@@ -1,0 +1,44 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import type { WrenchAuth } from "../../auth";
+import {
+  authorize__PASCAL_NAME__Request,
+  execute__PASCAL_NAME__WebOperation,
+  normalize__PASCAL_NAME__Response,
+  parse__PASCAL_NAME__CurrentSubject,
+  probe__PASCAL_NAME__WebSubject,
+} from "./runtime";
+
+const auth = {
+  schemaVersion: 1,
+  id: "__SITE_ID__-scaffold",
+  kind: "cookie-source",
+  source: "chrome",
+} as const satisfies WrenchAuth;
+
+describe("__DISPLAY_NAME__ authenticated first-party runtime scaffold", () => {
+  test("fails before account bootstrap or semantic execution", async () => {
+    expect(() => authorize__PASCAL_NAME__Request({})).toThrow("capture-required");
+    expect(() => parse__PASCAL_NAME__CurrentSubject({})).toThrow("capture-required");
+    expect(() => normalize__PASCAL_NAME__Response({})).toThrow("capture-required");
+    await expect(probe__PASCAL_NAME__WebSubject(auth)).rejects.toThrow(
+      "capture-required",
+    );
+    await expect(Reflect.apply(
+      execute__PASCAL_NAME__WebOperation,
+      undefined,
+      [undefined, undefined, undefined, undefined, undefined],
+    )).rejects.toThrow("capture-required");
+  });
+
+  test("contains no direct network or browser-action primitive", () => {
+    const source = readFileSync(join(import.meta.dir, "runtime.ts"), "utf8");
+    expect(source).not.toMatch(/\bfetch\s*\(/u);
+    expect(source).not.toMatch(/\bBun\.connect\s*\(/u);
+    expect(source).not.toMatch(/\b(?:http|https)\.request\s*\(/u);
+    expect(source).not.toMatch(/\bnew\s+WebSocket\s*\(/u);
+    expect(source).not.toMatch(/\bpage\.(?:click|fill|goto|press|type|upload)\s*\(/u);
+  });
+});

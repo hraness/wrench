@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 5,
+  "id": "example",
+  "version": "0.1.0",
+  "displayName": "Example",
+  "origins": [
+    "https://example.invalid"
+  ],
+  "browserDomains": [
+    "example.invalid"
+  ],
+  "operations": {
+    "content.read": {
+      "description": "Reserve one authenticated content read for first-party API capture and review.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "description": "Exact opaque target identifier for the reviewed contract.",
+            "minLength": 1,
+            "maxLength": 128,
+            "format": "path-segment"
+          }
+        },
+        "required": [
+          "target_id"
+        ]
+      },
+      "reviewedTemplate": {
+        "state": "capture-required",
+        "contractVersion": 1,
+        "instructions": "Capture the exact first-party exchange, then implement a code-owned internal API contract. This reservation cannot install or execute a request and must never become a DOM recipe."
+      }
+    }
+  }
+}

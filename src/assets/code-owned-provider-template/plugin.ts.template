@@ -1,0 +1,102 @@
+import {
+  defineProviderPlugin,
+  lazyWebSessionRuntime,
+} from "../../provider-plugin";
+
+/**
+ * Capture-required trusted source plugin scaffold.
+ *
+ * Keep this source unit under src/plugins/__SITE_ID__-web/. Replace each
+ * fail-closed boundary only after the selected sanitized evidence,
+ * deterministic tests, account binding, and an authorized low-stakes fixture
+ * prove the exact exchange. Never add a raw HTTP, GraphQL, header, URL, cookie,
+ * JavaScript, selector, or browser-action input.
+ */
+
+export const __CONSTANT_PREFIX___WEB_OPERATION_NAMES = Object.freeze([
+  __OPERATION_JSON__,
+] as const);
+
+export type __PASCAL_NAME__WebOperationName =
+  (typeof __CONSTANT_PREFIX___WEB_OPERATION_NAMES)[number];
+export type __PASCAL_NAME__WebContractState = "observed" | "capture-required";
+export type __PASCAL_NAME__WebRisk = "R1" | "R2" | "R3";
+
+export type __PASCAL_NAME__WebOperationContract = {
+  readonly effect: "read" | "write";
+  readonly risk: __PASCAL_NAME__WebRisk;
+  readonly state: __PASCAL_NAME__WebContractState;
+  readonly reason: string;
+};
+
+export const __CONSTANT_PREFIX___WEB_OPERATIONS = Object.freeze({
+  [__OPERATION_JSON__]: Object.freeze({
+    effect: __EFFECT_JSON__,
+    risk: __RISK_JSON__,
+    state: "capture-required",
+    reason: "Selected sanitized evidence is bound, but the exact request, response, account, actor, target, incidental-effect, uncertainty, and low-stakes live-fixture proofs are not complete.",
+  }),
+} as const satisfies Readonly<
+  Record<__PASCAL_NAME__WebOperationName, __PASCAL_NAME__WebOperationContract>
+>);
+
+export const __CONSTANT_PREFIX___WEB_ORIGIN = __ORIGIN_JSON__;
+
+function matches__PASCAL_NAME__WebSubject(_value: string): boolean {
+  // A subject format guessed from structural traffic would be unsafe. Replace
+  // this only with the reviewed stable provider-account namespace.
+  return false;
+}
+
+export const __CAMEL_NAME__WebPlugin = defineProviderPlugin({
+  apiVersion: 1,
+  id: __PLUGIN_ID_JSON__,
+  version: "0.1.0",
+  displayName: "__DISPLAY_NAME__",
+  sourceKind: "source",
+  implementationSources: [
+    { label: "plugin.ts", url: new URL(import.meta.url) },
+    { label: "runtime.ts", url: new URL("./runtime.ts", import.meta.url) },
+    { label: "wrench-adapter.json", url: new URL("./wrench-adapter.json", import.meta.url) },
+  ],
+  bindings: [{
+    transport: "web-session-api",
+    surfaceId: __SITE_ID_JSON__,
+    origin: __ORIGIN_JSON__,
+    protectedHostnameFamilies: [__HOSTNAME_JSON__],
+    authKinds: ["cookie-source", "cookies-file", "browser-profile"],
+    operations: [{
+      name: __OPERATION_JSON__,
+      contractVersion: 1,
+      risk: __RISK_JSON__,
+      input: {
+        properties: {},
+        required: [],
+      },
+      sideEffect: "__SIDE_EFFECT__",
+      idempotency: "__IDEMPOTENCY__",
+      dedupeWindowMs: __DEDUPE_WINDOW_MS__,
+      state: "capture-required",
+      dispatch: __DISPATCH_JSON__,
+      implementation: "Network-inert scaffold; promote only after every bound proof is complete.",
+      planDispatches: () => __PLAN_DISPATCHES__,
+      validateInput: (input) =>
+        Object.keys(input).length === 0
+          ? []
+          : ["capture-required scaffold accepts no operation input"],
+    }],
+    subject: {
+      format: "__SITE_ID__:<stable-provider-account-id>",
+      matches: matches__PASCAL_NAME__WebSubject,
+    },
+    runtime: lazyWebSessionRuntime(async () => {
+      const runtime = await import("./runtime");
+      return {
+        probe: runtime.probe__PASCAL_NAME__WebSubject,
+        execute: runtime.execute__PASCAL_NAME__WebOperation,
+      };
+    }),
+  }],
+});
+
+export default __CAMEL_NAME__WebPlugin;

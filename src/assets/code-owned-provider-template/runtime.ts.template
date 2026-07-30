@@ -1,0 +1,59 @@
+import type { WrenchAuth } from "../../auth";
+import type { WebSessionOperationExecutor } from "../../web-session";
+
+function captureRequired(reason: string): never {
+  throw new Error(`__DISPLAY_NAME__ authenticated web source plugin is capture-required: ${reason}`);
+}
+
+/**
+ * Replace this with a typed exact-origin/method/path/query/body/header
+ * authorizer. Keep all user-controlled values individually encoded and reject
+ * every undeclared field before cookie acquisition or network I/O.
+ */
+export function authorize__PASCAL_NAME__Request(_input: unknown): never {
+  return captureRequired("exact request authorization is not proven");
+}
+
+/**
+ * Replace this with the reviewed current-account parser. Return one stable,
+ * namespaced subject and reject missing, duplicate, or ambiguous identities.
+ */
+export function parse__PASCAL_NAME__CurrentSubject(_value: unknown): never {
+  return captureRequired("current-account binding is not proven");
+}
+
+/**
+ * Replace this with a bounded response projection that verifies requested
+ * target and actor/parent bindings before returning semantic output.
+ */
+export function normalize__PASCAL_NAME__Response(_value: unknown): never {
+  return captureRequired("response projection is not proven");
+}
+
+/**
+ * Add a reviewed exact current-account request before promotion. Browser
+ * bootstrap may supply one narrowly routed token, but it must not perform the
+ * semantic read or action.
+ */
+export async function probe__PASCAL_NAME__WebSubject(
+  auth: WrenchAuth,
+): Promise<string> {
+  void auth;
+  return captureRequired("current-account probe is not proven");
+}
+
+/**
+ * This source plugin is deliberately network-inert. Replace it with
+ * code-owned first-party HTTPS only after every promotion-checklist fact is
+ * proven. The kernel retains confirmation, dispatch journaling, recovery,
+ * attachment resolution, output bounds, and receipt authority.
+ */
+export const execute__PASCAL_NAME__WebOperation: WebSessionOperationExecutor =
+  async (manifest, recipe, input, auth, options) => {
+    void manifest;
+    void recipe;
+    void input;
+    void auth;
+    void options;
+    return captureRequired("semantic execution is not proven");
+  };

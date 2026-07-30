@@ -1,0 +1,1377 @@
+import { createHash } from "node:crypto";
+import {
+  constants,
+  createReadStream,
+  type Stats,
+} from "node:fs";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+} from "node:fs/promises";
+import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { BoundedByteBuffer } from "@hraness/kb/clip/bounded-byte-buffer";
+
+import type { WrenchAuth } from "../auth";
+import type { BrowserFileResolver } from "../browser";
+import type {
+  FileInputValue,
+  OperationInput,
+  WebSessionRecipe,
+} from "../model";
+import { OperationDeadline } from "../operation-deadline";
+import type {
+  ProviderPluginLinkedDeviceAttemptBoundaryV1,
+} from "../provider-plugin";
+import { wrenchStateHome } from "../storage";
+import type {
+  WebSessionDispatchEvent,
+  WebSessionExecution,
+  WebSessionOperationDeadline,
+} from "../web-session-execution";
+import {
+  WHATSAPP_PROTOCOL_PIN,
+  WHATSAPP_WEB_OPERATIONS,
+  WHATSAPP_WEB_OPERATION_NAMES,
+  parseWhatsAppAuthStatusEnvelope,
+  parseWhatsAppWriteEnvelope,
+  planWhatsAppWriteCommand,
+  projectWhatsAppChatsEnvelope,
+  projectWhatsAppMessageEnvelope,
+  projectWhatsAppMessagesEnvelope,
+  verifyWhatsAppWriteReadback,
+  whatsappMessageId,
+  whatsappTargetJid,
+  type WhatsAppWebOperationName,
+  type WhatsAppWritePlan,
+} from "./whatsapp-web";
+
+const WHATSAPP_ORIGIN = "https://web.whatsapp.com";
+const DEFAULT_LIMIT = 50;
+const MAX_STDERR_BYTES = 64 * 1024;
+const MAX_STORE_ENTRIES = 10_000;
+const MAX_SYNC_MESSAGES = 200_000;
+const MAX_SYNC_DB_SIZE = "2GB";
+const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
+
+type WhatsAppAuth = Extract<
+  WrenchAuth,
+  { readonly kind: "linked-device-store" }
+>;
+
+export type WacliInvocation = {
+  readonly binary: string;
+  readonly arguments: readonly string[];
+  readonly environment: Readonly<Record<string, string>>;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+  readonly signal?: AbortSignal;
+  /**
+   * Called immediately after the child process exists. Mutation accounting
+   * must treat everything after this point as potentially dispatched.
+   */
+  readonly onSpawn?: () => void;
+};
+
+export type WacliInvocationResult = {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+};
+
+export type WhatsAppWebRuntimeDependencies = {
+  /**
+   * Test-only binary seam. Production resolution accepts only the pinned
+   * release in fixed installation locations and verifies its SHA-256.
+   */
+  readonly binaryPath?: string;
+  readonly run?: (
+    invocation: WacliInvocation,
+  ) => Promise<WacliInvocationResult>;
+  readonly runInteractive?: (
+    plan: WhatsAppPairingPlan,
+  ) => Promise<number>;
+};
+
+function isWhatsAppOperation(
+  value: string,
+): value is WhatsAppWebOperationName {
+  return (WHATSAPP_WEB_OPERATION_NAMES as readonly string[]).includes(value);
+}
+
+function requireWhatsAppAuth(auth: WrenchAuth): WhatsAppAuth {
+  if (
+    auth.kind !== "linked-device-store"
+    || auth.provider !== "whatsapp"
+  ) {
+    throw new Error(
+      "WhatsApp protocol operations require a WhatsApp linked-device-store auth realm",
+    );
+  }
+  if (!isAbsolute(auth.path)) {
+    throw new Error("WhatsApp linked-device store path must be absolute");
+  }
+  return auth;
+}
+
+function ownedByCurrentUser(stats: Stats): boolean {
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  return uid === null || stats.uid === uid;
+}
+
+function assertPrivateOwned(
+  stats: Stats,
+  label: string,
+  kind: "directory" | "file" | "socket",
+): void {
+  const matchesKind = kind === "directory"
+    ? stats.isDirectory()
+    : kind === "file"
+      ? stats.isFile()
+      : stats.isSocket();
+  if (!matchesKind || !ownedByCurrentUser(stats)) {
+    throw new Error(`${label} must be an owned ${kind}`);
+  }
+  if ((stats.mode & 0o077) !== 0) {
+    throw new Error(`${label} must not grant group or world access`);
+  }
+}
+
+export type WhatsAppStoreValidationPurpose =
+  | "pair"
+  | "probe"
+  | "sync"
+  | "projection";
+
+/**
+ * Validate the complete top level of the credential/message store. This
+ * complements wacli's own 0700/0600 creation policy and catches later
+ * permission widening or symlink substitution before any trusted read.
+ */
+export async function validateWhatsAppStoreDirectory(
+  pathValue: string,
+  purpose: WhatsAppStoreValidationPurpose,
+): Promise<string> {
+  if (!isAbsolute(pathValue)) {
+    throw new Error("WhatsApp linked-device store path must be absolute");
+  }
+  const lexical = resolve(pathValue);
+  let directoryStats: Stats;
+  try {
+    directoryStats = await lstat(lexical);
+  } catch (error) {
+    if (
+      purpose === "pair"
+      && typeof error === "object"
+      && error !== null
+      && "code" in error
+      && error.code === "ENOENT"
+    ) {
+      await mkdir(lexical, { recursive: true, mode: 0o700 });
+      await chmod(lexical, 0o700);
+      directoryStats = await lstat(lexical);
+    } else {
+      throw new Error("WhatsApp linked-device store is unavailable");
+    }
+  }
+  if (directoryStats.isSymbolicLink()) {
+    throw new Error("WhatsApp linked-device store must not be a symbolic link");
+  }
+  assertPrivateOwned(directoryStats, "WhatsApp linked-device store", "directory");
+  const canonical = await realpath(lexical);
+  if (canonical !== lexical) {
+    throw new Error("WhatsApp linked-device store path must be canonical");
+  }
+
+  const entries = await readdir(canonical, { withFileTypes: true });
+  if (entries.length > MAX_STORE_ENTRIES) {
+    throw new Error("WhatsApp linked-device store has too many entries");
+  }
+  for (const entry of entries) {
+    if (
+      entry.name.length < 1
+      || entry.name.length > 255
+      || entry.name.includes("\0")
+      || entry.isSymbolicLink()
+    ) throw new Error("WhatsApp linked-device store contains an unsafe entry");
+    const entryPath = join(canonical, entry.name);
+    const stats = await lstat(entryPath);
+    if (stats.isSymbolicLink()) {
+      throw new Error("WhatsApp linked-device store contains a symbolic link");
+    }
+    if (stats.isDirectory()) {
+      assertPrivateOwned(stats, "WhatsApp linked-device store entry", "directory");
+    } else if (stats.isFile()) {
+      assertPrivateOwned(stats, "WhatsApp linked-device store entry", "file");
+    } else if (stats.isSocket()) {
+      assertPrivateOwned(stats, "WhatsApp linked-device store entry", "socket");
+    } else {
+      throw new Error("WhatsApp linked-device store contains an unsupported entry");
+    }
+  }
+
+  const requireRegular = async (name: string): Promise<void> => {
+    let stats: Stats;
+    try {
+      stats = await lstat(join(canonical, name));
+    } catch {
+      throw new Error(`WhatsApp linked-device store omitted ${name}`);
+    }
+    assertPrivateOwned(stats, `WhatsApp ${name}`, "file");
+  };
+  if (purpose === "sync" || purpose === "projection") {
+    await requireRegular("session.db");
+  }
+  if (purpose === "projection") {
+    await requireRegular("wacli.db");
+  }
+  return canonical;
+}
+
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = createReadStream(path, { flags: "r" });
+  for await (const chunkValue of stream) {
+    const chunk: unknown = chunkValue;
+    if (!Buffer.isBuffer(chunk)) {
+      throw new Error("WhatsApp protocol binary stream returned non-byte data");
+    }
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
+
+async function pinnedBinaryCandidate(pathValue: string): Promise<string | null> {
+  let canonical: string;
+  try {
+    canonical = await realpath(pathValue);
+  } catch {
+    return null;
+  }
+  const stats = await lstat(canonical);
+  if (
+    !stats.isFile()
+    || (stats.mode & 0o022) !== 0
+    || (stats.mode & 0o111) === 0
+    || (!ownedByCurrentUser(stats) && stats.uid !== 0)
+  ) return null;
+  if (process.platform !== "darwin" || process.arch !== "arm64") return null;
+  return await sha256File(canonical)
+      === WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256
+    ? canonical
+    : null;
+}
+
+export async function resolvePinnedWacliBinary(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<string> {
+  const candidates = [
+    join(
+      wrenchStateHome(environment),
+      "tools",
+      "wacli",
+      WHATSAPP_PROTOCOL_PIN.version,
+      "wacli",
+    ),
+    "/opt/homebrew/bin/wacli",
+    "/usr/local/bin/wacli",
+  ];
+  for (const candidate of candidates) {
+    const found = await pinnedBinaryCandidate(candidate);
+    if (found !== null) return found;
+  }
+  throw new Error(
+    `pinned WhatsApp protocol runtime wacli ${WHATSAPP_PROTOCOL_PIN.version} is not installed or failed integrity verification`,
+  );
+}
+
+export type WhatsAppProtocolRuntimeStatus = {
+  readonly ready: boolean;
+  readonly implementation: typeof WHATSAPP_PROTOCOL_PIN.implementation;
+  readonly version: typeof WHATSAPP_PROTOCOL_PIN.version;
+  readonly integrity: "sha256-pinned";
+  readonly setupCommand: string;
+};
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export async function inspectWhatsAppProtocolRuntime(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<WhatsAppProtocolRuntimeStatus> {
+  const installer = fileURLToPath(
+    new URL("../scripts/install-whatsapp-protocol.sh", import.meta.url),
+  );
+  let ready = false;
+  try {
+    await resolvePinnedWacliBinary(environment);
+    ready = true;
+  } catch {
+    // Doctor exposes categorical readiness and a deterministic setup command,
+    // never candidate paths or integrity failure details.
+  }
+  return Object.freeze({
+    ready,
+    implementation: WHATSAPP_PROTOCOL_PIN.implementation,
+    version: WHATSAPP_PROTOCOL_PIN.version,
+    integrity: "sha256-pinned",
+    setupCommand: `/bin/sh ${shellQuote(installer)}`,
+  });
+}
+
+async function readBoundedStream(
+  stream: ReadableStream<Uint8Array>,
+  maximum: number,
+): Promise<string> {
+  const reader = stream.getReader();
+  const output = new BoundedByteBuffer(maximum);
+  try {
+    for (;;) {
+      const item = await reader.read();
+      if (item.done) break;
+      if (!output.append(item.value)) {
+        throw new Error("WhatsApp protocol process output exceeded its bound");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(
+    output.toUint8Array(),
+  );
+}
+
+async function runWacli(
+  invocation: WacliInvocation,
+): Promise<WacliInvocationResult> {
+  const cancellationSignal = invocation.signal;
+  const isCancelled = (): boolean =>
+    cancellationSignal?.aborted === true;
+  if (isCancelled()) {
+    throw new Error("WhatsApp protocol command was cancelled");
+  }
+  const ownsProcessGroup = (
+    cancellationSignal !== undefined
+    && process.platform !== "win32"
+  );
+  const child = Bun.spawn(
+    [invocation.binary, ...invocation.arguments],
+    {
+      env: { ...invocation.environment },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      detached: ownsProcessGroup,
+    },
+  );
+  invocation.onSpawn?.();
+  let timedOut = false;
+  let cancelled = false;
+  let forceKill: ReturnType<typeof setTimeout> | null = null;
+  const signalChild = (signal: "SIGTERM" | "SIGKILL"): void => {
+    if (ownsProcessGroup) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch (error) {
+        if (
+          typeof error === "object"
+          && error !== null
+          && "code" in error
+          && error.code === "ESRCH"
+        ) return;
+      }
+    }
+    try {
+      child.kill(signal);
+    } catch {
+      // The process already exited between the state check and the signal.
+    }
+  };
+  const terminate = (): void => {
+    signalChild("SIGTERM");
+    if (forceKill === null) {
+      forceKill = setTimeout(() => signalChild("SIGKILL"), 1_000);
+    }
+  };
+  const onAbort = (): void => {
+    cancelled = true;
+    terminate();
+  };
+  cancellationSignal?.addEventListener("abort", onAbort, { once: true });
+  if (isCancelled()) onAbort();
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    terminate();
+  }, invocation.timeoutMs);
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      readBoundedStream(child.stdout, invocation.maxOutputBytes),
+      readBoundedStream(
+        child.stderr,
+        Math.min(invocation.maxOutputBytes, MAX_STDERR_BYTES),
+      ),
+      child.exited,
+    ]);
+    if (cancelled) throw new Error("WhatsApp protocol command was cancelled");
+    if (timedOut) throw new Error("WhatsApp protocol command timed out");
+    return { exitCode, stdout, stderr };
+  } catch (error) {
+    signalChild("SIGKILL");
+    await child.exited;
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (forceKill !== null) clearTimeout(forceKill);
+    cancellationSignal?.removeEventListener("abort", onAbort);
+  }
+}
+
+function wacliEnvironment(
+  readOnly: boolean,
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    PATH: "/usr/bin:/bin",
+    LANG: "C.UTF-8",
+    ...(readOnly ? { WACLI_READONLY: "1" } : {}),
+  });
+}
+
+function remainingTimeoutMs(
+  timeoutMs: number,
+  operationDeadline: WebSessionOperationDeadline | undefined,
+): number {
+  operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+  const remaining = Math.min(
+    timeoutMs,
+    operationDeadline?.remainingTimeMs() ?? timeoutMs,
+  );
+  if (remaining < 1) {
+    throw new Error("WhatsApp authenticated web operation timed out");
+  }
+  return remaining;
+}
+
+async function checkedRun(
+  binary: string,
+  arguments_: readonly string[],
+  options: {
+    readonly timeoutMs: number;
+    readonly maxOutputBytes: number;
+    readonly readOnly: boolean;
+    readonly onSpawn?: () => void;
+    readonly dependencies?: WhatsAppWebRuntimeDependencies;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+  },
+): Promise<unknown> {
+  const timeoutMs = remainingTimeoutMs(
+    options.timeoutMs,
+    options.operationDeadline,
+  );
+  const run = options.dependencies?.run ?? runWacli;
+  const invoke = () => run({
+    binary,
+    arguments: arguments_,
+    environment: wacliEnvironment(options.readOnly),
+    timeoutMs,
+    maxOutputBytes: options.maxOutputBytes,
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { signal: options.operationDeadline.signal }),
+    ...(options.onSpawn === undefined ? {} : { onSpawn: options.onSpawn }),
+  });
+  const result = options.operationDeadline === undefined
+    ? await invoke()
+    : await options.operationDeadline.run(
+        invoke,
+        WEB_SESSION_OPERATION_LABEL,
+      );
+  options.operationDeadline?.throwIfUnavailable(
+    WEB_SESSION_OPERATION_LABEL,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      "WhatsApp protocol command failed before producing reviewed output",
+    );
+  }
+  const raw = result.stdout.trim();
+  if (raw.length < 1) {
+    throw new Error("WhatsApp protocol command omitted JSON output");
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("WhatsApp protocol command returned malformed JSON");
+  }
+}
+
+async function runtimeBinary(
+  dependencies: WhatsAppWebRuntimeDependencies | undefined,
+  environment: Readonly<Record<string, string | undefined>>,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<string> {
+  operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+  const resolveBinary = () => resolvePinnedWacliBinary(environment);
+  const binary = dependencies?.binaryPath
+    ?? (operationDeadline === undefined
+      ? await resolveBinary()
+      : await operationDeadline.run(
+          resolveBinary,
+          WEB_SESSION_OPERATION_LABEL,
+        ));
+  if (dependencies?.binaryPath !== undefined && !isAbsolute(binary)) {
+    throw new Error("test WhatsApp protocol binary path must be absolute");
+  }
+  const timeoutMs = remainingTimeoutMs(5_000, operationDeadline);
+  const run = dependencies?.run ?? runWacli;
+  const invoke = () => run({
+    binary,
+    arguments: ["version"],
+    environment: wacliEnvironment(true),
+    timeoutMs,
+    maxOutputBytes: 1_024,
+    ...(operationDeadline === undefined
+      ? {}
+      : { signal: operationDeadline.signal }),
+  });
+  const result = operationDeadline === undefined
+    ? await invoke()
+    : await operationDeadline.run(
+        invoke,
+        WEB_SESSION_OPERATION_LABEL,
+      );
+  operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+  if (
+    result.exitCode !== 0
+    || result.stdout.trim() !== WHATSAPP_PROTOCOL_PIN.version
+  ) {
+    throw new Error("WhatsApp protocol runtime version did not match its pin");
+  }
+  return binary;
+}
+
+function readOnlyArguments(
+  store: string,
+  timeoutMs: number,
+  command: readonly string[],
+): readonly string[] {
+  return Object.freeze([
+    "--store",
+    store,
+    "--read-only",
+    "--json",
+    "--full",
+    "--timeout",
+    `${Math.max(1, timeoutMs)}ms`,
+    ...command,
+  ]);
+}
+
+function writeArguments(
+  store: string,
+  timeoutMs: number,
+  command: readonly string[],
+): readonly string[] {
+  return Object.freeze([
+    "--store",
+    store,
+    "--json",
+    "--full",
+    "--timeout",
+    `${Math.max(1, timeoutMs)}ms`,
+    ...command,
+  ]);
+}
+
+async function authStatus(
+  binary: string,
+  store: string,
+  timeoutMs: number,
+  dependencies: WhatsAppWebRuntimeDependencies | undefined,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<ReturnType<typeof parseWhatsAppAuthStatusEnvelope>> {
+  const commandTimeoutMs = remainingTimeoutMs(
+    timeoutMs,
+    operationDeadline,
+  );
+  return parseWhatsAppAuthStatusEnvelope(await checkedRun(
+    binary,
+    readOnlyArguments(store, commandTimeoutMs, ["auth", "status"]),
+    {
+      timeoutMs: commandTimeoutMs,
+      maxOutputBytes: 64 * 1024,
+      readOnly: true,
+      ...(dependencies === undefined ? {} : { dependencies }),
+      ...(operationDeadline === undefined
+        ? {}
+        : { operationDeadline }),
+    },
+  ));
+}
+
+async function boundRuntime(
+  auth: WrenchAuth,
+  purpose: "probe" | "projection",
+  timeoutMs: number,
+  dependencies: WhatsAppWebRuntimeDependencies | undefined,
+  environment: Readonly<Record<string, string | undefined>>,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<{
+  readonly auth: WhatsAppAuth;
+  readonly binary: string;
+  readonly store: string;
+  readonly subject: string;
+}> {
+  operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+  const linked = requireWhatsAppAuth(auth);
+  const validateStore = () =>
+    validateWhatsAppStoreDirectory(linked.path, purpose);
+  const store = operationDeadline === undefined
+    ? await validateStore()
+    : await operationDeadline.run(
+        validateStore,
+        WEB_SESSION_OPERATION_LABEL,
+      );
+  const binary = await runtimeBinary(
+    dependencies,
+    environment,
+    operationDeadline,
+  );
+  const status = await authStatus(
+    binary,
+    store,
+    timeoutMs,
+    dependencies,
+    operationDeadline,
+  );
+  if (!status.authenticated || status.subject === null) {
+    throw new Error(
+      "WhatsApp linked-device store is not paired; run the explicit auth pairing flow",
+    );
+  }
+  if (purpose === "projection") {
+    if (linked.subject === undefined) {
+      throw new Error(
+        "WhatsApp linked-device auth must be bound to its current account before private reads",
+      );
+    }
+    if (linked.subject !== status.subject) {
+      throw new Error(
+        "WhatsApp linked-device account did not match the bound auth realm",
+      );
+    }
+  }
+  return {
+    auth: linked,
+    binary,
+    store,
+    subject: status.subject,
+  };
+}
+
+export async function probeWhatsAppWebSubject(
+  auth: WrenchAuth,
+  options: {
+    readonly dependencies?: WhatsAppWebRuntimeDependencies;
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+    readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  const deadline = new OperationDeadline(timeoutMs, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+  try {
+    const runtime = await boundRuntime(
+      auth,
+      "probe",
+      timeoutMs,
+      options.dependencies,
+      options.environment ?? process.env,
+      deadline,
+    );
+    deadline.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+    return runtime.subject;
+  } finally {
+    deadline.dispose();
+  }
+}
+
+function inputInteger(
+  input: OperationInput,
+  name: string,
+  fallback: number,
+  maximum: number,
+): number {
+  const value = input[name] ?? fallback;
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > maximum) {
+    throw new Error(`input.${name} must be an integer between 1 and ${maximum}`);
+  }
+  return value as number;
+}
+
+function inputFolder(input: OperationInput): "all" | "active" | "archived" | "unread" {
+  const value = input.folder ?? "all";
+  if (
+    value !== "all"
+    && value !== "active"
+    && value !== "archived"
+    && value !== "unread"
+  ) throw new Error("input.folder must be all, active, archived, or unread");
+  return value;
+}
+
+export type WhatsAppReadPlan =
+  | {
+      readonly action: "messaging.list";
+      readonly command: readonly string[];
+      readonly limit: number;
+      readonly folder: "all" | "active" | "archived" | "unread";
+    }
+  | {
+      readonly action: "messaging.read";
+      readonly command: readonly string[];
+      readonly limit: number;
+      readonly conversationJid: string;
+    }
+  | {
+      readonly action: "media.read";
+      readonly command: readonly string[];
+      readonly conversationJid: string;
+      readonly messageId: string;
+    };
+
+export function planWhatsAppReadCommand(
+  action: "messaging.list",
+  input: OperationInput,
+): Extract<WhatsAppReadPlan, { readonly action: "messaging.list" }>;
+export function planWhatsAppReadCommand(
+  action: "messaging.read",
+  input: OperationInput,
+): Extract<WhatsAppReadPlan, { readonly action: "messaging.read" }>;
+export function planWhatsAppReadCommand(
+  action: "media.read",
+  input: OperationInput,
+): Extract<WhatsAppReadPlan, { readonly action: "media.read" }>;
+export function planWhatsAppReadCommand(
+  action: WhatsAppReadPlan["action"],
+  input: OperationInput,
+): WhatsAppReadPlan;
+export function planWhatsAppReadCommand(
+  action: WhatsAppReadPlan["action"],
+  input: OperationInput,
+): WhatsAppReadPlan {
+  if (action === "messaging.list") {
+    const limit = inputInteger(input, "limit", DEFAULT_LIMIT, 100);
+    const folder = inputFolder(input);
+    const flags = folder === "active"
+      ? ["--no-archived"]
+      : folder === "archived"
+        ? ["--archived"]
+        : folder === "unread"
+          ? ["--unread"]
+          : [];
+    return Object.freeze({
+      action,
+      limit,
+      folder,
+      command: Object.freeze([
+        "chats",
+        "list",
+        "--limit",
+        String(limit),
+        ...flags,
+      ]),
+    });
+  }
+  const conversationJid = whatsappTargetJid(
+    input.conversation_jid,
+    "input.conversation_jid",
+  );
+  if (action === "messaging.read") {
+    const limit = inputInteger(input, "limit", DEFAULT_LIMIT, 200);
+    return Object.freeze({
+      action,
+      limit,
+      conversationJid,
+      command: Object.freeze([
+        "messages",
+        "list",
+        "--chat",
+        conversationJid,
+        "--limit",
+        String(limit),
+      ]),
+    });
+  }
+  const messageId = whatsappMessageId(
+    input.message_id,
+    "input.message_id",
+  );
+  return Object.freeze({
+    action,
+    conversationJid,
+    messageId,
+    command: Object.freeze([
+      "messages",
+      "show",
+      "--chat",
+      conversationJid,
+      "--id",
+      messageId,
+    ]),
+  });
+}
+
+function outputWithinBound(value: unknown, maximum: number): unknown {
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") > maximum) {
+    throw new Error("WhatsApp projected output exceeded its reviewed byte limit");
+  }
+  return value;
+}
+
+async function executeLocalProjection(
+  runtime: Awaited<ReturnType<typeof boundRuntime>>,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  dependencies: WhatsAppWebRuntimeDependencies | undefined,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<WebSessionExecution> {
+  let output: unknown;
+  if (recipe.action === "messaging.list") {
+    const plan = planWhatsAppReadCommand(recipe.action, input);
+    const timeoutMs = remainingTimeoutMs(
+      recipe.timeoutMs,
+      operationDeadline,
+    );
+    const raw = await checkedRun(
+      runtime.binary,
+      readOnlyArguments(runtime.store, timeoutMs, plan.command),
+      {
+        timeoutMs,
+        maxOutputBytes: recipe.maxOutputBytes,
+        readOnly: true,
+        ...(dependencies === undefined ? {} : { dependencies }),
+        ...(operationDeadline === undefined
+          ? {}
+          : { operationDeadline }),
+      },
+    );
+    output = Object.freeze({
+      accountSubject: runtime.subject,
+      projection: "local-store",
+      completeness: "bounded-current-local-projection",
+      chats: projectWhatsAppChatsEnvelope(raw, plan.limit),
+    });
+  } else if (recipe.action === "messaging.read") {
+    const plan = planWhatsAppReadCommand(recipe.action, input);
+    const timeoutMs = remainingTimeoutMs(
+      recipe.timeoutMs,
+      operationDeadline,
+    );
+    const raw = await checkedRun(
+      runtime.binary,
+      readOnlyArguments(runtime.store, timeoutMs, plan.command),
+      {
+        timeoutMs,
+        maxOutputBytes: recipe.maxOutputBytes,
+        readOnly: true,
+        ...(dependencies === undefined ? {} : { dependencies }),
+        ...(operationDeadline === undefined
+          ? {}
+          : { operationDeadline }),
+      },
+    );
+    output = Object.freeze({
+      accountSubject: runtime.subject,
+      projection: "local-store",
+      completeness: "bounded-current-local-projection",
+      conversationJid: plan.conversationJid,
+      ...projectWhatsAppMessagesEnvelope(
+        raw,
+        plan.conversationJid,
+        plan.limit,
+      ),
+    });
+  } else if (recipe.action === "media.read") {
+    const plan = planWhatsAppReadCommand(recipe.action, input);
+    const timeoutMs = remainingTimeoutMs(
+      recipe.timeoutMs,
+      operationDeadline,
+    );
+    const raw = await checkedRun(
+      runtime.binary,
+      readOnlyArguments(runtime.store, timeoutMs, plan.command),
+      {
+        timeoutMs,
+        maxOutputBytes: recipe.maxOutputBytes,
+        readOnly: true,
+        ...(dependencies === undefined ? {} : { dependencies }),
+        ...(operationDeadline === undefined
+          ? {}
+          : { operationDeadline }),
+      },
+    );
+    const message = projectWhatsAppMessageEnvelope(
+      raw,
+      plan.conversationJid,
+      plan.messageId,
+    );
+    output = Object.freeze({
+      accountSubject: runtime.subject,
+      projection: "local-store",
+      completeness: "one-local-message",
+      conversationJid: plan.conversationJid,
+      messageId: plan.messageId,
+      media: message.media,
+    });
+  } else {
+    throw new Error("WhatsApp operation has no local projection");
+  }
+  return {
+    status: "succeeded",
+    output: outputWithinBound(output, recipe.maxOutputBytes),
+    finalUrl: WHATSAPP_ORIGIN,
+    dispatchStarted: false,
+    dispatch: { planned: 0, started: 0, verified: 0 },
+  };
+}
+
+function dispatchEvent(
+  action: string,
+  started: number,
+  verified: number,
+): WebSessionDispatchEvent {
+  return {
+    id: action,
+    index: 1,
+    progress: { planned: 1, started, verified },
+  };
+}
+
+async function materializedAttachment(
+  input: OperationInput,
+  resolver: BrowserFileResolver | undefined,
+): Promise<string | undefined> {
+  if (input.attachment === undefined) return undefined;
+  const attachment = input.attachment;
+  if (!isFileInputValue(attachment)) {
+    throw new Error("input.attachment must be a plan-bound file");
+  }
+  if (resolver === undefined) {
+    throw new Error("WhatsApp attachment send requires the plan-bound file resolver");
+  }
+  const paths = await resolver([attachment]);
+  if (paths.length !== 1 || typeof paths[0] !== "string" || !isAbsolute(paths[0])) {
+    throw new Error("WhatsApp file resolver did not return one exact absolute path");
+  }
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = await open(paths[0], constants.O_RDONLY | noFollow);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.size < 1 || stats.size > 1024 * 1024 * 1024) {
+      throw new Error("WhatsApp attachment must be a regular file no larger than 1 GiB");
+    }
+  } finally {
+    await handle.close();
+  }
+  return paths[0];
+}
+
+function isFileInputValue(value: unknown): value is FileInputValue {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    Object.keys(candidate).sort().join(",") === "kind,reference"
+    && candidate.kind === "file"
+    && typeof candidate.reference === "string"
+    && candidate.reference.length >= 1
+    && candidate.reference.length <= 512
+  );
+}
+
+/**
+ * Full response/readback accounting for the future mutation transport.
+ *
+ * This function is intentionally unreachable while every mutation contract is
+ * capture-required. The audited wacli 0.13.0 CLI retries selected send errors
+ * once and carries text in process argv, so promotion also requires a no-retry
+ * private payload transport rather than merely flipping contract state.
+ */
+async function executeMutation(
+  runtime: Awaited<ReturnType<typeof boundRuntime>>,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  options: {
+    readonly fileResolver?: BrowserFileResolver;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly dependencies?: WhatsAppWebRuntimeDependencies;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+  },
+): Promise<WebSessionExecution> {
+  const attachment = recipe.action === "messaging.send"
+    ? await materializedAttachment(input, options.fileResolver)
+    : undefined;
+  const plan = planWhatsAppWriteCommand(
+    recipe.action as WhatsAppWritePlan["action"],
+    input,
+    attachment,
+  );
+  let started = 0;
+  let verified = 0;
+  try {
+    await options.beforeDispatch?.(dispatchEvent(recipe.action, 0, 0));
+    const dispatchTimeoutMs = remainingTimeoutMs(
+      recipe.timeoutMs,
+      options.operationDeadline,
+    );
+    const response = await checkedRun(
+      runtime.binary,
+      writeArguments(runtime.store, dispatchTimeoutMs, plan.argv),
+      {
+        timeoutMs: dispatchTimeoutMs,
+        maxOutputBytes: recipe.maxOutputBytes,
+        readOnly: false,
+        onSpawn: () => {
+          started = 1;
+        },
+        ...(options.dependencies === undefined
+          ? {}
+          : { dependencies: options.dependencies }),
+        ...(options.operationDeadline === undefined
+          ? {}
+          : { operationDeadline: options.operationDeadline }),
+      },
+    );
+    if (started !== 1) {
+      throw new Error("WhatsApp protocol runner omitted dispatch accounting");
+    }
+    const receipt = parseWhatsAppWriteEnvelope(plan, response);
+    const readbackTimeoutMs = remainingTimeoutMs(
+      recipe.timeoutMs,
+      options.operationDeadline,
+    );
+    const readback = await checkedRun(
+      runtime.binary,
+      readOnlyArguments(runtime.store, readbackTimeoutMs, [
+        "messages",
+        "show",
+        "--chat",
+        receipt.readbackChatJid,
+        "--id",
+        receipt.messageId,
+      ]),
+      {
+        timeoutMs: readbackTimeoutMs,
+        maxOutputBytes: recipe.maxOutputBytes,
+        readOnly: true,
+        ...(options.dependencies === undefined
+          ? {}
+          : { dependencies: options.dependencies }),
+        ...(options.operationDeadline === undefined
+          ? {}
+          : { operationDeadline: options.operationDeadline }),
+      },
+    );
+    const output = verifyWhatsAppWriteReadback(plan, receipt, readback);
+    verified = 1;
+    await options.afterDispatchVerified?.(dispatchEvent(recipe.action, 1, 1));
+    return {
+      status: "succeeded",
+      output,
+      finalUrl: WHATSAPP_ORIGIN,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: WHATSAPP_ORIGIN,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? "WhatsApp may have changed the requested state but exact readback was not verified; reconcile before retrying"
+        : "WhatsApp linked-device operation failed before dispatch",
+    };
+  }
+}
+
+export async function executeWhatsAppWebOperation(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly fileResolver?: BrowserFileResolver;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly dependencies?: WhatsAppWebRuntimeDependencies;
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+  } = {},
+): Promise<WebSessionExecution> {
+  if (
+    recipe.site !== "whatsapp"
+    || recipe.contractVersion !== 1
+    || !isWhatsAppOperation(recipe.action)
+  ) throw new Error("WhatsApp linked-device recipe is not installed");
+  const contract = WHATSAPP_WEB_OPERATIONS[recipe.action];
+  if (contract.state !== "observed") {
+    throw new Error(
+      `WhatsApp linked-device operation ${recipe.action} is capture-required: ${contract.reason}`,
+    );
+  }
+  options.operationDeadline?.throwIfUnavailable(
+    WEB_SESSION_OPERATION_LABEL,
+  );
+  const runtime = await boundRuntime(
+    auth,
+    "projection",
+    recipe.timeoutMs,
+    options.dependencies,
+    options.environment ?? process.env,
+    options.operationDeadline,
+  );
+  if (
+    recipe.action === "messaging.list"
+    || recipe.action === "messaging.read"
+    || recipe.action === "media.read"
+  ) {
+    return executeLocalProjection(
+      runtime,
+      recipe,
+      input,
+      options.dependencies,
+      options.operationDeadline,
+    );
+  }
+  return executeMutation(runtime, recipe, input, options);
+}
+
+export type WhatsAppPairingPlan = {
+  readonly binary: string;
+  readonly store: string;
+  readonly arguments: readonly string[];
+  readonly environment: Readonly<Record<string, string>>;
+};
+
+export async function planWhatsAppPairing(
+  auth: WrenchAuth,
+  options: {
+    readonly phone?: string;
+    readonly dependencies?: WhatsAppWebRuntimeDependencies;
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+  } = {},
+): Promise<WhatsAppPairingPlan> {
+  const linked = requireWhatsAppAuth(auth);
+  const store = await validateWhatsAppStoreDirectory(linked.path, "pair");
+  const binary = await runtimeBinary(
+    options.dependencies,
+    options.environment ?? process.env,
+  );
+  const phone = options.phone;
+  if (
+    phone !== undefined
+    && !/^\+?[0-9]{5,20}$/u.test(phone)
+  ) throw new Error("WhatsApp pairing phone must be one international number");
+  return Object.freeze({
+    binary,
+    store,
+    arguments: Object.freeze([
+      "--store",
+      store,
+      "--timeout",
+      "10m",
+      "auth",
+      "--idle-exit",
+      "30s",
+      "--qr-format",
+      "terminal",
+      ...(phone === undefined ? [] : ["--phone", phone]),
+    ]),
+    environment: Object.freeze({
+      ...wacliEnvironment(false),
+      WACLI_SYNC_MAX_MESSAGES: String(MAX_SYNC_MESSAGES),
+      WACLI_SYNC_MAX_DB_SIZE: MAX_SYNC_DB_SIZE,
+    }),
+  });
+}
+
+async function runInteractivePairing(
+  plan: WhatsAppPairingPlan,
+): Promise<number> {
+  const child = Bun.spawn(
+    [plan.binary, ...plan.arguments],
+    {
+      env: { ...plan.environment },
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    },
+  );
+  return child.exited;
+}
+
+export async function pairWhatsAppAuth(
+  auth: WrenchAuth,
+  options: {
+    readonly phone?: string;
+    readonly dependencies?: WhatsAppWebRuntimeDependencies;
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+    readonly attempt: ProviderPluginLinkedDeviceAttemptBoundaryV1;
+  },
+): Promise<string> {
+  const plan = await planWhatsAppPairing(auth, options);
+  const run = options.dependencies?.runInteractive ?? runInteractivePairing;
+  await options.attempt.beforeExternalBegin();
+  if (await run(plan) !== 0) {
+    throw new Error("WhatsApp linked-device pairing did not complete");
+  }
+  return probeWhatsAppWebSubject(auth, {
+    ...(options.dependencies === undefined
+      ? {}
+      : { dependencies: options.dependencies }),
+    ...(options.environment === undefined
+      ? {}
+      : { environment: options.environment }),
+    timeoutMs: 10_000,
+  });
+}
+
+export type WhatsAppSyncPlan = {
+  readonly binary: string;
+  readonly store: string;
+  readonly arguments: readonly string[];
+  readonly environment: Readonly<Record<string, string>>;
+  readonly emitsProtocolAcknowledgements: true;
+};
+
+export async function planWhatsAppSyncOnce(
+  auth: WrenchAuth,
+  options: {
+    readonly dependencies?: WhatsAppWebRuntimeDependencies;
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+  } = {},
+): Promise<WhatsAppSyncPlan> {
+  const linked = requireWhatsAppAuth(auth);
+  const store = await validateWhatsAppStoreDirectory(linked.path, "sync");
+  const binary = await runtimeBinary(
+    options.dependencies,
+    options.environment ?? process.env,
+  );
+  return Object.freeze({
+    binary,
+    store,
+    arguments: Object.freeze([
+      "--store",
+      store,
+      "--json",
+      "--full",
+      "--timeout",
+      "5m",
+      "sync",
+      "--once",
+      "--presence-mode",
+      "quiet",
+      "--idle-exit",
+      "30s",
+      "--max-reconnect",
+      "1m",
+      "--max-messages",
+      String(MAX_SYNC_MESSAGES),
+      "--max-db-size",
+      MAX_SYNC_DB_SIZE,
+    ]),
+    environment: wacliEnvironment(false),
+    emitsProtocolAcknowledgements: true,
+  });
+}
+
+export async function syncWhatsAppAuthOnce(
+  auth: WrenchAuth,
+  options: {
+    readonly dependencies?: WhatsAppWebRuntimeDependencies;
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+    readonly attempt: ProviderPluginLinkedDeviceAttemptBoundaryV1;
+  },
+): Promise<{ readonly messagesStored: number }> {
+  const linked = requireWhatsAppAuth(auth);
+  if (linked.subject === undefined) {
+    throw new Error("WhatsApp linked-device auth must be account-bound before sync");
+  }
+  const currentSubject = await probeWhatsAppWebSubject(linked, {
+    ...(options.dependencies === undefined
+      ? {}
+      : { dependencies: options.dependencies }),
+    ...(options.environment === undefined
+      ? {}
+      : { environment: options.environment }),
+    timeoutMs: 10_000,
+  });
+  if (currentSubject !== linked.subject) {
+    throw new Error("WhatsApp sync account did not match the bound auth realm");
+  }
+  const plan = await planWhatsAppSyncOnce(auth, options);
+  const run = options.dependencies?.run ?? runWacli;
+  await options.attempt.beforeExternalBegin();
+  const result = await run({
+    binary: plan.binary,
+    arguments: plan.arguments,
+    environment: plan.environment,
+    timeoutMs: 5 * 60_000,
+    maxOutputBytes: 1024 * 1024,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error("WhatsApp linked-device synchronization failed");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout.trim()) as unknown;
+  } catch {
+    throw new Error("WhatsApp linked-device synchronization returned malformed JSON");
+  }
+  if (
+    typeof parsed !== "object"
+    || parsed === null
+    || Array.isArray(parsed)
+    || Object.keys(parsed).sort().join(",") !== "data,error,success"
+    || !("success" in parsed)
+    || parsed.success !== true
+    || !("error" in parsed)
+    || parsed.error !== null
+    || !("data" in parsed)
+    || typeof parsed.data !== "object"
+    || parsed.data === null
+    || Array.isArray(parsed.data)
+  ) throw new Error("WhatsApp linked-device synchronization returned an unsupported response");
+  const data = parsed.data as Record<string, unknown>;
+  if (
+    Object.keys(data).sort().join(",") !== "messages_stored,synced"
+    || data.synced !== true
+    || !Number.isSafeInteger(data.messages_stored)
+    || (data.messages_stored as number) < 0
+  ) throw new Error("WhatsApp linked-device synchronization returned an unsupported response");
+  const finalSubject = await probeWhatsAppWebSubject(linked, {
+    ...(options.dependencies === undefined
+      ? {}
+      : { dependencies: options.dependencies }),
+    ...(options.environment === undefined
+      ? {}
+      : { environment: options.environment }),
+    timeoutMs: 10_000,
+  });
+  if (finalSubject !== linked.subject) {
+    throw new Error("WhatsApp linked-device account changed during sync");
+  }
+  return Object.freeze({ messagesStored: data.messages_stored as number });
+}

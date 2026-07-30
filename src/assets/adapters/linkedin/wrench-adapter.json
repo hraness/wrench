@@ -1,0 +1,411 @@
+{
+  "schemaVersion": 3,
+  "id": "linkedin",
+  "version": "1.0.0",
+  "displayName": "LinkedIn (Official API)",
+  "surfaceId": "linkedin",
+  "origins": [
+    "https://www.linkedin.com"
+  ],
+  "browserDomains": [
+    "www.linkedin.com"
+  ],
+  "operations": {
+    "posts.read": {
+      "description": "Use the code-owned official linkedin API contract for posts.read. GET /rest/posts/{urn}; FINDER /rest/posts?q=author; LinkedIn-Version 202606; no home-feed reconstruction",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "Read one post or list posts by one author",
+            "enum": [
+              "one",
+              "author"
+            ]
+          },
+          "post_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn share or UGC Post URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "author": {
+            "type": "string",
+            "description": "Exact person or organization author URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "start": {
+            "type": "number",
+            "description": "Zero-based author-list offset",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "count": {
+            "type": "number",
+            "description": "Bounded result count",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "sort": {
+            "type": "string",
+            "description": "Author-list ordering",
+            "enum": [
+              "LAST_MODIFIED",
+              "CREATED"
+            ]
+          },
+          "view": {
+            "type": "string",
+            "description": "Reader-visible or author-visible representation",
+            "enum": [
+              "READER",
+              "AUTHOR"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "provider": {
+        "provider": "linkedin",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.publish": {
+      "description": "Use the code-owned official linkedin API contract for posts.publish. initialize fixed LinkedIn image/document/video upload; upload bytes without OAuth on signed video parts; poll assets to AVAILABLE with actor-specific read scope; finalize video; POST /rest/posts; external article cards require explicit source/title and omit thumbnail; no URL scraping",
+      "risk": "R3",
+      "sideEffect": "Mutates linkedin through the exact confirmed posts.publish official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "author": {
+            "type": "string",
+            "description": "Exact authenticated person or administered organization URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact post commentary",
+            "minLength": 1,
+            "maxLength": 3000
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Post visibility",
+            "enum": [
+              "PUBLIC",
+              "CONNECTIONS"
+            ]
+          },
+          "media": {
+            "type": "array",
+            "description": "Images, or one video/document",
+            "items": {
+              "type": "file",
+              "description": "One reviewed post attachment; video must be MP4 and at least 75,000 bytes, with duration and codec validated by LinkedIn processing",
+              "maxBytes": 524288000,
+              "mediaTypes": [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "video/mp4",
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 20
+          },
+          "media_title": {
+            "type": "string",
+            "description": "Required title for a document; optional video title",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "alt_text": {
+            "type": "string",
+            "description": "Optional image alternative text",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "article_url": {
+            "type": "string",
+            "description": "Optional exact HTTPS source for an external article-card post",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "article_title": {
+            "type": "string",
+            "description": "Optional external article-card title",
+            "minLength": 1,
+            "maxLength": 399
+          },
+          "article_description": {
+            "type": "string",
+            "description": "Optional external article-card description",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "author",
+          "body"
+        ]
+      },
+      "provider": {
+        "provider": "linkedin",
+        "action": "posts.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.repost": {
+      "description": "Use the code-owned official linkedin API contract for posts.repost. POST /rest/posts with exact reshareContext.parent; main-feed distribution; actor- and subject-bound",
+      "risk": "R3",
+      "sideEffect": "Mutates linkedin through the exact confirmed posts.repost official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "author": {
+            "type": "string",
+            "description": "Exact authenticated person or administered organization URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "target_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn share or UGC Post URN to reshare",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact reshare commentary",
+            "minLength": 1,
+            "maxLength": 3000
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Reshare visibility",
+            "enum": [
+              "PUBLIC",
+              "CONNECTIONS"
+            ]
+          }
+        },
+        "required": [
+          "author",
+          "target_urn",
+          "body"
+        ]
+      },
+      "provider": {
+        "provider": "linkedin",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.read": {
+      "description": "Use the code-owned official linkedin API contract for comments.read. GET /rest/socialActions/{target}/comments; one level per request; explicit parent query for replies",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "target_urn": {
+            "type": "string",
+            "description": "Exact post or composite parent-comment URN",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "start": {
+            "type": "number",
+            "description": "Zero-based comment offset",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "count": {
+            "type": "number",
+            "description": "Bounded comment count",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "target_urn"
+        ]
+      },
+      "provider": {
+        "provider": "linkedin",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.create": {
+      "description": "Use the code-owned official linkedin API contract for comments.create. POST /rest/socialActions/{post}/comments with explicit actor and object URNs; text only",
+      "risk": "R3",
+      "sideEffect": "Mutates linkedin through the exact confirmed comments.create official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "description": "Exact authenticated person or administered organization URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "target_urn": {
+            "type": "string",
+            "description": "Exact post URN used in the endpoint path",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "object_urn": {
+            "type": "string",
+            "description": "Exact root activity/object URN required by LinkedIn",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact comment text",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "actor",
+          "target_urn",
+          "object_urn",
+          "body"
+        ]
+      },
+      "provider": {
+        "provider": "linkedin",
+        "action": "comments.create",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "replies.create": {
+      "description": "Use the code-owned official linkedin API contract for replies.create. POST /rest/socialActions/{parent-comment}/comments with explicit parentComment and object; text only",
+      "risk": "R3",
+      "sideEffect": "Mutates linkedin through the exact confirmed replies.create official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "description": "Exact authenticated person or administered organization URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "parent_comment_urn": {
+            "type": "string",
+            "description": "Exact composite parent-comment URN",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "object_urn": {
+            "type": "string",
+            "description": "Exact root post/object URN",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact reply text",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "actor",
+          "parent_comment_urn",
+          "object_urn",
+          "body"
+        ]
+      },
+      "provider": {
+        "provider": "linkedin",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "reactions.set": {
+      "description": "Use the code-owned official linkedin API contract for reactions.set. POST /rest/reactions?actor=... for a named reaction; DELETE composite reaction key clears any current actor reaction",
+      "risk": "R2",
+      "sideEffect": "Mutates linkedin through the exact confirmed reactions.set official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "description": "Exact authenticated person or administered organization URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "target_urn": {
+            "type": "string",
+            "description": "Exact post or comment URN",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "reaction": {
+            "type": "string",
+            "description": "Required reaction type when enabled is true; omitted when false",
+            "enum": [
+              "LIKE",
+              "PRAISE",
+              "EMPATHY",
+              "INTEREST",
+              "APPRECIATION",
+              "ENTERTAINMENT"
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Create the named reaction when true; clear any current actor reaction when false"
+          }
+        },
+        "required": [
+          "actor",
+          "target_urn",
+          "enabled"
+        ]
+      },
+      "provider": {
+        "provider": "linkedin",
+        "action": "reactions.set",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}

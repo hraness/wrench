@@ -1,0 +1,437 @@
+{
+  "schemaVersion": 4,
+  "id": "facebook-marketplace-web",
+  "version": "1.1.1",
+  "displayName": "Facebook Marketplace (Authenticated Internal API)",
+  "surfaceId": "facebook-marketplace",
+  "origins": [
+    "https://www.facebook.com"
+  ],
+  "browserDomains": [
+    "www.facebook.com"
+  ],
+  "operations": {
+    "content.edit": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-marketplace state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Exact Marketplace listing ID",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "body": {
+            "type": "string",
+            "description": "Replacement text",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "listing_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "content.edit",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
+      "risk": "R2",
+      "sideEffect": "Changes remote facebook-marketplace state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Exact Marketplace listing ID",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired saved state"
+          }
+        },
+        "required": [
+          "listing_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "content.share": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-marketplace state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Exact Marketplace listing ID",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "destination": {
+            "type": "string",
+            "description": "Reviewed share destination",
+            "enum": [
+              "capture-required"
+            ]
+          }
+        },
+        "required": [
+          "listing_id",
+          "destination"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "content.share",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "feeds.read": {
+      "description": "Observed contract: bounded initial signed-in Marketplace HTML bootstrap plus current-bundle-resolved Relay continuation, with exact current-user proof binding, complete streamed-page assembly, and no client-script execution.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Reviewed Marketplace feed",
+            "enum": [
+              "marketplace"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "wrench-issued authenticated cursor returned by a complete prior Marketplace page; one chain supports at most 48 provider pages",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum unique listing projections",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "feeds.read",
+        "contractVersion": 2,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "listings.publish": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-marketplace state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Listing title",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "body": {
+            "type": "string",
+            "description": "Listing description",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "price": {
+            "type": "string",
+            "description": "Decimal listing price",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "currency": {
+            "type": "string",
+            "description": "Three-letter currency",
+            "minLength": 3,
+            "maxLength": 3
+          },
+          "category": {
+            "type": "string",
+            "description": "Reviewed provider category",
+            "minLength": 1,
+            "maxLength": 120,
+            "enum": [
+              "capture-required"
+            ]
+          },
+          "condition": {
+            "type": "string",
+            "description": "Reviewed item condition",
+            "minLength": 1,
+            "maxLength": 80,
+            "enum": [
+              "capture-required"
+            ]
+          },
+          "location": {
+            "type": "string",
+            "description": "Marketplace location label",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "delivery": {
+            "type": "string",
+            "description": "Reviewed delivery option",
+            "minLength": 1,
+            "maxLength": 80,
+            "enum": [
+              "capture-required"
+            ]
+          },
+          "images": {
+            "type": "array",
+            "description": "One to four exact listing images",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "file",
+              "description": "One listing image",
+              "maxBytes": 1073741824,
+              "mediaTypes": [
+                "image/*"
+              ]
+            }
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "price",
+          "currency",
+          "category",
+          "condition",
+          "location",
+          "delivery",
+          "images"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "listings.publish",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "listings.read": {
+      "description": "Observed contract: exact current-user and requested-listing-bound product-details HTML bootstrap. wrench does not execute Facebook's separately observed item-seen mutation.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Exact nonzero numeric Marketplace listing ID",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        },
+        "required": [
+          "listing_id"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "listings.read",
+        "contractVersion": 2,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "media.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Exact Marketplace listing ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "listing_id"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.list": {
+      "description": "Capture-required contract reservation: Marketplace inbox scope must remain distinct from personal Messenger and requires listing-bound capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Reviewed inbox folder",
+            "enum": [
+              "inbox"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum thread summaries",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Exact Marketplace listing ID bound to the conversation",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact conversation ID",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum messages",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "listing_id",
+          "conversation_id"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: Marketplace send requires exact listing, seller/buyer, thread, and protocol-correct Messenger binding.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-marketplace state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Exact Marketplace listing ID bound to the conversation",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact conversation ID",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "body": {
+            "type": "string",
+            "description": "Message body",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "listing_id",
+          "conversation_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-marketplace",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    }
+  }
+}

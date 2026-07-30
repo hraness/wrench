@@ -1,0 +1,2 @@
+# Deliberately empty. The state helper supplies this trusted file explicitly so
+# Bun never loads configuration or preloads from its untrusted bound cwd.

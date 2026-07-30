@@ -1,0 +1,583 @@
+{
+  "schemaVersion": 4,
+  "id": "facebook-group-web",
+  "version": "1.0.0",
+  "displayName": "Facebook Group (Authenticated Internal API)",
+  "surfaceId": "facebook-group",
+  "origins": [
+    "https://www.facebook.com"
+  ],
+  "browserDomains": [
+    "www.facebook.com"
+  ],
+  "operations": {
+    "comments.create": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "body": {
+            "type": "string",
+            "description": "Comment body",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "comments.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "comments.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum comments",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "communities.membership.set": {
+      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
+      "risk": "R2",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "description": "Exact Facebook Group ID",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "joined": {
+            "type": "boolean",
+            "description": "Exact desired membership state"
+          }
+        },
+        "required": [
+          "group_id",
+          "joined"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "communities.membership.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "content.edit": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "body": {
+            "type": "string",
+            "description": "Replacement text",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "content.edit",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
+      "risk": "R2",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired saved state"
+          }
+        },
+        "required": [
+          "post_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "content.share": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "destination": {
+            "type": "string",
+            "description": "Reviewed share destination",
+            "enum": [
+              "capture-required"
+            ]
+          }
+        },
+        "required": [
+          "post_id",
+          "destination"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "content.share",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "feeds.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Reviewed feed",
+            "enum": [
+              "home"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum results",
+            "minimum": 1,
+            "maximum": 30
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "likes.set": {
+      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
+      "risk": "R2",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "liked": {
+            "type": "boolean",
+            "description": "Exact desired like state"
+          }
+        },
+        "required": [
+          "post_id",
+          "liked"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "likes.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "media.publish": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "media": {
+            "type": "file",
+            "description": "Exact media file",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "image/*",
+              "video/*"
+            ]
+          },
+          "caption": {
+            "type": "string",
+            "description": "Optional media caption",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "audience": {
+            "type": "string",
+            "description": "Explicit audience",
+            "enum": [
+              "default"
+            ]
+          }
+        },
+        "required": [
+          "media"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "media.publish",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "media.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "posts.publish": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Post body",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "attachment": {
+            "type": "file",
+            "description": "Optional exact post attachment",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "image/*",
+              "video/*",
+              "image/gif"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "description": "Explicit audience",
+            "enum": [
+              "default"
+            ]
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "posts.publish",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "posts.quote": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "body": {
+            "type": "string",
+            "description": "Quote text",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "posts.quote",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "posts.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "posts.repost": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "reposted": {
+            "type": "boolean",
+            "description": "Exact desired repost state"
+          }
+        },
+        "required": [
+          "post_id",
+          "reposted"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "reactions.set": {
+      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
+      "risk": "R2",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "reaction": {
+            "type": "string",
+            "description": "Exact desired reaction",
+            "enum": [
+              "none",
+              "like",
+              "love",
+              "care",
+              "haha",
+              "wow",
+              "sad",
+              "angry"
+            ]
+          }
+        },
+        "required": [
+          "post_id",
+          "reaction"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "reactions.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote facebook-group state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Facebook post ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "comment_id": {
+            "type": "string",
+            "description": "Exact parent comment ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "body": {
+            "type": "string",
+            "description": "Reply body",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "post_id",
+          "comment_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "facebook-group",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    }
+  }
+}

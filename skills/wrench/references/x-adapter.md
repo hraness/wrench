@@ -1,0 +1,130 @@
+# X authenticated web API adapter
+
+The `x-web` schema-v4 adapter executes fixed, code-owned first-party `x.com` GraphQL/internal API exchanges with a signed-in cookie realm. A browser may record a managed HAR, bootstrap private session material, or resolve a reviewed current operation revision or transaction value. It never reads a feed, publishes, likes, bookmarks, or messages through X's DOM.
+
+First-party traffic is not the same as a documented public API. Use this local client only with the user's account authority, comply with applicable provider rules, and keep bulk or unsolicited automation outside wrench.
+
+## Contents
+
+- [Install and inspect](#install-and-inspect)
+- [Configure and bind the signed-in realm](#configure-and-bind-the-signed-in-realm)
+- [Use observed R1 contracts](#use-observed-r1-contracts)
+- [Resolve current X material](#resolve-current-x-material)
+- [Preserve capture-required mutations](#preserve-capture-required-mutations)
+- [Other capture-required operations](#other-capture-required-operations)
+- [Risk and confirmation](#risk-and-confirmation)
+- [Recapture on drift](#recapture-on-drift)
+
+## Install and inspect
+
+```sh
+wrench adapter validate src/assets/adapters/x/wrench-web-adapter.json
+wrench adapter install src/assets/adapters/x/wrench-web-adapter.json
+wrench capabilities x-web --json
+```
+
+`observed` means the exact code-owned contract version may execute. `capture-required` performs no request and never opens a browser-action fallback.
+
+The separate `x` adapter uses X's documented OAuth API. It covers documented reverse-chronological/user/mentions/List/recent-search/bookmark reads and approved posting, reply, thread, repost, bookmark, Article, media, and legacy-DM surfaces; it never supplies For You. Encrypted X Chat remains a separate cryptographic contract. Keep these transports and auth realms distinct, and never switch among them after preview or because one lacks coverage.
+
+## Configure and bind the signed-in realm
+
+Prefer a target-filtered browser cookie source:
+
+```sh
+wrench auth add x-main --cookie-source arc --cookie-profile "Profile 2"
+wrench auth bind x-main --site x
+wrench auth list --json
+```
+
+Use a private profile snapshot only when current local/session storage or first-party assets are needed to recover an approved authorization value or registered-operation revision.
+
+Before private reads or mutations, resolve the current stable X user ID through a reviewed account request and compare it with the realm's expected binding. Bind created posts, replies, quotes, reposts, likes, bookmarks, and DMs to that account plus the exact requested target. Fail before dispatch on account ambiguity or mismatch.
+
+## Use observed R1 contracts
+
+The current registry marks these code-owned reads observed:
+
+- `feeds.read`: one bounded For You, Following, user, List, search, or bookmarks page;
+- `posts.read`: one exact post through the current TweetDetail query;
+- `comments.read`: one bounded TweetDetail conversation/reply page.
+
+Authorized direct live evidence for this contract version covers For You, bookmarks, one exact post, and its bounded comments. Following, user, List, and search remain declared modes of the observed `feeds.read` contract; check `wrench capabilities x-web --json` for the installed input schema and let current preflight fail closed on revision drift.
+
+The only observed web writes are `likes.set` and `content.save`, both R2 desired-state mutations. Their evidence comes from prior reversible live fixtures, not the current read-only probes. Preview the exact post ID and desired `liked` or `saved` boolean, confirm the returned digest, and inspect the receipt. wrench does not mark either mutation verified until an independent TweetResultByRestId readback matches that boolean.
+
+Examples:
+
+```sh
+wrench x-web feeds.read \
+  --input '{"feed":"for-you","limit":25}' \
+  --auth x-main --json
+
+wrench x-web feeds.read \
+  --input '{"feed":"bookmarks","limit":25}' \
+  --auth x-main --json
+
+wrench x-web posts.read \
+  --input '{"post_id":"POST_ID"}' \
+  --auth x-main --json
+
+wrench x-web comments.read \
+  --input '{"post_id":"ROOT_POST_ID","limit":50}' \
+  --auth x-main --json
+
+```
+
+One page is not a completeness claim. Return a provider cursor only after projecting the complete provider page. If X returns more matching posts or replies than the requested projection limit, fail without exposing the end cursor instead of silently skipping unseen entries. User and List feeds additionally require the response to echo exactly the requested user/List identity. Keep inbox listing separate from conversation read so the R1 contract can exclude acknowledgement traffic.
+
+DM folder/conversation reads remain `capture-required` because current X Chat events are encrypted. They require the separate reviewed key-recovery, plaintext projection, and acknowledgement-free contract. Native X Article read remains `capture-required` until the entitlement-specific detail exchange is captured and projected.
+
+## Resolve current X material
+
+Code owns the operation name, exact GraphQL path, feature variables, query/body shape, and response projection. Current registered-operation revisions may be recovered from bounded first-party assets or capture metadata only by exact operation prefix. Require one unique match.
+
+Acquire cookies through the auth layer. Route the reviewed CSRF value only to the fixed CSRF header and a captured/storage authorization value only to `authorization`. Keep both in memory. Never put a bearer value, CSRF token, cookie, feature contract, query revision, or raw GraphQL variables in a manifest, preview, receipt, URL log, or generic output.
+
+Return `capture-required` on a missing or ambiguous operation revision, feature drift, token-source drift, response-shape drift, or account-binding failure. Do not launch the X composer to compensate.
+
+## Preserve capture-required mutations
+
+The current registry keeps these text/desired-state exchanges capture-required:
+
+- `posts.publish` (`R3`): one text post;
+- `threads.publish` (`R3`): one confirmed ordered root/self-reply schedule;
+- `replies.create` (`R3`): one text reply bound to an exact parent;
+- `posts.repost` (`R3`): exact desired repost state;
+- `posts.quote` (`R3`): one text quote bound to an exact post.
+
+Current `x-client-transaction-id` generation is code-owned: wrench resolves the unique wrapper module, exported helper, and lazy-module evidence from the current first-party main bundle, calls that cached helper through one contained private agent-browser session, closes and cleans the session, then places the ephemeral value only on the already-reviewed in-origin mutation request. Drift or bootstrap failure occurs before the durable dispatch boundary and is never retried. This prerequisite does not by itself graduate the contract states listed above.
+
+`likes.set` and `content.save` (`R2`) are the only observed web mutations. Each binds the exact account and post, selects only the matching create/delete mutation for the confirmed desired state, validates the operation-specific `Done` response, and independently reads the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. Text posts, threads, replies, reposts, quotes, media, DMs, and Articles did not graduate from those fixtures.
+
+Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.
+
+Treat repost, like, and bookmark as desired state only when both create and delete mutations are reviewed and response-bound. A state mismatch is not permission to issue another mutation blindly.
+
+Media remains capture-required where the exact upload/finalize/attach exchange has not graduated with the text mutation. Do not ignore a supplied file or fall back to DOM upload.
+
+## Other capture-required operations
+
+The current registry keeps these unavailable:
+
+- `messaging.list` and `messaging.read` (`R1`) until verified X Chat key recovery, plaintext projection, and acknowledgement-free handling are installed;
+- `messaging.send` (`R3`) until its exact current mutation, conversation/user target, response, and media path are captured;
+- `articles.read` (`R1`) until the entitlement-specific detail read is captured;
+- `articles.publish` (`R3`) until editor, cover upload, publish response, and account/article bindings are captured.
+
+No operation may be guessed from downloaded bundles or copied network snippets. A capture-required DM send must not type into X's message composer.
+
+Encrypted X Chat is not a normal HAR template. Plaintext and send require the separate key, signature, Juicebox, and exact encrypted-payload design in [the Wrench X Chat plan](../../../kb/plans/wrench-x-chat-xdk.md).
+
+## Risk and confirmation
+
+R1 reads run only after account binding and exclusion of seen/read acknowledgement requests. Likes and bookmarks are R2 desired state. Posts, replies, quotes, reposts, threads, DMs, and Articles are R3.
+
+Preview the exact account realm, target, body/items, attachment hashes, reply settings, desired state, contract hash, and dispatch schedule. Confirm once. Require duplicate refusal. If a request left but its response or target binding is uncertain, report `indeterminate` and preserve the ledger.
+
+## Recapture on drift
+
+Recapture when the operation revision, feature variables, path, request fields, authorization/CSRF source, response status/content type, projection, or identity binding changes. Update owned code, bump the contract and adapter versions, and rerun deterministic plus authorized live tests. Never patch a live request from arbitrary HAR values and never substitute browser clicks.

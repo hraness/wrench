@@ -1,0 +1,54 @@
+import { describe, expect, test } from "bun:test";
+
+import __CAMEL_NAME__WebManifest from "./wrench-adapter.json";
+import __CAMEL_NAME__WebPlugin, {
+  __CONSTANT_PREFIX___WEB_OPERATION_NAMES,
+  __CONSTANT_PREFIX___WEB_OPERATIONS,
+} from "./plugin";
+
+describe("__DISPLAY_NAME__ source provider plugin scaffold", () => {
+  test("exports one capture-required ProviderPluginV1 definition", () => {
+    expect(__CAMEL_NAME__WebPlugin).toMatchObject({
+      apiVersion: 1,
+      id: __PLUGIN_ID_JSON__,
+      version: "0.1.0",
+      sourceKind: "source",
+    });
+    expect(__CAMEL_NAME__WebPlugin.bindings).toHaveLength(1);
+    const binding = __CAMEL_NAME__WebPlugin.bindings[0];
+    expect(binding).toMatchObject({
+      transport: "web-session-api",
+      surfaceId: __SITE_ID_JSON__,
+      origin: __ORIGIN_JSON__,
+      operations: [{
+        name: __OPERATION_JSON__,
+        contractVersions: [1],
+      }],
+    });
+    expect(binding?.subject.matches("__SITE_ID__:unreviewed")).toBeFalse();
+  });
+
+  test("keeps the installable selector and owned contract capture-required", () => {
+    expect(__CAMEL_NAME__WebManifest.schemaVersion).toBe(4);
+    expect(__CAMEL_NAME__WebManifest.id).toBe(__PLUGIN_ID_JSON__);
+    expect(__CAMEL_NAME__WebManifest.surfaceId).toBe(__SITE_ID_JSON__);
+    expect(Object.keys(__CAMEL_NAME__WebManifest.operations)).toEqual([
+      __OPERATION_JSON__,
+    ]);
+    const operation = __CAMEL_NAME__WebManifest.operations[__OPERATION_JSON__];
+    expect(operation.webSession).toMatchObject({
+      site: __SITE_ID_JSON__,
+      action: __OPERATION_JSON__,
+      contractVersion: 1,
+    });
+    expect("browser" in operation).toBe(false);
+    expect("provider" in operation).toBe(false);
+    expect("reviewedTemplate" in operation).toBe(false);
+    expect(__CONSTANT_PREFIX___WEB_OPERATION_NAMES).toEqual([__OPERATION_JSON__]);
+    expect(__CONSTANT_PREFIX___WEB_OPERATIONS[__OPERATION_JSON__]).toMatchObject({
+      effect: __EFFECT_JSON__,
+      risk: __RISK_JSON__,
+      state: "capture-required",
+    });
+  });
+});

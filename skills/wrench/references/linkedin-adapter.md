@@ -1,0 +1,180 @@
+# LinkedIn authenticated web API adapter
+
+The current `linkedin-web` schema-v4 adapter has no observed operation. Every
+consumer-web capability is `capture-required`, including inbox listing and the
+explicit member-profile, organization-Page, recommended-connection, and
+connection-invitation reservations. Its strict first-party implementation is
+retained as inert recapture material, but the execution boundary refuses before
+cookie acquisition, browser bootstrap, or network traffic.
+
+A browser may record a managed HAR, bootstrap the private session, or resolve the current registered-query revision and CSRF material. It never lists an inbox, opens a conversation, sends a message, or performs another semantic action through LinkedIn's DOM.
+
+First-party traffic is not the same as a documented public API. Use this local client only with the user's account authority, comply with applicable provider rules, and keep bulk outreach and engagement outside wrench.
+
+## Contents
+
+- [Install and inspect](#install-and-inspect)
+- [Configure the signed-in realm](#configure-the-signed-in-realm)
+- [Recapture inbox listing](#recapture-inbox-listing)
+- [Resolve current LinkedIn material](#resolve-current-linkedin-material)
+- [Preserve capture-required operations](#preserve-capture-required-operations)
+- [Risk and confirmation](#risk-and-confirmation)
+- [Recapture on drift](#recapture-on-drift)
+
+## Install and inspect
+
+Validate the reviewed manifest before installation:
+
+```sh
+wrench adapter validate src/assets/adapters/linkedin/wrench-web-adapter.json
+wrench adapter install src/assets/adapters/linkedin/wrench-web-adapter.json
+wrench capabilities linkedin-web --json
+```
+
+Treat capability state as authoritative. `observed` means the exact contract version is eligible to execute after its account and current-session preflight passes. `capture-required` means the operation is reserved but unavailable; it performs no request and has no browser fallback.
+
+The separate `linkedin` adapter uses LinkedIn's documented OAuth API for approved post, comment, reply, repost, and reaction scopes. It does not supply the consumer Home feed or consumer inbox. Keep its OAuth token and preview separate from the `linkedin-web` cookie realm, and never switch transports silently.
+
+## Configure the signed-in realm
+
+Prefer target-filtered Arc or Chrome cookies:
+
+```sh
+wrench auth add linkedin-main --cookie-source arc --cookie-profile "Profile 2"
+wrench auth bind linkedin-main --site linkedin
+wrench auth list --json
+```
+
+Use a private profile snapshot only when current browser storage or first-party assets are required for bootstrap. Never attach the runtime operation to a live inbox tab and never copy LinkedIn session material into an OAuth token document.
+
+Bind `linkedin-main` to one stable current member/person identity before private reads or mutations. If organization operations are later added, bind the selected organization actor separately and prove that the current member can act for it. Reject account ambiguity, login changes, request-actor mismatch, and response-actor mismatch before dispatch.
+
+The retained candidate parser derives a mailbox only when the current-account
+response directly names one bounded `miniProfile` reference and exactly one
+included entity binds that reference to the same numeric member subject. It
+does not scan other included profile entities as a fallback. Missing,
+unbound, conflicting, or ambiguous direct bindings fail.
+
+The retained client can strictly review a short-lived `__cf_bm` edge-cookie
+rotation: it accepts only that name, validates origin, attributes, expiry, and
+deletion semantics, and binds the encrypted cache to the auth-locator hash.
+Removing the auth locator removes that cache. Current execution refuses before
+this client is created, so rotation code cannot turn a login, checkpoint, or
+stale contract into an executable capability.
+
+Verification on July 23, 2026 produced a durable projection-drift failure and
+every available LinkedIn realm returned `401` at current-account preflight.
+Reauthentication alone does not re-promote the contract; a fresh low-stakes
+capture must also prove the current identity, mailbox, query, response
+projection, and completeness semantics.
+
+## Recapture inbox listing
+
+`messaging.list` is a capture-required reservation. Version 1.1.0 remains
+archived as historical evidence of the formerly observed bundle; current
+version 1.2.0 deliberately demotes it and cannot execute. The intended folder
+input still reserves:
+
+- `focused` for the main inbox;
+- `other` for the additional inbox;
+- `requests` for pending message requests;
+- `archive`;
+- `spam`;
+- `all` for conversations in the returned inbox page.
+
+The prior candidate projected bounded conversation identity, participants,
+latest-message preview, read metadata, and an opaque sync token. Those shapes
+are retained for comparison, not claimed as current. A new capture must prove
+folder classification, whether continuation is executable, when a page is
+complete, and the exclusion of presence, delivery acknowledgements,
+seen/read receipts, and notification-badge requests. An inbox preview must not
+be described as full conversation history.
+
+Inspect the reservations without executing them:
+
+```sh
+wrench capabilities linkedin-web --json
+```
+
+Captured evidence identifies article, feed, mailbox-count, secondary-inbox,
+conversation-list, and message endpoint families. Every family remains
+capture-required until its current variables, bounded target-bound projection,
+completeness, and incidental effects are proved. Reading a conversation must
+use only a reviewed message query and must not mark it read.
+
+## Profiles, organization Pages, and connections
+
+The adapter reserves four bounded semantic operations without claiming that
+their internal requests are known:
+
+- `profiles.read` selects one exact public profile identifier or provider
+  profile URN;
+- `organizations.read` selects one exact organization public identifier or
+  organization URN and means viewing that LinkedIn Page, not acting as it;
+- `relationships.recommendations.read` selects the `all` recommended-connections
+  surface and one bounded page;
+- `relationships.connect` sends one confirmed invitation to an exact profile
+  URN, with an optional note of at most 300 characters.
+
+All four are `capture-required`. The three reads are R1; the invitation is R3
+with a 24-hour local-at-most-once window. Their presence in `wrench
+capabilities` makes the CLI shape reviewable and stable while guaranteeing that
+no request runs before a managed HAR proves the exact request, viewer scope,
+target, response, paging, completeness, and duplicate-state behavior.
+
+Do not treat `organizations.read` as organization-actor authority. A future
+Page-authored post or comment must separately bind the current member, selected
+organization actor, administered-role entitlement, request actor, and returned
+actor. `comments.create` targets an exact post URN; LinkedIn does not have a
+separate wrench operation for “commenting on a profile” or “commenting on a
+Page.” A member- or organization-authored post remains the comment target.
+
+## Resolve current LinkedIn material
+
+Derive the `csrf-token` header from exactly one bounded `JSESSIONID` cookie. Strip only the reviewed wrapper quotes and require the expected `ajax:` token form. Never log or return the cookie or derived token.
+
+Resolve a registered query such as `voyagerFeedDashMainFeed` or `messengerMessages` from bounded current candidates by exact operation prefix. Require exactly one `<prefix>.<32-hex>` match. Zero matches mean drift; several matches mean ambiguity. Both fail before the API request.
+
+Keep query IDs, CSRF material, cookies, variables, feature sets, and private identifiers out of manifests and receipts.
+
+## Preserve capture-required operations
+
+The current registry keeps these unavailable until their exact first-party exchanges are captured and reviewed:
+
+- `feeds.read`, `profiles.read`, `organizations.read`, `relationships.recommendations.read`, `messaging.list`, `messaging.read`, `posts.read`, `comments.read`, and `articles.read` (`R1`);
+- `messaging.send` (`R3`);
+- `posts.publish`, `posts.repost`, and `posts.quote` (`R3`);
+- `comments.create` and `replies.create` (`R3`);
+- `relationships.connect` (`R3`);
+- `reactions.set` (`R2`);
+- `articles.publish` (`R3`);
+
+Do not guess a Voyager/GraphQL mutation from a bundle, replay a captured payload, or use the composer as a fallback. To graduate one operation:
+
+1. capture one exact low-stakes fixture;
+2. bind the current member/organization actor;
+3. bind conversation/profile/organization/post/root/parent target IDs;
+4. bind returned message/comment/post/article identity and successful state;
+5. exclude unrelated background mutations;
+6. test revision drift, account mismatch, response drift, and uncertainty;
+7. bump the contract and adapter versions.
+
+For `messaging.send`, use an already-read, user-approved, low-stakes conversation. Keep recruiting and employment threads out of fixtures. A successful pressure test requires the internal `createMessage` response contract and an independent R1 read of the exact returned message; a visibly cleared textbox is irrelevant. Text-only and each attachment family are separate fixtures: the current manifest accepts one reviewed image, GIF, MP4 video, PDF, presentation, or word-processing document, but that input schema remains inert until upload initialization, byte transfer, asset ownership, message association, and independent readback are all captured and response-bound.
+
+For `relationships.connect`, use a user-approved profile that is not already
+connected or invitation-pending. Prove the preflight relationship state, exact
+target profile URN, optional note, returned invitation identity/state, and
+independent relationship readback. A disabled Connect button is not evidence.
+
+## Risk and confirmation
+
+R1 reads run only after they graduate and pass account binding. `reactions.set`
+is R2 only as an exact desired-state create/delete pair. Messages, comments,
+replies, posts, reposts, quotes, connection requests, and article publication
+are R3.
+
+Every R2/R3 operation must preview the exact account realm, actor, target, text/media hashes, side effect, contract hash, and dispatch schedule. Confirm once. Require local duplicate refusal. Treat an uncertain response after request start as `indeterminate`; never retry by clicking LinkedIn or by changing message whitespace.
+
+## Recapture on drift
+
+Fail before the semantic request when the registered query, path, allowed query fields, Rest.li shape, feature contract, CSRF source, response status/content type, projection, or target/account binding changes. Restore the affected operation to `capture-required`, record a new managed HAR, update owned code, and rerun deterministic plus authorized live tests. Never update the client directly from arbitrary live traffic.

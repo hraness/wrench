@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "id": "linkedin",
+  "version": "0.4.0",
+  "displayName": "LinkedIn",
+  "origins": [
+    "https://www.linkedin.com"
+  ],
+  "browserDomains": [
+    "www.linkedin.com",
+    "*.linkedin.com",
+    "*.licdn.com"
+  ],
+  "operations": {
+    "profile.read": {
+      "description": "Read visible content from one LinkedIn member profile. Signed-in page loads may still emit LinkedIn telemetry.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "profile_slug": {
+            "type": "string",
+            "description": "The member slug from a linkedin.com/in/<slug> profile URL.",
+            "minLength": 1,
+            "maxLength": 100,
+            "format": "path-segment"
+          }
+        },
+        "required": [
+          "profile_slug"
+        ]
+      },
+      "browser": {
+        "timeoutMs": 30000,
+        "maxOutputBytes": 1048576,
+        "steps": [
+          {
+            "kind": "navigate",
+            "path": "/in/${input.profile_slug}/"
+          },
+          {
+            "kind": "read"
+          }
+        ]
+      }
+    },
+    "messaging.send": {
+      "description": "Send one exact message in an existing LinkedIn conversation after digest confirmation.",
+      "risk": "R3",
+      "sideEffect": "Send a visible message to the existing conversation; opening it may also update LinkedIn read-state signals.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "conversation_url": {
+            "type": "string",
+            "description": "Exact existing conversation URL on https://www.linkedin.com.",
+            "minLength": 1,
+            "maxLength": 8192,
+            "format": "url",
+            "urlPathPrefixes": [
+              "/messaging/thread/"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Exact message text to send.",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "conversation_url",
+          "message"
+        ]
+      },
+      "browser": {
+        "timeoutMs": 30000,
+        "maxOutputBytes": 1048576,
+        "steps": [
+          {
+            "kind": "navigate-input",
+            "input": "conversation_url"
+          },
+          {
+            "kind": "wait-text",
+            "text": "Press Enter to Send"
+          },
+          {
+            "kind": "find",
+            "locator": {
+              "by": "role",
+              "value": "textbox",
+              "name": "Write a message…",
+              "exact": true
+            },
+            "action": "fill",
+            "with": "message"
+          },
+          {
+            "kind": "press",
+            "key": "Enter",
+            "dispatch": true
+          },
+          {
+            "kind": "assert-text",
+            "text": "${input.message}"
+          },
+          {
+            "kind": "assert-input-empty",
+            "locator": {
+              "by": "role",
+              "value": "textbox",
+              "name": "Write a message…",
+              "exact": true
+            }
+          }
+        ]
+      }
+    }
+  }
+}

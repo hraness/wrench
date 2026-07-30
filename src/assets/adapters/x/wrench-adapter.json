@@ -1,0 +1,700 @@
+{
+  "schemaVersion": 3,
+  "id": "x",
+  "version": "1.0.0",
+  "displayName": "X (Official API)",
+  "surfaceId": "x",
+  "origins": [
+    "https://x.com"
+  ],
+  "browserDomains": [
+    "x.com"
+  ],
+  "operations": {
+    "feeds.read": {
+      "description": "Use the code-owned official x API contract for feeds.read. fixed X v2 reverse-chron/user/mentions/List/recent-search/bookmark endpoints with endpoint-specific no-skip page minima; never For You",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Exact official timeline or discovery surface",
+            "enum": [
+              "home-reverse-chronological",
+              "user",
+              "mentions",
+              "list",
+              "recent-search",
+              "bookmarks"
+            ]
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Exact 1-19 digit X user ID for user or mentions feeds",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "list_id": {
+            "type": "string",
+            "description": "Exact 1-19 digit X List ID",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "query": {
+            "type": "string",
+            "description": "Recent-search query covering at most seven days",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque provider pagination token",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Bounded result count",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "since_id": {
+            "type": "string",
+            "description": "Return posts newer than this 1-19 digit post ID",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "until_id": {
+            "type": "string",
+            "description": "Return posts older than this 1-19 digit post ID",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Inclusive ISO-8601 start time",
+            "minLength": 20,
+            "maxLength": 40
+          },
+          "end_time": {
+            "type": "string",
+            "description": "Exclusive ISO-8601 end time",
+            "minLength": 20,
+            "maxLength": 40
+          },
+          "exclude_replies": {
+            "type": "boolean",
+            "description": "Exclude replies where the endpoint supports it"
+          },
+          "exclude_reposts": {
+            "type": "boolean",
+            "description": "Exclude reposts where the endpoint supports it"
+          },
+          "sort": {
+            "type": "string",
+            "description": "Recent-search ordering",
+            "enum": [
+              "recency",
+              "relevancy"
+            ]
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.read": {
+      "description": "Use the code-owned official x API contract for posts.read. GET /2/tweets by bounded IDs with fixed rich fields and expansions",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_ids": {
+            "type": "array",
+            "description": "Unique exact X post IDs",
+            "items": {
+              "type": "string",
+              "description": "One exact 1-19 digit post ID",
+              "minLength": 1,
+              "maxLength": 19
+            },
+            "minItems": 1,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "post_ids"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.read": {
+      "description": "Use the code-owned official x API contract for comments.read. GET recent or entitled full-archive search query conversation_id; cursor-preserving and never labeled complete",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact 1-19 digit root X post ID",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "window": {
+            "type": "string",
+            "description": "Recent seven-day search or entitled full-archive search",
+            "enum": [
+              "recent-7-days",
+              "full-archive"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque reply-search next token",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Bounded reply count",
+            "minimum": 10,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "messaging.list": {
+      "description": "Use the code-owned official x API contract for messaging.list. subject-bound GET legacy DM events or encrypted Chat conversations/events; Chat exposes metadata, request presence, and ciphertext envelopes but not plaintext or inbox folders",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "view": {
+            "type": "string",
+            "description": "Legacy DM events, encrypted Chat conversations, or encrypted Chat events",
+            "enum": [
+              "all",
+              "participant",
+              "conversation",
+              "chat-conversations",
+              "chat-events"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Exact participant, legacy DM conversation, or Chat conversation ID selected by view",
+            "minLength": 1,
+            "maxLength": 39
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque legacy DM or Chat pagination token",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Bounded event or conversation count",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "view"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "messaging.read": {
+      "description": "Use the code-owned official x API contract for messaging.read. subject-bound GET /2/dm_events/{event}; exact response identity; legacy DM only, not encrypted Chat",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "Exact 1-19 digit legacy DM event ID",
+            "minLength": 1,
+            "maxLength": 19
+          }
+        },
+        "required": [
+          "event_id"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "messaging.send": {
+      "description": "Use the code-owned official x API contract for messaging.send. optional official media upload then POST legacy DM message; explicit opt-in; not encrypted Chat",
+      "risk": "R3",
+      "sideEffect": "Mutates x through the exact confirmed messaging.send official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_kind": {
+            "type": "string",
+            "description": "Send to one participant or existing legacy DM conversation",
+            "enum": [
+              "participant",
+              "conversation"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Exact participant or legacy DM conversation ID",
+            "minLength": 1,
+            "maxLength": 39
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional exact legacy DM text; text or media is required",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional single legacy DM image, GIF, or video",
+            "maxBytes": 536870912,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "video/mp4"
+            ]
+          },
+          "media_alt_text": {
+            "type": "string",
+            "description": "Optional accessibility text applied to reviewed JPEG/PNG DM media",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "recipient_opted_in": {
+            "type": "boolean",
+            "description": "Required acknowledgement that the recipient opted into automated contact",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id",
+          "recipient_opted_in"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.publish": {
+      "description": "Use the code-owned official x API contract for posts.publish. optional official X v2 media upload then POST /2/tweets; media/poll union enforced",
+      "risk": "R3",
+      "sideEffect": "Mutates x through the exact confirmed posts.publish official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Optional exact post text; text, media, or a poll is required",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "media": {
+            "type": "array",
+            "description": "Up to four images, or one GIF/video",
+            "items": {
+              "type": "file",
+              "description": "One reviewed X post attachment",
+              "maxBytes": 536870912,
+              "mediaTypes": [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "video/mp4"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 4
+          },
+          "media_alt_texts": {
+            "type": "array",
+            "description": "Accessibility text aligned one-to-one with JPEG/PNG media",
+            "items": {
+              "type": "string",
+              "description": "One exact image description",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "minItems": 1,
+            "maxItems": 4
+          },
+          "poll_options": {
+            "type": "array",
+            "description": "Two to four poll choices",
+            "items": {
+              "type": "string",
+              "description": "One poll choice",
+              "minLength": 1,
+              "maxLength": 25
+            },
+            "minItems": 2,
+            "maxItems": 4
+          },
+          "poll_duration_minutes": {
+            "type": "number",
+            "description": "Poll duration in minutes",
+            "minimum": 5,
+            "maximum": 10080
+          },
+          "reply_settings": {
+            "type": "string",
+            "description": "Who may reply; everyone means omit the provider field",
+            "enum": [
+              "everyone",
+              "mentionedUsers",
+              "following",
+              "subscribers",
+              "verified"
+            ]
+          },
+          "community_id": {
+            "type": "string",
+            "description": "Optional exact 1-19 digit Community ID",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "made_with_ai": {
+            "type": "boolean",
+            "description": "When true, label the attached media as AI-generated; true requires media"
+          }
+        },
+        "required": []
+      },
+      "provider": {
+        "provider": "x",
+        "action": "posts.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "replies.create": {
+      "description": "Use the code-owned official x API contract for replies.create. POST /2/tweets reply; self-serve author-invitation and automated-recipient-opt-in acknowledgements required",
+      "risk": "R3",
+      "sideEffect": "Mutates x through the exact confirmed replies.create official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_post_id": {
+            "type": "string",
+            "description": "Exact 1-19 digit X post ID being replied to",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional exact reply text; text or media is required",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "media": {
+            "type": "array",
+            "description": "Up to four images, or one GIF/video",
+            "items": {
+              "type": "file",
+              "description": "One reviewed reply attachment",
+              "maxBytes": 536870912,
+              "mediaTypes": [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "video/mp4"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 4
+          },
+          "media_alt_texts": {
+            "type": "array",
+            "description": "Accessibility text aligned one-to-one with JPEG/PNG media",
+            "items": {
+              "type": "string",
+              "description": "One exact image description",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "minItems": 1,
+            "maxItems": 4
+          },
+          "recipient_opted_in": {
+            "type": "boolean",
+            "description": "Required acknowledgement of recipient opt-in for an automated reply",
+            "enum": [
+              true
+            ]
+          },
+          "author_invited_reply": {
+            "type": "boolean",
+            "description": "Required acknowledgement that the author mentioned or quoted the replying account",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "target_post_id",
+          "recipient_opted_in",
+          "author_invited_reply"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "threads.publish": {
+      "description": "Use the code-owned official x API contract for threads.publish. sequential POST /2/tweets; each continuation replies to immediately preceding returned ID; a normal partial return includes committed IDs for manual reconciliation and is never replayed automatically",
+      "risk": "R3",
+      "sideEffect": "Mutates x through the exact confirmed threads.publish official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "Exact ordered thread segments",
+            "items": {
+              "type": "string",
+              "description": "One exact thread segment",
+              "minLength": 1,
+              "maxLength": 280
+            },
+            "minItems": 1,
+            "maxItems": 25
+          },
+          "media": {
+            "type": "array",
+            "description": "Up to 25 reviewed thread attachments in dispatch order",
+            "items": {
+              "type": "file",
+              "description": "One reviewed thread attachment",
+              "maxBytes": 536870912,
+              "mediaTypes": [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "video/mp4"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 25
+          },
+          "media_item_indices": {
+            "type": "array",
+            "description": "One-based thread item index aligned one-to-one with media",
+            "items": {
+              "type": "number",
+              "description": "One-based thread item index",
+              "minimum": 1,
+              "maximum": 25
+            },
+            "minItems": 1,
+            "maxItems": 25
+          },
+          "media_alt_texts": {
+            "type": "array",
+            "description": "Accessibility text aligned one-to-one with JPEG/PNG thread media",
+            "items": {
+              "type": "string",
+              "description": "One exact image description",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "minItems": 1,
+            "maxItems": 25
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "threads.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.repost": {
+      "description": "Use the code-owned official x API contract for posts.repost. POST or DELETE /2/users/{me}/retweets desired-state endpoint",
+      "risk": "R3",
+      "sideEffect": "Mutates x through the exact confirmed posts.repost official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact 1-19 digit X post ID",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Repost when true; undo the authenticated account's repost when false"
+          }
+        },
+        "required": [
+          "post_id",
+          "enabled"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.save": {
+      "description": "Use the code-owned official x API contract for content.save. POST or DELETE /2/users/{me}/bookmarks desired-state endpoint",
+      "risk": "R2",
+      "sideEffect": "Mutates x through the exact confirmed content.save official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact 1-19 digit X post ID",
+            "minLength": 1,
+            "maxLength": 19
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Bookmark when true; remove the bookmark when false"
+          }
+        },
+        "required": [
+          "post_id",
+          "enabled"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "articles.publish": {
+      "description": "Use the code-owned official x API contract for articles.publish. optional official image upload; POST /2/articles/draft; POST /2/articles/{id}/publish; account eligibility required",
+      "risk": "R3",
+      "sideEffect": "Mutates x through the exact confirmed articles.publish official API contract.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Exact X Article title",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "body": {
+            "type": "string",
+            "description": "Plain-text Article body converted to deterministic DraftJS blocks",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "cover": {
+            "type": "file",
+            "description": "Optional Article cover image",
+            "maxBytes": 5242880,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png"
+            ]
+          },
+          "cover_alt_text": {
+            "type": "string",
+            "description": "Optional accessibility text applied to the reviewed Article cover",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "title",
+          "body"
+        ]
+      },
+      "provider": {
+        "provider": "x",
+        "action": "articles.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}

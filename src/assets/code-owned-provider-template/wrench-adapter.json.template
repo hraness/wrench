@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 4,
+  "id": __PLUGIN_ID_JSON__,
+  "version": "0.1.0",
+  "displayName": __ADAPTER_DISPLAY_NAME_JSON__,
+  "surfaceId": "__SITE_ID__",
+  "origins": [
+    "__ORIGIN__"
+  ],
+  "browserDomains": [
+    "__HOSTNAME__"
+  ],
+  "operations": {
+    "__OPERATION__": {
+      "description": "Capture-required contract reservation: sanitized evidence is selected, but the code-owned exchange and live fixture are not yet fully proven.",
+      "risk": "__RISK__",
+      "sideEffect": "__SIDE_EFFECT__",
+      "idempotency": "__IDEMPOTENCY__",
+      "dedupeWindowMs": __DEDUPE_WINDOW_MS__,
+      "input": {
+        "properties": {},
+        "required": []
+      },
+      "webSession": {
+        "site": "__SITE_ID__",
+        "action": "__OPERATION__",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    }
+  }
+}
