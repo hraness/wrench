@@ -20,6 +20,7 @@ import { removePrivateDirectoryTree } from "./storage";
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const helperPath = join(sourceDirectory, "path-helper.ts");
 const helperConfigPath = join(sourceDirectory, "state-helper.bunfig.toml");
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 
 type Identity = {
   readonly device: string;
@@ -67,7 +68,7 @@ function runHelper(
     }),
     maxBuffer: 1024 * 1024,
     shell: false,
-    timeout: 30_000,
+    timeout: TEST_CHILD_SIGNAL_TIMEOUT_MS,
     windowsHide: true,
   });
 }
@@ -75,6 +76,7 @@ function runHelper(
 describe("bound path helper traversal", () => {
   test("recovers an identity-bound recursive-removal quarantine after SIGKILL", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-path-helper-remove-recovery-"));
+    let child: ReturnType<typeof Bun.spawn> | null = null;
     try {
       const parent = join(root, "parent");
       const target = join(parent, "target");
@@ -94,7 +96,7 @@ describe("bound path helper traversal", () => {
           directoryExpectations: [expectedParent, expectedTarget],
         },
       });
-      const child = Bun.spawn([
+      const spawned = Bun.spawn([
         process.execPath,
         "--no-env-file",
         "--no-install",
@@ -112,26 +114,30 @@ describe("bound path helper traversal", () => {
         stdout: "pipe",
         stderr: "pipe",
       });
-      await child.stdin.write(request);
-      await child.stdin.end();
+      child = spawned;
+      await spawned.stdin.write(request);
+      await spawned.stdin.end();
       let quarantineName: string | undefined;
-      for (let attempt = 0; attempt < 500; attempt += 1) {
+      const readyDeadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+      while (performance.now() < readyDeadline) {
         quarantineName = readdirSync(parent).find((name) =>
-          name.startsWith(`.io-remove-${child.pid}-`));
+          name.startsWith(`.io-remove-${spawned.pid}-`));
         if (quarantineName !== undefined) break;
         await Bun.sleep(10);
       }
       expect(quarantineName).toBeDefined();
       expect(readdirSync(parent)).not.toContain("target");
-      child.kill("SIGKILL");
-      await child.exited;
+      spawned.kill("SIGKILL");
+      await spawned.exited;
 
       expect(removePrivateDirectoryTree(target, expectedTarget)).toBe(true);
       expect(readdirSync(parent)).toEqual([]);
     } finally {
+      child?.kill("SIGKILL");
+      if (child !== null) await child.exited;
       rmSync(root, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 
   test("refuses an exact recursive-removal quarantine owned by a live helper", () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-path-helper-remove-live-"));
@@ -233,6 +239,7 @@ describe("bound path helper traversal", () => {
 
   test("recovers only definitely orphaned atomic-write temporaries after SIGKILL", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-path-helper-temp-recovery-"));
+    let child: ReturnType<typeof Bun.spawn> | null = null;
     try {
       const expectedRoot = identity(lstatSync(root, { bigint: true }));
       const request = JSON.stringify({
@@ -247,7 +254,7 @@ describe("bound path helper traversal", () => {
           createOnly: false,
         },
       });
-      const child = Bun.spawn([
+      const spawned = Bun.spawn([
         process.execPath,
         "--no-env-file",
         "--no-install",
@@ -265,18 +272,20 @@ describe("bound path helper traversal", () => {
         stdout: "pipe",
         stderr: "pipe",
       });
-      await child.stdin.write(request);
-      await child.stdin.end();
+      child = spawned;
+      await spawned.stdin.write(request);
+      await spawned.stdin.end();
       let staleName: string | undefined;
-      for (let attempt = 0; attempt < 500; attempt += 1) {
+      const readyDeadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+      while (performance.now() < readyDeadline) {
         staleName = readdirSync(root).find((name) =>
-          name.startsWith(`.io-write-${child.pid}-`));
+          name.startsWith(`.io-write-${spawned.pid}-`));
         if (staleName !== undefined) break;
         await Bun.sleep(10);
       }
       expect(staleName).toBeDefined();
-      child.kill("SIGKILL");
-      await child.exited;
+      spawned.kill("SIGKILL");
+      await spawned.exited;
 
       const liveName =
         `.io-write-${process.pid}-11111111-1111-4111-8111-111111111111.tmp`;
@@ -293,9 +302,11 @@ describe("bound path helper traversal", () => {
       expect(names).toContain(liveName);
       expect(names).not.toContain("target.txt");
     } finally {
+      child?.kill("SIGKILL");
+      if (child !== null) await child.exited;
       rmSync(root, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 
   test("lists one inode-bound directory and rejects a replaced ancestor", () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-path-helper-list-"));

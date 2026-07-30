@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import {
   acquirePortableProviderPluginInvocationLease,
@@ -46,10 +46,6 @@ const hashA = "a".repeat(64);
 const hashB = "b".repeat(64);
 const hashC = "c".repeat(64);
 const hashD = "d".repeat(64);
-
-// The admission matrix intentionally crosses many fsync-backed state and
-// package-identity boundaries; allow for a busy development filesystem.
-setDefaultTimeout(60_000);
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");

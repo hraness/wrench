@@ -61,6 +61,8 @@ import {
   writePrivateJson,
 } from "./storage";
 
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
+
 const installManifest = (
   manifest: Parameters<typeof installManifestWithRegistry>[0],
   options: Parameters<typeof installManifestWithRegistry>[1],
@@ -801,7 +803,7 @@ describe("auth locators", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("does not reuse an auth ID whose prior physical realm is unresolved", () => {
     const testState = state();
@@ -879,7 +881,7 @@ describe("auth locators", () => {
       rmSync(testState.directory, { recursive: true, force: true });
       rmSync(deviceRoot, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("keeps auth realm IDs stable unless replacement is explicit", () => {
     const testState = state();
@@ -951,7 +953,7 @@ describe("auth locators", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("removes auth-bound browser session caches with the locator", () => {
     const testState = state();
@@ -990,7 +992,7 @@ describe("auth locators", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 });
 
 describe("private state storage", () => {
@@ -1048,7 +1050,8 @@ describe("private state storage", () => {
       }));
       await spawned.stdin.end();
       let staleName: string | undefined;
-      for (let attempt = 0; attempt < 500; attempt += 1) {
+      const readyDeadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+      while (performance.now() < readyDeadline) {
         staleName = readdirSync(plans).find((name) =>
           name.startsWith(`.io-write-${spawned.pid}-`));
         if (staleName !== undefined) break;
@@ -1070,9 +1073,10 @@ describe("private state storage", () => {
       expect(existsSync(join(plans, "target.json"))).toBeFalse();
     } finally {
       child?.kill("SIGKILL");
+      if (child !== null) await child.exited;
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 
   test.each([
     { label: "filesystem root", path: "/" },
@@ -1600,7 +1604,7 @@ describe("private state storage", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("preserves a same-UID edit that races a conditional managed upgrade", () => {
     const testState = state();

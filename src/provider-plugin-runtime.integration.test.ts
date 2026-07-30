@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
   mkdtempSync,
@@ -41,8 +41,6 @@ import {
   installManifest,
 } from "./storage";
 import { reconcileWebSessionRun } from "./web-session-recovery";
-
-setDefaultTimeout(15_000);
 
 const sourcePluginImplementationUrl = new URL(
   "./provider-plugin-test-fixture.ts",
@@ -523,7 +521,7 @@ describe("provider plugin runtime integration", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("persists a linked-device plugin through durable schema 4", async () => {
     const {

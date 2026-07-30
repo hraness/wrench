@@ -196,5 +196,5 @@ describe("durable provider contract inventory", () => {
         rejectedUnknown: true,
       });
     }
-  }, 120_000);
+  });
 });

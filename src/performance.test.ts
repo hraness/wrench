@@ -2,7 +2,6 @@ import {
   afterEach,
   describe,
   expect,
-  setDefaultTimeout,
   test,
 } from "bun:test";
 import {
@@ -23,8 +22,6 @@ import {
   wrenchStateHome,
 } from "./storage";
 import { wrenchUsage } from "./usage";
-
-setDefaultTimeout(60_000);
 
 const repositoryRoot = process.cwd();
 const cliPath = join(import.meta.dir, "cli.ts");
@@ -333,5 +330,5 @@ describe("Wrench hardening performance gates", () => {
         warmInstallerLimitMilliseconds,
       ),
     ).toBeLessThan(warmInstallerLimitMilliseconds);
-  }, 180_000);
+  });
 });

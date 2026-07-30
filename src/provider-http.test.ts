@@ -485,7 +485,7 @@ describe("bounded official-provider HTTP", () => {
     expect(cancellations).toBe(1);
     expect(() => expectResponseBodyUnlocked(response)).not.toThrow();
     finishCancellation?.();
-  }, 3_000);
+  });
 
   test("cancels malformed and overflowing streams exactly once and releases their readers", async () => {
     const cases = [

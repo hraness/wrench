@@ -251,7 +251,7 @@ describe("plan-bound attachments", () => {
     } finally {
       rmSync(value.root, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("rejects staging that would exceed the serialized aggregate quota", () => {
     const value = fixture();

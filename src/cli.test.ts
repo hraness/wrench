@@ -1,7 +1,6 @@
 import {
   describe,
   expect,
-  setDefaultTimeout,
   test,
 } from "bun:test";
 import {
@@ -32,8 +31,6 @@ const wrenchPath = join(import.meta.dir, "wrench.ts");
 function exactPathPattern(path: string): string {
   return `^${path.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`;
 }
-
-setDefaultTimeout(60_000);
 
 type ProcessResult = {
   readonly exitCode: number;

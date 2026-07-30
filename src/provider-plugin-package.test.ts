@@ -812,7 +812,7 @@ describe("portable provider plugin package verification", () => {
         );
       });
     }
-  }, 15_000);
+  });
 
   test("verifies the maximum legal tree with a constant helper-process budget", () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-portable-plugin-maximum-"));
@@ -873,5 +873,5 @@ describe("portable provider plugin package verification", () => {
       stopObserving();
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 });

@@ -41,6 +41,7 @@ import {
 
 const allowActivation = (): void => {};
 const assertQuiescent = (): void => {};
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 const lifecycleModuleUrl = new URL(
   "./provider-plugin-lifecycle.ts",
   import.meta.url,
@@ -108,7 +109,8 @@ async function interruptAuthoringStage(
   const prefix = `.${basename(output)}.wrench-plugin-${kind}-`;
   let stage: string | undefined;
   try {
-    for (let attempt = 0; attempt < 1_500; attempt += 1) {
+    const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+    while (performance.now() < deadline) {
       const name = readdirSync(join(output, "..")).find((entry) =>
         entry.startsWith(prefix));
       if (name !== undefined) {
@@ -189,7 +191,7 @@ describe("portable provider plugin lifecycle", () => {
         || name.includes(".oh-plugin-pack-")))
         .toEqual([]);
     });
-  }, 30_000);
+  });
 
   test("rejects unsafe and over-bound predecessor authoring stages without removing them", async () => {
     await withRoot((root) => {
@@ -233,7 +235,7 @@ describe("portable provider plugin lifecycle", () => {
       expect(existsSync(boundedOutput)).toBeFalse();
       expect(stages.every((stage) => existsSync(stage))).toBeTrue();
     });
-  }, 30_000);
+  });
 
   test("initializes, checks, tests, reproducibly packs, trusts, and inspects an inert plugin", async () => {
     await withRoot(async (root, environment) => {
@@ -364,7 +366,7 @@ describe("portable provider plugin lifecycle", () => {
       expect(removedArtifactPaths).toEqual(disabledArtifactPaths);
       expect(listPortableProviderPlugins(environment)).toEqual([]);
     });
-  }, 30_000);
+  });
 
   test("requires explicit trust before an observed fixture can spawn package code", async () => {
     await withRoot(async (root) => {
@@ -668,7 +670,7 @@ describe("portable provider plugin lifecycle", () => {
         "returned before capability step 2 (session.acquire)",
       );
     });
-  }, 60_000);
+  });
 
   test("uses explicit HTTP fixture results and failures without live provider access", async () => {
     await withRoot(async (root) => {
@@ -894,7 +896,7 @@ describe("portable provider plugin lifecycle", () => {
         })).rejects.toThrow(message);
       }
     });
-  }, 60_000);
+  });
 
   test("replays complete R2 and R3 dispatch transcripts without network or credentials", async () => {
     await withRoot(async (root) => {
@@ -1094,7 +1096,7 @@ describe("portable provider plugin lifecycle", () => {
         });
       }
     });
-  }, 30_000);
+  });
 
   test("packing refreshes declared hashes but refuses undeclared files and existing outputs", async () => {
     await withRoot((root) => {
@@ -1134,7 +1136,7 @@ describe("portable provider plugin lifecycle", () => {
           join(root, "undeclared.wrenchplugin"),
         )).toThrow("exactly match");
     });
-  }, 30_000);
+  });
 
   test("check applies activation projection at the 48-character adapter boundary", async () => {
     await withRoot((root) => {
@@ -1191,7 +1193,7 @@ describe("portable provider plugin lifecycle", () => {
         id: "long-surface",
       });
     });
-  }, 30_000);
+  });
 
   test("check applies activation registry validation to candidate-internal routes", async () => {
     await withRoot((root) => {
@@ -1228,5 +1230,5 @@ describe("portable provider plugin lifecycle", () => {
         "duplicate provider plugin session route",
       );
     });
-  }, 30_000);
+  });
 });

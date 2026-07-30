@@ -117,7 +117,7 @@ The current registry keeps these unavailable:
 
 No operation may be guessed from downloaded bundles or copied network snippets. A capture-required DM send must not type into X's message composer.
 
-Encrypted X Chat is not a normal HAR template. Plaintext and send require the separate key, signature, Juicebox, and exact encrypted-payload design in [the Wrench X Chat plan](../../../kb/plans/wrench-x-chat-xdk.md).
+Encrypted X Chat is not a normal HAR template. Plaintext and send require a separately reviewed cryptographic contract for key recovery, request signatures, Juicebox access, exact payload encryption and decryption, and forward compatibility.
 
 ## Risk and confirmation
 

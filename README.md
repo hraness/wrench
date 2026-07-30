@@ -13,10 +13,10 @@ Project site: [hraness.com/wrench](https://hraness.com/wrench)
 
 ## Install
 
-Pin the public repository to the immutable `v0.1.0` tag:
+Pin the public repository to the immutable `v0.1.1` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.1.0
+bun add --global github:hraness/wrench#v0.1.1
 wrench doctor
 ```
 
@@ -32,7 +32,7 @@ verifies the resolved closure versions and reviewed entrypoint hashes.
 For programmatic plugin types and bounded validators:
 
 ```sh
-bun add github:hraness/wrench#v0.1.0
+bun add github:hraness/wrench#v0.1.1
 ```
 
 ```ts
@@ -128,7 +128,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.1.1/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

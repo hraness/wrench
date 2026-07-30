@@ -62,6 +62,7 @@ const batchReadFaultForTest = process.env.NODE_ENV === "test"
 const casOverlapFaultForTest = process.env.NODE_ENV === "test"
   ? process.env.WRENCH_TEST_CAS_FAULT
   : undefined;
+const TEST_BARRIER_TIMEOUT_MS = 90_000;
 const writeTemporaryFaultForTest = process.env.NODE_ENV === "test"
   ? process.env.WRENCH_TEST_WRITE_TEMP_FAULT
   : undefined;
@@ -1318,7 +1319,7 @@ function pauseAfterStateMutationClaimForTest(): void {
     closeSync(descriptor);
   }
   syncDirectory(".");
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + TEST_BARRIER_TIMEOUT_MS;
   for (;;) {
     try {
       const release = lstatSync(releaseName);

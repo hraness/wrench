@@ -41,6 +41,8 @@ const ACCOUNT_JID = "15551234567@s.whatsapp.net";
 const CHAT_JID = "15557654321@s.whatsapp.net";
 const MESSAGE_ID = "3EB0SYNTHETICMESSAGE";
 const ZERO_TIME = "0001-01-01T00:00:00Z";
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
+const TEST_OPERATION_TIMEOUT_MS = 90_000;
 
 class FakeMonotonicClock implements OperationDeadlineClock {
   #nowMs = 0;
@@ -186,13 +188,15 @@ async function expectRejected(
 }
 
 async function waitForFile(path: string): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (existsSync(path)) return;
+  const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+  while (!existsSync(path)) {
+    if (performance.now() >= deadline) {
+      throw new Error(`timed out waiting for ${path}`);
+    }
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 10);
     });
   }
-  throw new Error(`timed out waiting for ${path}`);
 }
 
 async function waitForProcessExit(pid: number): Promise<void> {
@@ -668,9 +672,12 @@ describe("WhatsApp zero-network read plans", () => {
       const fixture = join(path, "blocking-wacli");
       const pidPath = `${fixture}.pid`;
       const caller = new AbortController();
-      const operationDeadline = new OperationDeadline(10_000, {
-        signal: caller.signal,
-      });
+      const operationDeadline = new OperationDeadline(
+        TEST_OPERATION_TIMEOUT_MS,
+        {
+          signal: caller.signal,
+        },
+      );
       let pid: number | null = null;
       try {
         writeFileSync(join(path, "session.db"), "");
@@ -679,7 +686,7 @@ describe("WhatsApp zero-network read plans", () => {
           fixture,
           [
             "#!/bin/sh",
-            "/bin/sleep 30 &",
+            "/bin/sleep 120 &",
             "descendant=$!",
             `printf '%s %s\\n' "$$" "$descendant" > ${JSON.stringify(pidPath)}`,
             "wait \"$descendant\"",
@@ -692,7 +699,7 @@ describe("WhatsApp zero-network read plans", () => {
         const execution = executeWhatsAppWebOperation(
           {
             ...recipe("messaging.list"),
-            timeoutMs: 10_000,
+            timeoutMs: TEST_OPERATION_TIMEOUT_MS,
           },
           { limit: 1 },
           auth(path, "whatsapp:pn:15551234567"),

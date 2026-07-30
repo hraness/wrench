@@ -53,6 +53,7 @@ export const MAX_PRIVATE_STATE_BATCH_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_PRIVATE_STATE_BATCH_TOTAL_BYTES = 64 * 1024 * 1024;
 const MAX_PRIVATE_STATE_BATCH_NAME_BYTES = 256 * 1024;
 const MAX_PRIVATE_STATE_BATCH_STDOUT_BYTES = 96 * 1024 * 1024;
+const TEST_STATE_HELPER_TIMEOUT_MS = 120_000;
 
 export interface PrivateDirectoryIdentity {
   readonly device: string;
@@ -736,7 +737,9 @@ function runStateHelper(
       ? MAX_PRIVATE_STATE_BATCH_STDOUT_BYTES
       : 180 * 1024 * 1024,
     shell: false,
-    timeout: 30_000,
+    timeout: faultForTest === "pause-after-cas-claim"
+      ? TEST_STATE_HELPER_TIMEOUT_MS
+      : 30_000,
     windowsHide: true,
   });
   const current = inspectRealDirectoryIdentity(directory);

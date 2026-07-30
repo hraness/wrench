@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { canonicalJson } from "./model";
 import { currentProcessStartIdentity } from "./process-identity";
@@ -38,14 +38,13 @@ import {
   withPortableProviderPluginCatalogLock,
 } from "./provider-plugin-store";
 
-setDefaultTimeout(30_000);
-
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
 const allowActivation = (): void => {};
 const assertQuiescent = (): void => {};
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 
 function createPackage(
   parent: string,
@@ -172,7 +171,7 @@ async function withAsyncRoot(
 }
 
 async function waitForFile(path: string): Promise<void> {
-  const deadline = performance.now() + 10_000;
+  const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
   while (!existsSync(path)) {
     if (performance.now() >= deadline) {
       throw new Error(`timed out waiting for child signal: ${path}`);
@@ -185,7 +184,7 @@ async function waitForDirectoryEntryCount(
   path: string,
   count: number,
 ): Promise<readonly string[]> {
-  const deadline = performance.now() + 10_000;
+  const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
   for (;;) {
     const entries = readdirSync(path).sort();
     if (entries.length >= count) return entries;
@@ -956,7 +955,7 @@ describe("portable provider plugin store", () => {
         await Promise.all(children.map((child) => child.exited));
       }
     });
-  }, 60_000);
+  });
 
   test("retries a claim renamed during its read and reports the live lock", async () => {
     await withAsyncRoot(async (root) => {
@@ -1094,7 +1093,7 @@ describe("portable provider plugin store", () => {
         rmSync(lockPath, { force: true });
       }
     });
-  }, 60_000);
+  });
 
   test("publishes lock and claim records atomically across a process exit", async () => {
     await withAsyncRoot(async (root) => {
@@ -1196,7 +1195,7 @@ describe("portable provider plugin store", () => {
         expect(readdirSync(paths.locks)).toEqual([]);
       }
     });
-  }, 60_000);
+  });
 
   test("recovers catalog and plugin locks left by an exited activation hook", async () => {
     await withAsyncRoot(async (root) => {
@@ -1245,8 +1244,7 @@ describe("portable provider plugin store", () => {
         child.exited,
         new Response(child.stderr).text(),
       ]);
-      expect(status).toBe(91);
-      expect(stderr).toBe("");
+      expect({ status, stderr }).toEqual({ status: 91, stderr: "" });
 
       const paths = portableProviderPluginStorePaths(storeRoot);
       expect(existsSync(join(paths.locks, ".catalog-mutation.lock"))).toBeTrue();

@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   execFileSync,
   spawn,
@@ -24,7 +24,7 @@ import {
   type ProcessOwnerIdentity,
 } from "./process-identity";
 
-setDefaultTimeout(15_000);
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 
 const PYTHON_ZOMBIE_HOLDER = `
 import subprocess
@@ -36,7 +36,7 @@ child = subprocess.Popen(
     stdout=sys.stdout,
     stderr=sys.stderr,
 )
-time.sleep(30)
+time.sleep(120)
 `;
 
 function linuxStat(state: string, startTicks = "424242"): string {
@@ -198,7 +198,7 @@ function observedProcessState(pid: number): string | undefined {
 }
 
 async function observeZombie(pid: number): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
   let lastState: string | undefined;
   do {
     lastState = observedProcessState(pid);
@@ -206,7 +206,7 @@ async function observeZombie(pid: number): Promise<void> {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 10);
     });
-  } while (Date.now() < deadline);
+  } while (performance.now() < deadline);
   throw new Error(
     `subprocess did not become an observable zombie (last state: ${
       lastState ?? "missing"
@@ -527,7 +527,7 @@ describe("process owner status", () => {
       try {
         const line = await withTimeout(
           firstLine(helper.stdout),
-          5_000,
+          TEST_CHILD_SIGNAL_TIMEOUT_MS,
           `zombie helper did not report its child: ${stderr}`,
         );
         const owner = parseOwnerIdentity(line);

@@ -26,6 +26,7 @@ import {
   writeSessionSecretIfUnchanged,
 } from "./session-secrets";
 
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -64,7 +65,7 @@ function sha256(text: string): string {
 }
 
 async function waitForFile(path: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
   while (!existsSync(path)) {
     if (Date.now() >= deadline) {
       throw new Error(`timed out waiting for test worker file: ${path}`);
@@ -445,43 +446,52 @@ describe("encrypted provider-session cache", () => {
     };
     const slower = worker("slower", 2, "stale-cookie");
     const faster = worker("faster", 3, "deleted-cookie");
-    await Promise.all([
-      waitForFile(slower.ready),
-      waitForFile(faster.ready),
-    ]);
-
-    writeFileSync(faster.gate, "go\n");
-    await waitForFile(faster.result);
-    writeFileSync(slower.gate, "go\n");
-    await waitForFile(slower.result);
-    const [fasterExit, slowerExit] = await Promise.all([
-      faster.child.exited,
-      slower.child.exited,
-    ]);
-    if (fasterExit !== 0 || slowerExit !== 0) {
-      const [fasterError, slowerError] = await Promise.all([
-        new Response(faster.child.stderr).text(),
-        new Response(slower.child.stderr).text(),
+    try {
+      await Promise.all([
+        waitForFile(slower.ready),
+        waitForFile(faster.ready),
       ]);
-      throw new Error(
-        `CAS worker failed: ${fasterError.slice(0, 256)} ${slowerError.slice(0, 256)}`,
-      );
-    }
 
-    expect(jsonRecord(
-      readFileSync(faster.result, "utf8"),
-      "faster CAS result",
-    ).written).toBeTrue();
-    expect(jsonRecord(
-      readFileSync(slower.result, "utf8"),
-      "slower CAS result",
-    )).toEqual({ written: false });
-    expect(readSessionSecret(
-      "linkedin",
-      "linkedin-main",
-      authHash,
-      state.value,
-    )).toEqual({ generation: 3, tombstones: ["deleted-cookie"] });
+      writeFileSync(faster.gate, "go\n");
+      await waitForFile(faster.result);
+      writeFileSync(slower.gate, "go\n");
+      await waitForFile(slower.result);
+      const [fasterExit, slowerExit] = await Promise.all([
+        faster.child.exited,
+        slower.child.exited,
+      ]);
+      if (fasterExit !== 0 || slowerExit !== 0) {
+        const [fasterError, slowerError] = await Promise.all([
+          new Response(faster.child.stderr).text(),
+          new Response(slower.child.stderr).text(),
+        ]);
+        throw new Error(
+          `CAS worker failed: ${fasterError.slice(0, 256)} ${slowerError.slice(0, 256)}`,
+        );
+      }
+
+      expect(jsonRecord(
+        readFileSync(faster.result, "utf8"),
+        "faster CAS result",
+      ).written).toBeTrue();
+      expect(jsonRecord(
+        readFileSync(slower.result, "utf8"),
+        "slower CAS result",
+      )).toEqual({ written: false });
+      expect(readSessionSecret(
+        "linkedin",
+        "linkedin-main",
+        authHash,
+        state.value,
+      )).toEqual({ generation: 3, tombstones: ["deleted-cookie"] });
+    } finally {
+      faster.child.kill("SIGKILL");
+      slower.child.kill("SIGKILL");
+      await Promise.all([
+        faster.child.exited,
+        slower.child.exited,
+      ]);
+    }
   });
 
   test("creates an absent coordinate exclusively and never resurrects a removed file", () => {

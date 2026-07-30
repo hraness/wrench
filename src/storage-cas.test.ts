@@ -2,7 +2,6 @@ import {
   afterEach,
   describe,
   expect,
-  setDefaultTimeout,
   test,
 } from "bun:test";
 import { createHash } from "node:crypto";
@@ -29,9 +28,27 @@ import {
   writePrivateJsonIfUnchanged,
 } from "./storage";
 
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 const roots: string[] = [];
 
-setDefaultTimeout(30_000);
+type PipedChild = Bun.Subprocess<"ignore", "pipe", "pipe">;
+
+async function killAndReapChild(
+  child: PipedChild,
+  stdout: Promise<string>,
+  stderr: Promise<string>,
+): Promise<void> {
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    try {
+      process.kill(child.pid, "SIGKILL");
+    } catch {
+      // The direct test child already exited.
+    }
+  }
+  await Promise.allSettled([child.exited, stdout, stderr]);
+}
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -57,7 +74,7 @@ function contentHash(path: string): string {
 }
 
 async function waitForFile(path: string): Promise<void> {
-  const deadline = performance.now() + 10_000;
+  const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
   while (!existsSync(path)) {
     if (performance.now() >= deadline) {
       throw new Error(`timed out waiting for state CAS signal: ${path}`);
@@ -127,9 +144,17 @@ describe("private state compare-and-swap writes", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
+    const firstStdout = new Response(first.stdout).text();
+    const firstStderr = new Response(first.stderr).text();
+    let firstReaped = false;
+    let releasePublished = false;
+    let second: PipedChild | undefined;
+    let secondStdoutPromise: Promise<string> | undefined;
+    let secondStderrPromise: Promise<string> | undefined;
+    let secondReaped = false;
     try {
       await waitForFile(readyPath);
-      const second = Bun.spawn([process.execPath, "-e", childScript], {
+      const spawnedSecond = Bun.spawn([process.execPath, "-e", childScript], {
         env: {
           ...process.env,
           NODE_ENV: "test",
@@ -142,31 +167,62 @@ describe("private state compare-and-swap writes", () => {
         stdout: "pipe",
         stderr: "pipe",
       });
-      const [secondStatus, secondStdout, secondStderr] = await Promise.all([
+      second = spawnedSecond;
+      secondStdoutPromise = new Response(spawnedSecond.stdout).text();
+      secondStderrPromise = new Response(spawnedSecond.stderr).text();
+      const [secondStatus, secondOutput, secondErrors] = await Promise.all([
         second.exited,
-        new Response(second.stdout).text(),
-        new Response(second.stderr).text(),
+        secondStdoutPromise,
+        secondStderrPromise,
       ]);
+      secondReaped = true;
       expect(secondStatus).toBe(0);
-      expect(secondStdout).toBe("false");
-      expect(secondStderr).toBe("");
-    } finally {
+      expect(secondOutput).toBe("false");
+      expect(secondErrors).toBe("");
+
       writeFileSync(releasePath, "release\n", { mode: 0o600 });
+      releasePublished = true;
+      const [firstStatus, firstOutput, firstErrors] = await Promise.all([
+        first.exited,
+        firstStdout,
+        firstStderr,
+      ]);
+      firstReaped = true;
+      expect(firstStatus).toBe(0);
+      expect(firstOutput).toBe("true");
+      expect(firstErrors).toBe("");
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2 });
+      expect(
+        readdirSync(directory).filter((name) =>
+          name.startsWith(".io-mutation-")
+        ),
+      ).toEqual([]);
+    } finally {
+      try {
+        if (!releasePublished) {
+          writeFileSync(releasePath, "release\n", { mode: 0o600 });
+        }
+      } finally {
+        try {
+          if (
+            !secondReaped
+            && second !== undefined
+            && secondStdoutPromise !== undefined
+            && secondStderrPromise !== undefined
+          ) {
+            await killAndReapChild(
+              second,
+              secondStdoutPromise,
+              secondStderrPromise,
+            );
+          }
+        } finally {
+          if (!firstReaped) {
+            await killAndReapChild(first, firstStdout, firstStderr);
+          }
+        }
+      }
     }
-    const [firstStatus, firstStdout, firstStderr] = await Promise.all([
-      first.exited,
-      new Response(first.stdout).text(),
-      new Response(first.stderr).text(),
-    ]);
-    expect(firstStatus).toBe(0);
-    expect(firstStdout).toBe("true");
-    expect(firstStderr).toBe("");
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2 });
-    expect(
-      readdirSync(directory).filter((name) =>
-        name.startsWith(".io-mutation-")
-      ),
-    ).toEqual([]);
   });
 
   test("rejects malformed expected hashes before invoking the helper", () => {

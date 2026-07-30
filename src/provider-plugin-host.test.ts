@@ -484,7 +484,7 @@ function invocation(
     files: [],
     // Success fixtures exercise process launch and staging, which can be
     // delayed substantially by unrelated repository checks on shared hosts.
-    timeoutMs: 15_000,
+    timeoutMs: 90_000,
     hostVersion: "1.0.0",
     plannedDispatchIds,
   };
@@ -621,7 +621,7 @@ describe("portable provider plugin child-process host", () => {
       expect(stagedDirectories).toHaveLength(16);
       expect(stagedDirectories.every((path) => !existsSync(path))).toBeTrue();
     });
-  }, 60_000);
+  });
 
   test("executes the verified runtime bytes after its installed path is rewritten", async () => {
     await withPackage({}, async (packageValue) => {

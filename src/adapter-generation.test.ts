@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   mkdtempSync,
@@ -59,8 +59,6 @@ const listInstalledManifests = (
 
 const roots: string[] = [];
 const assets = join(import.meta.dir, "assets", "adapters");
-
-setDefaultTimeout(30_000);
 
 afterEach(() => {
   for (const root of roots.splice(0)) {

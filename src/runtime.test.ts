@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   createCipheriv,
   createDecipheriv,
@@ -80,10 +80,6 @@ const installManifest = (
   ...options,
   registry: options.registry ?? providerPluginRegistry,
 });
-
-// These tests exercise multiple durable fsync/CAS boundaries and can exceed
-// 20 seconds on a busy development machine without any semantic stall.
-setDefaultTimeout(60_000);
 
 type TestState = {
   readonly directory: string;
@@ -1615,7 +1611,7 @@ describe("local at-most-once dispatch ledger", () => {
       control.release?.();
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("elects only one successor after an expired successful generation", async () => {
     const testState = state();
@@ -1671,7 +1667,7 @@ describe("local at-most-once dispatch ledger", () => {
       control.release?.();
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("stores a provisional run receipt before crossing into browser execution", async () => {
     const testState = state();
@@ -1694,7 +1690,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("refuses dispatch and preserves immutable failed evidence when the recovery capsule cannot be stored", async () => {
     const testState = state();
@@ -1755,7 +1751,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("refuses dispatch rather than replacing a lost recovery key for an older capsule", async () => {
     const testState = state();
@@ -1833,7 +1829,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("stores an encrypted exact-input capsule before web dispatch and retains it for an indeterminate run", async () => {
     const testState = state();
@@ -1932,7 +1928,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("keeps a cancelled post-dispatch web hook indeterminate and blocks late verification", async () => {
     const testState = state();
@@ -2022,7 +2018,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("uses the terminal run journal as source of truth beyond the legacy receipt persistence seam", async () => {
     const testState = state();
@@ -2084,7 +2080,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("replays a completed identical action without a second dispatch and reads a legacy ledger", async () => {
     const testState = state();
@@ -2122,7 +2118,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("allows retry after a known pre-dispatch failure", async () => {
     const testState = state();
@@ -2157,7 +2153,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("blocks retry after an indeterminate post-dispatch failure", async () => {
     const testState = state();
@@ -2193,7 +2189,7 @@ describe("local at-most-once dispatch ledger", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("turns an unexpected pre-dispatch executor throw into a durable failed run", async () => {
     const testState = state();
@@ -2448,7 +2444,7 @@ describe("provider dispatch schedules and attachments", () => {
       rmSync(sourceDirectory, { recursive: true, force: true });
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("binds an upload to a private plan bundle and removes it after verified dispatch", async () => {
     const testState = state();
@@ -2523,7 +2519,7 @@ describe("provider dispatch schedules and attachments", () => {
       rmSync(sourceDirectory, { recursive: true, force: true });
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test.each([
     {
@@ -2599,7 +2595,7 @@ describe("provider dispatch schedules and attachments", () => {
       rmSync(sourceDirectory, { recursive: true, force: true });
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("removes a bound attachment bundle when preflight hash verification fails", async () => {
     const testState = state();
@@ -2697,7 +2693,7 @@ describe("provider dispatch schedules and attachments", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 });
 
 describe("reviewed authenticated-template plans and receipts", () => {
@@ -3079,7 +3075,7 @@ describe("official-provider plans and receipts", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 });
 
 describe("receipts", () => {

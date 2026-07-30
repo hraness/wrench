@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -21,8 +21,6 @@ import {
   removeBrowserSnapshotDirectory,
 } from "./browser-snapshots";
 import { createPrivateStateDirectory } from "./storage";
-
-setDefaultTimeout(20_000);
 
 const markerName = ".io-browser-snapshot.json";
 

@@ -40,6 +40,9 @@ import {
   type OperationDeadlineClock,
 } from "./operation-deadline";
 
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
+const TEST_PROCESS_TIMEOUT_MS = 90_000;
+
 class FakeMonotonicClock implements OperationDeadlineClock {
   #nowMs = 0;
   #nextId = 1;
@@ -75,7 +78,7 @@ class FakeMonotonicClock implements OperationDeadlineClock {
 
 async function waitUntil(
   condition: () => boolean,
-  maximumMs = 2_000,
+  maximumMs = TEST_CHILD_SIGNAL_TIMEOUT_MS,
 ): Promise<void> {
   const deadline = performance.now() + maximumMs;
   while (!condition()) {
@@ -823,7 +826,7 @@ describe("browser process isolation helpers", () => {
         rmSync(recovered.artifacts, { recursive: true, force: true });
       }
     }
-  }, 10_000);
+  });
 
   test("rejects a pre-aborted browser budget before setup has any side effect", async () => {
     const caller = new AbortController();
@@ -1124,7 +1127,7 @@ describe("browser process isolation helpers", () => {
             LC_ALL: "C",
             PATH: process.env.PATH ?? "/usr/bin:/bin",
           },
-          timeoutMs: 30_000,
+          timeoutMs: TEST_PROCESS_TIMEOUT_MS,
           maxOutputBytes: 4_096,
           signal: controller.signal,
         },
@@ -1190,7 +1193,7 @@ describe("browser process isolation helpers", () => {
             LC_ALL: "C",
             PATH: process.env.PATH ?? "/usr/bin:/bin",
           },
-          timeoutMs: 30_000,
+          timeoutMs: TEST_PROCESS_TIMEOUT_MS,
           maxOutputBytes: 4_096,
           signal: controller.signal,
         },
@@ -1239,7 +1242,7 @@ describe("browser process isolation helpers", () => {
         trustUnfilteredEgress: true,
       }, {
         headed: false,
-        timeoutMs: 30_000,
+        timeoutMs: TEST_PROCESS_TIMEOUT_MS,
         maxOutputBytes: 4_096,
         operationDeadline: deadline,
         dependencies: {
@@ -1276,7 +1279,7 @@ describe("browser process isolation helpers", () => {
                 LC_ALL: "C",
                 PATH: process.env.PATH ?? "/usr/bin:/bin",
               },
-              timeoutMs: 30_000,
+              timeoutMs: TEST_PROCESS_TIMEOUT_MS,
             });
           },
         },
@@ -1317,7 +1320,7 @@ describe("browser process isolation helpers", () => {
       }
       rmSync(helperDirectory, { recursive: true, force: true });
     }
-  }, 10_000);
+  });
 
   test("bounds a stalled proxy cleanup and preserves the private roots", async () => {
     let proxyCloseCalls = 0;
@@ -1384,7 +1387,7 @@ describe("browser process isolation helpers", () => {
         rmSync(recovered.artifacts, { recursive: true, force: true });
       }
     }
-  }, 10_000);
+  });
 
   test("closes the network proxy after browser close fails while preserving private roots", async () => {
     let proxyCloseCalls = 0;
@@ -1567,5 +1570,5 @@ describe("browser process isolation helpers", () => {
       }
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 10_000);
+  });
 });

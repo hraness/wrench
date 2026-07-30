@@ -131,6 +131,7 @@ export type PortableProviderPluginStorePaths = {
 const MAX_STORE_RECORD_BYTES = 64 * 1024;
 const MAX_LOCK_CLAIMS = 1_024;
 const MAX_LOCK_PUBLICATIONS = 1_024;
+const TEST_BARRIER_TIMEOUT_MS = 90_000;
 const CATALOG_MUTATION_LOCK_NAME = ".catalog-mutation.lock";
 const lockClaimIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -612,7 +613,7 @@ function pauseAfterLockClaimReadForTest(
   }
   writePrivateFile(readyPath, Buffer.from("read\n", "utf8"));
   syncDirectory(dirname(readyPath));
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + TEST_BARRIER_TIMEOUT_MS;
   while (!existsSync(releasePath)) {
     if (Date.now() >= deadline) {
       throw new Error("portable plugin lock claim read test barrier timed out");
@@ -1247,7 +1248,7 @@ function pauseBeforeLockClaimForTest(path: string): void {
   }
   writePrivateFile(readyPath, Buffer.from("ready\n", "utf8"));
   syncDirectory(dirname(readyPath));
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + TEST_BARRIER_TIMEOUT_MS;
   while (!existsSync(releasePath)) {
     if (Date.now() >= deadline) {
       throw new Error("portable plugin lock claim test barrier timed out");
@@ -1272,7 +1273,7 @@ function pauseAfterWaitingLockClaimForTest(path: string): void {
   if (existsSync(readyPath)) return;
   writePrivateFile(readyPath, Buffer.from("waiting\n", "utf8"));
   syncDirectory(dirname(readyPath));
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + TEST_BARRIER_TIMEOUT_MS;
   while (!existsSync(releasePath)) {
     if (Date.now() >= deadline) {
       throw new Error("portable plugin waiting-claim test barrier timed out");

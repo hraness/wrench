@@ -1,7 +1,6 @@
 import {
   describe,
   expect,
-  setDefaultTimeout,
   test,
 } from "bun:test";
 import {
@@ -47,8 +46,6 @@ import {
   webSessionContractHash,
 } from "./web-session-contracts";
 import { providerPluginRegistry } from "./provider-plugins";
-
-setDefaultTimeout(15_000);
 
 type TestState = {
   readonly directory: string;
@@ -897,7 +894,7 @@ describe("web-session run reconciliation", () => {
         rmSync(testState.directory, { recursive: true, force: true });
       }
     }
-  }, 30_000);
+  });
 
   test("requires the capsule for new runs and accepts exact hash-bound input only for the legacy run", async () => {
     const currentState = state();
@@ -1152,5 +1149,5 @@ describe("web-session run reconciliation", () => {
     } finally {
       rmSync(capsuleState.directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 });

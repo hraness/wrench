@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -56,8 +56,6 @@ const loadInstalledManifest = (
   environment,
   registry,
 );
-
-setDefaultTimeout(60_000);
 
 type TestState = {
   readonly directory: string;
@@ -1404,7 +1402,7 @@ describe("doctor authenticated API readiness", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("reports same-boot authenticated-web cleanup uncertainty as unresolved recovery state", async () => {
     const testState = state();
@@ -1457,7 +1455,7 @@ describe("doctor authenticated API readiness", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("reports schema-v5 generic templates as inert derivation reservations", async () => {
     const testState = state();
@@ -1510,7 +1508,7 @@ describe("doctor authenticated API readiness", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 });
 
 describe("provider source plugin discovery CLI", () => {
@@ -2380,7 +2378,7 @@ describe("CLI previews and exit semantics", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  });
 
   test("shows the exact bound subject and selected internal API contract in a write confirmation", async () => {
     const testState = state();

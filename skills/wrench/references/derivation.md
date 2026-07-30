@@ -9,8 +9,8 @@ Use derivation to observe one signed-in first-party exchange and turn it into a 
 - [Review one sealed capture](#review-one-sealed-capture)
 - [Finish and remove the raw capture](#finish-and-remove-the-raw-capture)
 - [Create a fail-closed provider scaffold](#create-a-fail-closed-provider-scaffold)
-- [Promote evidence into owned code](#promote-evidence-into-owned-code)
-- [Install only the semantic selector](#install-only-the-semantic-selector)
+- [Promote evidence into a reviewed contract](#promote-evidence-into-a-reviewed-contract)
+- [Install only a bounded semantic contract](#install-only-a-bounded-semantic-contract)
 - [Forward-test the contract](#forward-test-the-contract)
 
 ## Define the evidence target

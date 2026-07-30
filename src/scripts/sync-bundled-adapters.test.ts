@@ -2,7 +2,6 @@ import {
   afterEach,
   describe,
   expect,
-  setDefaultTimeout,
   test,
 } from "bun:test";
 import {
@@ -49,8 +48,6 @@ type GenerationInstaller = NonNullable<SyncOptions["installGeneration"]>;
 
 const roots: string[] = [];
 const assetsDirectory = join(import.meta.dir, "..", "assets", "adapters");
-
-setDefaultTimeout(30_000);
 
 afterEach(() => {
   for (const root of roots.splice(0)) {

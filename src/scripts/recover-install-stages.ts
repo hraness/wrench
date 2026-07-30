@@ -27,6 +27,7 @@ const maximumDirectoryEntries = 10_000;
 const maximumInstallStages = 64;
 const maximumInstallStageBytes = 64 * 1024;
 const maximumMutationClaims = 64;
+const TEST_BARRIER_TIMEOUT_MS = 90_000;
 const installStageNamePattern = /^\.(wrench|oh)-install\.[A-Za-z0-9]{6}$/u;
 const installLeaseName = ".wrench-install.lease";
 const installLeaseMarker = "wrench-install-lease-v1:";
@@ -718,7 +719,7 @@ function waitAtInstallMutationClaimTestBarrier(
   } catch (error) {
     if (errorCode(error) !== "EEXIST") throw error;
   }
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + TEST_BARRIER_TIMEOUT_MS;
   while (!existsSync(releasePath)) {
     if (Date.now() >= deadline) {
       throw new Error(`local installer ${label} test barrier timed out`);

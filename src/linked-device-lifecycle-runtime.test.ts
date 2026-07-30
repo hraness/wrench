@@ -61,7 +61,27 @@ type LinkedDeviceAuth = Extract<
 const NOW = "2026-07-25T12:00:00.000Z";
 const HASH = "a".repeat(64);
 const SUBJECT = "whatsapp:pn:15551234567";
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 let memoryDeviceStore = "";
+
+type PipedChild = Bun.Subprocess<"ignore", "pipe", "pipe">;
+
+async function killAndReapChild(
+  child: PipedChild,
+  stdout: Promise<string>,
+  stderr: Promise<string>,
+): Promise<void> {
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    try {
+      process.kill(child.pid, "SIGKILL");
+    } catch {
+      // The direct test child already exited.
+    }
+  }
+  await Promise.allSettled([child.exited, stdout, stderr]);
+}
 
 beforeAll(() => {
   memoryDeviceStore = mkdtempSync(
@@ -694,7 +714,7 @@ describe("linked-device lifecycle runtime", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("binds a newly created pair store at the external boundary", async () => {
     const directory = mkdtempSync(
@@ -744,7 +764,7 @@ describe("linked-device lifecycle runtime", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("rejects a missing legacy store whose alias retargets before the pair boundary", async () => {
     const directory = mkdtempSync(
@@ -808,7 +828,7 @@ describe("linked-device lifecycle runtime", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("removes a symlink alias from the durable realm before external execution", async () => {
     const directory = mkdtempSync(
@@ -862,7 +882,7 @@ describe("linked-device lifecycle runtime", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   test("classifies a plugin preflight failure as safe to retry", async () => {
     const authState = fakeAuthStore(linkedAuth());
@@ -1313,7 +1333,7 @@ describe("linked-device lifecycle runtime", () => {
       releaseFirst?.();
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 
   test("admits only one external lifecycle per auth across overlapping callers", async () => {
     const directory = mkdtempSync(
@@ -1395,7 +1415,7 @@ describe("linked-device lifecycle runtime", () => {
       releaseFirst?.();
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 
   test("a new process discharges a SIGKILL-interrupted post-boundary journal without retrying", async () => {
     const outer = mkdtempSync(
@@ -1447,9 +1467,16 @@ describe("linked-device lifecycle runtime", () => {
         },
       });
     `;
-    let interrupted: ReturnType<typeof Bun.spawn> | null = null;
+    let interrupted: PipedChild | null = null;
+    let interruptedStdout: Promise<string> | null = null;
+    let interruptedStderr: Promise<string> | null = null;
+    let interruptedReaped = false;
+    let reconciler: PipedChild | null = null;
+    let reconcilerStdout: Promise<string> | null = null;
+    let reconcilerStderr: Promise<string> | null = null;
+    let reconcilerReaped = false;
     try {
-      interrupted = Bun.spawn(
+      const spawnedInterrupted = Bun.spawn(
         [process.execPath, "--no-env-file", "--eval", childScript],
         {
           cwd: repositoryRoot,
@@ -1458,24 +1485,33 @@ describe("linked-device lifecycle runtime", () => {
           stderr: "pipe",
         },
       );
-      for (let attempt = 0; attempt < 1_000 && !existsSync(ready); attempt += 1) {
+      interrupted = spawnedInterrupted;
+      interruptedStdout = new Response(spawnedInterrupted.stdout).text();
+      interruptedStderr = new Response(spawnedInterrupted.stderr).text();
+      const readyDeadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+      while (!existsSync(ready) && performance.now() < readyDeadline) {
         await Bun.sleep(10);
       }
       if (!existsSync(ready)) {
         interrupted.kill("SIGKILL");
-        await interrupted.exited;
-        const childStderr = interrupted.stderr;
+        const [, , childErrors] = await Promise.all([
+          interrupted.exited,
+          interruptedStdout,
+          interruptedStderr,
+        ]);
+        interruptedReaped = true;
         throw new Error(
-          `interrupted lifecycle child did not reach its boundary: ${
-            childStderr instanceof ReadableStream
-              ? await new Response(childStderr).text()
-              : ""
-          }`,
+          `interrupted lifecycle child did not reach its boundary: ${childErrors}`,
         );
       }
       expect(existsSync(ready)).toBeTrue();
       interrupted.kill("SIGKILL");
-      await interrupted.exited;
+      await Promise.all([
+        interrupted.exited,
+        interruptedStdout,
+        interruptedStderr,
+      ]);
+      interruptedReaped = true;
 
       const input = JSON.stringify({
         outcome: "not-applied",
@@ -1489,7 +1525,7 @@ describe("linked-device lifecycle runtime", () => {
           { WRENCH_STATE_HOME: ${JSON.stringify(state)} },
         );
       `;
-      const reconciler = Bun.spawn(
+      const spawnedReconciler = Bun.spawn(
         [process.execPath, "--no-env-file", "--eval", reconcileScript],
         {
           cwd: repositoryRoot,
@@ -1498,11 +1534,15 @@ describe("linked-device lifecycle runtime", () => {
           stderr: "pipe",
         },
       );
+      reconciler = spawnedReconciler;
+      reconcilerStdout = new Response(spawnedReconciler.stdout).text();
+      reconcilerStderr = new Response(spawnedReconciler.stderr).text();
       const [exitCode, stdout, stderr] = await Promise.all([
         reconciler.exited,
-        new Response(reconciler.stdout).text(),
-        new Response(reconciler.stderr).text(),
+        reconcilerStdout,
+        reconcilerStderr,
       ]);
+      reconcilerReaped = true;
       expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect(JSON.parse(stdout)).toMatchObject({
         ok: true,
@@ -1521,8 +1561,37 @@ describe("linked-device lifecycle runtime", () => {
         reasonCode: "reconciled-not-applied",
       });
     } finally {
-      interrupted?.kill("SIGKILL");
-      rmSync(outer, { recursive: true, force: true });
+      try {
+        try {
+          if (
+            !reconcilerReaped
+            && reconciler !== null
+            && reconcilerStdout !== null
+            && reconcilerStderr !== null
+          ) {
+            await killAndReapChild(
+              reconciler,
+              reconcilerStdout,
+              reconcilerStderr,
+            );
+          }
+        } finally {
+          if (
+            !interruptedReaped
+            && interrupted !== null
+            && interruptedStdout !== null
+            && interruptedStderr !== null
+          ) {
+            await killAndReapChild(
+              interrupted,
+              interruptedStdout,
+              interruptedStderr,
+            );
+          }
+        }
+      } finally {
+        rmSync(outer, { recursive: true, force: true });
+      }
     }
-  }, 30_000);
+  });
 });

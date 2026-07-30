@@ -31,6 +31,7 @@ const predecessorMarker =
 const retiredClaimPrefix = ".wrench-install.retired-claim-";
 const retirementId = "00000000-0000-4000-8000-000000000002";
 const recoveryScript = join(import.meta.dir, "recover-install-stages.ts");
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 const roots: string[] = [];
 
 function differentDigest(value: string): string {
@@ -97,7 +98,8 @@ function stage(
 }
 
 async function waitForPath(path: string, label: string): Promise<void> {
-  for (let attempt = 0; attempt < 800; attempt += 1) {
+  const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+  while (performance.now() < deadline) {
     if (existsSync(path)) return;
     await Bun.sleep(25);
   }
@@ -156,7 +158,7 @@ describe("abandoned local installer stage recovery", () => {
 
   test("reclaims a crashed owner's exact lease and stage before acquisition", async () => {
     const root = directory();
-    const owner = Bun.spawn(["/bin/sleep", "30"]);
+    const owner = Bun.spawn(["/bin/sleep", "120"]);
     try {
       acquireInstallLease(root, owner.pid);
       const abandoned = stage(
@@ -217,10 +219,10 @@ describe("abandoned local installer stage recovery", () => {
       };
     });
     try {
-      for (
-        let attempt = 0;
-        attempt < 800 && readdirSync(readyDirectory).length !== 4;
-        attempt += 1
+      const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+      while (
+        readdirSync(readyDirectory).length !== 4
+        && performance.now() < deadline
       ) {
         const exited = children.find((entry) => entry.child.exitCode !== null);
         if (exited !== undefined) {
@@ -257,11 +259,11 @@ describe("abandoned local installer stage recovery", () => {
       for (const entry of children) entry.child.kill(9);
       await Promise.all(children.map((entry) => entry.child.exited));
     }
-  }, 30_000);
+  });
 
   test("blocks a successor while a paused release owns mutation arbitration", async () => {
     const root = directory();
-    const owner = Bun.spawn(["/bin/sleep", "30"]);
+    const owner = Bun.spawn(["/bin/sleep", "120"]);
     const readyPath = join(root, "release-ready");
     const releasePath = join(root, "release-release");
     try {
@@ -289,10 +291,10 @@ describe("abandoned local installer stage recovery", () => {
       const releaseStdout = new Response(releaseHelper.stdout).text();
       const releaseStderr = new Response(releaseHelper.stderr).text();
       try {
-        for (
-          let attempt = 0;
-          attempt < 800 && !existsSync(readyPath);
-          attempt += 1
+        const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+        while (
+          !existsSync(readyPath)
+          && performance.now() < deadline
         ) {
           if (releaseHelper.exitCode !== null) {
             throw new Error(
@@ -332,7 +334,7 @@ describe("abandoned local installer stage recovery", () => {
       owner.kill(9);
       await owner.exited;
     }
-  }, 30_000);
+  });
 
   test("recovers a mutation claim whose held helper is killed", async () => {
     const root = directory();
@@ -368,7 +370,7 @@ describe("abandoned local installer stage recovery", () => {
       helper.kill(9);
       await helper.exited;
     }
-  }, 30_000);
+  });
 
   test("cleans the maximum exact dead claim set before admitting a successor", () => {
     const root = directory();
@@ -516,7 +518,7 @@ describe("abandoned local installer stage recovery", () => {
       helper.kill(9);
       await helper.exited;
     }
-  }, 30_000);
+  });
 
   test("removes exact current and predecessor managed private stages only", () => {
     const root = directory();

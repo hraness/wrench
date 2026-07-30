@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import {
   PreservedBrowserArtifactsError,
@@ -41,8 +41,6 @@ import {
 } from "./storage";
 
 type Environment = Readonly<Record<string, string | undefined>>;
-
-setDefaultTimeout(30_000);
 
 async function withState(
   callback: (

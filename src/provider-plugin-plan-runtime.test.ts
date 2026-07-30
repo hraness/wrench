@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -56,10 +56,6 @@ const sourcePluginImplementationUrl = new URL(
   "./provider-plugin-test-fixture.ts",
   import.meta.url,
 );
-
-// Confirmation crosses several durable helper-process boundaries. Shared CI
-// hosts can delay those launches without changing the planner result.
-setDefaultTimeout(15_000);
 
 function state(): TestState {
   const directory = mkdtempSync(join(tmpdir(), "wrench-plugin-plan-runtime-"));

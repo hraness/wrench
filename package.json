@@ -1,6 +1,6 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local-first Bun CLI for durable web capture, knowledge context, verified media archives, and bounded provider plugins.",
   "license": "MIT",
   "type": "module",
@@ -203,7 +203,7 @@
   "scripts": {
     "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
-    "test": "bun test --no-orphans --timeout 180000 ./src",
+    "test": "bun test --no-orphans --timeout 180000 --max-concurrency 4 ./src",
     "test:standalone": "bun run scripts/standalone-smoke.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
     "check": "bun run typecheck && bun run build && bun run test:package && bun run test && bun run test:standalone",

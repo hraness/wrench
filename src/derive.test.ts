@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -43,8 +43,6 @@ import { sha256 } from "./model";
 import type { ProviderPluginRegistry } from "./provider-plugin-registry";
 import { providerPluginRegistry } from "./provider-plugins";
 import { createPrivateJsonIfAbsent, removePrivateEmptyStateDirectory } from "./storage";
-
-setDefaultTimeout(20_000);
 
 const targetOrigin = "https://example.com";
 const readOnlyPolicy = { allowRemoteActions: false, targetOrigin } as const;
@@ -1483,7 +1481,7 @@ describe("derivation session path defenses", () => {
       rmSync(socketDirectory, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test.each(["..", ".", "--config", " leading-space", "trailing-space ", "name\u0000suffix"])(
     "rejects unsafe named profile metadata %j before launching or deleting",
@@ -1707,7 +1705,7 @@ describe("derivation scaffold boundaries", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("allows force only for a real directory and does not remove unrelated files", () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-scaffold-force-"));

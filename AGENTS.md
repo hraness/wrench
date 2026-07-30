@@ -21,5 +21,6 @@
 - Keep mutations behind exact preview, confirmation, durable dispatch, and at-most-once evidence. Never retry or clear an indeterminate dispatch; reconcile it from separately obtained exact evidence.
 - Keep raw authenticated traffic, cookies, tokens, profiles, private content, and local paths out of Git, tests, receipts, logs, and diagnostics.
 - Pair concrete behavior with deterministic example tests. Add property tests for strict parsers, canonical encodings, identifiers, ordering, round trips, lifecycle transitions, and arbitrary input.
+- Keep the Bun runner timeout and concurrency policy in `package.json`; test bodies may own explicit product deadlines and elapsed assertions, but must not call `setDefaultTimeout` or pass per-test runner timeouts.
 - Treat this repository as the complete project. Use only its public names, paths, commands, and dependencies in code, tests, documentation, and Git prose.
 - Treat a `v*` tag as a release request. Keep it equal to `v<package.json version>` on `main`, wait for the read-only gate, and verify the resulting GitHub Release is non-draft, immutable, and Latest before creating another tag.

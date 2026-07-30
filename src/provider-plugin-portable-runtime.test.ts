@@ -15,7 +15,6 @@ import {
   beforeAll,
   describe,
   expect,
-  setDefaultTimeout,
   test,
 } from "bun:test";
 
@@ -91,13 +90,11 @@ import {
 } from "./runtime";
 import { runWebSessionOperationWithDeadline } from "./web-session";
 
-setDefaultTimeout(60_000);
-
 // Successful portable-host fixtures include staging, process admission, and
 // verified teardown. Keep their operation budget aligned with the focused host
 // suite so unrelated process-heavy checks cannot turn a success fixture into a
 // deliberate cleanup-unsafe recovery case.
-const REAL_HOST_FIXTURE_TIMEOUT_MS = 15_000;
+const REAL_HOST_FIXTURE_TIMEOUT_MS = 90_000;
 
 class FakeMonotonicClock implements OperationDeadlineClock {
   #nowMs = 0;
