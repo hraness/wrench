@@ -18,7 +18,7 @@ export type WrenchArguments =
   | { readonly command: "help" }
   | { readonly command: "clip"; readonly arguments: readonly string[] }
   | { readonly command: "read"; readonly arguments: readonly string[] }
-  | { readonly command: "mine"; readonly arguments: readonly string[] }
+  | { readonly command: "media"; readonly arguments: readonly string[] }
   | { readonly command: "doctor"; readonly json: boolean }
   | { readonly command: "capabilities"; readonly adapterId?: string; readonly json: boolean }
   | { readonly command: "plugin-list"; readonly json: boolean }
@@ -549,7 +549,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     return {
       ok: true,
       value: {
-        command: "mine",
+        command: "media",
         arguments: mediaMode === "archive" || mediaMode === "audio" || mediaMode === "video" || mediaMode === "transcript"
           ? mediaArguments
           : ["archive", ...mediaArguments],
@@ -564,7 +564,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     || first === "verify"
     || first === "transcriber"
   ) {
-    return { ok: true, value: { command: "mine", arguments: raw } };
+    return { ok: true, value: { command: "media", arguments: raw } };
   }
   if (first === "run") return parseWrenchArguments(["invoke", ...raw.slice(1)]);
   if (first === "doctor") {

@@ -3,10 +3,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type { DoctorReport as MineDoctorReport } from "@hraness/mine/doctor";
 import type { DoctorReport as ClipDoctorReport } from "@hraness/kb/capture";
 import { createAuth, loadAuth, saveAuth } from "./auth";
 import { PreservedBrowserArtifactsError } from "./browser";
+import type * as MediaRuntimeModule from "./media";
+import type { DoctorReport as MediaDoctorReport } from "./media/doctor";
 import { canonicalJson, isWebSessionOperation, sha256, type WrenchManifest } from "./model";
 import { planAssetBundlePath } from "./plan-assets";
 import {
@@ -56,6 +57,8 @@ const loadInstalledManifest = (
   environment,
   registry,
 );
+
+type MediaRuntime = typeof MediaRuntimeModule;
 
 type TestState = {
   readonly directory: string;
@@ -278,7 +281,7 @@ function unavailableClipReport(): ClipDoctorReport {
   };
 }
 
-function unavailableMineReport(): MineDoctorReport {
+function unavailableMediaReport(): MediaDoctorReport {
   return {
     ok: false,
     checks: [],
@@ -294,6 +297,15 @@ function unavailableMineReport(): MineDoctorReport {
   };
 }
 
+function mediaRuntime(overrides: Partial<MediaRuntime> = {}): MediaRuntime {
+  return {
+    runCli: () => Promise.resolve(0),
+    runDoctor: () => Promise.resolve(unavailableMediaReport()),
+    renderDoctorReport: () => "",
+    ...overrides,
+  };
+}
+
 async function runDoctor(
   testState: TestState,
   json = true,
@@ -305,7 +317,7 @@ async function runDoctor(
     wrench.output,
     {
       inspectClipEnvironment: () => Promise.resolve(unavailableClipReport()),
-      inspectMineEnvironment: () => Promise.resolve(unavailableMineReport()),
+      loadMediaRuntime: () => Promise.resolve(mediaRuntime()),
     },
   );
   expect(wrench.stderr()).toBe("");
@@ -1122,9 +1134,28 @@ describe("auth CLI", () => {
   });
 });
 
-describe("Mine media delegation", () => {
-  test("passes translated media arguments, Wrench, environment, signal, and exit code through unchanged", async () => {
-    const environment = { ...process.env, MINE_HOME: "/tmp/mine-library" };
+describe("Wrench media routing", () => {
+  test("does not load the media runtime for an unrelated Wrench command", async () => {
+    const wrench = capture();
+    let mediaLoads = 0;
+    const code = await main(
+      ["platforms", "--json"],
+      process.env,
+      wrench.output,
+      {
+        loadMediaRuntime: () => {
+          mediaLoads += 1;
+          return Promise.resolve(mediaRuntime());
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(mediaLoads).toBe(0);
+  });
+
+  test("passes translated media arguments, environment, signal, and exit code through unchanged", async () => {
+    const environment = { ...process.env, WRENCH_MEDIA_HOME: "/tmp/media-library" };
     const wrench = capture();
     const controller = new AbortController();
     const calls: string[][] = [];
@@ -1134,24 +1165,26 @@ describe("Mine media delegation", () => {
       environment,
       wrench.output,
       {
-        runMineCli: (arguments_, options) => {
-          calls.push([...arguments_]);
-          expect(options?.environment).toBe(environment);
-          expect(options?.signal).toBe(controller.signal);
-          options?.io?.stdout("mine delegated output\n");
-          return Promise.resolve(9);
-        },
+        loadMediaRuntime: () => Promise.resolve(mediaRuntime({
+          runCli: (arguments_, options) => {
+            calls.push([...arguments_]);
+            expect(options?.environment).toBe(environment);
+            expect(options?.signal).toBe(controller.signal);
+            options?.io?.stdout("media delegated output\n");
+            return Promise.resolve(9);
+          },
+        })),
       },
       controller.signal,
     );
 
     expect(code).toBe(9);
     expect(calls).toEqual([["audio", "https://media.example/item", "--json"]]);
-    expect(wrench.stdout()).toBe("mine delegated output\n");
+    expect(wrench.stdout()).toBe("media delegated output\n");
     expect(wrench.stderr()).toBe("");
   });
 
-  test("adds Mine evidence to doctor without making media readiness weaken action readiness", async () => {
+  test("adds media evidence to doctor without making media readiness weaken action readiness", async () => {
     const environment = { ...process.env, WRENCH_STATE_HOME: state().directory };
     const clipReport: ClipDoctorReport = {
       schemaVersion: 1,
@@ -1168,7 +1201,7 @@ describe("Mine media delegation", () => {
       tools: [],
       warnings: [],
     };
-    const mineReport: MineDoctorReport = {
+    const mediaReport: MediaDoctorReport = {
       ok: false,
       checks: [],
       warnings: [],
@@ -1185,16 +1218,18 @@ describe("Mine media delegation", () => {
     try {
       const code = await main(["doctor", "--json"], environment, wrench.output, {
         inspectClipEnvironment: () => Promise.resolve(clipReport),
-        inspectMineEnvironment: (options) => {
-          expect(options?.env).toBe(environment);
-          return Promise.resolve(mineReport);
-        },
+        loadMediaRuntime: () => Promise.resolve(mediaRuntime({
+          runDoctor: (options) => {
+            expect(options?.env).toBe(environment);
+            return Promise.resolve(mediaReport);
+          },
+        })),
       });
 
       expect(code).toBe(3);
       expect(JSON.parse(wrench.stdout())).toMatchObject({
         ok: false,
-        mine: mineReport,
+        media: mediaReport,
         wrench: {
           mediaArchiveReady: false,
           browserCaptureBootstrapReady: true,
@@ -1244,7 +1279,7 @@ describe("Mine media delegation", () => {
         tools: [],
         warnings: [],
       };
-      const mineReport: MineDoctorReport = {
+      const mediaReport: MediaDoctorReport = {
         ok: false,
         checks: [],
         warnings: [],
@@ -1260,7 +1295,9 @@ describe("Mine media delegation", () => {
       const wrench = capture();
       expect(await main(["doctor", "--json"], testState.environment, wrench.output, {
         inspectClipEnvironment: () => Promise.resolve(clipReport),
-        inspectMineEnvironment: () => Promise.resolve(mineReport),
+        loadMediaRuntime: () => Promise.resolve(mediaRuntime({
+          runDoctor: () => Promise.resolve(mediaReport),
+        })),
       })).toBe(0);
       const parsed = JSON.parse(wrench.stdout()) as {
         readonly oh: unknown;
@@ -1939,7 +1976,7 @@ describe("reviewed platform policy helpers", () => {
     let catalogLoads = 0;
     const dependencies = {
       inspectClipEnvironment: () => Promise.resolve(unavailableClipReport()),
-      inspectMineEnvironment: () => Promise.resolve(unavailableMineReport()),
+      loadMediaRuntime: () => Promise.resolve(mediaRuntime()),
       createPortableProviderPluginCatalog: (
         registry: ProviderPluginRegistry,
         environment: Readonly<Record<string, string | undefined>> = process.env,

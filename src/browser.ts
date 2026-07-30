@@ -432,9 +432,12 @@ export function agentBrowserCommand(): readonly string[] {
   return packageAgentBrowserCommand();
 }
 
-export function isolatedEnvironment(socketDirectory: string): Readonly<Record<string, string>> {
+export function isolatedEnvironment(
+  socketDirectory: string,
+  inheritedEnvironment: Readonly<Record<string, string | undefined>> = process.env,
+): Readonly<Record<string, string>> {
   const output: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(inheritedEnvironment)) {
     if (value === undefined || key.startsWith("AGENT_BROWSER_") || inheritedProxyKeys.has(key)) continue;
     output[key] = value;
   }

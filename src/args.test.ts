@@ -42,36 +42,36 @@ describe("wrench CLI grammar", () => {
     });
   });
 
-  test("routes verified media commands through Mine without changing bare URL clipping", () => {
+  test("routes verified media commands through the owned media runtime without changing bare URL clipping", () => {
     const url = "https://media.example/video";
     expect(parseWrenchArguments(["archive", url, "--refresh", "--json"])).toEqual({
       ok: true,
-      value: { command: "mine", arguments: ["archive", url, "--refresh", "--json"] },
+      value: { command: "media", arguments: ["archive", url, "--refresh", "--json"] },
     });
     expect(parseWrenchArguments(["media", url, "--output", "/tmp/library"])).toEqual({
       ok: true,
-      value: { command: "mine", arguments: ["archive", url, "--output", "/tmp/library"] },
+      value: { command: "media", arguments: ["archive", url, "--output", "/tmp/library"] },
     });
     expect(parseWrenchArguments(["media", "transcript", url, "--lang", "de"])).toEqual({
       ok: true,
-      value: { command: "mine", arguments: ["transcript", url, "--lang", "de"] },
+      value: { command: "media", arguments: ["transcript", url, "--lang", "de"] },
     });
     for (const mode of ["audio", "video", "transcript"] as const) {
       expect(parseWrenchArguments([mode, url])).toEqual({
         ok: true,
-        value: { command: "mine", arguments: [mode, url] },
+        value: { command: "media", arguments: [mode, url] },
       });
     }
-    expect(parseWrenchArguments(["verify", "/tmp/Mine/item", "--json"])).toEqual({
+    expect(parseWrenchArguments(["verify", "/tmp/wrench-media/item", "--json"])).toEqual({
       ok: true,
-      value: { command: "mine", arguments: ["verify", "/tmp/Mine/item", "--json"] },
+      value: { command: "media", arguments: ["verify", "/tmp/wrench-media/item", "--json"] },
     });
     expect(parseWrenchArguments([
       "transcriber", "setup", "--engine", "whisper-cpp", "--model", "/tmp/model.bin",
     ])).toEqual({
       ok: true,
       value: {
-        command: "mine",
+        command: "media",
         arguments: ["transcriber", "setup", "--engine", "whisper-cpp", "--model", "/tmp/model.bin"],
       },
     });

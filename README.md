@@ -13,10 +13,10 @@ Project site: [hraness.com/wrench](https://hraness.com/wrench)
 
 ## Install
 
-Pin the public repository to the immutable `v0.1.1` tag:
+Pin the public repository to the immutable `v0.2.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.1.1
+bun add --global github:hraness/wrench#v0.2.0
 wrench doctor
 ```
 
@@ -32,7 +32,7 @@ verifies the resolved closure versions and reviewed entrypoint hashes.
 For programmatic plugin types and bounded validators:
 
 ```sh
-bun add github:hraness/wrench#v0.1.1
+bun add github:hraness/wrench#v0.2.0
 ```
 
 ```ts
@@ -62,18 +62,22 @@ wrench archive URL                 # create a verified media archive
 wrench audio URL
 wrench video URL
 wrench transcript URL
+wrench verify path/to/archive-item
 wrench context path/to/code        # resolve nearby agent context
 wrench search "query"              # search the local knowledge base
 wrench doctor --json
 ```
 
-Wrench captures only material the user is authorized to access. It does not
-bypass authentication, payment, access controls, or DRM.
+Wrench archives one accessible, finite, non-DRM media item at a time. It
+rejects playlists, live streams, affirmative DRM, and unsupported
+authentication instead of weakening the archive boundary. Use it only for
+material you are authorized to access. Wrench does not bypass authentication,
+payment, access controls, or DRM.
 
-The `doctor --json` response uses `wrench` as its canonical report envelope.
-It also emits the structurally identical deprecated `oh` envelope as a frozen
-JSON compatibility alias for predecessor consumers. New integrations must use
-`wrench`; the two envelopes must never diverge.
+Each completed media item retains the acquired encoded media,
+privacy-projected provider metadata, requested derivatives and transcripts, a
+versioned manifest, and SHA-256 integrity records. Inspect the directory
+directly and run `wrench verify` to recompute every recorded artifact hash.
 
 ## Inspect provider support
 
@@ -128,7 +132,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.1.1/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.2.0/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

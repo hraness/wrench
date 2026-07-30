@@ -2,11 +2,6 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { runCli as runMineCli } from "@hraness/mine";
-import {
-  renderDoctorReport as renderMineDoctorReport,
-  runDoctor as inspectMineEnvironment,
-} from "@hraness/mine/doctor";
 import { BoundedByteBuffer } from "@hraness/kb/clip/bounded-byte-buffer";
 import {
   clipMain,
@@ -28,6 +23,7 @@ import {
   type WrenchAuth,
 } from "./auth";
 import { parseWrenchArguments, wrenchUsage, type WrenchArguments } from "./args";
+import type * as MediaRuntimeModule from "./media";
 import {
   cloneBrowserProfile,
   PreservedBrowserArtifactsError,
@@ -178,10 +174,14 @@ type Output = {
   readonly stderr: (value: string) => void;
 };
 
+type MediaRuntime = typeof MediaRuntimeModule;
+
 const defaultOutput: Output = {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value),
 };
+
+const loadMediaRuntime = (): Promise<MediaRuntime> => import("./media");
 
 export function renderWrenchUsage(): string {
   return wrenchUsage;
@@ -190,8 +190,7 @@ export function renderWrenchUsage(): string {
 export type WrenchDependencies = {
   readonly clipMain: typeof clipMain;
   readonly inspectClipEnvironment: typeof inspectClipEnvironment;
-  readonly inspectMineEnvironment: typeof inspectMineEnvironment;
-  readonly runMineCli: typeof runMineCli;
+  readonly loadMediaRuntime: () => Promise<MediaRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
   readonly probePluginSubject: (
     binding: ProviderPluginBindingV1,
@@ -233,8 +232,7 @@ export type WrenchDependencies = {
 const defaultDependencies: WrenchDependencies = {
   clipMain,
   inspectClipEnvironment,
-  inspectMineEnvironment,
-  runMineCli,
+  loadMediaRuntime,
   providerPluginRegistry,
   probePluginSubject: async (binding, auth, signal) => {
     requireProviderPluginAuth(binding, auth);
@@ -284,8 +282,7 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
   return {
     clipMain: overrides.clipMain ?? defaultDependencies.clipMain,
     inspectClipEnvironment: overrides.inspectClipEnvironment ?? defaultDependencies.inspectClipEnvironment,
-    inspectMineEnvironment: overrides.inspectMineEnvironment ?? defaultDependencies.inspectMineEnvironment,
-    runMineCli: overrides.runMineCli ?? defaultDependencies.runMineCli,
+    loadMediaRuntime: overrides.loadMediaRuntime ?? defaultDependencies.loadMediaRuntime,
     providerPluginRegistry: overrides.providerPluginRegistry
       ?? defaultDependencies.providerPluginRegistry,
     probePluginSubject: overrides.probePluginSubject
@@ -1008,9 +1005,12 @@ async function doctor(
         binding.transport === "linked-device"
         && binding.linkedDeviceLifecycle !== undefined,
     ));
-  const [capture, mine, linkedDeviceProtocols] = await Promise.all([
+  const [capture, mediaInspection, linkedDeviceProtocols] = await Promise.all([
     dependencies.inspectClipEnvironment(),
-    dependencies.inspectMineEnvironment({ env: environment }),
+    dependencies.loadMediaRuntime().then(async (runtime) => ({
+      runtime,
+      report: await runtime.runDoctor({ env: environment }),
+    })),
     Promise.all(linkedDeviceBindings.map(async (binding) => {
       try {
         return {
@@ -1028,6 +1028,7 @@ async function doctor(
       }
     })),
   ]);
+  const media = mediaInspection.report;
   const portablePlugins = doctorPortableProviderPlugins(environment);
   const expiredPlansRemoved = purgeExpiredPlans(environment);
   const orphanedBrowserSnapshotsRemoved = purgeOrphanedBrowserSnapshots(environment);
@@ -1059,7 +1060,7 @@ async function doctor(
     && linkedDeviceLifecycleRecoveryHealthy;
   const wrenchReport = {
     home: wrenchStateHome(environment),
-    mediaArchiveReady: mine.ok,
+    mediaArchiveReady: media.ok,
     installedAdapters: adapters.length,
     configuredAuth: auth,
     browserCaptureBootstrapReady,
@@ -1092,7 +1093,7 @@ async function doctor(
   const report = {
     ok: actionReady && recoveryHealthy && portablePlugins.ok,
     capture,
-    mine,
+    media,
     wrench: wrenchReport,
     // Frozen doctor JSON compatibility alias. Predecessor consumers received
     // this report under `oh`; both envelopes must remain structurally exact.
@@ -1102,7 +1103,7 @@ async function doctor(
   else {
     output.stdout(sanitizeTerminalText(renderDoctorReport(capture)));
     output.stdout("\nWrench verified media archive\n");
-    output.stdout(sanitizeTerminalText(renderMineDoctorReport(mine)));
+    output.stdout(sanitizeTerminalText(mediaInspection.runtime.renderDoctorReport(media)));
     output.stdout("\nWrench actions\n");
     output.stdout(`- Home: ${safe(report.wrench.home)}\n`);
     output.stdout(`- Installed adapters: ${adapters.length}\n`);
@@ -1342,8 +1343,9 @@ async function runCommand(
   if (arguments_.command === "read") {
     return runCaptureCommand(["inspect"], arguments_.arguments, environment, output, dependencies);
   }
-  if (arguments_.command === "mine") {
-    return dependencies.runMineCli(arguments_.arguments, {
+  if (arguments_.command === "media") {
+    const media = await dependencies.loadMediaRuntime();
+    return media.runCli(arguments_.arguments, {
       io: output,
       environment,
       ...(signal === undefined ? {} : { signal }),

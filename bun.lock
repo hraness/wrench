@@ -6,7 +6,6 @@
       "name": "@hraness/wrench",
       "dependencies": {
         "@hraness/kb": "github:hraness/kb#a4989df0e81d504651dbb20c3a4ef36c8846d0cb",
-        "@hraness/mine": "github:hraness/mine#858f861c06d071395165dc0ac8b542855027daca",
         "buffer-from": "1.1.2",
         "source-map": "0.6.1",
         "source-map-support": "0.5.21",
@@ -23,8 +22,6 @@
     "@hono/node-server": ["@hono/node-server@1.19.17", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ=="],
 
     "@hraness/kb": ["@hraness/kb@github:hraness/kb#a4989df", { "dependencies": { "@steipete/sweet-cookie": "git+https://github.com/hraness/sweet-cookie.git#112dce1a3c3dd165310616ca63dd2f6cc652b212", "@tobilu/qmd": "2.5.3", "agent-browser": "0.32.3", "defuddle": "0.19.1", "yaml": "^2.9.0" }, "bin": { "kb": "./dist/cli.js" } }, "hraness-kb-a4989df", "sha512-9rOg2KMPbLU08p5plrAhpOk7z6xCfHC6E+g+7HAk9pY6+ZvkDHFfiDvNfK2pNN+4+iEePPTCCFIh8VS+02oIWQ=="],
-
-    "@hraness/mine": ["@hraness/mine@github:hraness/mine#858f861", { "bin": { "mine": "./dist/index.js" } }, "hraness-mine-858f861", "sha512-Mq9Q10Wz8efU/uNfAmBMoU11TwFn5dmA25T21g2qs3YWVzohl0sUINbLwfYnrlRmQWLtgpGAV++Mf2/A5345KA=="],
 
     "@huggingface/jinja": ["@huggingface/jinja@0.5.9", "", {}, "sha512-uWTG+l3VJRsl7EXxYizuL3P+cCPoc3cRqbWWRcQN0FhejRfbdq0RNhCmbY/YDtnTcz9icdLYuLDjsnz4d8JMuw=="],
 

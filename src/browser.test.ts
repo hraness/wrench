@@ -411,28 +411,16 @@ describe("browser process isolation helpers", () => {
   });
 
   test("strips inherited agent-browser and proxy settings", () => {
-    const before = {
-      agent: process.env.AGENT_BROWSER_SESSION,
-      upper: process.env.HTTPS_PROXY,
-      lower: process.env.http_proxy,
-    };
-    process.env.AGENT_BROWSER_SESSION = "ambient-session";
-    process.env.HTTPS_PROXY = "http://ambient-proxy.invalid";
-    process.env.http_proxy = "http://ambient-proxy.invalid";
-    try {
-      const environment = isolatedEnvironment("/tmp/wrench-test-socket");
-      expect(environment.AGENT_BROWSER_SESSION).toBeUndefined();
-      expect(environment.HTTPS_PROXY).toBeUndefined();
-      expect(environment.http_proxy).toBeUndefined();
-      expect(environment.AGENT_BROWSER_SOCKET_DIR).toBe("/tmp/wrench-test-socket");
-    } finally {
-      if (before.agent === undefined) delete process.env.AGENT_BROWSER_SESSION;
-      else process.env.AGENT_BROWSER_SESSION = before.agent;
-      if (before.upper === undefined) delete process.env.HTTPS_PROXY;
-      else process.env.HTTPS_PROXY = before.upper;
-      if (before.lower === undefined) delete process.env.http_proxy;
-      else process.env.http_proxy = before.lower;
-    }
+    const environment = isolatedEnvironment("/tmp/wrench-test-socket", {
+      PATH: "/usr/bin:/bin",
+      AGENT_BROWSER_SESSION: "ambient-session",
+      HTTPS_PROXY: "http://ambient-proxy.invalid",
+      http_proxy: "http://ambient-proxy.invalid",
+    });
+    expect(environment).toEqual({
+      PATH: "/usr/bin:/bin",
+      AGENT_BROWSER_SOCKET_DIR: "/tmp/wrench-test-socket",
+    });
   });
 
   test("parses only the last valid JSON diagnostic line", () => {

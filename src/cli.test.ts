@@ -329,14 +329,16 @@ try {
     }
   });
 
-  test("routed commands never load Mine, capture, browser, or derive graphs", async () => {
+  test("routed commands never load media, capture, browser, or derive graphs", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-loader-sentinel-"));
     chmodSync(root, 0o700);
     try {
       const forbiddenGraphs = [
         {
-          id: "mine",
-          path: realpathSync(fileURLToPath(import.meta.resolve("@hraness/mine"))),
+          id: "media",
+          path: realpathSync(
+            fileURLToPath(import.meta.resolve("./media/index.ts")),
+          ),
         },
         {
           id: "kb-capture",

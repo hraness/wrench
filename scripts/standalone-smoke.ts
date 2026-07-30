@@ -51,6 +51,7 @@ const environment: Record<string, string> = {
   PATH: process.env.PATH ?? "",
   TMPDIR: temporary,
   TZ: "UTC",
+  WRENCH_MEDIA_HOME: join(state, "media"),
   WRENCH_STATE_HOME: state,
 };
 
@@ -174,7 +175,7 @@ async function assertInstalledClosurePackage(
 
 function assertDoctorSchema(label: string, text: string): void {
   const report = parseJsonObject(label, text);
-  requireKeys(label, report, ["capture", "mine", "oh", "ok", "wrench"]);
+  requireKeys(label, report, ["capture", "media", "oh", "ok", "wrench"]);
   if (typeof report.ok !== "boolean") {
     throw new Error(`${label}.ok is not a boolean`);
   }
@@ -189,8 +190,8 @@ function assertDoctorSchema(label: string, text: string): void {
     throw new Error(`${label}.capture.schemaVersion is not 1`);
   }
 
-  const mine = requireJsonObject(`${label}.mine`, report.mine);
-  requireKeys(`${label}.mine`, mine, [
+  const media = requireJsonObject(`${label}.media`, report.media);
+  requireKeys(`${label}.media`, media, [
     "checks",
     "errors",
     "ok",

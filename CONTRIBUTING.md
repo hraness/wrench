@@ -18,6 +18,13 @@ redaction, and recovery. A new mutation also needs preview-digest,
 at-most-once, indeterminate-result, and reconciliation evidence. Keep an
 operation `capture-required` until the exact current contract is proved.
 
+Media changes must preserve the one-item, finite, non-DRM source boundary and
+must never add an access-control bypass. Keep acquisition output staged until
+the complete artifact contract, manifest, and SHA-256 records verify. Add
+deterministic coverage for parsing, direct and provider acquisition,
+derivation, transcripts, revision history, locking, cancellation, and
+full-item verification.
+
 Portable-plugin changes must preserve static validation before code execution,
 content-addressed packages, explicit code trust, denied-by-default host
 capabilities, exact-origin HTTPS, opaque credential sinks, bounded files and

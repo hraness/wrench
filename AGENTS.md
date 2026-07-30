@@ -1,6 +1,7 @@
 # Contents
 
-- `src/` – the CLI, strict data and protocol models, provider-plugin kernel, built-in providers, runtime assets, helpers, and colocated tests.
+- `src/` – the CLI, page-capture runtime, strict data and protocol models, provider-plugin kernel, built-in providers, runtime assets, helpers, and colocated tests.
+- `src/media/` – the finite-item media acquisition, archive, derivation, transcript, revision, verification, and cancellation runtime.
 - `skills/wrench/` – the packaged Agent Skill and focused operational references.
 - `docs/` – provider-plugin authoring and trust-boundary guidance.
 - `scripts/` – standalone CLI, plugin lifecycle, and clean-consumer package verification.
@@ -13,6 +14,7 @@
 - Use Bun 1.3.14 and run `bun run check` before handing off a change.
 - Keep the package root import side-effect-free. Importing `@hraness/wrench` must not start the CLI, inspect local state, load built-in providers, or access the network.
 - Expose bounded semantic operations, never caller-selected requests, endpoints, headers, cookies, selectors, scripts, shell commands, or arbitrary file access.
+- Keep media acquisition to one authorized, accessible, finite, non-DRM item. Reject playlists, live streams, affirmative DRM, unsupported authentication, and access-control bypasses. Promote an item only after its inspectable archive, versioned manifest, and SHA-256 records pass complete verification.
 - Treat source plugins as trusted in-process code. Treat portable child-process execution as ordinary-failure containment, not a hostile-code sandbox, and require an explicit trust decision for the exact verified bundle.
 - Parse every foreign manifest, package, message, plan, receipt, response, and CLI value from `unknown`; reject extra fields, malformed bounds, ambiguous ownership, and drift.
 - Keep installed support discoverable from the validated active catalog. Reject duplicate plugin, route, or operation ownership before a command can use it.
