@@ -416,7 +416,7 @@ throw new Error("private fallback did not load a forbidden module");
     }
   });
 
-  test("has only static help as an eager dependency and starts help quickly", async () => {
+  test("has only static help as an eager dependency and bounds startup CPU work", async () => {
     const source = readFileSync(cliPath, "utf8");
     expect(source).toContain('import { wrenchUsage } from "./usage"');
     expect(source).toContain('import("./wrench")');
@@ -427,7 +427,6 @@ throw new Error("private fallback did not load a forbidden module");
     ) as { readonly bin?: Readonly<Record<string, string>> };
     expect(packageJson.bin?.wrench).toMatch(/^\.?\/src\/cli\.ts$/u);
 
-    const started = performance.now();
     const child = Bun.spawn([process.execPath, cliPath, "--help"], {
       cwd: repositoryRoot,
       stdout: "pipe",
@@ -438,10 +437,12 @@ throw new Error("private fallback did not load a forbidden module");
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
-    const elapsedMilliseconds = performance.now() - started;
+    const resourceUsage = child.resourceUsage();
     expect(exitCode).toBe(0);
     expect(stdout).toBe(wrenchUsage);
     expect(stderr).toBe("");
-    expect(elapsedMilliseconds).toBeLessThan(500);
+    expect(resourceUsage).toBeDefined();
+    expect(Number(resourceUsage?.cpuTime.total ?? Number.POSITIVE_INFINITY))
+      .toBeLessThan(500_000);
   });
 });

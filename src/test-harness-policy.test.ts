@@ -662,8 +662,11 @@ describe("test harness policy", () => {
     ) {
       throw new Error("package.json scripts.test must be a string");
     }
+    const expectedTestCommand =
+      "bun test --no-orphans --timeout 180000 --max-concurrency \"$"
+      + "{GOMAXPROCS:-4}\" ./src";
     expect(packageJson.scripts.test).toBe(
-      "bun test --no-orphans --timeout 180000 --max-concurrency 4 ./src",
+      expectedTestCommand,
     );
   });
 });

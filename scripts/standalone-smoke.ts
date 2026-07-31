@@ -55,6 +55,15 @@ const environment: Record<string, string> = {
   WRENCH_STATE_HOME: state,
 };
 
+const inheritedProcessBudget = process.env.GOMAXPROCS;
+if (
+  inheritedProcessBudget !== undefined
+  && /^[1-9][0-9]*$/u.test(inheritedProcessBudget)
+  && Number.isSafeInteger(Number(inheritedProcessBudget))
+) {
+  environment.GOMAXPROCS = inheritedProcessBudget;
+}
+
 for (const name of ["COMSPEC", "PATHEXT", "SystemRoot", "SYSTEMROOT"]) {
   const value = process.env[name];
   if (value !== undefined) environment[name] = value;

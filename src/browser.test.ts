@@ -1458,7 +1458,6 @@ describe("browser process isolation helpers", () => {
   test("bounds an unkillable command and reports preserved browser artifacts", async () => {
     if (process.platform === "win32") return;
     const directory = mkdtempSync(join(tmpdir(), "wrench-browser-unkillable-test-"));
-    const pidPath = join(directory, "pid");
     const originalKill: typeof process.kill = process.kill.bind(process);
     let pid: number | null = null;
     let artifactsDirectory: string | null = null;
@@ -1469,7 +1468,10 @@ describe("browser process isolation helpers", () => {
         target: number,
         signal?: number | NodeJS.Signals,
       ): true => {
-        if (target < 0) return true;
+        if (target < 0) {
+          pid ??= -target;
+          return true;
+        }
         return originalKill(target, signal);
       };
       const startedAt = performance.now();
@@ -1499,9 +1501,7 @@ describe("browser process isolation helpers", () => {
               process.execPath,
               "-e",
               [
-                "import { writeFileSync } from 'node:fs';",
                 "process.on('SIGTERM', () => undefined);",
-                `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
                 "setInterval(() => undefined, 1_000);",
               ].join("\n"),
             ], {
@@ -1517,13 +1517,11 @@ describe("browser process isolation helpers", () => {
           },
         },
       }));
-      await waitUntil(() => existsSync(pidPath));
-      pid = Number(readFileSync(pidPath, "utf8"));
-      expect(Number.isSafeInteger(pid)).toBeTrue();
-
       const failure = await rejectionValue(operation);
       const elapsedMs = performance.now() - startedAt;
       expect(elapsedMs).toBeLessThan(5_000);
+      expect(pid).not.toBeNull();
+      expect(Number.isSafeInteger(pid)).toBeTrue();
       expect(failure).toBeInstanceOf(PreservedBrowserArtifactsError);
       if (!(failure instanceof PreservedBrowserArtifactsError)) {
         throw new Error("expected preserved browser artifacts");

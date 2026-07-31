@@ -229,7 +229,7 @@
   "scripts": {
     "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
-    "test": "bun test --no-orphans --timeout 180000 --max-concurrency 4 ./src",
+    "test": "bun test --no-orphans --timeout 180000 --max-concurrency \"${GOMAXPROCS:-4}\" ./src",
     "accept:media:adaptive": "bun run scripts/media/adaptive-vod-acceptance.ts",
     "accept:media:authenticated": "bun run scripts/media/authenticated-capture-acceptance.ts",
     "test:standalone": "bun run scripts/standalone-smoke.ts",
