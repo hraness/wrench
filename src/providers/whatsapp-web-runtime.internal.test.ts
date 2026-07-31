@@ -671,6 +671,7 @@ describe("WhatsApp zero-network read plans", () => {
       const path = privateDirectory();
       const fixture = join(path, "blocking-wacli");
       const pidPath = `${fixture}.pid`;
+      const pendingPidPath = `${pidPath}.pending`;
       const caller = new AbortController();
       const operationDeadline = new OperationDeadline(
         TEST_OPERATION_TIMEOUT_MS,
@@ -686,9 +687,14 @@ describe("WhatsApp zero-network read plans", () => {
           fixture,
           [
             "#!/bin/sh",
+            "if [ \"$1\" = \"version\" ]; then",
+            "  printf '0.13.0\\n'",
+            "  exit 0",
+            "fi",
             "/bin/sleep 120 &",
             "descendant=$!",
-            `printf '%s %s\\n' "$$" "$descendant" > ${JSON.stringify(pidPath)}`,
+            `printf '%s %s\\n' "$$" "$descendant" > ${JSON.stringify(pendingPidPath)}`,
+            `/bin/mv ${JSON.stringify(pendingPidPath)} ${JSON.stringify(pidPath)}`,
             "wait \"$descendant\"",
             "",
           ].join("\n"),
