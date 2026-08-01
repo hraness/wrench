@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const packageName = "@hraness/wrench";
-const importSpecifiers = ["@hraness/wrench"];
+const importSpecifiers = ["@hraness/wrench","@hraness/wrench/client"];
 const binNames = ["wrench"];
 const verificationPackages = ["@steipete/sweet-cookie@https://codeload.github.com/hraness/sweet-cookie/tar.gz/112dce1a3c3dd165310616ca63dd2f6cc652b212","@types/bun@^1.3.14","fast-check@^4.8.0"];
 
@@ -43,7 +43,7 @@ try {
     "-e",
     `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
   ], consumer);
-  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nvoid [surface0];\n");
+  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nimport * as surface1 from \"@hraness/wrench/client\";\nvoid [surface0, surface1];\n");
   await writeFile(join(consumer, "tsconfig.bundler.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"types\": [\n      \"bun\",\n      \"node\"\n    ],\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"Preserve\",\n    \"moduleResolution\": \"Bundler\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);
 

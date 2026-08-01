@@ -89,7 +89,8 @@ export const wrenchUsage = `Usage:
   wrench derive discard <derivation-id> --yes
 
   wrench invoke <adapter> <operation> [--input <json|@file|->] [--auth <id>]
-                [--preview] [--headed] [--json]
+                [--preview | --cache-only | --projection-identity-only]
+                [--headed] [--json]
   wrench <adapter> <operation> [invoke-options]  Shorthand for 'wrench invoke'
   wrench confirm <plan-digest> [--headed] [--json]
   wrench plans list [--json]
@@ -105,4 +106,13 @@ Risk policy:
   contracts; browser action recipes are rejected across protected site families.
   Wrench never exposes arbitrary eval, request, selector, cookie, storage, or raw
   file-transfer capabilities.
+
+Read projections:
+  Successful subject-bound R1 results publish encrypted exact-query snapshots.
+  Repeat the invocation with --cache-only to return that snapshot without a browser
+  or provider roundtrip. --projection-identity-only returns only opaque auth/query
+  identity and the validated input hash without decoding the snapshot. A normal
+  invocation explicitly revalidates it. Unbound reads are never cached.
+  Bind the auth locator to its verified account subject before private snapshots can
+  be served.
 `;

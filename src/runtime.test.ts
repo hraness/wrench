@@ -3,6 +3,7 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  randomUUID,
 } from "node:crypto";
 import {
   chmodSync,
@@ -18,6 +19,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { createAuth, saveAuth, type WrenchAuth } from "./auth";
 import {
@@ -90,6 +92,53 @@ function state(): TestState {
   const directory = mkdtempSync(join(tmpdir(), "wrench-runtime-test-"));
   chmodSync(directory, 0o700);
   return { directory, environment: { WRENCH_STATE_HOME: directory } };
+}
+
+async function holdReadProjectionAdmissionInChild(
+  testState: TestState,
+  authId: string,
+) {
+  const readyPath = join(testState.directory, `.admission-ready-${randomUUID()}`);
+  const admissionModuleUrl = pathToFileURL(
+    join(import.meta.dir, "read-projection-admission.ts"),
+  ).href;
+  const child = Bun.spawn([
+    process.execPath,
+    "--eval",
+    `
+      const { writeFileSync } = await import("node:fs");
+      const { acquireReadProjectionAuthAdmission } = await import(${JSON.stringify(admissionModuleUrl)});
+      const admission = acquireReadProjectionAuthAdmission(
+        process.env.WRENCH_TEST_AUTH_ID,
+        process.env,
+      );
+      writeFileSync(process.env.WRENCH_TEST_READY_PATH, "ready\\n", { mode: 0o600 });
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 750);
+      admission.release();
+    `,
+  ], {
+    env: {
+      ...process.env,
+      WRENCH_STATE_HOME: testState.directory,
+      WRENCH_TEST_AUTH_ID: authId,
+      WRENCH_TEST_READY_PATH: readyPath,
+    },
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const deadline = performance.now() + 5_000;
+  while (!existsSync(readyPath) && performance.now() < deadline) {
+    await Bun.sleep(5);
+  }
+  if (!existsSync(readyPath)) {
+    child.kill();
+    const exitCode = await child.exited;
+    const stderr = await new Response(child.stderr).text();
+    throw new Error(
+      `cross-process admission holder did not become ready (exit ${exitCode}): ${stderr}`,
+    );
+  }
+  return child;
 }
 
 function auth(source: "chrome" | "firefox" = "chrome"): WrenchAuth {
@@ -471,6 +520,34 @@ function legacyEncryptedPlan(stored: StoredPlan, key: Uint8Array) {
     tag: cipher.getAuthTag().toString("base64"),
   } as const;
 }
+
+describe("read projection preparation", () => {
+  test("prepares a read after another process settles its auth coordinate", async () => {
+    const testState = state();
+    let child: Awaited<
+      ReturnType<typeof holdReadProjectionAdmissionInChild>
+    > | null = null;
+    try {
+      installFixture(testState);
+      child = await holdReadProjectionAdmissionInChild(
+        testState,
+        "x-official",
+      );
+      const invocation = preparedRead(testState);
+      expect(invocation).toMatchObject({
+        operationId: "posts.read",
+        auth: { id: "x-official", subject: "12345" },
+      });
+      expect(await child.exited).toBe(0);
+      expect(await new Response(child.stderr).text()).toBe("");
+      child = null;
+    } finally {
+      child?.kill();
+      if (child !== null) await child.exited;
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("protected browser action boundaries", () => {
   test("rejects forged schema-v2/v3 invocations before planning, staging, or execution", () => {

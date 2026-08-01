@@ -712,7 +712,10 @@ async function xrpc(
     body = JSON.stringify(options.jsonBody);
   } else if (options.blobBody !== undefined) {
     headers.set("content-type", options.blobBody.mediaType);
-    body = new Blob([options.blobBody.bytes], { type: options.blobBody.mediaType });
+    body = new Blob(
+      [new Uint8Array(options.blobBody.bytes)],
+      { type: options.blobBody.mediaType },
+    );
   }
   const operationDeadline = client.operationDeadline;
   const controller = operationDeadline === undefined

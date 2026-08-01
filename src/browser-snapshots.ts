@@ -14,7 +14,7 @@ import {
 
 const snapshotDirectoryName = "browser-snapshots";
 const snapshotNamePattern = /^capture-(\d{1,10})-(\d{1,16})-([0-9a-f]{32})$/u;
-const quarantineNamePattern = /^\.io-remove-(\d{1,10})-(\d{1,16})-([0-9a-f]{32})\.quarantine$/u;
+const quarantineNamePattern = /^\.io-remove-tree-(\d{1,10})-(\d{1,16})-([0-9a-f]{32})\.quarantine$/u;
 const ownerMarkerName = ".io-browser-snapshot.json";
 const ownerMarkerMaximumBytes = 512;
 const maximumSnapshotEntries = 256;

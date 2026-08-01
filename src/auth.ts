@@ -34,6 +34,12 @@ import {
 } from "./storage";
 import { removeSessionSecretsForAuth } from "./session-secrets";
 import {
+  removeReadProjectionsForAuth,
+  removeReadProjectionAuthIncarnation,
+  rotateReadProjectionAuthIncarnation,
+  withReadProjectionAuthAdmission,
+} from "./read-projections";
+import {
   isProviderPluginSurfaceId,
   type ProviderPluginSurfaceId,
 } from "./provider-plugin-identifiers";
@@ -359,7 +365,7 @@ export function saveAuth(
     current?.auth,
     auth,
     environment,
-    () => {
+    () => withReadProjectionAuthAdmission(auth.id, environment, () => {
       const observed = loadAuthSnapshotIfPresent(auth.id, environment);
       if (current === null) {
         if (observed !== null) {
@@ -367,6 +373,8 @@ export function saveAuth(
             `auth locator ${auth.id} changed concurrently before creation`,
           );
         }
+        rotateReadProjectionAuthIncarnation(auth.id, environment);
+        removePrivateAuthState(auth.id, environment);
         if (!createPrivateJsonIfAbsent(
           path,
           auth,
@@ -386,6 +394,8 @@ export function saveAuth(
           `auth locator ${auth.id} changed concurrently before replacement`,
         );
       }
+      rotateReadProjectionAuthIncarnation(auth.id, environment);
+      removePrivateAuthState(auth.id, environment);
       if (!writePrivateJsonIfUnchanged(
         path,
         auth,
@@ -396,7 +406,7 @@ export function saveAuth(
         );
       }
       return path;
-    },
+    }),
   );
 }
 
@@ -721,7 +731,7 @@ function parseAuthSnapshotText(
   });
 }
 
-function loadAuthSnapshotIfPresent(
+export function loadAuthSnapshotIfPresent(
   id: string,
   environment: Readonly<Record<string, string | undefined>>,
 ): AuthSnapshot | null {
@@ -912,16 +922,23 @@ export function replaceAuthIfUnchanged(
   if (replacement.auth.id !== current.auth.id) {
     throw new Error("auth replacement ID does not match its snapshot");
   }
-  const replace = (): AuthReplaceResult => {
-    const replaced = writePrivateJsonIfUnchanged(
-      authPath(current.auth.id, environment),
-      replacement.auth,
-      { expectedCurrentContentSha256: current.contentSha256 },
-    );
-    return replaced
-      ? Object.freeze({ replaced: true as const, snapshot: replacement })
-      : Object.freeze({ replaced: false as const });
-  };
+  const replace = (): AuthReplaceResult =>
+    withReadProjectionAuthAdmission(current.auth.id, environment, () => {
+      const observed = loadAuthSnapshotIfPresent(current.auth.id, environment);
+      if (
+        observed === null
+        || observed.contentSha256 !== current.contentSha256
+      ) return Object.freeze({ replaced: false as const });
+      rotateReadProjectionAuthIncarnation(current.auth.id, environment);
+      removePrivateAuthState(current.auth.id, environment);
+      const replaced = writePrivateJsonIfUnchanged(
+        authPath(current.auth.id, environment),
+        replacement.auth,
+        { expectedCurrentContentSha256: current.contentSha256 },
+      );
+      if (!replaced) return Object.freeze({ replaced: false as const });
+      return Object.freeze({ replaced: true as const, snapshot: replacement });
+    });
   const linkedMutation = current.auth.kind === "linked-device-store"
     || replacement.auth.kind === "linked-device-store";
   if (!linkedMutation) return replace();
@@ -993,14 +1010,23 @@ export function removeAuth(id: string, environment: Readonly<Record<string, stri
     );
   }
   if (current === null) {
-    removeSessionSecretsForAuth(id, environment);
-    return false;
+    return withReadProjectionAuthAdmission(id, environment, () => {
+      const observed = loadAuthSnapshotIfPresent(id, environment);
+      if (observed !== null) {
+        throw new Error(
+          `auth locator ${id} changed concurrently before removal`,
+        );
+      }
+      removePrivateAuthState(id, environment);
+      removeReadProjectionAuthIncarnation(id, environment);
+      return false;
+    });
   }
   return withLinkedDeviceAuthMutationAdmissions(
     current.auth,
     undefined,
     environment,
-    () => {
+    () => withReadProjectionAuthAdmission(id, environment, () => {
       const observed = loadAuthSnapshotIfPresent(id, environment);
       if (
         observed === null
@@ -1010,6 +1036,9 @@ export function removeAuth(id: string, environment: Readonly<Record<string, stri
           `auth locator ${id} changed concurrently before removal`,
         );
       }
+      rotateReadProjectionAuthIncarnation(id, environment);
+      removePrivateAuthState(id, environment);
+      removeReadProjectionAuthIncarnation(id, environment);
       const removed = removePrivateStateFileIfUnchanged(
         path,
         { expectedCurrentContentSha256: current.contentSha256 },
@@ -1020,8 +1049,31 @@ export function removeAuth(id: string, environment: Readonly<Record<string, stri
           `auth locator ${id} changed concurrently before removal`,
         );
       }
-      removeSessionSecretsForAuth(id, environment);
       return true;
-    },
+    }),
   );
+}
+
+function removePrivateAuthState(
+  id: string,
+  environment: Readonly<Record<string, string | undefined>>,
+): void {
+  const failures: unknown[] = [];
+  try {
+    removeSessionSecretsForAuth(id, environment);
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    removeReadProjectionsForAuth(id, environment);
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      `private state cleanup for auth locator ${id} failed`,
+    );
+  }
 }

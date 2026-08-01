@@ -51,6 +51,8 @@ export const MAX_WRENCH_JSON_BYTES = 1024 * 1024;
 export const MAX_PRIVATE_STATE_BATCH_FILES = 1_000;
 export const MAX_PRIVATE_STATE_BATCH_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_PRIVATE_STATE_BATCH_TOTAL_BYTES = 64 * 1024 * 1024;
+const DEFAULT_PRIVATE_STATE_EXPECTED_CONTENT_BYTES = 2 * 1024 * 1024;
+const MAX_PRIVATE_STATE_EXPECTED_CONTENT_BYTES = 4 * 1024 * 1024;
 const MAX_PRIVATE_STATE_BATCH_NAME_BYTES = 256 * 1024;
 const MAX_PRIVATE_STATE_BATCH_STDOUT_BYTES = 96 * 1024 * 1024;
 const TEST_STATE_HELPER_TIMEOUT_MS = 120_000;
@@ -73,7 +75,9 @@ type PrivateStateBatchReadFaultForTest =
   | "replace-first-file-after-open"
   | "replace-first-child-after-bind"
   | "replace-directory-after-bind";
-type PrivateStateCasFaultForTest = "pause-after-cas-claim";
+type PrivateStateCasFaultForTest =
+  | "fail-after-cas-commit"
+  | "pause-after-cas-claim";
 type StateHelperFaultForTest =
   | EmptyDirectoryRemovalRaceForTest
   | PrivateStateBatchReadFaultForTest
@@ -102,6 +106,8 @@ const stateDirectoryNames = [
   "plans",
   "provider-plugin-state",
   "provider-plugins",
+  "read-projection-control",
+  "read-projections",
   "recovery",
   "run-journals",
   "runs",
@@ -174,6 +180,7 @@ type StateHelperOperation =
       readonly content: string;
       readonly createOnly: boolean;
       readonly expectedContentSha256: string | null;
+      readonly maximumExpectedContentBytes: number;
     }
   | {
       readonly kind: "create-directory";
@@ -200,6 +207,7 @@ type StateHelperOperation =
       readonly kind: "list-directory";
       readonly segments: readonly string[];
       readonly directoryExpectations: readonly StateDirectoryExpectation[];
+      readonly recoverOrphanedMutationClaims: boolean;
     }
   | {
       readonly kind: "remove-directory-tree";
@@ -728,6 +736,7 @@ function runStateHelper(
             || faultForTest === "replace-target-after-validation"
             ? { WRENCH_TEST_EMPTY_DIRECTORY_REMOVAL_RACE: faultForTest }
             : faultForTest === "pause-after-cas-claim"
+                || faultForTest === "fail-after-cas-commit"
               ? { WRENCH_TEST_CAS_FAULT: faultForTest }
               : { WRENCH_TEST_BATCH_READ_FAULT: faultForTest }),
         },
@@ -1055,6 +1064,7 @@ function validateUnmarkedStateRoot(root: string): boolean {
     ...stateDirectoryNames,
     ".cursor-encryption-key",
     ".plan-encryption-key",
+    ".projection-encryption-key",
     ".recovery-encryption-key",
     ".session-encryption-key",
   ]);
@@ -1092,6 +1102,7 @@ function validateUnmarkedStateRoot(root: string): boolean {
       (
         entry.name === ".plan-encryption-key"
         || entry.name === ".cursor-encryption-key"
+        || entry.name === ".projection-encryption-key"
         || entry.name === ".recovery-encryption-key"
         || entry.name === ".session-encryption-key"
       )
@@ -1432,13 +1443,13 @@ export function createPrivateStateDirectory(
   return response.targetIdentity;
 }
 
-export function readPrivateStateFileIfPresent(
+export function readPrivateStateFileBytesIfPresent(
   path: string,
   maximumBytes: number,
   label: string,
   environment: Readonly<Record<string, string | undefined>> = process.env,
   expectedStateDirectories?: readonly Readonly<PrivateDirectoryIdentity>[],
-): string | null {
+): Buffer | null {
   assertSafeStatePath(path, environment);
   const root = wrenchStateHome(environment);
   const identity = ensureClaimedStateRoot(root);
@@ -1476,6 +1487,24 @@ export function readPrivateStateFileIfPresent(
   ) throw new Error(`optional ${label} returned malformed bounded content`);
   const content = Buffer.from(encoded, "base64");
   if (content.byteLength > maximumBytes) throw new Error(`optional ${label} grew beyond ${maximumBytes} bytes while being read`);
+  return content;
+}
+
+export function readPrivateStateFileIfPresent(
+  path: string,
+  maximumBytes: number,
+  label: string,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  expectedStateDirectories?: readonly Readonly<PrivateDirectoryIdentity>[],
+): string | null {
+  const content = readPrivateStateFileBytesIfPresent(
+    path,
+    maximumBytes,
+    label,
+    environment,
+    expectedStateDirectories,
+  );
+  if (content === null) return null;
   try {
     return new TextDecoder("utf-8", {
       fatal: true,
@@ -1602,6 +1631,7 @@ export function writePrivateJson(path: string, value: unknown, options: { readon
       content: `${canonicalJson(value)}\n`,
       createOnly: false,
       expectedContentSha256: null,
+      maximumExpectedContentBytes: DEFAULT_PRIVATE_STATE_EXPECTED_CONTENT_BYTES,
     });
     return;
   }
@@ -1629,15 +1659,34 @@ export function writePrivateJsonIfUnchanged(
   value: unknown,
   options: {
     readonly expectedCurrentContentSha256: string;
+    /**
+     * Explicitly widen only the current-file read used to authenticate a
+     * bounded recovery snapshot. New JSON remains subject to the ordinary
+     * state-mutation byte cap.
+     */
+    readonly maximumExpectedCurrentBytes?: number;
     /** Test-only seam that pauses the winning helper after exclusive admission. */
     readonly pauseAfterClaimForTest?: boolean;
+    /** Test-only seam that reports failure after the replacement is durable. */
+    readonly failAfterCommitForTest?: boolean;
   },
 ): boolean {
   if (!/^[0-9a-f]{64}$/u.test(options.expectedCurrentContentSha256)) {
     throw new Error("expected private state content hash is invalid");
   }
+  const maximumExpectedCurrentBytes =
+    options.maximumExpectedCurrentBytes
+    ?? DEFAULT_PRIVATE_STATE_EXPECTED_CONTENT_BYTES;
   if (
-    options.pauseAfterClaimForTest === true
+    !Number.isSafeInteger(maximumExpectedCurrentBytes)
+    || maximumExpectedCurrentBytes < 0
+    || maximumExpectedCurrentBytes > MAX_PRIVATE_STATE_EXPECTED_CONTENT_BYTES
+  ) {
+    throw new Error("expected private state content byte bound is invalid");
+  }
+  if (
+    (options.pauseAfterClaimForTest === true
+      || options.failAfterCommitForTest === true)
     && process.env.NODE_ENV !== "test"
   ) {
     throw new Error("state CAS fault injection is available only in tests");
@@ -1648,6 +1697,7 @@ export function writePrivateJsonIfUnchanged(
   }
   const identity = ensureClaimedStateRoot(stateRoot);
   const segments = stateSegments(stateRoot, path);
+  const replacementContent = `${canonicalJson(value)}\n`;
   try {
     runStateHelper(
       stateRoot,
@@ -1659,21 +1709,24 @@ export function writePrivateJsonIfUnchanged(
           stateRoot,
           segments.slice(0, -1),
         ),
-        content: `${canonicalJson(value)}\n`,
+        content: replacementContent,
         createOnly: false,
         expectedContentSha256: options.expectedCurrentContentSha256,
+        maximumExpectedContentBytes: maximumExpectedCurrentBytes,
       },
       false,
       options.pauseAfterClaimForTest === true
         ? "pause-after-cas-claim"
-        : undefined,
+        : options.failAfterCommitForTest === true
+          ? "fail-after-cas-commit"
+          : undefined,
     );
     return true;
   } catch (error) {
     if (
       error instanceof Error
       && error.message.includes("state file content no longer matches the expected hash")
-    ) {
+      ) {
       return false;
     }
     throw error;
@@ -1741,6 +1794,7 @@ export function createPrivateJsonIfAbsent(
       content: `${canonicalJson(value)}\n`,
       createOnly: true,
       expectedContentSha256: null,
+      maximumExpectedContentBytes: DEFAULT_PRIVATE_STATE_EXPECTED_CONTENT_BYTES,
     });
     return { created: response.created === true };
   }
@@ -1827,11 +1881,15 @@ export function listPrivateStateDirectory(
   path: string,
   environment: Readonly<Record<string, string | undefined>> = process.env,
   expectedTarget?: Readonly<PrivateDirectoryIdentity>,
+  options: {
+    readonly recoverOrphanedMutationClaims?: boolean;
+  } = {},
 ): readonly PrivateStateDirectoryEntry[] {
   return snapshotPrivateStateDirectory(
     path,
     environment,
     expectedTarget,
+    options,
   ).entries;
 }
 
@@ -1839,6 +1897,9 @@ export function snapshotPrivateStateDirectory(
   path: string,
   environment: Readonly<Record<string, string | undefined>> = process.env,
   expectedTarget?: Readonly<PrivateDirectoryIdentity>,
+  options: {
+    readonly recoverOrphanedMutationClaims?: boolean;
+  } = {},
 ): PrivateStateDirectorySnapshot {
   const root = wrenchStateHome(environment);
   const identity = ensureClaimedStateRoot(root);
@@ -1852,6 +1913,8 @@ export function snapshotPrivateStateDirectory(
     kind: "list-directory",
     segments,
     directoryExpectations,
+    recoverOrphanedMutationClaims:
+      options.recoverOrphanedMutationClaims === true,
   });
   if (response.entries === undefined) throw new Error("state helper omitted its directory entries");
   return Object.freeze({
@@ -3650,6 +3713,7 @@ export function installManifest(
       content: `${canonicalJson(manifest)}\n`,
       createOnly: false,
       expectedContentSha256: options.expectedCurrentContentSha256 ?? null,
+      maximumExpectedContentBytes: DEFAULT_PRIVATE_STATE_EXPECTED_CONTENT_BYTES,
     });
     return path;
   });

@@ -47,6 +47,10 @@ const identities = Object.freeze({
       "fa672d87c02f067d898b8b39c5541022da5756082db0f6f02efb1f4d77dec610",
       "5522797adc02ae6f3fe7735aeae5f6e18ce337aa20d78850b13d566db4a53614",
       "552f8999465501c1288e1ea6633816ba1f4efddd4ec40c6ddb3aa0a23fbd87ae",
+      "f8df3fdacc4de2209e71b9177fd5cca34d71a459a763ea263fac684d3f728145",
+      "976eb47dcc8f6fb7d44bb2e364316df388131ed32d328c21a60f9e615014dcef",
+      "2d79785939dc51feb22f6a500ca04acba570867098504fb115ff2a238d980c56",
+      "822ee667ecc88607bdeee98aac09aaf10c641048c6f8674ae528dda7e7089ed7",
     ],
   },
   "hacker-news-web": {
@@ -87,6 +91,8 @@ const identities = Object.freeze({
     reviewedClosureSha256: [
       "a27ff58f2ea21df58ff71b0683ee038207e7aa7a5c199fcb04f4193f9e8e3c5c",
       "cc0b8f6bc9f514e065565a4ab7094732f4aef314d01ef48a9d4be4e64952f19b",
+      "d4bf4801a99803849b9a1659baa1041255b6bdc6d91f9d17b659bd997e09f3d8",
+      "b10c270ccffd65e49a569f0985e0161c830cfcdf3ff5ca32f228fb24fc7d9d5d",
     ],
   },
   "linkedin-web": {
@@ -115,6 +121,10 @@ const identities = Object.freeze({
       "16eb39316d4faeaad7a2013a0cfdf92288006bb631739de11cb4169983770cf9",
       "3421301d5b97f5bee0a71af4183e01f2dad7b4f4ccf20a1832133bcd8ebc824f",
       "a4f5fbb37fc10ac0867be88143fe7998a16a082dcb7f8631bd5e4359fa64f42e",
+      "ba324c803d8ed49e5aa0ed5eaae9b28578713a095096bb2c5902d4c317ee96f4",
+      "0b69fb0122a11190d136c9b1a57d3e5045ff02e37d1992b21ce0896f3abb68ed",
+      "ccf961262a1aca56cdd58f3a59cdef1596d279bf473f130be3e5a3d90f657d2b",
+      "e09fb60d6f6703c9deb41e2d704e6451fb02219a328222d18734e074a420513d",
     ],
   },
   "meta-web": {
@@ -139,6 +149,8 @@ const identities = Object.freeze({
       "5b20f9db784e3d2a51e5a4bae5800c3fef9efdca4e28b0909e9a9bfb5ef97c4f",
       "19d65a042a1533515c6fa79f5177762530da80b4ece69eea3114ac6ec4a48403",
       "d20db0c78faac2af58c95e20e5a81b8c31dbca8e1c3a21f337d81f673b04acf7",
+      "bc58597d6527c9efb06aa0dc5aa1b4432dce6757179798bd712e7ea02d9b8765",
+      "3164dcbe11eeb70fb7985e683abd248c511230d74ca17173abcbced90620d718",
     ],
   },
   "reddit-web": {
@@ -223,6 +235,10 @@ const identities = Object.freeze({
       "12ae8ba6b0994bbb9dcc52bdc5d7ff489c9d3fce49f22c9e85b8f3a4c7f845c9",
       "f8d920d6dd84702e1c2c7bd5461926f599b202524ddddde971bcb9ed228f57ee",
       "5a980ab1aeed0f788f5cc44f6a88a2f28b9272a1cc93e42a3998784a3d5b68b8",
+      "5023bc5f33f84b5d3c363fa4e41dc708321cc8b2e88aef4102b5a4b7415c05ea",
+      "d26b024089a914ad6972344ea0e3b1590c4c34985e2a4cb576fd68e030f0ffb8",
+      "9b115abf18d19c374cd342514d4b66f1fcdb7cec1efc08859a33028d6b6fea12",
+      "b503810b360821162921630f312f950cb6ea647c799eeb9808c6cffc43b8eaed",
     ],
   },
   "x-official": {
@@ -243,6 +259,8 @@ const identities = Object.freeze({
     reviewedClosureSha256: [
       "b6e2b143fea44019c11a5ade5a555f5d5683548630dd6cbaa810c43c3fa0c471",
       "f5e693393054655fe0b10eb7fcc468a7251f6a36eb02b4184df11ddcabbf2ae4",
+      "c023ddd13cfe36149c93228d94c034abbf8b00c79143493420c3a9a0f9127a42",
+      "bb4595ace099e9d67b016c52fd3877ea96fa74fdca325e8a068feccc767ef47b",
     ],
   },
   "x-web": {

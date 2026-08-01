@@ -896,6 +896,8 @@ describe("wrench CLI grammar", () => {
         inputSource: "@message.json",
         authId: "linkedin-live",
         preview: true,
+        cacheOnly: false,
+        projectionIdentityOnly: false,
         headed: true,
         json: true,
       },
@@ -919,6 +921,8 @@ describe("wrench CLI grammar", () => {
         inputSource: "{}",
         authId: "linkedin",
         preview: false,
+        cacheOnly: false,
+        projectionIdentityOnly: false,
         headed: false,
         json: false,
       },
@@ -926,6 +930,81 @@ describe("wrench CLI grammar", () => {
     expect(parseWrenchArguments(["run", "linkedin", "messaging.send", "--preview"])).toMatchObject({
       ok: true,
       value: { command: "invoke", adapterId: "linkedin", operationId: "messaging.send", preview: true },
+    });
+    expect(parseWrenchArguments([
+      "invoke",
+      "linkedin",
+      "messaging.list",
+      "--cache-only",
+      "--json",
+    ])).toMatchObject({
+      ok: true,
+      value: {
+        command: "invoke",
+        adapterId: "linkedin",
+        operationId: "messaging.list",
+        cacheOnly: true,
+        preview: false,
+        headed: false,
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "invoke",
+      "linkedin",
+      "messaging.list",
+      "--cache-only",
+      "--preview",
+    ])).toEqual({
+      ok: false,
+      message: "invoke --cache-only cannot be combined with --preview",
+    });
+    expect(parseWrenchArguments([
+      "invoke",
+      "linkedin",
+      "messaging.list",
+      "--cache-only",
+      "--headed",
+    ])).toEqual({
+      ok: false,
+      message: "invoke --cache-only never opens a browser and cannot be combined with --headed",
+    });
+    expect(parseWrenchArguments([
+      "invoke",
+      "linkedin",
+      "messaging.list",
+      "--projection-identity-only",
+      "--json",
+    ])).toMatchObject({
+      ok: true,
+      value: {
+        command: "invoke",
+        projectionIdentityOnly: true,
+        cacheOnly: false,
+        preview: false,
+        headed: false,
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "invoke",
+      "linkedin",
+      "messaging.list",
+      "--projection-identity-only",
+      "--cache-only",
+    ])).toEqual({
+      ok: false,
+      message: "invoke --projection-identity-only cannot be combined with --preview or --cache-only",
+    });
+    expect(parseWrenchArguments([
+      "invoke",
+      "linkedin",
+      "messaging.list",
+      "--projection-identity-only",
+      "--headed",
+    ])).toEqual({
+      ok: false,
+      message: "invoke --projection-identity-only never opens a browser and cannot be combined with --headed",
     });
     expect(parseWrenchArguments(["runs", "show", "00000000-0000-4000-8000-000000000000", "--json"])).toEqual({
       ok: true,

@@ -465,7 +465,7 @@ function trackedYtDlpManifest(
 describe("Wrench media manifest", () => {
   test("uses one Wrench-owned schema and transcriber identity", () => {
     expect(WRENCH_MEDIA_SCHEMA_VERSION).toBe(1);
-    expect(WRENCH_MEDIA_VERSION).toBe("0.2.0");
+    expect(WRENCH_MEDIA_VERSION).toBe("0.3.0");
     expect(localTranscriptVariantSegments(localIdentity)).toEqual([
       "transcript",
       "local",

@@ -103,7 +103,7 @@ describe("managed browser snapshots", () => {
       const deadPid = await exitedPid();
       const quarantine = join(
         dirname(active.path),
-        `.io-remove-${deadPid}-${now}-${"b".repeat(32)}.quarantine`,
+        `.io-remove-tree-${deadPid}-${now}-${"b".repeat(32)}.quarantine`,
       );
       createPrivateStateDirectory(quarantine, state.environment, active.rootIdentity);
 

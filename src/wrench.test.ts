@@ -3,7 +3,6 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type { DoctorReport as ClipDoctorReport } from "@hraness/kb/capture";
 import { createAuth, loadAuth, saveAuth } from "./auth";
 import { PreservedBrowserArtifactsError } from "./browser";
 import type * as MediaRuntimeModule from "./media";
@@ -27,7 +26,15 @@ import {
   createPortableProviderPluginCatalog as buildPortableProviderPluginCatalog,
 } from "./provider-plugin-portable-catalog";
 import type { InvocationResult, RunReceipt } from "./runtime";
-import { invocationView, main, renderWrenchUsage, runWrenchProcess } from "./wrench";
+import {
+  cachedInvocationView,
+  invocationView,
+  main,
+  renderWrenchUsage,
+  revalidatedInvocationView,
+  runWrenchProcess,
+  type WrenchClipEnvironmentInspection,
+} from "./wrench";
 import { hasUnsafeTerminalCharacters } from "@hraness/kb/clip/terminal";
 import {
   acquireWebSessionCleanupAdmission,
@@ -263,21 +270,19 @@ function capture(): {
   };
 }
 
-function unavailableClipReport(): ClipDoctorReport {
+function clipEnvironmentInspection(
+  browserCaptureReady = false,
+  generatedAt = "2026-07-22T00:00:00.000Z",
+): WrenchClipEnvironmentInspection {
+  const report = {
+    fixtureSchema: "opaque-kb-doctor-report",
+    generatedAt,
+    nestedEvidence: { preserved: true },
+  };
   return {
-    schemaVersion: 1,
-    generatedAt: "2026-07-22T00:00:00.000Z",
-    bun: { expectedVersion: "1.3.14", currentVersion: "1.3.14", status: "ready" },
-    dependencies: [
-      { name: "defuddle", expectedVersion: "0.19.1", declaredVersion: "0.19.1", installedVersion: "0.19.1", status: "ready" },
-      { name: "agent-browser", expectedVersion: "0.32.3", declaredVersion: "0.32.3", installedVersion: null, status: "unavailable" },
-      { name: "@steipete/sweet-cookie", expectedVersion: "0.4.0", declaredVersion: "0.4.0", installedVersion: null, status: "unavailable" },
-    ],
-    deriveClient: { available: false, status: "unavailable" },
-    browsers: [],
-    chromeProfileNames: [],
-    tools: [],
-    warnings: [],
+    report,
+    renderReport: () => `Opaque KB environment report at ${generatedAt}\n`,
+    browserCaptureBootstrapReady: browserCaptureReady,
   };
 }
 
@@ -316,7 +321,7 @@ async function runDoctor(
     testState.environment,
     wrench.output,
     {
-      inspectClipEnvironment: () => Promise.resolve(unavailableClipReport()),
+      inspectClipEnvironment: () => Promise.resolve(clipEnvironmentInspection()),
       loadMediaRuntime: () => Promise.resolve(mediaRuntime()),
     },
   );
@@ -1184,23 +1189,60 @@ describe("Wrench media routing", () => {
     expect(wrench.stderr()).toBe("");
   });
 
+  test("keeps the KB inspection opaque while preserving JSON, terminal rendering, and readiness", async () => {
+    const testState = state();
+    const report = {
+      fixtureSchema: "independent-from-kb-doctor-versions",
+      nestedEvidence: { preserved: true },
+    };
+    let renderCalls = 0;
+    const inspection: WrenchClipEnvironmentInspection = {
+      report,
+      renderReport: () => {
+        renderCalls += 1;
+        return "Opaque KB environment report\n";
+      },
+      browserCaptureBootstrapReady: true,
+    };
+    const dependencies = {
+      inspectClipEnvironment: () => Promise.resolve(inspection),
+      loadMediaRuntime: () => Promise.resolve(mediaRuntime()),
+    };
+    try {
+      const json = capture();
+      expect(await main(
+        ["doctor", "--json"],
+        testState.environment,
+        json.output,
+        dependencies,
+      )).toBe(3);
+      expect(JSON.parse(json.stdout())).toMatchObject({
+        capture: report,
+        wrench: { browserCaptureBootstrapReady: true },
+      });
+      expect(renderCalls).toBe(0);
+
+      const text = capture();
+      expect(await main(
+        ["doctor"],
+        testState.environment,
+        text.output,
+        dependencies,
+      )).toBe(3);
+      expect(text.stdout()).toContain("Opaque KB environment report");
+      expect(text.stdout()).toContain("Browser capture/bootstrap: ready");
+      expect(renderCalls).toBe(1);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("adds media evidence to doctor without making media readiness weaken action readiness", async () => {
     const environment = { ...process.env, WRENCH_STATE_HOME: state().directory };
-    const clipReport: ClipDoctorReport = {
-      schemaVersion: 1,
-      generatedAt: "2026-07-21T00:00:00.000Z",
-      bun: { expectedVersion: "1.3.14", currentVersion: "1.3.14", status: "ready" },
-      dependencies: [
-        { name: "defuddle", expectedVersion: "0.19.1", declaredVersion: "0.19.1", installedVersion: "0.19.1", status: "ready" },
-        { name: "agent-browser", expectedVersion: "0.32.3", declaredVersion: "0.32.3", installedVersion: "0.32.3", status: "ready" },
-        { name: "@steipete/sweet-cookie", expectedVersion: "0.4.0", declaredVersion: "0.4.0", installedVersion: "0.4.0", status: "ready" },
-      ],
-      deriveClient: { available: true, status: "ready" },
-      browsers: [],
-      chromeProfileNames: [],
-      tools: [],
-      warnings: [],
-    };
+    const clipInspection = clipEnvironmentInspection(
+      true,
+      "2026-07-21T00:00:00.000Z",
+    );
     const mediaReport: MediaDoctorReport = {
       ok: false,
       checks: [],
@@ -1217,7 +1259,7 @@ describe("Wrench media routing", () => {
     const wrench = capture();
     try {
       const code = await main(["doctor", "--json"], environment, wrench.output, {
-        inspectClipEnvironment: () => Promise.resolve(clipReport),
+        inspectClipEnvironment: () => Promise.resolve(clipInspection),
         loadMediaRuntime: () => Promise.resolve(mediaRuntime({
           runDoctor: (options) => {
             expect(options?.env).toBe(environment);
@@ -1264,21 +1306,10 @@ describe("Wrench media routing", () => {
         scopes,
         subject: "12345",
       }), testState.environment);
-      const clipReport: ClipDoctorReport = {
-        schemaVersion: 1,
-        generatedAt: "2026-07-21T00:00:00.000Z",
-        bun: { expectedVersion: "1.3.14", currentVersion: "1.3.14", status: "ready" },
-        dependencies: [
-          { name: "defuddle", expectedVersion: "0.19.1", declaredVersion: "0.19.1", installedVersion: "0.19.1", status: "ready" },
-          { name: "agent-browser", expectedVersion: "0.32.3", declaredVersion: "0.32.3", installedVersion: null, status: "unavailable" },
-          { name: "@steipete/sweet-cookie", expectedVersion: "0.4.0", declaredVersion: "0.4.0", installedVersion: null, status: "unavailable" },
-        ],
-        deriveClient: { available: false, status: "unavailable" },
-        browsers: [],
-        chromeProfileNames: [],
-        tools: [],
-        warnings: [],
-      };
+      const clipInspection = clipEnvironmentInspection(
+        false,
+        "2026-07-21T00:00:00.000Z",
+      );
       const mediaReport: MediaDoctorReport = {
         ok: false,
         checks: [],
@@ -1294,7 +1325,7 @@ describe("Wrench media routing", () => {
       };
       const wrench = capture();
       expect(await main(["doctor", "--json"], testState.environment, wrench.output, {
-        inspectClipEnvironment: () => Promise.resolve(clipReport),
+        inspectClipEnvironment: () => Promise.resolve(clipInspection),
         loadMediaRuntime: () => Promise.resolve(mediaRuntime({
           runDoctor: () => Promise.resolve(mediaReport),
         })),
@@ -1855,6 +1886,59 @@ describe("reviewed platform policy helpers", () => {
       );
       expect(installed.stderr()).toBe("");
 
+      saveAuth(createAuth("synthetic-cli-file-auth", {
+        oauthProvider: surfaceId,
+        tokenFile: join(testState.directory, "synthetic-token.json"),
+        scopes: ["records.read"],
+        subject: "synthetic-cli-official:account",
+      }), testState.environment);
+      const identity = capture();
+      expect(await main([
+        "invoke",
+        "synthetic-cli-official-adapter",
+        "records.read",
+        "--input",
+        "{}",
+        "--auth",
+        "synthetic-cli-file-auth",
+        "--projection-identity-only",
+        "--json",
+      ], testState.environment, identity.output, dependencies)).toBe(0);
+      const identityView = JSON.parse(identity.stdout()) as {
+        readonly ok: unknown;
+        readonly source: unknown;
+        readonly status: unknown;
+        readonly authIdentity: unknown;
+        readonly authHash: unknown;
+        readonly inputHash: unknown;
+        readonly projection: { readonly key: unknown };
+      };
+      expect(identityView).toMatchObject({
+        ok: true,
+        source: "projection-identity",
+        status: "ready",
+        authHash: sha256(canonicalJson(loadAuth(
+          "synthetic-cli-file-auth",
+          testState.environment,
+        ))),
+        inputHash: sha256(canonicalJson({})),
+      });
+      expect(Object.keys(identityView).sort()).toEqual([
+        "authHash",
+        "authIdentity",
+        "inputHash",
+        "ok",
+        "projection",
+        "source",
+        "status",
+      ]);
+      expect(identityView.projection.key).toBeString();
+      expect(identityView.projection.key).toMatch(/^[a-f0-9]{64}$/u);
+      expect(identityView.authIdentity).toBeString();
+      expect(identityView.authIdentity).toMatch(/^[a-f0-9]{64}$/u);
+      expect(identity.stderr()).toBe("");
+      expect(runtimeLoads).toBe(0);
+
       const listed = capture();
       expect(await main([
         "capabilities",
@@ -1975,7 +2059,7 @@ describe("reviewed platform policy helpers", () => {
     const activeRegistry = registryProtectingPortableCatalogFixture();
     let catalogLoads = 0;
     const dependencies = {
-      inspectClipEnvironment: () => Promise.resolve(unavailableClipReport()),
+      inspectClipEnvironment: () => Promise.resolve(clipEnvironmentInspection()),
       loadMediaRuntime: () => Promise.resolve(mediaRuntime()),
       createPortableProviderPluginCatalog: (
         registry: ProviderPluginRegistry,
@@ -2351,6 +2435,374 @@ describe("reviewed platform policy helpers", () => {
 });
 
 describe("CLI previews and exit semantics", () => {
+  test("renders cache hits, misses, and live revalidation as distinct read sources", () => {
+    const cacheKey = "d".repeat(64);
+    const dataRevision = "e".repeat(64);
+    const output = {
+      messages: [{ id: "message-1", text: "persisted message" }],
+    };
+    const cached = {
+      status: "hit",
+      source: "cache",
+      key: cacheKey,
+      output,
+      dataRevision,
+      createdAt: "2026-07-31T12:00:00.000Z",
+      dataChangedAt: "2026-07-31T12:00:00.000Z",
+      validatedAt: "2026-07-31T12:05:00.000Z",
+      runId: "00000000-0000-4000-8000-000000000001",
+      ageMs: 30_000,
+      freshness: { state: "fresh", freshForMs: 60_000 },
+    } satisfies Parameters<typeof cachedInvocationView>[0];
+
+    expect(cachedInvocationView(cached)).toEqual({
+      ok: true,
+      status: "cached",
+      source: "cache",
+      projection: {
+        key: cacheKey,
+        dataRevision,
+        createdAt: "2026-07-31T12:00:00.000Z",
+        dataChangedAt: "2026-07-31T12:00:00.000Z",
+        validatedAt: "2026-07-31T12:05:00.000Z",
+        runId: "00000000-0000-4000-8000-000000000001",
+        ageMs: 30_000,
+        freshness: { state: "fresh", freshForMs: 60_000 },
+      },
+      output,
+    });
+    expect(cachedInvocationView({ status: "miss", key: cacheKey })).toEqual({
+      ok: false,
+      status: "cache-miss",
+      source: "cache",
+      projection: { key: cacheKey },
+    });
+
+    const live: InvocationResult = {
+      receipt: {
+        schemaVersion: 3,
+        runId: "00000000-0000-4000-8000-000000000002",
+        planDigest: null,
+        adapter: { id: "x", version: "1.0.0", hash: "a".repeat(64) },
+        operation: "posts.read",
+        risk: "R1",
+        inputHash: "b".repeat(64),
+        auth: { id: "x-official", hash: "c".repeat(64), kind: "oauth-token-file" },
+        transport: "provider-api",
+        providerContractHash: "f".repeat(64),
+        status: "succeeded",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 1 },
+        startedAt: "2026-07-31T12:06:00.000Z",
+        finishedAt: "2026-07-31T12:06:01.000Z",
+        finalOrigin: "https://api.x.com",
+        error: null,
+      },
+      output: { messages: [{ id: "message-2", text: "live message" }] },
+      replayed: false,
+      privateArtifactsPreserved: false,
+    };
+    const revalidated = revalidatedInvocationView({
+      cachedBefore: cached,
+      live,
+      cache: {
+        status: "stored",
+        publication: {
+          key: cacheKey,
+          dataRevision: "f".repeat(64),
+          validatedAt: "2026-07-31T12:06:01.000Z",
+          dataChangedAt: "2026-07-31T12:06:01.000Z",
+          disposition: "changed",
+        },
+      },
+    });
+    expect(revalidated).toMatchObject({
+      ok: true,
+      status: "succeeded",
+      source: "live",
+      output: live.output,
+      cache: {
+        status: "stored",
+        publication: {
+          key: cacheKey,
+          dataRevision: "f".repeat(64),
+          disposition: "changed",
+        },
+      },
+    });
+  });
+
+  test("returns cached R1 reads without a provider roundtrip and distinguishes misses", async () => {
+    const testState = state();
+    try {
+      install(testState, "R1");
+      const cacheKey = "d".repeat(64);
+      const dataRevision = "e".repeat(64);
+      const exactMessage =
+        "token=ordinary-message-value left\u202eright\u0085tail";
+      const cached = {
+        status: "hit",
+        source: "cache",
+        key: cacheKey,
+        output: {
+          items: [{ id: "2078889282404569267", text: exactMessage }],
+        },
+        dataRevision,
+        createdAt: "2026-07-31T12:00:00.000Z",
+        dataChangedAt: "2026-07-31T12:00:00.000Z",
+        validatedAt: "2026-07-31T12:05:00.000Z",
+        runId: "00000000-0000-4000-8000-000000000003",
+        ageMs: 15_000,
+        freshness: { state: "stale", freshForMs: 10_000 },
+      } satisfies Parameters<typeof cachedInvocationView>[0];
+      const arguments_ = [
+        "invoke",
+        "x",
+        "posts.read",
+        "--input",
+        '{"post_ids":["2078889282404569267"]}',
+        "--auth",
+        "x-official",
+        "--cache-only",
+        "--json",
+      ] as const;
+
+      const hit = capture();
+      expect(await main(arguments_, testState.environment, hit.output, {
+        readCachedPreparedCapability: (invocation) => {
+          expect(invocation.operationId).toBe("posts.read");
+          return cached;
+        },
+      })).toBe(0);
+      expect(JSON.parse(hit.stdout())).toMatchObject({
+        ok: true,
+        status: "cached",
+        source: "cache",
+        projection: { key: cacheKey, dataRevision },
+        output: cached.output,
+      });
+      expect(hasUnsafeTerminalCharacters(hit.stdout())).toBeFalse();
+      expect(hit.stdout()).toContain("token=ordinary-message-value");
+      expect(hit.stdout()).toContain("\\u202e");
+      expect(hit.stdout()).toContain("\\u0085");
+      expect(hit.stderr()).toBe("");
+
+      const human = capture();
+      expect(await main(
+        arguments_.filter((argument) => argument !== "--json"),
+        testState.environment,
+        human.output,
+        { readCachedPreparedCapability: () => cached },
+      )).toBe(0);
+      expect(human.stdout()).not.toContain("ordinary-message-value");
+      expect(hasUnsafeTerminalCharacters(human.stdout())).toBeFalse();
+
+      const miss = capture();
+      expect(await main(arguments_, testState.environment, miss.output, {
+        readCachedPreparedCapability: () => ({ status: "miss", key: cacheKey }),
+      })).toBe(3);
+      expect(JSON.parse(miss.stdout())).toEqual({
+        ok: false,
+        status: "cache-miss",
+        source: "cache",
+        projection: { key: cacheKey },
+      });
+      expect(miss.stderr()).toBe("");
+
+      let identityCacheReads = 0;
+      const identity = capture();
+      expect(await main(
+        arguments_.map((argument) =>
+          argument === "--cache-only"
+            ? "--projection-identity-only"
+            : argument),
+        testState.environment,
+        identity.output,
+        {
+          readCachedPreparedCapability: () => {
+            identityCacheReads += 1;
+            return cached;
+          },
+        },
+      )).toBe(0);
+      expect(identityCacheReads).toBe(0);
+      const identityView = JSON.parse(identity.stdout()) as {
+        readonly ok: unknown;
+        readonly source: unknown;
+        readonly status: unknown;
+        readonly authIdentity: unknown;
+        readonly authHash: unknown;
+        readonly inputHash: unknown;
+        readonly projection: { readonly key: unknown };
+      };
+      expect(identityView).toMatchObject({
+        ok: true,
+        source: "projection-identity",
+        status: "ready",
+        authHash: sha256(canonicalJson(loadAuth(
+          "x-official",
+          testState.environment,
+        ))),
+        inputHash: sha256(canonicalJson({
+          post_ids: ["2078889282404569267"],
+        })),
+      });
+      expect(Object.keys(identityView).sort()).toEqual([
+        "authHash",
+        "authIdentity",
+        "inputHash",
+        "ok",
+        "projection",
+        "source",
+        "status",
+      ]);
+      expect(identityView.projection.key).toBeString();
+      expect(identityView.projection.key).toMatch(/^[a-f0-9]{64}$/u);
+      expect(identityView.authIdentity).toBeString();
+      expect(identityView.authIdentity).toMatch(/^[a-f0-9]{64}$/u);
+      expect(identity.stderr()).toBe("");
+
+      saveAuth(createAuth("x-unbound-read", {
+        oauthProvider: "x",
+        tokenFile: join(testState.directory, "x-unbound-token.json"),
+        scopes: ["tweet.read", "users.read"],
+      }), testState.environment);
+      const unbound = capture();
+      expect(await main([
+        "invoke",
+        "x",
+        "posts.read",
+        "--input",
+        '{"post_ids":["2078889282404569267"]}',
+        "--auth",
+        "x-unbound-read",
+        "--projection-identity-only",
+        "--json",
+      ], testState.environment, unbound.output, {
+        readCachedPreparedCapability: () => {
+          identityCacheReads += 1;
+          return cached;
+        },
+      })).toBe(0);
+      const unboundView = JSON.parse(unbound.stdout()) as Record<string, unknown>;
+      expect(Object.keys(unboundView).sort()).toEqual([
+        "authHash",
+        "authIdentity",
+        "inputHash",
+        "ok",
+        "source",
+        "status",
+      ]);
+      expect(unboundView).toMatchObject({
+        ok: true,
+        source: "projection-identity",
+        status: "unbound",
+        authHash: sha256(canonicalJson(loadAuth(
+          "x-unbound-read",
+          testState.environment,
+        ))),
+        inputHash: sha256(canonicalJson({
+          post_ids: ["2078889282404569267"],
+        })),
+      });
+      expect(unboundView.authIdentity).toMatch(/^[a-f0-9]{64}$/u);
+      expect(identityCacheReads).toBe(0);
+      expect(unbound.stderr()).toBe("");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("prints the live result and projection publication for a revalidated R1 read", async () => {
+    const testState = state();
+    try {
+      install(testState, "R1");
+      const exactMessage =
+        "Authorization: Bearer ordinary-message-value left\u202eright\u0085tail";
+      const live: InvocationResult = {
+        receipt: {
+          schemaVersion: 3,
+          runId: "00000000-0000-4000-8000-000000000004",
+          planDigest: null,
+          adapter: { id: "x", version: "1.0.0", hash: "a".repeat(64) },
+          operation: "posts.read",
+          risk: "R1",
+          inputHash: "b".repeat(64),
+          auth: { id: "x-official", hash: "c".repeat(64), kind: "oauth-token-file" },
+          transport: "provider-api",
+          providerContractHash: "f".repeat(64),
+          status: "succeeded",
+          dispatchStarted: true,
+          dispatch: { planned: 1, started: 1, verified: 1 },
+          startedAt: "2026-07-31T12:10:00.000Z",
+          finishedAt: "2026-07-31T12:10:01.000Z",
+          finalOrigin: "https://api.x.com",
+          error: null,
+        },
+        output: {
+          items: [{ id: "2078889282404569267", text: exactMessage }],
+        },
+        replayed: false,
+        privateArtifactsPreserved: false,
+      };
+      const cacheKey = "d".repeat(64);
+      const wrench = capture();
+
+      expect(await main([
+        "invoke",
+        "x",
+        "posts.read",
+        "--input",
+        '{"post_ids":["2078889282404569267"]}',
+        "--auth",
+        "x-official",
+        "--json",
+      ], testState.environment, wrench.output, {
+        revalidatePreparedCapability: (invocation, options) => {
+          expect(invocation.operationId).toBe("posts.read");
+          expect(options.headed).toBeFalse();
+          return Promise.resolve({
+            cachedBefore: { status: "miss", key: cacheKey },
+            live,
+            cache: {
+              status: "stored",
+              publication: {
+                key: cacheKey,
+                dataRevision: "e".repeat(64),
+                validatedAt: live.receipt.finishedAt,
+                dataChangedAt: live.receipt.finishedAt,
+                disposition: "created",
+              },
+            },
+          });
+        },
+      })).toBe(0);
+
+      expect(JSON.parse(wrench.stdout())).toMatchObject({
+        ok: true,
+        status: "succeeded",
+        runId: live.receipt.runId,
+        source: "live",
+        output: live.output,
+        cache: {
+          status: "stored",
+          publication: {
+            key: cacheKey,
+            dataRevision: "e".repeat(64),
+            disposition: "created",
+          },
+        },
+      });
+      expect(hasUnsafeTerminalCharacters(wrench.stdout())).toBeFalse();
+      expect(wrench.stdout()).toContain("Authorization: Bearer ordinary-message-value");
+      expect(wrench.stdout()).toContain("\\u202e");
+      expect(wrench.stdout()).toContain("\\u0085");
+      expect(wrench.stderr()).toBe("");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("reports both completed reads and submitted writes as successful JSON outcomes", () => {
     const receipt = (status: RunReceipt["status"]): RunReceipt => ({
       schemaVersion: 2,

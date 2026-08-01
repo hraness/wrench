@@ -1,7 +1,7 @@
 # Wrench
 
-Wrench is a local-first Bun CLI for durable web capture, knowledge context,
-verified media archives, and bounded provider plugins.
+Wrench is a local-first Bun CLI for durable web capture, encrypted read
+projections, verified media archives, and bounded provider plugins.
 
 ```sh
 wrench https://example.com/article
@@ -13,10 +13,10 @@ Project site: [hraness.com/wrench](https://hraness.com/wrench)
 
 ## Install
 
-Pin the public repository to the immutable `v0.2.0` tag:
+Pin the public repository to the immutable `v0.3.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.2.0
+bun add --global github:hraness/wrench#v0.3.0
 wrench doctor
 ```
 
@@ -32,7 +32,7 @@ verifies the resolved closure versions and reviewed entrypoint hashes.
 For programmatic plugin types and bounded validators:
 
 ```sh
-bun add github:hraness/wrench#v0.2.0
+bun add github:hraness/wrench#v0.3.0
 ```
 
 ```ts
@@ -96,6 +96,61 @@ partially supported request. Source plugins are trusted in-process code.
 Portable plugins run as explicitly trusted child-process code; process
 separation contains ordinary failures but is not a hostile-code sandbox.
 
+## Persistent reads
+
+Successful R1 invocations with a verified account subject publish an encrypted
+snapshot of the exact validated query and bounded provider output. The same
+query can be returned later without opening a browser or provider connection:
+
+```sh
+wrench auth bind reddit-main --site reddit-web
+wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","limit":25}' --json
+wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","limit":25}' --cache-only --json
+```
+
+Normal invocation is the explicit revalidation step. Cache publication has a
+separate outcome from the live read, so a failed refresh or local publication
+never erases the last good snapshot. Inputs, account subjects, cursors, private
+IDs, and provider output remain inside authenticated local ciphertext.
+Replacing or removing an auth locator rotates its local lifetime identity, so
+old projection and provider-session ciphertext cannot revive after recreation.
+
+UI clients can render the current snapshot before awaiting revalidation:
+
+```ts
+import { staleWhileRevalidateCapability } from "@hraness/wrench/client"
+
+const messages = staleWhileRevalidateCapability({
+  adapterId: "reddit-web",
+  operationId: "messaging.list",
+  authId: "reddit-main",
+  input: { folder: "inbox", limit: 25 },
+}, { freshForMs: 30_000 })
+
+if (messages.cached?.status === "hit") {
+  render(messages.cached.output, messages.cached.freshness)
+}
+const refreshed = await messages.revalidation
+if (refreshed.current?.source === "cache") {
+  render(refreshed.current.output, refreshed.current.freshness)
+} else if (refreshed.current?.source === "live") {
+  render(refreshed.current.output)
+}
+```
+
+`current` applies Wrench's ordering policy. It prefers the verified
+`cachedAfter` snapshot after a failed refresh, a superseded publication, or a
+cache error with a concurrently advanced run, revision, or validation time. It
+uses live output only when that output is still current, and is `null` when a
+failed refresh has no last-good snapshot. `cachedBefore`, `cachedAfter`, `live`,
+and `cache` remain available for diagnostics and richer UI states.
+
+Snapshots preserve exact provider page and completeness semantics. Wrench does
+not generically merge cursors, infer deletions, or normalize unlike entities.
+Revalidation reruns the selected R1 operation; it does not imply a separate
+provider sync. In particular, WhatsApp reads revalidate its local linked-device
+projection, while `wrench auth sync <id> --once` remains explicit.
+
 ## Create a portable plugin
 
 An agent can create a private, network-inert starting point without editing
@@ -132,7 +187,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.2.0/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.3.0/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

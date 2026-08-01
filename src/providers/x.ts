@@ -1188,7 +1188,7 @@ async function uploadOneShotImage(
     {
       method: "POST",
       headers: multipartBearer(context, multipart.contentType),
-      body: multipart.body,
+      body: new Uint8Array(multipart.body),
     },
     [200],
   );
@@ -1295,7 +1295,7 @@ async function uploadChunkedMedia(
         {
           method: "POST",
           headers: multipartBearer(context, multipart.contentType),
-          body: multipart.body,
+          body: new Uint8Array(multipart.body),
         },
         [200],
       );

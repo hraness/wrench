@@ -740,7 +740,7 @@ async function putUploadBytes(
   const response = await context.http.request(destination, {
     method: "PUT",
     headers,
-    body: bytes,
+    body: new Uint8Array(bytes),
   }, expectedStatuses, [destination.hostname]);
   return response.headers;
 }

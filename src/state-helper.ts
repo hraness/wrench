@@ -33,6 +33,8 @@ const MAX_BATCH_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_BATCH_TOTAL_BYTES = 64 * 1024 * 1024;
 const MAX_BATCH_NAME_BYTES = 256 * 1024;
 const MAX_BATCH_STDOUT_BYTES = 96 * 1024 * 1024;
+const MAX_STATE_MUTATION_CONTENT_BYTES = 2 * 1024 * 1024;
+const MAX_STATE_MUTATION_EXPECTED_CONTENT_BYTES = 4 * 1024 * 1024;
 const stateDirectories = new Set([
   "adapter-generations",
   "adapters",
@@ -45,6 +47,8 @@ const stateDirectories = new Set([
   "plans",
   "provider-plugin-state",
   "provider-plugins",
+  "read-projection-control",
+  "read-projections",
   "recovery",
   "run-journals",
   "runs",
@@ -68,6 +72,11 @@ const writeTemporaryFaultForTest = process.env.NODE_ENV === "test"
   : undefined;
 const writeTemporaryNamePattern =
   /^\.io-write-([1-9][0-9]{0,9})-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.tmp$/u;
+const stateMutationStageNamePattern =
+  /^\.io-mutation-stage-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})-([1-9][0-9]{0,9})\.tmp$/u;
+const removeQuarantineNamePattern =
+  /^\.io-remove-tree-([1-9][0-9]{0,9})-([1-9][0-9]{0,15})-([0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15})\.quarantine$/u;
+const REMOVE_QUARANTINE_SCAN_MAXIMUM = 10_000;
 
 type Identity = { readonly device: string; readonly inode: string };
 type DirectoryExpectation = Identity | null;
@@ -77,6 +86,15 @@ type StateMutationClaim = ProcessOwnerIdentity & {
   readonly schemaVersion: 1;
   readonly targetSha256: string;
   readonly claimId: string;
+};
+type StateMutationStageSnapshot = {
+  readonly claim: StateMutationClaim | null;
+  readonly content: Buffer;
+  readonly identity: Identity;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+  readonly mode: bigint;
 };
 type DirectoryEntry = {
   readonly name: string;
@@ -175,6 +193,7 @@ type Request = {
       readonly content: string;
       readonly createOnly: boolean;
       readonly expectedContentSha256: string | null;
+      readonly maximumExpectedContentBytes: number;
     }
     | {
       readonly kind: "create-directory";
@@ -201,6 +220,7 @@ type Request = {
       readonly kind: "list-directory";
       readonly segments: readonly string[];
       readonly directoryExpectations: readonly DirectoryExpectation[];
+      readonly recoverOrphanedMutationClaims: boolean;
     }
     | {
       readonly kind: "remove-directory-tree";
@@ -522,12 +542,24 @@ function parseRequest(value: unknown): Request {
   }
   if (
     operation.kind === "write-file"
-    && exactKeys(operation, ["kind", "segments", "directoryExpectations", "content", "createOnly", "expectedContentSha256"])
+    && exactKeys(operation, [
+      "kind",
+      "segments",
+      "directoryExpectations",
+      "content",
+      "createOnly",
+      "expectedContentSha256",
+      "maximumExpectedContentBytes",
+    ])
     && typeof operation.content === "string"
-    && Buffer.byteLength(operation.content, "utf8") <= 2 * 1024 * 1024
+    && Buffer.byteLength(operation.content, "utf8") <= MAX_STATE_MUTATION_CONTENT_BYTES
     && typeof operation.createOnly === "boolean"
     && (operation.expectedContentSha256 === null
       || (typeof operation.expectedContentSha256 === "string" && /^[0-9a-f]{64}$/u.test(operation.expectedContentSha256)))
+    && typeof operation.maximumExpectedContentBytes === "number"
+    && Number.isSafeInteger(operation.maximumExpectedContentBytes)
+    && operation.maximumExpectedContentBytes >= 0
+    && operation.maximumExpectedContentBytes <= MAX_STATE_MUTATION_EXPECTED_CONTENT_BYTES
     && (!operation.createOnly || operation.expectedContentSha256 === null)
   ) {
     const segments = parseSegments(operation.segments);
@@ -542,6 +574,7 @@ function parseRequest(value: unknown): Request {
         content: operation.content,
         createOnly: operation.createOnly,
         expectedContentSha256: operation.expectedContentSha256,
+        maximumExpectedContentBytes: operation.maximumExpectedContentBytes,
       },
     };
   }
@@ -614,7 +647,16 @@ function parseRequest(value: unknown): Request {
       },
     };
   }
-  if (operation.kind === "list-directory" && exactKeys(operation, ["kind", "segments", "directoryExpectations"])) {
+  if (
+    operation.kind === "list-directory"
+    && exactKeys(operation, [
+      "kind",
+      "segments",
+      "directoryExpectations",
+      "recoverOrphanedMutationClaims",
+    ])
+    && typeof operation.recoverOrphanedMutationClaims === "boolean"
+  ) {
     const segments = parseSegments(operation.segments);
     return {
       schemaVersion: 1,
@@ -624,6 +666,8 @@ function parseRequest(value: unknown): Request {
         kind: "list-directory",
         segments,
         directoryExpectations: parseDirectoryExpectations(operation.directoryExpectations, segments.length),
+        recoverOrphanedMutationClaims:
+          operation.recoverOrphanedMutationClaims,
       },
     };
   }
@@ -728,6 +772,61 @@ function recoverDefinitelyOrphanedWriteTemporaries(): void {
   if (removed) syncDirectory(".");
 }
 
+/**
+ * A recursive-removal quarantine is helper-owned only when its complete name
+ * is exact. Reclaim it only after proving its PID absent and revalidating that
+ * the leaf is still one private, current-user directory. Live, reused, and
+ * uninspectable PIDs remain untouched.
+ */
+function recoverDefinitelyOrphanedDirectoryQuarantines(): void {
+  let entriesRead = 0;
+  let removed = false;
+  const directory = opendirSync(".");
+  try {
+    for (;;) {
+      const entry = directory.readSync();
+      if (entry === null) break;
+      entriesRead += 1;
+      if (entriesRead > REMOVE_QUARANTINE_SCAN_MAXIMUM) {
+        throw new Error(
+          `directory quarantine recovery exceeds its ${REMOVE_QUARANTINE_SCAN_MAXIMUM} entry bound`,
+        );
+      }
+      const pidText = removeQuarantineNamePattern.exec(entry.name)?.[1];
+      if (pidText === undefined) continue;
+      const pid = Number(pidText);
+      if (
+        !Number.isSafeInteger(pid)
+        || pid < 1
+        || pid > 2_147_483_647
+        || !processIsDefinitelyMissing(pid)
+      ) continue;
+      let stats: BigIntStats;
+      try {
+        stats = lstatSync(entry.name, { bigint: true });
+      } catch (error) {
+        if (hasCode(error, "ENOENT")) continue;
+        throw error;
+      }
+      if (
+        stats.isSymbolicLink()
+        || !stats.isDirectory()
+        || !ownedByCurrentUser(stats)
+        || !hasPrivateDirectoryMode(stats)
+      ) continue;
+      try {
+        rmSync(entry.name, { recursive: true, force: false, maxRetries: 0 });
+        removed = true;
+      } catch (error) {
+        if (!hasCode(error, "ENOENT")) throw error;
+      }
+    }
+  } finally {
+    directory.closeSync();
+  }
+  if (removed) syncDirectory(".");
+}
+
 function pauseAfterWriteTemporaryForTest(): void {
   if (writeTemporaryFaultForTest !== "pause-after-temp-fsync") return;
   const waitState = new Int32Array(new SharedArrayBuffer(4));
@@ -778,6 +877,7 @@ function validateUnclaimedRoot(): void {
     ...stateDirectories,
     ".cursor-encryption-key",
     ".plan-encryption-key",
+    ".projection-encryption-key",
     ".recovery-encryption-key",
     ".session-encryption-key",
   ]);
@@ -985,6 +1085,7 @@ function assertStatePath(segments: readonly string[]): void {
         && (
           first === ".plan-encryption-key"
           || first === ".cursor-encryption-key"
+          || first === ".projection-encryption-key"
           || first === ".recovery-encryption-key"
           || first === ".session-encryption-key"
         )
@@ -1009,6 +1110,7 @@ function traverseDirectories(
 ): boolean {
   if (segments.length !== expectations.length) throw new Error("directory expectation count does not match the state path");
   if (segments.length > 0) assertStateDirectoryPath(segments);
+  recoverDefinitelyOrphanedDirectoryQuarantines();
   for (const [index, segment] of segments.entries()) {
     const expected = expectations[index];
     if (expected === undefined) throw new Error("directory expectation is missing");
@@ -1022,6 +1124,7 @@ function traverseDirectories(
     } else {
       bindExistingDirectory(segment, expected);
     }
+    recoverDefinitelyOrphanedDirectoryQuarantines();
   }
   return true;
 }
@@ -1200,6 +1303,154 @@ function stateMutationOwnerStatus(
   return status;
 }
 
+function readStateMutationStageSnapshot(
+  name: string,
+  claimId: string,
+  pid: number,
+): StateMutationStageSnapshot | null {
+  let descriptor: number;
+  try {
+    descriptor = openPrivateFileForRead(name);
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return null;
+    throw error;
+  }
+  try {
+    const content = readStablePrivateFile(descriptor, 4 * 1024);
+    const stats = fstatSync(descriptor, { bigint: true });
+    let value: unknown;
+    try {
+      value = JSON.parse(new TextDecoder("utf-8", {
+        fatal: true,
+        ignoreBOM: true,
+      }).decode(content)) as unknown;
+    } catch {
+      value = null;
+    }
+    let claim: StateMutationClaim | null = null;
+    if (
+      isRecord(value)
+      && typeof value.targetSha256 === "string"
+      && /^[a-f0-9]{64}$/u.test(value.targetSha256)
+    ) {
+      try {
+        const parsed = parseStateMutationClaim(
+          content,
+          value.targetSha256,
+          claimId,
+        );
+        if (parsed.pid === pid) claim = parsed;
+      } catch {
+        // A stable malformed stage is recoverable only from a definitely
+        // absent filename PID because it has not published ownership.
+      }
+    }
+    return {
+      claim,
+      content,
+      identity: identity(stats),
+      size: stats.size,
+      mtimeNs: stats.mtimeNs,
+      ctimeNs: stats.ctimeNs,
+      mode: stats.mode,
+    };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function sameStateMutationStageSnapshot(
+  left: StateMutationStageSnapshot,
+  right: StateMutationStageSnapshot,
+): boolean {
+  return left.content.equals(right.content)
+    && sameIdentity(left.identity, right.identity)
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+    && left.mode === right.mode;
+}
+
+function stateMutationStageOwnerIsDefinitelyGone(
+  snapshot: StateMutationStageSnapshot,
+  pid: number,
+): boolean {
+  return snapshot.claim === null
+    ? processIsDefinitelyMissing(pid)
+    : stateMutationOwnerStatus(snapshot.claim) === "different-or-dead";
+}
+
+/**
+ * A mutation-claim stage has not published arbitration ownership, but an
+ * active helper still needs it for the atomic rename that publishes its
+ * claim. A canonical stage uses its complete process identity. An empty,
+ * partial, or malformed stage can use only its exact filename PID, so reclaim
+ * it after two stable snapshots only when that PID is definitely absent.
+ * Live, reused, changing, and uninspectable stages remain visible.
+ */
+function recoverDefinitelyOrphanedStateMutationStages(): void {
+  let entriesRead = 0;
+  let removed = false;
+  for (const name of readdirSync(".")) {
+    entriesRead += 1;
+    if (entriesRead > 10_000) {
+      throw new Error("state mutation stage recovery exceeds its entry bound");
+    }
+    const match = stateMutationStageNamePattern.exec(name);
+    const claimId = match?.[1];
+    const pidText = match?.[2];
+    if (claimId === undefined || pidText === undefined) continue;
+    const pid = Number(pidText);
+    if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2_147_483_647) {
+      continue;
+    }
+    let snapshot: StateMutationStageSnapshot | null;
+    try {
+      snapshot = readStateMutationStageSnapshot(name, claimId, pid);
+    } catch {
+      continue;
+    }
+    if (
+      snapshot === null
+      || !stateMutationStageOwnerIsDefinitelyGone(snapshot, pid)
+    ) continue;
+    let revalidated: StateMutationStageSnapshot | null;
+    try {
+      revalidated = readStateMutationStageSnapshot(name, claimId, pid);
+    } catch {
+      continue;
+    }
+    if (
+      revalidated === null
+      || !sameStateMutationStageSnapshot(snapshot, revalidated)
+      || !stateMutationStageOwnerIsDefinitelyGone(revalidated, pid)
+    ) continue;
+    let current: BigIntStats;
+    try {
+      current = lstatSync(name, { bigint: true });
+    } catch (error) {
+      if (hasCode(error, "ENOENT")) continue;
+      throw error;
+    }
+    if (
+      current.isSymbolicLink()
+      || !current.isFile()
+      || !sameIdentity(revalidated.identity, identity(current))
+      || revalidated.size !== current.size
+      || revalidated.mtimeNs !== current.mtimeNs
+      || revalidated.ctimeNs !== current.ctimeNs
+      || revalidated.mode !== current.mode
+    ) continue;
+    try {
+      unlinkSync(name);
+      removed = true;
+    } catch (error) {
+      if (!hasCode(error, "ENOENT")) throw error;
+    }
+  }
+  if (removed) syncDirectory(".");
+}
+
 function listLiveStateMutationClaims(
   targetSha256: string,
 ): readonly {
@@ -1257,6 +1508,31 @@ function listLiveStateMutationClaims(
     return live;
   }
   throw new Error("state mutation claims did not reach a stable snapshot");
+}
+
+/**
+ * Directory readers can otherwise strand behind a mutation claim left by a
+ * helper that died after publishing its claim. Inspect only exact claim
+ * filenames, then reuse the target-scoped arbitration logic so a claim is
+ * removed only when its complete process identity is definitely dead. Live,
+ * malformed, and uninspectable state remains visible or fails closed.
+ */
+function recoverDefinitelyOrphanedStateMutationClaims(): void {
+  const targets = new Set<string>();
+  for (const name of readdirSync(".")) {
+    const match =
+      /^\.io-mutation-([a-f0-9]{64})-(?:waiting|candidate|held)-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.lock$/u
+        .exec(name);
+    const targetSha256 = match?.[1];
+    if (targetSha256 === undefined) continue;
+    targets.add(targetSha256);
+    if (targets.size > 10_000) {
+      throw new Error("state mutation recovery exceeds its target bound");
+    }
+  }
+  for (const targetSha256 of [...targets].sort()) {
+    listLiveStateMutationClaims(targetSha256);
+  }
 }
 
 function writeStateMutationClaim(
@@ -1368,6 +1644,7 @@ function acquireStateMutationClaim(
   targetName: string,
   requestId: string,
 ): (() => void) | null {
+  recoverDefinitelyOrphanedStateMutationStages();
   const targetSha256 = stateMutationTargetSha256(targetName);
   const processIdentity = currentStateMutationProcessIdentity();
   const claim: StateMutationClaim = {
@@ -1514,6 +1791,25 @@ function readFileIfPresent(
   }
 }
 
+function releaseStateMutationAfterWrite(
+  release: () => void,
+  mutationDurable: boolean,
+): void {
+  try {
+    if (
+      mutationDurable
+      && casOverlapFaultForTest === "fail-after-cas-commit"
+    ) {
+      throw new Error("state CAS test fault while releasing a durable claim");
+    }
+    release();
+  } catch (error) {
+    if (!mutationDurable) throw error;
+    // The target rename and parent-directory sync are authoritative. A dead
+    // helper's exact claim is recoverable by the next arbitration operation.
+  }
+}
+
 function writeFile(
   expected: Identity,
   segments: readonly string[],
@@ -1521,6 +1817,7 @@ function writeFile(
   content: string,
   createOnly: boolean,
   expectedContentSha256: string | null,
+  maximumExpectedContentBytes: number,
   requestId: string,
 ): Response {
   const actual = assertClaimedRoot(expected);
@@ -1531,6 +1828,7 @@ function writeFile(
   let descriptor: number | null = null;
   let temporaryExists = false;
   let releaseMutation: (() => void) | null = null;
+  let mutationDurable = false;
   try {
     descriptor = openSync(
       temporary,
@@ -1577,7 +1875,10 @@ function writeFile(
           throw error;
         }
         try {
-          const currentContent = readStablePrivateFile(current, 2 * 1024 * 1024);
+          const currentContent = readStablePrivateFile(
+            current,
+            maximumExpectedContentBytes,
+          );
           const currentSha256 = createHash("sha256").update(currentContent).digest("hex");
           if (currentSha256 !== expectedContentSha256) {
             throw new Error("state file content no longer matches the expected hash");
@@ -1590,9 +1891,12 @@ function writeFile(
       temporaryExists = false;
     }
     syncDirectory(".");
+    mutationDurable = true;
     return { ok: true, identity: actual, created: true };
   } finally {
-    releaseMutation?.();
+    if (releaseMutation !== null) {
+      releaseStateMutationAfterWrite(releaseMutation, mutationDurable);
+    }
     if (descriptor !== null) closeSync(descriptor);
     if (temporaryExists) {
       try {
@@ -1863,7 +2167,7 @@ function removeDirectoryTree(
     throw new Error("directory-tree removal target changed identity after it was bound");
   }
 
-  const quarantine = `.io-remove-${process.pid}-${Date.now()}-${crypto.randomUUID().replaceAll("-", "")}.quarantine`;
+  const quarantine = `.io-remove-tree-${process.pid}-${Date.now()}-${crypto.randomUUID().replaceAll("-", "")}.quarantine`;
   assertDirectoryAbsent(quarantine);
   renameSync(name, quarantine);
   const quarantinedStats = lstatSync(quarantine, { bigint: true });
@@ -1933,6 +2237,7 @@ function listDirectory(
   expected: Identity,
   segments: readonly string[],
   directoryExpectations: readonly DirectoryExpectation[],
+  recoverOrphanedMutationClaims: boolean,
 ): Response {
   const actual = assertClaimedRoot(expected);
   assertStateDirectoryPath(segments);
@@ -1940,6 +2245,10 @@ function listDirectory(
     return { ok: true, identity: actual, entries: [] };
   }
   recoverDefinitelyOrphanedWriteTemporaries();
+  recoverDefinitelyOrphanedStateMutationStages();
+  if (recoverOrphanedMutationClaims) {
+    recoverDefinitelyOrphanedStateMutationClaims();
+  }
   const targetIdentity = currentPrivateDirectoryIdentity();
   const entries: DirectoryEntry[] = [];
   const directory = opendirSync(".");
@@ -2408,6 +2717,7 @@ function execute(request: Request): Response {
       operation.content,
       operation.createOnly,
       operation.expectedContentSha256,
+      operation.maximumExpectedContentBytes,
       request.requestId,
     );
   }
@@ -2435,7 +2745,12 @@ function execute(request: Request): Response {
     return removeEmptyDirectory(request.expected, operation.segments, operation.directoryExpectations, request.requestId);
   }
   if (operation.kind === "list-directory") {
-    return listDirectory(request.expected, operation.segments, operation.directoryExpectations);
+    return listDirectory(
+      request.expected,
+      operation.segments,
+      operation.directoryExpectations,
+      operation.recoverOrphanedMutationClaims,
+    );
   }
   return removeDirectoryTree(request.expected, operation.segments, operation.directoryExpectations);
 }

@@ -142,8 +142,9 @@ import {
   cancelInvocationPlan,
   confirmInvocation,
   createAndSaveInvocationPlan,
+  createReadProjectionQueryForInvocation,
   type createInvocationPlan,
-  executeReadInvocation,
+  type executeReadInvocation,
   listInvocationPlans,
   listRunReceipts,
   prepareInvocation,
@@ -152,6 +153,12 @@ import {
   repairInterruptedConfirmationClaims,
   repairInterruptedRunJournals,
 } from "./runtime";
+import {
+  readCachedPreparedCapability,
+  revalidatePreparedCapability,
+  type RevalidatedCapability,
+} from "./read-client";
+import type { ReadProjectionCacheResult } from "./read-projections";
 import {
   checkSourceProviderPluginDirectory,
   scaffoldWebProvider,
@@ -176,6 +183,19 @@ type Output = {
 
 type MediaRuntime = typeof MediaRuntimeModule;
 
+/**
+ * Wrench's stable boundary around the independently versioned KB doctor.
+ *
+ * The default adapter preserves the complete KB report for JSON output while
+ * keeping its concrete schema and terminal renderer out of Wrench's dependency
+ * and test contracts.
+ */
+export type WrenchClipEnvironmentInspection = {
+  readonly report: unknown;
+  readonly renderReport: () => string;
+  readonly browserCaptureBootstrapReady: boolean;
+};
+
 const defaultOutput: Output = {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value),
@@ -183,13 +203,28 @@ const defaultOutput: Output = {
 
 const loadMediaRuntime = (): Promise<MediaRuntime> => import("./media");
 
+const inspectDefaultClipEnvironment = async (): Promise<WrenchClipEnvironmentInspection> => {
+  const report = await inspectClipEnvironment();
+  return {
+    report,
+    renderReport: () => renderDoctorReport(report),
+    browserCaptureBootstrapReady: report.deriveClient.status === "ready"
+      && report.dependencies.find(
+        (dependency) => dependency.name === "agent-browser",
+      )?.status === "ready"
+      && report.dependencies.find(
+        (dependency) => dependency.name === "@steipete/sweet-cookie",
+      )?.status === "ready",
+  };
+};
+
 export function renderWrenchUsage(): string {
   return wrenchUsage;
 }
 
 export type WrenchDependencies = {
   readonly clipMain: typeof clipMain;
-  readonly inspectClipEnvironment: typeof inspectClipEnvironment;
+  readonly inspectClipEnvironment: () => Promise<WrenchClipEnvironmentInspection>;
   readonly loadMediaRuntime: () => Promise<MediaRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
   readonly probePluginSubject: (
@@ -227,11 +262,15 @@ export type WrenchDependencies = {
     typeof reconcilePortableProviderPluginRun;
   readonly createPortableProviderPluginCatalog:
     typeof createPortableProviderPluginCatalog;
+  readonly readCachedPreparedCapability:
+    typeof readCachedPreparedCapability;
+  readonly revalidatePreparedCapability:
+    typeof revalidatePreparedCapability;
 };
 
 const defaultDependencies: WrenchDependencies = {
   clipMain,
-  inspectClipEnvironment,
+  inspectClipEnvironment: inspectDefaultClipEnvironment,
   loadMediaRuntime,
   providerPluginRegistry,
   probePluginSubject: async (binding, auth, signal) => {
@@ -276,6 +315,8 @@ const defaultDependencies: WrenchDependencies = {
   reconcileLinkedDeviceLifecycleJournal,
   reconcilePortableProviderPluginRun,
   createPortableProviderPluginCatalog,
+  readCachedPreparedCapability,
+  revalidatePreparedCapability,
 };
 
 function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDependencies {
@@ -303,6 +344,12 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
     createPortableProviderPluginCatalog:
       overrides.createPortableProviderPluginCatalog
       ?? defaultDependencies.createPortableProviderPluginCatalog,
+    readCachedPreparedCapability:
+      overrides.readCachedPreparedCapability
+      ?? defaultDependencies.readCachedPreparedCapability,
+    revalidatePreparedCapability:
+      overrides.revalidatePreparedCapability
+      ?? defaultDependencies.revalidatePreparedCapability,
   };
 }
 
@@ -327,7 +374,7 @@ function boundedCliRecoveryHandle(value: string): string | null {
 
 function exactTerminalJson(value: unknown): string {
   const json = JSON.stringify(value, null, 2);
-  // JSON escapes preserve the exact planned value when the preview is parsed,
+  // JSON escapes preserve the exact value when the document is parsed,
   // while keeping terminal-control and bidi characters inert on screen.
   return `${json.replace(/[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/gu, (character) =>
     `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)}\n`;
@@ -1005,7 +1052,7 @@ async function doctor(
         binding.transport === "linked-device"
         && binding.linkedDeviceLifecycle !== undefined,
     ));
-  const [capture, mediaInspection, linkedDeviceProtocols] = await Promise.all([
+  const [captureInspection, mediaInspection, linkedDeviceProtocols] = await Promise.all([
     dependencies.inspectClipEnvironment(),
     dependencies.loadMediaRuntime().then(async (runtime) => ({
       runtime,
@@ -1028,6 +1075,7 @@ async function doctor(
       }
     })),
   ]);
+  const capture = captureInspection.report;
   const media = mediaInspection.report;
   const portablePlugins = doctorPortableProviderPlugins(environment);
   const expiredPlansRemoved = purgeExpiredPlans(environment);
@@ -1038,9 +1086,8 @@ async function doctor(
   const derivations = listDerivations(environment);
   const unsettledRuns = listRunReceipts(environment).filter((receipt) =>
     "status" in receipt && (receipt.status === "pending" || receipt.status === "partial" || receipt.status === "indeterminate"));
-  const browserCaptureBootstrapReady = capture.deriveClient.status === "ready"
-    && capture.dependencies.find((dependency) => dependency.name === "agent-browser")?.status === "ready"
-    && capture.dependencies.find((dependency) => dependency.name === "@steipete/sweet-cookie")?.status === "ready";
+  const browserCaptureBootstrapReady =
+    captureInspection.browserCaptureBootstrapReady;
   const providerApiReady = officialProviders.some((provider) => provider.ready);
   const webSessionSites = authenticatedWebSessionReadiness(environment, registry);
   const webSessionApiReady = webSessionSites.some((site) => site.ready);
@@ -1101,7 +1148,7 @@ async function doctor(
   };
   if (arguments_.json) output.stdout(safeJson(report));
   else {
-    output.stdout(sanitizeTerminalText(renderDoctorReport(capture)));
+    output.stdout(sanitizeTerminalText(captureInspection.renderReport()));
     output.stdout("\nWrench verified media archive\n");
     output.stdout(sanitizeTerminalText(mediaInspection.runtime.renderDoctorReport(media)));
     output.stdout("\nWrench actions\n");
@@ -1319,6 +1366,45 @@ export function invocationView(result: Awaited<ReturnType<typeof executeReadInvo
     replayed: result.replayed,
     receipt: result.receipt,
     output: result.output,
+  };
+}
+
+export function cachedInvocationView(
+  result: ReadProjectionCacheResult,
+): Record<string, unknown> {
+  if (result.status === "miss") {
+    return {
+      ok: false,
+      status: "cache-miss",
+      source: "cache",
+      projection: { key: result.key },
+    };
+  }
+  return {
+    ok: true,
+    status: "cached",
+    source: "cache",
+    projection: {
+      key: result.key,
+      dataRevision: result.dataRevision,
+      createdAt: result.createdAt,
+      dataChangedAt: result.dataChangedAt,
+      validatedAt: result.validatedAt,
+      runId: result.runId,
+      ageMs: result.ageMs,
+      freshness: result.freshness,
+    },
+    output: result.output,
+  };
+}
+
+export function revalidatedInvocationView(
+  result: RevalidatedCapability,
+): Record<string, unknown> {
+  return {
+    ...invocationView(result.live),
+    source: "live",
+    cache: result.cache,
   };
 }
 
@@ -1640,7 +1726,11 @@ async function runCommand(
     return 0;
   }
   if (arguments_.command === "auth-remove") {
-    if (!arguments_.yes) throw new Error("auth remove requires --yes; this removes only the locator, not browser credentials");
+    if (!arguments_.yes) {
+      throw new Error(
+        "auth remove requires --yes; this removes the locator and Wrench-owned session/projection caches, not browser or provider credentials",
+      );
+    }
     const removed = removeAuth(arguments_.id, environment);
     output.stdout(removed ? `Removed auth locator ${safe(arguments_.id)}.\n` : `Auth locator ${safe(arguments_.id)} was not present.\n`);
     return 0;
@@ -2168,19 +2258,83 @@ async function runCommand(
     if (operation.risk === "R4") {
       throw new Error("R4 capabilities are blocked by wrench");
     }
+    if (arguments_.cacheOnly && operation.risk !== "R1") {
+      throw new Error("invoke --cache-only is available only for R1 capabilities");
+    }
+    if (arguments_.projectionIdentityOnly && operation.risk !== "R1") {
+      throw new Error("invoke --projection-identity-only is available only for R1 capabilities");
+    }
     if (operation.risk === "R1") {
+      if (arguments_.projectionIdentityOnly) {
+        const inputHash = sha256(canonicalJson(invocation.input));
+        const authIdentity = invocation.readProjectionAuthIdentityHash;
+        if (
+          authIdentity === undefined
+          || !/^[a-f0-9]{64}$/u.test(authIdentity)
+        ) {
+          throw new Error(
+            "prepared invocation is missing its auth lifetime identity; prepare it again",
+          );
+        }
+        const authHash = sha256(canonicalJson(invocation.auth));
+        if (invocation.auth.subject === undefined) {
+          const view = {
+            ok: true,
+            source: "projection-identity",
+            status: "unbound",
+            authIdentity,
+            authHash,
+            inputHash,
+          };
+          if (arguments_.json) output.stdout(exactTerminalJson(view));
+          else print(output, view, false);
+          return 0;
+        }
+        const query = createReadProjectionQueryForInvocation(
+          invocation,
+          environment,
+          dependencies.providerPluginRegistry,
+        );
+        const view = {
+          ok: true,
+          source: "projection-identity",
+          status: "ready",
+          authIdentity,
+          authHash,
+          inputHash,
+          projection: { key: query.key },
+        };
+        if (arguments_.json) output.stdout(exactTerminalJson(view));
+        else print(output, view, false);
+        return 0;
+      }
       if (arguments_.preview) {
         printPreview(output, directPreviewView(invocation), arguments_.json);
         return 0;
       }
-      const result = await executeReadInvocation(invocation, {
-        headed: arguments_.headed,
-        environment,
-        registry: dependencies.providerPluginRegistry,
-        ...(signal === undefined ? {} : { signal }),
-      });
-      print(output, invocationView(result), arguments_.json);
-      return result.receipt.status === "succeeded" || result.receipt.status === "submitted" ? 0 : result.receipt.status === "indeterminate" ? 5 : 3;
+      if (arguments_.cacheOnly) {
+        const result = dependencies.readCachedPreparedCapability(invocation, {
+          environment,
+          registry: dependencies.providerPluginRegistry,
+        });
+        const view = cachedInvocationView(result);
+        if (arguments_.json) output.stdout(exactTerminalJson(view));
+        else print(output, view, false);
+        return result.status === "hit" ? 0 : 3;
+      }
+      const result = await dependencies.revalidatePreparedCapability(
+        invocation,
+        {
+          headed: arguments_.headed,
+          environment,
+          registry: dependencies.providerPluginRegistry,
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      const view = revalidatedInvocationView(result);
+      if (arguments_.json) output.stdout(exactTerminalJson(view));
+      else print(output, view, false);
+      return result.live.receipt.status === "succeeded" || result.live.receipt.status === "submitted" ? 0 : result.live.receipt.status === "indeterminate" ? 5 : 3;
     }
     const stored = createAndSaveInvocationPlan(
       invocation,

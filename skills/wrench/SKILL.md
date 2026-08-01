@@ -15,6 +15,7 @@ Use the installed `wrench` command. Start with `wrench --help`; if it is unavail
 - Inspect support: `wrench plugin list`, `wrench plugin show <id>`, and `wrench capabilities [adapter]`.
 - Diagnose state: `wrench operator doctor --json`.
 - Invoke a supported semantic operation: `wrench invoke <adapter> <operation>` or its printed shorthand.
+- Read a previously validated exact query without a provider roundtrip: repeat the subject-bound R1 invocation with `--cache-only`; omit that flag to revalidate it explicitly.
 - Add a provider without changing Wrench source: author a portable plugin.
 - Derive a reviewed first-party contract from authorized HAR evidence: follow [the derivation guide](references/derivation.md).
 
@@ -87,6 +88,7 @@ Inspect the capability first:
 ```sh
 wrench capabilities example-web --json
 wrench example-web feeds.read --input '{"limit":20}' --auth example-main --json
+wrench example-web feeds.read --input '{"limit":20}' --auth example-main --cache-only --json
 ```
 
 - `capture-required` performs no request.
@@ -94,6 +96,13 @@ wrench example-web feeds.read --input '{"limit":20}' --auth example-main --json
 - `R2` is one bounded, normally reversible change.
 - `R3` is externally visible or consequential.
 - `R4` is blocked.
+
+Successful subject-bound R1 reads publish an encrypted exact-query snapshot.
+`--cache-only` returns that snapshot and its data revision, validation time,
+age, and freshness without opening a browser or provider connection. A normal
+R1 invocation is the explicit revalidation path. Do not rewrite cursors,
+limits, folders, or targets to manufacture a cache hit, and do not assume that
+revalidating a local linked-device projection performs a remote sync.
 
 R2/R3 produce an exact five-minute preview. Review adapter, operation, transport, account, scalar input, attachment hashes, side effect, contract hash, and dispatch schedule, then run the printed `wrench confirm <digest>`. Never retry `pending`, `partial`, or `indeterminate` work. Reconcile from independently observed, secret-free evidence with `wrench runs reconcile`; reconciliation never repeats the original mutation.
 

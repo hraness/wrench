@@ -366,6 +366,10 @@ try {
       "source-map-support",
       installedPackageRoot,
     );
+    const installedTypeScriptRoot = resolveInstalledDependencyRoot(
+      "typescript",
+      installedPackageRoot,
+    );
     await Promise.all([
       assertInstalledClosurePackage({
         keyFile: "dist/index-1fa66nh9.js",
@@ -408,12 +412,66 @@ try {
       assertInstalledClosurePackage({
         keyFile: "lib/typescript.js",
         name: "typescript",
-        root: resolveInstalledDependencyRoot("typescript", installedPackageRoot),
+        root: installedTypeScriptRoot,
         sha256:
           "569177652966bd528c319171c7dd22860dbf72bde116cbc4f644f1d02bb12e39",
         version: "6.0.3",
       }),
     ]);
+    await runCommand(
+      "import packed read client",
+      [
+        process.execPath,
+        "-e",
+        "import { readCachedCapability, revalidateCapability, staleWhileRevalidateCapability } from '@hraness/wrench/client'; if (![readCachedCapability, revalidateCapability, staleWhileRevalidateCapability].every((value) => typeof value === 'function')) process.exit(1);",
+      ],
+      consumer,
+    );
+    await writeFile(
+      join(consumer, "client-typecheck.ts"),
+      [
+        "import {",
+        "  readCachedCapability,",
+        "  revalidateCapability,",
+        "  staleWhileRevalidateCapability,",
+        "  type CapabilityReadRequest,",
+        "  type ReadProjectionCacheResult,",
+        "  type RevalidatedCapability,",
+        "} from '@hraness/wrench/client';",
+        "const request: CapabilityReadRequest = { adapterId: 'x', operationId: 'messaging.list' };",
+        "const cachedReader: (request: CapabilityReadRequest) => ReadProjectionCacheResult = readCachedCapability;",
+        "const revalidator: (request: CapabilityReadRequest) => Promise<RevalidatedCapability> = revalidateCapability;",
+        "void [request, cachedReader, revalidator, staleWhileRevalidateCapability];",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(consumer, "tsconfig.client.json"),
+      `${JSON.stringify({
+        compilerOptions: {
+          target: "ES2023",
+          lib: ["ES2023", "DOM"],
+          module: "Preserve",
+          moduleResolution: "Bundler",
+          moduleDetection: "force",
+          strict: true,
+          noEmit: true,
+          skipLibCheck: false,
+          types: [],
+        },
+        include: ["client-typecheck.ts"],
+      }, null, 2)}\n`,
+    );
+    await runCommand(
+      "typecheck packed read client without Bun ambient types",
+      [
+        process.execPath,
+        join(installedTypeScriptRoot, "bin", "tsc"),
+        "-p",
+        "tsconfig.client.json",
+      ],
+      consumer,
+    );
     await exerciseCli({
       cliPath: join(consumer, "node_modules", ".bin", "wrench"),
       cwd: consumer,

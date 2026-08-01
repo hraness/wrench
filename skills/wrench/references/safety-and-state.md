@@ -6,6 +6,7 @@ Use this reference before recording signed-in traffic, resolving browser-held se
 
 - [Separate authority from mechanism](#separate-authority-from-mechanism)
 - [Bind the authenticated account](#bind-the-authenticated-account)
+- [Use persistent reads without changing their meaning](#use-persistent-reads-without-changing-their-meaning)
 - [Keep browser authority narrow](#keep-browser-authority-narrow)
 - [Constrain first-party HTTP](#constrain-first-party-http)
 - [Minimize HAR exposure](#minimize-har-exposure)
@@ -45,6 +46,37 @@ Before a private read or any dispatch:
 Fail before dispatch on a missing, ambiguous, changed, or mismatched identity. Use a new auth ID for a second account. Require an explicit reviewed rebind after a deliberate login change; do not mutate an existing realm silently.
 
 Official OAuth auth is a separate realm and must satisfy its own subject/scope binding. Never fall back between browser-session and OAuth auth.
+
+## Use persistent reads without changing their meaning
+
+A successful subject-bound R1 invocation publishes one encrypted snapshot of
+its exact validated input and bounded output. Repeat the same invocation with
+`--cache-only` to read it without a browser or provider roundtrip. Omit the flag
+to rerun the reviewed R1 contract and publish a newer validation.
+
+Treat the adapter hash, operation, full auth realm, verified subject, validated
+input, transport, and exact executable contract as part of the query identity.
+Do not drop a cursor, change a limit, expand a folder, or substitute an auth ID
+to force a hit. A contract or account change intentionally produces a miss.
+
+Cache freshness is an observation, not provider authority. An unchanged
+revalidation advances validation time without fabricating a data revision.
+Failed, partial, or indeterminate reads retain the last good snapshot. Wrench
+does not infer deletion from absence on a partial page or merge unlike provider
+entities. Revalidation reruns the selected R1 operation; it does not silently
+perform `auth sync`, and it must not introduce acknowledgement or presence
+effects outside that operation's reviewed contract.
+
+Auth replacement and removal rotate a durable local lifetime identity before
+cleanup. Projection and provider-session ciphertext from an earlier lifetime
+must remain unreadable even if identical locator bytes are later recreated.
+
+The projection key is bound to an authenticated store-ownership marker. Wrench
+refuses a missing, malformed, or replacement key while projection ciphertext
+or that marker remains. If the key is irretrievably lost, remove exactly
+`read-projections/`, `.projection-encryption-key`, and
+`read-projection-control/store-key.json` beneath `WRENCH_STATE_HOME`, retain the
+other control records, and rebuild snapshots through live revalidation.
 
 ## Keep browser authority narrow
 

@@ -182,6 +182,8 @@ export type WrenchArguments =
       readonly inputSource: string;
       readonly authId: string;
       readonly preview: boolean;
+      readonly cacheOnly: boolean;
+      readonly projectionIdentityOnly: boolean;
       readonly headed: boolean;
       readonly json: boolean;
     }
@@ -1292,8 +1294,35 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     if (adapterIssue !== null) return { ok: false, message: adapterIssue };
     const operationIssue = validOperation(operationId);
     if (operationIssue !== null) return { ok: false, message: operationIssue };
-    const parsed = optionValues(raw.slice(3), ["--input", "--auth"], ["--preview", "--headed", "--json"]);
+    const parsed = optionValues(raw.slice(3), ["--input", "--auth"], ["--preview", "--cache-only", "--projection-identity-only", "--headed", "--json"]);
     if (isFailure(parsed)) return parsed;
+    if (
+      parsed.booleans.has("--cache-only")
+      && parsed.booleans.has("--preview")
+    ) {
+      return { ok: false, message: "invoke --cache-only cannot be combined with --preview" };
+    }
+    if (
+      parsed.booleans.has("--cache-only")
+      && parsed.booleans.has("--headed")
+    ) {
+      return { ok: false, message: "invoke --cache-only never opens a browser and cannot be combined with --headed" };
+    }
+    if (
+      parsed.booleans.has("--projection-identity-only")
+      && (
+        parsed.booleans.has("--preview")
+        || parsed.booleans.has("--cache-only")
+      )
+    ) {
+      return { ok: false, message: "invoke --projection-identity-only cannot be combined with --preview or --cache-only" };
+    }
+    if (
+      parsed.booleans.has("--projection-identity-only")
+      && parsed.booleans.has("--headed")
+    ) {
+      return { ok: false, message: "invoke --projection-identity-only never opens a browser and cannot be combined with --headed" };
+    }
     return {
       ok: true,
       value: {
@@ -1303,6 +1332,9 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         inputSource: parsed.values["--input"] ?? "{}",
         authId: parsed.values["--auth"] ?? adapterId,
         preview: parsed.booleans.has("--preview"),
+        cacheOnly: parsed.booleans.has("--cache-only"),
+        projectionIdentityOnly:
+          parsed.booleans.has("--projection-identity-only"),
         headed: parsed.booleans.has("--headed"),
         json: parsed.booleans.has("--json"),
       },

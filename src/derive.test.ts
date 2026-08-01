@@ -42,7 +42,11 @@ import {
 import { sha256 } from "./model";
 import type { ProviderPluginRegistry } from "./provider-plugin-registry";
 import { providerPluginRegistry } from "./provider-plugins";
-import { createPrivateJsonIfAbsent, removePrivateEmptyStateDirectory } from "./storage";
+import {
+  createPrivateJsonIfAbsent,
+  listPrivateStateDirectory,
+  removePrivateEmptyStateDirectory,
+} from "./storage";
 
 const targetOrigin = "https://example.com";
 const readOnlyPolicy = { allowRemoteActions: false, targetOrigin } as const;
@@ -889,6 +893,15 @@ describe("derivation session path defenses", () => {
         .find((entry) => entry.startsWith(".io-remove-") && entry.endsWith(".quarantine"));
       expect(insertionQuarantine).toBeDefined();
       expect(readFileSync(join(derivations, insertionQuarantine ?? "missing", "arrived-late"), "utf8")).toBe("keep");
+      listPrivateStateDirectory(
+        derivations,
+        environment,
+        identity(derivations),
+      );
+      expect(readFileSync(
+        join(derivations, insertionQuarantine ?? "missing", "arrived-late"),
+        "utf8",
+      )).toBe("keep");
 
       const replacementId = crypto.randomUUID();
       const replacementDirectory = join(derivations, replacementId);

@@ -1,11 +1,12 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.2.0",
-  "description": "A local-first Bun CLI for durable web capture, knowledge context, verified media archives, and bounded provider plugins.",
+  "version": "0.3.0",
+  "description": "A local-first Bun CLI for durable web capture, encrypted read projections, verified media archives, and bounded provider plugins.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
     "./src/cli.ts",
+    "./src/client.ts",
     "./src/index.ts"
   ],
   "packageManager": "bun@1.3.14",
@@ -30,6 +31,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./src/client-types.ts",
+      "import": "./dist/client.js"
     }
   },
   "bin": {
@@ -78,6 +83,8 @@
     "src/browser.ts",
     "src/canonical-json.ts",
     "src/catalog-cli.ts",
+    "src/client-types.ts",
+    "src/client.ts",
     "src/cli.ts",
     "src/cursor-token.ts",
     "src/derive-command-helper.ts",
@@ -165,6 +172,9 @@
     "src/provider-plugins.ts",
     "src/provider-subject.ts",
     "src/provider.ts",
+    "src/read-projection-admission.ts",
+    "src/read-client.ts",
+    "src/read-projections.ts",
     "src/providers/bluesky-web-runtime.ts",
     "src/providers/bluesky-web.ts",
     "src/providers/hacker-news-web-runtime.ts",
@@ -227,7 +237,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
+    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test --no-orphans --timeout 180000 --max-concurrency \"${GOMAXPROCS:-4}\" ./src",
     "accept:media:adaptive": "bun run scripts/media/adaptive-vod-acceptance.ts",

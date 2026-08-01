@@ -14,6 +14,12 @@ import {
   type WrenchAuth,
 } from "./auth";
 import {
+  createReadProjectionQuery,
+  projectionAuthIdentityHash,
+  withSettledReadProjectionAuthAdmission,
+  type ReadProjectionQuery,
+} from "./read-projections";
+import {
   executeBrowserRecipe,
   PreservedBrowserArtifactsError,
   type BrowserDispatchEvent,
@@ -283,6 +289,8 @@ export type PreparedInvocation = {
   readonly operationId: string;
   readonly input: OperationInput;
   readonly auth: WrenchAuth;
+  /** Exact auth bytes plus the auth lifetime observed during preparation. */
+  readonly readProjectionAuthIdentityHash?: string;
   /** Recomputed from the selected command-scoped registry; caller input is ignored. */
   readonly portablePluginContract?: PortableOperationIdentityV1;
 };
@@ -489,11 +497,22 @@ function revalidatePreparedInvocation(
   if (canonicalJson(auth) !== canonicalJson(invocation.auth)) {
     throw new Error("prepared authentication contains unsupported state");
   }
+  const readProjectionAuthIdentityHash =
+    invocation.readProjectionAuthIdentityHash;
+  if (
+    readProjectionAuthIdentityHash !== undefined
+    && !/^[a-f0-9]{64}$/u.test(readProjectionAuthIdentityHash)
+  ) {
+    throw new Error("prepared auth lifetime identity is malformed");
+  }
   const checkedBase: PreparedInvocation = {
     manifest: parsedManifest.value,
     operationId: invocation.operationId,
     input: platformInput.value,
     auth,
+    ...(readProjectionAuthIdentityHash === undefined
+      ? {}
+      : { readProjectionAuthIdentityHash }),
   };
   assertPreparedInvocationBrowserPolicy(checkedBase);
   assertInvocationTransport(
@@ -970,13 +989,118 @@ export function prepareInvocation(
   if (!inputResult.ok) throw new Error(inputResult.issues.join("; "));
   const platformInput = validatePlatformOperationInput(manifestResult.value, operationId, inputResult.value);
   if (!platformInput.ok) throw new Error(platformInput.issues.join("; "));
-  const auth = loadAuth(authId, environment);
+  const preparedAuth = withSettledReadProjectionAuthAdmission(
+    authId,
+    environment,
+    () => {
+      const auth = loadAuth(authId, environment);
+      return Object.freeze({
+        auth,
+        readProjectionAuthIdentityHash: projectionAuthIdentityHash(
+          auth.id,
+          authHash(auth),
+          environment,
+        ),
+      });
+    },
+  );
   return revalidatePreparedInvocation({
     manifest: manifestResult.value,
     operationId,
     input: platformInput.value,
-    auth,
+    auth: preparedAuth.auth,
+    readProjectionAuthIdentityHash:
+      preparedAuth.readProjectionAuthIdentityHash,
   }, registry).invocation;
+}
+
+/**
+ * Derive the exact private read-projection coordinate from the same checked
+ * adapter, auth realm, transport, and executable contract used for a live
+ * invocation. A verified subject is mandatory because an unbound browser
+ * locator can change accounts without changing its local path.
+ */
+export function createReadProjectionQueryForInvocation(
+  invocation: PreparedInvocation,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  registry: ProviderPluginRegistry = providerPluginRegistry,
+): ReadProjectionQuery {
+  const checked = revalidatePreparedInvocation(invocation, registry);
+  const operation = checked.operation;
+  if (operation.risk !== "R1") {
+    throw new Error("only R1 capabilities have read projections");
+  }
+  const subject = checked.invocation.auth.subject;
+  if (subject === undefined) {
+    throw new Error(
+      `auth locator ${checked.invocation.auth.id} must be bound to a verified subject before private read projections can be stored or served; run wrench auth bind ${checked.invocation.auth.id}`,
+    );
+  }
+  const pluginResolution = resolveCodeOwnedPluginOperation(operation, registry);
+  if (
+    pluginResolution !== null
+    && pluginResolution.operation.state === "observed"
+    && !pluginResolution.binding.subject.matches(subject)
+  ) {
+    throw new Error(
+      `auth locator ${checked.invocation.auth.id} has a subject that does not match ${pluginResolution.binding.subject.format}`,
+    );
+  }
+  const portableIdentity = pluginResolution?.portableIdentity ?? null;
+  const preparedAuthIdentityHash =
+    checked.invocation.readProjectionAuthIdentityHash;
+  if (preparedAuthIdentityHash === undefined) {
+    throw new Error(
+      "prepared invocation is missing its auth lifetime identity; prepare it again",
+    );
+  }
+  const contract = portableIdentity !== null
+    ? {
+        transport: "portable-provider-plugin" as const,
+        hash: sha256(canonicalJson(portableIdentity)),
+      }
+    : isProviderOperation(operation)
+      ? {
+          transport: "provider-api" as const,
+          hash: providerContractHash(
+            getProviderContract(operation.provider, registry),
+            registry,
+          ),
+        }
+      : isWebSessionOperation(operation)
+        ? {
+            transport: "web-session-api" as const,
+            hash: webSessionContractHash(
+              getWebSessionContract(operation.webSession, registry),
+              registry,
+            ),
+          }
+        : isReviewedTemplateOperation(operation)
+          ? {
+              transport: "reviewed-template-api" as const,
+              hash: reviewedTemplateHash(operation.reviewedTemplate),
+            }
+          : {
+              transport: "browser" as const,
+              hash: manifestHash(checked.invocation.manifest),
+            };
+  return createReadProjectionQuery({
+    adapter: {
+      id: checked.invocation.manifest.id,
+      version: checked.invocation.manifest.version,
+      hash: manifestHash(checked.invocation.manifest),
+    },
+    operation: checked.invocation.operationId,
+    input: checked.invocation.input,
+    inputHash: sha256(canonicalJson(checked.invocation.input)),
+    auth: {
+      id: checked.invocation.auth.id,
+      kind: checked.invocation.auth.kind,
+      hash: preparedAuthIdentityHash,
+      subject,
+    },
+    contract,
+  }, environment);
 }
 
 export function createInvocationPlan(

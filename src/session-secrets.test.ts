@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { canonicalJson } from "./model";
+import { rotateReadProjectionAuthIncarnation } from "./read-projection-admission";
 import {
   readSessionSecret,
   readSessionSecretSnapshot,
@@ -92,10 +93,31 @@ describe("encrypted provider-session cache", () => {
     const encrypted = jsonRecord(raw, "encrypted session secret");
     expect(raw).not.toContain(secret.accessJwt);
     expect(raw).not.toContain(secret.refreshJwt);
-    expect(encrypted.schemaVersion).toBe(2);
+    expect(encrypted.schemaVersion).toBe(3);
     expect(encrypted.keyId).toMatch(/^[a-f0-9]{64}$/u);
+    expect(encrypted.authIdentityHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(encrypted.authIdentityHash).not.toBe(authHash);
+    expect(encrypted.generation).toMatch(/^[a-f0-9]{64}$/u);
+    const coordinate = jsonRecord(
+      readFileSync(join(
+        state.root,
+        "session-secrets",
+        "coordinates",
+        "bluesky--bluesky-main.json",
+      ), "utf8"),
+      "session-secret coordinate state",
+    );
+    expect(encrypted.generation).toBe(coordinate.generation);
     expect(lstatSync(path).mode & 0o777).toBe(0o600);
     expect(lstatSync(join(state.root, "session-secrets")).mode & 0o777).toBe(0o700);
+    expect(lstatSync(join(state.root, "session-secrets", "coordinates")).mode & 0o777)
+      .toBe(0o700);
+    expect(lstatSync(join(
+      state.root,
+      "session-secrets",
+      "coordinates",
+      "bluesky--bluesky-main.json",
+    )).mode & 0o777).toBe(0o600);
     expect(lstatSync(join(state.root, ".session-encryption-key")).mode & 0o777)
       .toBe(0o600);
     const snapshot = readSessionSecretSnapshot(
@@ -132,6 +154,92 @@ describe("encrypted provider-session cache", () => {
     expect(removeSessionSecret("bluesky", "bluesky-main", state.value)).toBeTrue();
     expect(readSessionSecret("bluesky", "bluesky-main", authHash, state.value))
       .toBeNull();
+  });
+
+  test("invalidates encrypted secrets when the auth incarnation rotates", () => {
+    const state = environment();
+    const authHash = "6".repeat(64);
+    writeSessionSecret(
+      "bluesky",
+      "bluesky-main",
+      authHash,
+      { refreshJwt: "first-incarnation-secret" },
+      state.value,
+    );
+    const before = readSessionSecretSnapshot(
+      "bluesky",
+      "bluesky-main",
+      authHash,
+      state.value,
+    );
+    expect(before.value).toEqual({
+      refreshJwt: "first-incarnation-secret",
+    });
+
+    rotateReadProjectionAuthIncarnation("bluesky-main", state.value);
+
+    const after = readSessionSecretSnapshot(
+      "bluesky",
+      "bluesky-main",
+      authHash,
+      state.value,
+    );
+    expect(after).toEqual({
+      value: null,
+      contentSha256: before.contentSha256,
+    });
+  });
+
+  test("rejects a stale session writer after an auth incarnation rotation", () => {
+    const state = environment();
+    const authHash = "7".repeat(64);
+    writeSessionSecret(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      { generation: 1, cookies: ["stale-cookie"] },
+      state.value,
+    );
+    const stale = readSessionSecretSnapshot(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      state.value,
+    );
+    const staleAbsent = readSessionSecretSnapshot(
+      "future-plugin",
+      "linkedin-main",
+      authHash,
+      state.value,
+    );
+    expect(staleAbsent.value).toBeNull();
+    expect(staleAbsent.contentSha256).toMatch(/^[a-f0-9]{64}$/u);
+
+    rotateReadProjectionAuthIncarnation("linkedin-main", state.value);
+    rotateReadProjectionAuthIncarnation("linkedin-main", state.value);
+
+    expect(writeSessionSecretIfUnchanged(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      { generation: 2, cookies: ["late-stale-cookie"] },
+      stale.contentSha256,
+      state.value,
+    )).toEqual({ written: false });
+    expect(writeSessionSecretIfUnchanged(
+      "future-plugin",
+      "linkedin-main",
+      authHash,
+      { generation: 1, cookies: ["late-first-write"] },
+      staleAbsent.contentSha256,
+      state.value,
+    )).toEqual({ written: false });
+    expect(readSessionSecret(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      state.value,
+    )).toBeNull();
   });
 
   test("rejects authenticated-ciphertext tampering", () => {
@@ -390,6 +498,7 @@ describe("encrypted provider-session cache", () => {
         return value;
       };
       const environment = { ...process.env, WRENCH_STATE_HOME: required("WRENCH_TEST_HOME") };
+      while (!existsSync(required("WRENCH_TEST_START"))) await Bun.sleep(5);
       const snapshot = readSessionSecretSnapshot(
         "linkedin",
         "linkedin-main",
@@ -420,10 +529,12 @@ describe("encrypted provider-session cache", () => {
       tombstone: string,
     ) => {
       const ready = join(state.root, `${name}.ready`);
+      const start = join(state.root, `${name}.start`);
       const gate = join(state.root, `${name}.gate`);
       const result = join(state.root, `${name}.result`);
       return {
         ready,
+        start,
         gate,
         result,
         child: Bun.spawn(
@@ -432,6 +543,7 @@ describe("encrypted provider-session cache", () => {
             env: {
               ...process.env,
               WRENCH_TEST_HOME: state.root,
+              WRENCH_TEST_START: start,
               WRENCH_TEST_READY: ready,
               WRENCH_TEST_GATE: gate,
               WRENCH_TEST_RESULT: result,
@@ -447,10 +559,10 @@ describe("encrypted provider-session cache", () => {
     const slower = worker("slower", 2, "stale-cookie");
     const faster = worker("faster", 3, "deleted-cookie");
     try {
-      await Promise.all([
-        waitForFile(slower.ready),
-        waitForFile(faster.ready),
-      ]);
+      writeFileSync(slower.start, "start\n");
+      await waitForFile(slower.ready);
+      writeFileSync(faster.start, "start\n");
+      await waitForFile(faster.ready);
 
       writeFileSync(faster.gate, "go\n");
       await waitForFile(faster.result);
@@ -503,7 +615,8 @@ describe("encrypted provider-session cache", () => {
       authHash,
       state.value,
     );
-    expect(absent).toEqual({ value: null, contentSha256: null });
+    expect(absent.value).toBeNull();
+    expect(absent.contentSha256).toMatch(/^[a-f0-9]{64}$/u);
 
     const winner = writeSessionSecretIfUnchanged(
       "linkedin",
@@ -544,15 +657,92 @@ describe("encrypted provider-session cache", () => {
       state.value,
     );
     expect(staleAfterRemoval).toEqual({ written: false });
-    expect(readSessionSecret(
+    const staleOriginalAbsentAfterRemoval = writeSessionSecretIfUnchanged(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      { generation: 1, cookies: ["original-absent-writer"] },
+      absent.contentSha256,
+      state.value,
+    );
+    expect(staleOriginalAbsentAfterRemoval).toEqual({ written: false });
+    const absentAfterRemoval = readSessionSecretSnapshot(
       "linkedin",
       "linkedin-main",
       authHash,
       state.value,
-    )).toBeNull();
+    );
+    expect(absentAfterRemoval.value).toBeNull();
+    expect(absentAfterRemoval.contentSha256).not.toBe(absent.contentSha256);
   });
 
-  test("reads historical schema-v1 keys and envelopes, then writes schema v2", () => {
+  test("reclaims ciphertext left behind after a generation-first removal", () => {
+    const state = environment();
+    const authHash = "8".repeat(64);
+    writeSessionSecret(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      { generation: 1, cookies: ["pre-removal-cookie"] },
+      state.value,
+    );
+    const present = readSessionSecretSnapshot(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      state.value,
+    );
+    const ciphertextPath = join(
+      state.root,
+      "session-secrets",
+      "linkedin--linkedin-main.json",
+    );
+    const coordinatePath = join(
+      state.root,
+      "session-secrets",
+      "coordinates",
+      "linkedin--linkedin-main.json",
+    );
+    const coordinate = jsonRecord(
+      readFileSync(coordinatePath, "utf8"),
+      "session-secret coordinate state",
+    );
+    if (typeof coordinate.generation !== "string") {
+      throw new Error("coordinate fixture omitted its generation");
+    }
+    const interruptedRemovalGeneration = coordinate.generation === "9".repeat(64)
+      ? "8".repeat(64)
+      : "9".repeat(64);
+    writeFileSync(
+      coordinatePath,
+      `${canonicalJson({
+        ...coordinate,
+        generation: interruptedRemovalGeneration,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    rotateReadProjectionAuthIncarnation("linkedin-main", state.value);
+
+    expect(writeSessionSecretIfUnchanged(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      { generation: 2, cookies: ["must-not-revive"] },
+      present.contentSha256,
+      state.value,
+    )).toEqual({ written: false });
+    expect(existsSync(ciphertextPath)).toBeFalse();
+    const recovered = readSessionSecretSnapshot(
+      "linkedin",
+      "linkedin-main",
+      authHash,
+      state.value,
+    );
+    expect(recovered.value).toBeNull();
+    expect(recovered.contentSha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  test("reclaims historical envelopes without exposing their secret", () => {
     const state = environment();
     const authHash = "4".repeat(64);
     const secret = { refreshJwt: "historical-private-refresh-token" };
@@ -618,8 +808,10 @@ describe("encrypted provider-session cache", () => {
       authHash,
       state.value,
     );
-    expect(historical.value).toEqual(secret);
-    const migrated = writeSessionSecretIfUnchanged(
+    expect(historical.value).toBeNull();
+    expect(historical.contentSha256).not.toBeNull();
+    expect(existsSync(secretPath)).toBeFalse();
+    const replacement = writeSessionSecretIfUnchanged(
       "bluesky",
       "bluesky-main",
       authHash,
@@ -627,13 +819,15 @@ describe("encrypted provider-session cache", () => {
       historical.contentSha256,
       state.value,
     );
-    expect(migrated.written).toBeTrue();
+    expect(replacement.written).toBeTrue();
     const migratedEnvelope = jsonRecord(
       readFileSync(secretPath, "utf8"),
       "migrated encrypted session secret",
     );
-    expect(migratedEnvelope.schemaVersion).toBe(2);
+    expect(migratedEnvelope.schemaVersion).toBe(3);
     expect(migratedEnvelope.keyId).toMatch(/^[a-f0-9]{64}$/u);
+    expect(migratedEnvelope.authIdentityHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(migratedEnvelope.generation).toMatch(/^[a-f0-9]{64}$/u);
     expect(readSessionSecret(
       "bluesky",
       "bluesky-main",

@@ -47,6 +47,12 @@ import {
   writeSessionSecret,
 } from "./session-secrets";
 import {
+  createReadProjectionQuery,
+  projectionAuthIdentityHash,
+  publishReadProjection,
+  readReadProjection,
+} from "./read-projections";
+import {
   createPrivateJsonIfAbsent,
   installManifest as installManifestWithRegistry,
   listPrivateStateDirectory,
@@ -939,7 +945,7 @@ describe("auth locators", () => {
     }
   });
 
-  test("lists valid auth deterministically, skips malformed records, and removes only the locator", () => {
+  test("lists valid auth deterministically, skips malformed records, and removes the locator", () => {
     const testState = state();
     try {
       saveAuth(createAuth("zulu", { source: "firefox" }), testState.environment);
@@ -955,7 +961,119 @@ describe("auth locators", () => {
     }
   });
 
-  test("removes auth-bound browser session caches with the locator", () => {
+  test("preserves an auth created after an absent removal read", () => {
+    const testState = state();
+    try {
+      const winner = createAuth("linkedin-main", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "urn:li:person:concurrent-winner",
+      });
+      const authHash = "a".repeat(64);
+      const input = { folder: "inbox", limit: 25 };
+      let rootReads = 0;
+      let injected = false;
+      let winnerIncarnationHash: string | undefined;
+      let projection:
+        | ReturnType<typeof createReadProjectionQuery>
+        | undefined;
+      const racingEnvironment = Object.freeze({
+        get WRENCH_STATE_HOME(): string {
+          rootReads += 1;
+          // The first four resolutions perform the initial absent snapshot.
+          // The fifth begins admission acquisition, which is the exact window
+          // in which a concurrent creator can win before removal is admitted.
+          if (!injected && rootReads === 5) {
+            injected = true;
+            saveAuth(winner, testState.environment);
+            const snapshot = loadAuthSnapshot(
+              winner.id,
+              testState.environment,
+            );
+            winnerIncarnationHash = projectionAuthIdentityHash(
+              winner.id,
+              snapshot.contentSha256,
+              testState.environment,
+            );
+            writeSessionSecret(
+              "linkedin-cookie-rotation",
+              winner.id,
+              authHash,
+              { private: "concurrent-session-cache" },
+              testState.environment,
+            );
+            projection = createReadProjectionQuery({
+              adapter: {
+                id: "linkedin-web",
+                version: "1.0.0",
+                hash: "b".repeat(64),
+              },
+              operation: "messaging.list",
+              input,
+              inputHash: createHash("sha256")
+                .update(canonicalJson(input))
+                .digest("hex"),
+              auth: {
+                id: winner.id,
+                kind: winner.kind,
+                hash: authHash,
+                subject: "urn:li:person:concurrent-winner",
+              },
+              contract: {
+                transport: "web-session-api",
+                hash: "c".repeat(64),
+              },
+            }, testState.environment);
+            publishReadProjection(
+              projection,
+              { conversations: [{ id: "thread-concurrent" }] },
+              {
+                environment: testState.environment,
+                runId: "00000000-0000-4000-8000-000000000203",
+                startedAt: "2026-07-31T17:10:00.000Z",
+                finishedAt: "2026-07-31T17:10:01.000Z",
+              },
+            );
+          }
+          return testState.directory;
+        },
+      });
+
+      expect(() => removeAuth(winner.id, racingEnvironment))
+        .toThrow("changed concurrently before removal");
+      expect(injected).toBeTrue();
+      expect(loadAuth(winner.id, testState.environment)).toEqual(winner);
+      expect(readSessionSecret(
+        "linkedin-cookie-rotation",
+        winner.id,
+        authHash,
+        testState.environment,
+      )).toEqual({ private: "concurrent-session-cache" });
+      if (projection === undefined || winnerIncarnationHash === undefined) {
+        throw new Error("concurrent auth fixture was not installed");
+      }
+      expect(readReadProjection(
+        projection,
+        { environment: testState.environment },
+      )).toMatchObject({
+        status: "hit",
+        output: { conversations: [{ id: "thread-concurrent" }] },
+      });
+      const winnerSnapshot = loadAuthSnapshot(
+        winner.id,
+        testState.environment,
+      );
+      expect(projectionAuthIdentityHash(
+        winner.id,
+        winnerSnapshot.contentSha256,
+        testState.environment,
+      )).toBe(winnerIncarnationHash);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("removes auth-bound browser session caches and read projections with the locator", () => {
     const testState = state();
     try {
       const auth = createAuth("linkedin-main", { source: "arc", profile: "Profile 1" });
@@ -968,6 +1086,33 @@ describe("auth locators", () => {
         { private: "edge-cookie-cache" },
         testState.environment,
       );
+      const input = { folder: "inbox", limit: 25 };
+      const projection = createReadProjectionQuery({
+        adapter: {
+          id: "linkedin-web",
+          version: "1.0.0",
+          hash: "b".repeat(64),
+        },
+        operation: "messaging.list",
+        input,
+        inputHash: createHash("sha256").update(canonicalJson(input)).digest("hex"),
+        auth: {
+          id: auth.id,
+          kind: auth.kind,
+          hash: authHash,
+          subject: "urn:li:person:example",
+        },
+        contract: {
+          transport: "web-session-api",
+          hash: "c".repeat(64),
+        },
+      }, testState.environment);
+      publishReadProjection(projection, { conversations: [{ id: "thread-1" }] }, {
+        environment: testState.environment,
+        runId: "00000000-0000-4000-8000-000000000201",
+        startedAt: "2026-07-31T17:00:00.000Z",
+        finishedAt: "2026-07-31T17:00:01.000Z",
+      });
       writeSessionSecret(
         "bluesky",
         auth.id,
@@ -983,12 +1128,178 @@ describe("auth locators", () => {
         authHash,
         testState.environment,
       )).toBeNull();
+      expect(readReadProjection(projection, { environment: testState.environment }))
+        .toMatchObject({ status: "miss" });
       expect(readSessionSecret(
         "bluesky",
         auth.id,
         authHash,
         testState.environment,
       )).toBeNull();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("finishes fallible incarnation cleanup before committing auth removal", () => {
+    const testState = state();
+    try {
+      const initial = createAuth("linkedin-main", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "urn:li:person:initial",
+      });
+      saveAuth(initial, testState.environment);
+      const initialSnapshot = loadAuthSnapshot(
+        initial.id,
+        testState.environment,
+      );
+      const initialProjectionAuthHash = projectionAuthIdentityHash(
+        initial.id,
+        initialSnapshot.contentSha256,
+        testState.environment,
+      );
+      const authFile = join(
+        testState.directory,
+        "auth",
+        `${initial.id}.json`,
+      );
+      const incarnationDirectory = join(
+        testState.directory,
+        "read-projection-control",
+        "incarnations",
+      );
+      const [incarnationName] = readdirSync(incarnationDirectory);
+      if (incarnationName === undefined) {
+        throw new Error("expected a read projection auth incarnation");
+      }
+      const incarnationFile = join(incarnationDirectory, incarnationName);
+
+      chmodSync(incarnationDirectory, 0o755);
+      expect(() => removeAuth(initial.id, testState.environment)).toThrow();
+      expect(loadAuth(initial.id, testState.environment)).toEqual(initial);
+      expect(existsSync(authFile)).toBeTrue();
+      chmodSync(incarnationDirectory, 0o700);
+
+      let postCommitFaultInjected = false;
+      const faultingEnvironment = Object.freeze({
+        get WRENCH_STATE_HOME(): string {
+          if (
+            !postCommitFaultInjected
+            && !existsSync(authFile)
+            && existsSync(incarnationFile)
+          ) {
+            postCommitFaultInjected = true;
+            chmodSync(incarnationDirectory, 0o755);
+          }
+          return testState.directory;
+        },
+      });
+
+      let removalError: unknown;
+      let removed = false;
+      try {
+        removed = removeAuth(initial.id, faultingEnvironment);
+      } catch (error) {
+        removalError = error;
+      }
+      expect({
+        reportedFailure: removalError !== undefined,
+        authFileGone: !existsSync(authFile),
+      }).not.toEqual({ reportedFailure: true, authFileGone: true });
+      expect(removalError).toBeUndefined();
+      expect(removed).toBeTrue();
+      expect(postCommitFaultInjected).toBeFalse();
+      expect(existsSync(authFile)).toBeFalse();
+      expect(existsSync(incarnationFile)).toBeFalse();
+
+      const replacement = createAuth("linkedin-main", {
+        source: "chrome",
+        profile: "Profile 2",
+        subject: "urn:li:person:replacement",
+      });
+      saveAuth(replacement, testState.environment);
+      saveAuth(initial, testState.environment, { force: true });
+      const recreatedSnapshot = loadAuthSnapshot(
+        initial.id,
+        testState.environment,
+      );
+      expect(recreatedSnapshot.contentSha256)
+        .toBe(initialSnapshot.contentSha256);
+      expect(projectionAuthIdentityHash(
+        initial.id,
+        recreatedSnapshot.contentSha256,
+        testState.environment,
+      )).not.toBe(initialProjectionAuthHash);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("does not commit a forced auth replacement before projection cleanup settles", () => {
+    const testState = state();
+    try {
+      const initial = createAuth("linkedin-main", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "urn:li:person:initial",
+      });
+      saveAuth(initial, testState.environment);
+      const input = { folder: "inbox", limit: 25 };
+      const projection = createReadProjectionQuery({
+        adapter: {
+          id: "linkedin-web",
+          version: "1.0.0",
+          hash: "b".repeat(64),
+        },
+        operation: "messaging.list",
+        input,
+        inputHash: createHash("sha256")
+          .update(canonicalJson(input))
+          .digest("hex"),
+        auth: {
+          id: initial.id,
+          kind: initial.kind,
+          hash: "a".repeat(64),
+          subject: "urn:li:person:initial",
+        },
+        contract: {
+          transport: "web-session-api",
+          hash: "c".repeat(64),
+        },
+      }, testState.environment);
+      publishReadProjection(projection, { conversations: [{ id: "thread-1" }] }, {
+        environment: testState.environment,
+        runId: "00000000-0000-4000-8000-000000000202",
+        startedAt: "2026-07-31T17:05:00.000Z",
+        finishedAt: "2026-07-31T17:05:01.000Z",
+      });
+      const realm = join(
+        testState.directory,
+        "read-projections",
+        projection.realmKey,
+      );
+      chmodSync(realm, 0o755);
+      const replacement = createAuth("linkedin-main", {
+        source: "chrome",
+        profile: "Profile 2",
+        subject: "urn:li:person:replacement",
+      });
+
+      expect(() => saveAuth(
+        replacement,
+        testState.environment,
+        { force: true },
+      )).toThrow();
+      expect(loadAuth(initial.id, testState.environment)).toEqual(initial);
+
+      chmodSync(realm, 0o700);
+      expect(saveAuth(
+        replacement,
+        testState.environment,
+        { force: true },
+      )).toContain(`${initial.id}.json`);
+      expect(loadAuth(initial.id, testState.environment)).toEqual(replacement);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
@@ -1046,6 +1357,7 @@ describe("private state storage", () => {
           content: "{\"published\":false}\n",
           createOnly: false,
           expectedContentSha256: null,
+          maximumExpectedContentBytes: 2 * 1024 * 1024,
         },
       }));
       await spawned.stdin.end();

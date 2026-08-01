@@ -11,6 +11,9 @@
     "paths": {
       "@hraness/wrench": [
         "./src/index.ts"
+      ],
+      "@hraness/wrench/client": [
+        "./src/client.ts"
       ]
     },
     "verbatimModuleSyntax": true,

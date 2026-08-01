@@ -99,6 +99,30 @@ describe("private state compare-and-swap writes", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2 });
   });
 
+  test("reconciles a helper failure after the replacement is durable", () => {
+    const { root } = state();
+    const directory = join(root, "session-secrets");
+    const path = join(directory, "value.json");
+    writePrivateJson(path, { version: 1 });
+
+    expect(writePrivateJsonIfUnchanged(path, { version: 2 }, {
+      expectedCurrentContentSha256: contentHash(path),
+      failAfterCommitForTest: true,
+    })).toBeTrue();
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2 });
+    expect(readdirSync(directory).some((name) =>
+      name.startsWith(".io-mutation-") && name.endsWith(".lock")))
+      .toBeTrue();
+
+    expect(writePrivateJsonIfUnchanged(path, { version: 3 }, {
+      expectedCurrentContentSha256: contentHash(path),
+    })).toBeTrue();
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 3 });
+    expect(readdirSync(directory).some((name) =>
+      name.startsWith(".io-mutation-") && name.endsWith(".lock")))
+      .toBeFalse();
+  });
+
   test("treats disappearance as a conflict rather than recreating state", () => {
     const { root } = state();
     const path = join(root, "session-secrets", "missing.json");
@@ -295,6 +319,24 @@ describe("private state compare-and-swap writes", () => {
     })).toBeTrue();
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2 });
     expect(existsSync(claimPath)).toBeFalse();
+  });
+
+  test("widens the current-file CAS bound only when recovery requests it", () => {
+    const { root } = state();
+    const path = join(root, "session-secrets", "value.json");
+    const oversized = `${"x".repeat(2 * 1024 * 1024)}\n`;
+    writeFileSync(path, oversized, { mode: 0o600 });
+    const expected = contentHash(path);
+
+    expect(() => writePrivateJsonIfUnchanged(path, { version: 2 }, {
+      expectedCurrentContentSha256: expected,
+    })).toThrow("bounded private owned file");
+    expect(readFileSync(path, "utf8")).toBe(oversized);
+    expect(writePrivateJsonIfUnchanged(path, { version: 2 }, {
+      expectedCurrentContentSha256: expected,
+      maximumExpectedCurrentBytes: 4 * 1024 * 1024,
+    })).toBeTrue();
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2 });
   });
 
   test("deletes only the exact inode-bound content snapshot", () => {
