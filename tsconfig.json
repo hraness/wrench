@@ -14,6 +14,9 @@
       ],
       "@hraness/wrench/client": [
         "./src/client.ts"
+      ],
+      "@hraness/wrench/omni": [
+        "./src/omni-client.ts"
       ]
     },
     "verbatimModuleSyntax": true,

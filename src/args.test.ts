@@ -1006,6 +1006,55 @@ describe("wrench CLI grammar", () => {
       ok: false,
       message: "invoke --projection-identity-only never opens a browser and cannot be combined with --headed",
     });
+    expect(parseWrenchArguments([
+      "omni",
+      "read",
+      "--input",
+      "-",
+      "--cache-only",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "omni-read",
+        inputSource: "-",
+        cacheOnly: true,
+        identityOnly: false,
+        fromExactCache: false,
+        headed: false,
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "omni",
+      "read",
+      "--input",
+      "@view.json",
+      "--from-exact-cache",
+    ])).toMatchObject({
+      ok: true,
+      value: {
+        command: "omni-read",
+        inputSource: "@view.json",
+        fromExactCache: true,
+      },
+    });
+    expect(parseWrenchArguments(["omni", "read"])).toEqual({
+      ok: false,
+      message: "omni read requires --input <json|@file|->",
+    });
+    expect(parseWrenchArguments([
+      "omni", "read", "--input", "-", "--cache-only", "--identity-only",
+    ])).toEqual({
+      ok: false,
+      message: "omni read accepts only one of --cache-only, --identity-only, or --from-exact-cache",
+    });
+    expect(parseWrenchArguments([
+      "omni", "read", "--input", "-", "--from-exact-cache", "--headed",
+    ])).toEqual({
+      ok: false,
+      message: "omni read cache, identity, and exact-cache rebuild modes never open a browser and cannot use --headed",
+    });
     expect(parseWrenchArguments(["runs", "show", "00000000-0000-4000-8000-000000000000", "--json"])).toEqual({
       ok: true,
       value: {

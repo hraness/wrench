@@ -1,13 +1,14 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.3.0",
-  "description": "A local-first Bun CLI for durable web capture, encrypted read projections, verified media archives, and bounded provider plugins.",
+  "version": "0.4.0",
+  "description": "A local-first Bun CLI and SDK for durable web capture, encrypted reads, strict cross-provider views, verified media archives, and bounded provider plugins.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
     "./src/cli.ts",
     "./src/client.ts",
-    "./src/index.ts"
+    "./src/index.ts",
+    "./src/omni-client.ts"
   ],
   "packageManager": "bun@1.3.14",
   "repository": {
@@ -24,6 +25,7 @@
     "knowledge-base",
     "media-archive",
     "provider-plugins",
+    "cross-provider",
     "local-first",
     "bun"
   ],
@@ -35,6 +37,10 @@
     "./client": {
       "types": "./src/client-types.ts",
       "import": "./dist/client.js"
+    },
+    "./omni": {
+      "types": "./src/omni-client-types.ts",
+      "import": "./dist/omni-client.js"
     }
   },
   "bin": {
@@ -120,6 +126,12 @@
     "src/linked-device-lifecycle-journal.ts",
     "src/linked-device-lifecycle-runtime.ts",
     "src/model.ts",
+    "src/omni-client-types.ts",
+    "src/omni-client.ts",
+    "src/omni-limits.ts",
+    "src/omni-model.ts",
+    "src/omni-request.ts",
+    "src/omni-runtime.ts",
     "src/operation-deadline.ts",
     "src/path-helper.ts",
     "src/pinned-https.ts",
@@ -190,14 +202,18 @@
     "src/providers/meta-web-descriptors.ts",
     "src/providers/meta-web-runtime.ts",
     "src/providers/meta-web.ts",
+    "src/providers/meta-omni.ts",
     "src/providers/reddit-web-runtime.ts",
     "src/providers/reddit-web.ts",
+    "src/providers/reddit-omni.ts",
     "src/providers/substack-web-runtime.ts",
     "src/providers/substack-web.ts",
+    "src/providers/substack-omni.ts",
     "src/providers/tiktok-web-runtime.ts",
     "src/providers/tiktok-web.ts",
     "src/providers/whatsapp-web-runtime.ts",
     "src/providers/whatsapp-web.ts",
+    "src/providers/whatsapp-omni.ts",
     "src/providers/x-transaction-id.ts",
     "src/providers/x-web-runtime.ts",
     "src/providers/x-web.ts",
@@ -237,7 +253,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
+    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts ./src/omni-client.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test --no-orphans --timeout 180000 --max-concurrency \"${GOMAXPROCS:-4}\" ./src",
     "accept:media:adaptive": "bun run scripts/media/adaptive-vod-acceptance.ts",

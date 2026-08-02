@@ -7,11 +7,14 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 
 import { canonicalJson } from "./canonical-json";
 import {
+  READ_PROJECTION_TRANSITION_SETTLEMENT_WAIT_MS,
   withReadProjectionAuthAdmission,
+  withSettledReadProjectionAuthAdmission,
 } from "./read-projection-admission";
 import {
   MAX_PRIVATE_STATE_BATCH_FILE_BYTES,
@@ -51,6 +54,7 @@ type Environment = Readonly<Record<string, string | undefined>>;
 type JsonRecord = Record<string, unknown>;
 
 const STORE_DIRECTORY = "read-projections";
+const OMNI_STORE_DIRECTORY = "omni-read-projections";
 const CONTROL_DIRECTORY = "read-projection-control";
 const KEY_FILE = ".projection-encryption-key";
 const STORE_KEY_MARKER_FILE = "store-key.json";
@@ -128,6 +132,39 @@ export type ReadProjectionQuery = {
   readonly identity: ReadProjectionQueryIdentity;
 };
 
+export type OmniProjectionQuery = ReadProjectionQuery & {
+  /** Runtime storage-class tag. Exact-query values deliberately have no tag. */
+  readonly storageClass: "omni-v1";
+};
+
+type ProjectionStorageClass = "exact-v1" | "omni-v1";
+
+export type OmniProjectionCurrent = {
+  readonly key: string;
+  /** Immutable encrypted revision named by the authoritative head. */
+  readonly storageRevisionId: string;
+  readonly output: unknown;
+  readonly dataRevision: string;
+  readonly createdAt: string;
+  readonly dataChangedAt: string;
+  readonly validatedAt: string;
+  readonly runId: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+};
+
+export type OmniProjectionPublication = ReadProjectionPublication & {
+  readonly storageRevisionId: string;
+  readonly runId: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+};
+
+export type OmniProjectionReductionResult = {
+  readonly publication: OmniProjectionPublication;
+  readonly current: OmniProjectionCurrent;
+};
+
 export type ReadProjectionCacheResult =
   | {
       readonly status: "miss";
@@ -149,6 +186,25 @@ export type ReadProjectionCacheResult =
         readonly freshForMs: number | null;
       };
     };
+
+export type OmniProjectionCacheResult =
+  | Extract<ReadProjectionCacheResult, { readonly status: "miss" }>
+  | (Extract<ReadProjectionCacheResult, { readonly status: "hit" }> & {
+      readonly storageRevisionId: string;
+      readonly startedAt: string;
+      readonly finishedAt: string;
+    });
+
+/** Internal exact-head observation used to bind a derivative to exact bytes. */
+export type ReadProjectionMaterializationSnapshot = OmniProjectionCacheResult;
+
+/** Exact immutable head that must still own the auth admission at reduction. */
+export type ReadProjectionExactHeadFence = {
+  readonly query: ReadProjectionQuery;
+  readonly storageRevisionId: string;
+  readonly dataRevision: string;
+  readonly runId: string;
+};
 
 export type ReadProjectionPublication = {
   readonly key: string;
@@ -225,6 +281,7 @@ type ProjectionHeadSnapshot = {
 };
 
 type ReadProjectionCorruptionEvidence = {
+  readonly storageClass: ProjectionStorageClass;
   readonly queryKey: string;
   readonly realmKey: string;
   readonly headContentSha256: string;
@@ -265,6 +322,10 @@ export class ReadProjectionCorruptionError extends Error {
 
   get queryKey(): string {
     return corruptionEvidence.get(this)!.queryKey;
+  }
+
+  get storageClass(): ProjectionStorageClass {
+    return corruptionEvidence.get(this)!.storageClass;
   }
 
   get realmKey(): string {
@@ -484,6 +545,41 @@ function boundedJson(value: unknown, label: string): unknown {
   return cloned;
 }
 
+function deeplyFreezeJson(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    if ("value" in descriptor) deeplyFreezeJson(descriptor.value);
+  }
+  return Object.freeze(value);
+}
+
+function immutableBoundedJson(value: unknown, label: string): unknown {
+  return deeplyFreezeJson(boundedJson(value, label));
+}
+
+function hasThenableProtocol(value: unknown): boolean {
+  if (
+    (typeof value !== "object" || value === null)
+    && typeof value !== "function"
+  ) return false;
+  const visited = new WeakSet<object>();
+  let current: object | null = value;
+  while (current !== null) {
+    if (visited.has(current)) {
+      throw new Error("omni projection reducer result has a cyclic prototype chain");
+    }
+    visited.add(current);
+    const descriptor = Object.getOwnPropertyDescriptor(current, "then");
+    if (descriptor !== undefined) {
+      return !("value" in descriptor) || typeof descriptor.value === "function";
+    }
+    current = Object.getPrototypeOf(current) as object | null;
+  }
+  return false;
+}
+
 function hashBytes(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -508,6 +604,19 @@ function storeDirectory(environment: Environment): string {
   return join(wrenchStateHome(environment), STORE_DIRECTORY);
 }
 
+function omniStoreDirectory(environment: Environment): string {
+  return join(wrenchStateHome(environment), OMNI_STORE_DIRECTORY);
+}
+
+function storeDirectoryForClass(
+  storageClass: ProjectionStorageClass,
+  environment: Environment,
+): string {
+  return storageClass === "exact-v1"
+    ? storeDirectory(environment)
+    : omniStoreDirectory(environment);
+}
+
 function keyPath(environment: Environment): string {
   return join(wrenchStateHome(environment), KEY_FILE);
 }
@@ -520,12 +629,26 @@ function storeKeyMarkerPath(environment: Environment): string {
   return join(controlDirectory(environment), STORE_KEY_MARKER_FILE);
 }
 
-function realmDirectory(realmKey: string, environment: Environment): string {
-  return join(storeDirectory(environment), hexDigest(realmKey, "projection realm key"));
+function realmDirectory(
+  realmKey: string,
+  environment: Environment,
+  storageClass: ProjectionStorageClass = "exact-v1",
+): string {
+  return join(
+    storeDirectoryForClass(storageClass, environment),
+    hexDigest(realmKey, "projection realm key"),
+  );
 }
 
 function queryDirectory(query: ReadProjectionQuery, environment: Environment): string {
-  return join(realmDirectory(query.realmKey, environment), query.key);
+  return join(
+    realmDirectory(
+      query.realmKey,
+      environment,
+      projectionStorageClass(query),
+    ),
+    query.key,
+  );
 }
 
 function headPath(query: ReadProjectionQuery, environment: Environment): string {
@@ -634,12 +757,30 @@ function parseProjectionKey(text: string): ProjectionKey {
 function encryptedStoreHasState(environment: Environment): boolean {
   const directory = storeDirectory(environment);
   const identity = ensureProjectionStateDirectory(directory, environment);
-  return listPrivateStateDirectory(
+  const exactHasState = listPrivateStateDirectory(
     directory,
     environment,
     identity,
     { recoverOrphanedMutationClaims: true },
   ).length > 0;
+  if (exactHasState) return true;
+  try {
+    lstatSync(omniStoreDirectory(environment));
+  } catch (error) {
+    if (
+      typeof error === "object"
+      && error !== null
+      && "code" in error
+      && error.code === "ENOENT"
+    ) return false;
+    throw error;
+  }
+  return snapshotPrivateStateDirectory(
+    omniStoreDirectory(environment),
+    environment,
+    undefined,
+    { recoverOrphanedMutationClaims: true },
+  ).entries.length > 0;
 }
 
 function readProjectionKeyIfPresent(environment: Environment): ProjectionKey | null {
@@ -769,7 +910,9 @@ function projectionKey(environment: Environment, create: boolean): ProjectionKey
   let key = readProjectionKeyIfPresent(environment);
   if (key === null) {
     const markerExists = readProjectionStoreKeyMarkerIfPresent(environment) !== null;
-    const storeHasState = encryptedStoreHasState(environment);
+    const storeHasState = markerExists
+      ? false
+      : encryptedStoreHasState(environment);
     if (markerExists || storeHasState) {
       key = readProjectionKeyIfPresent(environment);
       if (key === null) {
@@ -862,11 +1005,34 @@ function queryForIdentity(
   });
 }
 
+function omniQueryForIdentity(
+  identityValue: ReadProjectionQueryIdentity,
+  environment: Environment,
+  projectionKeyValue?: ProjectionKey,
+): OmniProjectionQuery {
+  const identity = parseIdentity(identityValue);
+  const key = projectionKeyValue ?? projectionKey(environment, true);
+  if (key === null) throw new Error("projection encryption key is unavailable");
+  return Object.freeze({
+    storageClass: "omni-v1" as const,
+    key: hmac(key.value, "wrench-omni-projection-query-v1", canonicalJson(identity)),
+    realmKey: hmac(key.value, "wrench-omni-projection-realm-v1", identity.auth.id),
+    identity,
+  });
+}
+
 export function createReadProjectionQuery(
   identity: ReadProjectionQueryIdentity,
   environment: Environment = process.env,
 ): ReadProjectionQuery {
   return queryForIdentity(identity, environment);
+}
+
+export function createOmniProjectionQuery(
+  identity: ReadProjectionQueryIdentity,
+  environment: Environment = process.env,
+): OmniProjectionQuery {
+  return omniQueryForIdentity(identity, environment);
 }
 
 function parseQueryValue(value: unknown): ReadProjectionQuery {
@@ -883,6 +1049,32 @@ function parseQueryValue(value: unknown): ReadProjectionQuery {
   });
 }
 
+function parseOmniQueryValue(value: unknown): OmniProjectionQuery {
+  const query = record(value, "omni projection query");
+  exactKeys(
+    query,
+    ["storageClass", "key", "realmKey", "identity"],
+    "omni projection query",
+  );
+  if (query.storageClass !== "omni-v1") {
+    throw new Error("omni projection storage class is malformed");
+  }
+  return Object.freeze({
+    storageClass: "omni-v1",
+    key: hexDigest(query.key, "omni projection query key"),
+    realmKey: hexDigest(query.realmKey, "omni projection realm key"),
+    identity: parseIdentity(query.identity),
+  });
+}
+
+function projectionStorageClass(
+  query: ReadProjectionQuery,
+): ProjectionStorageClass {
+  return Object.hasOwn(query, "storageClass")
+    ? (query as OmniProjectionQuery).storageClass
+    : "exact-v1";
+}
+
 function validateQuery(query: ReadProjectionQuery, environment: Environment): {
   readonly query: ReadProjectionQuery;
   readonly key: ProjectionKey;
@@ -893,6 +1085,23 @@ function validateQuery(query: ReadProjectionQuery, environment: Environment): {
   const expected = queryForIdentity(parsed.identity, environment, key);
   if (parsed.key !== expected.key || parsed.realmKey !== expected.realmKey) {
     throw new Error("read projection query is not bound to its current private key");
+  }
+  return { query: expected, key };
+}
+
+function validateOmniQuery(
+  query: OmniProjectionQuery,
+  environment: Environment,
+): {
+  readonly query: OmniProjectionQuery;
+  readonly key: ProjectionKey;
+} {
+  const parsed = parseOmniQueryValue(query);
+  const key = projectionKey(environment, true);
+  if (key === null) throw new Error("projection encryption key is unavailable");
+  const expected = omniQueryForIdentity(parsed.identity, environment, key);
+  if (parsed.key !== expected.key || parsed.realmKey !== expected.realmKey) {
+    throw new Error("omni projection query is not bound to its current private key");
   }
   return { query: expected, key };
 }
@@ -1253,8 +1462,18 @@ function decryptChunk(
   }
 }
 
-function dataRevision(key: ProjectionKey, output: unknown): string {
-  return hmac(key.value, "wrench-read-projection-data-v1", canonicalJson(output));
+function dataRevision(
+  key: ProjectionKey,
+  output: unknown,
+  storageClass: ProjectionStorageClass = "exact-v1",
+): string {
+  return hmac(
+    key.value,
+    storageClass === "exact-v1"
+      ? "wrench-read-projection-data-v1"
+      : "wrench-omni-projection-data-v1",
+    canonicalJson(output),
+  );
 }
 
 function corruptionContext(
@@ -1263,6 +1482,7 @@ function corruptionContext(
   headPublicationValue: ReadProjectionHeadPublication | null,
 ): ReadProjectionCorruptionEvidence {
   return Object.freeze({
+    storageClass: projectionStorageClass(query),
     queryKey: query.key,
     realmKey: query.realmKey,
     headContentSha256,
@@ -1426,7 +1646,11 @@ function loadFromHead(
   }
   let payload: ProjectionPayloadV1;
   try {
-    payload = parsePayload(parsed, query, (output) => dataRevision(key, output));
+    payload = parsePayload(
+      parsed,
+      query,
+      (output) => dataRevision(key, output, projectionStorageClass(query)),
+    );
   } catch (error) {
     throw corruption(evidence, "read projection payload is corrupt", error);
   }
@@ -1513,6 +1737,103 @@ export function readReadProjection(
       dataChangedAt: loaded.payload.dataChangedAt,
       validatedAt: loaded.payload.validatedAt,
       runId: loaded.payload.runId,
+      ageMs: observed.ageMs,
+      freshness: Object.freeze({
+        state: observed.state,
+        freshForMs: observed.freshForMs,
+      }),
+    });
+  });
+}
+
+export function readOmniProjection(
+  queryValue: OmniProjectionQuery,
+  options: {
+    readonly environment?: Environment;
+    readonly now?: Date;
+    readonly freshForMs?: number;
+  } = {},
+): OmniProjectionCacheResult {
+  const environment = options.environment ?? process.env;
+  const authId = parseOmniQueryValue(queryValue).identity.auth.id;
+  return withReadProjectionAuthAdmission(authId, environment, () => {
+    const { query, key } = validateOmniQuery(queryValue, environment);
+    const loaded = loadProjection(query, key, environment);
+    if (loaded === null) {
+      return Object.freeze({ status: "miss" as const, key: query.key });
+    }
+    const observed = freshness(
+      loaded.payload.validatedAt,
+      options.now ?? new Date(),
+      options.freshForMs,
+    );
+    return Object.freeze({
+      status: "hit" as const,
+      source: "cache" as const,
+      key: query.key,
+      storageRevisionId: loaded.head.revisionId,
+      output: immutableBoundedJson(
+        loaded.payload.output,
+        "omni projection current output",
+      ),
+      dataRevision: loaded.payload.dataRevision,
+      createdAt: loaded.payload.createdAt,
+      dataChangedAt: loaded.payload.dataChangedAt,
+      validatedAt: loaded.payload.validatedAt,
+      runId: loaded.payload.runId,
+      startedAt: loaded.payload.startedAt,
+      finishedAt: loaded.payload.finishedAt,
+      ageMs: observed.ageMs,
+      freshness: Object.freeze({
+        state: observed.state,
+        freshForMs: observed.freshForMs,
+      }),
+    });
+  });
+}
+
+/**
+ * Observe the authoritative exact head with the immutable storage revision and
+ * execution interval required by a provider-owned materializer. The ordinary
+ * exact cache API intentionally keeps its existing public shape.
+ */
+export function readReadProjectionForMaterialization(
+  queryValue: ReadProjectionQuery,
+  options: {
+    readonly environment?: Environment;
+    readonly now?: Date;
+    readonly freshForMs?: number;
+  } = {},
+): ReadProjectionMaterializationSnapshot {
+  const environment = options.environment ?? process.env;
+  const authId = parseQueryValue(queryValue).identity.auth.id;
+  return withReadProjectionAuthAdmission(authId, environment, () => {
+    const { query, key } = validateQuery(queryValue, environment);
+    const loaded = loadProjection(query, key, environment);
+    if (loaded === null) {
+      return Object.freeze({ status: "miss" as const, key: query.key });
+    }
+    const observed = freshness(
+      loaded.payload.validatedAt,
+      options.now ?? new Date(),
+      options.freshForMs,
+    );
+    return Object.freeze({
+      status: "hit" as const,
+      source: "cache" as const,
+      key: query.key,
+      storageRevisionId: loaded.head.revisionId,
+      output: immutableBoundedJson(
+        loaded.payload.output,
+        "exact projection materialization output",
+      ),
+      dataRevision: loaded.payload.dataRevision,
+      createdAt: loaded.payload.createdAt,
+      dataChangedAt: loaded.payload.dataChangedAt,
+      validatedAt: loaded.payload.validatedAt,
+      runId: loaded.payload.runId,
+      startedAt: loaded.payload.startedAt,
+      finishedAt: loaded.payload.finishedAt,
       ageMs: observed.ageMs,
       freshness: Object.freeze({
         state: observed.state,
@@ -1764,11 +2085,12 @@ function realmUsage(
   readonly realmIdentity: PrivateDirectoryIdentity;
   readonly queries: readonly RealmQueryUsage[];
 } {
+  const storageClass = projectionStorageClass(query);
   const storeIdentity = ensurePrivateStateDirectory(
-    storeDirectory(environment),
+    storeDirectoryForClass(storageClass, environment),
     environment,
   );
-  const realm = realmDirectory(query.realmKey, environment);
+  const realm = realmDirectory(query.realmKey, environment, storageClass);
   const realmIdentity = ensurePrivateStateDirectory(realm, environment);
   const snapshot = snapshotPrivateStateDirectory(
     realm,
@@ -2135,6 +2457,239 @@ export function publishReadProjection(
   });
 }
 
+function omniCurrent(
+  query: OmniProjectionQuery,
+  payload: ProjectionPayloadV1,
+  storageRevisionId: string,
+): OmniProjectionCurrent {
+  return Object.freeze({
+    key: query.key,
+    storageRevisionId,
+    output: immutableBoundedJson(
+      payload.output,
+      "omni projection current output",
+    ),
+    dataRevision: payload.dataRevision,
+    createdAt: payload.createdAt,
+    dataChangedAt: payload.dataChangedAt,
+    validatedAt: payload.validatedAt,
+    runId: payload.runId,
+    startedAt: payload.startedAt,
+    finishedAt: payload.finishedAt,
+  });
+}
+
+function omniPublication(
+  query: OmniProjectionQuery,
+  payload: ProjectionPayloadV1,
+  storageRevisionId: string,
+  disposition: OmniProjectionPublication["disposition"],
+): OmniProjectionPublication {
+  return Object.freeze({
+    ...publication(query, payload, disposition),
+    storageRevisionId,
+    runId: payload.runId,
+    startedAt: payload.startedAt,
+    finishedAt: payload.finishedAt,
+  });
+}
+
+function omniMutationTime(
+  now: Date,
+  current: LoadedProjection | null,
+): string {
+  if (!Number.isFinite(now.getTime())) {
+    throw new Error("omni projection mutation time is invalid");
+  }
+  let milliseconds = now.getTime();
+  if (current !== null) {
+    milliseconds = Math.max(
+      milliseconds,
+      new Date(current.payload.validatedAt).getTime() + 1,
+    );
+  }
+  try {
+    return timestamp(
+      new Date(milliseconds).toISOString(),
+      "omni projection mutation time",
+    );
+  } catch (error) {
+    throw new Error("omni projection mutation time cannot advance", { cause: error });
+  }
+}
+
+/**
+ * Serialize one pure synchronous aggregate transition under the auth admission.
+ * The reducer sees an immutable JSON snapshot. A candidate revision remains
+ * unreachable until its head wins the compare-and-swap publication.
+ */
+export function reduceOmniProjection(
+  queryValue: OmniProjectionQuery,
+  reducer: (currentOutput: unknown) => unknown,
+  options: {
+    readonly environment?: Environment;
+    readonly now?: Date;
+    /** Runs inside the auth admission before any reducer state is observed. */
+    readonly assertCurrent?: () => void;
+    /** Exact head whose bytes the reducer interpreted. */
+    readonly exactHead?: ReadProjectionExactHeadFence;
+  } = {},
+): OmniProjectionReductionResult {
+  if (typeof reducer !== "function") {
+    throw new Error("omni projection reducer must be a function");
+  }
+  const environment = options.environment ?? process.env;
+  const parsedOmniQuery = parseOmniQueryValue(queryValue);
+  const authId = parsedOmniQuery.identity.auth.id;
+  return withSettledReadProjectionAuthAdmission(
+    authId,
+    environment,
+    () => {
+      if (
+        options.assertCurrent !== undefined
+        && typeof options.assertCurrent !== "function"
+      ) {
+        throw new Error("omni projection current-authority guard is malformed");
+      }
+      options.assertCurrent?.();
+      if (options.exactHead !== undefined) {
+        const fence = record(options.exactHead, "omni projection exact-head fence");
+        exactKeys(
+          fence,
+          ["query", "storageRevisionId", "dataRevision", "runId"],
+          "omni projection exact-head fence",
+        );
+        const { query: exactQuery, key: exactKey } = validateQuery(
+          fence.query as ReadProjectionQuery,
+          environment,
+        );
+        if (
+          exactQuery.identity.auth.id !== parsedOmniQuery.identity.auth.id
+          || exactQuery.identity.auth.hash !== parsedOmniQuery.identity.auth.hash
+        ) {
+          throw new Error(
+            "omni projection exact-head fence belongs to another auth lifetime",
+          );
+        }
+        const expectedStorageRevisionId = safeString(
+          fence.storageRevisionId,
+          "omni projection exact storage revision ID",
+          64,
+        );
+        if (!/^[a-f0-9]{32}$/u.test(expectedStorageRevisionId)) {
+          throw new Error("omni projection exact storage revision ID is malformed");
+        }
+        const expectedDataRevision = hexDigest(
+          fence.dataRevision,
+          "omni projection exact data revision",
+        );
+        const expectedRunId = runId(fence.runId);
+        const exact = loadProjection(exactQuery, exactKey, environment);
+        if (
+          exact === null
+          || exact.head.revisionId !== expectedStorageRevisionId
+          || exact.payload.dataRevision !== expectedDataRevision
+          || exact.payload.runId !== expectedRunId
+        ) {
+          throw new Error(
+            "exact projection changed before normalized publication admission",
+          );
+        }
+      }
+      const { query, key } = validateOmniQuery(queryValue, environment);
+      const current = loadProjection(query, key, environment);
+      const mutationTime = omniMutationTime(options.now ?? new Date(), current);
+      const currentOutput = current === null
+        ? null
+        : immutableBoundedJson(
+            current.payload.output,
+            "omni projection reducer input",
+          );
+      const reduced = reducer(currentOutput);
+      if (hasThenableProtocol(reduced)) {
+        throw new Error(
+          "omni projection reducers must be synchronous and must not return promises or thenables",
+        );
+      }
+      const output = immutableBoundedJson(reduced, "omni projection output");
+      const nextRevision = dataRevision(key, output, "omni-v1");
+      if (current?.payload.dataRevision === nextRevision) {
+        return Object.freeze({
+          publication: omniPublication(
+            query,
+            current.payload,
+            current.head.revisionId,
+            "unchanged",
+          ),
+          current: omniCurrent(
+            query,
+            current.payload,
+            current.head.revisionId,
+          ),
+        });
+      }
+
+      const normalizedRunId = randomUUID();
+      const payload: ProjectionPayloadV1 = Object.freeze({
+        schemaVersion: 1,
+        query: query.identity,
+        output,
+        dataRevision: nextRevision,
+        createdAt: current?.payload.createdAt ?? mutationTime,
+        dataChangedAt: mutationTime,
+        validatedAt: mutationTime,
+        runId: normalizedRunId,
+        startedAt: mutationTime,
+        finishedAt: mutationTime,
+      });
+      const oldChunkCount = current === null
+        ? 0
+        : currentChunkCount(current, query, key, environment);
+      const revision = writeRevision(query, key, payload, current, environment);
+      const promoted = current === null
+        ? createPrivateJsonIfAbsent(
+            headPath(query, environment),
+            revision.head,
+            { environment },
+          ).created
+        : writePrivateJsonIfUnchanged(
+            headPath(query, environment),
+            revision.head,
+            { expectedCurrentContentSha256: current.headContentSha256 },
+          );
+      if (!promoted) {
+        removeRevision(
+          query,
+          revision.head.revisionId,
+          revision.chunkCount,
+          environment,
+        );
+        throw new Error(
+          "omni projection publication lost its authenticated compare-and-swap",
+        );
+      }
+      if (current !== null) {
+        removeRevision(
+          query,
+          current.head.revisionId,
+          oldChunkCount,
+          environment,
+        );
+      }
+      return Object.freeze({
+        publication: omniPublication(
+          query,
+          payload,
+          revision.head.revisionId,
+          current === null ? "created" : "changed",
+        ),
+        current: omniCurrent(query, payload, revision.head.revisionId),
+      });
+    },
+    { maximumWaitMs: READ_PROJECTION_TRANSITION_SETTLEMENT_WAIT_MS },
+  );
+}
+
 function rawHeadSnapshot(
   query: ReadProjectionQuery,
   environment: Environment,
@@ -2244,6 +2799,7 @@ export function repairReadProjection(
     const observed = corruptionEvidence.get(options.corruption);
     if (
       observed === undefined
+      || observed.storageClass !== "exact-v1"
       || observed.queryKey !== query.key
       || observed.realmKey !== query.realmKey
     ) {
@@ -2395,15 +2951,39 @@ export function removeReadProjectionsForAuth(
   return withReadProjectionAuthAdmission(authIdValue, environment, () => {
     const key = projectionKey(environment, false);
     if (key === null) return false;
-    const realmKey = hmac(
+    const exactRealmKey = hmac(
       key.value,
       "wrench-read-projection-realm-v1",
       authIdValue,
     );
-    return removePrivateStateDirectoryTree(
-      realmDirectory(realmKey, environment),
-      environment,
+    const omniRealmKey = hmac(
+      key.value,
+      "wrench-omni-projection-realm-v1",
+      authIdValue,
     );
+    let removed = false;
+    const failures: unknown[] = [];
+    for (const [storageClass, realmKey] of [
+      ["exact-v1", exactRealmKey],
+      ["omni-v1", omniRealmKey],
+    ] as const) {
+      try {
+        removed = removePrivateStateDirectoryTree(
+          realmDirectory(realmKey, environment, storageClass),
+          environment,
+        ) || removed;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        "read projection auth cleanup failed for exact and omni stores",
+      );
+    }
+    return removed;
   });
 }
 

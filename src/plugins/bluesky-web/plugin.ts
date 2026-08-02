@@ -35,6 +35,17 @@ export const blueskyWebPlugin = defineProviderPlugin({
     operations: webSessionContractOperations(
       Object.values(blueskyContracts),
       "abc79ec47122e0f027f009ff03155f54ae3b73df20641f1024b85921195df550",
+      {},
+      {
+        "messaging.list": {
+          state: "unsupported",
+          reason: "Bluesky inbox identity, pagination, completeness, and acknowledgement-free behavior remain capture-required",
+        },
+        "messaging.read": {
+          state: "unsupported",
+          reason: "Bluesky conversation reads remain capture-required despite the presence of unshipped parser code",
+        },
+      },
     ),
     subject: {
       format: "did:plc:<id> or did:web:<host>",

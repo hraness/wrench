@@ -1,35 +1,13 @@
 // @bun
+import {
+  canonicalJson
+} from "./index-dqv16dt0.js";
+
 // src/client.ts
 import { spawn, spawnSync } from "child_process";
 import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { types as nodeTypes } from "util";
-
-// src/canonical-json.ts
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function canonicalJson(value) {
-  if (value === null || typeof value === "boolean" || typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("canonical JSON cannot represent a non-finite number");
-    }
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
-  }
-  if (isRecord(value)) {
-    const entries = Object.entries(value).filter(([, item]) => item !== undefined).sort(([left], [right]) => left.localeCompare(right));
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
-  }
-  throw new Error("canonical JSON supports only JSON-compatible values");
-}
-
-// src/client.ts
 var MAX_INPUT_BYTES = 1024 * 1024;
 var MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 var MAX_ERROR_BYTES = 8 * 1024;
@@ -42,14 +20,14 @@ var abortSignalAbortedGetter = (() => {
   const getter = descriptor === undefined ? undefined : Reflect.get(descriptor, "get");
   return typeof getter !== "function" ? undefined : (value) => Reflect.apply(getter, value, []);
 })();
-function isRecord2(value) {
+function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isUnknownArray(value) {
   return Array.isArray(value);
 }
 function record(value, label) {
-  if (!isRecord2(value))
+  if (!isRecord(value))
     throw new Error(`${label} must be an object`);
   return value;
 }
@@ -221,7 +199,7 @@ function snapshotChildEnvironment(overrides) {
   }
   if (overrides === undefined)
     return Object.freeze(environment);
-  if (!isRecord2(overrides) || nodeTypes.isProxy(overrides) || Object.getPrototypeOf(overrides) !== Object.prototype && Object.getPrototypeOf(overrides) !== null) {
+  if (!isRecord(overrides) || nodeTypes.isProxy(overrides) || Object.getPrototypeOf(overrides) !== Object.prototype && Object.getPrototypeOf(overrides) !== null) {
     throw new Error("Wrench client environment must use a plain, non-proxy object");
   }
   const descriptors = Object.getOwnPropertyDescriptors(overrides);
@@ -260,7 +238,7 @@ function isBrandedAbortSignal(value) {
   }
 }
 function snapshotClientOptions(optionsValue, revalidation) {
-  if (!isRecord2(optionsValue) || nodeTypes.isProxy(optionsValue) || Object.getPrototypeOf(optionsValue) !== Object.prototype && Object.getPrototypeOf(optionsValue) !== null)
+  if (!isRecord(optionsValue) || nodeTypes.isProxy(optionsValue) || Object.getPrototypeOf(optionsValue) !== Object.prototype && Object.getPrototypeOf(optionsValue) !== null)
     throw new Error("Wrench client options must use a plain, non-proxy object");
   const descriptors = Object.getOwnPropertyDescriptors(optionsValue);
   const keys = Reflect.ownKeys(descriptors);
@@ -325,7 +303,7 @@ function prepareRequest(requestValue) {
   const operationId = safeString(request.operationId, "Wrench client operation ID", 128);
   const authId = Object.hasOwn(request, "authId") ? safeString(request.authId, "Wrench client auth ID", 64) : adapterId;
   const rawInput = Object.hasOwn(request, "input") ? request.input : {};
-  if (!isRecord2(rawInput))
+  if (!isRecord(rawInput))
     throw new Error("input must be a JSON object");
   const input = canonicalJson(rawInput);
   if (Buffer.byteLength(input, "utf8") > MAX_INPUT_BYTES) {
@@ -559,7 +537,7 @@ function parseCatalogExecutionIdentity(value, request, preview) {
   });
   if (adapter.id !== request.adapterId || adapter.id !== preview.adapter.id || adapter.version !== preview.adapter.version || adapter.hash !== preview.adapter.hash || !isUnknownArray(adapterValue.operations))
     throw new Error("Wrench execution identity preflights disagreed");
-  const operations = adapterValue.operations.filter((candidate) => isRecord2(candidate) && candidate.id === request.operationId);
+  const operations = adapterValue.operations.filter((candidate) => isRecord(candidate) && candidate.id === request.operationId);
   if (operations.length !== 1) {
     throw new Error("Wrench execution identity catalog operation is ambiguous");
   }

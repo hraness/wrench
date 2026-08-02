@@ -36,6 +36,17 @@ export const linkedinWebPlugin = defineProviderPlugin({
     operations: webSessionContractOperations(
       Object.values(linkedinContracts),
       "03f83133f668712b5fa776ab3982e27d52a7645f0ae7dde52d5452bff6f31827",
+      {},
+      {
+        "messaging.list": {
+          state: "unsupported",
+          reason: "LinkedIn web mailbox projection and paging remain capture-required",
+        },
+        "messaging.read": {
+          state: "unsupported",
+          reason: "LinkedIn web message variables and acknowledgement-free response handling remain capture-required",
+        },
+      },
     ),
     subject: {
       format: "urn:li:fsd_profile:<numeric-id>",

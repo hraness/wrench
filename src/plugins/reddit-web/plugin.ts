@@ -8,6 +8,10 @@ import {
   webImplementationSources,
 } from "../../provider-plugin-builtins";
 import { webSessionContractDefinitions } from "../../web-session-contract-definitions";
+import {
+  materializeRedditMessagingList,
+  materializeRedditMessagingRead,
+} from "../../providers/reddit-omni";
 
 const redditContracts = webSessionContractDefinitions.reddit;
 if (redditContracts === undefined) {
@@ -23,6 +27,7 @@ export const redditWebPlugin = defineProviderPlugin({
   implementationSources: webImplementationSources(import.meta.url, [
     ["providers/reddit-web.ts", "../../providers/reddit-web.ts"],
     ["providers/reddit-web-runtime.ts", "../../providers/reddit-web-runtime.ts"],
+    ["providers/reddit-omni.ts", "../../providers/reddit-omni.ts"],
   ]),
   bindings: [{
     transport: "web-session-api",
@@ -33,6 +38,23 @@ export const redditWebPlugin = defineProviderPlugin({
     operations: webSessionContractOperations(
       Object.values(redditContracts),
       "3220985112930ea777c3d816304f7a8afd5fb727d6844c5da55abc8a5aa70405",
+      {},
+      {
+        "messaging.list": {
+          state: "supported",
+          schemaVersion: 1,
+          materializerId: "reddit-messaging-list",
+          materializerVersion: 1,
+          materialize: materializeRedditMessagingList,
+        },
+        "messaging.read": {
+          state: "supported",
+          schemaVersion: 1,
+          materializerId: "reddit-messaging-read",
+          materializerVersion: 1,
+          materialize: materializeRedditMessagingRead,
+        },
+      },
     ),
     subject: {
       format: "reddit:t2_<account-id>",

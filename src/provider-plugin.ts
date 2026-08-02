@@ -104,12 +104,35 @@ type ProviderPluginOperationDefinitionBaseV1 = {
    * kernel compares it to this pure desired-state projection.
    */
   readonly reconciliation?: ProviderPluginReconciliationDefinitionV1;
+  /**
+   * Provider-owned interpretation of one exact inbox read. Every installed
+   * messaging list/read contract must either supply a pure, versioned
+   * materializer or state why normalization is unsafe. The kernel reparses
+   * supported output from unknown before it reaches durable state.
+   */
+  readonly omni?: ProviderPluginOmniDefinitionV1;
 };
 
 export type ProviderPluginReconciliationDefinitionV1 = {
   readonly kind: "boolean-desired-state";
   readonly desiredState: (input: OperationInput) => boolean;
 };
+
+export type ProviderPluginOmniDefinitionV1 =
+  | {
+      readonly state: "supported";
+      readonly schemaVersion: 1;
+      readonly materializerId: string;
+      readonly materializerVersion: number;
+      readonly materialize: (
+        input: OperationInput,
+        output: unknown,
+      ) => unknown;
+    }
+  | {
+      readonly state: "unsupported";
+      readonly reason: string;
+    };
 
 export type ProviderApiPluginOperationDefinitionV1 =
   ProviderPluginOperationDefinitionBaseV1 & {
@@ -2174,6 +2197,7 @@ function freezeOperation(
       "validateInput",
       "validateSubjectInput",
       "reconciliation",
+      "omni",
       ...(official ? ["requiredScopeSets", "coverage"] : []),
     ],
     "provider plugin operation",
@@ -2322,6 +2346,82 @@ function freezeOperation(
       );
     }
   }
+  const isOmniInboxRead = operation.name === "messaging.list"
+    || operation.name === "messaging.read";
+  if (isOmniInboxRead && operation.omni === undefined) {
+    throw new Error(
+      `provider plugin operation ${operation.name} must declare supported or unsupported omni normalization`,
+    );
+  }
+  if (!isOmniInboxRead && operation.omni !== undefined) {
+    throw new Error(
+      `provider plugin operation ${operation.name} cannot declare inbox normalization`,
+    );
+  }
+  let omni: ProviderPluginOmniDefinitionV1 | undefined;
+  if (operation.omni !== undefined) {
+    if (
+      typeof operation.omni !== "object"
+      || operation.omni === null
+    ) {
+      throw new Error(
+        `provider plugin operation ${operation.name} has an invalid omni normalization contract`,
+      );
+    }
+    if (operation.omni.state === "supported") {
+      requireExactKeys(
+        operation.omni,
+        ["state", "schemaVersion", "materializerId", "materializerVersion", "materialize"],
+        `provider plugin operation ${operation.name} omni normalization`,
+      );
+      if (
+        operation.state !== "observed"
+        || operation.risk !== "R1"
+        || operation.omni.schemaVersion !== 1
+        || typeof operation.omni.materializerId !== "string"
+        || !/^[a-z][a-z0-9-]{0,63}$/u.test(operation.omni.materializerId)
+        || !Number.isSafeInteger(operation.omni.materializerVersion)
+        || operation.omni.materializerVersion < 1
+        || operation.omni.materializerVersion > 1_000_000
+        || typeof operation.omni.materialize !== "function"
+      ) {
+        throw new Error(
+          `provider plugin operation ${operation.name} has an invalid supported omni normalization contract`,
+        );
+      }
+      omni = Object.freeze({
+        state: "supported",
+        schemaVersion: 1,
+        materializerId: operation.omni.materializerId,
+        materializerVersion: operation.omni.materializerVersion,
+        materialize: operation.omni.materialize,
+      });
+    } else if (operation.omni.state === "unsupported") {
+      requireExactKeys(
+        operation.omni,
+        ["state", "reason"],
+        `provider plugin operation ${operation.name} omni normalization`,
+      );
+      if (
+        typeof operation.omni.reason !== "string"
+        || operation.omni.reason.length < 1
+        || operation.omni.reason.length > 1_000
+        || hasControlCharacters(operation.omni.reason)
+      ) {
+        throw new Error(
+          `provider plugin operation ${operation.name} has an invalid unsupported omni normalization reason`,
+        );
+      }
+      omni = Object.freeze({
+        state: "unsupported",
+        reason: operation.omni.reason,
+      });
+    } else {
+      throw new Error(
+        `provider plugin operation ${operation.name} has an invalid omni normalization state`,
+      );
+    }
+  }
   const {
     historicalContractVersions: ignoredHistoricalContractVersions,
     ...operationWithoutHistory
@@ -2348,6 +2448,7 @@ function freezeOperation(
           desiredState: operation.reconciliation.desiredState,
         }),
       }),
+    ...(omni === undefined ? {} : { omni }),
   };
   if (!official) return Object.freeze(common);
   const providerOperation = operation as ProviderApiPluginOperationDefinitionV1;

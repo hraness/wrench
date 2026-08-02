@@ -13,10 +13,10 @@ Project site: [hraness.com/wrench](https://hraness.com/wrench)
 
 ## Install
 
-Pin the public repository to the immutable `v0.3.0` tag:
+Pin the public repository to the immutable `v0.4.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.3.0
+bun add --global github:hraness/wrench#v0.4.0
 wrench doctor
 ```
 
@@ -32,7 +32,7 @@ verifies the resolved closure versions and reviewed entrypoint hashes.
 For programmatic plugin types and bounded validators:
 
 ```sh
-bun add github:hraness/wrench#v0.3.0
+bun add github:hraness/wrench#v0.4.0
 ```
 
 ```ts
@@ -145,11 +145,71 @@ uses live output only when that output is still current, and is `null` when a
 failed refresh has no last-good snapshot. `cachedBefore`, `cachedAfter`, `live`,
 and `cache` remain available for diagnostics and richer UI states.
 
-Snapshots preserve exact provider page and completeness semantics. Wrench does
-not generically merge cursors, infer deletions, or normalize unlike entities.
-Revalidation reruns the selected R1 operation; it does not imply a separate
-provider sync. In particular, WhatsApp reads revalidate its local linked-device
-projection, while `wrench auth sync <id> --once` remains explicit.
+Exact snapshots preserve provider page and completeness semantics without
+reinterpretation. Revalidation reruns the selected R1 operation; it does not
+imply a separate provider sync. In particular, WhatsApp reads revalidate its
+local linked-device projection, while `wrench auth sync <id> --once` remains
+explicit.
+
+## Normalized omni views
+
+The omni layer materializes selected exact inbox snapshots into a strict shared
+union of conversations, messages, and notifications. Each provider owns a pure,
+versioned materializer with explicit identity, pagination, completeness,
+tombstone, and deletion semantics. Unsupported providers say why. A shape
+change fails at that provider-owned boundary, retains the last good normalized
+entities, and records the exact failed revision instead of guessing.
+
+Omni v1 has no provider-authored write-invalidation tags. Auth-incarnation,
+materializer, and plugin implementation identity changes strand the prior
+normalized coordinates. Freshness advances only when the exact query is
+explicitly revalidated. If a newer exact snapshot drifts, Wrench keeps the last
+good derivative and reports `retained-after-drift`. The provider-local
+diagnostic remains inside encrypted normalized state. Public reasons are
+categorical and do not echo foreign values or unreviewed property names.
+
+```sh
+wrench omni read --input '{
+  "schemaVersion": 1,
+  "sources": [
+    {"adapterId":"reddit-web","operationId":"messaging.list","authId":"reddit-main","input":{"folder":"inbox","limit":25}},
+    {"adapterId":"whatsapp-web","operationId":"messaging.list","authId":"whatsapp-main","input":{"folder":"all","limit":100}}
+  ],
+  "filter": {"kinds":["conversation","message","notification"]},
+  "page": {"limit":100}
+}' --cache-only --json
+```
+
+`--cache-only` reads encrypted normalized state without a browser or provider
+round trip. `--from-exact-cache` rebuilds derivatives from encrypted exact
+snapshots. The default mode revalidates supported sources independently and
+then returns one locally paged view. Provider cursors remain private; public
+view cursors are authenticated and bound to the request, account lifetimes,
+materializer closure, and view revision.
+
+Each source row exposes a keyed `normalizationDataRevision` for causal cache
+comparison without revealing normalized bytes. During SWR, `current` may be an
+`omni-merged` result: it adopts a proven newer cached view while retaining every
+unresolved live source status. A concurrent advance for one provider, account,
+or continuation therefore cannot erase another live failure; the independent
+`live` and `cachedAfter` observations remain available as well.
+
+```ts
+import { staleWhileRevalidateOmniView } from "@hraness/wrench/omni"
+
+const messages = staleWhileRevalidateOmniView({
+  schemaVersion: 1,
+  sources: [{
+    adapterId: "reddit-web",
+    operationId: "messaging.list",
+    authId: "reddit-main",
+    input: { folder: "inbox", limit: 25 },
+  }],
+})
+
+render(messages.cached?.view)
+render((await messages.revalidation).current.view)
+```
 
 ## Create a portable plugin
 
@@ -187,7 +247,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.3.0/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.4.0/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

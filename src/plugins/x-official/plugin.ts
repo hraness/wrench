@@ -35,6 +35,16 @@ export const xOfficialPlugin = defineProviderPlugin({
         semanticIdentity: "2e0c82c2a43c84d5acd79ae734943e2bc8290f8580d3f2435d979bb92f574c8d",
         validateInput: (contract, input) =>
           xProviderConditionalInputIssues(contract.operation, input),
+        omni: {
+          "messaging.list": {
+            state: "unsupported",
+            reason: "X official messaging output retains raw or encrypted nested provider data without a strict plaintext materializer",
+          },
+          "messaging.read": {
+            state: "unsupported",
+            reason: "X official message reads retain raw provider data without a strict provider-owned output materializer",
+          },
+        },
       },
     ),
     subject: {

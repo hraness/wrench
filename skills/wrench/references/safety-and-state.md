@@ -61,11 +61,23 @@ to force a hit. A contract or account change intentionally produces a miss.
 
 Cache freshness is an observation, not provider authority. An unchanged
 revalidation advances validation time without fabricating a data revision.
-Failed, partial, or indeterminate reads retain the last good snapshot. Wrench
-does not infer deletion from absence on a partial page or merge unlike provider
-entities. Revalidation reruns the selected R1 operation; it does not silently
+Failed, partial, or indeterminate reads retain the last good snapshot.
+Revalidation reruns the selected R1 operation; it does not silently
 perform `auth sync`, and it must not introduce acknowledgement or presence
 effects outside that operation's reviewed contract.
+
+The separate omni storage class derives a strict shared Conversation, Message,
+or Notification only through a provider-owned, versioned materializer. Its
+account-lifetime identity includes the adapter, provider plugin closure,
+surface, and auth incarnation. Provider pages retain explicit completeness,
+membership, cursor, and tombstone evidence. Absence never means deletion
+without a complete partition or explicit tombstone. Omni v1 has no
+provider-authored write-invalidation tags. Auth-incarnation, materializer, and
+plugin implementation identity changes strand the prior normalized
+coordinates, while exact-query freshness advances only through explicit
+revalidation. A materializer failure records the failed exact data revision and
+retains the last good entities as `retained-after-drift`; it must not weaken
+parsing or mutate the exact snapshot to make drift disappear.
 
 Auth replacement and removal rotate a durable local lifetime identity before
 cleanup. Projection and provider-session ciphertext from an earlier lifetime
@@ -74,7 +86,7 @@ must remain unreadable even if identical locator bytes are later recreated.
 The projection key is bound to an authenticated store-ownership marker. Wrench
 refuses a missing, malformed, or replacement key while projection ciphertext
 or that marker remains. If the key is irretrievably lost, remove exactly
-`read-projections/`, `.projection-encryption-key`, and
+`read-projections/`, `omni-read-projections/`, `.projection-encryption-key`, and
 `read-projection-control/store-key.json` beneath `WRENCH_STATE_HOME`, retain the
 other control records, and rebuild snapshots through live revalidation.
 

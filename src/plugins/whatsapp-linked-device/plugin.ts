@@ -8,6 +8,10 @@ import {
   webImplementationSources,
 } from "../../provider-plugin-builtins";
 import { webSessionContractDefinitions } from "../../web-session-contract-definitions";
+import {
+  materializeWhatsAppMessagingList,
+  materializeWhatsAppMessagingRead,
+} from "../../providers/whatsapp-omni";
 
 const whatsappContracts = webSessionContractDefinitions.whatsapp;
 if (whatsappContracts === undefined) {
@@ -25,6 +29,7 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
     ["kernel/storage.ts", "../../storage.ts"],
     ["providers/whatsapp-web.ts", "../../providers/whatsapp-web.ts"],
     ["providers/whatsapp-web-runtime.ts", "../../providers/whatsapp-web-runtime.ts"],
+    ["providers/whatsapp-omni.ts", "../../providers/whatsapp-omni.ts"],
   ]),
   bindings: [{
     transport: "linked-device",
@@ -35,6 +40,23 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
     operations: webSessionContractOperations(
       Object.values(whatsappContracts),
       "fec7017105b6d31e8913ccda4c451cb2a4dcd967e20f6dde7190fdec69a2afde",
+      {},
+      {
+        "messaging.list": {
+          state: "supported",
+          schemaVersion: 1,
+          materializerId: "whatsapp-messaging-list",
+          materializerVersion: 1,
+          materialize: materializeWhatsAppMessagingList,
+        },
+        "messaging.read": {
+          state: "supported",
+          schemaVersion: 1,
+          materializerId: "whatsapp-messaging-read",
+          materializerVersion: 1,
+          materialize: materializeWhatsAppMessagingRead,
+        },
+      },
     ),
     subject: {
       format: "whatsapp:pn:<phone> or whatsapp:lid:<linked-id>",

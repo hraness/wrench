@@ -13,6 +13,16 @@ const operations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
   "1e18e78882a88581c81def646f5c1e925249b066bda3672b5d9ca32a5e1b763d",
   { "likes.set": [1] },
+  {
+    "messaging.list": {
+      state: "unsupported",
+      reason: "X web Chat inbox events are encrypted and require reviewed key recovery before plaintext normalization",
+    },
+    "messaging.read": {
+      state: "unsupported",
+      reason: "X web Chat conversation events are encrypted and require reviewed key recovery before plaintext normalization",
+    },
+  },
 ).map((operation) => {
   if (operation.name !== "content.save" && operation.name !== "likes.set") {
     return operation;

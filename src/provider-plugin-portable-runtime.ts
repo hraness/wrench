@@ -416,6 +416,17 @@ function portableOperation(
     implementation: operation.implementation,
     planDispatches: plannedDispatches(operation),
     validateInput: () => Object.freeze([]),
+    ...(
+      operation.name === "messaging.list"
+      || operation.name === "messaging.read"
+        ? {
+            omni: Object.freeze({
+              state: "unsupported" as const,
+              reason: "portable provider plugins do not yet attest a versioned output materializer",
+            }),
+          }
+        : {}
+    ),
   } as const;
   return (
     operation.requiredScopeSets !== undefined

@@ -51,6 +51,8 @@ const identities = Object.freeze({
       "976eb47dcc8f6fb7d44bb2e364316df388131ed32d328c21a60f9e615014dcef",
       "2d79785939dc51feb22f6a500ca04acba570867098504fb115ff2a238d980c56",
       "822ee667ecc88607bdeee98aac09aaf10c641048c6f8674ae528dda7e7089ed7",
+      "cf7f4430032c60e2c33f65b406f30ebd2cc0e576f3f744cfb56f550e4e6d5279",
+      "642c55c0a175f17ada6a89c4dbc9a098f48ac2df1abcaedf38bfeeccdb2e19d9",
     ],
   },
   "hacker-news-web": {
@@ -71,6 +73,8 @@ const identities = Object.freeze({
     reviewedClosureSha256: [
       "66bd89c3cec17a41a4b629e0eb74737ce7ecbd92eef8f85c97eba9a5035aec3c",
       "369706494465e302cccfbe7a996082d315a360b1ed1539856acdfac3e75888a5",
+      "8af55c08e11b85757951adbfbc7c2b2dfbb243627568ce1f8adda0f23b1e5448",
+      "0481cc378a5c7b658b68c23a8be11bd0126b7e90e697bce36447f5be419a4814",
     ],
   },
   "linkedin-official": {
@@ -93,6 +97,8 @@ const identities = Object.freeze({
       "cc0b8f6bc9f514e065565a4ab7094732f4aef314d01ef48a9d4be4e64952f19b",
       "d4bf4801a99803849b9a1659baa1041255b6bdc6d91f9d17b659bd997e09f3d8",
       "b10c270ccffd65e49a569f0985e0161c830cfcdf3ff5ca32f228fb24fc7d9d5d",
+      "9c2936e26220fb5f1b89b14d48cad7ebfbee828d842a6c9f175525e579c0c908",
+      "9d563e0699a26f0cbedf45b494b7dd3b7ff03cffaa496d7d52967ce113b26011",
     ],
   },
   "linkedin-web": {
@@ -125,6 +131,8 @@ const identities = Object.freeze({
       "0b69fb0122a11190d136c9b1a57d3e5045ff02e37d1992b21ce0896f3abb68ed",
       "ccf961262a1aca56cdd58f3a59cdef1596d279bf473f130be3e5a3d90f657d2b",
       "e09fb60d6f6703c9deb41e2d704e6451fb02219a328222d18734e074a420513d",
+      "967563db261aab828b46425b4a83939d3aead285533c45d5f66089a8b7e6e557",
+      "712ef7ebbeed2266c4e9b7fd4563694e3cd7593e091e3f69c12ea1ff1260d9b6",
     ],
   },
   "meta-web": {
@@ -151,6 +159,8 @@ const identities = Object.freeze({
       "d20db0c78faac2af58c95e20e5a81b8c31dbca8e1c3a21f337d81f673b04acf7",
       "bc58597d6527c9efb06aa0dc5aa1b4432dce6757179798bd712e7ea02d9b8765",
       "3164dcbe11eeb70fb7985e683abd248c511230d74ca17173abcbced90620d718",
+      "2948ead40bee02f16fdaea6b149abbc3bbbde753b6525240e3e5aee7ea7b0de7",
+      "c238f0550f75750bb0c3f41ecdc11a2db6dd0cddda171b8f12295b041e5cefcf",
     ],
   },
   "reddit-web": {
@@ -171,6 +181,8 @@ const identities = Object.freeze({
     reviewedClosureSha256: [
       "64c159e9f170eff7a83e86152fc0a7a99625312cf2aa7b00e920a7bd2b65441d",
       "cde0cd4fe8954aff68ad86e537edfbf0b876eaeffc3d34f68d84a91e8f7067e4",
+      "e6de1cabf552663a704a1dc12cabe82bf9bc8a4659e29cf1aa0bc8bbc2a6b7d1",
+      "689526e318ba739107149a63812b301bab93aad3a32db5215fc7243eca413972",
     ],
   },
   "substack-web": {
@@ -191,6 +203,8 @@ const identities = Object.freeze({
     reviewedClosureSha256: [
       "e50798cdad324f91eee0e2c7c0d14e4b871856dc110dd6b107c70f31e5b8221c",
       "9f54941ccb4eabdc02d28ad84f65d0357b50d3c7adaf124e989ffdb013f3daa7",
+      "b2a13f43de778244193e399e1d7261192f5480986a2459209b14a8263803645a",
+      "c58ab400154b6c7d64bc80aac6e866e3a7ab3f51da819a5cb3ae4351cd1f90f0",
     ],
   },
   "tiktok-web": {
@@ -211,6 +225,8 @@ const identities = Object.freeze({
     reviewedClosureSha256: [
       "089c9c6474c69aad4babd52bdea3f8bc47911eacdf9328978e5f284c92bc7d2f",
       "3d23a2953d0aafd2da64f2a05219861043a3cdd33845ab55d4ecc406e63f8d81",
+      "af3b3827f64f611ed1143c8dd78d0be264f3b8c6cad4985a0c272d0c975063ef",
+      "7d3c148d49175a98fe5082a986a014cdb009a98e48c0b747efd480243d66ba50",
     ],
   },
   "whatsapp-linked-device": {
@@ -239,6 +255,8 @@ const identities = Object.freeze({
       "d26b024089a914ad6972344ea0e3b1590c4c34985e2a4cb576fd68e030f0ffb8",
       "9b115abf18d19c374cd342514d4b66f1fcdb7cec1efc08859a33028d6b6fea12",
       "b503810b360821162921630f312f950cb6ea647c799eeb9808c6cffc43b8eaed",
+      "f29df39bac49f371fb417e207f5963f2394a51ff2c8ef7377642f98bbebe0706",
+      "2424af4d6e7a8c40487f8564398f18e16645194ca481b2483335d9dd31da151c",
     ],
   },
   "x-official": {
@@ -261,6 +279,8 @@ const identities = Object.freeze({
       "f5e693393054655fe0b10eb7fcc468a7251f6a36eb02b4184df11ddcabbf2ae4",
       "c023ddd13cfe36149c93228d94c034abbf8b00c79143493420c3a9a0f9127a42",
       "bb4595ace099e9d67b016c52fd3877ea96fa74fdca325e8a068feccc767ef47b",
+      "1166e911b30b4bae28eb4b0701fbda39848b672921c729fd697a9611c26dc375",
+      "39bae92af51cf6e0136cc6b4298d5c42728941681340d14cac1fc0dd0df58007",
     ],
   },
   "x-web": {
@@ -283,6 +303,8 @@ const identities = Object.freeze({
       "971e28e03a8b21f5a8f4555f04b55865fd98c738b883f53a567925c8295176fc",
       "385d832624347604a81cd67f0d6879d9a0c699d2cb314b94a733f87ae5324e21",
       "b7d9fbe4717fbe0dfd2c5c551b5936129a73774007fb094c9964f790e2569956",
+      "6a9d83ae5bf20cfc0bf52d3c4bb2cbb3ade803dc53a4944cbc52d0b204ff17e5",
+      "97169c76625c743e766afc3976f580692f384bc099f525f8f86f8b8054ec0cba",
     ],
   },
   "youtube-web": {
@@ -303,6 +325,8 @@ const identities = Object.freeze({
     reviewedClosureSha256: [
       "efabeb142292c2af49abc9d185481476d792a505635eef453828c544e61eda12",
       "5c69143794f108087f8ba0bd2f31c18fe1a9ac32b3761754cf4d75bd2041ae2e",
+      "4ad74dd9483b19149afb53df66214424846eabb96d288137707b630a1cead8ff",
+      "aeace8983445ae7cfd528cf39c779ea692d596895ebc84e1ad2e1884d3466061",
     ],
   },
 } as const satisfies Readonly<Record<string, ReviewedBuiltInContractIdentityV1>>);

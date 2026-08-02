@@ -203,6 +203,25 @@ and sync remain source-plugin-only until a portable lifecycle protocol can
 preserve the same admission, journal, acknowledgement, and recovery
 invariants. Wrench rejects that execution path without transport fallback.
 
+Every installed `messaging.list` and `messaging.read` operation also declares
+its omni state. Use `unsupported` with a concrete bounded reason unless exact
+provider output semantics justify a source-owned materializer. A supported
+materializer is pure, versioned, included in the plugin's reviewed
+implementation closure, and returns only the strict shared page envelope. It
+must reject unknown or changed provider fields at a bounded provider-owned
+structural boundary without echoing unreviewed foreign names or values through
+public status. It must state identity, page membership, completeness,
+continuation, and tombstone semantics without inventing cross-provider
+equivalence. The kernel reparses its return value from `unknown`. Omni v1 has
+no provider-authored write-invalidation
+tags. Auth-incarnation, materializer, and plugin implementation identity changes
+strand prior normalized coordinates. Exact-query freshness advances only
+through explicit revalidation, while materializer drift keeps the last good
+derivative with an explicit categorical status. Its detailed provider-local
+diagnostic remains encrypted. Portable v1 messaging remains explicitly
+unsupported until the package protocol can attest the same output and
+materializer closure.
+
 Source linked-device pair, sync, auth replacement, auth removal, and explicit
 reconciliation serialize on a realm derived from the provider plus canonical
 physical store path, not the mutable auth ID. Consequently two auth aliases or

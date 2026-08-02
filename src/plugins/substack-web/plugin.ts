@@ -8,6 +8,7 @@ import {
   webImplementationSources,
 } from "../../provider-plugin-builtins";
 import { webSessionContractDefinitions } from "../../web-session-contract-definitions";
+import { materializeSubstackMessagingList } from "../../providers/substack-omni";
 
 const substackContracts = webSessionContractDefinitions.substack;
 if (substackContracts === undefined) {
@@ -23,6 +24,7 @@ export const substackWebPlugin = defineProviderPlugin({
   implementationSources: webImplementationSources(import.meta.url, [
     ["providers/substack-web.ts", "../../providers/substack-web.ts"],
     ["providers/substack-web-runtime.ts", "../../providers/substack-web-runtime.ts"],
+    ["providers/substack-omni.ts", "../../providers/substack-omni.ts"],
   ]),
   bindings: [{
     transport: "web-session-api",
@@ -33,6 +35,20 @@ export const substackWebPlugin = defineProviderPlugin({
     operations: webSessionContractOperations(
       Object.values(substackContracts),
       "8a1026934db5debe52f7b72d31adaee54160211ae3b23e0fe5bddab189315b08",
+      {},
+      {
+        "messaging.list": {
+          state: "supported",
+          schemaVersion: 1,
+          materializerId: "substack-messaging-list",
+          materializerVersion: 1,
+          materialize: materializeSubstackMessagingList,
+        },
+        "messaging.read": {
+          state: "unsupported",
+          reason: "Substack message reads remain capture-required",
+        },
+      },
     ),
     subject: {
       format: "substack:<numeric-id>",

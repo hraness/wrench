@@ -1,6 +1,6 @@
 ---
 name: wrench
-description: Use the Wrench CLI to capture or read web content, archive media, inspect installed semantic capabilities, and author, verify, package, install, or operate bounded provider plugins. Use when an agent needs a new site integration without adding raw HTTP, DOM automation, or credentials to its tool surface.
+description: Use the Wrench CLI to capture or read web content, archive media, query encrypted normalized cross-provider views, inspect installed semantic capabilities, and author, verify, package, install, or operate bounded provider plugins. Use when an agent needs a new site integration without adding raw HTTP, DOM automation, or credentials to its tool surface.
 ---
 
 # Wrench
@@ -16,6 +16,7 @@ Use the installed `wrench` command. Start with `wrench --help`; if it is unavail
 - Diagnose state: `wrench operator doctor --json`.
 - Invoke a supported semantic operation: `wrench invoke <adapter> <operation>` or its printed shorthand.
 - Read a previously validated exact query without a provider roundtrip: repeat the subject-bound R1 invocation with `--cache-only`; omit that flag to revalidate it explicitly.
+- Read a normalized cross-provider inbox without a provider roundtrip: `wrench omni read --input <json|@file|-> --cache-only --json`; use `--from-exact-cache` to rebuild from exact ciphertext or omit the mode to revalidate supported sources.
 - Add a provider without changing Wrench source: author a portable plugin.
 - Derive a reviewed first-party contract from authorized HAR evidence: follow [the derivation guide](references/derivation.md).
 
@@ -104,6 +105,21 @@ R1 invocation is the explicit revalidation path. Do not rewrite cursors,
 limits, folders, or targets to manufacture a cache hit, and do not assume that
 revalidating a local linked-device projection performs a remote sync.
 
+For an omni request, list each exact `messaging.list` or `messaging.read`
+source with its adapter, auth ID, and input. Treat its shared Conversation,
+Message, and Notification union as a derivative, never as replacement evidence
+for the exact provider snapshot. Inspect every per-source normalization state.
+`retained-after-drift` means the provider's newest exact bytes failed its
+provider-owned materializer and the returned entities are deliberately the
+last good derivative. Do not hide or coerce that status. Public reasons are
+categorical; detailed drift diagnostics stay encrypted. During SWR, treat an
+`omni-merged` current view as cached data paired with the unresolved live source
+statuses that remain authoritative for display. Provider cursors stay private;
+use only the authenticated local view cursor returned by Wrench.
+Omni v1 has no write-tag invalidation surface. Auth-incarnation, materializer,
+and plugin implementation identity changes strand prior derivatives. Exact
+query freshness advances only through explicit R1 revalidation.
+
 R2/R3 produce an exact five-minute preview. Review adapter, operation, transport, account, scalar input, attachment hashes, side effect, contract hash, and dispatch schedule, then run the printed `wrench confirm <digest>`. Never retry `pending`, `partial`, or `indeterminate` work. Reconcile from independently observed, secret-free evidence with `wrench runs reconcile`; reconciliation never repeats the original mutation.
 
 ## Derive only when a contract is missing
@@ -122,5 +138,5 @@ Use a managed derivation to capture the minimum authorized first-party exchange.
 
 interface:
   display_name: "wrench"
-  short_description: "Capture sites and build bounded provider plugins"
+  short_description: "Capture sites, query omni views, and build bounded provider plugins"
   default_prompt: "Use $wrench to capture this site or add the smallest safe semantic provider capability."

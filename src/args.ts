@@ -188,6 +188,15 @@ export type WrenchArguments =
       readonly json: boolean;
     }
   | {
+      readonly command: "omni-read";
+      readonly inputSource: string;
+      readonly cacheOnly: boolean;
+      readonly identityOnly: boolean;
+      readonly fromExactCache: boolean;
+      readonly headed: boolean;
+      readonly json: boolean;
+    }
+  | {
       readonly command: "confirm";
       readonly digest: string;
       readonly headed: boolean;
@@ -1335,6 +1344,50 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         cacheOnly: parsed.booleans.has("--cache-only"),
         projectionIdentityOnly:
           parsed.booleans.has("--projection-identity-only"),
+        headed: parsed.booleans.has("--headed"),
+        json: parsed.booleans.has("--json"),
+      },
+    };
+  }
+  if (first === "omni") {
+    if (raw[1] !== "read") {
+      return { ok: false, message: "omni requires read" };
+    }
+    const parsed = optionValues(
+      raw.slice(2),
+      ["--input"],
+      ["--cache-only", "--identity-only", "--from-exact-cache", "--headed", "--json"],
+    );
+    if (isFailure(parsed)) return parsed;
+    const inputSource = parsed.values["--input"];
+    if (inputSource === undefined) {
+      return { ok: false, message: "omni read requires --input <json|@file|->" };
+    }
+    const modes = [
+      parsed.booleans.has("--cache-only"),
+      parsed.booleans.has("--identity-only"),
+      parsed.booleans.has("--from-exact-cache"),
+    ].filter(Boolean).length;
+    if (modes > 1) {
+      return {
+        ok: false,
+        message: "omni read accepts only one of --cache-only, --identity-only, or --from-exact-cache",
+      };
+    }
+    if (parsed.booleans.has("--headed") && modes > 0) {
+      return {
+        ok: false,
+        message: "omni read cache, identity, and exact-cache rebuild modes never open a browser and cannot use --headed",
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        command: "omni-read",
+        inputSource,
+        cacheOnly: parsed.booleans.has("--cache-only"),
+        identityOnly: parsed.booleans.has("--identity-only"),
+        fromExactCache: parsed.booleans.has("--from-exact-cache"),
         headed: parsed.booleans.has("--headed"),
         json: parsed.booleans.has("--json"),
       },

@@ -163,6 +163,19 @@ function providerPluginView(plugin: ProviderPluginV1): Record<string, unknown> {
         state: operation.state,
         validatesSubjectInput: operation.validateSubjectInput !== undefined,
         reconciliation: operation.reconciliation?.kind ?? null,
+        omni: operation.omni === undefined
+          ? null
+          : operation.omni.state === "supported"
+            ? {
+                state: "supported",
+                schemaVersion: operation.omni.schemaVersion,
+                materializerId: operation.omni.materializerId,
+                materializerVersion: operation.omni.materializerVersion,
+              }
+            : {
+                state: "unsupported",
+                reason: operation.omni.reason,
+              },
       })),
     })),
   };

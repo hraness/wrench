@@ -160,6 +160,12 @@ import {
 } from "./read-client";
 import type { ReadProjectionCacheResult } from "./read-projections";
 import {
+  identifyOmniView,
+  readCachedOmniViewInternal,
+  rebuildOmniViewFromExactCache,
+  revalidateOmniViewInternal,
+} from "./omni-runtime";
+import {
   checkSourceProviderPluginDirectory,
   scaffoldWebProvider,
 } from "./scripts/scaffold-web-provider";
@@ -266,6 +272,10 @@ export type WrenchDependencies = {
     typeof readCachedPreparedCapability;
   readonly revalidatePreparedCapability:
     typeof revalidatePreparedCapability;
+  readonly identifyOmniView: typeof identifyOmniView;
+  readonly readCachedOmniViewInternal: typeof readCachedOmniViewInternal;
+  readonly rebuildOmniViewFromExactCache: typeof rebuildOmniViewFromExactCache;
+  readonly revalidateOmniViewInternal: typeof revalidateOmniViewInternal;
 };
 
 const defaultDependencies: WrenchDependencies = {
@@ -317,6 +327,10 @@ const defaultDependencies: WrenchDependencies = {
   createPortableProviderPluginCatalog,
   readCachedPreparedCapability,
   revalidatePreparedCapability,
+  identifyOmniView,
+  readCachedOmniViewInternal,
+  rebuildOmniViewFromExactCache,
+  revalidateOmniViewInternal,
 };
 
 function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDependencies {
@@ -350,6 +364,17 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
     revalidatePreparedCapability:
       overrides.revalidatePreparedCapability
       ?? defaultDependencies.revalidatePreparedCapability,
+    identifyOmniView:
+      overrides.identifyOmniView ?? defaultDependencies.identifyOmniView,
+    readCachedOmniViewInternal:
+      overrides.readCachedOmniViewInternal
+      ?? defaultDependencies.readCachedOmniViewInternal,
+    rebuildOmniViewFromExactCache:
+      overrides.rebuildOmniViewFromExactCache
+      ?? defaultDependencies.rebuildOmniViewFromExactCache,
+    revalidateOmniViewInternal:
+      overrides.revalidateOmniViewInternal
+      ?? defaultDependencies.revalidateOmniViewInternal,
   };
 }
 
@@ -2244,6 +2269,27 @@ async function runCommand(
     print(output, { ok: true, observedEntries: analysis.observedEntries, candidates: analysis.candidates.length, ...result }, arguments_.json);
     return 0;
   }
+  if (arguments_.command === "omni-read") {
+    const request = await readInput(arguments_.inputSource);
+    const common = {
+      environment,
+      registry: dependencies.providerPluginRegistry,
+    } as const;
+    const value = arguments_.identityOnly
+      ? dependencies.identifyOmniView(request, common)
+      : arguments_.cacheOnly
+        ? dependencies.readCachedOmniViewInternal(request, common)
+        : arguments_.fromExactCache
+          ? dependencies.rebuildOmniViewFromExactCache(request, common)
+          : await dependencies.revalidateOmniViewInternal(request, {
+              ...common,
+              headed: arguments_.headed,
+              ...(signal === undefined ? {} : { signal }),
+            });
+    if (arguments_.json) output.stdout(exactTerminalJson(value));
+    else print(output, value, false);
+    return 0;
+  }
   if (arguments_.command === "invoke") {
     const invocation = prepareInvocation(
       arguments_.adapterId,
@@ -2547,6 +2593,7 @@ function commandUsesPortableProviderCatalog(
     || command === "auth-bind"
     || command === "auth-pair"
     || command === "auth-sync"
+    || command === "omni-read"
     || command === "invoke"
     || command === "confirm"
     || command === "runs-reconcile";

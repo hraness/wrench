@@ -43,6 +43,7 @@ export type {
   ProviderPluginDefinitionV1,
   ProviderPluginImplementationSourceDefinitionV1,
   ProviderPluginLinkedDeviceLifecycleRuntimeV1,
+  ProviderPluginOmniDefinitionV1,
   ProviderPluginOperationDefinitionV1,
   ProviderPluginReconciliationDefinitionV1,
   ProviderPluginSubjectDefinitionV1,

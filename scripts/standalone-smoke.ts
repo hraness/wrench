@@ -427,6 +427,15 @@ try {
       ],
       consumer,
     );
+    await runCommand(
+      "import packed omni client",
+      [
+        process.execPath,
+        "-e",
+        "import { readCachedOmniView, revalidateOmniView, staleWhileRevalidateOmniView } from '@hraness/wrench/omni'; if (![readCachedOmniView, revalidateOmniView, staleWhileRevalidateOmniView].every((value) => typeof value === 'function')) process.exit(1);",
+      ],
+      consumer,
+    );
     await writeFile(
       join(consumer, "client-typecheck.ts"),
       [
@@ -446,6 +455,33 @@ try {
       ].join("\n"),
     );
     await writeFile(
+      join(consumer, "omni-typecheck.ts"),
+      [
+        "import {",
+        "  readCachedOmniView,",
+        "  revalidateOmniView,",
+        "  staleWhileRevalidateOmniView,",
+        "  type OmniViewCacheResult,",
+        "  type OmniViewRequest,",
+        "  type RevalidatedOmniView,",
+        "} from '@hraness/wrench/omni';",
+        "const request: OmniViewRequest = {",
+        "  schemaVersion: 1,",
+        "  sources: [{",
+        "    adapterId: 'reddit-web',",
+        "    operationId: 'messaging.list',",
+        "    authId: 'reddit-main',",
+        "    input: { folder: 'inbox', limit: 25 },",
+        "  }],",
+        "};",
+        "const cachedReader: (request: OmniViewRequest) => OmniViewCacheResult = readCachedOmniView;",
+        "const revalidator: (request: OmniViewRequest) => Promise<RevalidatedOmniView> = revalidateOmniView;",
+        "const swr = staleWhileRevalidateOmniView(request);",
+        "void [request, cachedReader, revalidator, swr.cached, swr.revalidation];",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
       join(consumer, "tsconfig.client.json"),
       `${JSON.stringify({
         compilerOptions: {
@@ -459,7 +495,7 @@ try {
           skipLibCheck: false,
           types: [],
         },
-        include: ["client-typecheck.ts"],
+        include: ["client-typecheck.ts", "omni-typecheck.ts"],
       }, null, 2)}\n`,
     );
     await runCommand(
@@ -472,11 +508,53 @@ try {
       ],
       consumer,
     );
-    await exerciseCli({
+    const packedCli = {
       cliPath: join(consumer, "node_modules", ".bin", "wrench"),
       cwd: consumer,
       label: "packed",
-    }, "packed");
+    } as const;
+    await runCli(packedCli, "install isolated omni adapter", [
+      "adapter",
+      "install",
+      join(
+        installedPackageRoot,
+        "src",
+        "assets",
+        "adapters",
+        "reddit",
+        "wrench-web-adapter.json",
+      ),
+    ]);
+    await runCli(packedCli, "create isolated omni auth locator", [
+      "auth",
+      "add",
+      "reddit-main",
+      "--cookie-source",
+      "chrome",
+      "--subject",
+      "reddit:t2_account",
+    ]);
+    await runCommand(
+      "read deterministic empty omni cache through packed SDK",
+      [
+        process.execPath,
+        "-e",
+        [
+          "import { readCachedOmniView } from '@hraness/wrench/omni';",
+          "const result = readCachedOmniView({ schemaVersion: 1, sources: [{ adapterId: 'reddit-web', operationId: 'messaging.list', authId: 'reddit-main', input: { folder: 'inbox', limit: 25 } }] });",
+          "if (result.schemaVersion !== 1 || result.source !== 'omni-cache') throw new Error('packed omni cache result envelope is malformed');",
+          "if (!/^[a-f0-9]{64}$/.test(result.identity.invocationDigest) || !/^[a-f0-9]{64}$/.test(result.identity.requestDigest) || !/^[a-f0-9]{64}$/.test(result.identity.sourceSetDigest)) throw new Error('packed omni cache identity is malformed');",
+          "if (result.view.schemaVersion !== 1 || !/^[a-f0-9]{64}$/.test(result.view.viewRevision)) throw new Error('packed omni cache view identity is malformed');",
+          "if (result.view.entities.length !== 0 || result.view.nextCursor !== null) throw new Error('packed omni cache was not empty');",
+          "if (result.view.sources.length !== 1) throw new Error('packed omni cache omitted its requested source');",
+          "const source = result.view.sources[0];",
+          "if (source.adapterId !== 'reddit-web' || source.operationId !== 'messaging.list' || source.authId !== 'reddit-main' || source.surfaceId !== 'reddit') throw new Error('packed omni cache source identity is malformed');",
+          "if (source.exact.state !== 'miss' || source.normalization.state !== 'missing') throw new Error('packed omni empty-cache states are malformed');",
+        ].join(" "),
+      ],
+      consumer,
+    );
+    await exerciseCli(packedCli, "packed");
   }
 } finally {
   await rm(work, { recursive: true, force: true });

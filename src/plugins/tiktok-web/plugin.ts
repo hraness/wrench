@@ -33,6 +33,17 @@ export const tiktokWebPlugin = defineProviderPlugin({
     operations: webSessionContractOperations(
       Object.values(tiktokContracts),
       "1d14f603853acd6c44bb2a4de17bb7a71dace303712d1ed9ca9f25c3571ee145",
+      {},
+      {
+        "messaging.list": {
+          state: "unsupported",
+          reason: "TikTok messaging list transport and output semantics remain capture-required",
+        },
+        "messaging.read": {
+          state: "unsupported",
+          reason: "TikTok messaging read transport and output semantics remain capture-required",
+        },
+      },
     ),
     subject: {
       format: "tiktok:uid:<id>/sec:<secondary-id>",

@@ -9,6 +9,31 @@ import {
 } from "../../provider-plugin-builtins";
 import { webSessionContractDefinitions } from "../../web-session-contract-definitions";
 import type { MetaWebSite } from "../../providers/meta-web";
+import { materializeInstagramMessagingList } from "../../providers/meta-omni";
+
+function metaOmniDefinitions(site: MetaWebSite) {
+  if (site === "facebook-group") return Object.freeze({});
+  return Object.freeze({
+    "messaging.list": Object.freeze({
+      ...(site === "instagram"
+        ? {
+            state: "supported" as const,
+            schemaVersion: 1 as const,
+            materializerId: "instagram-messaging-list",
+            materializerVersion: 1,
+            materialize: materializeInstagramMessagingList,
+          }
+        : {
+            state: "unsupported" as const,
+            reason: `${site} messaging list semantics remain capture-required`,
+          }),
+    }),
+    "messaging.read": Object.freeze({
+      state: "unsupported" as const,
+      reason: `${site} message reads remain capture-required`,
+    }),
+  });
+}
 
 const metaWebSites = Object.freeze([
   "instagram",
@@ -99,6 +124,7 @@ export const metaWebPlugin = defineProviderPlugin({
     ["providers/meta-marketplace-relay.ts", "../../providers/meta-marketplace-relay.ts"],
     ["providers/meta-relay-bundle.ts", "../../providers/meta-relay-bundle.ts"],
     ["providers/meta-web-descriptors.ts", "../../providers/meta-web-descriptors.ts"],
+    ["providers/meta-omni.ts", "../../providers/meta-omni.ts"],
   ]),
   bindings: metaWebSites.map((site) => ({
     transport: "web-session-api" as const,
@@ -110,6 +136,7 @@ export const metaWebPlugin = defineProviderPlugin({
       Object.values(webSessionContractDefinitions[site]),
       contractSemanticIdentities[site],
       historicalVersions[site],
+      metaOmniDefinitions(site),
     ),
     subject: {
       format: subjectFormats[site],

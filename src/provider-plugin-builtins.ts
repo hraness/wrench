@@ -7,11 +7,54 @@ import type {
   ProviderApiPluginOperationDefinitionV1,
   ProviderPluginAuthKind,
   ProviderPluginImplementationSourceDefinitionV1,
+  ProviderPluginOmniDefinitionV1,
   WebSessionPluginOperationDefinitionV1,
 } from "./provider-plugin";
 import type { WebSessionContract } from "./web-session-contract-definitions";
 import { planWebSessionContractDispatches } from "./web-session-contract-planning";
 import type { OperationInput } from "./model";
+
+export type ProviderPluginOmniDefinitionsV1 = Readonly<
+  Record<string, ProviderPluginOmniDefinitionV1>
+>;
+
+function omniDefinition(
+  operation: string,
+  definitions: ProviderPluginOmniDefinitionsV1 | undefined,
+): { readonly omni?: ProviderPluginOmniDefinitionV1 } {
+  const inboxRead = operation === "messaging.list"
+    || operation === "messaging.read";
+  const definition = definitions?.[operation];
+  if (inboxRead && definition === undefined) {
+    throw new Error(
+      `provider operation ${operation} must explicitly declare omni normalization support`,
+    );
+  }
+  if (!inboxRead && definition !== undefined) {
+    throw new Error(
+      `provider operation ${operation} has an unexpected inbox normalization declaration`,
+    );
+  }
+  return definition === undefined ? {} : { omni: definition };
+}
+
+function assertOmniDefinitionCoverage(
+  operations: readonly string[],
+  definitions: ProviderPluginOmniDefinitionsV1 | undefined,
+): void {
+  const expected = operations.filter((operation) =>
+    operation === "messaging.list" || operation === "messaging.read")
+    .sort();
+  const actual = Object.keys(definitions ?? {}).sort();
+  if (
+    actual.length !== expected.length
+    || actual.some((operation, index) => operation !== expected[index])
+  ) {
+    throw new Error(
+      "provider omni declarations must exactly cover installed messaging list/read operations",
+    );
+  }
+}
 
 export const browserSessionAuthKinds = Object.freeze([
   "browser-profile",
@@ -44,8 +87,13 @@ export function officialContractOperations(
       input: OperationInput,
       subject: string,
     ) => readonly string[];
+    readonly omni?: ProviderPluginOmniDefinitionsV1;
   },
 ): readonly ProviderApiPluginOperationDefinitionV1[] {
+  assertOmniDefinitionCoverage(
+    contracts.map((contract) => contract.operation),
+    options.omni,
+  );
   assertContractSemanticIdentity(
     contracts[0]?.provider ?? "official provider",
     contracts,
@@ -69,6 +117,7 @@ export function officialContractOperations(
       planProviderContractDispatches(contract, input),
     validateInput: (input: OperationInput) =>
       options.validateInput(contract, input),
+    ...omniDefinition(contract.operation, options.omni),
     ...(validateSubjectInput === undefined
       ? {}
       : {
@@ -86,7 +135,12 @@ export function webSessionContractOperations(
   contracts: readonly WebSessionContract[],
   semanticIdentity: string,
   historicalVersions: Readonly<Record<string, readonly number[]>> = {},
+  omni?: ProviderPluginOmniDefinitionsV1,
 ): readonly WebSessionPluginOperationDefinitionV1[] {
+  assertOmniDefinitionCoverage(
+    contracts.map((contract) => contract.operation),
+    omni,
+  );
   assertContractSemanticIdentity(
     contracts[0]?.site ?? "authenticated session",
     contracts,
@@ -109,6 +163,7 @@ export function webSessionContractOperations(
     planDispatches: (input: OperationInput) =>
       planWebSessionContractDispatches(contract, input),
     validateInput: () => Object.freeze([]),
+    ...omniDefinition(contract.operation, omni),
   })));
 }
 

@@ -91,6 +91,9 @@ export const wrenchUsage = `Usage:
   wrench invoke <adapter> <operation> [--input <json|@file|->] [--auth <id>]
                 [--preview | --cache-only | --projection-identity-only]
                 [--headed] [--json]
+  wrench omni read --input <json|@file|->
+                [--cache-only | --identity-only | --from-exact-cache]
+                [--headed] [--json]
   wrench <adapter> <operation> [invoke-options]  Shorthand for 'wrench invoke'
   wrench confirm <plan-digest> [--headed] [--json]
   wrench plans list [--json]
@@ -115,4 +118,10 @@ Read projections:
   invocation explicitly revalidates it. Unbound reads are never cached.
   Bind the auth locator to its verified account subject before private snapshots can
   be served.
+
+Omni views:
+  Supported provider inbox reads materialize into encrypted Conversation, Message,
+  and Notification entities. 'omni read --cache-only' returns the merged local view
+  without provider work. A normal omni read explicitly revalidates each declared
+  source; --from-exact-cache rebuilds derivatives from exact snapshots only.
 `;
