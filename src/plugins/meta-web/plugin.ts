@@ -78,8 +78,14 @@ function subjectMatches(site: MetaWebSite, value: string): boolean {
 }
 
 const historicalVersions = Object.freeze({
-  instagram: Object.freeze({}),
-  threads: Object.freeze({}),
+  instagram: Object.freeze({
+    "comments.read": Object.freeze([1]),
+    "feeds.read": Object.freeze([1]),
+    "messaging.list": Object.freeze([1]),
+  }),
+  threads: Object.freeze({
+    "feeds.read": Object.freeze([1]),
+  }),
   facebook: Object.freeze({
     "feeds.read": Object.freeze([1]),
     "messaging.list": Object.freeze([1]),
@@ -97,8 +103,8 @@ const historicalVersions = Object.freeze({
 >);
 
 const contractSemanticIdentities = Object.freeze({
-  instagram: "d99d945f1735472c4dabe9c182f6a87aa8c5048456488de601d7da3550f9a742",
-  threads: "da1a94589371ce2cbb13d1cbf4c903cc1284b633c744ce0291681ef291f83f59",
+  instagram: "ee545d5775348de09e1ca1c42acdf71583fff18cfb73f42be2d350dba20bad20",
+  threads: "c9329d9ca816dfc7898bfa862c9c6b986e974b206f87ea56011719b447f7a37d",
   facebook: "d6398bbc522567efb2dc0267a40fea785261621e0f4ca855a1c20a47b980e1f2",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
   "facebook-group": "30717a546b60658ecc2e199a14babb4fa2b46afd1e8d9113044a1b7afda3d376",

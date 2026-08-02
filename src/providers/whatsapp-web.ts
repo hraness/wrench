@@ -685,7 +685,7 @@ export type WhatsAppWritePlan =
       readonly action: "messaging.send";
       readonly argv: readonly string[];
       readonly destinationJid: string;
-      readonly expectedBody: string | null;
+      readonly expectedBody: string;
       readonly expectedMedia: boolean;
     }
   | {
@@ -710,6 +710,15 @@ export type WhatsAppWritePlan =
       readonly destinationJid: string;
     };
 
+export function isWhatsAppWriteAction(
+  action: WhatsAppWebOperationName,
+): action is WhatsAppWritePlan["action"] {
+  return action === "messaging.send"
+    || action === "reactions.set"
+    || action === "content.edit"
+    || action === "content.share";
+}
+
 /**
  * Construct only fixed wacli semantic commands. No arbitrary subcommand,
  * recipient name, URL, flag, or query surface can pass through this function.
@@ -728,15 +737,12 @@ export function planWhatsAppWriteCommand(
       inputString(input, "conversation_jid", MAX_JID),
       "input.conversation_jid",
     );
-    const body = optionalInputString(input, "body", MAX_MESSAGE_BODY);
+    const body = inputString(input, "body", MAX_MESSAGE_BODY);
     const replyTo = optionalInputString(input, "reply_to_message_id", MAX_MESSAGE_ID);
     if (replyTo !== undefined) {
       whatsappMessageId(replyTo, "input.reply_to_message_id");
     }
     if (materializedAttachmentPath === undefined) {
-      if (body === undefined || body.length < 1) {
-        throw new Error("WhatsApp text send requires input.body");
-      }
       return Object.freeze({
         action,
         argv: Object.freeze([
@@ -777,13 +783,14 @@ export function planWhatsAppWriteCommand(
         path,
         "--post-send-wait",
         "0",
-        ...(body === undefined ? [] : ["--caption", body]),
+        "--caption",
+        body,
         ...(filename === undefined ? [] : ["--filename", filename]),
         ...(mimeType === undefined ? [] : ["--mime", mimeType]),
         ...(replyTo === undefined ? [] : ["--reply-to", replyTo]),
       ]),
       destinationJid,
-      expectedBody: body ?? null,
+      expectedBody: body,
       expectedMedia: true,
     });
   }
@@ -857,36 +864,41 @@ export function planWhatsAppWriteCommand(
       expectedBody,
     });
   }
-  const sourceConversationJid = whatsappTargetJid(
-    inputString(input, "source_conversation_jid", MAX_JID),
-    "input.source_conversation_jid",
-  );
-  const sourceMessageId = whatsappMessageId(
-    inputString(input, "message_id", MAX_MESSAGE_ID),
-    "input.message_id",
-  );
-  const destinationJid = whatsappTargetJid(
-    inputString(input, "destination_jid", MAX_JID),
-    "input.destination_jid",
-  );
-  return Object.freeze({
-    action,
-    argv: Object.freeze([
-      "messages",
-      "forward",
-      "--chat",
+  if (action === "content.share") {
+    const sourceConversationJid = whatsappTargetJid(
+      inputString(input, "source_conversation_jid", MAX_JID),
+      "input.source_conversation_jid",
+    );
+    const sourceMessageId = whatsappMessageId(
+      inputString(input, "message_id", MAX_MESSAGE_ID),
+      "input.message_id",
+    );
+    const destinationJid = whatsappTargetJid(
+      inputString(input, "destination_jid", MAX_JID),
+      "input.destination_jid",
+    );
+    return Object.freeze({
+      action,
+      argv: Object.freeze([
+        "messages",
+        "forward",
+        "--chat",
+        sourceConversationJid,
+        "--id",
+        sourceMessageId,
+        "--to",
+        destinationJid,
+        "--post-send-wait",
+        "0",
+      ]),
       sourceConversationJid,
-      "--id",
       sourceMessageId,
-      "--to",
       destinationJid,
-      "--post-send-wait",
-      "0",
-    ]),
-    sourceConversationJid,
-    sourceMessageId,
-    destinationJid,
-  });
+    });
+  }
+  throw new Error(
+    `WhatsApp linked-device operation ${String(action)} has no reviewed write plan`,
+  );
 }
 
 export type WhatsAppWriteReceipt = {
@@ -983,8 +995,7 @@ export function verifyWhatsAppWriteReadback(
     if (
       plan.expectedMedia
         ? message.media === null
-          || (plan.expectedBody !== null
-            && message.media.caption !== plan.expectedBody)
+          || message.media.caption !== plan.expectedBody
         : message.text !== plan.expectedBody
     ) throw new Error("WhatsApp send readback did not bind the confirmed content");
   } else if (plan.action === "reactions.set") {

@@ -485,6 +485,14 @@ function recipe(
   site: MetaWebSite,
   action: WebSessionRecipe["action"],
   contractVersion = (
+    site === "instagram" && (
+      action === "comments.read"
+      || action === "feeds.read"
+      || action === "messaging.list"
+    )
+  ) || (
+    site === "threads" && action === "feeds.read"
+  ) || (
     site === "facebook" && (action === "feeds.read" || action === "messaging.list")
   ) || (
     (site === "facebook-group" || site === "facebook-marketplace")
@@ -622,14 +630,20 @@ describe("Meta authenticated internal-data runtime", () => {
                 user: { pk: "12345", username: "viewer" },
               },
             }],
-            more_available: false,
+            next_max_id: "provider-next-page",
+            more_available: true,
           }), { status: 200, headers: { "content-type": "application/json" } });
         }),
       },
     );
     expect(result).toMatchObject({
       status: "succeeded",
-      output: { feed: "home", items: [{ id: "900_12345" }] },
+      output: {
+        feed: "home",
+        items: [{ id: "900_12345" }],
+        page_scope: "first-page-only",
+        continuation_supported: false,
+      },
       dispatchStarted: false,
       dispatch: { planned: 0, started: 0, verified: 0 },
     });
@@ -646,7 +660,11 @@ describe("Meta authenticated internal-data runtime", () => {
       { dependencies: dependencies("threads", threadsCalls) },
     );
     expect(threads).toMatchObject({
-      output: { posts: [{ id: "900_12345" }] },
+      output: {
+        posts: [{ id: "900_12345" }],
+        page_scope: "first-page-only",
+        continuation_supported: false,
+      },
       dispatchStarted: false,
     });
     expect(threadsCalls).toHaveLength(1);
@@ -1178,8 +1196,22 @@ describe("Meta authenticated internal-data runtime", () => {
       },
       {
         site: "instagram",
+        action: "feeds.read",
+        input: { feed: "home", cursor: "raw" },
+        auth: auth("instagram"),
+        dependencySite: "instagram",
+      },
+      {
+        site: "instagram",
         action: "messaging.list",
         input: { folder: "requests" },
+        auth: auth("instagram"),
+        dependencySite: "instagram",
+      },
+      {
+        site: "instagram",
+        action: "messaging.list",
+        input: { folder: "inbox", cursor: "raw" },
         auth: auth("instagram"),
         dependencySite: "instagram",
       },
@@ -1455,5 +1487,33 @@ describe("Meta authenticated internal-data runtime", () => {
     expect(acquisitions.count).toBe(0);
     expect(calls).toHaveLength(0);
     expect(callbacks).toBe(0);
+  });
+
+  test("rejects stale v1 Instagram and Threads first-page plans before auth or network", async () => {
+    for (const [site, action, input, dependencySite] of [
+      ["instagram", "feeds.read", { feed: "home", limit: 5 }, "instagram"],
+      ["instagram", "comments.read", { media_id: "900_12345", limit: 5 }, "instagram"],
+      ["instagram", "messaging.list", { folder: "inbox", limit: 5 }, "instagram"],
+      ["threads", "feeds.read", { feed: "for-you", limit: 5 }, "threads"],
+    ] as const) {
+      const calls: Call[] = [];
+      const acquisitions = { count: 0 };
+      const message = await rejectionMessage(executeMetaWebOperation(
+        recipe(site, action, 1),
+        input,
+        auth(site),
+        {
+          dependencies: dependencies(
+            dependencySite,
+            calls,
+            undefined,
+            acquisitions,
+          ),
+        },
+      ));
+      expect(message).toContain("contract version 1 is not installed");
+      expect(acquisitions.count).toBe(0);
+      expect(calls).toHaveLength(0);
+    }
   });
 });

@@ -555,11 +555,8 @@ function prepareMetaRead(
 ): PreparedMetaRead {
   if (recipe.site === "instagram") {
     if (recipe.action === "feeds.read") {
-      requireExactInputKeys(input, ["cursor", "feed", "limit"]);
+      requireExactInputKeys(input, ["feed", "limit"]);
       exactEnumInput(input, "feed", ["home"]);
-      if (input.cursor !== undefined) {
-        throw new Error("Instagram timeline cursor pagination is capture-required");
-      }
       return Object.freeze({
         kind: "instagram-feed",
         limit: integerInput(input, "limit", 20, 1, 30),
@@ -573,11 +570,8 @@ function prepareMetaRead(
       });
     }
     if (recipe.action === "comments.read") {
-      requireExactInputKeys(input, ["cursor", "limit", "media_id"]);
+      requireExactInputKeys(input, ["limit", "media_id"]);
       const mediaId = exactInstagramMediaId(input);
-      if (input.cursor !== undefined) {
-        throw new Error("Instagram comment cursor pagination is capture-required");
-      }
       return Object.freeze({
         kind: "instagram-comments",
         mediaId,
@@ -585,11 +579,8 @@ function prepareMetaRead(
       });
     }
     if (recipe.action === "messaging.list") {
-      requireExactInputKeys(input, ["cursor", "folder", "limit"]);
+      requireExactInputKeys(input, ["folder", "limit"]);
       exactEnumInput(input, "folder", ["inbox"]);
-      if (input.cursor !== undefined) {
-        throw new Error("Instagram inbox cursor pagination is capture-required");
-      }
       return Object.freeze({
         kind: "instagram-inbox",
         limit: integerInput(input, "limit", 20, 1, 50),
@@ -597,11 +588,8 @@ function prepareMetaRead(
     }
   }
   if (recipe.site === "threads" && recipe.action === "feeds.read") {
-    requireExactInputKeys(input, ["cursor", "feed", "limit"]);
+    requireExactInputKeys(input, ["feed", "limit"]);
     exactEnumInput(input, "feed", ["for-you"]);
-    if (input.cursor !== undefined) {
-      throw new Error("Threads feed cursor pagination is capture-required");
-    }
     return Object.freeze({
       kind: "threads-feed",
       limit: integerInput(input, "limit", 20, 1, 30),

@@ -158,7 +158,7 @@ function exactNames(
   if (extra.length > 0) throw new Error(`${label} contained unsupported ${extra.join(", ")}`);
 }
 
-export type HackerNewsReadOperation = "viewer.current" | "feeds.news" | "posts.read" | "comments.read";
+export type HackerNewsReadOperation = "viewer.current" | "feeds.read" | "posts.read" | "comments.read";
 
 export function authorizeHackerNewsReadRequest(input: {
   readonly operation: HackerNewsReadOperation;
@@ -177,7 +177,7 @@ export function authorizeHackerNewsReadRequest(input: {
   }
   const url = exactUrl(input.url, "Hacker News read URL");
   const query = exactParameters(url.searchParams, "Hacker News read query");
-  if (input.operation === "viewer.current" || input.operation === "feeds.news") {
+  if (input.operation === "viewer.current" || input.operation === "feeds.read") {
     if (url.pathname !== "/news" || query.size !== 0) {
       throw new Error("Hacker News news request changed its reviewed exchange");
     }

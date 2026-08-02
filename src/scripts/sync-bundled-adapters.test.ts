@@ -150,10 +150,21 @@ describe("single-process bundled adapter generation sync", () => {
       "facebook-marketplace-web@1.1.0",
       "facebook-page-web@1.0.0",
       "facebook-web@1.0.0",
+      "instagram-web@1.0.0",
       "linkedin@0.4.0",
       "linkedin-web@1.0.0",
       "linkedin-web@1.1.0",
+      "threads-web@1.0.0",
     ]);
+    expect(Object.fromEntries(discovered.flatMap((adapter) =>
+      adapter.upgradeFrom.map((baseline) => [
+        `${adapter.id}@${baseline.manifest.version}`,
+        baseline.sourceContentSha256,
+      ]),
+    ))).toMatchObject({
+      "instagram-web@1.0.0": "bc3e17911739cc496105aac3bec522ef64b5e3b55183a2a0541850bb0f0ad18b",
+      "threads-web@1.0.0": "750a6db23ea6e3e3c96f3a9086ce17d73c3c5c90066e576525e848fe4583ec41",
+    });
     expect(discovered.map((adapter) => adapter.id)).toEqual([
       "bluesky-web",
       "facebook-group-web",

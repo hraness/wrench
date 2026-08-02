@@ -125,7 +125,7 @@ describe("Hacker News internal-web operation registry", () => {
 });
 
 describe("Hacker News exact R1 request authorization", () => {
-  test("accepts only /news and one exact decimal /item target", () => {
+  test("authorizes the viewer probe and canonical feed read separately on the exact /news route", () => {
     expect(authorizeHackerNewsReadRequest({
       operation: "viewer.current",
       url: "https://news.ycombinator.com/news",
@@ -136,6 +136,19 @@ describe("Hacker News exact R1 request authorization", () => {
       path: "/news",
       queryNames: [],
     });
+    expect(authorizeHackerNewsReadRequest({
+      operation: "feeds.read",
+      url: "https://news.ycombinator.com/news",
+      method: "GET",
+    })).toEqual({
+      operation: "feeds.read",
+      method: "GET",
+      path: "/news",
+      queryNames: [],
+    });
+  });
+
+  test("authorizes one exact decimal /item target", () => {
     expect(authorizeHackerNewsReadRequest({
       operation: "comments.read",
       url: `https://news.ycombinator.com/item?id=${POST_ID}`,
@@ -152,7 +165,7 @@ describe("Hacker News exact R1 request authorization", () => {
   test("rejects origin, path, method, duplicate query, body, and target drift", () => {
     const candidates: readonly Parameters<typeof authorizeHackerNewsReadRequest>[0][] = [
       {
-        operation: "feeds.news",
+        operation: "feeds.read",
         url: "https://news.ycombinator.com/newest",
         method: "GET",
       },

@@ -36,6 +36,28 @@ const DEFAULT_LIMIT = 25;
 
 export type RedditWebRuntimeDependencies = Partial<WebSessionNetworkDependencies>;
 
+export type RedditWebDesiredStatePreparation =
+  | {
+      readonly operation: "content.save";
+      readonly thingId: string;
+      readonly desiredState: boolean;
+      readonly actualState: boolean;
+      readonly alreadyDesired: boolean;
+    }
+  | {
+      readonly operation: "reactions.set";
+      readonly thingId: string;
+      readonly desiredState: boolean | null;
+      readonly actualState: boolean | null;
+      readonly alreadyDesired: boolean;
+    };
+
+export type RedditWebDesiredStateReadback = {
+  readonly kind: "saved";
+  readonly enabled: boolean;
+  readonly thingId: string;
+};
+
 function isRedditOperation(value: string): value is RedditWebOperationName {
   return (REDDIT_WEB_OPERATION_NAMES as readonly string[]).includes(value);
 }
@@ -349,6 +371,156 @@ function desiredLikedState(direction: -1 | 0 | 1): boolean | null {
   return direction === 1 ? true : direction === -1 ? false : null;
 }
 
+async function prepareDesiredStateWithClient(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+): Promise<{
+  readonly viewer: RedditWebViewer;
+  readonly preparation: RedditWebDesiredStatePreparation;
+}> {
+  if (
+    recipe.site !== "reddit"
+    || recipe.contractVersion !== 1
+    || (recipe.action !== "content.save" && recipe.action !== "reactions.set")
+  ) {
+    throw new Error(
+      "Reddit desired-state preparation supports only content.save and reactions.set",
+    );
+  }
+  const viewer = await requireBoundViewer(client, auth);
+  const thingId = redditFullname(
+    stringInput(input, "thing_id", 40),
+    "input.thing_id",
+    ["t1", "t3"],
+  );
+  const before = await readThingState(client, thingId, recipe.maxOutputBytes);
+  if (recipe.action === "content.save") {
+    const desiredState = booleanInput(input, "saved");
+    return Object.freeze({
+      viewer,
+      preparation: Object.freeze({
+        operation: "content.save",
+        thingId,
+        desiredState,
+        actualState: before.saved,
+        alreadyDesired: before.saved === desiredState,
+      }),
+    });
+  }
+  const direction = desiredReaction(input);
+  const desiredState = desiredLikedState(direction);
+  return Object.freeze({
+    viewer,
+    preparation: Object.freeze({
+      operation: "reactions.set",
+      thingId,
+      desiredState,
+      actualState: before.liked,
+      alreadyDesired: before.liked === desiredState,
+    }),
+  });
+}
+
+/**
+ * Perform only the account and exact-target reads that precede a Reddit
+ * desired-state write. The helper never constructs a mutation request or
+ * enters the dispatch boundary, so capture-required execution stays inert.
+ */
+export async function prepareRedditWebDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: RedditWebRuntimeDependencies;
+  } = {},
+): Promise<RedditWebDesiredStatePreparation> {
+  if (
+    recipe.site !== "reddit"
+    || recipe.contractVersion !== 1
+    || (recipe.action !== "content.save" && recipe.action !== "reactions.set")
+  ) {
+    throw new Error(
+      "Reddit desired-state preparation supports only content.save and reactions.set",
+    );
+  }
+  const client = await createWebSessionClient(REDDIT_ORIGIN, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+  });
+  return (await prepareDesiredStateWithClient(
+    client,
+    recipe,
+    input,
+    auth,
+  )).preparation;
+}
+
+/** Independently read one exact Reddit saved state for reconciliation. */
+export async function readRedditWebDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: RedditWebRuntimeDependencies;
+  } = {},
+): Promise<RedditWebDesiredStateReadback> {
+  if (
+    recipe.site !== "reddit"
+    || recipe.contractVersion !== 1
+    || recipe.action !== "content.save"
+  ) {
+    throw new Error("Reddit recovery readback supports only content.save");
+  }
+  const preparation = await prepareRedditWebDesiredState(
+    recipe,
+    input,
+    auth,
+    options,
+  );
+  if (preparation.operation !== "content.save") {
+    throw new Error("Reddit saved-state readback changed operation kind");
+  }
+  return Object.freeze({
+    kind: "saved",
+    enabled: preparation.actualState,
+    thingId: preparation.thingId,
+  });
+}
+
+function desiredStateNoOp(
+  preparation: RedditWebDesiredStatePreparation,
+): WebSessionExecution {
+  const desired = preparation.operation === "content.save"
+    ? { saved: preparation.desiredState }
+    : {
+      direction: preparation.desiredState === true
+        ? 1
+        : preparation.desiredState === false ? -1 : 0,
+    };
+  return {
+    status: "succeeded",
+    output: Object.freeze({
+      thingId: preparation.thingId,
+      desired: Object.freeze(desired),
+      noOp: true,
+      effect: "already-satisfied",
+    }),
+    finalUrl: REDDIT_ORIGIN,
+    dispatchStarted: false,
+    dispatch: { planned: 1, started: 0, verified: 0 },
+  };
+}
+
 async function executeDesiredState(
   client: WebSessionClient,
   recipe: WebSessionRecipe,
@@ -361,19 +533,15 @@ async function executeDesiredState(
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
   },
 ): Promise<WebSessionExecution> {
-  const initialViewer = await requireBoundViewer(client, auth);
-  const targetId = redditFullname(
-    stringInput(input, "thing_id", 40),
-    "input.thing_id",
-    ["t1", "t3"],
-  );
+  const prepared = await prepareDesiredStateWithClient(client, recipe, input, auth);
+  const initialViewer = prepared.viewer;
+  const targetId = prepared.preparation.thingId;
   const save = recipe.action === "content.save";
   const direction = save ? null : desiredReaction(input);
   const saved = save ? booleanInput(input, "saved") : null;
-  const before = await readThingState(client, targetId, recipe.maxOutputBytes);
-  const alreadyDesired = save
-    ? before.saved === saved
-    : before.liked === desiredLikedState(direction!);
+  if (prepared.preparation.alreadyDesired) {
+    return desiredStateNoOp(prepared.preparation);
+  }
 
   let started = 0;
   let verified = 0;
@@ -426,7 +594,7 @@ async function executeDesiredState(
         thingId: targetId,
         desired: save ? { saved } : { direction },
         noOp: false,
-        previouslyDesired: alreadyDesired,
+        previouslyDesired: false,
       }),
       finalUrl: REDDIT_ORIGIN,
       dispatchStarted: true,

@@ -6,7 +6,9 @@ import type { WrenchAuth } from "../auth";
 import type { OperationInput, WebSessionRecipe } from "../model";
 import {
   executeRedditWebOperation,
+  prepareRedditWebDesiredState,
   probeRedditWebSubject,
+  readRedditWebDesiredState,
   type RedditWebRuntimeDependencies,
 } from "./reddit-web-runtime";
 
@@ -169,6 +171,17 @@ function messageThing(): unknown {
   };
 }
 
+function stateThing(
+  thingId: string,
+  liked: boolean | null,
+  saved: boolean,
+): unknown {
+  return {
+    kind: thingId.startsWith("t1_") ? "t1" : "t3",
+    data: { name: thingId, liked, likes: liked, saved },
+  };
+}
+
 function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "reddit",
@@ -316,6 +329,92 @@ describe("Reddit authenticated internal API runtime", () => {
       expect(acquisitions).toBe(0);
       expect(calls).toHaveLength(0);
     }
+  });
+
+  test("prepares save and every reaction no-op through reads before any dispatch", async () => {
+    const scenarios = [
+      {
+        action: "content.save",
+        input: { thing_id: POST_ID, saved: true },
+        thingId: POST_ID,
+        liked: null,
+        saved: true,
+        desiredState: true,
+      },
+      {
+        action: "reactions.set",
+        input: { thing_id: COMMENT_ID, direction: -1 },
+        thingId: COMMENT_ID,
+        liked: false,
+        saved: false,
+        desiredState: false,
+      },
+      {
+        action: "reactions.set",
+        input: { thing_id: COMMENT_ID, direction: 0 },
+        thingId: COMMENT_ID,
+        liked: null,
+        saved: false,
+        desiredState: null,
+      },
+    ] as const;
+    for (const scenario of scenarios) {
+      const calls: CapturedRequest[] = [];
+      const preparation = await prepareRedditWebDesiredState(
+        recipe(scenario.action),
+        scenario.input,
+        redditAuth,
+        {
+          dependencies: dependencies(calls, (request) => {
+            if (request.url.pathname === "/api/me.json") {
+              return jsonResponse(viewerResponse());
+            }
+            expect(request.url.pathname).toBe("/api/info.json");
+            expect(request.url.searchParams.get("id")).toBe(scenario.thingId);
+            return jsonResponse(listing([
+              stateThing(scenario.thingId, scenario.liked, scenario.saved),
+            ]));
+          }),
+        },
+      );
+      expect(preparation).toMatchObject({
+        operation: scenario.action,
+        thingId: scenario.thingId,
+        desiredState: scenario.desiredState,
+        actualState: scenario.desiredState,
+        alreadyDesired: true,
+      });
+      expect(calls.map((request) => request.method)).toEqual(["GET", "GET"]);
+      expect(calls.some((request) => request.url.pathname.startsWith("/api/save")))
+        .toBeFalse();
+      expect(calls.some((request) => request.url.pathname === "/api/unsave"))
+        .toBeFalse();
+      expect(calls.some((request) => request.url.pathname === "/api/vote"))
+        .toBeFalse();
+    }
+  });
+
+  test("exports the exact account-bound saved-state reconciliation readback", async () => {
+    const calls: CapturedRequest[] = [];
+    const readback = await readRedditWebDesiredState(
+      recipe("content.save"),
+      { thing_id: POST_ID, saved: false },
+      redditAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.pathname === "/api/me.json") {
+            return jsonResponse(viewerResponse());
+          }
+          return jsonResponse(listing([stateThing(POST_ID, null, true)]));
+        }),
+      },
+    );
+    expect(readback).toEqual({ kind: "saved", enabled: true, thingId: POST_ID });
+    expect(calls.map((request) => request.url.pathname)).toEqual([
+      "/api/me.json",
+      "/api/info.json",
+    ]);
+    expect(calls.every((request) => request.method === "GET")).toBeTrue();
   });
 
   test("fails account mismatch before the target request and rejects reservations before cookie acquisition", () => {

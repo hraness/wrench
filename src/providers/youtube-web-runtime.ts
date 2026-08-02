@@ -53,6 +53,25 @@ export type YouTubeWebRuntimeDependencies = Partial<WebSessionNetworkDependencie
   readonly now?: () => number;
 };
 
+export type YouTubeWebDesiredStateKind =
+  | "like"
+  | "subscription"
+  | "watch-later";
+
+export type YouTubeWebDesiredStatePreparation = {
+  readonly kind: YouTubeWebDesiredStateKind;
+  readonly targetId: string;
+  readonly desiredState: boolean;
+  readonly actualState: boolean;
+  readonly alreadyDesired: boolean;
+};
+
+export type YouTubeWebDesiredStateReadback = {
+  readonly kind: YouTubeWebDesiredStateKind;
+  readonly targetId: string;
+  readonly enabled: boolean;
+};
+
 type YouTubeBootstrap = {
   readonly auth: WrenchAuth;
   readonly client: WebSessionClient;
@@ -423,6 +442,153 @@ async function followReadback(bootstrap: YouTubeBootstrap, channelId: string): P
   return youtubeSubscriptionState(response, channelId);
 }
 
+function isYouTubeDesiredStateRecipe(recipe: WebSessionRecipe): boolean {
+  return recipe.site === "youtube"
+    && recipe.contractVersion === 1
+    && (
+      recipe.action === "likes.set"
+      || recipe.action === "content.save"
+      || recipe.action === "relationships.follow.set"
+    );
+}
+
+async function prepareDesiredStateWithBootstrap(
+  bootstrap: YouTubeBootstrap,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+): Promise<{
+  readonly preparation: YouTubeWebDesiredStatePreparation;
+  readonly commandSource: unknown;
+}> {
+  if (!isYouTubeDesiredStateRecipe(recipe)) {
+    throw new Error(
+      "YouTube desired-state preparation supports only likes.set, content.save, and relationships.follow.set",
+    );
+  }
+  requireBoundSubject(bootstrap);
+  const kind: YouTubeWebDesiredStateKind = recipe.action === "likes.set"
+    ? "like"
+    : recipe.action === "content.save"
+      ? "watch-later"
+      : "subscription";
+  const targetId = kind === "subscription" ? channelIdInput(input) : videoIdInput(input);
+  const desiredState = kind === "like"
+    ? booleanInput(input, "liked")
+    : kind === "watch-later"
+      ? booleanInput(input, "saved")
+      : booleanInput(input, "followed");
+  const commandSource = kind === "subscription"
+    ? await innertube(
+      bootstrap,
+      "browse",
+      { browseId: targetId },
+      "YouTube subscription command discovery",
+    )
+    : await innertube(
+      bootstrap,
+      "next",
+      { videoId: targetId },
+      kind === "like"
+        ? "YouTube like command discovery"
+        : "YouTube save readback",
+    );
+  const actualState = kind === "like"
+    ? youtubeLikeState(commandSource, targetId)
+    : kind === "watch-later"
+      ? youtubeWatchLaterState(commandSource, targetId)
+      : youtubeSubscriptionState(commandSource, targetId);
+  return Object.freeze({
+    preparation: Object.freeze({
+      kind,
+      targetId,
+      desiredState,
+      actualState,
+      alreadyDesired: actualState === desiredState,
+    }),
+    commandSource: kind === "watch-later" ? null : commandSource,
+  });
+}
+
+/**
+ * Perform only the account and exact-target reads that precede a YouTube
+ * desired-state write. Capture-required execution remains network-inert; this
+ * read-only seam exists for reconciliation and deterministic preparation tests.
+ */
+export async function prepareYouTubeWebDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: YouTubeWebRuntimeDependencies;
+  } = {},
+): Promise<YouTubeWebDesiredStatePreparation> {
+  if (!isYouTubeDesiredStateRecipe(recipe)) {
+    throw new Error(
+      "YouTube desired-state preparation supports only likes.set, content.save, and relationships.follow.set",
+    );
+  }
+  const bootstrap = await bootstrapYouTube(auth, {
+    timeoutMs: recipe.timeoutMs,
+    maxOutputBytes: recipe.maxOutputBytes,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+  });
+  return (await prepareDesiredStateWithBootstrap(
+    bootstrap,
+    recipe,
+    input,
+  )).preparation;
+}
+
+/** Independently observe one exact YouTube desired state for reconciliation. */
+export async function readYouTubeWebDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: YouTubeWebRuntimeDependencies;
+  } = {},
+): Promise<YouTubeWebDesiredStateReadback> {
+  const preparation = await prepareYouTubeWebDesiredState(
+    recipe,
+    input,
+    auth,
+    options,
+  );
+  return Object.freeze({
+    kind: preparation.kind,
+    targetId: preparation.targetId,
+    enabled: preparation.actualState,
+  });
+}
+
+function desiredStateNoOp(
+  preparation: YouTubeWebDesiredStatePreparation,
+): WebSessionExecution {
+  return {
+    status: "succeeded",
+    output: Object.freeze({
+      kind: preparation.kind,
+      targetId: preparation.targetId,
+      enabled: preparation.desiredState,
+      noOp: true,
+      effect: "already-satisfied",
+    }),
+    finalUrl: preparation.kind === "subscription"
+      ? `${YOUTUBE_ORIGIN}/channel/${preparation.targetId}`
+      : `${YOUTUBE_ORIGIN}/watch?v=${preparation.targetId}`,
+    dispatchStarted: false,
+    dispatch: { planned: 1, started: 0, verified: 0 },
+  };
+}
+
 async function executeDesiredState(
   bootstrap: YouTubeBootstrap,
   recipe: WebSessionRecipe,
@@ -432,29 +598,20 @@ async function executeDesiredState(
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
   },
 ): Promise<WebSessionExecution> {
-  requireBoundSubject(bootstrap);
-  const kind = recipe.action === "likes.set"
-    ? "like"
-    : recipe.action === "content.save"
-      ? "watch-later"
-      : "subscription";
-  const targetId = kind === "subscription" ? channelIdInput(input) : videoIdInput(input);
-  const desired = kind === "like"
-    ? booleanInput(input, "liked")
-    : kind === "watch-later"
-      ? booleanInput(input, "saved")
-      : booleanInput(input, "followed");
+  const prepared = await prepareDesiredStateWithBootstrap(bootstrap, recipe, input);
+  const { kind, targetId, desiredState: desired } = prepared.preparation;
+  if (prepared.preparation.alreadyDesired) {
+    return desiredStateNoOp(prepared.preparation);
+  }
   let started = 0;
   let verified = 0;
   try {
     if (kind === "like") {
-      const current = await innertube(
-        bootstrap,
-        "next",
-        { videoId: targetId },
-        "YouTube like command discovery",
+      const mutation = youtubeLikeMutationRequest(
+        prepared.commandSource,
+        targetId,
+        desired,
       );
-      const mutation = youtubeLikeMutationRequest(current, targetId, desired);
       await options.beforeDispatch?.(dispatchEvent(recipe.action, 0, 0));
       started = 1;
       await innertube(
@@ -479,13 +636,11 @@ async function executeDesiredState(
         "YouTube Watch Later mutation",
       );
     } else {
-      const current = await innertube(
-        bootstrap,
-        "browse",
-        { browseId: targetId },
-        "YouTube subscription command discovery",
+      const mutation = youtubeSubscriptionMutationRequest(
+        prepared.commandSource,
+        targetId,
+        desired,
       );
-      const mutation = youtubeSubscriptionMutationRequest(current, targetId, desired);
       await options.beforeDispatch?.(dispatchEvent(recipe.action, 0, 0));
       started = 1;
       await innertube(

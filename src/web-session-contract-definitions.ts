@@ -331,8 +331,14 @@ const META_WEB_OPERATIONS = Object.freeze({
     "media.read",
     "messaging.list",
     "posts.read",
-  ]),
-  threads: operationPolicies("threads", ["feeds.read"]),
+  ], {
+    "comments.read": 2,
+    "feeds.read": 2,
+    "messaging.list": 2,
+  }),
+  threads: operationPolicies("threads", ["feeds.read"], {
+    "feeds.read": 2,
+  }),
   facebook: operationPolicies("facebook", ["feeds.read"], {
     "feeds.read": 2,
     "messaging.list": 2,

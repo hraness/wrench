@@ -134,11 +134,20 @@ function contracts(
 
 export const META_WEB_OPERATIONS = Object.freeze({
   instagram: contracts("instagram", {
-    "feeds.read": observed("live direct /api/v1/feed/timeline JSON with viewer binding and bounded media projection"),
+    "feeds.read": observed(
+      "one bounded first page from live direct /api/v1/feed/timeline JSON with viewer binding and no continuation cursor accepted or exposed",
+      2,
+    ),
     "posts.read": observed("live direct /api/v1/media/{id}/info JSON with exact returned-media binding"),
     "media.read": observed("the target-bound media-info response supplies bounded media metadata without copying credentials"),
-    "comments.read": observed("live direct /api/v1/media/{id}/comments JSON with caption/root binding and bounded comment projection"),
-    "messaging.list": observed("live direct direct_v2 inbox summary GET; no seen, ack, or presence endpoint is issued"),
+    "comments.read": observed(
+      "one bounded first page from live direct /api/v1/media/{id}/comments JSON with caption/root binding and no continuation cursor accepted or exposed",
+      2,
+    ),
+    "messaging.list": observed(
+      "one bounded first page from the live direct_v2 inbox summary GET, with no continuation cursor accepted or exposed and no seen, ack, or presence endpoint issued",
+      2,
+    ),
     "messaging.read": captureRequired(
       "messaging.read",
       "Direct thread reads require a reviewed no-seen/no-presence capture; listing evidence does not authorize reading messages",
@@ -149,7 +158,10 @@ export const META_WEB_OPERATIONS = Object.freeze({
     ),
   }),
   threads: contracts("threads", {
-    "feeds.read": observed("live direct signed-in Threads Relay preload JSON with exact Barcelona viewer binding"),
+    "feeds.read": observed(
+      "one bounded first page from live direct signed-in Threads Relay preload JSON with exact Barcelona viewer binding and no continuation cursor accepted or exposed",
+      2,
+    ),
     "messaging.list": captureRequired(
       "messaging.list",
       "Threads inbox uses Lightspeed/Msys state and may acknowledge or update presence; Relay setup metadata is not message-list authority",
@@ -1054,11 +1066,13 @@ export function normalizeInstagramFeed(value: unknown, limit: number): unknown {
     items.push(instagramMedia(item.media_or_ad, `Instagram timeline media[${index}]`));
     if (items.length >= limit) break;
   }
+  optionalString(envelope.next_max_id, "Instagram timeline response.next_max_id", 4096);
+  optionalBoolean(envelope.more_available, "Instagram timeline response.more_available");
   return Object.freeze({
     feed: "home",
     items: Object.freeze(items),
-    next_cursor: optionalString(envelope.next_max_id, "Instagram timeline response.next_max_id", 4096),
-    more_available: optionalBoolean(envelope.more_available, "Instagram timeline response.more_available"),
+    page_scope: "first-page-only",
+    continuation_supported: false,
   });
 }
 
@@ -1106,18 +1120,20 @@ export function normalizeInstagramComments(value: unknown, mediaId: string, limi
       ),
     });
   });
+  optionalString(
+    envelope.next_min_id ?? envelope.next_max_id,
+    "Instagram comments response.next_cursor",
+    4096,
+  );
+  optionalBoolean(
+    envelope.has_more_comments ?? envelope.has_more_headload_comments,
+    "Instagram comments response.has_more",
+  );
   return Object.freeze({
     media_id: mediaId,
     comments: Object.freeze(comments),
-    next_cursor: optionalString(
-      envelope.next_min_id ?? envelope.next_max_id,
-      "Instagram comments response.next_cursor",
-      4096,
-    ),
-    has_more: optionalBoolean(
-      envelope.has_more_comments ?? envelope.has_more_headload_comments,
-      "Instagram comments response.has_more",
-    ),
+    page_scope: "first-page-only",
+    continuation_supported: false,
   });
 }
 
@@ -1147,11 +1163,13 @@ export function normalizeInstagramInbox(value: unknown, viewerId: string, limit:
       pending: optionalBoolean(thread.pending, `Instagram inbox thread[${index}].pending`),
     });
   });
+  optionalString(inbox.oldest_cursor ?? inbox.next_cursor, "Instagram inbox next cursor", 4096);
+  optionalBoolean(inbox.has_older, "Instagram inbox has_older");
   return Object.freeze({
     folder: "inbox",
     threads: Object.freeze(threads),
-    next_cursor: optionalString(inbox.oldest_cursor ?? inbox.next_cursor, "Instagram inbox next cursor", 4096),
-    has_older: optionalBoolean(inbox.has_older, "Instagram inbox has_older"),
+    page_scope: "first-page-only",
+    continuation_supported: false,
     pending_requests_total: optionalInteger(envelope.pending_requests_total, "Instagram inbox pending_requests_total"),
   });
 }
@@ -1201,7 +1219,12 @@ export function normalizeThreadsFeedHtml(html: unknown, viewerId: string, limit:
     }
   });
   if (posts.length === 0) throw new Error("Threads Relay preload omitted a bounded feed");
-  return Object.freeze({ feed: "for-you", posts: Object.freeze(posts) });
+  return Object.freeze({
+    feed: "for-you",
+    posts: Object.freeze(posts),
+    page_scope: "first-page-only",
+    continuation_supported: false,
+  });
 }
 
 function facebookPost(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -2019,14 +2042,14 @@ export const metaWebEvidenceSnapshot = Object.freeze({
   operations: Object.freeze({
     instagram: Object.freeze({
       viewer: "GET / HTML PolarisViewer, corroborated by ds_user_id",
-      feed: "GET /api/v1/feed/timeline/",
+      feed: "GET /api/v1/feed/timeline/ first page without cursor continuation",
       post: "GET /api/v1/media/{id}/info/",
-      comments: "GET /api/v1/media/{id}/comments/",
-      inbox: "GET /api/v1/direct_v2/inbox/ without seen/ack dispatch",
+      comments: "GET /api/v1/media/{id}/comments/ first page without cursor continuation",
+      inbox: "GET /api/v1/direct_v2/inbox/ first page without cursor continuation or seen/ack dispatch",
     }),
     threads: Object.freeze({
       viewer: "GET / HTML BarcelonaSessionInfo plus Relay viewer.user.id",
-      feed: "GET / signed-in Relay feedData preload",
+      feed: "GET / signed-in first-page Relay feedData preload without cursor continuation",
     }),
     facebook: Object.freeze({
       viewer: "GET / HTML CurrentUserInitialData, corroborated by c_user",

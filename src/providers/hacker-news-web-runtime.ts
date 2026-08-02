@@ -64,11 +64,12 @@ function readHeaders(): Readonly<Record<string, string>> {
 
 async function readNews(
   client: WebSessionClient,
+  operation: "viewer.current" | "feeds.read",
   maximumBytes: number,
 ): Promise<string> {
   const url = new URL("/news", HN_ORIGIN);
   authorizeHackerNewsReadRequest({
-    operation: "viewer.current",
+    operation,
     url,
     method: "GET",
   });
@@ -107,7 +108,11 @@ export async function probeHackerNewsWebSubject(
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
   });
-  const username = parseHackerNewsViewerHtml(await readNews(client, MAX_HTML_BYTES));
+  const username = parseHackerNewsViewerHtml(await readNews(
+    client,
+    "viewer.current",
+    MAX_HTML_BYTES,
+  ));
   return `hacker-news:${username}`;
 }
 
@@ -168,7 +173,11 @@ export async function executeHackerNewsWebOperation(
       : { operationDeadline: options.operationDeadline }),
     ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
   });
-  const newsHtml = await readNews(client, recipe.maxOutputBytes);
+  const newsHtml = await readNews(
+    client,
+    recipe.action === "feeds.read" ? "feeds.read" : "viewer.current",
+    recipe.maxOutputBytes,
+  );
   assertBoundViewer(auth, parseHackerNewsViewerHtml(newsHtml));
   // R1 operations never enter the mutation dispatch ledger.
   void options.beforeDispatch;

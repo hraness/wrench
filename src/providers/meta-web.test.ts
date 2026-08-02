@@ -5,7 +5,10 @@ import facebookMarketplaceManifest from "../assets/adapters/facebook-marketplace
 import facebookPageManifest from "../assets/adapters/facebook-page/wrench-web-adapter.json";
 import facebookManifest from "../assets/adapters/facebook/wrench-web-adapter.json";
 import instagramManifest from "../assets/adapters/instagram/wrench-web-adapter.json";
+import instagramV1Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.0.0.json";
 import threadsManifest from "../assets/adapters/threads/wrench-web-adapter.json";
+import threadsV1Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.0.0.json";
+import { metaWebPlugin } from "../plugins/meta-web/plugin";
 import {
   META_WEB_OPERATIONS,
   META_WEB_OPERATION_NAMES,
@@ -377,7 +380,22 @@ describe("Meta consumer-web policy", () => {
   });
 
   test("keeps unproven writes and protocol-sensitive messaging capture-required", () => {
-    expect(META_WEB_OPERATIONS.instagram["feeds.read"]).toMatchObject({ state: "observed" });
+    expect(META_WEB_OPERATIONS.instagram["feeds.read"]).toMatchObject({
+      state: "observed",
+      contractVersion: 2,
+    });
+    expect(META_WEB_OPERATIONS.instagram["comments.read"]).toMatchObject({
+      state: "observed",
+      contractVersion: 2,
+    });
+    expect(META_WEB_OPERATIONS.instagram["messaging.list"]).toMatchObject({
+      state: "observed",
+      contractVersion: 2,
+    });
+    expect(META_WEB_OPERATIONS.threads["feeds.read"]).toMatchObject({
+      state: "observed",
+      contractVersion: 2,
+    });
     expect(META_WEB_OPERATIONS.instagram["likes.set"]).toMatchObject({ state: "capture-required" });
     expect(META_WEB_OPERATIONS.instagram["messaging.send"]?.reason).toContain("E2EE");
     expect(META_WEB_OPERATIONS.threads["messaging.list"]).toMatchObject({ state: "capture-required" });
@@ -407,6 +425,36 @@ describe("Meta consumer-web policy", () => {
       state: "observed",
       contractVersion: 2,
     });
+  });
+
+  test("versions first-page-only Instagram and Threads contracts without losing v1 resolution", () => {
+    const affected = [
+      ["instagram", "comments.read", instagramManifest, instagramV1Manifest],
+      ["instagram", "feeds.read", instagramManifest, instagramV1Manifest],
+      ["instagram", "messaging.list", instagramManifest, instagramV1Manifest],
+      ["threads", "feeds.read", threadsManifest, threadsV1Manifest],
+    ] as const;
+
+    expect(instagramManifest.version).toBe("1.1.0");
+    expect(instagramV1Manifest.version).toBe("1.0.0");
+    expect(threadsManifest.version).toBe("1.1.0");
+    expect(threadsV1Manifest.version).toBe("1.0.0");
+
+    for (const [site, operation, current, prior] of affected) {
+      const currentOperation = current.operations[operation];
+      const priorOperation = prior.operations[operation];
+      expect(currentOperation.webSession.contractVersion).toBe(2);
+      expect(priorOperation.webSession.contractVersion).toBe(1);
+      expect(currentOperation.input.properties).not.toHaveProperty("cursor");
+      expect(priorOperation.input.properties).toHaveProperty("cursor");
+      expect(currentOperation.description).toContain("one bounded first page");
+
+      const binding = metaWebPlugin.bindings.find((candidate) =>
+        candidate.surfaceId === site);
+      const descriptor = binding?.operations.find((candidate) =>
+        candidate.name === operation);
+      expect(descriptor?.contractVersions).toEqual([1, 2]);
+    }
   });
 
   test("binds each consumer surface to its exact bootstrapped viewer", () => {
@@ -518,8 +566,8 @@ describe("Meta consumer-web policy", () => {
         like_count: 2,
         comment_count: 1,
       }],
-      next_cursor: "next",
-      more_available: true,
+      page_scope: "first-page-only",
+      continuation_supported: false,
     });
     expect(normalizeInstagramPost({ status: "ok", items: [media] }, "900_12345")).toMatchObject({
       id: "900_12345",
@@ -533,17 +581,29 @@ describe("Meta consumer-web policy", () => {
         created_at: 101,
         user: { pk: "222", username: "friend" },
       }],
-      has_more_comments: false,
-    }, "900_12345", 10)).toMatchObject({
+      next_min_id: "comments-next",
+      has_more_comments: true,
+    }, "900_12345", 10)).toEqual({
       media_id: "900_12345",
-      comments: [{ id: "comment-1", text: "reply" }],
+      comments: [{
+        id: "comment-1",
+        text: "reply",
+        created_at: 101,
+        parent_comment_id: null,
+        user: { id: "222", username: "friend", full_name: null },
+        has_liked_comment: null,
+        comment_like_count: null,
+      }],
+      page_scope: "first-page-only",
+      continuation_supported: false,
     });
     expect(normalizeInstagramInbox({
       status: "ok",
       viewer: { pk: "12345" },
       pending_requests_total: 2,
       inbox: {
-        has_older: false,
+        oldest_cursor: "inbox-next",
+        has_older: true,
         threads: [{
           thread_id: "thread-1",
           thread_title: "Friends",
@@ -553,9 +613,18 @@ describe("Meta consumer-web policy", () => {
           users: [{ pk: "222", username: "friend" }],
         }],
       },
-    }, "12345", 10)).toMatchObject({
+    }, "12345", 10)).toEqual({
       folder: "inbox",
-      threads: [{ thread_id: "thread-1" }],
+      threads: [{
+        thread_id: "thread-1",
+        thread_title: "Friends",
+        users: [{ id: "222", username: "friend", full_name: null }],
+        last_activity_at: 100,
+        read_state: 1,
+        pending: false,
+      }],
+      page_scope: "first-page-only",
+      continuation_supported: false,
       pending_requests_total: 2,
     });
   });
@@ -564,6 +633,8 @@ describe("Meta consumer-web policy", () => {
     expect(normalizeThreadsFeedHtml(threadsHtml, "12345", 10)).toMatchObject({
       feed: "for-you",
       posts: [{ id: "900_12345", caption: "hello" }],
+      page_scope: "first-page-only",
+      continuation_supported: false,
     });
     expect(normalizeFacebookFeedHtml(facebookHtml, "24680", 10)).toMatchObject({
       feed: "home",

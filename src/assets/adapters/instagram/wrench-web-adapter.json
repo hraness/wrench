@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "instagram-web",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "displayName": "Instagram (Authenticated Web API)",
   "surfaceId": "instagram",
   "origins": [
@@ -46,7 +46,7 @@
       }
     },
     "comments.read": {
-      "description": "Observed contract: live direct /api/v1/media/{id}/comments JSON with caption/root binding and bounded comment projection.",
+      "description": "Observed contract: one bounded first page from live direct /api/v1/media/{id}/comments JSON with caption/root binding and no continuation cursor accepted or exposed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -58,12 +58,6 @@
             "description": "Exact Instagram media ID",
             "minLength": 1,
             "maxLength": 80
-          },
-          "cursor": {
-            "type": "string",
-            "description": "Opaque cursor returned by the preceding page",
-            "minLength": 1,
-            "maxLength": 4096
           },
           "limit": {
             "type": "number",
@@ -79,7 +73,7 @@
       "webSession": {
         "site": "instagram",
         "action": "comments.read",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }
@@ -186,7 +180,7 @@
       }
     },
     "feeds.read": {
-      "description": "Observed contract: live direct /api/v1/feed/timeline JSON with viewer binding and bounded media projection.",
+      "description": "Observed contract: one bounded first page from live direct /api/v1/feed/timeline JSON with viewer binding and no continuation cursor accepted or exposed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -199,12 +193,6 @@
             "enum": [
               "home"
             ]
-          },
-          "cursor": {
-            "type": "string",
-            "description": "Opaque cursor returned by the preceding page",
-            "minLength": 1,
-            "maxLength": 4096
           },
           "limit": {
             "type": "number",
@@ -220,7 +208,7 @@
       "webSession": {
         "site": "instagram",
         "action": "feeds.read",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }
@@ -328,7 +316,7 @@
       }
     },
     "messaging.list": {
-      "description": "Observed contract: live direct direct_v2 inbox summary GET; no seen, ack, or presence endpoint is issued.",
+      "description": "Observed contract: one bounded first page from the live direct_v2 inbox summary GET, with no continuation cursor accepted or exposed and no seen, ack, or presence endpoint issued.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -341,12 +329,6 @@
             "enum": [
               "inbox"
             ]
-          },
-          "cursor": {
-            "type": "string",
-            "description": "Opaque cursor returned by the preceding page",
-            "minLength": 1,
-            "maxLength": 4096
           },
           "limit": {
             "type": "number",
@@ -362,7 +344,7 @@
       "webSession": {
         "site": "instagram",
         "action": "messaging.list",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }

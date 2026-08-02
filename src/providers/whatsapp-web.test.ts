@@ -9,6 +9,7 @@ import {
   WHATSAPP_COMMUNITY_MEMBERSHIP_POLICY,
   WHATSAPP_WEB_OPERATIONS,
   WHATSAPP_WEB_OPERATION_NAMES,
+  isWhatsAppWriteAction,
   parseWhatsAppAuthStatusEnvelope,
   parseWhatsAppWriteEnvelope,
   parseWhatsAppJid,
@@ -289,6 +290,12 @@ describe("WhatsApp bounded local projection", () => {
 
 describe("WhatsApp fixed mutation plans and readback", () => {
   test("constructs fixed exact-JID commands without an arbitrary CLI surface", () => {
+    expect(WHATSAPP_WEB_OPERATION_NAMES.filter(isWhatsAppWriteAction)).toEqual([
+      "content.edit",
+      "content.share",
+      "messaging.send",
+      "reactions.set",
+    ]);
     expect(planWhatsAppWriteCommand("messaging.send", {
       conversation_jid: CHAT_JID,
       body: "low stakes",
@@ -324,6 +331,32 @@ describe("WhatsApp fixed mutation plans and readback", () => {
       "--post-send-wait",
       "0",
     ]);
+    expect(planWhatsAppWriteCommand("messaging.send", {
+      conversation_jid: CHAT_JID,
+      body: "caption",
+    }, "/private/tmp/fixture.jpg")).toMatchObject({
+      expectedBody: "caption",
+      expectedMedia: true,
+      argv: [
+        "send",
+        "file",
+        "--to",
+        CHAT_JID,
+        "--file",
+        "/private/tmp/fixture.jpg",
+        "--post-send-wait",
+        "0",
+        "--caption",
+        "caption",
+      ],
+    });
+    expect(() => planWhatsAppWriteCommand("messaging.send", {
+      conversation_jid: CHAT_JID,
+    }, "/private/tmp/fixture.jpg")).toThrow("input.body");
+    expect(() => planWhatsAppWriteCommand("content.save" as never, {
+      conversation_jid: CHAT_JID,
+      message_id: MESSAGE_ID,
+    })).toThrow("has no reviewed write plan");
     expect(() => planWhatsAppWriteCommand("messaging.send", {
       conversation_jid: "--help",
       body: "unsafe",
@@ -370,5 +403,46 @@ describe("WhatsApp fixed mutation plans and readback", () => {
       to: GROUP_JID,
       id: SENT_ID,
     }))).toThrow("destination");
+
+    const mediaPlan = planWhatsAppWriteCommand("messaging.send", {
+      conversation_jid: CHAT_JID,
+      body: "caption",
+    }, "/private/tmp/fixture.jpg");
+    const mediaReceipt = parseWhatsAppWriteEnvelope(mediaPlan, success({
+      sent: true,
+      to: CHAT_JID,
+      id: SENT_ID,
+      file: { type: "image" },
+    }));
+    expect(verifyWhatsAppWriteReadback(
+      mediaPlan,
+      mediaReceipt,
+      success(message({
+        MsgID: SENT_ID,
+        SenderJID: "",
+        SenderName: "me",
+        FromMe: true,
+        Text: "caption",
+        DisplayText: "caption",
+        MediaType: "image",
+        MediaCaption: "caption",
+      })),
+    )).toMatchObject({
+      messageId: SENT_ID,
+      fromMe: true,
+      media: { type: "image", caption: "caption" },
+    });
+    expect(() => verifyWhatsAppWriteReadback(
+      mediaPlan,
+      mediaReceipt,
+      success(message({
+        MsgID: SENT_ID,
+        SenderJID: "",
+        SenderName: "me",
+        FromMe: true,
+        MediaType: "image",
+        MediaCaption: "wrong caption",
+      })),
+    )).toThrow("confirmed content");
   });
 });

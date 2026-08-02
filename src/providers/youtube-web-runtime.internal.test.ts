@@ -6,7 +6,9 @@ import type { WrenchAuth } from "../auth";
 import type { OperationInput, WebSessionRecipe } from "../model";
 import {
   executeYouTubeWebOperation,
+  prepareYouTubeWebDesiredState,
   probeYouTubeWebSubject,
+  readYouTubeWebDesiredState,
   type YouTubeWebRuntimeDependencies,
 } from "./youtube-web-runtime";
 
@@ -133,6 +135,47 @@ function accountsListResponse(channelId = CHANNEL_ID): unknown {
         },
       },
     }],
+  };
+}
+
+function likeStateResponse(enabled: boolean): unknown {
+  return {
+    currentVideoEndpoint: { watchEndpoint: { videoId: VIDEO_ID } },
+    buttons: [{
+      toggleButtonRenderer: {
+        defaultIcon: { iconType: "LIKE" },
+        isToggled: enabled,
+      },
+    }],
+  };
+}
+
+function watchLaterStateResponse(enabled: boolean): unknown {
+  return {
+    currentVideoEndpoint: { watchEndpoint: { videoId: VIDEO_ID } },
+    menu: [{
+      playlistEditEndpoint: {
+        playlistId: "WL",
+        actions: [enabled
+          ? { action: "ACTION_REMOVE_VIDEO", removedVideoId: VIDEO_ID }
+          : { action: "ACTION_ADD_VIDEO", addedVideoId: VIDEO_ID }],
+      },
+    }],
+  };
+}
+
+function subscriptionStateResponse(enabled: boolean): unknown {
+  return {
+    metadata: {
+      channelMetadataRenderer: { externalId: TARGET_CHANNEL_ID },
+    },
+    frameworkUpdates: {
+      entityBatchUpdate: {
+        mutations: [{
+          payload: { subscriptionStateEntity: { subscribed: enabled } },
+        }],
+      },
+    },
   };
 }
 
@@ -426,6 +469,88 @@ describe("YouTube authenticated Innertube runtime", () => {
       )).rejects.toThrow("capture-required");
       expect(acquisitions).toBe(0);
       expect(calls).toHaveLength(0);
+    }
+  });
+
+  test("prepares all three already-satisfied states before any mutation dispatch", async () => {
+    const scenarios = [
+      {
+        action: "likes.set",
+        input: { video_id: VIDEO_ID, liked: true },
+        expectedKind: "like",
+        expectedTargetId: VIDEO_ID,
+        expectedEndpoint: "next",
+        response: likeStateResponse(true),
+      },
+      {
+        action: "content.save",
+        input: { video_id: VIDEO_ID, saved: true },
+        expectedKind: "watch-later",
+        expectedTargetId: VIDEO_ID,
+        expectedEndpoint: "next",
+        response: watchLaterStateResponse(true),
+      },
+      {
+        action: "relationships.follow.set",
+        input: { channel_id: TARGET_CHANNEL_ID, followed: true },
+        expectedKind: "subscription",
+        expectedTargetId: TARGET_CHANNEL_ID,
+        expectedEndpoint: "browse",
+        response: subscriptionStateResponse(true),
+      },
+    ] as const;
+    for (const scenario of scenarios) {
+      const prepareCalls: CapturedRequest[] = [];
+      const preparation = await prepareYouTubeWebDesiredState(
+        recipe(scenario.action),
+        scenario.input,
+        youtubeAuth,
+        {
+          dependencies: dependencies(prepareCalls, (request) =>
+            baseHandler(request, (operationRequest) =>
+              endpoint(operationRequest) === scenario.expectedEndpoint
+                ? jsonResponse(scenario.response)
+                : null)),
+        },
+      );
+      expect(preparation).toEqual({
+        kind: scenario.expectedKind,
+        targetId: scenario.expectedTargetId,
+        desiredState: true,
+        actualState: true,
+        alreadyDesired: true,
+      });
+      expect(prepareCalls.slice(3).map(endpoint)).toEqual([
+        scenario.expectedEndpoint,
+      ]);
+      expect(prepareCalls.some((request) => [
+        "like/like",
+        "like/removelike",
+        "playlist/edit",
+        "subscription/subscribe",
+        "subscription/unsubscribe",
+      ].includes(endpoint(request)))).toBeFalse();
+
+      const readbackCalls: CapturedRequest[] = [];
+      expect(await readYouTubeWebDesiredState(
+        recipe(scenario.action),
+        scenario.input,
+        youtubeAuth,
+        {
+          dependencies: dependencies(readbackCalls, (request) =>
+            baseHandler(request, (operationRequest) =>
+              endpoint(operationRequest) === scenario.expectedEndpoint
+                ? jsonResponse(scenario.response)
+                : null)),
+        },
+      )).toEqual({
+        kind: scenario.expectedKind,
+        targetId: scenario.expectedTargetId,
+        enabled: true,
+      });
+      expect(readbackCalls.slice(3).map(endpoint)).toEqual([
+        scenario.expectedEndpoint,
+      ]);
     }
   });
 

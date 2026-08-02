@@ -10,6 +10,7 @@ import { OperationDeadline } from "../operation-deadline";
 import {
   executeBlueskyWebOperation,
   probeBlueskyWebSubject,
+  readBlueskyWebDesiredState,
   type BlueskyWebRuntimeDependencies,
 } from "./bluesky-web-runtime";
 
@@ -50,6 +51,15 @@ const unboundBlueskyAuth = {
   cookieProfile: "/private/chromium/Default",
 } as const satisfies WrenchAuth;
 
+const unsupportedCookieAuth = {
+  schemaVersion: 1,
+  id: "bluesky-cookie-test",
+  kind: "cookie-source",
+  source: "arc",
+  profile: "Profile 1",
+  subject: VIEWER_DID,
+} as const satisfies WrenchAuth;
+
 type CapturedRequest = {
   readonly url: URL;
   readonly method: string;
@@ -87,7 +97,9 @@ function sessionResponse(did = VIEWER_DID): unknown {
   };
 }
 
-function postView(): unknown {
+function postView(
+  viewer: Readonly<Record<string, unknown>> = {},
+): unknown {
   return {
     uri: POST_URI,
     cid: `b${"a".repeat(40)}`,
@@ -106,7 +118,7 @@ function postView(): unknown {
     repostCount: 0,
     likeCount: 0,
     quoteCount: 0,
-    viewer: {},
+    viewer,
   };
 }
 
@@ -176,6 +188,25 @@ function assertBaseRequest(request: CapturedRequest): void {
 }
 
 describe("Bluesky authenticated XRPC runtime", () => {
+  test("matches the browser-profile-only binding before any bootstrap seam runs", () => {
+    let bootstraps = 0;
+    let fetches = 0;
+    expect(probeBlueskyWebSubject(unsupportedCookieAuth, {
+      dependencies: {
+        bootstrapAccount: () => {
+          bootstraps += 1;
+          return Promise.resolve(bootstrapAccount());
+        },
+        fetch: () => {
+          fetches += 1;
+          return Promise.resolve(jsonResponse(sessionResponse()));
+        },
+      },
+    })).rejects.toThrow("requires browser-profile auth");
+    expect(bootstraps).toBe(0);
+    expect(fetches).toBe(0);
+  });
+
   test("uses a sealed browser-only storage bootstrap and then probes getSession over direct XRPC", async () => {
     const batches: (readonly (readonly string[])[])[] = [];
     let closed = false;
@@ -635,6 +666,70 @@ describe("Bluesky authenticated XRPC runtime", () => {
       "app.bsky.feed.getPostThread",
       "com.atproto.server.getSession",
       "app.bsky.feed.getPosts",
+    ]);
+  });
+
+  test("reads all four exact desired states through account-bound XRPC without mutation", async () => {
+    const calls: CapturedRequest[] = [];
+    const likeUri = `at://${VIEWER_DID}/app.bsky.feed.like/3llike`;
+    const followUri = `at://${VIEWER_DID}/app.bsky.graph.follow/3lfollow`;
+    const deps = dependencies(calls, (request) => {
+      const method = nsid(request);
+      if (method === "com.atproto.server.getSession") {
+        return jsonResponse(sessionResponse());
+      }
+      if (method === "app.bsky.feed.getPosts") {
+        return jsonResponse({
+          posts: [postView({
+            like: likeUri,
+            bookmarked: true,
+          })],
+        });
+      }
+      if (method === "app.bsky.actor.getProfile") {
+        return jsonResponse({
+          did: AUTHOR_DID,
+          handle: "author.test",
+          viewer: { following: followUri },
+        });
+      }
+      throw new Error(`unexpected desired-state XRPC method ${method}`);
+    });
+    expect(await readBlueskyWebDesiredState(
+      recipe("likes.set"),
+      { post_uri: POST_URI, liked: true },
+      blueskyAuth,
+      { dependencies: deps },
+    )).toEqual({ kind: "like", enabled: true, postUri: POST_URI });
+    expect(await readBlueskyWebDesiredState(
+      recipe("content.save"),
+      { post_uri: POST_URI, saved: true },
+      blueskyAuth,
+      { dependencies: deps },
+    )).toEqual({ kind: "bookmark", enabled: true, postUri: POST_URI });
+    expect(await readBlueskyWebDesiredState(
+      recipe("posts.repost"),
+      { post_uri: POST_URI, reposted: false },
+      blueskyAuth,
+      { dependencies: deps },
+    )).toEqual({ kind: "repost", enabled: false, postUri: POST_URI });
+    expect(await readBlueskyWebDesiredState(
+      recipe("relationships.follow.set"),
+      { actor_did: AUTHOR_DID, followed: true },
+      blueskyAuth,
+      { dependencies: deps },
+    )).toEqual({ kind: "follow", enabled: true, actorDid: AUTHOR_DID });
+    expect(calls).toHaveLength(8);
+    expect(calls.every((request) => request.method === "GET")).toBeTrue();
+    expect(calls.map(nsid)).toEqual([
+      "com.atproto.server.getSession",
+      "app.bsky.feed.getPosts",
+      "com.atproto.server.getSession",
+      "app.bsky.feed.getPosts",
+      "com.atproto.server.getSession",
+      "app.bsky.feed.getPosts",
+      "com.atproto.server.getSession",
+      "app.bsky.actor.getProfile",
     ]);
   });
 

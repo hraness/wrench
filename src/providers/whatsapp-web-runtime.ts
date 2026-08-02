@@ -38,6 +38,7 @@ import {
   WHATSAPP_PROTOCOL_PIN,
   WHATSAPP_WEB_OPERATIONS,
   WHATSAPP_WEB_OPERATION_NAMES,
+  isWhatsAppWriteAction,
   parseWhatsAppAuthStatusEnvelope,
   parseWhatsAppWriteEnvelope,
   planWhatsAppWriteCommand,
@@ -1009,6 +1010,7 @@ function isFileInputValue(value: unknown): value is FileInputValue {
  */
 async function executeMutation(
   runtime: Awaited<ReturnType<typeof boundRuntime>>,
+  action: WhatsAppWritePlan["action"],
   recipe: WebSessionRecipe,
   input: OperationInput,
   options: {
@@ -1019,11 +1021,11 @@ async function executeMutation(
     readonly operationDeadline?: WebSessionOperationDeadline;
   },
 ): Promise<WebSessionExecution> {
-  const attachment = recipe.action === "messaging.send"
+  const attachment = action === "messaging.send"
     ? await materializedAttachment(input, options.fileResolver)
     : undefined;
   const plan = planWhatsAppWriteCommand(
-    recipe.action as WhatsAppWritePlan["action"],
+    action,
     input,
     attachment,
   );
@@ -1131,6 +1133,17 @@ export async function executeWhatsAppWebOperation(
       `WhatsApp linked-device operation ${recipe.action} is capture-required: ${contract.reason}`,
     );
   }
+  const localProjection = recipe.action === "messaging.list"
+    || recipe.action === "messaging.read"
+    || recipe.action === "media.read";
+  const writeAction = isWhatsAppWriteAction(recipe.action)
+    ? recipe.action
+    : undefined;
+  if (!localProjection && writeAction === undefined) {
+    throw new Error(
+      `WhatsApp linked-device operation ${recipe.action} has no reviewed write plan`,
+    );
+  }
   options.operationDeadline?.throwIfUnavailable(
     WEB_SESSION_OPERATION_LABEL,
   );
@@ -1142,11 +1155,7 @@ export async function executeWhatsAppWebOperation(
     options.environment ?? process.env,
     options.operationDeadline,
   );
-  if (
-    recipe.action === "messaging.list"
-    || recipe.action === "messaging.read"
-    || recipe.action === "media.read"
-  ) {
+  if (localProjection) {
     return executeLocalProjection(
       runtime,
       recipe,
@@ -1155,7 +1164,10 @@ export async function executeWhatsAppWebOperation(
       options.operationDeadline,
     );
   }
-  return executeMutation(runtime, recipe, input, options);
+  if (writeAction === undefined) {
+    throw new Error("WhatsApp write-plan classification changed during execution");
+  }
+  return executeMutation(runtime, writeAction, recipe, input, options);
 }
 
 export type WhatsAppPairingPlan = {

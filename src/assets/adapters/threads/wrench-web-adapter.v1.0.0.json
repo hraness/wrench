@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "threads-web",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "displayName": "Threads (Authenticated Internal API)",
   "surfaceId": "threads",
   "origins": [
@@ -152,7 +152,7 @@
       }
     },
     "feeds.read": {
-      "description": "Observed contract: one bounded first page from live direct signed-in Threads Relay preload JSON with exact Barcelona viewer binding and no continuation cursor accepted or exposed.",
+      "description": "Observed contract: live direct signed-in Threads Relay preload JSON with exact Barcelona viewer binding.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -165,6 +165,12 @@
             "enum": [
               "for-you"
             ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
           },
           "limit": {
             "type": "number",
@@ -180,7 +186,7 @@
       "webSession": {
         "site": "threads",
         "action": "feeds.read",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }

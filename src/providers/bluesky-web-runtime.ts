@@ -109,6 +109,24 @@ export type BlueskyWebRuntimeDependencies = {
   ) => SessionSecretWriteResult | Promise<SessionSecretWriteResult>;
 };
 
+export type BlueskyWebDesiredStateKind =
+  | "bookmark"
+  | "follow"
+  | "like"
+  | "repost";
+
+export type BlueskyWebDesiredStateReadback =
+  | {
+      readonly kind: Exclude<BlueskyWebDesiredStateKind, "follow">;
+      readonly enabled: boolean;
+      readonly postUri: string;
+    }
+  | {
+      readonly kind: "follow";
+      readonly enabled: boolean;
+      readonly actorDid: string;
+    };
+
 type BlueskyClient = {
   readonly session: BlueskySessionMaterial;
   readonly timeoutMs: number;
@@ -414,6 +432,9 @@ async function selectedSession(
   operationDeadline?: WebSessionOperationDeadline,
   registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar,
 ): Promise<SelectedBlueskySession> {
+  if (auth.kind !== "browser-profile") {
+    throw new Error("Bluesky authenticated API requires browser-profile auth");
+  }
   operationDeadline?.throwIfUnavailable(
     "authenticated web operation deadline",
   );
@@ -918,6 +939,78 @@ async function getProfile(
     }),
     did,
   );
+}
+
+/**
+ * Independently observe one exact Bluesky desired-state target through the
+ * already account-bound XRPC client. This path cannot create or delete a
+ * record and remains available only as a reconciliation readback.
+ */
+export async function readBlueskyWebDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly dependencies?: BlueskyWebRuntimeDependencies;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<BlueskyWebDesiredStateReadback> {
+  if (
+    recipe.site !== "bluesky"
+    || recipe.contractVersion !== 1
+    || (
+      recipe.action !== "likes.set"
+      && recipe.action !== "content.save"
+      && recipe.action !== "relationships.follow.set"
+      && recipe.action !== "posts.repost"
+    )
+  ) {
+    throw new Error(
+      "Bluesky recovery readback supports only likes.set, content.save, relationships.follow.set, and posts.repost",
+    );
+  }
+  const deadline = new OperationDeadline(recipe.timeoutMs, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+  try {
+    const client = await bootstrapClient(
+      auth,
+      recipe.timeoutMs,
+      recipe.maxOutputBytes,
+      options.dependencies,
+      deadline,
+    );
+    requireBoundSubject(auth, client.session);
+    if (recipe.action === "relationships.follow.set") {
+      const actorDid = blueskyDid(
+        inputString(input, "actor_did", 255),
+        "input.actor_did",
+      );
+      if (actorDid === client.session.did) {
+        throw new Error("Bluesky cannot follow the bound viewer");
+      }
+      const profile = await getProfile(client, actorDid);
+      return Object.freeze({
+        kind: "follow",
+        enabled: profile.following !== null,
+        actorDid,
+      });
+    }
+    const postUri = postUriInput(input);
+    const kind = recipe.action === "likes.set"
+      ? "like"
+      : recipe.action === "content.save"
+        ? "bookmark"
+        : "repost";
+    const post = await getPost(client, postUri);
+    return Object.freeze({
+      kind,
+      enabled: postState(post, kind),
+      postUri,
+    });
+  } finally {
+    deadline.dispose();
+  }
 }
 
 async function executeFeedRead(
