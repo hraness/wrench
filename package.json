@@ -1,7 +1,7 @@
 {
   "name": "@hraness/wrench",
   "version": "0.4.0",
-  "description": "A local-first Bun CLI and SDK for durable web capture, encrypted reads, strict cross-provider views, verified media archives, and bounded provider plugins.",
+  "description": "A standard interface for coding agents to operate browser sessions through recorded private APIs.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [

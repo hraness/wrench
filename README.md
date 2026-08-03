@@ -1,7 +1,13 @@
 # Wrench
 
-Wrench is a local-first Bun CLI for durable web capture, encrypted read
-projections, verified media archives, and bounded provider plugins.
+Wrench is a standard interface for coding agents to operate browser sessions
+through recorded private APIs. It records the private APIs behind a browser
+workflow, turns them into typed plugins, and exposes bounded semantic operations
+without returning raw browser access.
+
+The local-first Bun CLI also provides durable web capture, encrypted read
+projections, normalized cross-provider views, verified media archives, and
+bounded provider plugins.
 
 ```sh
 wrench https://example.com/article
