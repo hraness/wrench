@@ -23,6 +23,7 @@ import {
   type WrenchAuth,
 } from "./auth";
 import { parseWrenchArguments, wrenchUsage, type WrenchArguments } from "./args";
+import type { GmailCaptureRunner } from "./gmail-capture";
 import type * as MediaRuntimeModule from "./media";
 import {
   cloneBrowserProfile,
@@ -178,6 +179,7 @@ import {
   readManifestFile,
   readRegularFile,
   removeInstalledManifest,
+  ensurePrivateStateDirectory,
   wrenchStateHome,
   writePrivateJson,
 } from "./storage";
@@ -209,6 +211,11 @@ const defaultOutput: Output = {
 
 const loadMediaRuntime = (): Promise<MediaRuntime> => import("./media");
 
+const runDefaultGmailCapture: GmailCaptureRunner = async (...arguments_) => {
+  const { runGmailCapture } = await import("./gmail-capture");
+  return runGmailCapture(...arguments_);
+};
+
 const inspectDefaultClipEnvironment = async (): Promise<WrenchClipEnvironmentInspection> => {
   const report = await inspectClipEnvironment();
   return {
@@ -230,6 +237,7 @@ export function renderWrenchUsage(): string {
 
 export type WrenchDependencies = {
   readonly clipMain: typeof clipMain;
+  readonly gmailCaptureMain: GmailCaptureRunner;
   readonly inspectClipEnvironment: () => Promise<WrenchClipEnvironmentInspection>;
   readonly loadMediaRuntime: () => Promise<MediaRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
@@ -280,6 +288,7 @@ export type WrenchDependencies = {
 
 const defaultDependencies: WrenchDependencies = {
   clipMain,
+  gmailCaptureMain: runDefaultGmailCapture,
   inspectClipEnvironment: inspectDefaultClipEnvironment,
   loadMediaRuntime,
   providerPluginRegistry,
@@ -336,6 +345,8 @@ const defaultDependencies: WrenchDependencies = {
 function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDependencies {
   return {
     clipMain: overrides.clipMain ?? defaultDependencies.clipMain,
+    gmailCaptureMain:
+      overrides.gmailCaptureMain ?? defaultDependencies.gmailCaptureMain,
     inspectClipEnvironment: overrides.inspectClipEnvironment ?? defaultDependencies.inspectClipEnvironment,
     loadMediaRuntime: overrides.loadMediaRuntime ?? defaultDependencies.loadMediaRuntime,
     providerPluginRegistry: overrides.providerPluginRegistry
@@ -445,6 +456,9 @@ function resolveCaptureArgumentsWithAuth(
   }
   const auth = loadAuth(authId, environment);
   if (auth.kind === "oauth-token-file") {
+    if (auth.provider === "gmail") {
+      return { arguments: forwarded, auth };
+    }
     throw new Error(
       `auth locator ${auth.id} is for official ${auth.provider} API capabilities and cannot be used for browser capture; use cookie/profile auth for clip or read`,
     );
@@ -536,8 +550,36 @@ async function runCaptureCommand(
 ): Promise<number> {
   const resolved = resolveCaptureArgumentsWithAuth(arguments_, environment);
   const unresolvedArguments = [...prefix, ...resolved.arguments];
-  if (!parseCaptureArguments(unresolvedArguments, environment).ok) {
+  const parsed = parseCaptureArguments(unresolvedArguments, environment);
+  if (!parsed.ok) {
     return dependencies.clipMain(unresolvedArguments, environment, output);
+  }
+  if (
+    resolved.auth?.kind === "oauth-token-file"
+    && resolved.auth.provider === "gmail"
+    && (parsed.value.command === "capture" || parsed.value.command === "inspect")
+  ) {
+    const hasExplicitMedia = resolved.arguments.includes("--media");
+    const normalizedGmailArguments = parsed.value.media === "images" && !hasExplicitMedia
+      ? { ...parsed.value, media: "all" as const }
+      : parsed.value;
+    const hasExplicitOutput = resolved.arguments.includes("--output");
+    const persistentPrivateCapture = !normalizedGmailArguments.stdout && !hasExplicitOutput;
+    const gmailOptions = persistentPrivateCapture
+      ? {
+          ...normalizedGmailArguments,
+          outputBase: join(wrenchStateHome(environment), "captures", "gmail"),
+        }
+      : normalizedGmailArguments;
+    if (persistentPrivateCapture) {
+      ensurePrivateStateDirectory(gmailOptions.outputBase, environment);
+    }
+    return dependencies.gmailCaptureMain(
+      gmailOptions,
+      resolved.auth,
+      environment,
+      output,
+    );
   }
   const prepared = prepareCapture(resolved, environment);
   try {

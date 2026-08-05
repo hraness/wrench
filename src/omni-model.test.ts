@@ -12,6 +12,7 @@ import {
   type OmniSourceIdentityV1,
   type ProviderMaterializedEntityV1,
   type ProviderMaterializedPageV1,
+  type ProviderMessageV1,
 } from "./omni-model";
 
 const source: OmniSourceIdentityV1 = Object.freeze({
@@ -54,8 +55,8 @@ function participant(id: string | null) {
 function message(
   providerId: string,
   orderedAt: string,
-  body = providerId,
-): ProviderMaterializedEntityV1 {
+  body: string | null = providerId,
+): ProviderMessageV1 {
   return Object.freeze({
     kind: "message" as const,
     providerId,
@@ -153,6 +154,50 @@ describe("omni normalized model", () => {
       ...page("folder:inbox", []),
       invalidationTags: ["speculative-delete"],
     })).toThrow("must contain exactly");
+  });
+
+  test("round-trips optional body truncation evidence without forging legacy declarations", () => {
+    const legacyPage = page("folder:legacy", [
+      message("t4_legacy", "2026-08-01T00:00:01.000Z"),
+    ]);
+    const parsedLegacy = parseMaterializedPageV1(legacyPage);
+    expect(Object.hasOwn(parsedLegacy.entities[0]!, "bodyTruncated")).toBeFalse();
+    expect(canonicalJson(parsedLegacy)).toBe(canonicalJson(legacyPage));
+
+    const declaredPage = page("folder:declared", [{
+      ...message("t4_declared", "2026-08-01T00:00:02.000Z"),
+      bodyTruncated: true,
+    }]);
+    const parsedDeclared = parseMaterializedPageV1(declaredPage);
+    expect(parsedDeclared.entities[0]).toMatchObject({
+      body: "t4_declared",
+      bodyTruncated: true,
+    });
+
+    const state = reduceOmniSourceStateV1(null, parsedDeclared, {
+      source,
+      provenance: provenance(1),
+    });
+    const reparsed = parseOmniSourceStateV1(
+      JSON.parse(canonicalJson(state)),
+    );
+    expect(reparsed.entities[0]?.entity).toMatchObject({
+      body: "t4_declared",
+      bodyTruncated: true,
+    });
+
+    const undefinedDeclaration = {
+      ...message("t4_invalid", "2026-08-01T00:00:03.000Z"),
+      bodyTruncated: undefined,
+    } as unknown as ProviderMaterializedEntityV1;
+    expect(() => parseMaterializedPageV1(page(
+      "folder:invalid",
+      [undefinedDeclaration],
+    ))).toThrow("bodyTruncated must be boolean");
+    expect(() => parseMaterializedPageV1(page("folder:null", [{
+      ...message("t4_null", "2026-08-01T00:00:04.000Z", null),
+      bodyTruncated: true,
+    }]))).toThrow("cannot be true when body is null");
   });
 
   test("replays one page idempotently and rejects same-observation conflicts", () => {

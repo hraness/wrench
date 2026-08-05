@@ -103,6 +103,8 @@ export type OmniMessageV1 = OmniEntityCommonV1 & {
   readonly direction: "incoming" | "outgoing" | "unknown";
   readonly subject: string | null;
   readonly body: string | null;
+  /** Present when the materializer declares whether body is a bounded prefix. */
+  readonly bodyTruncated?: boolean;
   readonly unread: boolean | null;
   readonly replyToProviderId: string | null;
   readonly state:

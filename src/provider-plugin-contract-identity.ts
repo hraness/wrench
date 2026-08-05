@@ -1,21 +1,21 @@
 export interface ReviewedBuiltInContractIdentityV1 {
   readonly schemaVersion: 1;
   readonly pluginVersion: string;
-  /** Canonical writer identity from the predecessor runtime with NODE_ENV unset. */
+  /** Canonical durable writer identity for the current contract distribution. */
   readonly implementationSha256: string;
   /** Exact b64ccd66 predecessor execution identities accepted only by readers. */
   readonly legacyReadImplementationSha256: Readonly<{
     readonly test: string;
     readonly production: string;
     readonly development: string;
-  }>;
+  }> | null;
   /** Exact later e71c9bd3 predecessor-runtime identities, kept as one distribution. */
   readonly legacyE71ReadImplementationSha256: Readonly<{
     readonly default: string;
     readonly test: string;
     readonly production: string;
     readonly development: string;
-  }>;
+  }> | null;
   /** Distribution-specific, environment-independent current closure attestations. */
   readonly reviewedClosureSha256: readonly string[];
 }
@@ -57,6 +57,25 @@ const identities = Object.freeze({
       "87aa8dd489e1e0a22189d3fad64504b78caf7a55e4bbaaefd05ced7724719cb4",
       "05084c0d9343da14555af20f85d0350377a85ccdd9e0c8fe58b9342c678515cc",
       "1084960df451434032dc9dfe1dbde260ae46484d2fe40f5c9970e6e2baa080f8",
+      "f701bf4df0d4e2e3798a2954da4c2fc26e654a3f9a8dce9402b51f3f5df4042a",
+      "fbbdc50a525317b5a056ced4392d2bbac8c6e9955d99930f5c3b21017e313b01",
+      "b70d123bbeb3489669ccf69d5f6ad68e5e0cd42e4ca061a8f46dcc60577f50ef",
+    ],
+  },
+  "gmail-official": {
+    schemaVersion: 1,
+    pluginVersion: "1.0.0",
+    implementationSha256: "7313c1b5dffcf78251166ed02a80870b7415e685db5fe582321c878b99f4a263",
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
+    reviewedClosureSha256: [
+      "a8ae8c58035292b8fff3041c3914c775aa5a26838e98b5a0dd2f01c51068bea8",
+      "e0336cb7cb2313aaec88fd9e273b18df3ef56da42cf980071a64cd54f31bfaa9",
+      "ae050d17cd5a0d36400769598b95e39852c04f49871b87751200c542bafe4d25",
+      "bce6def0b2d7e6e4d26b31847d4b278b0fce5b21faa8dda0b97de3a87c430466",
+      "7130af3a00b602fb045c14f3d122dac5cab1f590e6036743ebbcbb914c80cfca",
+      "66df7d721eaf73e8bb4441a6ca0d646cccfd58bab8132371689d7d031515c618",
+      "74c9216de499ddc3bb1c0efbebc779d8fdb634e78ef44a86b08f50c62457c71d",
     ],
   },
   "hacker-news-web": {
@@ -84,6 +103,7 @@ const identities = Object.freeze({
       "8422d6688bda2191b9a3955fd9c79acc1d0b1ad21edbdde52ccacf62fe92bfa7",
       "1dc03895fc34463353a5b13068132d583218ab5f5437d0f4433e5ce8d600a602",
       "59cccd6313acedc89cba22cbbc486dd4dfb0658dda4c994c7657af438e1c599d",
+      "ef8263a61c122906e08dc3e2b5bb239eff3521f3e4c0685fa28db088ae138f37",
     ],
   },
   "linkedin-official": {
@@ -108,6 +128,11 @@ const identities = Object.freeze({
       "b10c270ccffd65e49a569f0985e0161c830cfcdf3ff5ca32f228fb24fc7d9d5d",
       "9c2936e26220fb5f1b89b14d48cad7ebfbee828d842a6c9f175525e579c0c908",
       "9d563e0699a26f0cbedf45b494b7dd3b7ff03cffaa496d7d52967ce113b26011",
+      "61cc671fea097c25f04d4fc60409691e17f36b6b34358f3cdb663ab264a1785d",
+      "d241ac9be5d7eb19e09f36d5d99973d72060307403c63b0cd17c04e78fd470ba",
+      "e38fedfcab8805040ff787cb59d9226d8bd27caacf7271aad9b79ed6edbf8fde",
+      "486f4682175344a93bcaaec54491a4c0d39691adc5aa6571de01022d01ef4e3b",
+      "c7eb1e0aa8e6a3f4da3e05967e4fcc5aaacd413f693a292dab09cb5b03ccef5f",
     ],
   },
   "linkedin-web": {
@@ -146,6 +171,9 @@ const identities = Object.freeze({
       "e4ac3c26b15bec325a04f3994fbe0c16de7c8f7eb1f5cb8d800d5a47cfbd92f7",
       "23ff622f5ca861ca94018601d9ab359494a44a40528a7cd528494d69773112db",
       "abc93b1f58d0f9d4e92870392b57a5fcd6b53bae5539b7108ac0539f2e89bb14",
+      "7b1628f633f73cafaecd4e936d264ca36171796dee6db95edc309c4f1a4b3cf8",
+      "91465a5ac153eb7622875b25bb9edf4c1bffb29dc89f617861ecfec1fda2574f",
+      "9b837d56332afdf08aa764750c9297d103b8932f7366b2483f46038f78b18180",
     ],
   },
   "meta-web": {
@@ -178,6 +206,11 @@ const identities = Object.freeze({
       "a7f414ea752b01451ba1cd44e9e4abe4e2a5cddd958d0c0fa578deb15ec5bda9",
       "9963339df0e994bda557683553d50c792cab659a81e4dd41a368dc4dfb17e1e8",
       "f64ffa5bf661f0236801a08f59b4ccdbabcdd575d5d988201661ee72a702baef",
+      "2f51d9b1124b7b0634a1011df13257458d66d3b1eeac141bcb4e3dfda71cb4dd",
+      "1675822661bc076eaaad9b57fd9f269aa0c0e242ed8437cd27df75dd65edfd89",
+      "03a195fd8b7c5b2fc950f801caae675c14edd90f43da6067288a2d5ec56bcaf9",
+      "17ce5e13419ddf7aeafbcd3666c7bae3c0589a61847720d94a35f81e3d8d04e1",
+      "61ec79987db71ded6463b9788d4a830430ebe52341de5c79fb785abf729ea16f",
     ],
   },
   "reddit-web": {
@@ -204,6 +237,8 @@ const identities = Object.freeze({
       "1ca1d147f4fd35ddfabdfef9c4e16957e893615b1fb80b999ee7160fd32e8321",
       "00d51162d59ccf42a98bb13af7945b4737c40c5899c9905420bb7ede4f921eb6",
       "9bdfbcb8b310f6f4a94ccd38bb71e16bb6d6b99ca89eb56530a2c570c89e215a",
+      "fbf51b2e1e896ec687fd8d75b667174083823a5d0bc22112d6042371b0ab3d0d",
+      "f30779067b2051c51578ee77c02d3d975f40b2e659dfe0199ce050c5fe2dadc2",
     ],
   },
   "substack-web": {
@@ -230,6 +265,8 @@ const identities = Object.freeze({
       "66174bbd1730087480580ea36ef30a5d41cc5c6e6078b1e8a6a4b0021cc56734",
       "068e8f959e3893b0721a761fad951b51fdcd1ba6d454ba1bdfbb4be01c8ac0db",
       "9f5cda9959cffb77a9e49b96f765c0f911b1ef1d846480e6e8ab3ff07f9f8fb4",
+      "bca0a0a20ac8f718da475fd9db753445c41ca1a295436cf50cbe9c39fd651d7c",
+      "283346da9533e659a22a2738cf6dd6e874866ed28e4ff2c9b4d286cf2052c5af",
     ],
   },
   "tiktok-web": {
@@ -256,6 +293,7 @@ const identities = Object.freeze({
       "cd96e3731971b30018244d2a101f8ad8120e70d340140289bd6367258da24ac5",
       "cbf56ff85e59dad763721e9d1fa06a02607c5d5e422d017a96a9efd1ccc19dec",
       "5f4eb374e6b04b35c550f379b409733115ba947944782a496dbf4ea71d2136a4",
+      "f3b3dfd48186372ed3f26906d3d79f47729ad26aef9f2cbb9d94481d314f2165",
     ],
   },
   "whatsapp-linked-device": {
@@ -290,6 +328,10 @@ const identities = Object.freeze({
       "0b5f2dd3efcc603b619b1df9a79c9a2bd96afbc2f72d2a976f985f91812847ae",
       "c416b28817c1669dc711a075f0499fd971d7599bfe21e619520d625acbf657d2",
       "ff4e77449bf7bdbc59ffb264ce96dd489f819b9ca225aac69bacebfd9ee0458d",
+      "73268039f8753e02b782dac5245863f8962f53d4befba1f4a067ebeb5959aca8",
+      "e00d12d46acefa083be53ac985c390a3441b96c29ba8fd4ee64e87c85d0f0530",
+      "06ead0c1a15e0072946bb8c6b2aa1bb5f6d68f37dd253da1334301558c3491c4",
+      "829afd3bc34bf0cabc997516fee2dcda12dae5bac4bdeb25c4eb205fb345b3f3",
     ],
   },
   "x-official": {
@@ -314,6 +356,11 @@ const identities = Object.freeze({
       "bb4595ace099e9d67b016c52fd3877ea96fa74fdca325e8a068feccc767ef47b",
       "1166e911b30b4bae28eb4b0701fbda39848b672921c729fd697a9611c26dc375",
       "39bae92af51cf6e0136cc6b4298d5c42728941681340d14cac1fc0dd0df58007",
+      "a82eec35f014931d8fabe9587d2a1ab5a27c878f483562d1e049f27b9849f7a5",
+      "7b104f0825ea9fd60cd3cd17872874e04d26501d2f310032e575097dcba0dce4",
+      "46c56f77580fd4d28264ca7e88a1b9de1b415a155a1ad20966a86958099e6025",
+      "8a5a48ad717a8954c08ecbb65c919d5fecb5571b36e2117359f10d3d4b2ba161",
+      "219150b40bdd2757b0f9ac24049e7ef0ec7cc83c5fbcffa42726ebfcee665c81",
     ],
   },
   "x-web": {
@@ -342,6 +389,7 @@ const identities = Object.freeze({
       "b579c9ee7bf9830120d24263435d249fbe14982032e76411356f146fd653eb17",
       "88af0beec0b08155236927d3d6a57cf218bcc5d51552cc56297cab323a5f5eaa",
       "245052650d4086db55a447a9150e86a850e6b1733b58c857571f16a5b8ad5b56",
+      "028daa16e3f74ebd201e93308d377515e488a30a2ffad8e8f92055d14b641557",
     ],
   },
   "youtube-web": {
@@ -368,13 +416,18 @@ const identities = Object.freeze({
       "ea6dd333a68134b45a02a0988d52e1decfdbbda260d18b4bf7a01755d506ec71",
       "654a904fce509f47c8d8476fc68fa294a576d121004217098a3638a8a64c89b9",
       "94a533892157b6d895c580c17004ab895896a26efeb2502ac237e7aa119aa1e5",
+      "8f22fc03d4a344ee85dfe3872d14e2343030899aeeafe6a0892b336407de6c01",
     ],
   },
 } as const satisfies Readonly<Record<string, ReviewedBuiltInContractIdentityV1>>);
 
 for (const identity of Object.values(identities)) {
-  Object.freeze(identity.legacyReadImplementationSha256);
-  Object.freeze(identity.legacyE71ReadImplementationSha256);
+  if (identity.legacyReadImplementationSha256 !== null) {
+    Object.freeze(identity.legacyReadImplementationSha256);
+  }
+  if (identity.legacyE71ReadImplementationSha256 !== null) {
+    Object.freeze(identity.legacyE71ReadImplementationSha256);
+  }
   Object.freeze(identity.reviewedClosureSha256);
   Object.freeze(identity);
 }

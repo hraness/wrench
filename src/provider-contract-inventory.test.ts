@@ -29,6 +29,7 @@ const [{ createProviderPluginRegistry }, { generatedProviderPlugins }, providerC
 ]);
 const registry = createProviderPluginRegistry(generatedProviderPlugins);
 const rows = [];
+const currentOnlyRows = [];
 const legacyRows = Array.from({ length: 7 }, () => []);
 let acceptedLegacy = true;
 let rejectedUnknown = true;
@@ -63,6 +64,13 @@ function legacyHash(contract, implementationHash, web) {
     .update(implementationHash)
     .digest("hex");
 }
+function appendCurrentRow(row) {
+  if (row[0] === "provider-api" && row[1] === "gmail") {
+    currentOnlyRows.push(row);
+    return;
+  }
+  rows.push(row);
+}
 for (const plugin of registry.list()) {
   for (const binding of plugin.bindings) {
     for (const operation of binding.operations) {
@@ -76,7 +84,7 @@ for (const plugin of registry.list()) {
             timeoutMs: 30_000,
             maxOutputBytes: 1024 * 1024,
           }, registry);
-          rows.push([binding.transport, binding.surfaceId, operation.name, contractVersion,
+          appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
             providerContracts.providerContractHash(contract, registry)]);
           legacyImplementations.forEach((implementationHash, index) => {
             const hash = legacyHash(contract, implementationHash, false);
@@ -94,7 +102,7 @@ for (const plugin of registry.list()) {
             timeoutMs: 60_000,
             maxOutputBytes: 2 * 1024 * 1024,
           }, registry);
-          rows.push([binding.transport, binding.surfaceId, operation.name, contractVersion,
+          appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
             webContracts.webSessionContractHash(contract, registry)]);
           legacyImplementations.forEach((implementationHash, index) => {
             const hash = legacyHash(contract, implementationHash, true);
@@ -147,9 +155,13 @@ for (const legacy of legacyRows) {
     return leftRank - rightRank;
   });
 }
+currentOnlyRows.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 process.stdout.write(JSON.stringify({
   rows: rows.length,
   sha256: createHash("sha256").update(JSON.stringify(rows)).digest("hex"),
+  currentOnlyRows: currentOnlyRows.length,
+  currentOnlySha256:
+    createHash("sha256").update(JSON.stringify(currentOnlyRows)).digest("hex"),
   legacyRows: legacyRows.map((legacy) => legacy.length),
   legacySha256: legacyRows.map((legacy) =>
     createHash("sha256").update(JSON.stringify(legacy)).digest("hex")
@@ -190,6 +202,8 @@ describe("durable provider contract inventory", () => {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
         rows: 260,
         sha256: predecessorDefaultInventorySha256,
+        currentOnlyRows: 3,
+        currentOnlySha256: "0700d87cef45de71decb2994fc4c48979e5ead8011763f8d7782318a43babb74",
         legacyRows: [260, 260, 260, 260, 260, 260, 260],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,

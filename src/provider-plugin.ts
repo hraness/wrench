@@ -643,6 +643,11 @@ type ProviderPluginBindingDefinitionBaseV1 = {
 export type ProviderApiPluginBindingDefinitionV1 =
   ProviderPluginBindingDefinitionBaseV1 & {
   readonly transport: "provider-api";
+  /**
+   * Every exact HTTPS origin that may receive this binding's OAuth bearer
+   * token. Defaults to `[origin]`; declare auxiliary provider APIs explicitly.
+   */
+  readonly runtimeOrigins?: readonly `https://${string}`[];
   readonly operations: readonly ProviderApiPluginOperationDefinitionV1[];
   readonly runtime: ProviderApiPluginRuntimeHooksV1;
 };
@@ -707,6 +712,7 @@ type ProviderPluginBindingBaseV1 = Omit<
 
 export type ProviderApiPluginBindingV1 = ProviderPluginBindingBaseV1 & {
   readonly transport: "provider-api";
+  readonly runtimeOrigins: readonly `https://${string}`[];
   readonly operations: readonly ProviderApiPluginOperationV1[];
   readonly loadRuntime: ProviderApiPluginRuntimeHooksV1["loadRuntime"];
   readonly execute: ProviderApiPluginRuntimeV1["execute"];
@@ -2630,6 +2636,7 @@ function freezeBinding(
       "transport",
       "surfaceId",
       "origin",
+      ...(binding.transport === "provider-api" ? ["runtimeOrigins"] : []),
       "manifestOrigins",
       "protectedHostnameFamilies",
       "authKinds",
@@ -2664,6 +2671,50 @@ function freezeBinding(
     || binding.origin !== origin.origin
   ) {
     throw new Error(`provider plugin surface ${binding.surfaceId} must declare an exact credential-free HTTPS origin`);
+  }
+  let runtimeOrigins: `https://${string}`[] = [];
+  if (binding.transport === "provider-api") {
+    const declaredRuntimeOrigins = binding.runtimeOrigins ?? [binding.origin];
+    requireBoundedNonEmptyArray(
+      declaredRuntimeOrigins,
+      `provider plugin surface ${binding.surfaceId} runtimeOrigins`,
+      20,
+    );
+    runtimeOrigins = [...declaredRuntimeOrigins];
+    for (const runtimeOrigin of runtimeOrigins) {
+      let parsed: URL;
+      try {
+        parsed = new URL(runtimeOrigin);
+      } catch {
+        throw new Error(
+          `provider plugin surface ${binding.surfaceId} has an invalid runtime origin`,
+        );
+      }
+      if (
+        parsed.protocol !== "https:"
+        || parsed.username !== ""
+        || parsed.password !== ""
+        || parsed.pathname !== "/"
+        || parsed.search !== ""
+        || parsed.hash !== ""
+        || runtimeOrigin !== parsed.origin
+      ) {
+        throw new Error(
+          `provider plugin surface ${binding.surfaceId} must declare exact credential-free HTTPS runtime origins`,
+        );
+      }
+    }
+    if (new Set(runtimeOrigins).size !== runtimeOrigins.length) {
+      throw new Error(
+        `provider plugin surface ${binding.surfaceId} repeats a runtime origin`,
+      );
+    }
+    if (!runtimeOrigins.includes(binding.origin)) {
+      throw new Error(
+        `provider plugin surface ${binding.surfaceId} runtime origins must include its primary origin`,
+      );
+    }
+    runtimeOrigins.sort();
   }
   const declaredManifestOrigins = binding.manifestOrigins === undefined
     ? [binding.origin]
@@ -2703,7 +2754,11 @@ function freezeBinding(
     );
   }
   const endpointHostnames = [
-    origin.hostname.toLowerCase(),
+    ...runtimeOrigins.map((runtimeOrigin) =>
+      new URL(runtimeOrigin).hostname.toLowerCase()),
+    ...(binding.transport === "provider-api"
+      ? []
+      : [origin.hostname.toLowerCase()]),
     ...manifestOrigins.map((manifestOrigin) =>
       new URL(manifestOrigin).hostname.toLowerCase()),
   ];
@@ -2827,6 +2882,7 @@ function freezeBinding(
     const result: ProviderApiPluginBindingV1 = Object.freeze({
       ...common,
       transport: "provider-api",
+      runtimeOrigins: Object.freeze(runtimeOrigins),
       operations: Object.freeze(operations) as readonly ProviderApiPluginOperationV1[],
       subject: Object.freeze({ ...binding.subject }),
       loadRuntime,

@@ -34,6 +34,7 @@ import {
   revalidatedInvocationView,
   runWrenchProcess,
   type WrenchClipEnvironmentInspection,
+  type WrenchDependencies,
 } from "./wrench";
 import { hasUnsafeTerminalCharacters } from "@hraness/kb/clip/terminal";
 import {
@@ -1137,6 +1138,142 @@ describe("auth CLI", () => {
       rmSync(profileRoot, { recursive: true, force: true });
     }
   });
+
+  test("routes Gmail OAuth reads and clips through the official private capture boundary", async () => {
+    const testState = state();
+    const privateOutput = join(realpathSync(testState.directory), "captures", "gmail");
+    const explicitOutput = join(testState.directory, "explicit-export");
+    try {
+      saveAuth(createAuth("gmail-main", {
+        oauthProvider: "gmail",
+        tokenFile: join(testState.directory, "gmail-token.json"),
+        scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+        subject: "reader@gmail.com",
+      }), testState.environment);
+
+      let genericClipCalls = 0;
+      const observed: Array<{
+        readonly command: string;
+        readonly outputBase: string;
+        readonly stdout: boolean;
+        readonly media: string;
+        readonly authId: string;
+      }> = [];
+      const dependencies: Partial<WrenchDependencies> = {
+        clipMain: () => {
+          genericClipCalls += 1;
+          return Promise.resolve(99);
+        },
+        gmailCaptureMain: (options, auth) => {
+          observed.push({
+            command: options.command,
+            outputBase: options.outputBase,
+            stdout: options.stdout,
+            media: options.media,
+            authId: auth.id,
+          });
+          return Promise.resolve(0);
+        },
+      };
+
+      const defaultCapture = capture();
+      const defaultExitCode = await main(
+        ["clip", "https://mail.google.com/mail/u/0/#inbox/thread-1", "--auth", "gmail-main"],
+        testState.environment,
+        defaultCapture.output,
+        dependencies,
+      );
+      expect(defaultCapture.stderr()).toBe("");
+      expect(defaultExitCode).toBe(0);
+      expect(existsSync(privateOutput)).toBeTrue();
+
+      const readCapture = capture();
+      expect(await main(
+        ["read", "https://mail.google.com/mail/u/reader%40gmail.com/#all/thread-2", "--auth", "gmail-main"],
+        testState.environment,
+        readCapture.output,
+        dependencies,
+      )).toBe(0);
+      expect(readCapture.stderr()).toBe("");
+
+      const explicitCapture = capture();
+      expect(await main(
+        [
+          "clip",
+          "https://mail.google.com/mail/u/0/#sent/thread-3",
+          "--auth", "gmail-main",
+          "--output", explicitOutput,
+        ],
+        testState.environment,
+        explicitCapture.output,
+        dependencies,
+      )).toBe(0);
+      expect(explicitCapture.stderr()).toBe("");
+
+      expect(genericClipCalls).toBe(0);
+      expect(observed).toEqual([
+        {
+          command: "capture",
+          outputBase: privateOutput,
+          stdout: false,
+          media: "all",
+          authId: "gmail-main",
+        },
+        {
+          command: "inspect",
+          outputBase: "kb/articles",
+          stdout: true,
+          media: "none",
+          authId: "gmail-main",
+        },
+        {
+          command: "capture",
+          outputBase: explicitOutput,
+          stdout: false,
+          media: "all",
+          authId: "gmail-main",
+        },
+      ]);
+      expect(existsSync(explicitOutput)).toBeFalse();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps non-Gmail OAuth locators outside browser capture", async () => {
+    const testState = state();
+    try {
+      saveAuth(createAuth("x-main", {
+        oauthProvider: "x",
+        tokenFile: join(testState.directory, "x-token.json"),
+        scopes: ["tweet.read", "users.read"],
+        subject: "12345",
+      }), testState.environment);
+      const wrench = capture();
+      let delegated = false;
+      expect(await main(
+        ["clip", "https://x.com/example/status/1", "--auth", "x-main"],
+        testState.environment,
+        wrench.output,
+        {
+          clipMain: () => {
+            delegated = true;
+            return Promise.resolve(99);
+          },
+          gmailCaptureMain: () => {
+            delegated = true;
+            return Promise.resolve(99);
+          },
+        },
+      )).toBe(3);
+      expect(delegated).toBeFalse();
+      expect(wrench.stderr()).toContain(
+        "official x API capabilities and cannot be used for browser capture",
+      );
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Wrench media routing", () => {
@@ -1341,6 +1478,7 @@ describe("Wrench media routing", () => {
           browserActionReady: false,
           providerApiReady: true,
           officialProviders: [
+            { provider: "gmail", ready: false },
             { provider: "linkedin", ready: false },
             {
               provider: "x",
@@ -1701,6 +1839,38 @@ describe("provider source plugin discovery CLI", () => {
       expect(wrench.stdout()).not.toContain('"execute"');
       expect(wrench.stdout()).not.toContain('"probe"');
       expect(wrench.stdout()).not.toContain("file://");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("shows every credential-bearing origin for an official provider", async () => {
+    const testState = state();
+    try {
+      const wrench = capture();
+      expect(await main(
+        ["plugin", "show", "gmail-official", "--json"],
+        testState.environment,
+        wrench.output,
+      )).toBe(0);
+      expect(wrench.stderr()).toBe("");
+      const view = JSON.parse(wrench.stdout()) as {
+        readonly plugin: {
+          readonly bindings: readonly {
+            readonly origin: string;
+            readonly runtimeOrigins?: readonly string[];
+          }[];
+        };
+      };
+      expect(view.plugin.bindings[0]).toMatchObject({
+        origin: "https://gmail.googleapis.com",
+        runtimeOrigins: [
+          "https://gmail.googleapis.com",
+          "https://people.googleapis.com",
+        ],
+      });
+      expect(wrench.stdout()).not.toContain('"execute"');
+      expect(wrench.stdout()).not.toContain('"accessToken"');
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

@@ -162,6 +162,11 @@ function nullableBoolean(value, label) {
     return value;
   return fail(label, "must be boolean or null");
 }
+function boolean(value, label) {
+  if (typeof value === "boolean")
+    return value;
+  return fail(label, "must be boolean");
+}
 function oneOf(value, values, label) {
   if (typeof value !== "string" || !values.includes(value)) {
     return fail(label, `must be one of ${values.join(", ")}`);
@@ -538,6 +543,7 @@ function conversationEntity(source, label) {
   return verifyEntityRevision(semantic, source.revision, label);
 }
 function messageEntity(source, label) {
+  const hasBodyTruncated = Object.hasOwn(source, "bodyTruncated");
   exactKeys(source, [
     "kind",
     "providerId",
@@ -557,11 +563,16 @@ function messageEntity(source, label) {
     "revision",
     "source",
     "conversationId"
-  ], [], label);
+  ], hasBodyTruncated ? ["bodyTruncated"] : [], label);
   const common = entityCommon(source, label);
   const conversationProviderId = nullableText(source.conversationProviderId, `${label}.conversationProviderId`, 1024);
   if (conversationProviderId === null !== (common.conversationId === null)) {
     return fail(`${label}.conversationId`, "is inconsistent with conversationProviderId");
+  }
+  const body = nullableText(source.body, `${label}.body`, 256 * 1024, true);
+  const bodyTruncated = hasBodyTruncated ? boolean(source.bodyTruncated, `${label}.bodyTruncated`) : undefined;
+  if (body === null && bodyTruncated === true) {
+    return fail(`${label}.bodyTruncated`, "cannot be true when body is null");
   }
   const semantic = Object.freeze({
     kind: "message",
@@ -573,7 +584,8 @@ function messageEntity(source, label) {
     recipients: Object.freeze(denseArray(source.recipients, `${label}.recipients`, MAX_PARTICIPANTS).map((entry, index) => participant(entry, `${label}.recipients[${index}]`))),
     direction: oneOf(source.direction, ["incoming", "outgoing", "unknown"], `${label}.direction`),
     subject: nullableText(source.subject, `${label}.subject`, 8192, true),
-    body: nullableText(source.body, `${label}.body`, 256 * 1024, true),
+    body,
+    ...bodyTruncated === undefined ? {} : { bodyTruncated },
     unread: nullableBoolean(source.unread, `${label}.unread`),
     replyToProviderId: nullableText(source.replyToProviderId, `${label}.replyToProviderId`, 1024),
     state: oneOf(source.state, ["active", "revoked", "deleted-for-me", "revoked-and-deleted-for-me"], `${label}.state`),

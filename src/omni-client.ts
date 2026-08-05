@@ -313,6 +313,11 @@ function nullableBoolean(value: unknown, label: string): boolean | null {
   return fail(label, "must be boolean or null");
 }
 
+function boolean(value: unknown, label: string): boolean {
+  if (typeof value === "boolean") return value;
+  return fail(label, "must be boolean");
+}
+
 function oneOf<const T extends string>(
   value: unknown,
   values: readonly T[],
@@ -774,12 +779,13 @@ function conversationEntity(
 }
 
 function messageEntity(source: JsonRecord, label: string): OmniMessageV1 {
+  const hasBodyTruncated = Object.hasOwn(source, "bodyTruncated");
   exactKeys(source, [
     "kind", "providerId", "providerRevision", "orderedAt", "conversationProviderId",
     "sender", "recipients", "direction", "subject", "body", "unread",
     "replyToProviderId", "state", "attachments", "id", "revision", "source",
     "conversationId",
-  ], [], label);
+  ], hasBodyTruncated ? ["bodyTruncated"] : [], label);
   const common = entityCommon(source, label);
   const conversationProviderId = nullableText(
     source.conversationProviderId,
@@ -788,6 +794,13 @@ function messageEntity(source: JsonRecord, label: string): OmniMessageV1 {
   );
   if ((conversationProviderId === null) !== (common.conversationId === null)) {
     return fail(`${label}.conversationId`, "is inconsistent with conversationProviderId");
+  }
+  const body = nullableText(source.body, `${label}.body`, 256 * 1024, true);
+  const bodyTruncated = hasBodyTruncated
+    ? boolean(source.bodyTruncated, `${label}.bodyTruncated`)
+    : undefined;
+  if (body === null && bodyTruncated === true) {
+    return fail(`${label}.bodyTruncated`, "cannot be true when body is null");
   }
   const semantic = Object.freeze({
     kind: "message" as const,
@@ -807,7 +820,8 @@ function messageEntity(source: JsonRecord, label: string): OmniMessageV1 {
       `${label}.direction`,
     ),
     subject: nullableText(source.subject, `${label}.subject`, 8_192, true),
-    body: nullableText(source.body, `${label}.body`, 256 * 1024, true),
+    body,
+    ...(bodyTruncated === undefined ? {} : { bodyTruncated }),
     unread: nullableBoolean(source.unread, `${label}.unread`),
     replyToProviderId: nullableText(
       source.replyToProviderId,

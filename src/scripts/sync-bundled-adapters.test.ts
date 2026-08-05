@@ -139,7 +139,7 @@ function capturingInstaller(
 describe("single-process bundled adapter generation sync", () => {
   test("derives all current and archived inventory from assets with registry parity", () => {
     const discovered = discoverBundledAdapters();
-    expect(discovered).toHaveLength(17);
+    expect(discovered).toHaveLength(18);
     expect(discovered.flatMap((adapter) =>
       adapter.upgradeFrom.map((baseline) =>
         `${adapter.id}@${baseline.manifest.version}`
@@ -171,6 +171,7 @@ describe("single-process bundled adapter generation sync", () => {
       "facebook-marketplace-web",
       "facebook-page-web",
       "facebook-web",
+      "gmail",
       "hacker-news-web",
       "instagram-web",
       "linkedin",
@@ -184,7 +185,7 @@ describe("single-process bundled adapter generation sync", () => {
       "x-web",
       "youtube-web",
     ]);
-    expect(new Set(discovered.map((adapter) => adapter.routeKey)).size).toBe(17);
+    expect(new Set(discovered.map((adapter) => adapter.routeKey)).size).toBe(18);
   });
 
   test("validates every immutable source snapshot before one generation commit", async () => {
@@ -225,13 +226,13 @@ describe("single-process bundled adapter generation sync", () => {
       ),
     });
 
-    expect(validations).toBe(17);
+    expect(validations).toBe(18);
     expect(validationRegistries.size).toBe(1);
     expect([...validationRegistries][0]).not.toBe(providerPluginRegistry);
-    expect(committed.validationsAtInstall).toBe(17);
-    expect(committed.selections).toHaveLength(17);
+    expect(committed.validationsAtInstall).toBe(18);
+    expect(committed.selections).toHaveLength(18);
     expect(result).toEqual({
-      installed: 17,
+      installed: 18,
       preserved: 0,
       commitId: "00000000-0000-4000-8000-000000000001",
     });
@@ -274,7 +275,7 @@ describe("single-process bundled adapter generation sync", () => {
             output,
             activeRegistry,
           );
-          if (validations === 17) {
+          if (validations === 18) {
             installPortableProviderPlugin(packagePath, {
               trustExecutableCode: true,
               expectedCurrentBundleSha256: null,
@@ -293,7 +294,7 @@ describe("single-process bundled adapter generation sync", () => {
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
-    expect(validations).toBe(17);
+    expect(validations).toBe(18);
     expect(publicationCalls).toBe(0);
     expect(failure).toContain(
       "portable provider plugin catalog changed during bundled adapter validation",
@@ -385,8 +386,8 @@ describe("single-process bundled adapter generation sync", () => {
       },
     });
 
-    expect(result.installed).toBe(17);
-    expect(committed).toHaveLength(17);
+    expect(result.installed).toBe(18);
+    expect(committed).toHaveLength(18);
     expect(committed.every((selection) =>
       selection.state === "present"
       && selection.manifest.id === selection.id

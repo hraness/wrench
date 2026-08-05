@@ -3,6 +3,7 @@ import { MediaArchiveError } from "./archive";
 import { runCli, type CliIo, type MediaCliDependencies } from "./cli";
 import {
   WRENCH_MEDIA_SCHEMA_VERSION,
+  WRENCH_MEDIA_VERSION,
   WRENCH_MEDIA_YT_DLP_YOUTUBE_IDENTITY_PROFILE,
   type MediaManifest,
 } from "./manifest";
@@ -33,7 +34,7 @@ function captureIo(): { io: CliIo; stdout: string[]; stderr: string[] } {
 
 const manifest: MediaManifest = {
   schemaVersion: WRENCH_MEDIA_SCHEMA_VERSION,
-  wrenchVersion: "0.4.0",
+  wrenchVersion: WRENCH_MEDIA_VERSION,
   assetKey: sourceAssetKey("Youtube", "abcdefghijk"),
   capturedAt: "2026-07-21T00:00:00.000Z",
   mode: "archive",
@@ -71,7 +72,7 @@ const revision: MediaTrackedRevision = {
 const trackedManifest: MediaManifest = {
   ...manifest,
   schemaVersion: WRENCH_MEDIA_SCHEMA_VERSION,
-  wrenchVersion: "0.4.0",
+  wrenchVersion: WRENCH_MEDIA_VERSION,
   assetKey: trackedRevisionAssetKey(revision),
   acquisition: {
     adapter: "yt-dlp",

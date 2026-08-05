@@ -26,6 +26,8 @@ import {
   lazyProviderApiRuntime,
   lazyWebSessionRuntime,
   providerPluginRepositoryRoot,
+  type ProviderApiPluginBindingDefinitionV1,
+  type ProviderApiPluginOperationDefinitionV1,
   type ProviderPluginDefinitionV1,
   type WebSessionApiPluginBindingDefinitionV1,
   type WebSessionPluginOperationDefinitionV1,
@@ -121,6 +123,30 @@ function webBinding(
   };
 }
 
+function providerApiBinding(
+  surfaceId: string,
+): ProviderApiPluginBindingDefinitionV1 {
+  const providerOperation: ProviderApiPluginOperationDefinitionV1 = {
+    ...operation(),
+    requiredScopeSets: [["test.read"]],
+    coverage: ["test records"],
+  };
+  return {
+    transport: "provider-api",
+    surfaceId,
+    origin: `https://${surfaceId}.example`,
+    authKinds: ["oauth-token-file"],
+    operations: [providerOperation],
+    subject: {
+      format: `${surfaceId}:<id>`,
+      matches: (value) => value.startsWith(`${surfaceId}:`),
+    },
+    runtime: lazyProviderApiRuntime(() => Promise.resolve({
+      execute: () => Promise.resolve(),
+    })),
+  };
+}
+
 function pluginDefinition(
   id: string,
   bindings: readonly WebSessionApiPluginBindingDefinitionV1[] = [
@@ -211,6 +237,17 @@ function writeInstalledDependency(
 }
 
 describe("provider plugin definition and registry", () => {
+  test("registers Gmail as a current-only durable provider identity", () => {
+    const plugin = providerPluginRegistry.get("gmail-official");
+    const binding = plugin?.bindings[0];
+    expect(plugin?.version).toBe("1.0.0");
+    expect(binding?.transport).toBe("provider-api");
+    if (binding === undefined) throw new Error("Gmail provider binding is unavailable");
+    expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
+      .toBe("7313c1b5dffcf78251166ed02a80870b7415e685db5fe582321c878b99f4a263");
+    expect(providerPluginRegistry.legacyContractImplementationHashes(binding)).toEqual([]);
+  });
+
   test("freezes complete definitions and orders plugins, bindings, and operations", () => {
     const registry = createProviderPluginRegistry([
       pluginDefinition("zeta", [
@@ -928,6 +965,82 @@ describe("provider plugin definition and registry", () => {
     const validated = defineProviderPlugin(base);
     expect(() => createProviderPluginRegistry([{ ...validated }]))
       .toThrow("is not a validated definition");
+  });
+
+  test("freezes exact bounded provider API runtime origins", () => {
+    const define = (binding: ProviderApiPluginBindingDefinitionV1) =>
+      defineProviderPlugin({
+        ...pluginDefinition("runtime-origin-contract"),
+        bindings: [binding],
+      });
+    const base = providerApiBinding("runtime-origin-contract");
+
+    expect(define(base).bindings[0]).toMatchObject({
+      origin: "https://runtime-origin-contract.example",
+      runtimeOrigins: ["https://runtime-origin-contract.example"],
+    });
+    const withAuxiliary = define({
+      ...base,
+      runtimeOrigins: [
+        "https://runtime-origin-contract.example",
+        "https://people.example",
+      ],
+    });
+    const binding = withAuxiliary.bindings[0];
+    if (binding?.transport !== "provider-api") {
+      throw new Error("provider API runtime-origin fixture is unavailable");
+    }
+    expect(binding.runtimeOrigins).toEqual([
+      "https://people.example",
+      "https://runtime-origin-contract.example",
+    ]);
+    expect(Object.isFrozen(binding.runtimeOrigins)).toBeTrue();
+    expect(binding.protectedHostnameFamilies).toEqual([
+      "people.example",
+      "runtime-origin-contract.example",
+    ]);
+
+    for (const runtimeOrigin of [
+      "https://people.example/contacts",
+      "https://user@people.example",
+      "https://people.example?token=sink",
+    ] as const) {
+      expect(() => define({
+        ...base,
+        runtimeOrigins: [base.origin, runtimeOrigin],
+      })).toThrow("exact credential-free HTTPS runtime origins");
+    }
+    expect(() => define({
+      ...base,
+      runtimeOrigins: [base.origin, base.origin],
+    })).toThrow("repeats a runtime origin");
+    expect(() => define({
+      ...base,
+      runtimeOrigins: ["https://people.example"],
+    })).toThrow("must include its primary origin");
+    expect(() => define({
+      ...base,
+      runtimeOrigins: [base.origin, "https://people.example"],
+      protectedHostnameFamilies: ["runtime-origin-contract.example"],
+    })).toThrow("protected hostname families do not cover people.example");
+    expect(() => define({
+      ...base,
+      runtimeOrigins: Array.from(
+        { length: 21 },
+        (_unused, index): `https://${string}` =>
+          `https://api-${index}.example`,
+      ),
+    })).toThrow("runtimeOrigins");
+    const invalidWebRuntimeOrigin: WebSessionApiPluginBindingDefinitionV1 & {
+      readonly runtimeOrigins: readonly `https://${string}`[];
+    } = {
+      ...webBinding("web-runtime-origin"),
+      runtimeOrigins: ["https://web-runtime-origin.example"],
+    };
+    expect(() => defineProviderPlugin({
+      ...pluginDefinition("web-runtime-origin"),
+      bindings: [invalidWebRuntimeOrigin],
+    })).toThrow("unsupported keys: runtimeOrigins");
   });
 
   test("hashes one owning-plugin snapshot and isolates unrelated registry snapshots", () => {
@@ -1967,7 +2080,7 @@ describe("provider plugin definition and registry", () => {
     );
     const installedKbDynamicModulePath = join(
       dirname(fileURLToPath(import.meta.resolve("@hraness/kb"))),
-      "index-1fa66nh9.js",
+      "index-bt118a7q.js",
     );
     const repositoryLayout = existsSync(repositoryPackageRootPath);
     const packageRootPath = repositoryLayout

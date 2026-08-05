@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { providerPluginRegistry } from "./provider-plugins";
 
 const supported = new Set([
+  "gmail-official/gmail/messaging.list",
+  "gmail-official/gmail/messaging.read",
   "meta-web/instagram/messaging.list",
   "reddit-web/reddit/messaging.list",
   "reddit-web/reddit/messaging.read",
@@ -37,6 +39,7 @@ describe("provider plugin omni declarations", () => {
 
   test("provider-owned materializer files are in each supported closure", () => {
     const expectedLabels = new Map([
+      ["gmail-official", "providers/gmail-omni.ts"],
       ["meta-web", "providers/meta-omni.ts"],
       ["reddit-web", "providers/reddit-omni.ts"],
       ["substack-web", "providers/substack-omni.ts"],

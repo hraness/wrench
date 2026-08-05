@@ -13,6 +13,7 @@ export const wrenchUsage = `Usage:
   wrench list [query-options]                          Query notes and metadata
   wrench index [semantic-options]                      Build the local semantic index
   wrench search <query> [semantic-options]             Search the local vault
+  wrench url-metadata backfill [metadata-options]      Backfill saved URL metadata
   wrench context <repository-path> [context-options]   Resolve scoped agent context
   wrench agents identity|check|audit [...]             Inspect repository agent guides
   wrench adapters [--json]                             List public capture adapters

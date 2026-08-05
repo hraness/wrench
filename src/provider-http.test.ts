@@ -512,6 +512,79 @@ describe("bounded official-provider HTTP", () => {
     }
   });
 
+  test("enforces a request-specific response cap within the client ceiling", async () => {
+    const client = new ProviderHttpClient(
+      () => Promise.resolve(new Response(JSON.stringify({ value: "x".repeat(200) }), {
+        status: 200,
+      })),
+      30_000,
+      1_024,
+    );
+    expect(await rejectionMessage(client.request(
+      "https://api.x.com/2/tweets",
+      { method: "GET" },
+      [200],
+      ["api.x.com"],
+      128,
+    ))).toContain("exceeds 128 bytes");
+    expect(await rejectionMessage(client.request(
+      "https://api.x.com/2/tweets",
+      { method: "GET" },
+      [200],
+      ["api.x.com"],
+      1_025,
+    ))).toContain("within the client ceiling");
+  });
+
+  test("requires an exact JSON response media type when requested", async () => {
+    for (const contentType of [
+      "application/json",
+      'Application/JSON; Charset="UTF-8"',
+    ]) {
+      const client = new ProviderHttpClient(
+        () => Promise.resolve(new Response('{"ok":true}', {
+          status: 200,
+          headers: { "content-type": contentType },
+        })),
+        30_000,
+        1_024,
+      );
+      expect((await client.request(
+        "https://api.x.com/2/tweets",
+        { method: "GET" },
+        [200],
+        ["api.x.com"],
+        1_024,
+        "application/json",
+      )).body).toEqual({ ok: true });
+    }
+
+    for (const contentType of [
+      null,
+      "text/plain",
+      "application/json; charset=iso-8859-1",
+      "application/json; charset=utf-8; charset=utf-8",
+      "application/json; charset=utf-8; profile=example",
+    ]) {
+      const client = new ProviderHttpClient(
+        () => Promise.resolve(new Response('{"ok":true}', {
+          status: 200,
+          ...(contentType === null ? {} : { headers: { "content-type": contentType } }),
+        })),
+        30_000,
+        1_024,
+      );
+      expect(await rejectionMessage(client.request(
+        "https://api.x.com/2/tweets",
+        { method: "GET" },
+        [200],
+        ["api.x.com"],
+        1_024,
+        "application/json",
+      ))).toContain("unsupported response media type");
+    }
+  });
+
   test("cancels and joins a pending body read after the operation deadline", async () => {
     const clock = new FakeMonotonicClock();
     const deadline = new OperationDeadline(100, { clock });

@@ -92,6 +92,8 @@ export type ProviderMessageV1 = ProviderEntityCommonV1 & {
   readonly direction: "incoming" | "outgoing" | "unknown";
   readonly subject: string | null;
   readonly body: string | null;
+  /** Present when a materializer can prove whether body is a bounded prefix. */
+  readonly bodyTruncated?: boolean;
   readonly unread: boolean | null;
   readonly replyToProviderId: string | null;
   readonly state: "active" | "revoked" | "deleted-for-me" | "revoked-and-deleted-for-me";
@@ -386,6 +388,11 @@ function nullableBoolean(value: unknown, label: string): boolean | null {
   return fail(label, "must be boolean or null");
 }
 
+function boolean(value: unknown, label: string): boolean {
+  if (typeof value === "boolean") return value;
+  return fail(label, "must be boolean");
+}
+
 function digest(value: unknown, label: string): string {
   const result = text(value, label, 64);
   if (!/^[a-f0-9]{64}$/u.test(result)) return fail(label, "must be a SHA-256 digest");
@@ -509,11 +516,20 @@ function entity(value: unknown, label: string): ProviderMaterializedEntityV1 {
     });
   }
   if (kind === "message") {
+    const hasBodyTruncated = Object.hasOwn(source, "bodyTruncated");
     exactKeys(source, [
       "kind", "providerId", "providerRevision", "orderedAt", "conversationProviderId",
       "sender", "recipients", "direction", "subject", "body", "unread",
       "replyToProviderId", "state", "attachments",
+      ...(hasBodyTruncated ? ["bodyTruncated"] : []),
     ], label);
+    const body = nullableText(source.body, `${label}.body`, 256 * 1024, true);
+    const bodyTruncated = hasBodyTruncated
+      ? boolean(source.bodyTruncated, `${label}.bodyTruncated`)
+      : undefined;
+    if (body === null && bodyTruncated === true) {
+      return fail(`${label}.bodyTruncated`, "cannot be true when body is null");
+    }
     return Object.freeze({
       ...common,
       kind,
@@ -523,7 +539,8 @@ function entity(value: unknown, label: string): ProviderMaterializedEntityV1 {
         .map((entry, index) => participant(entry, `${label}.recipients[${index}]`))),
       direction: oneOf(source.direction, ["incoming", "outgoing", "unknown"] as const, `${label}.direction`),
       subject: nullableText(source.subject, `${label}.subject`, 8_192, true),
-      body: nullableText(source.body, `${label}.body`, 256 * 1024, true),
+      body,
+      ...(bodyTruncated === undefined ? {} : { bodyTruncated }),
       unread: nullableBoolean(source.unread, `${label}.unread`),
       replyToProviderId: nullableText(source.replyToProviderId, `${label}.replyToProviderId`, 1_024),
       state: oneOf(source.state, ["active", "revoked", "deleted-for-me", "revoked-and-deleted-for-me"] as const, `${label}.state`),
@@ -739,15 +756,16 @@ function publicEntity(
 function parsePublicEntity(value: unknown, label: string): OmniEntityV1 {
   const source = record(value, label);
   const kind = oneOf(source.kind, ["conversation", "message", "notification"] as const, `${label}.kind`);
+  const hasBodyTruncated = kind === "message" && Object.hasOwn(source, "bodyTruncated");
   const providerKeys = kind === "conversation"
     ? ["kind", "providerId", "providerRevision", "orderedAt", "detail", "title", "summary", "participants", "unread", "unreadCount", "archived", "pending"]
     : kind === "message"
-      ? ["kind", "providerId", "providerRevision", "orderedAt", "conversationProviderId", "sender", "recipients", "direction", "subject", "body", "unread", "replyToProviderId", "state", "attachments"]
+      ? ["kind", "providerId", "providerRevision", "orderedAt", "conversationProviderId", "sender", "recipients", "direction", "subject", "body", ...(hasBodyTruncated ? ["bodyTruncated"] : []), "unread", "replyToProviderId", "state", "attachments"]
       : ["kind", "providerId", "providerRevision", "orderedAt", "actor", "subject", "body", "unread", "context"];
   const expectedKeys = kind === "conversation"
     ? ["kind", "providerId", "providerRevision", "orderedAt", "detail", "title", "summary", "participants", "unread", "unreadCount", "archived", "pending", "id", "revision", "source", "conversationId"]
     : kind === "message"
-      ? ["kind", "providerId", "providerRevision", "orderedAt", "conversationProviderId", "sender", "recipients", "direction", "subject", "body", "unread", "replyToProviderId", "state", "attachments", "id", "revision", "source", "conversationId"]
+      ? ["kind", "providerId", "providerRevision", "orderedAt", "conversationProviderId", "sender", "recipients", "direction", "subject", "body", ...(hasBodyTruncated ? ["bodyTruncated"] : []), "unread", "replyToProviderId", "state", "attachments", "id", "revision", "source", "conversationId"]
       : ["kind", "providerId", "providerRevision", "orderedAt", "actor", "subject", "body", "unread", "context", "id", "revision", "source", "conversationId"];
   exactKeys(source, expectedKeys, label);
   const providerInput = Object.fromEntries(

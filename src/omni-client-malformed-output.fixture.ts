@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
 import { canonicalJson, sha256 } from "./canonical-json";
-import type { OmniViewRequest } from "./omni-client-types";
+import type { OmniViewRequest, OmniViewV1 } from "./omni-client-types";
 
 type SyncResponse = {
   readonly status: number;
@@ -106,10 +106,48 @@ function view(viewRevisionCharacter: string, body: string) {
   });
 }
 
+function messageView(
+  viewRevisionCharacter: string,
+  bodyTruncated?: boolean,
+) {
+  const base = view(viewRevisionCharacter, "unused notification body");
+  const semantic = Object.freeze({
+    kind: "message" as const,
+    providerId: "message-1",
+    providerRevision: "provider-revision-1",
+    orderedAt: timestamp,
+    conversationProviderId: null,
+    sender: null,
+    recipients: Object.freeze([]),
+    direction: "unknown" as const,
+    subject: null,
+    body: "bounded body",
+    ...(bodyTruncated === undefined ? {} : { bodyTruncated }),
+    unread: false,
+    replyToProviderId: null,
+    state: "active" as const,
+    attachments: Object.freeze([]),
+    id: "f".repeat(64),
+    source: Object.freeze({
+      surfaceId: "reddit",
+      authId: "reddit-main",
+      providerId: "message-1",
+    }),
+    conversationId: null,
+  });
+  return Object.freeze({
+    ...base,
+    entities: Object.freeze([Object.freeze({
+      ...semantic,
+      revision: sha256(canonicalJson(semantic)),
+    })]),
+  });
+}
+
 function envelope(
   source: "omni-cache" | "omni-live" | "omni-exact-cache",
   identity: FixtureIdentity,
-  resultView = view("3", "cached"),
+  resultView: OmniViewV1 = view("3", "cached"),
 ): string {
   return JSON.stringify({
     ok: true,
@@ -366,6 +404,35 @@ assert(
   `cache command was wrong: ${JSON.stringify(firstCacheArguments)}`,
 );
 assert(cacheInputs.at(-1) === expectedRequest, "cache request was not sent over stdin");
+
+cacheResponses.push({
+  status: 0,
+  stdout: envelope(
+    "omni-cache",
+    requestIdentityA,
+    messageView("4", true),
+  ),
+});
+const declaredMessage = readCachedOmniView(request).view.entities[0];
+assert(
+  declaredMessage?.kind === "message" && declaredMessage.bodyTruncated === true,
+  "cache parser lost declared body truncation evidence",
+);
+
+cacheResponses.push({
+  status: 0,
+  stdout: envelope(
+    "omni-cache",
+    requestIdentityA,
+    messageView("5"),
+  ),
+});
+const legacyMessage = readCachedOmniView(request).view.entities[0];
+assert(
+  legacyMessage?.kind === "message"
+  && !Object.hasOwn(legacyMessage, "bodyTruncated"),
+  "cache parser forged body truncation evidence for a legacy entity",
+);
 
 cacheResponses.push({
   status: 0,

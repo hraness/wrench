@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 3,
+  "id": "gmail",
+  "version": "1.0.0",
+  "displayName": "Gmail (Official API)",
+  "surfaceId": "gmail",
+  "origins": [
+    "https://mail.google.com",
+    "https://contacts.google.com"
+  ],
+  "browserDomains": [
+    "mail.google.com",
+    "contacts.google.com"
+  ],
+  "operations": {
+    "contacts.list": {
+      "description": "Use the code-owned official gmail API contract for contacts.list. subject-bound GET Google People API /v1/people/me/connections plus bounded per-contact and per-direction Gmail queries for sent and received statistics; complete, lower-bound, and truncated states are explicit",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Opaque Google People API next-page token",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Bounded contact count; defaults to 20",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "stats_scan_limit": {
+            "type": "number",
+            "description": "Maximum messages scanned per contact and direction for sent and received statistics; defaults to 100; limit multiplied by this value cannot exceed 2000",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": []
+      },
+      "provider": {
+        "provider": "gmail",
+        "action": "contacts.list",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.list": {
+      "description": "Use the code-owned official gmail API contract for messaging.list. subject-bound GET Gmail /gmail/v1/users/me/threads with fixed INBOX selection or one bounded query, followed by bounded metadata reads; no modify, acknowledgement, or read-receipt request",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "view": {
+            "type": "string",
+            "description": "List the inbox or execute one explicit Gmail search",
+            "enum": [
+              "inbox",
+              "search"
+            ]
+          },
+          "query": {
+            "type": "string",
+            "description": "Exact Gmail search expression; required only for search",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque Gmail next-page token",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Bounded thread count",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "include_spam_trash": {
+            "type": "boolean",
+            "description": "Include matching spam and trash threads for search"
+          }
+        },
+        "required": [
+          "view"
+        ]
+      },
+      "provider": {
+        "provider": "gmail",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.read": {
+      "description": "Use the code-owned official gmail API contract for messaging.read. subject-bound GET Gmail /gmail/v1/users/me/threads/{thread} with exact response identity and bounded MIME projection; no modify, acknowledgement, or read-receipt request",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "description": "Exact Gmail thread ID",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "thread_id"
+        ]
+      },
+      "provider": {
+        "provider": "gmail",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    }
+  }
+}

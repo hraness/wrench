@@ -44,6 +44,7 @@ import {
   type ProviderPluginSurfaceId,
 } from "./provider-plugin-identifiers";
 export {
+  isGmailAccountSubject,
   isLinkedInProviderActorSubject,
   isLinkedInWebAccountSubject,
   isXAccountSubject,
@@ -428,7 +429,7 @@ export function normalizeAuthSubject(value: string): string {
   if (
     !isSafeString(value, 512)
     || value.trim() !== value
-    || !/^[A-Za-z0-9][A-Za-z0-9._:@/%+-]{0,511}$/u.test(value)
+    || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~:@-]{1,512}$/u.test(value)
   ) throw new Error("auth locator has an invalid subject");
   return value;
 }
@@ -453,6 +454,27 @@ function isSafeAuthPath(value: unknown): value is string {
 
 const isSafeOAuthTokenPath = isSafeAuthPath;
 
+function isCanonicalHttpsOAuthScope(value: string): boolean {
+  if (value === "https://mail.google.com/") return true;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "https:"
+    && url.username === ""
+    && url.password === ""
+    && url.port === ""
+    && url.search === ""
+    && url.hash === ""
+    && url.pathname !== "/"
+    && url.href === value
+    && /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u.test(url.hostname)
+    && url.hostname.includes(".")
+    && /^\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/u.test(url.pathname);
+}
+
 export function normalizeOAuthScopes(values: readonly string[]): readonly string[] {
   if (!Array.isArray(values) || values.length < 1 || values.length > 64) {
     throw new Error("OAuth token-file auth requires between 1 and 64 scopes");
@@ -461,8 +483,15 @@ export function normalizeOAuthScopes(values: readonly string[]): readonly string
     if (
       !isSafeString(value, 128)
       || value.trim() !== value
-      || !/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(value)
-    ) throw new Error("OAuth scopes must be non-empty provider scope names without whitespace or control characters");
+      || (
+        !/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(value)
+        && !isCanonicalHttpsOAuthScope(value)
+      )
+    ) {
+      throw new Error(
+        "OAuth scopes must be provider scope names or canonical HTTPS scope URLs without whitespace or control characters",
+      );
+    }
     return value;
   });
   if (new Set(scopes).size !== scopes.length) throw new Error("OAuth scopes must not contain duplicates");

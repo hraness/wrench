@@ -1252,7 +1252,7 @@ describe("wrench CLI grammar", () => {
       arguments: [
         "auth", "add", "x-api", "--oauth-provider", "x", "--token-file", "/private/token", "--scopes", "tweet.read,,users.read",
       ],
-      message: "non-empty provider scope names",
+      message: "provider scope names or canonical HTTPS scope URLs",
     },
     {
       arguments: [

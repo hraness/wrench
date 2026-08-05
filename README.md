@@ -19,10 +19,10 @@ Project site: [hraness.com/wrench](https://hraness.com/wrench)
 
 ## Install
 
-Pin the public repository to the immutable `v0.4.0` tag:
+Pin the public repository to the immutable `v0.5.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.4.0
+bun add --global github:hraness/wrench#v0.5.0
 wrench doctor
 ```
 
@@ -38,7 +38,7 @@ verifies the resolved closure versions and reviewed entrypoint hashes.
 For programmatic plugin types and bounded validators:
 
 ```sh
-bun add github:hraness/wrench#v0.4.0
+bun add github:hraness/wrench#v0.5.0
 ```
 
 ```ts
@@ -71,8 +71,17 @@ wrench transcript URL
 wrench verify path/to/archive-item
 wrench context path/to/code        # resolve nearby agent context
 wrench search "query"              # search the local knowledge base
+wrench url-metadata backfill --root kb
 wrench doctor --json
 ```
+
+`wrench url-metadata` delegates to the shared `@hraness/kb` URL-intelligence
+boundary. Backfill searches for bounded metadata through its pinned Rust search
+helper, records resumable `url-metadata.json` sidecars beside saved URLs, and
+performs read-only Archive.today discovery, including archive.is URLs, by
+default. Pass `--no-archive` to disable archive discovery or `--refresh` to
+replace an existing sidecar after a fresh bounded lookup. Run
+`wrench url-metadata --help` for the complete limits and helper-path options.
 
 Wrench archives one accessible, finite, non-DRM media item at a time. It
 rejects playlists, live streams, affirmative DRM, and unsupported
@@ -156,6 +165,77 @@ reinterpretation. Revalidation reruns the selected R1 operation; it does not
 imply a separate provider sync. In particular, WhatsApp reads revalidate its
 local linked-device projection, while `wrench auth sync <id> --once` remains
 explicit.
+
+### Gmail
+
+Gmail uses the official Gmail and People APIs. Create a current-user-owned
+mode-0600 token document whose provider, subject, and sorted scopes exactly
+match its Wrench auth locator:
+
+```json
+{
+  "schemaVersion": 1,
+  "provider": "gmail",
+  "subject": "person@example.com",
+  "scopes": [
+    "https://www.googleapis.com/auth/contacts.readonly",
+    "https://www.googleapis.com/auth/gmail.readonly"
+  ],
+  "accessToken": "replace-with-the-access-token",
+  "expiresAt": "2099-01-01T00:00:00.000Z"
+}
+```
+
+```sh
+wrench auth add gmail-main --oauth-provider gmail \
+  --token-file /absolute/private/gmail-token.json \
+  --scopes https://www.googleapis.com/auth/contacts.readonly,https://www.googleapis.com/auth/gmail.readonly \
+  --subject person@example.com
+
+wrench gmail contacts.list --auth gmail-main \
+  --input '{"limit":20,"stats_scan_limit":100}' --json
+wrench gmail messaging.list --auth gmail-main \
+  --input '{"view":"inbox","limit":25}' --json
+wrench gmail messaging.list --auth gmail-main \
+  --input '{"view":"search","query":"from:example.com has:attachment","limit":25}' --json
+wrench gmail messaging.read --auth gmail-main \
+  --input '{"thread_id":"thread-id-from-list"}' --json
+```
+
+Contact statistics report sent and received counts plus the maximum internal
+date across every bounded matched message. Count and date completeness flags
+remain explicit when the scan bound truncates a query or a message lacks a
+date. Contacts with mixed, unsupported, or absent addresses report `partial`,
+`unsupported`, or `unavailable` address coverage and lower-bound, incomplete
+statistics instead of exact zeroes for unscanned mailboxes. `limit * stats_scan_limit` cannot
+exceed 2,000, which bounds the per-direction Gmail scan before its paired
+metadata reads. Inbox and search rows include a provider-derived `threadUrl`
+and the exact `messaging.read` input. Reading does not mark a message seen or
+emit a protocol acknowledgement.
+
+Pass a returned Gmail `threadUrl` to `wrench read` or `wrench clip` with the
+same auth locator. Gmail clips default to private Wrench state rather than the
+Git-backed knowledge base. `--output <directory>` is the explicit plaintext
+export boundary. Attachments are content-addressed and integrity-recorded;
+the implicit capture default and explicit `--media all` include every MIME
+attachment, while `--media none` omits their bytes. `--media images` is rejected
+because it would misrepresent non-image files in a Gmail thread. The private
+bundle keeps one physical file per digest and a `gmail.json` occurrence map for
+message, MIME part, provider attachment, declared filename and MIME type, and
+snapshot provenance. Its schema-2 provenance preserves normalized reviewed headers
+for each message: Subject, In-Reply-To, From, To, Cc, Bcc, Date, and Message-ID. Every
+physical attachment object uses the deterministic `<sha256>.bin` name and
+`application/octet-stream` manifest type, so conflicting or active declared
+types cannot create a second object or activate stored content.
+Text body leaves that Gmail externalizes through its attachment endpoint are
+resolved within the same body budget before a read or clip reports completion.
+Official `messaging.read` results cap full-thread decoded text at 7 MiB. Gmail's
+Omni projection keeps an exact UTF-8-safe 256 KiB prefix per message and sets
+`bodyTruncated` explicitly without adding a synthetic marker.
+Full-thread JSON reserves at most 32 MiB for inline attachment payloads;
+provider-hosted attachment endpoints remain independently bounded to 100 MiB
+per file, so profile, thread, and attachment responses never share one broad
+memory allowance.
 
 ## Normalized omni views
 
@@ -253,7 +333,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.4.0/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.5.0/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

@@ -99,6 +99,7 @@ const stateDirectoryNames = [
   "adapters",
   "auth",
   "browser-snapshots",
+  "captures",
   "derivations",
   "idempotency",
   "linked-device-stores",

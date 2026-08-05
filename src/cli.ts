@@ -57,6 +57,7 @@ const publicWrenchCommands = new Set([
   "pdf",
   "refresh",
   "search",
+  "url-metadata",
 ]);
 
 export function isPublicWrenchCommand(rawArguments: readonly string[]): boolean {

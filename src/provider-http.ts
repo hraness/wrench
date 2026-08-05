@@ -209,6 +209,8 @@ export type ProviderResponse = {
   readonly body: unknown;
 };
 
+export type ProviderResponseMediaType = "application/json";
+
 type ProviderResponseReader = {
   readonly read: () => Promise<unknown>;
   readonly cancel: (reason?: unknown) => Promise<void>;
@@ -507,12 +509,32 @@ export class ProviderHttpClient {
       ?? Math.max(0, (this.#legacyDeadlineMs ?? 0) - Date.now());
   }
 
+  /** Fail synchronously when CPU-bound response projection has exhausted the shared deadline. */
+  throwIfUnavailable(): void {
+    this.#operationDeadline?.throwIfUnavailable(PROVIDER_OPERATION_LABEL);
+    if (this.remainingTimeMs() < 1) {
+      throw new Error("official provider operation timed out during response projection");
+    }
+  }
+
   async request(
     urlValue: string | URL,
     init: RequestInit,
     expectedStatuses: readonly number[],
     allowedHosts: readonly string[],
+    maximumBytes = this.#maximumBytes,
+    responseMediaType?: ProviderResponseMediaType,
   ): Promise<ProviderResponse> {
+    if (
+      !Number.isSafeInteger(maximumBytes)
+      || maximumBytes < 1
+      || maximumBytes > this.#maximumBytes
+    ) {
+      throw new Error("official provider request response limit must be a positive safe integer within the client ceiling");
+    }
+    if (responseMediaType !== undefined && responseMediaType !== "application/json") {
+      throw new Error("official provider request has an unsupported response media-type policy");
+    }
     const url = new URL(urlValue);
     if (
       url.protocol !== "https:"
@@ -563,9 +585,26 @@ export class ProviderHttpClient {
       }
       throw failure;
     }
+    if (responseMediaType === "application/json") {
+      const contentType = response.headers.get("content-type");
+      if (
+        contentType === null
+        || contentType.length > 256
+        || !/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/iu.test(contentType)
+      ) {
+        const failure = new Error(
+          `official provider returned an unsupported response media type for ${init.method ?? "GET"} ${safePath(url)}`,
+        );
+        const cleanupFailure = await cancelResponseBody(response.body);
+        if (cleanupFailure !== null) {
+          throw responseCleanupVerificationError(failure, cleanupFailure);
+        }
+        throw failure;
+      }
+    }
     const text = await boundedResponseText(
       response,
-      this.#maximumBytes,
+      maximumBytes,
       this.#operationDeadline,
     );
     if (text === "") return { status: response.status, headers: response.headers, body: null };

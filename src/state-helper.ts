@@ -40,6 +40,7 @@ const stateDirectories = new Set([
   "adapters",
   "auth",
   "browser-snapshots",
+  "captures",
   "derivations",
   "idempotency",
   "linked-device-stores",

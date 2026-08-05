@@ -23,7 +23,7 @@ type InstalledClosurePackage = {
 
 const expectedClosureRuntimeDependencies = Object.freeze({
   "@hraness/kb":
-    "github:hraness/kb#a4989df0e81d504651dbb20c3a4ef36c8846d0cb",
+    "github:hraness/kb#66e873179386614e8048a47977e78dd44502b9d6",
   "buffer-from": "1.1.2",
   "source-map": "0.6.1",
   "source-map-support": "0.5.21",
@@ -195,8 +195,8 @@ function assertDoctorSchema(label: string, text: string): void {
     "schemaVersion",
     "warnings",
   ]);
-  if (capture.schemaVersion !== 1) {
-    throw new Error(`${label}.capture.schemaVersion is not 1`);
+  if (capture.schemaVersion !== 2) {
+    throw new Error(`${label}.capture.schemaVersion is not 2`);
   }
 
   const media = requireJsonObject(`${label}.media`, report.media);
@@ -223,6 +223,19 @@ async function exerciseCli(
   target: Readonly<{ cliPath: string; cwd: string; label: string }>,
   artifactLabel: string,
 ): Promise<void> {
+  const urlMetadataHelp = await runCli(
+    target,
+    "url-metadata help",
+    ["url-metadata", "--help"],
+  );
+  if (
+    urlMetadataHelp.stderr !== ""
+    || !urlMetadataHelp.stdout.includes("kb url-metadata")
+    || !urlMetadataHelp.stdout.includes("metadata-search-engine-rs")
+  ) {
+    throw new Error(`${target.label} url-metadata help is malformed`);
+  }
+
   const doctor = await runCli(target, "doctor", ["doctor", "--json"], [0, 3]);
   assertDoctorSchema(`${target.label} doctor`, doctor.stdout);
 
@@ -372,12 +385,12 @@ try {
     );
     await Promise.all([
       assertInstalledClosurePackage({
-        keyFile: "dist/index-1fa66nh9.js",
+        keyFile: "dist/index-bt118a7q.js",
         name: "@hraness/kb",
         root: installedKbRoot,
         sha256:
-          "a6ae0af7add039e07af47da3ce24d4a5fdc4bc184398a57d4ec955e8d4c7fc97",
-        version: "0.10.0",
+          "90dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b",
+        version: "0.14.0",
       }),
       assertInstalledClosurePackage({
         keyFile: "index.js",
@@ -418,6 +431,15 @@ try {
         version: "6.0.3",
       }),
     ]);
+    await runCommand(
+      "import packed KB URL intelligence",
+      [
+        process.execPath,
+        "-e",
+        "import { ARCHIVE_TODAY_HOSTS, normalizeSourceUrlIdentity } from '@hraness/kb/url-intelligence'; if (!Array.isArray(ARCHIVE_TODAY_HOSTS) || ARCHIVE_TODAY_HOSTS.length === 0 || normalizeSourceUrlIdentity('https://example.com') !== 'https://example.com/') process.exit(1);",
+      ],
+      consumer,
+    );
     await runCommand(
       "import packed read client",
       [

@@ -5,7 +5,7 @@
     "": {
       "name": "@hraness/wrench",
       "dependencies": {
-        "@hraness/kb": "github:hraness/kb#a4989df0e81d504651dbb20c3a4ef36c8846d0cb",
+        "@hraness/kb": "github:hraness/kb#66e873179386614e8048a47977e78dd44502b9d6",
         "buffer-from": "1.1.2",
         "source-map": "0.6.1",
         "source-map-support": "0.5.21",
@@ -21,7 +21,7 @@
   "packages": {
     "@hono/node-server": ["@hono/node-server@1.19.17", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ=="],
 
-    "@hraness/kb": ["@hraness/kb@github:hraness/kb#a4989df", { "dependencies": { "@steipete/sweet-cookie": "git+https://github.com/hraness/sweet-cookie.git#112dce1a3c3dd165310616ca63dd2f6cc652b212", "@tobilu/qmd": "2.5.3", "agent-browser": "0.32.3", "defuddle": "0.19.1", "yaml": "^2.9.0" }, "bin": { "kb": "./dist/cli.js" } }, "hraness-kb-a4989df", "sha512-9rOg2KMPbLU08p5plrAhpOk7z6xCfHC6E+g+7HAk9pY6+ZvkDHFfiDvNfK2pNN+4+iEePPTCCFIh8VS+02oIWQ=="],
+    "@hraness/kb": ["@hraness/kb@github:hraness/kb#66e8731", { "dependencies": { "@steipete/sweet-cookie": "git+https://github.com/hraness/sweet-cookie.git#112dce1a3c3dd165310616ca63dd2f6cc652b212", "@tobilu/qmd": "git+https://github.com/hraness/qmd.git#aa993dceb3ef8cfb71d470554ca437570f5a2b3c", "agent-browser": "0.32.3", "defuddle": "0.19.1", "yaml": "^2.9.0" }, "bin": { "kb": "./dist/cli.js" } }, "hraness-kb-66e8731", "sha512-wkU3L36IjMp87oYrHoVa/z2fNkGKDQgtUDqhv20qGkwBpW+Z+UyLRnOtZK98BYaNzClHxzt2pLbqUQM3u3XC6A=="],
 
     "@huggingface/jinja": ["@huggingface/jinja@0.5.9", "", {}, "sha512-uWTG+l3VJRsl7EXxYizuL3P+cCPoc3cRqbWWRcQN0FhejRfbdq0RNhCmbY/YDtnTcz9icdLYuLDjsnz4d8JMuw=="],
 
@@ -93,7 +93,7 @@
 
     "@tinyhttp/content-disposition": ["@tinyhttp/content-disposition@2.2.4", "", {}, "sha512-5Kc5CM2Ysn3vTTArBs2vESUt0AQiWZA86yc1TI3B+lxXmtEq133C1nxXNOgnzhrivdPZIh3zLj5gDnZjoLL5GA=="],
 
-    "@tobilu/qmd": ["@tobilu/qmd@2.5.3", "", { "dependencies": { "@modelcontextprotocol/sdk": "1.29.0", "better-sqlite3": "12.10.0", "fast-glob": "3.3.3", "node-llama-cpp": "3.18.1", "picomatch": "4.0.4", "sqlite-vec": "0.1.9", "tree-sitter-go": "0.25.0", "tree-sitter-python": "0.25.0", "tree-sitter-rust": "0.24.0", "tree-sitter-typescript": "0.23.2", "web-tree-sitter": "0.26.8", "yaml": "2.9.0", "zod": "4.2.1" }, "optionalDependencies": { "sqlite-vec-darwin-arm64": "0.1.9", "sqlite-vec-darwin-x64": "0.1.9", "sqlite-vec-linux-arm64": "0.1.9", "sqlite-vec-linux-x64": "0.1.9", "sqlite-vec-windows-x64": "0.1.9" }, "peerDependencies": { "typescript": "^5.9.3" }, "bin": { "qmd": "bin/qmd" } }, "sha512-wUKc4pSPDbgs7mV7JYE8/Qj1pNXXatJFV8byTT/T3yLaoAXheFtWu0BgSWwoWGhRkMmxl5Qyitt66NHgbMyeBA=="],
+    "@tobilu/qmd": ["@tobilu/qmd@github:hraness/qmd#aa993dc", { "dependencies": { "@modelcontextprotocol/sdk": "1.29.0", "better-sqlite3": "12.10.0", "fast-glob": "3.3.3", "node-llama-cpp": "3.18.1", "picomatch": "4.0.4", "sqlite-vec": "0.1.9", "tree-sitter-go": "0.25.0", "tree-sitter-python": "0.25.0", "tree-sitter-rust": "0.24.0", "tree-sitter-typescript": "0.23.2", "web-tree-sitter": "0.26.8", "yaml": "2.9.0", "zod": "4.2.1" }, "optionalDependencies": { "sqlite-vec-darwin-arm64": "0.1.9", "sqlite-vec-darwin-x64": "0.1.9", "sqlite-vec-linux-arm64": "0.1.9", "sqlite-vec-linux-x64": "0.1.9", "sqlite-vec-windows-x64": "0.1.9" }, "peerDependencies": { "typescript": "^5.9.3" }, "bin": { "qmd": "bin/qmd" } }, "hraness-qmd-aa993dc", "sha512-8vwNE/U5SWSscMokgqRHsdDnTT6V5wy7rsrvn3mw5vi5qdXesiIb1fb5qCsjkWSwiZhTbx0d1r+zGfzIO/T2jw=="],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 

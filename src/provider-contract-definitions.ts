@@ -471,6 +471,96 @@ const xDefinitions = {
   },
 } as const satisfies Readonly<Record<string, ProviderContractDefinition>>;
 
+const gmailDefinitions = {
+  "contacts.list": {
+    provider: "gmail",
+    operation: "contacts.list",
+    contractVersion: 1,
+    risk: "R1",
+    input: {
+      properties: {
+        cursor: string("Opaque Google People API next-page token", { minLength: 1, maxLength: 4_096 }),
+        limit: number("Bounded contact count; defaults to 20", 1, 100),
+        stats_scan_limit: number("Maximum messages scanned per contact and direction for sent and received statistics; defaults to 100; limit multiplied by this value cannot exceed 2000", 1, 2_000),
+      },
+      required: [],
+    },
+    requiredScopeSets: [
+      [
+        "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/gmail.readonly",
+      ],
+      [
+        "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+      ],
+      [
+        "https://www.googleapis.com/auth/contacts.readonly",
+        "https://mail.google.com/",
+      ],
+      [
+        "https://www.googleapis.com/auth/contacts",
+        "https://www.googleapis.com/auth/gmail.readonly",
+      ],
+      [
+        "https://www.googleapis.com/auth/contacts",
+        "https://www.googleapis.com/auth/gmail.modify",
+      ],
+      [
+        "https://www.googleapis.com/auth/contacts",
+        "https://mail.google.com/",
+      ],
+    ],
+    dispatch: "none",
+    coverage: ["contacts", "contact-metadata", "contact-email-addresses", "sent-counts", "received-counts", "last-sent-at", "last-received-at", "bounded-stat-completeness"],
+    implementation: "subject-bound GET Google People API /v1/people/me/connections plus bounded per-contact and per-direction Gmail searches; exact matched IDs are deduplicated, every bounded match receives one metadata read for the maximum internal date, limit multiplied by stats_scan_limit is capped at 2000, and complete, lower-bound, and truncated states are explicit",
+  },
+  "messaging.list": {
+    provider: "gmail",
+    operation: "messaging.list",
+    contractVersion: 1,
+    risk: "R1",
+    input: {
+      properties: {
+        view: string("List the inbox or execute one explicit Gmail search", { enum: ["inbox", "search"] }),
+        query: string("Exact Gmail search expression; required only for search", { minLength: 1, maxLength: 512 }),
+        cursor: string("Opaque Gmail next-page token", { minLength: 1, maxLength: 4_096 }),
+        limit: number("Bounded thread count", 1, 100),
+        include_spam_trash: boolean("Include matching spam and trash threads for search"),
+      },
+      required: ["view"],
+    },
+    requiredScopeSets: [
+      ["https://www.googleapis.com/auth/gmail.readonly"],
+      ["https://www.googleapis.com/auth/gmail.modify"],
+      ["https://mail.google.com/"],
+    ],
+    dispatch: "none",
+    coverage: ["inbox-threads", "search-threads", "thread-metadata", "thread-urls", "replayable-read-input"],
+    implementation: "subject-bound GET Gmail /gmail/v1/users/me/threads with fixed INBOX selection or one bounded query, followed by bounded metadata reads that emit exact thread URLs and messaging.read input; no modify, acknowledgement, or read-receipt request",
+  },
+  "messaging.read": {
+    provider: "gmail",
+    operation: "messaging.read",
+    contractVersion: 1,
+    risk: "R1",
+    input: {
+      properties: {
+        thread_id: string("Exact Gmail thread ID", { minLength: 1, maxLength: 256 }),
+      },
+      required: ["thread_id"],
+    },
+    requiredScopeSets: [
+      ["https://www.googleapis.com/auth/gmail.readonly"],
+      ["https://www.googleapis.com/auth/gmail.modify"],
+      ["https://mail.google.com/"],
+    ],
+    dispatch: "none",
+    coverage: ["thread", "message-metadata", "render-safe-bodies", "attachment-metadata", "thread-url"],
+    implementation: "subject-bound GET Gmail /gmail/v1/users/me/threads/{thread} with exact response identity, bounded MIME projection, stable part identities, attachment metadata, and an exact Gmail thread URL; no modify, acknowledgement, or read-receipt request",
+  },
+} as const satisfies Readonly<Record<string, ProviderContractDefinition>>;
+
 type BoundProviderContracts<
   Definitions extends Readonly<Record<string, ProviderContractDefinition>>,
 > = {
@@ -499,8 +589,9 @@ function bindProviderSemantics<
 
 const linkedin = bindProviderSemantics(linkedinDefinitions);
 const x = bindProviderSemantics(xDefinitions);
+const gmail = bindProviderSemantics(gmailDefinitions);
 
-export const providerContractDefinitions = { linkedin, x } as const;
+export const providerContractDefinitions = { gmail, linkedin, x } as const;
 
 export { planProviderContractDispatches } from "./provider-contract-planning";
 

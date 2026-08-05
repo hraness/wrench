@@ -146,6 +146,9 @@ function providerPluginView(plugin: ProviderPluginV1): Record<string, unknown> {
       transport: binding.transport,
       surfaceId: binding.surfaceId,
       origin: binding.origin,
+      ...(binding.transport === "provider-api"
+        ? { runtimeOrigins: binding.runtimeOrigins }
+        : {}),
       manifestOrigins: binding.manifestOrigins,
       protectedHostnameFamilies: binding.protectedHostnameFamilies,
       authKinds: binding.authKinds,
@@ -216,9 +219,13 @@ function renderProviderPluginText(plugin: ProviderPluginV1): string {
     "  Bindings:",
   ];
   for (const binding of plugin.bindings) {
+    const runtimeOriginLine = binding.transport === "provider-api"
+      ? [`      Credential-bearing runtime origins: ${binding.runtimeOrigins.join(", ")}`]
+      : [];
     lines.push(
       `    - ${binding.transport}/${binding.surfaceId}`,
       `      Origin: ${binding.origin}`,
+      ...runtimeOriginLine,
       `      Manifest origins: ${binding.manifestOrigins.join(", ")}`,
       `      Protected host families: ${binding.protectedHostnameFamilies.join(", ")}`,
       `      Auth: ${binding.authKinds.join(", ")}`,

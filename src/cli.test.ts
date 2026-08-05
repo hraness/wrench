@@ -127,34 +127,46 @@ describe("lazy wrench CLI entrypoint", () => {
     const previousExitCode = process.exitCode;
     try {
       let publicLoads = 0;
-      let received: readonly string[] = [];
-      await runWrenchCliProcess(
+      const received: (readonly string[])[] = [];
+      for (const rawArguments of [
         ["adapters", "--json"],
-        { stdout: () => undefined, stderr: () => undefined },
-        () => {
-          throw new Error("public commands must not load the provider runtime");
-        },
-        () => {
-          throw new Error("public commands must not load the provider catalog");
-        },
-        () => {
-          publicLoads += 1;
-          return Promise.resolve({
-            main: (raw) => {
-              received = raw ?? [];
-              return Promise.resolve(6);
-            },
-          });
-        },
-      );
-      expect(publicLoads).toBe(1);
-      expect(received).toEqual(["adapters", "--json"]);
+        ["url-metadata", "--help"],
+      ] as const) {
+        await runWrenchCliProcess(
+          rawArguments,
+          { stdout: () => undefined, stderr: () => undefined },
+          () => {
+            throw new Error("public commands must not load the provider runtime");
+          },
+          () => {
+            throw new Error("public commands must not load the provider catalog");
+          },
+          () => {
+            publicLoads += 1;
+            return Promise.resolve({
+              main: (raw) => {
+                received.push(raw ?? []);
+                return Promise.resolve(6);
+              },
+            });
+          },
+        );
+      }
+      expect(publicLoads).toBe(2);
+      expect(received).toEqual([
+        ["adapters", "--json"],
+        ["url-metadata", "--help"],
+      ]);
       expect(process.exitCode).toBe(6);
       expect(isPublicWrenchCommand(["doctor"])).toBeFalse();
       expect(isPublicWrenchCommand(["inspect"])).toBeFalse();
       expect(isPublicWrenchCommand(["operator", "doctor"])).toBeFalse();
+      expect(isPublicWrenchCommand(["url-metadata", "backfill"])).toBeTrue();
+      expect(wrenchUsage).toContain(
+        "wrench url-metadata backfill [metadata-options]",
+      );
     } finally {
-      process.exitCode = previousExitCode;
+      process.exitCode = previousExitCode ?? 0;
     }
   });
 

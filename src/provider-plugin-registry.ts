@@ -540,7 +540,7 @@ const reviewedMetaDynamicInstalledModuleIdentities = Object.freeze([
   "typescript@6.0.3\u0000lib/typescript.js\u0000569177652966bd528c319171c7dd22860dbf72bde116cbc4f644f1d02bb12e39",
 ]);
 const reviewedKbDynamicInstalledModuleIdentity =
-  "@hraness/kb@0.10.0\u0000dist/index-1fa66nh9.js\u0000a6ae0af7add039e07af47da3ce24d4a5fdc4bc184398a57d4ec955e8d4c7fc97";
+  "@hraness/kb@0.14.0\u0000dist/index-bt118a7q.js\u000090dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b";
 const reviewedKbDynamicResolutionPolicy =
   "createRequire(parentUrl).resolve(`$" +
   "{packageName}/package.json`) is reached only by resolvePackageDirectory(\"agent-browser\") at module initialization";
@@ -2937,6 +2937,12 @@ function createProviderPluginRegistryInternal(
       .legacyReadImplementationSha256;
     const e71Legacy = reviewedBuiltInContractIdentity(plugin.id, plugin.version)
       .legacyE71ReadImplementationSha256;
+    if (legacy === null && e71Legacy === null) return Object.freeze([]);
+    if (legacy === null || e71Legacy === null) {
+      throw new Error(
+        `built-in provider plugin ${plugin.id}@${plugin.version} has an incomplete legacy contract identity`,
+      );
+    }
     return Object.freeze([
       Buffer.from(legacy.test, "hex"),
       Buffer.from(legacy.production, "hex"),
