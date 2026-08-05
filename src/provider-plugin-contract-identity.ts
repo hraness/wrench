@@ -56,6 +56,7 @@ const identities = Object.freeze({
       "5f7deb36088f2cd3f18afafefdb927598d8b9f62a81610da55cc0f4b236120b8",
       "87aa8dd489e1e0a22189d3fad64504b78caf7a55e4bbaaefd05ced7724719cb4",
       "05084c0d9343da14555af20f85d0350377a85ccdd9e0c8fe58b9342c678515cc",
+      "1084960df451434032dc9dfe1dbde260ae46484d2fe40f5c9970e6e2baa080f8",
     ],
   },
   "hacker-news-web": {
@@ -82,6 +83,7 @@ const identities = Object.freeze({
       "485b9ed9c204ab7a2467df1173e201c8964266553f170208344d424c98937611",
       "8422d6688bda2191b9a3955fd9c79acc1d0b1ad21edbdde52ccacf62fe92bfa7",
       "1dc03895fc34463353a5b13068132d583218ab5f5437d0f4433e5ce8d600a602",
+      "59cccd6313acedc89cba22cbbc486dd4dfb0658dda4c994c7657af438e1c599d",
     ],
   },
   "linkedin-official": {
@@ -143,6 +145,7 @@ const identities = Object.freeze({
       "7ad941b74978946e5988aa8823d342ac6f4b7a0a29213ebe9bdd791aa3904922",
       "e4ac3c26b15bec325a04f3994fbe0c16de7c8f7eb1f5cb8d800d5a47cfbd92f7",
       "23ff622f5ca861ca94018601d9ab359494a44a40528a7cd528494d69773112db",
+      "abc93b1f58d0f9d4e92870392b57a5fcd6b53bae5539b7108ac0539f2e89bb14",
     ],
   },
   "meta-web": {
@@ -174,6 +177,7 @@ const identities = Object.freeze({
       "a8a5148635f77b2399dcd5c166ed379c9b5a0e993349eeb3ebd48f1145a5eec1",
       "a7f414ea752b01451ba1cd44e9e4abe4e2a5cddd958d0c0fa578deb15ec5bda9",
       "9963339df0e994bda557683553d50c792cab659a81e4dd41a368dc4dfb17e1e8",
+      "f64ffa5bf661f0236801a08f59b4ccdbabcdd575d5d988201661ee72a702baef",
     ],
   },
   "reddit-web": {
@@ -199,6 +203,7 @@ const identities = Object.freeze({
       "3b9a20a84b57149db9f50534f7e59f0a106e89c4e276ced9ca9c293cb127a707",
       "1ca1d147f4fd35ddfabdfef9c4e16957e893615b1fb80b999ee7160fd32e8321",
       "00d51162d59ccf42a98bb13af7945b4737c40c5899c9905420bb7ede4f921eb6",
+      "9bdfbcb8b310f6f4a94ccd38bb71e16bb6d6b99ca89eb56530a2c570c89e215a",
     ],
   },
   "substack-web": {
@@ -224,6 +229,7 @@ const identities = Object.freeze({
       "d05184eff91f3dc18bedff182521f631eccbaeb03a6bf8b8cccf37b52686f996",
       "66174bbd1730087480580ea36ef30a5d41cc5c6e6078b1e8a6a4b0021cc56734",
       "068e8f959e3893b0721a761fad951b51fdcd1ba6d454ba1bdfbb4be01c8ac0db",
+      "9f5cda9959cffb77a9e49b96f765c0f911b1ef1d846480e6e8ab3ff07f9f8fb4",
     ],
   },
   "tiktok-web": {
@@ -249,6 +255,7 @@ const identities = Object.freeze({
       "b0d0dd30841cfcfa9b78a4a383ac85b03d763393f787fc24f4a8037c364d668e",
       "cd96e3731971b30018244d2a101f8ad8120e70d340140289bd6367258da24ac5",
       "cbf56ff85e59dad763721e9d1fa06a02607c5d5e422d017a96a9efd1ccc19dec",
+      "5f4eb374e6b04b35c550f379b409733115ba947944782a496dbf4ea71d2136a4",
     ],
   },
   "whatsapp-linked-device": {
@@ -282,6 +289,7 @@ const identities = Object.freeze({
       "4fcc21c3f6aa0a2880e6f5582911320cd1519bfefe7a5390c08230672864aa58",
       "0b5f2dd3efcc603b619b1df9a79c9a2bd96afbc2f72d2a976f985f91812847ae",
       "c416b28817c1669dc711a075f0499fd971d7599bfe21e619520d625acbf657d2",
+      "ff4e77449bf7bdbc59ffb264ce96dd489f819b9ca225aac69bacebfd9ee0458d",
     ],
   },
   "x-official": {
@@ -333,6 +341,7 @@ const identities = Object.freeze({
       "eb37d38c2401a96e467179b517235f73dd850b7ccc97cd2f9620437be6733459",
       "b579c9ee7bf9830120d24263435d249fbe14982032e76411356f146fd653eb17",
       "88af0beec0b08155236927d3d6a57cf218bcc5d51552cc56297cab323a5f5eaa",
+      "245052650d4086db55a447a9150e86a850e6b1733b58c857571f16a5b8ad5b56",
     ],
   },
   "youtube-web": {
@@ -358,6 +367,7 @@ const identities = Object.freeze({
       "9c8b7ce5407fa35816549e1178c949cc154c1e2b32213de0099aae54d4ce3df6",
       "ea6dd333a68134b45a02a0988d52e1decfdbbda260d18b4bf7a01755d506ec71",
       "654a904fce509f47c8d8476fc68fa294a576d121004217098a3638a8a64c89b9",
+      "94a533892157b6d895c580c17004ab895896a26efeb2502ac237e7aa119aa1e5",
     ],
   },
 } as const satisfies Readonly<Record<string, ReviewedBuiltInContractIdentityV1>>);
