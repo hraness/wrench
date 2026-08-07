@@ -194,6 +194,11 @@ function nullableBoolean(value: unknown, path: string): boolean | null {
   return value;
 }
 
+function boolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") return drift(path, "must be boolean");
+  return value;
+}
+
 function decimalId(value: unknown, path: string): string {
   const result = string(value, path, 32);
   if (!/^[1-9][0-9]{0,31}$/u.test(result)) {
@@ -297,8 +302,11 @@ export function materializeInstagramMessagingList(
   exactKeys(source, [
     "folder",
     "threads",
-    "next_cursor",
-    "has_older",
+    "page_scope",
+    "continuation_supported",
+    "raw_thread_count",
+    "provider_has_older",
+    "provider_cursor_present",
     "pending_requests_total",
   ], [], "messaging.list output");
   if (source.folder !== "inbox") {
@@ -314,21 +322,35 @@ export function materializeInstagramMessagingList(
   if (new Set(ids).size !== ids.length) {
     drift("messaging.list output.threads", "contains duplicate stable thread IDs");
   }
-  const nextCursor = nullableString(
-    source.next_cursor,
-    "messaging.list output.next_cursor",
-    4_096,
-  );
-  const hasOlder = nullableBoolean(
-    source.has_older,
-    "messaging.list output.has_older",
-  );
-  if (hasOlder === true && nextCursor === null) {
-    drift("messaging.list output.next_cursor", "is required when has_older is true");
+  if (source.page_scope !== "first-page-only") {
+    drift("messaging.list output.page_scope", "must be first-page-only");
   }
-  if (hasOlder === false && nextCursor !== null) {
-    drift("messaging.list output.next_cursor", "must be null when has_older is false");
+  if (source.continuation_supported !== false) {
+    drift(
+      "messaging.list output.continuation_supported",
+      "must remain false until cursor replay is reviewed",
+    );
   }
+  const rawThreadCount = integer(
+    source.raw_thread_count,
+    "messaging.list output.raw_thread_count",
+    0,
+    1_000,
+  );
+  if (rawThreadCount < entities.length) {
+    drift(
+      "messaging.list output.raw_thread_count",
+      "must cover every projected thread",
+    );
+  }
+  boolean(
+    source.provider_has_older,
+    "messaging.list output.provider_has_older",
+  );
+  boolean(
+    source.provider_cursor_present,
+    "messaging.list output.provider_cursor_present",
+  );
   nullableInteger(
     source.pending_requests_total,
     "messaging.list output.pending_requests_total",
@@ -339,13 +361,10 @@ export function materializeInstagramMessagingList(
     schemaVersion: 1,
     partition,
     completeness: Object.freeze({
-      kind: hasOlder === false ? "complete" : "first-page-only",
-      reason: hasOlder === false
-        ? "Instagram explicitly reported that the inbox has no older page."
-        : "Instagram exposed older-page evidence, but authenticated inbox cursor replay remains capture-required.",
+      kind: "first-page-only",
+      reason:
+        "Instagram authenticated inbox cursor replay remains capture-required, so the privacy-preserving runtime exposes only the reviewed first page.",
     }),
-    // The exact output cursor is validated as drift evidence but is not an
-    // executable provider input under the observed contract.
     cursor: Object.freeze({ direction: "none", request: null, nextInput: null }),
     entities: materialized,
     tombstones: Object.freeze([]),

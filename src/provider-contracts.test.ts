@@ -172,6 +172,13 @@ describe("official provider contract registry", () => {
     expect(providerContracts.linkedin["posts.read"].implementation).toContain("no home-feed reconstruction");
     expect("messaging.list" in providerContracts.linkedin).toBeFalse();
 
+    const linkedInContacts = providerContracts.linkedin["contacts.list"];
+    expect(linkedInContacts.requiredScopeSets).toEqual([["r_1st_connections", "r_liteprofile"]]);
+    expect(linkedInContacts.coverage).toContain("authenticated-viewer-binding");
+    expect(linkedInContacts.coverage).toContain("locale-selection-evidence");
+    expect(linkedInContacts.implementation).toContain("GET /v2/me?projection=(id)");
+    expect(linkedInContacts.implementation).toContain("exact byte comparison");
+
     const linkedInPublish = providerContracts.linkedin["posts.publish"];
     expect(linkedInPublish.input.properties.media.items.mediaTypes).toContain("video/mp4");
     expect(linkedInPublish.input.properties.media.items.mediaTypes).not.toContain("video/quicktime");

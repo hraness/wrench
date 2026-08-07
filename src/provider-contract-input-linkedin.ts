@@ -6,6 +6,13 @@ export function linkedinProviderConditionalInputIssues(
   input: OperationInput,
 ): readonly string[] {
   const issues: string[] = [];
+  if (action === "contacts.list") {
+    for (const name of ["start", "count"] as const) {
+      if (typeof input[name] === "number" && !Number.isSafeInteger(input[name])) {
+        issues.push(`input.${name} must be a safe integer`);
+      }
+    }
+  }
   if (action === "posts.read") {
     if (input.mode === "one") {
       if (typeof input.post_urn !== "string") {

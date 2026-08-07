@@ -29,6 +29,7 @@ const implementationSources = Object.freeze([
   source("kernel/provider-http.ts", "../../provider-http.ts"),
   source("kernel/operation-deadline.ts", "../../operation-deadline.ts"),
   source("providers/gmail-api.ts", "../../providers/gmail-api.ts"),
+  source("providers/contact-projection.ts", "../../providers/contact-projection.ts"),
   source("providers/gmail.ts", "../../providers/gmail.ts"),
   source("providers/gmail-omni.ts", "../../providers/gmail-omni.ts"),
 ]);

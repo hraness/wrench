@@ -28,6 +28,7 @@ describe("LinkedIn internal-web operation registry", () => {
   test("enumerates the complete semantic surface exactly once", () => {
     expect(LINKEDIN_WEB_OPERATION_NAMES).toEqual([
       "feeds.read",
+      "contacts.list",
       "profiles.read",
       "organizations.read",
       "relationships.recommendations.read",

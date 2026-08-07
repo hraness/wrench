@@ -26,7 +26,11 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
     ["kernel/auth.ts", "../../auth.ts"],
+    ["kernel/state-helper.bunfig.toml", "../../state-helper.bunfig.toml"],
     ["kernel/storage.ts", "../../storage.ts"],
+    ["providers/contact-projection.ts", "../../providers/contact-projection.ts"],
+    ["providers/whatsapp-contact-projection-helper.ts", "../../providers/whatsapp-contact-projection-helper.ts"],
+    ["providers/whatsapp-contact-projection-protocol.ts", "../../providers/whatsapp-contact-projection-protocol.ts"],
     ["providers/whatsapp-web.ts", "../../providers/whatsapp-web.ts"],
     ["providers/whatsapp-web-runtime.ts", "../../providers/whatsapp-web-runtime.ts"],
     ["providers/whatsapp-omni.ts", "../../providers/whatsapp-omni.ts"],
@@ -39,7 +43,7 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
     authKinds: linkedDeviceAuthKinds,
     operations: webSessionContractOperations(
       Object.values(whatsappContracts),
-      "fec7017105b6d31e8913ccda4c451cb2a4dcd967e20f6dde7190fdec69a2afde",
+      "e8c49c66847eabdb7319b3e1a11fe95513415451e1c9731a7fc62f4fca95d80b",
       {},
       {
         "messaging.list": {

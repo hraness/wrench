@@ -35,7 +35,7 @@ export const linkedinWebPlugin = defineProviderPlugin({
     authKinds: browserSessionAuthKinds,
     operations: webSessionContractOperations(
       Object.values(linkedinContracts),
-      "03f83133f668712b5fa776ab3982e27d52a7645f0ae7dde52d5452bff6f31827",
+      "4c7603dd77900786b4aecb29296c8a2188ee6514ee0b64e0b076526eb4559c3f",
       {},
       {
         "messaging.list": {

@@ -21,7 +21,13 @@ export const linkedinOfficialPlugin = defineProviderPlugin({
   version: "1.0.0",
   displayName: "LinkedIn Official API",
   sourceKind: "built-in",
-  implementationSources: officialImplementationSources(import.meta.url, "linkedin"),
+  implementationSources: Object.freeze([
+    ...officialImplementationSources(import.meta.url, "linkedin"),
+    Object.freeze({
+      label: "providers/contact-projection.ts",
+      url: new URL("../../providers/contact-projection.ts", import.meta.url),
+    }),
+  ]),
   bindings: [{
     transport: "provider-api",
     surfaceId: "linkedin",
@@ -32,10 +38,17 @@ export const linkedinOfficialPlugin = defineProviderPlugin({
     operations: officialContractOperations(
       Object.values(providerContractDefinitions.linkedin),
       {
-        semanticIdentity: "f596551d3ce0f5ec7ee35cb07d280567394d24fd214a2f51a01a30008c65daaf",
+        semanticIdentity: "ee66fdcc3c9ade03be01aa1e8dbe799159ee2fffccbd4c9850fd98e4a6359519",
         validateInput: (contract, input) =>
           linkedinProviderConditionalInputIssues(contract.operation, input),
         validateSubjectInput: (contract, input, subject) => {
+          if (contract.operation === "contacts.list") {
+            return /^urn:li:person:[A-Za-z0-9_-]{1,256}$/u.test(subject)
+              ? []
+              : [
+                "LinkedIn contacts.list requires an OAuth locator with an exact person URN subject",
+              ];
+          }
           if (contract.risk !== "R2" && contract.risk !== "R3") return [];
           const requestedActor = typeof input.actor === "string"
             ? input.actor

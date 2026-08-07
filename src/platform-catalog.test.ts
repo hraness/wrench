@@ -25,6 +25,7 @@ const r1Operations = new Set<SemanticOperationName>([
   "content.clip",
   "profiles.read",
   "organizations.read",
+  "contacts.list",
   "feeds.read",
   "messaging.list",
   "messaging.read",

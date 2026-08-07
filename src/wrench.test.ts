@@ -1545,6 +1545,7 @@ describe("doctor authenticated API readiness", () => {
           "articles.read",
           "comments.create",
           "comments.read",
+          "contacts.list",
           "feeds.read",
           "messaging.list",
           "messaging.read",
@@ -2406,7 +2407,7 @@ describe("reviewed platform policy helpers", () => {
       const installed = loadInstalledManifest("linkedin", testState.environment);
       expect(installed.ok).toBeTrue();
       if (!installed.ok) throw new Error(installed.issues.join("; "));
-      expect(installed.value).toMatchObject({ schemaVersion: 3, id: "linkedin", version: "1.0.0" });
+      expect(installed.value).toMatchObject({ schemaVersion: 3, id: "linkedin", version: "1.1.0" });
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

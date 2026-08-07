@@ -311,6 +311,7 @@ const TIKTOK_WEB_OPERATIONS = operationPolicies("tiktok", [
   "feeds.read",
 ]);
 const WHATSAPP_WEB_OPERATIONS = operationPolicies("whatsapp", [
+  "contacts.list",
   "media.read",
   "messaging.list",
   "messaging.read",
@@ -327,6 +328,7 @@ type MetaWebSite =
 const META_WEB_OPERATIONS = Object.freeze({
   instagram: operationPolicies("instagram", [
     "comments.read",
+    "contacts.list",
     "feeds.read",
     "media.read",
     "messaging.list",
@@ -423,6 +425,7 @@ const bluesky = {
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const linkedin = {
+  "contacts.list": contract("linkedin", "contacts.list", "R1", "capture-required", "consumer-web contact statistics require a fresh viewer-bound messaging-participant collection with real conversation and message pagination, group attribution, completeness, and acknowledgement-free behavior"),
   "feeds.read": contract("linkedin", "feeds.read", "R1", "capture-required", "the registered feed query revision is known, but its exact current value-level variables need a fresh reviewed capture"),
   "profiles.read": contract("linkedin", "profiles.read", "R1", "capture-required", "exact public-identifier or profile-URN lookup and bounded member projection require a reviewed capture"),
   "organizations.read": contract("linkedin", "organizations.read", "R1", "capture-required", "exact organization identifier lookup and bounded page projection require a reviewed capture"),
@@ -493,6 +496,7 @@ const reddit = {
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const whatsapp = {
+  "contacts.list": contract("whatsapp", "contacts.list", WHATSAPP_WEB_OPERATIONS["contacts.list"].risk, WHATSAPP_WEB_OPERATIONS["contacts.list"].state, WHATSAPP_WEB_OPERATIONS["contacts.list"].reason),
   "content.edit": contract("whatsapp", "content.edit", WHATSAPP_WEB_OPERATIONS["content.edit"].risk, WHATSAPP_WEB_OPERATIONS["content.edit"].state, WHATSAPP_WEB_OPERATIONS["content.edit"].reason),
   "content.save": contract("whatsapp", "content.save", WHATSAPP_WEB_OPERATIONS["content.save"].risk, WHATSAPP_WEB_OPERATIONS["content.save"].state, WHATSAPP_WEB_OPERATIONS["content.save"].reason),
   "content.share": contract("whatsapp", "content.share", WHATSAPP_WEB_OPERATIONS["content.share"].risk, WHATSAPP_WEB_OPERATIONS["content.share"].state, WHATSAPP_WEB_OPERATIONS["content.share"].reason),

@@ -8,10 +8,12 @@ import {
   type BigIntStats,
 } from "node:fs";
 import { isAbsolute } from "node:path";
+import { types as nodeTypes } from "node:util";
 
 import { isLinkedInProviderActorSubject } from "../provider-subject";
 import { bearerHeaders } from "../provider-http";
 import type { ProviderActionContext, ProviderFile } from "../provider-context";
+import { projectContactDirectionStats } from "./contact-projection";
 
 const LINKEDIN_API_ORIGIN = "https://api.linkedin.com";
 const LINKEDIN_API_HOSTS = ["api.linkedin.com"] as const;
@@ -27,6 +29,12 @@ const FILE_READ_CHUNK_BYTES = 1024 * 1024;
 const MAX_MEDIA_STATUS_POLLS = 100;
 const MAX_MEDIA_STATUS_WAIT_MS = 8 * 60_000;
 const DEFAULT_MEDIA_STATUS_DELAY_MS = 1_000;
+const CONNECTIONS_DEFAULT_COUNT = 10;
+const CONNECTIONS_MAX_COUNT = 50;
+const CONNECTIONS_MAX_START = 100_000;
+const CONNECTIONS_PROJECTION = "(elements(*(to~)),paging)";
+const CONNECTION_STATS_UNAVAILABLE_REASON =
+  "linkedin-connections-message-statistics-unavailable";
 
 const imageMediaTypes = new Set(["image/jpeg", "image/png", "image/gif"]);
 const videoMediaTypes = new Set(["video/mp4"]);
@@ -82,6 +90,41 @@ type UploadInstruction = {
   readonly uploadUrl: string;
 };
 
+type StrictJsonRecord = Readonly<Record<string, unknown>>;
+
+type LocalizedConnectionNameSelectionBasis =
+  | "preferred-locale-exact"
+  | "preferred-locale-unambiguous-variant"
+  | "sole-localized-value"
+  | "unavailable";
+
+type LocalizedConnectionName = Readonly<{
+  value: string | null;
+  localized: Readonly<Record<string, string>>;
+  preferredLocale: Readonly<{
+    country: string | null;
+    language: string;
+  }> | null;
+  selectedLocale: string | null;
+  selectionBasis: LocalizedConnectionNameSelectionBasis;
+}>;
+
+const unavailableConnectionStats = Object.freeze({
+  count: null,
+  complete: false,
+  lowerBound: false,
+  truncated: false,
+  lastAt: null,
+  lastAtComplete: false,
+  lastAtBasis: "unavailable",
+  incompleteReasons: Object.freeze([CONNECTION_STATS_UNAVAILABLE_REASON]),
+} as const);
+
+const unavailableConnectionStatsProjection = projectContactDirectionStats(
+  unavailableConnectionStats,
+  unavailableConnectionStats,
+);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -89,6 +132,74 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) throw new Error(`LinkedIn returned an invalid ${label}`);
   return value;
+}
+
+function strictRecord(value: unknown, label: string): StrictJsonRecord {
+  if (
+    nodeTypes.isProxy(value)
+    || typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || (
+      Object.getPrototypeOf(value) !== Object.prototype
+      && Object.getPrototypeOf(value) !== null
+    )
+  ) throw new Error(`${label} must be a plain object`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string") throw new Error(`${label} must not contain symbol properties`);
+    const descriptor = descriptors[key];
+    if (
+      descriptor === undefined
+      || !("value" in descriptor)
+      || !descriptor.enumerable
+    ) throw new Error(`${label}.${key} must be an enumerable data property`);
+  }
+  return value as StrictJsonRecord;
+}
+
+function exactKeys(
+  value: StrictJsonRecord,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): void {
+  const allowed = new Set([...required, ...optional]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new Error(`${label} contains unreviewed property ${key}`);
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) throw new Error(`${label}.${key} is required`);
+  }
+}
+
+function strictArray(value: unknown, label: string, maximum: number): readonly unknown[] {
+  if (
+    nodeTypes.isProxy(value)
+    || !Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+    || value.length > maximum
+  ) throw new Error(`${label} must be a dense array of at most ${maximum} items`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const expected = new Set<PropertyKey>([
+    "length",
+    ...Array.from({ length: value.length }, (_unused, index) => String(index)),
+  ]);
+  if (
+    Reflect.ownKeys(descriptors).length !== expected.size
+    || Reflect.ownKeys(descriptors).some((key) => !expected.has(key))
+  ) throw new Error(`${label} must be a dense array without named properties`);
+  const result: unknown[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (
+      descriptor === undefined
+      || !("value" in descriptor)
+      || !descriptor.enumerable
+    ) throw new Error(`${label}[${index}] must be an enumerable data property`);
+    result.push(descriptor.value);
+  }
+  return Object.freeze(result);
 }
 
 function hasUnsafeTextControl(value: string): boolean {
@@ -153,12 +264,183 @@ function responseInteger(value: unknown, label: string): number {
   return value as number;
 }
 
-function apiHeaders(context: ProviderActionContext, json = false): Headers {
+function isWellFormedText(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return false;
+  }
+  return true;
+}
+
+function hasUnsafeStructuredTextControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      code <= 0x1f
+      || code === 0x7f
+      || (code >= 0x80 && code <= 0x9f)
+      || code === 0x061c
+      || code === 0x200e
+      || code === 0x200f
+      || (code >= 0x2028 && code <= 0x202e)
+      || (code >= 0x2066 && code <= 0x2069)
+    ) return true;
+  }
+  return false;
+}
+
+function structuredResponseText(
+  value: unknown,
+  label: string,
+  maximum: number,
+): string {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || Buffer.byteLength(value, "utf8") > maximum
+    || value.trim().length === 0
+    || !isWellFormedText(value)
+    || hasUnsafeStructuredTextControl(value)
+  ) throw new Error(`LinkedIn returned an invalid ${label}`);
+  return value;
+}
+
+function personUrn(value: unknown, label: string): string {
+  const urn = structuredResponseText(value, label, 280);
+  if (!/^urn:li:person:[A-Za-z0-9_-]{1,256}$/u.test(urn)) {
+    throw new Error(`LinkedIn returned an invalid ${label}`);
+  }
+  return urn;
+}
+
+function personId(value: unknown, label: string): string {
+  const id = structuredResponseText(value, label, 256);
+  if (!/^[A-Za-z0-9_-]{1,256}$/u.test(id)) {
+    throw new Error(`LinkedIn returned an invalid ${label}`);
+  }
+  return id;
+}
+
+function localizedConnectionName(value: unknown, label: string): LocalizedConnectionName {
+  const source = strictRecord(value, label);
+  exactKeys(source, ["localized"], ["preferredLocale"], label);
+  let preferredLocale: LocalizedConnectionName["preferredLocale"] = null;
+  if (source.preferredLocale !== undefined) {
+    const locale = strictRecord(source.preferredLocale, `${label}.preferredLocale`);
+    exactKeys(locale, ["language"], ["country"], `${label}.preferredLocale`);
+    const language = structuredResponseText(
+      locale.language,
+      `${label}.preferredLocale.language`,
+      2,
+    );
+    const country = locale.country === undefined
+      ? null
+      : structuredResponseText(
+        locale.country,
+        `${label}.preferredLocale.country`,
+        2,
+      );
+    if (!/^[a-z]{2}$/u.test(language) || (country !== null && !/^[A-Z]{2}$/u.test(country))) {
+      throw new Error(`LinkedIn returned an invalid ${label}.preferredLocale`);
+    }
+    preferredLocale = Object.freeze({ country, language });
+  }
+
+  const localizedSource = strictRecord(source.localized, `${label}.localized`);
+  const entries = Object.keys(localizedSource).sort();
+  if (entries.length < 1 || entries.length > 64) {
+    throw new Error(`LinkedIn returned an invalid ${label}.localized`);
+  }
+  const localized: Record<string, string> = {};
+  for (const key of entries) {
+    if (!/^[a-z]{2}(?:_[A-Z]{2})?(?:_[A-Za-z0-9]{1,16})?$/u.test(key)) {
+      throw new Error(`LinkedIn returned an invalid ${label}.localized locale ${key}`);
+    }
+    localized[key] = structuredResponseText(
+      localizedSource[key],
+      `${label}.localized.${key}`,
+      512,
+    );
+  }
+  let selectedLocale: string | null = null;
+  let selectionBasis: LocalizedConnectionNameSelectionBasis = "unavailable";
+  if (preferredLocale !== null) {
+    const preferredKey = preferredLocale.country === null
+      ? preferredLocale.language
+      : `${preferredLocale.language}_${preferredLocale.country}`;
+    if (Object.hasOwn(localized, preferredKey)) {
+      selectedLocale = preferredKey;
+      selectionBasis = "preferred-locale-exact";
+    } else {
+      const compatibleVariants = entries.filter((key) =>
+        key.startsWith(`${preferredKey}_`));
+      if (compatibleVariants.length === 1) {
+        selectedLocale = compatibleVariants[0] ?? null;
+        selectionBasis = "preferred-locale-unambiguous-variant";
+      }
+    }
+  } else if (entries.length === 1) {
+    selectedLocale = entries[0] ?? null;
+    selectionBasis = "sole-localized-value";
+  }
+  return Object.freeze({
+    value: selectedLocale === null ? null : localized[selectedLocale] ?? null,
+    localized: Object.freeze(localized),
+    preferredLocale,
+    selectedLocale,
+    selectionBasis,
+  });
+}
+
+function exactContactsInput(input: unknown): Readonly<{
+  start: number;
+  count: number;
+}> {
+  const source = strictRecord(input, "LinkedIn contacts.list input");
+  exactKeys(source, [], ["start", "count"], "LinkedIn contacts.list input");
+  return Object.freeze({
+    start: inputInteger(source.start, "input.start", 0, 0, CONNECTIONS_MAX_START),
+    count: inputInteger(
+      source.count,
+      "input.count",
+      CONNECTIONS_DEFAULT_COUNT,
+      1,
+      CONNECTIONS_MAX_COUNT,
+    ),
+  });
+}
+
+function contactsAccountSubject(context: ProviderActionContext): string {
+  const subject = context.auth.subject;
+  if (
+    typeof subject !== "string"
+    || !/^urn:li:person:[A-Za-z0-9_-]{1,256}$/u.test(subject)
+  ) {
+    throw new Error(
+      "LinkedIn contacts.list requires an OAuth locator with an exact person URN subject",
+    );
+  }
+  context.addRequiredScopes(["r_1st_connections", "r_liteprofile"]);
+  return subject;
+}
+
+function restApiHeaders(context: ProviderActionContext, json = false): Headers {
   return bearerHeaders(context.token.accessToken, {
     Accept: "application/json",
     "Linkedin-Version": LINKEDIN_VERSION,
     "X-Restli-Protocol-Version": LINKEDIN_PROTOCOL_VERSION,
     ...(json ? { "Content-Type": "application/json" } : {}),
+  });
+}
+
+function v2ApiHeaders(context: ProviderActionContext): Headers {
+  return bearerHeaders(context.token.accessToken, {
+    Accept: "application/json",
+    "X-Restli-Protocol-Version": LINKEDIN_PROTOCOL_VERSION,
   });
 }
 
@@ -362,6 +644,45 @@ function exactListedComment(
   };
 }
 
+function exactConnection(value: unknown, index: number): Readonly<Record<string, unknown>> {
+  const label = `LinkedIn connections response.elements[${index}]`;
+  const source = strictRecord(value, label);
+  exactKeys(source, ["to", "to~"], [], label);
+  const urn = personUrn(source.to, `${label}.to`);
+  const decorated = strictRecord(source["to~"], `${label}.to~`);
+  exactKeys(decorated, ["id", "firstName", "lastName"], [], `${label}.to~`);
+  const id = personId(decorated.id, `${label}.to~.id`);
+  if (urn !== `urn:li:person:${id}`) {
+    throw new Error("LinkedIn returned a decorated connection ID that did not match its person URN");
+  }
+  const firstName = localizedConnectionName(
+    decorated.firstName,
+    `${label}.to~.firstName`,
+  );
+  const lastName = localizedConnectionName(
+    decorated.lastName,
+    `${label}.to~.lastName`,
+  );
+  return Object.freeze({
+    providerId: urn,
+    personId: id,
+    displayName: firstName.value === null || lastName.value === null
+      ? null
+      : `${firstName.value} ${lastName.value}`,
+    firstName: firstName.value,
+    lastName: lastName.value,
+    localizedFirstName: firstName.localized,
+    localizedLastName: lastName.localized,
+    firstNamePreferredLocale: firstName.preferredLocale,
+    lastNamePreferredLocale: lastName.preferredLocale,
+    firstNameSelectedLocale: firstName.selectedLocale,
+    lastNameSelectedLocale: lastName.selectedLocale,
+    firstNameSelectionBasis: firstName.selectionBasis,
+    lastNameSelectionBasis: lastName.selectionBasis,
+    ...unavailableConnectionStatsProjection,
+  });
+}
+
 function exactQueryEntries(url: URL): readonly string[] {
   return [...url.searchParams.entries()]
     .filter(([key]) => key !== "start" && key !== "count")
@@ -387,10 +708,146 @@ function validatedNextLink(linkValue: unknown, requestUrl: URL): URL {
     || next.port !== ""
     || next.username !== ""
     || next.password !== ""
+    || next.hash !== ""
     || next.pathname !== requestUrl.pathname
     || JSON.stringify(exactQueryEntries(next)) !== JSON.stringify(exactQueryEntries(requestUrl))
   ) throw new Error("LinkedIn returned a next paging link for a different collection");
   return next;
+}
+
+function connectionPageOutput(
+  responseBody: unknown,
+  accountSubject: string,
+  requestedStart: number,
+  requestedCount: number,
+  requestUrl: URL,
+): Readonly<Record<string, unknown>> {
+  const body = strictRecord(responseBody, "LinkedIn connections response");
+  exactKeys(body, ["elements", "paging"], [], "LinkedIn connections response");
+  const elements = strictArray(
+    body.elements,
+    "LinkedIn connections response.elements",
+    requestedCount,
+  );
+  const paging = strictRecord(body.paging, "LinkedIn connections response.paging");
+  exactKeys(
+    paging,
+    ["start", "count", "total", "links"],
+    [],
+    "LinkedIn connections response.paging",
+  );
+  const start = responseInteger(paging.start, "connections paging start");
+  const count = responseInteger(paging.count, "connections paging count");
+  const total = responseInteger(paging.total, "connections paging total");
+  if (start !== requestedStart || count !== requestedCount) {
+    throw new Error("LinkedIn connections paging did not bind the exact requested page");
+  }
+  const expectedReturned = Math.min(count, Math.max(total - start, 0));
+  if (elements.length !== expectedReturned) {
+    throw new Error(
+      "LinkedIn connections page length contradicted its exact paging total",
+    );
+  }
+
+  const links = strictArray(
+    paging.links,
+    "LinkedIn connections response.paging.links",
+    2,
+  );
+  const seenRelations = new Set<string>();
+  for (let index = 0; index < links.length; index += 1) {
+    const label = `LinkedIn connections response.paging.links[${index}]`;
+    const link = strictRecord(links[index], label);
+    exactKeys(link, ["rel", "href"], ["type"], label);
+    const relation = structuredResponseText(link.rel, `${label}.rel`, 4);
+    if (relation !== "next" && relation !== "prev") {
+      throw new Error(`LinkedIn returned an invalid connections paging relation ${relation}`);
+    }
+    if (seenRelations.has(relation)) {
+      throw new Error(`LinkedIn returned duplicate ${relation} connections paging links`);
+    }
+    seenRelations.add(relation);
+    const href = structuredResponseText(link.href, `${label}.href`, 8_192);
+    if (/\s/u.test(href)) throw new Error("LinkedIn returned an invalid connections paging URL");
+    if (link.type !== undefined && link.type !== "application/json") {
+      throw new Error("LinkedIn returned an unsupported connections paging media type");
+    }
+    let linkedPage: URL;
+    try {
+      linkedPage = validatedNextLink({ href }, requestUrl);
+    } catch (error) {
+      throw new Error("LinkedIn returned a connections paging link for a different collection", {
+        cause: error,
+      });
+    }
+    const linkedCount = exactPagingParameter(linkedPage, "count");
+    const linkedStart = exactPagingParameter(linkedPage, "start");
+    if (linkedCount !== count) {
+      throw new Error("LinkedIn connections paging link changed the requested count");
+    }
+    const expectedStart = relation === "next"
+      ? start + count
+      : Math.max(0, start - count);
+    if (
+      linkedStart !== expectedStart
+      || (relation === "next" && start + elements.length >= total)
+      || (relation === "prev" && start === 0)
+    ) {
+      throw new Error(
+        `LinkedIn returned a contradictory ${relation} connections paging link`,
+      );
+    }
+  }
+
+  const contacts = Object.freeze(elements.map((value, index) =>
+    exactConnection(value, index)));
+  const providerIds = contacts.map((contact) => contact.providerId);
+  if (new Set(providerIds).size !== providerIds.length) {
+    throw new Error("LinkedIn returned duplicate connections within one page");
+  }
+  const hasMore = start + contacts.length < total;
+  // The Connections API documents empty paging links even when total exceeds
+  // the current page, and documents continuation as start + count. Derive it
+  // only after exact request, total, and returned-row binding above.
+  const candidateNextStart = hasMore ? start + count : null;
+  const nextStart = candidateNextStart !== null
+    && candidateNextStart <= CONNECTIONS_MAX_START
+    ? candidateNextStart
+    : null;
+  const offsetBoundReached = candidateNextStart !== null && nextStart === null;
+  const contactSetComplete = start === 0 && contacts.length === total;
+  const contactSetCompleteness = contactSetComplete
+    ? "complete"
+    : offsetBoundReached
+      ? "bounded"
+      : nextStart === null
+        ? "terminal-page"
+        : "page";
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "linkedin",
+    operation: "contacts.list",
+    accountSubject,
+    contacts,
+    metadataScope: "documented-first-degree-connections-decorated-name-page",
+    contactSetCompleteness,
+    contactTruncated: !contactSetComplete,
+    contactSetIncompleteReasons: Object.freeze(contactSetComplete
+      ? []
+      : [
+          "requested-offset-page-only",
+          ...(offsetBoundReached ? ["connection-offset-bound-reached"] : []),
+        ]),
+    totalItems: total,
+    paging: Object.freeze({
+      start,
+      count,
+      returned: contacts.length,
+      total,
+    }),
+    nextStart,
+    statsScope: "unavailable-from-linkedin-connections-api",
+  });
 }
 
 function nextOffset(
@@ -534,7 +991,7 @@ async function resharePost(context: ProviderActionContext): Promise<void> {
   const id = await context.dispatch(async () => {
     const response = await context.http.request(apiUrl("/rest/posts"), {
       method: "POST",
-      headers: apiHeaders(context, true),
+      headers: restApiHeaders(context, true),
       body: jsonBody({
         author,
         commentary,
@@ -798,7 +1255,7 @@ async function waitForMediaAvailable(
   for (let attempt = 0; attempt < MAX_MEDIA_STATUS_POLLS; attempt += 1) {
     const response = await context.http.request(
       apiUrl(`/rest/${kind}/${encodedUrn(id)}`),
-      { method: "GET", headers: apiHeaders(context) },
+      { method: "GET", headers: restApiHeaders(context) },
       [200],
       LINKEDIN_API_HOSTS,
     );
@@ -830,7 +1287,7 @@ async function initializeAndUploadImage(
     apiUrl("/rest/images?action=initializeUpload"),
     {
       method: "POST",
-      headers: apiHeaders(context, true),
+      headers: restApiHeaders(context, true),
       body: jsonBody({ initializeUploadRequest: { owner } }),
     },
     [200],
@@ -855,7 +1312,7 @@ async function initializeAndUploadDocument(
     apiUrl("/rest/documents?action=initializeUpload"),
     {
       method: "POST",
-      headers: apiHeaders(context, true),
+      headers: restApiHeaders(context, true),
       body: jsonBody({ initializeUploadRequest: { owner } }),
     },
     [200],
@@ -949,7 +1406,7 @@ async function initializeUploadAndFinalizeVideo(
       apiUrl("/rest/videos?action=initializeUpload"),
       {
         method: "POST",
-        headers: apiHeaders(context, true),
+        headers: restApiHeaders(context, true),
         body: jsonBody({
           initializeUploadRequest: {
             owner,
@@ -984,7 +1441,7 @@ async function initializeUploadAndFinalizeVideo(
       apiUrl("/rest/videos?action=finalizeUpload"),
       {
         method: "POST",
-        headers: apiHeaders(context, true),
+        headers: restApiHeaders(context, true),
         body: jsonBody({
           finalizeUploadRequest: {
             video: id,
@@ -1003,6 +1460,46 @@ async function initializeUploadAndFinalizeVideo(
   }
 }
 
+function exactViewerPersonSubject(value: unknown): string {
+  const viewer = strictRecord(value, "LinkedIn viewer response");
+  exactKeys(viewer, ["id"], [], "LinkedIn viewer response");
+  return `urn:li:person:${personId(viewer.id, "viewer response.id")}`;
+}
+
+async function listConnections(context: ProviderActionContext): Promise<void> {
+  const input = exactContactsInput(context.input);
+  const locatorSubject = contactsAccountSubject(context);
+  const viewerUrl = apiUrl("/v2/me");
+  viewerUrl.searchParams.set("projection", "(id)");
+  const viewerResponse = await context.http.request(viewerUrl, {
+    method: "GET",
+    headers: v2ApiHeaders(context),
+  }, [200], LINKEDIN_API_HOSTS, undefined, "application/json");
+  const accountSubject = exactViewerPersonSubject(viewerResponse.body);
+  if (!Buffer.from(accountSubject, "utf8").equals(Buffer.from(locatorSubject, "utf8"))) {
+    throw new Error(
+      "authenticated LinkedIn person does not match the OAuth locator subject",
+    );
+  }
+
+  const url = apiUrl("/v2/connections");
+  url.searchParams.set("q", "viewer");
+  url.searchParams.set("projection", CONNECTIONS_PROJECTION);
+  url.searchParams.set("start", String(input.start));
+  url.searchParams.set("count", String(input.count));
+  const response = await context.http.request(url, {
+    method: "GET",
+    headers: v2ApiHeaders(context),
+  }, [200], LINKEDIN_API_HOSTS, undefined, "application/json");
+  context.setOutput(connectionPageOutput(
+    response.body,
+    accountSubject,
+    input.start,
+    input.count,
+    url,
+  ));
+}
+
 async function readPosts(context: ProviderActionContext): Promise<void> {
   const mode = requiredString(context.input.mode, "input.mode", 20);
   const view = context.input.view === undefined
@@ -1016,7 +1513,7 @@ async function readPosts(context: ProviderActionContext): Promise<void> {
     url.searchParams.set("viewContext", view);
     const response = await context.http.request(url, {
       method: "GET",
-      headers: apiHeaders(context),
+      headers: restApiHeaders(context),
     }, [200], LINKEDIN_API_HOSTS);
     context.setOutput(singleOutput("posts.read", exactResponsePost(response.body, id)));
     context.setFinalUrl(linkedInPostUrl(id));
@@ -1042,7 +1539,7 @@ async function readPosts(context: ProviderActionContext): Promise<void> {
   url.searchParams.set("count", String(count));
   url.searchParams.set("sortBy", sort);
   url.searchParams.set("viewContext", view);
-  const headers = apiHeaders(context);
+  const headers = restApiHeaders(context);
   headers.set("X-RestLi-Method", "FINDER");
   const response = await context.http.request(url, { method: "GET", headers }, [200], LINKEDIN_API_HOSTS);
   context.setOutput(pageOutput(
@@ -1069,7 +1566,7 @@ async function readComments(context: ProviderActionContext): Promise<void> {
   url.searchParams.set("count", String(count));
   const response = await context.http.request(url, {
     method: "GET",
-    headers: apiHeaders(context),
+    headers: restApiHeaders(context),
   }, [200], LINKEDIN_API_HOSTS);
   context.setOutput(pageOutput(
     "comments.read",
@@ -1158,7 +1655,7 @@ async function createComment(context: ProviderActionContext, reply: boolean): Pr
       apiUrl(`/rest/socialActions/${encodedUrn(target)}/comments`),
       {
         method: "POST",
-        headers: apiHeaders(context, true),
+        headers: restApiHeaders(context, true),
         body: jsonBody(requestBody),
       },
       [201],
@@ -1209,7 +1706,7 @@ async function setReaction(context: ProviderActionContext): Promise<void> {
       url.searchParams.set("actor", actor);
       const response = await context.http.request(url, {
         method: "POST",
-        headers: apiHeaders(context, true),
+        headers: restApiHeaders(context, true),
         body: jsonBody({ root: target, reactionType: reaction }),
       }, [201], LINKEDIN_API_HOSTS);
       const body = record(response.body, "created reaction response");
@@ -1253,7 +1750,7 @@ async function setReaction(context: ProviderActionContext): Promise<void> {
     const key = `(actor:${encodedUrn(actor)},entity:${encodedUrn(target)})`;
     await context.http.request(apiUrl(`/rest/reactions/${key}`), {
       method: "DELETE",
-      headers: apiHeaders(context),
+      headers: restApiHeaders(context),
     }, [204], LINKEDIN_API_HOSTS);
     return {
       id: null,
@@ -1353,7 +1850,7 @@ async function publishPost(context: ProviderActionContext): Promise<void> {
     };
     const response = await context.http.request(apiUrl("/rest/posts"), {
       method: "POST",
-      headers: apiHeaders(context, true),
+      headers: restApiHeaders(context, true),
       body: jsonBody(requestBody),
     }, [201], LINKEDIN_API_HOSTS);
     const id = responseString(response.headers.get("x-restli-id"), "created post ID", 500);
@@ -1376,7 +1873,8 @@ async function publishPost(context: ProviderActionContext): Promise<void> {
 
 /** Execute a fixed LinkedIn REST contract. No endpoint, method, or host is supplied by a manifest. */
 export async function executeLinkedInProvider(context: ProviderActionContext): Promise<void> {
-  if (context.recipe.action === "posts.read") await readPosts(context);
+  if (context.recipe.action === "contacts.list") await listConnections(context);
+  else if (context.recipe.action === "posts.read") await readPosts(context);
   else if (context.recipe.action === "posts.publish") await publishPost(context);
   else if (context.recipe.action === "posts.repost") await resharePost(context);
   else if (context.recipe.action === "comments.read") await readComments(context);

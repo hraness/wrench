@@ -3,6 +3,11 @@ import { types as nodeTypes } from "node:util";
 import type { OperationInput } from "../model";
 import type { ProviderActionContext } from "../provider-context";
 import {
+  parseContactDirectionStats,
+  projectContactDirectionStats,
+  type ContactDirectionStats,
+} from "./contact-projection";
+import {
   buildGmailThreadUrl,
   createGmailApiClient,
   extractGmailEmailAddresses,
@@ -52,21 +57,11 @@ type ParsedMessagingListInput = Readonly<{
   includeSpamTrash: boolean;
 }>;
 
-type DirectionStats = Readonly<{
-  count: number;
-  complete: boolean;
-  lowerBound: boolean;
-  truncated: boolean;
-  lastAt: string | null;
-  lastAtComplete: boolean;
-  lastAtBasis: "bounded-matched-message-internal-date" | "unavailable";
-  incompleteReasons: readonly (
-    | "message-internal-date-unavailable"
-    | "no-contact-addresses"
-    | "scan-limit-reached"
-    | "unsupported-contact-addresses"
-  )[];
-}>;
+type GmailDirectionStatsIncompleteReason =
+  | "message-internal-date-unavailable"
+  | "no-contact-addresses"
+  | "scan-limit-reached"
+  | "unsupported-contact-addresses";
 
 type ContactEmailCoverage = Readonly<{
   emails: readonly string[];
@@ -430,16 +425,16 @@ async function scanContactDirection(
   direction: ContactDirection,
   scanLimit: number,
   admit: ConcurrentAdmission,
-): Promise<DirectionStats> {
+): Promise<ContactDirectionStats> {
   const queries = contactQueryChunks(direction, addressCoverage.emails);
   if (queries.length === 0) {
     const addressCoverageComplete = addressCoverage.kind === "complete";
-    const incompleteReasons: DirectionStats["incompleteReasons"] = addressCoverageComplete
+    const incompleteReasons: readonly GmailDirectionStatsIncompleteReason[] = addressCoverageComplete
       ? Object.freeze([])
       : addressCoverage.kind === "unavailable"
         ? Object.freeze(["no-contact-addresses"] as const)
         : Object.freeze(["unsupported-contact-addresses"] as const);
-    return Object.freeze({
+    return parseContactDirectionStats({
       count: 0,
       complete: addressCoverageComplete,
       lowerBound: !addressCoverageComplete,
@@ -448,7 +443,7 @@ async function scanContactDirection(
       lastAtComplete: addressCoverageComplete,
       lastAtBasis: "unavailable",
       incompleteReasons,
-    });
+    }, "official Gmail contacts.list direction stats");
   }
   const messageIds = new Set<string>();
   let scannedEntries = 0;
@@ -498,12 +493,12 @@ async function scanContactDirection(
   const addressCoverageComplete = addressCoverage.kind === "complete";
   const countComplete = complete && addressCoverageComplete;
   const lastAtComplete = countComplete && metadataDatesComplete;
-  const incompleteReasons: DirectionStats["incompleteReasons"] = Object.freeze([
+  const incompleteReasons: readonly GmailDirectionStatsIncompleteReason[] = Object.freeze([
     ...(addressCoverageComplete ? [] : ["unsupported-contact-addresses" as const]),
     ...(complete ? [] : ["scan-limit-reached" as const]),
     ...(metadataDatesComplete ? [] : ["message-internal-date-unavailable" as const]),
   ]);
-  return Object.freeze({
+  return parseContactDirectionStats({
     count: messageIds.size,
     complete: countComplete,
     lowerBound: !countComplete,
@@ -512,33 +507,7 @@ async function scanContactDirection(
     lastAtComplete,
     lastAtBasis: lastAt === null ? "unavailable" : "bounded-matched-message-internal-date",
     incompleteReasons,
-  });
-}
-
-function contactWithStats(
-  contact: GmailContact,
-  sent: DirectionStats,
-  received: DirectionStats,
-): Readonly<Record<string, unknown>> {
-  return Object.freeze({
-    ...contact,
-    sentCount: sent.count,
-    sentCountComplete: sent.complete,
-    sentCountLowerBound: sent.lowerBound,
-    sentCountTruncated: sent.truncated,
-    receivedCount: received.count,
-    receivedCountComplete: received.complete,
-    receivedCountLowerBound: received.lowerBound,
-    receivedCountTruncated: received.truncated,
-    lastSentAt: sent.lastAt,
-    lastSentAtComplete: sent.lastAtComplete,
-    lastSentAtBasis: sent.lastAtBasis,
-    sentStatsIncompleteReasons: sent.incompleteReasons,
-    lastReceivedAt: received.lastAt,
-    lastReceivedAtComplete: received.lastAtComplete,
-    lastReceivedAtBasis: received.lastAtBasis,
-    receivedStatsIncompleteReasons: received.incompleteReasons,
-  });
+  }, "official Gmail contacts.list direction stats");
 }
 
 async function executeContactsList(context: ProviderActionContext): Promise<void> {
@@ -571,7 +540,7 @@ async function executeContactsList(context: ProviderActionContext): Promise<void
       ),
     }),
   );
-  const byContact = new Map<string, Partial<Record<ContactDirection, DirectionStats>>>();
+  const byContact = new Map<string, Partial<Record<ContactDirection, ContactDirectionStats>>>();
   for (const entry of stats) {
     const current = byContact.get(entry.resourceName) ?? {};
     current[entry.direction] = entry.stats;
@@ -584,7 +553,8 @@ async function executeContactsList(context: ProviderActionContext): Promise<void
     }
     const addressCoverage = contactEmailCoverage(contact);
     return Object.freeze({
-      ...contactWithStats(contact, values.sent, values.received),
+      ...contact,
+      ...projectContactDirectionStats(values.sent, values.received),
       statsAddressCoverage: addressCoverage.kind,
       statsSupportedAddressCount: addressCoverage.emails.length,
       statsUnsupportedAddressCount: addressCoverage.unsupportedAddressCount,

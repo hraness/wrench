@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -13,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import {
   createAuth,
@@ -25,6 +27,11 @@ import {
   type OperationDeadlineClock,
 } from "../operation-deadline";
 import {
+  WebSessionCleanupUnverifiedError,
+  runWebSessionOperationWithDeadline,
+} from "../web-session-execution";
+import {
+  WhatsAppContactProjectionCleanupUnverifiedError,
   executeWhatsAppWebOperation,
   pairWhatsAppAuth,
   planWhatsAppPairing,
@@ -34,11 +41,15 @@ import {
   syncWhatsAppAuthOnce,
   validateWhatsAppStoreDirectory,
   type WacliInvocation,
+  type WhatsAppContactProjectionHelperResult,
   type WhatsAppWebRuntimeDependencies,
 } from "./whatsapp-web-runtime";
 
 const ACCOUNT_JID = "15551234567@s.whatsapp.net";
 const CHAT_JID = "15557654321@s.whatsapp.net";
+const FIRST_CONTACT_JID = "15550000001@s.whatsapp.net";
+const SECOND_CONTACT_JID = "222222222222222@lid";
+const GROUP_CONTACT_JID = "120363123456789012@g.us";
 const MESSAGE_ID = "3EB0SYNTHETICMESSAGE";
 const ZERO_TIME = "0001-01-01T00:00:00Z";
 const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
@@ -132,6 +143,73 @@ function privateDirectory(): string {
   return realpathSync(path);
 }
 
+function createContactStore(): string {
+  const path = privateDirectory();
+  const databasePath = join(path, "session.db");
+  const database = new Database(databasePath, { create: true, strict: true });
+  try {
+    database.exec("PRAGMA journal_mode = DELETE; PRAGMA foreign_keys = ON");
+    database.exec(`
+      CREATE TABLE whatsmeow_device (
+        jid TEXT PRIMARY KEY,
+        lid TEXT
+      );
+      CREATE TABLE whatsmeow_contacts (
+        our_jid TEXT,
+        their_jid TEXT,
+        first_name TEXT,
+        full_name TEXT,
+        push_name TEXT,
+        business_name TEXT,
+        redacted_phone TEXT,
+        PRIMARY KEY (our_jid, their_jid),
+        FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid)
+          ON DELETE CASCADE
+          ON UPDATE CASCADE
+      );
+    `);
+    database.query(
+      "INSERT INTO whatsmeow_device (jid, lid) VALUES (?1, ?2)",
+    ).run("15551234567:3@s.whatsapp.net", "999999999999999@lid");
+    const insertContact = database.query(`
+      INSERT INTO whatsmeow_contacts (
+        our_jid, their_jid, first_name, full_name,
+        push_name, business_name, redacted_phone
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `);
+    insertContact.run(
+      "15551234567:3@s.whatsapp.net",
+      FIRST_CONTACT_JID,
+      "Ada",
+      "Ada Full",
+      "Ada Push",
+      null,
+      "+1 ••• ••• 0001",
+    );
+    insertContact.run(
+      "15551234567:3@s.whatsapp.net",
+      SECOND_CONTACT_JID,
+      "Lin",
+      null,
+      "Lin Push",
+      "Lin Business",
+      null,
+    );
+    insertContact.run(
+      "15551234567:3@s.whatsapp.net",
+      GROUP_CONTACT_JID,
+      null,
+      "Excluded Group",
+      null,
+      null,
+      null,
+    );
+  } finally {
+    database.close();
+  }
+  chmodSync(databasePath, 0o600);
+  return path;
+}
 function auth(path: string, subject?: string): WrenchAuth {
   return {
     schemaVersion: 1,
@@ -168,6 +246,20 @@ function runner(
         : `${JSON.stringify(value)}\n`,
       stderr: "",
     });
+  };
+}
+
+function emptyContactHelperResult(): WhatsAppContactProjectionHelperResult {
+  return {
+    exitCode: 0,
+    stdout: `${JSON.stringify({
+      schemaVersion: 1,
+      status: "succeeded",
+      contacts: [],
+      nextCursor: null,
+      localContactTablePageComplete: true,
+    })}\n`,
+    stderr: "",
   };
 }
 
@@ -757,6 +849,459 @@ describe("WhatsApp zero-network read plans", () => {
       }
     },
   );
+
+  test("projects account-bound Whatsmeow contacts with unavailable message statistics", async () => {
+    const path = createContactStore();
+    try {
+      const firstPage = await executeWhatsAppWebOperation(
+        recipe("contacts.list"),
+        { limit: 1 },
+        auth(path, "whatsapp:pn:15551234567"),
+      );
+      expect(firstPage.status).toBe("succeeded");
+      expect(firstPage.dispatchStarted).toBe(false);
+      expect(firstPage.dispatch).toEqual({ planned: 0, started: 0, verified: 0 });
+      expect(firstPage.output).toEqual({
+        provider: "whatsapp",
+        operation: "contacts.list",
+        accountSubject: "whatsapp:pn:15551234567",
+        projection: "quiescent-account-bound-session-store",
+        contacts: [{
+          providerId: FIRST_CONTACT_JID,
+          jidKind: "user",
+          phone: "15550000001",
+          redactedPhone: "+1 ••• ••• 0001",
+          firstName: "Ada",
+          fullName: "Ada Full",
+          pushName: "Ada Push",
+          businessName: null,
+          displayName: "Ada Full",
+          displayNameBasis: "full-name",
+          alias: null,
+          tags: [],
+          updatedAt: null,
+          localProjectionStatsComplete: false,
+          sentCount: null,
+          sentCountComplete: false,
+          sentCountLowerBound: false,
+          sentCountTruncated: false,
+          receivedCount: null,
+          receivedCountComplete: false,
+          receivedCountLowerBound: false,
+          receivedCountTruncated: false,
+          lastSentAt: null,
+          lastSentAtComplete: false,
+          lastSentAtBasis: "unavailable",
+          sentStatsIncompleteReasons: [
+            "whatsapp-message-store-account-owner-unavailable",
+          ],
+          lastReceivedAt: null,
+          lastReceivedAtComplete: false,
+          lastReceivedAtBasis: "unavailable",
+          receivedStatsIncompleteReasons: [
+            "whatsapp-message-store-account-owner-unavailable",
+          ],
+        }],
+        nextCursor: FIRST_CONTACT_JID,
+        localContactTablePageComplete: false,
+        remoteContactSetComplete: false,
+        contactSetIncompleteReasons: [
+          "linked-device-contact-sync-coverage-unknown",
+        ],
+        statsScope: "unavailable",
+        statsCompleteness: "unavailable",
+      });
+
+      const secondPage = await executeWhatsAppWebOperation(
+        recipe("contacts.list"),
+        { limit: 1, cursor: FIRST_CONTACT_JID },
+        auth(path, "whatsapp:lid:999999999999999"),
+      );
+      expect(secondPage.output).toEqual({
+        provider: "whatsapp",
+        operation: "contacts.list",
+        accountSubject: "whatsapp:lid:999999999999999",
+        projection: "quiescent-account-bound-session-store",
+        contacts: [{
+          providerId: SECOND_CONTACT_JID,
+          jidKind: "lid",
+          phone: null,
+          redactedPhone: null,
+          firstName: "Lin",
+          fullName: null,
+          pushName: "Lin Push",
+          businessName: "Lin Business",
+          displayName: "Lin Push",
+          displayNameBasis: "push-name",
+          alias: null,
+          tags: [],
+          updatedAt: null,
+          localProjectionStatsComplete: false,
+          sentCount: null,
+          sentCountComplete: false,
+          sentCountLowerBound: false,
+          sentCountTruncated: false,
+          receivedCount: null,
+          receivedCountComplete: false,
+          receivedCountLowerBound: false,
+          receivedCountTruncated: false,
+          lastSentAt: null,
+          lastSentAtComplete: false,
+          lastSentAtBasis: "unavailable",
+          sentStatsIncompleteReasons: [
+            "whatsapp-message-store-account-owner-unavailable",
+          ],
+          lastReceivedAt: null,
+          lastReceivedAtComplete: false,
+          lastReceivedAtBasis: "unavailable",
+          receivedStatsIncompleteReasons: [
+            "whatsapp-message-store-account-owner-unavailable",
+          ],
+        }],
+        nextCursor: null,
+        localContactTablePageComplete: true,
+        remoteContactSetComplete: false,
+        contactSetIncompleteReasons: [
+          "linked-device-contact-sync-coverage-unknown",
+        ],
+        statsScope: "unavailable",
+        statsCompleteness: "unavailable",
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("binds contact projection to exactly one session database owner", async () => {
+    const path = createContactStore();
+    try {
+      let message = "";
+      try {
+        await executeWhatsAppWebOperation(
+          recipe("contacts.list"),
+          { limit: 1 },
+          auth(path, "whatsapp:pn:19999999999"),
+        );
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("owner-mismatch");
+      expect(message).not.toContain(path);
+      expect(message).not.toContain(FIRST_CONTACT_JID);
+      expect(message).not.toContain("Ada Full");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("parent revalidation discards helper output after session path replacement", async () => {
+    const path = createContactStore();
+    const replacement = createContactStore();
+    try {
+      let output: unknown;
+      let rejection: unknown;
+      try {
+        output = await executeWhatsAppWebOperation(
+          recipe("contacts.list"),
+          { limit: 1 },
+          auth(path, "whatsapp:pn:15551234567"),
+          {
+            dependencies: {
+              runContactProjectionHelper: () => {
+                renameSync(
+                  join(path, "session.db"),
+                  join(path, "session.db.original"),
+                );
+                renameSync(
+                  join(replacement, "session.db"),
+                  join(path, "session.db"),
+                );
+                return Promise.resolve(emptyContactHelperResult());
+              },
+            },
+          },
+        );
+      } catch (error) {
+        rejection = error;
+      }
+      expect(output).toBeUndefined();
+      expect(rejection).toBeInstanceOf(Error);
+      expect((rejection as Error).message).toContain(
+        "parent binding changed",
+      );
+      expect((rejection as Error).message).not.toContain(path);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+      rmSync(replacement, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects malformed contact inputs before helper execution", async () => {
+    let helperStarts = 0;
+    const path = createContactStore();
+    try {
+      for (const input of [
+        { limit: 0 },
+        { cursor: GROUP_CONTACT_JID },
+        { limit: 1, unreviewed: true },
+      ]) {
+        await expectRejected(
+          executeWhatsAppWebOperation(
+            recipe("contacts.list"),
+            input,
+            auth(path, "whatsapp:pn:15551234567"),
+            {
+              dependencies: {
+                runContactProjectionHelper: () => {
+                  helperStarts += 1;
+                  return Promise.resolve(emptyContactHelperResult());
+                },
+              },
+            },
+          ),
+          "input",
+        );
+      }
+      await expectRejected(
+        executeWhatsAppWebOperation(
+          recipe("contacts.list"),
+          { limit: 1 },
+          auth(path, "whatsapp:pn:not-digits"),
+          {
+            dependencies: {
+              runContactProjectionHelper: () => {
+                helperStarts += 1;
+                return Promise.resolve(emptyContactHelperResult());
+              },
+            },
+          },
+        ),
+        "auth subject",
+      );
+      const privateMarker = `${path}-private-input-key`;
+      let privateInputRejection: unknown;
+      try {
+        await executeWhatsAppWebOperation(
+          recipe("contacts.list"),
+          { limit: 1, [privateMarker]: true },
+          auth(path, "whatsapp:pn:15551234567"),
+          {
+            dependencies: {
+              runContactProjectionHelper: () => {
+                helperStarts += 1;
+                return Promise.resolve(emptyContactHelperResult());
+              },
+            },
+          },
+        );
+      } catch (error) {
+        privateInputRejection = error;
+      }
+      expect(privateInputRejection).toBeInstanceOf(Error);
+      expect((privateInputRejection as Error).message).toContain(
+        "unsupported fields",
+      );
+      expect((privateInputRejection as Error).message).not.toContain(
+        privateMarker,
+      );
+      expect((privateInputRejection as Error).message).not.toContain(path);
+      expect(helperStarts).toBe(0);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("does not spawn when cleanup-barrier registration is rejected", async () => {
+    const path = createContactStore();
+    let helperStarts = 0;
+    try {
+      await expectRejected(
+        executeWhatsAppWebOperation(
+          recipe("contacts.list"),
+          { limit: 1 },
+          auth(path, "whatsapp:pn:15551234567"),
+          {
+            registerCleanupBarrier: () => {
+              throw new Error("cleanup registrar unavailable");
+            },
+            dependencies: {
+              runContactProjectionHelper: () => {
+                helperStarts += 1;
+                return Promise.resolve(emptyContactHelperResult());
+              },
+            },
+          },
+        ),
+        "cleanup registrar unavailable",
+      );
+      expect(helperStarts).toBe(0);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("ordinary helper failure fulfills its cleanup barrier", async () => {
+    const path = createContactStore();
+    let barrier: Promise<void> | undefined;
+    try {
+      const execution = executeWhatsAppWebOperation(
+        recipe("contacts.list"),
+        { limit: 1 },
+        auth(path, "whatsapp:pn:15551234567"),
+        {
+          registerCleanupBarrier: (value) => {
+            barrier = value;
+          },
+          dependencies: {
+            runContactProjectionHelper: () =>
+              Promise.reject(new Error("ordinary schema failure")),
+          },
+        },
+      );
+      await expectRejected(execution, "ordinary schema failure");
+      if (barrier === undefined) throw new Error("cleanup barrier was not registered");
+      await barrier;
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("operation deadline waits for helper exit and stream settlement", async () => {
+    const path = createContactStore();
+    const clock = new FakeMonotonicClock();
+    let resolveHelper:
+      | ((value: WhatsAppContactProjectionHelperResult) => void)
+      | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    try {
+      const execution = runWebSessionOperationWithDeadline(
+        recipe("contacts.list"),
+        { deadlineClock: clock },
+        (options) => executeWhatsAppWebOperation(
+          recipe("contacts.list"),
+          { limit: 1 },
+          auth(path, "whatsapp:pn:15551234567"),
+          {
+            ...options,
+            dependencies: {
+              runContactProjectionHelper: () => {
+                markStarted?.();
+                return new Promise((resolve) => {
+                  resolveHelper = resolve;
+                });
+              },
+            },
+          },
+        ),
+      );
+      await started;
+      let settled = false;
+      void execution.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      clock.advance(recipe("contacts.list").timeoutMs);
+      await Promise.resolve();
+      expect(settled).toBeFalse();
+
+      resolveHelper?.(emptyContactHelperResult());
+      await expectRejected(execution, "timed out");
+      expect(settled).toBeTrue();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("cleanup-unverified helper state maps to the kernel cleanup error", async () => {
+    const path = createContactStore();
+    try {
+      let rejection: unknown;
+      try {
+        await runWebSessionOperationWithDeadline(
+          recipe("contacts.list"),
+          {},
+          (options) => executeWhatsAppWebOperation(
+            recipe("contacts.list"),
+            { limit: 1 },
+            auth(path, "whatsapp:pn:15551234567"),
+            {
+              ...options,
+              dependencies: {
+                runContactProjectionHelper: () => Promise.reject(
+                  new WhatsAppContactProjectionCleanupUnverifiedError(),
+                ),
+              },
+            },
+          ),
+        );
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(WebSessionCleanupUnverifiedError);
+      expect((rejection as Error).message).toContain(
+        "cleanup could not be verified",
+      );
+      expect((rejection as Error).message).not.toContain(
+        "WhatsApp contact projection helper",
+      );
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("cleanup uncertainty outranks simultaneous parent-store drift", async () => {
+    const path = createContactStore();
+    const replacement = createContactStore();
+    try {
+      let rejection: unknown;
+      try {
+        await runWebSessionOperationWithDeadline(
+          recipe("contacts.list"),
+          {},
+          (options) => executeWhatsAppWebOperation(
+            recipe("contacts.list"),
+            { limit: 1 },
+            auth(path, "whatsapp:pn:15551234567"),
+            {
+              ...options,
+              dependencies: {
+                runContactProjectionHelper: () => {
+                  renameSync(
+                    join(path, "session.db"),
+                    join(path, "session.db.original"),
+                  );
+                  renameSync(
+                    join(replacement, "session.db"),
+                    join(path, "session.db"),
+                  );
+                  return Promise.reject(
+                    new WhatsAppContactProjectionCleanupUnverifiedError(),
+                  );
+                },
+              },
+            },
+          ),
+        );
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(WebSessionCleanupUnverifiedError);
+      expect((rejection as Error).message).toContain(
+        "cleanup could not be verified",
+      );
+      expect((rejection as Error).message).not.toContain("parent binding");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+      rmSync(replacement, { recursive: true, force: true });
+    }
+  });
 
   test("executes paired chat, message, and media reads through read-only local projections", async () => {
     const path = privateDirectory();

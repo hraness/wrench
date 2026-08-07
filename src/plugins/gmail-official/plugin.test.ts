@@ -192,6 +192,7 @@ describe("Gmail official provider plugin", () => {
         "kernel/provider-http.ts",
         "kernel/operation-deadline.ts",
         "providers/gmail-api.ts",
+        "providers/contact-projection.ts",
         "providers/gmail.ts",
         "providers/gmail-omni.ts",
       ].sort((left, right) => left.localeCompare(right)));

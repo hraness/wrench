@@ -11,6 +11,7 @@ export const semanticOperationNames = [
   "content.clip",
   "profiles.read",
   "organizations.read",
+  "contacts.list",
   "feeds.read",
   "messaging.list",
   "messaging.read",
@@ -126,6 +127,7 @@ const operationMeanings = {
   "content.clip": "Capture one bounded content target locally",
   "profiles.read": "Read one explicitly selected member or account profile",
   "organizations.read": "Read one explicitly selected organization or page",
+  "contacts.list": "List one bounded provider-defined contact collection with explicit metadata and statistics completeness",
   "feeds.read": "Read one explicitly selected bounded feed or timeline",
   "messaging.list": "List one bounded provider-visible inbox or message-event collection",
   "messaging.read": "Read one explicitly targeted conversation",
@@ -251,6 +253,7 @@ function buildOperationMatrix(groups: OperationGroups): OperationPolicyMatrix {
   for (const name of [
     "profiles.read",
     "organizations.read",
+    "contacts.list",
     "relationships.recommendations.read",
   ] as const) {
     if (policies[name] === undefined) {
@@ -524,6 +527,7 @@ export const socialPlatformCatalog = {
         "content.clip",
         "profiles.read",
         "organizations.read",
+        "contacts.list",
         "feeds.read",
         "messaging.list",
         "messaging.read",
@@ -776,7 +780,7 @@ export const socialPlatformCatalog = {
     displayName: "WhatsApp Web",
     originPolicy: exactOrigins("https://web.whatsapp.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "messaging.read", "media.read"],
+      R1: ["content.read", "contacts.list", "messaging.read", "media.read"],
       R2: ["reactions.set", "content.save"],
       R3: ["messaging.send", "content.share", "content.edit"],
       unsupported: ["content.clip", "media.publish", "communities.membership.set"],
@@ -887,7 +891,7 @@ export const socialPlatformCatalog = {
     displayName: "Instagram",
     originPolicy: exactOrigins("https://www.instagram.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "messaging.read", "comments.read", "posts.read", "media.read"],
+      R1: ["content.read", "content.clip", "contacts.list", "messaging.read", "comments.read", "posts.read", "media.read"],
       R2: ["reactions.set", "likes.set", "relationships.follow.set", "content.save"],
       R3: [
         "messaging.send",
@@ -1002,7 +1006,7 @@ export const socialPlatformCatalog = {
     displayName: "Facebook",
     originPolicy: exactOrigins("https://www.facebook.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "messaging.read", "comments.read", "posts.read", "media.read"],
+      R1: ["content.read", "content.clip", "contacts.list", "messaging.read", "comments.read", "posts.read", "media.read"],
       R2: ["reactions.set", "likes.set", "relationships.follow.set", "content.save"],
       R3: [
         "messaging.send",

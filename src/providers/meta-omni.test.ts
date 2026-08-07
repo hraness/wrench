@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { parseMaterializedPageV1 } from "../omni-model";
 import { materializeInstagramMessagingList } from "./meta-omni";
+import { normalizeInstagramInbox } from "./meta-web";
 
 const participant = Object.freeze({
   id: "12345",
@@ -22,8 +23,11 @@ function output(overrides: Readonly<Record<string, unknown>> = {}): unknown {
   return {
     folder: "inbox",
     threads: [thread],
-    next_cursor: "opaque-instagram-cursor",
-    has_older: true,
+    page_scope: "first-page-only",
+    continuation_supported: false,
+    raw_thread_count: 1,
+    provider_has_older: false,
+    provider_cursor_present: false,
     pending_requests_total: 2,
     ...overrides,
   };
@@ -45,7 +49,7 @@ describe("Instagram omni inbox materializer", () => {
       partition: "instagram:inbox",
       completeness: {
         kind: "first-page-only",
-        reason: "Instagram exposed older-page evidence, but authenticated inbox cursor replay remains capture-required.",
+        reason: "Instagram authenticated inbox cursor replay remains capture-required, so the privacy-preserving runtime exposes only the reviewed first page.",
       },
       cursor: { direction: "none", request: null, nextInput: null },
       entities: [{
@@ -70,17 +74,43 @@ describe("Instagram omni inbox materializer", () => {
     });
   });
 
-  test("uses complete only when the provider explicitly reports no older page", () => {
+  test("materializes the exact privacy-preserving runtime inbox projection", () => {
+    const runtimeOutput = normalizeInstagramInbox({
+      status: "ok",
+      viewer: { pk: "24680" },
+      pending_requests_total: 0,
+      inbox: {
+        oldest_cursor: "provider-only-cursor",
+        has_older: false,
+        threads: [{
+          thread_id: "340282366841710300949128160279579384001",
+          thread_title: "Fixture",
+          users: [{ pk: "12345", username: "reader", full_name: "Reader" }],
+          last_activity_at: 1_700_000_004,
+          read_state: 1,
+          pending: false,
+        }],
+      },
+    }, "24680", 20);
+
     expect(materializeInstagramMessagingList(
-      { folder: "inbox" },
-      output({ next_cursor: null, has_older: false }),
+      { folder: "inbox", limit: 20 },
+      runtimeOutput,
     )).toMatchObject({
-      completeness: { kind: "complete" },
-      cursor: { nextInput: null },
+      partition: "instagram:inbox",
+      completeness: { kind: "first-page-only" },
+      cursor: { direction: "none", request: null, nextInput: null },
+      entities: [{
+        providerId: "340282366841710300949128160279579384001",
+        participants: [{ providerId: "12345", handle: "reader" }],
+      }],
     });
+  });
+
+  test("never promotes a first-page-only runtime projection to complete", () => {
     expect(materializeInstagramMessagingList(
       { folder: "inbox" },
-      output({ next_cursor: null, has_older: null }),
+      output(),
     )).toMatchObject({
       completeness: { kind: "first-page-only" },
       cursor: { nextInput: null },
@@ -98,8 +128,11 @@ describe("Instagram omni inbox materializer", () => {
     for (const key of [
       "folder",
       "threads",
-      "next_cursor",
-      "has_older",
+      "page_scope",
+      "continuation_supported",
+      "raw_thread_count",
+      "provider_has_older",
+      "provider_cursor_present",
       "pending_requests_total",
     ] as const) {
       const value = clone(output()) as Record<string, unknown>;
@@ -174,19 +207,36 @@ describe("Instagram omni inbox materializer", () => {
     )).toThrow("duplicate participant IDs");
   });
 
-  test("rejects contradictory cursor and completeness evidence", () => {
+  test("rejects runtime continuation or page-scope drift", () => {
     expect(() => materializeInstagramMessagingList(
       { folder: "inbox" },
-      output({ next_cursor: null, has_older: true }),
-    )).toThrow("next_cursor is required when has_older is true");
+      output({ page_scope: "complete" }),
+    )).toThrow("page_scope must be first-page-only");
     expect(() => materializeInstagramMessagingList(
       { folder: "inbox" },
-      output({ next_cursor: "unexpected", has_older: false }),
-    )).toThrow("next_cursor must be null when has_older is false");
+      output({ continuation_supported: true }),
+    )).toThrow("continuation_supported must remain false");
     expect(() => materializeInstagramMessagingList(
       { folder: "inbox" },
       output({ pending_requests_total: -1 }),
     )).toThrow("pending_requests_total must be an integer");
+    expect(() => materializeInstagramMessagingList(
+      { folder: "inbox" },
+      output({ raw_thread_count: 0 }),
+    )).toThrow("raw_thread_count must cover every projected thread");
+    expect(() => materializeInstagramMessagingList(
+      { folder: "inbox" },
+      output({ raw_thread_count: 1_001 }),
+    )).toThrow("raw_thread_count must be an integer");
+    for (const key of [
+      "provider_has_older",
+      "provider_cursor_present",
+    ] as const) {
+      expect(() => materializeInstagramMessagingList(
+        { folder: "inbox" },
+        output({ [key]: null }),
+      )).toThrow(`${key} must be boolean`);
+    }
   });
 
   test("rejects foreign containers without executing accessors", () => {

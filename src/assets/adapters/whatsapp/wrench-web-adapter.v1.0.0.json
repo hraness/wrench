@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "whatsapp-web",
-  "version": "1.2.0",
+  "version": "1.0.0",
   "displayName": "WhatsApp (Linked-Device Protocol)",
   "surfaceId": "whatsapp",
   "origins": [
@@ -11,37 +11,6 @@
     "web.whatsapp.com"
   ],
   "operations": {
-    "contacts.list": {
-      "description": "List one bounded page from the private account-bound Whatsmeow session.db contact table without opening a WhatsApp connection; message statistics remain explicitly unavailable because the separate message store has no account-owner column.",
-      "risk": "R1",
-      "sideEffect": "none",
-      "idempotency": "none",
-      "dedupeWindowMs": 0,
-      "input": {
-        "properties": {
-          "cursor": {
-            "type": "string",
-            "description": "Exact contact JID after which the next local page begins",
-            "minLength": 9,
-            "maxLength": 96
-          },
-          "limit": {
-            "type": "number",
-            "description": "Maximum projected contacts",
-            "minimum": 1,
-            "maximum": 100
-          }
-        },
-        "required": []
-      },
-      "webSession": {
-        "site": "whatsapp",
-        "action": "contacts.list",
-        "contractVersion": 1,
-        "timeoutMs": 30000,
-        "maxOutputBytes": 8388608
-      }
-    },
     "messaging.list": {
       "description": "List a bounded page from the private account-bound linked-device projection without opening a WhatsApp connection or emitting protocol acknowledgements.",
       "risk": "R1",

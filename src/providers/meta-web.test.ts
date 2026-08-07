@@ -20,6 +20,7 @@ import {
   normalizeFacebookMarketplaceFeedHtml,
   normalizeFacebookMarketplaceListingHtml,
   normalizeInstagramComments,
+  normalizeInstagramContacts,
   normalizeInstagramFeed,
   normalizeInstagramInbox,
   normalizeInstagramPost,
@@ -435,7 +436,7 @@ describe("Meta consumer-web policy", () => {
       ["threads", "feeds.read", threadsManifest, threadsV1Manifest],
     ] as const;
 
-    expect(instagramManifest.version).toBe("1.1.0");
+    expect(instagramManifest.version).toBe("1.2.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
     expect(threadsManifest.version).toBe("1.1.0");
     expect(threadsV1Manifest.version).toBe("1.0.0");
@@ -625,8 +626,198 @@ describe("Meta consumer-web policy", () => {
       }],
       page_scope: "first-page-only",
       continuation_supported: false,
+      raw_thread_count: 1,
+      provider_has_older: true,
+      provider_cursor_present: true,
       pending_requests_total: 2,
     });
+  });
+
+  test("projects bounded unique Instagram inbox contacts without fabricating message statistics", () => {
+    const response = {
+      status: "ok",
+      viewer: { pk: "12345" },
+      inbox: {
+        oldest_cursor: "provider-cursor",
+        has_older: true,
+        threads: [
+          {
+            thread_id: "thread-1",
+            users: [
+              { pk: "12345", username: "viewer", full_name: "Viewer" },
+              { pk: "222", username: "friend", full_name: "Friend" },
+              { pk: "333", username: "other", full_name: null },
+            ],
+          },
+          {
+            thread_id: "thread-2",
+            users: [
+              { pk: "222", username: "changed", full_name: "Changed" },
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(normalizeInstagramContacts(response, "12345", 20, 50)).toEqual({
+      provider: "instagram",
+      operation: "contacts.list",
+      accountSubject: "instagram:12345",
+      contacts: [
+        {
+          providerId: "222",
+          displayName: "Friend",
+          handle: "friend",
+          sentCount: null,
+          sentCountComplete: false,
+          sentCountLowerBound: false,
+          sentCountTruncated: false,
+          receivedCount: null,
+          receivedCountComplete: false,
+          receivedCountLowerBound: false,
+          receivedCountTruncated: false,
+          lastSentAt: null,
+          lastSentAtComplete: false,
+          lastSentAtBasis: "unavailable",
+          sentStatsIncompleteReasons: ["message-history-capture-required"],
+          lastReceivedAt: null,
+          lastReceivedAtComplete: false,
+          lastReceivedAtBasis: "unavailable",
+          receivedStatsIncompleteReasons: ["message-history-capture-required"],
+        },
+        {
+          providerId: "333",
+          displayName: null,
+          handle: "other",
+          sentCount: null,
+          sentCountComplete: false,
+          sentCountLowerBound: false,
+          sentCountTruncated: false,
+          receivedCount: null,
+          receivedCountComplete: false,
+          receivedCountLowerBound: false,
+          receivedCountTruncated: false,
+          lastSentAt: null,
+          lastSentAtComplete: false,
+          lastSentAtBasis: "unavailable",
+          sentStatsIncompleteReasons: ["message-history-capture-required"],
+          lastReceivedAt: null,
+          lastReceivedAtComplete: false,
+          lastReceivedAtBasis: "unavailable",
+          receivedStatsIncompleteReasons: ["message-history-capture-required"],
+        },
+      ],
+      metadataScope: "first-page-inbox-participant-summary",
+      contactSetCompleteness: "first-page-only",
+      contactSetIncompleteReasons: [
+        "first-inbox-page-only",
+        "provider-has-older",
+        "provider-cursor-present",
+      ],
+      contactTruncated: true,
+      statsScope: "unavailable-without-acknowledgement-free-message-history",
+    });
+
+    expect(normalizeInstagramContacts(response, "12345", 20, 1)).toMatchObject({
+      contacts: [{ providerId: "222" }],
+      contactSetCompleteness: "first-page-only",
+      contactSetIncompleteReasons: [
+        "first-inbox-page-only",
+        "provider-has-older",
+        "provider-cursor-present",
+        "contact-limit-reached",
+      ],
+      contactTruncated: true,
+    });
+  });
+
+  test("distinguishes terminal Instagram pages from provider and local truncation", () => {
+    const thread = (threadId: string, participantId: string) => ({
+      thread_id: threadId,
+      users: [{ pk: participantId, username: `person-${participantId}` }],
+    });
+    const terminal = {
+      status: "ok",
+      viewer: { pk: "12345" },
+      inbox: {
+        has_older: false,
+        threads: [thread("thread-1", "222")],
+      },
+    };
+
+    expect(normalizeInstagramContacts(terminal, "12345", 20, 50)).toMatchObject({
+      contacts: [{ providerId: "222" }],
+      contactSetIncompleteReasons: ["first-inbox-page-only"],
+      contactTruncated: false,
+    });
+    expect(normalizeInstagramContacts({
+      ...terminal,
+      inbox: {
+        ...terminal.inbox,
+        next_cursor: "provider-next",
+      },
+    }, "12345", 20, 50)).toMatchObject({
+      contactSetIncompleteReasons: [
+        "first-inbox-page-only",
+        "provider-cursor-present",
+      ],
+      contactTruncated: true,
+    });
+    expect(normalizeInstagramContacts({
+      ...terminal,
+      inbox: {
+        ...terminal.inbox,
+        threads: [
+          thread("thread-1", "222"),
+          thread("thread-2", "333"),
+        ],
+      },
+    }, "12345", 1, 50)).toMatchObject({
+      contacts: [{ providerId: "222" }],
+      contactSetIncompleteReasons: [
+        "first-inbox-page-only",
+        "thread-limit-reached",
+      ],
+      contactTruncated: true,
+    });
+  });
+
+  test("rejects Instagram inbox participant collections beyond the reviewed bound", () => {
+    const response = {
+      status: "ok",
+      viewer: { pk: "12345" },
+      inbox: {
+        threads: [{
+          thread_id: "thread-1",
+          users: Array.from({ length: 101 }, (_unused, index) => ({
+            pk: String(index + 1),
+            username: `person${index + 1}`,
+          })),
+        }],
+      },
+    };
+    expect(() => normalizeInstagramContacts(response, "12345", 20, 50)).toThrow(
+      "Instagram inbox thread[0].users exceeded its reviewed bound",
+    );
+    expect(() => normalizeInstagramContacts({
+      ...response,
+      inbox: { threads: [{ thread_id: "thread-1", users: {} }] },
+    }, "12345", 20, 50)).toThrow(
+      "Instagram inbox thread[0].users must be a bounded array",
+    );
+    for (const id of ["0", "01"]) {
+      expect(() => normalizeInstagramContacts({
+        ...response,
+        inbox: {
+          threads: [{
+            thread_id: "thread-1",
+            users: [{ pk: id, username: "malformed" }],
+          }],
+        },
+      }, "12345", 20, 50)).toThrow(
+        "must be a canonical decimal account ID",
+      );
+    }
   });
 
   test("projects viewer-bound Threads and Facebook Relay preloads", () => {

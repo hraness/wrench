@@ -150,11 +150,17 @@ describe("single-process bundled adapter generation sync", () => {
       "facebook-marketplace-web@1.1.0",
       "facebook-page-web@1.0.0",
       "facebook-web@1.0.0",
+      "facebook-web@1.1.0",
       "instagram-web@1.0.0",
+      "instagram-web@1.1.0",
       "linkedin@0.4.0",
+      "linkedin@1.0.0",
       "linkedin-web@1.0.0",
       "linkedin-web@1.1.0",
+      "linkedin-web@1.2.0",
       "threads-web@1.0.0",
+      "whatsapp-web@1.0.0",
+      "whatsapp-web@1.1.0",
     ]);
     expect(Object.fromEntries(discovered.flatMap((adapter) =>
       adapter.upgradeFrom.map((baseline) => [

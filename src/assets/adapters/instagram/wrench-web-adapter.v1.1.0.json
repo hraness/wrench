@@ -1,76 +1,29 @@
 {
   "schemaVersion": 4,
-  "id": "facebook-web",
-  "version": "1.2.0",
-  "displayName": "Facebook (Authenticated Internal API)",
-  "surfaceId": "facebook",
+  "id": "instagram-web",
+  "version": "1.1.0",
+  "displayName": "Instagram (Authenticated Web API)",
+  "surfaceId": "instagram",
   "origins": [
-    "https://www.facebook.com"
+    "https://www.instagram.com"
   ],
   "browserDomains": [
-    "www.facebook.com"
+    "www.instagram.com"
   ],
   "operations": {
-    "contacts.list": {
-      "description": "Capture-required contract reservation: list one bounded Facebook friends or Messenger-participant collection only after exact actor binding, paging, completeness, acknowledgement behavior, and directional message-history semantics are reviewed.",
-      "risk": "R1",
-      "sideEffect": "none",
-      "idempotency": "none",
-      "dedupeWindowMs": 0,
-      "input": {
-        "properties": {
-          "source": {
-            "type": "string",
-            "description": "Provider-defined contact collection requiring a separate reviewed transport",
-            "enum": [
-              "friends",
-              "messenger-participants"
-            ]
-          },
-          "cursor": {
-            "type": "string",
-            "description": "Opaque cursor returned by the preceding reviewed page",
-            "minLength": 1,
-            "maxLength": 4096
-          },
-          "limit": {
-            "type": "number",
-            "description": "Maximum projected contacts",
-            "minimum": 1,
-            "maximum": 100
-          },
-          "stats_scan_limit": {
-            "type": "number",
-            "description": "Maximum reviewed message-history entries scanned per contact and direction",
-            "minimum": 1,
-            "maximum": 2000
-          }
-        },
-        "required": [
-          "source"
-        ]
-      },
-      "webSession": {
-        "site": "facebook",
-        "action": "contacts.list",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
-      }
-    },
     "comments.create": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           },
           "body": {
             "type": "string",
@@ -80,37 +33,31 @@
           }
         },
         "required": [
-          "post_id",
+          "media_id",
           "body"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "comments.create",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "comments.read": {
-      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "description": "Observed contract: one bounded first page from live direct /api/v1/media/{id}/comments JSON with caption/root binding and no continuation cursor accepted or exposed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
-          },
-          "cursor": {
-            "type": "string",
-            "description": "Opaque cursor returned by the preceding page",
-            "minLength": 1,
-            "maxLength": 4096
+            "maxLength": 80
           },
           "limit": {
             "type": "number",
@@ -120,30 +67,30 @@
           }
         },
         "required": [
-          "post_id"
+          "media_id"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "comments.read",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "content.edit": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           },
           "body": {
             "type": "string",
@@ -153,31 +100,31 @@
           }
         },
         "required": [
-          "post_id",
+          "media_id",
           "body"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "content.edit",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "content.save": {
       "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
       "risk": "R2",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           },
           "saved": {
             "type": "boolean",
@@ -185,31 +132,31 @@
           }
         },
         "required": [
-          "post_id",
+          "media_id",
           "saved"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "content.save",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "content.share": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           },
           "destination": {
             "type": "string",
@@ -220,20 +167,20 @@
           }
         },
         "required": [
-          "post_id",
+          "media_id",
           "destination"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "content.share",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "feeds.read": {
-      "description": "Observed contract: bounded initial signed-in Comet homepage preload with exact current-user binding; it makes no completion or pagination claim.",
+      "description": "Observed contract: one bounded first page from live direct /api/v1/feed/timeline JSON with viewer binding and no continuation cursor accepted or exposed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -259,26 +206,26 @@
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "feeds.read",
         "contractVersion": 2,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "likes.set": {
       "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
       "risk": "R2",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           },
           "liked": {
             "type": "boolean",
@@ -286,22 +233,22 @@
           }
         },
         "required": [
-          "post_id",
+          "media_id",
           "liked"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "likes.set",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "media.publish": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -334,42 +281,42 @@
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "media.publish",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "media.read": {
-      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "description": "Observed contract: the target-bound media-info response supplies bounded media metadata without copying credentials.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           }
         },
         "required": [
-          "post_id"
+          "media_id"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "media.read",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "messaging.list": {
-      "description": "Capture-required contract reservation: a homepage Comet preload does not establish the inbox route or folder, paging or completeness, or acknowledgement/presence behavior; Messenger Msys/E2EE needs its own reviewed transport.",
+      "description": "Observed contract: one bounded first page from the live direct_v2 inbox summary GET, with no continuation cursor accepted or exposed and no seen, ack, or presence endpoint issued.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -380,17 +327,8 @@
             "type": "string",
             "description": "Reviewed inbox folder",
             "enum": [
-              "inbox",
-              "message-requests",
-              "archived",
-              "spam"
+              "inbox"
             ]
-          },
-          "cursor": {
-            "type": "string",
-            "description": "Opaque cursor returned by the preceding page",
-            "minLength": 1,
-            "maxLength": 4096
           },
           "limit": {
             "type": "number",
@@ -404,15 +342,15 @@
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "messaging.list",
         "contractVersion": 2,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "messaging.read": {
-      "description": "Capture-required contract reservation: Messenger conversation reads require protocol-correct Lightspeed/Msys acknowledgement analysis.",
+      "description": "Capture-required contract reservation: Direct thread reads require a reviewed no-seen/no-presence capture; listing evidence does not authorize reading messages.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -443,17 +381,17 @@
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "messaging.read",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "messaging.send": {
-      "description": "Capture-required contract reservation: Messenger send requires protocol-correct Lightspeed/Msys/E2EE and cannot be represented as a plaintext GraphQL replay.",
+      "description": "Capture-required contract reservation: Instagram messaging is split across Direct, LS/Msys, and E2EE transports; plaintext replay is prohibited.",
       "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -476,8 +414,7 @@
             "maxBytes": 1073741824,
             "mediaTypes": [
               "image/*",
-              "video/*",
-              "application/pdf"
+              "video/*"
             ]
           }
         },
@@ -487,131 +424,53 @@
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "messaging.send",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
-      }
-    },
-    "posts.publish": {
-      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
-      "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
-      "idempotency": "local-at-most-once",
-      "dedupeWindowMs": 86400000,
-      "input": {
-        "properties": {
-          "body": {
-            "type": "string",
-            "description": "Post body",
-            "minLength": 1,
-            "maxLength": 1000
-          },
-          "attachment": {
-            "type": "file",
-            "description": "Optional exact post attachment",
-            "maxBytes": 1073741824,
-            "mediaTypes": [
-              "image/*",
-              "video/*",
-              "image/gif"
-            ]
-          },
-          "audience": {
-            "type": "string",
-            "description": "Explicit audience",
-            "enum": [
-              "default"
-            ]
-          }
-        },
-        "required": [
-          "body"
-        ]
-      },
-      "webSession": {
-        "site": "facebook",
-        "action": "posts.publish",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
-      }
-    },
-    "posts.quote": {
-      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
-      "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
-      "idempotency": "local-at-most-once",
-      "dedupeWindowMs": 86400000,
-      "input": {
-        "properties": {
-          "post_id": {
-            "type": "string",
-            "description": "Exact Facebook post ID",
-            "minLength": 1,
-            "maxLength": 256
-          },
-          "body": {
-            "type": "string",
-            "description": "Quote text",
-            "minLength": 1,
-            "maxLength": 1000
-          }
-        },
-        "required": [
-          "post_id",
-          "body"
-        ]
-      },
-      "webSession": {
-        "site": "facebook",
-        "action": "posts.quote",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "posts.read": {
-      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "description": "Observed contract: live direct /api/v1/media/{id}/info JSON with exact returned-media binding.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           }
         },
         "required": [
-          "post_id"
+          "media_id"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "posts.read",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "posts.repost": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           },
           "reposted": {
             "type": "boolean",
@@ -619,31 +478,31 @@
           }
         },
         "required": [
-          "post_id",
+          "media_id",
           "reposted"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "posts.repost",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "reactions.set": {
       "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
       "risk": "R2",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           },
           "reaction": {
             "type": "string",
@@ -661,22 +520,22 @@
           }
         },
         "required": [
-          "post_id",
+          "media_id",
           "reaction"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "reactions.set",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "relationships.follow.set": {
       "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
       "risk": "R2",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -698,26 +557,26 @@
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "relationships.follow.set",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     },
     "replies.create": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote facebook state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "post_id": {
+          "media_id": {
             "type": "string",
-            "description": "Exact Facebook post ID",
+            "description": "Exact Instagram media ID",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 80
           },
           "comment_id": {
             "type": "string",
@@ -733,17 +592,17 @@
           }
         },
         "required": [
-          "post_id",
+          "media_id",
           "comment_id",
           "body"
         ]
       },
       "webSession": {
-        "site": "facebook",
+        "site": "instagram",
         "action": "replies.create",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 10485760
+        "maxOutputBytes": 8388608
       }
     }
   }

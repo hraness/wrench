@@ -78,6 +78,31 @@ function isFileInputValue(value: unknown): boolean {
 }
 
 const linkedinDefinitions = {
+  "contacts.list": {
+    provider: "linkedin",
+    operation: "contacts.list",
+    contractVersion: 1,
+    risk: "R1",
+    input: {
+      properties: {
+        start: number("Zero-based first-degree connection offset; defaults to 0", 0, 100_000),
+        count: number("Bounded first-degree connection count; defaults to 10", 1, 50),
+      },
+      required: [],
+    },
+    requiredScopeSets: [["r_1st_connections", "r_liteprofile"]],
+    dispatch: "none",
+    coverage: [
+      "first-degree-connections",
+      "authenticated-viewer-binding",
+      "connection-localized-names",
+      "locale-selection-evidence",
+      "connection-set-total",
+      "offset-paging",
+      "unavailable-message-statistics",
+    ],
+    implementation: "pre-network scope and person-URN validation, then subject-bound GET /v2/me?projection=(id) and an exact byte comparison between the authenticated person URN and OAuth locator before GET /v2/connections?q=viewer&projection=(elements(*(to~)),paging); exact offset-page, decorated person identity, locale-selection evidence, and total-count validation; restricted r_1st_connections and r_liteprofile approval required; no inbox or web fallback; message statistics are explicitly unavailable",
+  },
   "posts.read": {
     provider: "linkedin",
     operation: "posts.read",

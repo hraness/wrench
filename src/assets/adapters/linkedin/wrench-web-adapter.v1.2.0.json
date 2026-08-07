@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.3.0",
+  "version": "1.2.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -11,43 +11,6 @@
     "www.linkedin.com"
   ],
   "operations": {
-    "contacts.list": {
-      "description": "Capture-required contract reservation: list bounded LinkedIn messaging participants with statistics only after current viewer binding, real conversation and message pagination, group attribution, completeness, and acknowledgement-free behavior are reviewed.",
-      "risk": "R1",
-      "sideEffect": "none",
-      "idempotency": "none",
-      "dedupeWindowMs": 0,
-      "input": {
-        "properties": {
-          "cursor": {
-            "type": "string",
-            "description": "Opaque cursor returned by the preceding reviewed conversation page",
-            "minLength": 1,
-            "maxLength": 4096
-          },
-          "limit": {
-            "type": "number",
-            "description": "Maximum projected messaging participants",
-            "minimum": 1,
-            "maximum": 100
-          },
-          "stats_scan_limit": {
-            "type": "number",
-            "description": "Maximum reviewed messages scanned per contact and direction",
-            "minimum": 1,
-            "maximum": 2000
-          }
-        },
-        "required": []
-      },
-      "webSession": {
-        "site": "linkedin",
-        "action": "contacts.list",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 4194304
-      }
-    },
     "feeds.read": {
       "description": "Capture-required contract reservation: the LinkedIn home-feed query revision is known, but execution remains disabled until exact current variables and a bounded response projection are captured and reviewed.",
       "risk": "R1",

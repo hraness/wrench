@@ -305,6 +305,7 @@ export const genericSemanticRisks = {
   "content.clip": "R1",
   "profiles.read": "R1",
   "organizations.read": "R1",
+  "contacts.list": "R1",
   "feeds.read": "R1",
   "messaging.list": "R1",
   "messaging.read": "R1",

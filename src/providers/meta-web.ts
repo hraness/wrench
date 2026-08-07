@@ -7,6 +7,7 @@
  */
 
 import { assertMetaCometReadActor } from "./meta-bootstrap";
+import { projectContactDirectionStats } from "./contact-projection";
 import { extractMetaJsonScriptTexts } from "./meta-relay-bundle";
 
 export const META_WEB_SITES = Object.freeze([
@@ -22,9 +23,25 @@ export type MetaWebSite = (typeof META_WEB_SITES)[number];
 export type MetaWebRisk = "R1" | "R2" | "R3";
 export type MetaWebContractState = "observed" | "capture-required";
 
+const unavailableInstagramContactStats = Object.freeze({
+  count: null,
+  complete: false,
+  lowerBound: false,
+  truncated: false,
+  lastAt: null,
+  lastAtComplete: false,
+  lastAtBasis: "unavailable",
+  incompleteReasons: Object.freeze(["message-history-capture-required"]),
+} as const);
+
+const unavailableInstagramContactStatsProjection = projectContactDirectionStats(
+  unavailableInstagramContactStats,
+  unavailableInstagramContactStats,
+);
+
 export const META_WEB_OPERATION_NAMES = Object.freeze({
   instagram: Object.freeze([
-    "comments.create", "comments.read", "content.edit", "content.save", "content.share",
+    "comments.create", "comments.read", "contacts.list", "content.edit", "content.save", "content.share",
     "feeds.read", "likes.set", "media.publish", "media.read", "messaging.list",
     "messaging.read", "messaging.send", "posts.read", "posts.repost", "reactions.set",
     "relationships.follow.set", "replies.create",
@@ -36,7 +53,7 @@ export const META_WEB_OPERATION_NAMES = Object.freeze({
     "relationships.follow.set", "replies.create", "threads.publish",
   ] as const),
   facebook: Object.freeze([
-    "comments.create", "comments.read", "content.edit", "content.save", "content.share",
+    "comments.create", "comments.read", "contacts.list", "content.edit", "content.save", "content.share",
     "feeds.read", "likes.set", "media.publish", "media.read", "messaging.list",
     "messaging.read", "messaging.send", "posts.publish", "posts.quote", "posts.read",
     "posts.repost", "reactions.set", "relationships.follow.set", "replies.create",
@@ -61,6 +78,13 @@ export const META_WEB_OPERATION_NAMES = Object.freeze({
 } satisfies Readonly<Record<MetaWebSite, readonly string[]>>);
 
 export type MetaWebOperationName = (typeof META_WEB_OPERATION_NAMES)[MetaWebSite][number];
+
+const META_NUMERIC_ID_PATTERN = /^[1-9][0-9]{0,31}$/u;
+
+/** True only for Meta account IDs in their one canonical decimal representation. */
+export function isCanonicalMetaNumericId(value: unknown): value is string {
+  return typeof value === "string" && META_NUMERIC_ID_PATTERN.test(value);
+}
 
 export type MetaWebOperationContract = {
   readonly contractVersion: number;
@@ -134,6 +158,10 @@ function contracts(
 
 export const META_WEB_OPERATIONS = Object.freeze({
   instagram: contracts("instagram", {
+    "contacts.list": observed(
+      "unique non-viewer participants from one bounded first page of the live direct_v2 inbox summary GET; the contact set and all message statistics retain explicit first-page or unavailable completeness",
+      1,
+    ),
     "feeds.read": observed(
       "one bounded first page from live direct /api/v1/feed/timeline JSON with viewer binding and no continuation cursor accepted or exposed",
       2,
@@ -176,6 +204,10 @@ export const META_WEB_OPERATIONS = Object.freeze({
     ),
   }),
   facebook: contracts("facebook", {
+    "contacts.list": captureRequired(
+      "contacts.list",
+      "personal Facebook contacts require either an exact friends collection or a separately reviewed Messenger-participant transport with actor binding, paging, completeness, and acknowledgement analysis",
+    ),
     "feeds.read": observed(
       "live direct signed-in Comet Relay news-feed preload JSON with exact current-user binding",
       2,
@@ -960,7 +992,7 @@ function modulePayloads(roots: readonly unknown[], moduleName: string): readonly
 function oneStableId(values: readonly unknown[], label: string): string {
   const ids = new Set<string>();
   for (const value of values) {
-    if (typeof value === "string" && /^[0-9]{1,32}$/u.test(value) && value !== "0") ids.add(value);
+    if (isCanonicalMetaNumericId(value)) ids.add(value);
   }
   if (ids.size !== 1) throw new Error(`${label} did not resolve to exactly one stable account ID`);
   return [...ids][0] as string;
@@ -981,8 +1013,7 @@ export function parseFacebookViewerId(html: unknown): string {
   const candidates: string[] = [];
   for (const [index, payload] of payloads.entries()) {
     if (
-      typeof payload.ACCOUNT_ID !== "string"
-      || !/^[1-9][0-9]{0,31}$/u.test(payload.ACCOUNT_ID)
+      !isCanonicalMetaNumericId(payload.ACCOUNT_ID)
       || payload.ACCOUNT_ID !== payload.USER_ID
     ) {
       throw new Error(
@@ -1015,7 +1046,9 @@ function instagramUser(value: unknown, label: string): Readonly<Record<string, u
   if (value === undefined || value === null) return null;
   const user = record(value, label);
   const id = optionalString(user.pk ?? user.id, `${label}.id`, 32);
-  if (id !== null && !/^[0-9]{1,32}$/u.test(id)) throw new Error(`${label}.id must be decimal`);
+  if (id !== null && !isCanonicalMetaNumericId(id)) {
+    throw new Error(`${label}.id must be a canonical decimal account ID`);
+  }
   return Object.freeze({
     id,
     username: optionalString(user.username, `${label}.username`, 64),
@@ -1138,9 +1171,15 @@ export function normalizeInstagramComments(value: unknown, mediaId: string, limi
 }
 
 export function normalizeInstagramInbox(value: unknown, viewerId: string, limit: number): unknown {
+  if (!isCanonicalMetaNumericId(viewerId)) {
+    throw new Error("Instagram inbox viewer ID must be a canonical decimal account ID");
+  }
   const envelope = okInstagramEnvelope(value, "Instagram inbox response");
   const viewer = record(envelope.viewer, "Instagram inbox response.viewer");
   const responseViewerId = boundedString(viewer.pk ?? viewer.id, "Instagram inbox response.viewer.id", 32);
+  if (!isCanonicalMetaNumericId(responseViewerId)) {
+    throw new Error("Instagram inbox response.viewer.id must be a canonical decimal account ID");
+  }
   if (responseViewerId !== viewerId) {
     throw new Error("Instagram inbox response changed its bound viewer");
   }
@@ -1148,10 +1187,17 @@ export function normalizeInstagramInbox(value: unknown, viewerId: string, limit:
   if (!Array.isArray(inbox.threads) || inbox.threads.length > 1_000) {
     throw new Error("Instagram inbox response.inbox.threads must be a bounded array");
   }
+  const rawThreadCount = inbox.threads.length;
   const threads = inbox.threads.slice(0, limit).map((value, index) => {
     const thread = record(value, `Instagram inbox response.inbox.threads[${index}]`);
+    if (thread.users !== undefined && !Array.isArray(thread.users)) {
+      throw new Error(`Instagram inbox thread[${index}].users must be a bounded array`);
+    }
+    if (Array.isArray(thread.users) && thread.users.length > 100) {
+      throw new Error(`Instagram inbox thread[${index}].users exceeded its reviewed bound`);
+    }
     const users = Array.isArray(thread.users)
-      ? thread.users.slice(0, 100).map((user, userIndex) =>
+      ? thread.users.map((user, userIndex) =>
         instagramUser(user, `Instagram inbox thread[${index}].users[${userIndex}]`))
       : [];
     return Object.freeze({
@@ -1163,14 +1209,118 @@ export function normalizeInstagramInbox(value: unknown, viewerId: string, limit:
       pending: optionalBoolean(thread.pending, `Instagram inbox thread[${index}].pending`),
     });
   });
-  optionalString(inbox.oldest_cursor ?? inbox.next_cursor, "Instagram inbox next cursor", 4096);
-  optionalBoolean(inbox.has_older, "Instagram inbox has_older");
+  const providerCursor = optionalString(
+    inbox.oldest_cursor ?? inbox.next_cursor,
+    "Instagram inbox next cursor",
+    4096,
+  );
+  const providerHasOlder = optionalBoolean(inbox.has_older, "Instagram inbox has_older") ?? false;
   return Object.freeze({
     folder: "inbox",
     threads: Object.freeze(threads),
     page_scope: "first-page-only",
     continuation_supported: false,
+    raw_thread_count: rawThreadCount,
+    provider_has_older: providerHasOlder,
+    provider_cursor_present: providerCursor !== null,
     pending_requests_total: optionalInteger(envelope.pending_requests_total, "Instagram inbox pending_requests_total"),
+  });
+}
+
+export function normalizeInstagramContacts(
+  value: unknown,
+  viewerId: string,
+  threadLimit: number,
+  contactLimit: number,
+): unknown {
+  const inbox = record(
+    normalizeInstagramInbox(value, viewerId, threadLimit),
+    "Instagram normalized inbox",
+  );
+  if (!Array.isArray(inbox.threads)) {
+    throw new Error("Instagram normalized inbox omitted its bounded threads");
+  }
+  const rawThreadCount = optionalInteger(
+    inbox.raw_thread_count,
+    "Instagram normalized inbox.raw_thread_count",
+  );
+  const providerHasOlder = optionalBoolean(
+    inbox.provider_has_older,
+    "Instagram normalized inbox.provider_has_older",
+  );
+  const providerCursorPresent = optionalBoolean(
+    inbox.provider_cursor_present,
+    "Instagram normalized inbox.provider_cursor_present",
+  );
+  if (
+    rawThreadCount === null
+    || providerHasOlder === null
+    || providerCursorPresent === null
+  ) {
+    throw new Error("Instagram normalized inbox omitted its pagination evidence");
+  }
+  const byId = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const [threadIndex, threadValue] of inbox.threads.entries()) {
+    const thread = record(
+      threadValue,
+      `Instagram normalized inbox.threads[${threadIndex}]`,
+    );
+    if (!Array.isArray(thread.users)) {
+      throw new Error(
+        `Instagram normalized inbox.threads[${threadIndex}].users must be a bounded array`,
+      );
+    }
+    for (const [userIndex, userValue] of thread.users.entries()) {
+      const user = record(
+        userValue,
+        `Instagram normalized inbox.threads[${threadIndex}].users[${userIndex}]`,
+      );
+      const id = boundedString(
+        user.id,
+        `Instagram normalized inbox.threads[${threadIndex}].users[${userIndex}].id`,
+        32,
+      );
+      if (id === viewerId || byId.has(id)) continue;
+      byId.set(id, Object.freeze({
+        providerId: id,
+        displayName: optionalString(
+          user.full_name,
+          `Instagram normalized inbox.threads[${threadIndex}].users[${userIndex}].full_name`,
+          256,
+        ),
+        handle: optionalString(
+          user.username,
+          `Instagram normalized inbox.threads[${threadIndex}].users[${userIndex}].username`,
+          64,
+        ),
+        ...unavailableInstagramContactStatsProjection,
+      }));
+    }
+  }
+  const allContacts = [...byId.values()];
+  const threadLimitReached = rawThreadCount > threadLimit;
+  const contactLimitReached = allContacts.length > contactLimit;
+  const contactSetIncompleteReasons = [
+    "first-inbox-page-only",
+    ...(providerHasOlder ? ["provider-has-older"] : []),
+    ...(providerCursorPresent ? ["provider-cursor-present"] : []),
+    ...(threadLimitReached ? ["thread-limit-reached"] : []),
+    ...(contactLimitReached ? ["contact-limit-reached"] : []),
+  ] as const;
+  const contactTruncated = providerHasOlder
+    || providerCursorPresent
+    || threadLimitReached
+    || contactLimitReached;
+  return Object.freeze({
+    provider: "instagram",
+    operation: "contacts.list",
+    accountSubject: `instagram:${viewerId}`,
+    contacts: Object.freeze(allContacts.slice(0, contactLimit)),
+    metadataScope: "first-page-inbox-participant-summary",
+    contactSetCompleteness: "first-page-only",
+    contactSetIncompleteReasons: Object.freeze(contactSetIncompleteReasons),
+    contactTruncated,
+    statsScope: "unavailable-without-acknowledgement-free-message-history",
   });
 }
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "id": "linkedin",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "displayName": "LinkedIn (Official API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -11,37 +11,6 @@
     "www.linkedin.com"
   ],
   "operations": {
-    "contacts.list": {
-      "description": "Use the code-owned official linkedin API contract for contacts.list. Bind the OAuth locator subject to exact GET /v2/me?projection=(id) identity before GET /v2/connections?q=viewer with the fixed decorated-name projection, deterministic MultiLocaleString selection, exact offset-page and total validation, exact r_1st_connections plus r_liteprofile approval, and explicitly unavailable message statistics; no inbox or web fallback",
-      "risk": "R1",
-      "sideEffect": "none",
-      "idempotency": "none",
-      "dedupeWindowMs": 0,
-      "input": {
-        "properties": {
-          "start": {
-            "type": "number",
-            "description": "Zero-based first-degree connection offset; defaults to 0",
-            "minimum": 0,
-            "maximum": 100000
-          },
-          "count": {
-            "type": "number",
-            "description": "Bounded first-degree connection count; defaults to 10",
-            "minimum": 1,
-            "maximum": 50
-          }
-        },
-        "required": []
-      },
-      "provider": {
-        "provider": "linkedin",
-        "action": "contacts.list",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 2097152
-      }
-    },
     "posts.read": {
       "description": "Use the code-owned official linkedin API contract for posts.read. GET /rest/posts/{urn}; FINDER /rest/posts?q=author; LinkedIn-Version 202606; no home-feed reconstruction",
       "risk": "R1",

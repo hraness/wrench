@@ -22,6 +22,7 @@ export const WHATSAPP_PROTOCOL_PIN = Object.freeze({
 } as const);
 
 export const WHATSAPP_WEB_OPERATION_NAMES = Object.freeze([
+  "contacts.list",
   "content.edit",
   "content.save",
   "content.share",
@@ -61,6 +62,11 @@ function observed(
 }
 
 export const WHATSAPP_WEB_OPERATIONS = Object.freeze({
+  "contacts.list": observed(
+    "read",
+    "R1",
+    "the account-bound Whatsmeow session.db contact table is projected by a fixed killable read-only helper after exact schema, owner, quiescence, and file-identity validation; message statistics remain explicitly unavailable because wacli.db message rows have no account owner",
+  ),
   "messaging.list": observed(
     "read",
     "R1",

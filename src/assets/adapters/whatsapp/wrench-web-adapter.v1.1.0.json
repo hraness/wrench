@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "whatsapp-web",
-  "version": "1.2.0",
+  "version": "1.1.0",
   "displayName": "WhatsApp (Linked-Device Protocol)",
   "surfaceId": "whatsapp",
   "origins": [
@@ -12,7 +12,7 @@
   ],
   "operations": {
     "contacts.list": {
-      "description": "List one bounded page from the private account-bound Whatsmeow session.db contact table without opening a WhatsApp connection; message statistics remain explicitly unavailable because the separate message store has no account-owner column.",
+      "description": "List one bounded page from the private account-bound WhatsApp contact table and derive lower-bound direct-message statistics from the same quiescent local projection without opening a WhatsApp connection.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",

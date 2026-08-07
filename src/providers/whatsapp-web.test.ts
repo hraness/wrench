@@ -92,7 +92,14 @@ describe("WhatsApp linked-device protocol registry", () => {
     });
     expect(whatsappManifest.schemaVersion).toBe(4);
     expect(whatsappManifest.id).toBe("whatsapp-web");
+    expect(whatsappManifest.version).toBe("1.2.0");
     expect(whatsappManifest.displayName).toContain("Linked-Device Protocol");
+    expect(whatsappManifest.operations["contacts.list"].description).toContain(
+      "Whatsmeow session.db contact table",
+    );
+    expect(whatsappManifest.operations["contacts.list"].description).toContain(
+      "message statistics remain explicitly unavailable",
+    );
     expect(Object.keys(whatsappManifest.operations).sort()).toEqual(
       [...WHATSAPP_WEB_OPERATION_NAMES].sort(),
     );
@@ -113,7 +120,12 @@ describe("WhatsApp linked-device protocol registry", () => {
   });
 
   test("graduates only paired non-mutating projections and keeps every mutation fail-closed", () => {
-    const observed = new Set(["media.read", "messaging.list", "messaging.read"]);
+    const observed = new Set([
+      "contacts.list",
+      "media.read",
+      "messaging.list",
+      "messaging.read",
+    ]);
     for (const [action, contract] of Object.entries(WHATSAPP_WEB_OPERATIONS)) {
       expect(contract.state).toBe(
         observed.has(action) ? "observed" : "capture-required",

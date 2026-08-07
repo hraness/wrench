@@ -10,6 +10,7 @@ export const LINKEDIN_MESSENGER_GRAPHQL_PATH = "/voyager/api/voyagerMessagingGra
 
 export const LINKEDIN_WEB_OPERATION_NAMES = Object.freeze([
   "feeds.read",
+  "contacts.list",
   "profiles.read",
   "organizations.read",
   "relationships.recommendations.read",
@@ -57,6 +58,13 @@ export type LinkedInWebOperationContract = {
  * semantic reservation, not permission to guess or execute an endpoint.
  */
 export const LINKEDIN_WEB_OPERATIONS = {
+  "contacts.list": {
+    effect: "read",
+    risk: "R1",
+    state: "capture-required",
+    evidence: "none",
+    requests: [],
+  },
   "feeds.read": {
     effect: "read",
     risk: "R1",

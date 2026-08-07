@@ -19,10 +19,10 @@ Project site: [hraness.com/wrench](https://hraness.com/wrench)
 
 ## Install
 
-Pin the public repository to the immutable `v0.5.0` tag:
+Pin the public repository to the immutable `v0.6.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.5.0
+bun add --global github:hraness/wrench#v0.6.0
 wrench doctor
 ```
 
@@ -38,7 +38,7 @@ verifies the resolved closure versions and reviewed entrypoint hashes.
 For programmatic plugin types and bounded validators:
 
 ```sh
-bun add github:hraness/wrench#v0.5.0
+bun add github:hraness/wrench#v0.6.0
 ```
 
 ```ts
@@ -165,6 +165,53 @@ reinterpretation. Revalidation reruns the selected R1 operation; it does not
 imply a separate provider sync. In particular, WhatsApp reads revalidate its
 local linked-device projection, while `wrench auth sync <id> --once` remains
 explicit.
+
+### Contact providers
+
+`contacts.list` uses one shared directional-statistics shape. A count is either
+complete, an explicit lower bound, or `null` when the provider cannot supply
+it. Timestamps carry the same completeness and basis evidence. Providers do
+not turn missing message history into zero activity.
+
+| Provider | Contact collection | Directional statistics |
+| --- | --- | --- |
+| Gmail | Google People connections | Bounded Gmail message scans with explicit truncation |
+| LinkedIn official API | First-degree connections with locale-selection evidence | Unavailable; the Connections API does not expose ordinary inbox history |
+| Instagram authenticated web | Unique non-viewer participants from the reviewed first Direct inbox summary page, with explicit first-page and pagination incompleteness | Unavailable until acknowledgement-free message-history paging is reviewed |
+| WhatsApp linked device | One page of the authenticated account owner's private, quiescent Whatsmeow contact store | Unavailable; Wrench does not treat a linked-device message cache as account-owned history |
+| Facebook authenticated web | Capture-required reservation for friends or Messenger participants | Capture-required |
+| Telegram | Not installed | Requires a reviewed TDLib user-session lifecycle; Wrench does not substitute the Bot API or claim contact access |
+
+LinkedIn requires approved access to both the restricted
+`r_1st_connections` and `r_liteprofile` scopes. Before listing connections,
+Wrench reads `/v2/me`, derives the exact authenticated person URN, and compares
+it byte-for-byte with the OAuth locator. Its consumer-web contact operation
+remains capture-required and never falls back from the official API:
+
+```sh
+wrench linkedin contacts.list --auth linkedin-main \
+  --input '{"start":0,"count":25}' --json
+```
+
+Instagram returns only participants visible in one reviewed first inbox page.
+Its output marks provider pagination signals and local thread or contact limits
+as incomplete instead of presenting that page as a complete contact set.
+WhatsApp reads contacts from the authenticated account owner's private,
+quiescent Whatsmeow `session.db` without opening a new WhatsApp connection.
+Message counts and last-message timestamps remain explicitly unavailable:
+
+```sh
+wrench instagram-web contacts.list --auth instagram-main \
+  --input '{"thread_limit":25,"contact_limit":50}' --json
+wrench whatsapp-web contacts.list --auth whatsapp-main \
+  --input '{"limit":50}' --json
+```
+
+Telegram's official `getContacts` method belongs to
+[TDLib's user-client API](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1get_contacts.html).
+Wrench will not install or expose this surface until it can bind the TDLib
+authorization lifecycle, account identity, local database, paging behavior,
+and message-history completeness without weakening the linked-device boundary.
 
 ### Gmail
 
@@ -333,7 +380,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.5.0/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.6.0/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

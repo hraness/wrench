@@ -3147,6 +3147,45 @@ describe("provider plugin definition and registry", () => {
     expect(definitions).not.toContain("canonicalJson");
   });
 
+  test("binds the shared contact projection into every observed contact provider", () => {
+    const plugins = providerPluginRegistry.list();
+    const observedContactProviderIds = plugins
+      .filter((plugin) => plugin.bindings.some((binding) =>
+        binding.operations.some((operation) =>
+          operation.name === "contacts.list" && operation.state === "observed"
+        )
+      ))
+      .map((plugin) => plugin.id)
+      .sort((left, right) => left.localeCompare(right));
+    const sharedProjectionProviderIds = plugins
+      .filter((plugin) => plugin.implementationSources.some((source) =>
+        source.label === "providers/contact-projection.ts"
+      ))
+      .map((plugin) => plugin.id)
+      .sort((left, right) => left.localeCompare(right));
+
+    expect(observedContactProviderIds).toEqual([
+      "gmail-official",
+      "linkedin-official",
+      "meta-web",
+      "whatsapp-linked-device",
+    ]);
+    expect(sharedProjectionProviderIds).toEqual(observedContactProviderIds);
+
+    const whatsapp = providerPluginRegistry.get("whatsapp-linked-device");
+    expect(whatsapp).toBeDefined();
+    const whatsappSourceLabels = new Set(
+      whatsapp?.implementationSources.map((source) => source.label) ?? [],
+    );
+    for (const expected of [
+      "kernel/state-helper.bunfig.toml",
+      "providers/whatsapp-contact-projection-helper.ts",
+      "providers/whatsapp-contact-projection-protocol.ts",
+    ]) {
+      expect(whatsappSourceLabels.has(expected)).toBeTrue();
+    }
+  });
+
   test("resolves every bundled schema-v3/v4 operation at its durable route version", () => {
     const root = join(import.meta.dir, "assets", "adapters");
     let checked = 0;

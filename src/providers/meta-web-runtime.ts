@@ -19,11 +19,13 @@ import {
   META_WEB_OPERATIONS,
   META_WEB_OPERATION_NAMES,
   META_WEB_SITES,
+  isCanonicalMetaNumericId,
   normalizeFacebookFeedHtml,
   normalizeFacebookMarketplaceFeedJsonDocuments,
   normalizeFacebookMarketplaceFeedHtml,
   normalizeFacebookMarketplaceListingHtml,
   normalizeInstagramComments,
+  normalizeInstagramContacts,
   normalizeInstagramFeed,
   normalizeInstagramInbox,
   normalizeInstagramPost,
@@ -344,23 +346,30 @@ function facebookMarketplaceAuthHash(auth: WrenchAuth): string {
 
 function expectedFacebookViewerId(auth: WrenchAuth): string {
   const subject = webSessionAuthSubject(auth);
-  const match = subject?.match(/^facebook:user:([1-9][0-9]{0,31})$/u);
-  if (match?.[1] === undefined) {
+  const prefix = "facebook:user:";
+  const id = subject?.startsWith(prefix) === true
+    ? subject.slice(prefix.length)
+    : null;
+  if (!isCanonicalMetaNumericId(id)) {
     throw new Error(
       "Facebook Marketplace pagination requires an exact bound Facebook viewer subject",
     );
   }
-  return match[1];
+  return id;
 }
 
 function expectedMetaAuthSubject(site: MetaWebSite, auth: WrenchAuth): string {
   const subject = webSessionAuthSubject(auth);
-  const pattern = site === "instagram"
-    ? /^instagram:[1-9][0-9]{0,31}$/u
+  const prefix = site === "instagram"
+    ? "instagram:"
     : site === "threads"
-      ? /^threads:[1-9][0-9]{0,31}$/u
-      : /^facebook:user:[1-9][0-9]{0,31}$/u;
-  if (subject === null || !pattern.test(subject)) {
+      ? "threads:"
+      : "facebook:user:";
+  if (
+    subject === null
+    || !subject.startsWith(prefix)
+    || !isCanonicalMetaNumericId(subject.slice(prefix.length))
+  ) {
     throw new Error(`${site} authenticated operations require an exact bound viewer subject`);
   }
   return subject;
@@ -521,9 +530,14 @@ type PreparedMetaRead =
     readonly limit: number;
   }
   | {
-    readonly kind: "instagram-inbox";
-    readonly limit: number;
-  }
+      readonly kind: "instagram-inbox";
+      readonly limit: number;
+    }
+  | {
+      readonly kind: "instagram-contacts";
+      readonly threadLimit: number;
+      readonly contactLimit: number;
+    }
   | {
     readonly kind: "threads-feed";
     readonly limit: number;
@@ -554,6 +568,14 @@ function prepareMetaRead(
   environment: Readonly<Record<string, string | undefined>>,
 ): PreparedMetaRead {
   if (recipe.site === "instagram") {
+    if (recipe.action === "contacts.list") {
+      requireExactInputKeys(input, ["contact_limit", "thread_limit"]);
+      return Object.freeze({
+        kind: "instagram-contacts",
+        threadLimit: integerInput(input, "thread_limit", 20, 1, 50),
+        contactLimit: integerInput(input, "contact_limit", 50, 1, 100),
+      });
+    }
     if (recipe.action === "feeds.read") {
       requireExactInputKeys(input, ["feed", "limit"]);
       exactEnumInput(input, "feed", ["home"]);
@@ -658,7 +680,8 @@ async function executeInstagramRead(
         | "instagram-feed"
         | "instagram-media"
         | "instagram-comments"
-        | "instagram-inbox";
+        | "instagram-inbox"
+        | "instagram-contacts";
     }
   >,
   client: WebSessionClient,
@@ -701,9 +724,15 @@ async function executeInstagramRead(
     });
     return normalizeInstagramComments(response, prepared.mediaId, prepared.limit);
   }
-  if (prepared.kind === "instagram-inbox") {
+  if (
+    prepared.kind === "instagram-inbox"
+    || prepared.kind === "instagram-contacts"
+  ) {
     const url = new URL("/api/v1/direct_v2/inbox/", ORIGINS.instagram);
-    url.searchParams.set("limit", String(prepared.limit));
+    const threadLimit = prepared.kind === "instagram-inbox"
+      ? prepared.limit
+      : prepared.threadLimit;
+    url.searchParams.set("limit", String(threadLimit));
     url.searchParams.set("thread_message_limit", "1");
     url.searchParams.set("persistentBadging", "true");
     url.searchParams.set("visual_message_return_type", "unseen");
@@ -713,7 +742,14 @@ async function executeInstagramRead(
       headers: instagramHeaders(`${ORIGINS.instagram}/direct/inbox/`),
       maxBytes,
     });
-    return normalizeInstagramInbox(response, viewerId, prepared.limit);
+    return prepared.kind === "instagram-inbox"
+      ? normalizeInstagramInbox(response, viewerId, prepared.limit)
+      : normalizeInstagramContacts(
+        response,
+        viewerId,
+        prepared.threadLimit,
+        prepared.contactLimit,
+      );
   }
   const exhaustive: never = prepared;
   throw new Error(`Instagram authenticated web operation ${(exhaustive as { kind: string }).kind} is not reviewed`);
@@ -774,6 +810,7 @@ export async function executeMetaWebOperation(
     || prepared.kind === "instagram-media"
     || prepared.kind === "instagram-comments"
     || prepared.kind === "instagram-inbox"
+    || prepared.kind === "instagram-contacts"
   ) {
     output = await executeInstagramRead(
       prepared,
@@ -781,7 +818,10 @@ export async function executeMetaWebOperation(
       viewer.id,
       recipe.maxOutputBytes,
     );
-    if (prepared.kind === "instagram-inbox") {
+    if (
+      prepared.kind === "instagram-inbox"
+      || prepared.kind === "instagram-contacts"
+    ) {
       finalUrl = `${origin}/direct/inbox/`;
     }
   } else if (prepared.kind === "threads-feed") {

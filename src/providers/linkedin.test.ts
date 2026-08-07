@@ -28,7 +28,8 @@ const getProviderContract = (
 ) => getProviderContractWithRegistry(recipe, providerPluginRegistry);
 
 const ACCESS_TOKEN = "linkedin-secret-access-token";
-const MEMBER = "urn:li:person:member_123";
+const MEMBER_ID = "member_123";
+const MEMBER = `urn:li:person:${MEMBER_ID}`;
 const ORGANIZATION = "urn:li:organization:12345";
 const POST = "urn:li:ugcPost:7000000000000000001";
 const SHARE = "urn:li:share:7000000000000000002";
@@ -41,6 +42,7 @@ function reactionUrn(actor: string, target: string): string {
 }
 
 type LinkedInAction =
+  | "contacts.list"
   | "posts.read"
   | "posts.publish"
   | "posts.repost"
@@ -237,8 +239,78 @@ function validVideoBytes(): Uint8Array {
 
 function assertLinkedInApiHeaders(request: CapturedRequest): void {
   expect(request.headers.get("authorization")).toBe(`Bearer ${ACCESS_TOKEN}`);
+  expect(request.headers.get("accept")).toBe("application/json");
   expect(request.headers.get("linkedin-version")).toBe("202606");
   expect(request.headers.get("x-restli-protocol-version")).toBe("2.0.0");
+}
+
+function assertLinkedInV2ApiHeaders(request: CapturedRequest): void {
+  expect(request.headers.get("authorization")).toBe(`Bearer ${ACCESS_TOKEN}`);
+  expect(request.headers.get("accept")).toBe("application/json");
+  expect(request.headers.get("x-restli-protocol-version")).toBe("2.0.0");
+  expect(request.headers.get("linkedin-version")).toBeNull();
+  expect(request.headers.get("content-type")).toBeNull();
+}
+
+function multiLocaleConnectionName(
+  localized: Readonly<Record<string, string>>,
+  preferredLocale?: Readonly<{ country?: string; language: string }>,
+): Record<string, unknown> {
+  return {
+    localized,
+    ...(preferredLocale === undefined ? {} : { preferredLocale }),
+  };
+}
+
+function localizedConnectionName(
+  value: string,
+  country = "US",
+  language = "en",
+): Record<string, unknown> {
+  return multiLocaleConnectionName(
+    { [`${language}_${country}`]: value },
+    { country, language },
+  );
+}
+
+function connectionRow(
+  id: string,
+  firstName: string,
+  lastName: string,
+): Record<string, unknown> {
+  return connectionRowWithNames(
+    id,
+    localizedConnectionName(firstName),
+    localizedConnectionName(lastName),
+  );
+}
+
+function connectionRowWithNames(
+  id: string,
+  firstName: unknown,
+  lastName: unknown,
+): Record<string, unknown> {
+  return {
+    to: `urn:li:person:${id}`,
+    "to~": {
+      id,
+      firstName,
+      lastName,
+    },
+  };
+}
+
+function connectionsPage(
+  elements: readonly unknown[],
+  start: number,
+  count: number,
+  total: number,
+  links: readonly unknown[] = [],
+): Record<string, unknown> {
+  return {
+    elements,
+    paging: { start, count, total, links },
+  };
 }
 
 async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
@@ -249,6 +321,409 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   }
   throw new Error("expected operation to reject");
 }
+
+describe("official LinkedIn first-degree connections", () => {
+  test("lists one exact documented page with decorated names and explicitly unavailable statistics", async () => {
+    const fake = fakeFetch([
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: { id: MEMBER_ID },
+      },
+      {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: connectionsPage([
+          connectionRow("9HfhE6QlBz", "Louise", "Belcher"),
+          connectionRow("another_member", "Bob", "Belcher"),
+        ], 0, 2, 3),
+      },
+    ]);
+    const run = harness("contacts.list", { start: 0, count: 2 }, fake.fetch, {
+      scopes: ["r_1st_connections", "r_liteprofile"],
+      subject: MEMBER,
+    });
+
+    await executeLinkedInProvider(run.context);
+
+    expect(fake.requests).toHaveLength(2);
+    const viewerRequest = fake.requests[0] as CapturedRequest;
+    expect(viewerRequest.url).toBe(
+      "https://api.linkedin.com/v2/me?projection=%28id%29",
+    );
+    expect(viewerRequest.method).toBe("GET");
+    assertLinkedInV2ApiHeaders(viewerRequest);
+    const request = fake.requests[1] as CapturedRequest;
+    expect(request.url).toBe(
+      "https://api.linkedin.com/v2/connections?q=viewer&projection=%28elements%28*%28to%7E%29%29%2Cpaging%29&start=0&count=2",
+    );
+    expect(request.method).toBe("GET");
+    assertLinkedInV2ApiHeaders(request);
+    expect(run.output()).toEqual({
+      schemaVersion: 1,
+      provider: "linkedin",
+      operation: "contacts.list",
+      accountSubject: MEMBER,
+      contacts: [
+        {
+          providerId: "urn:li:person:9HfhE6QlBz",
+          personId: "9HfhE6QlBz",
+          displayName: "Louise Belcher",
+          firstName: "Louise",
+          lastName: "Belcher",
+          localizedFirstName: { en_US: "Louise" },
+          localizedLastName: { en_US: "Belcher" },
+          firstNamePreferredLocale: { country: "US", language: "en" },
+          lastNamePreferredLocale: { country: "US", language: "en" },
+          firstNameSelectedLocale: "en_US",
+          lastNameSelectedLocale: "en_US",
+          firstNameSelectionBasis: "preferred-locale-exact",
+          lastNameSelectionBasis: "preferred-locale-exact",
+          sentCount: null,
+          sentCountComplete: false,
+          sentCountLowerBound: false,
+          sentCountTruncated: false,
+          receivedCount: null,
+          receivedCountComplete: false,
+          receivedCountLowerBound: false,
+          receivedCountTruncated: false,
+          lastSentAt: null,
+          lastSentAtComplete: false,
+          lastSentAtBasis: "unavailable",
+          sentStatsIncompleteReasons: [
+            "linkedin-connections-message-statistics-unavailable",
+          ],
+          lastReceivedAt: null,
+          lastReceivedAtComplete: false,
+          lastReceivedAtBasis: "unavailable",
+          receivedStatsIncompleteReasons: [
+            "linkedin-connections-message-statistics-unavailable",
+          ],
+        },
+        expect.objectContaining({
+          providerId: "urn:li:person:another_member",
+          displayName: "Bob Belcher",
+          sentCount: null,
+          receivedCount: null,
+        }),
+      ],
+      metadataScope: "documented-first-degree-connections-decorated-name-page",
+      contactSetCompleteness: "page",
+      contactTruncated: true,
+      contactSetIncompleteReasons: ["requested-offset-page-only"],
+      totalItems: 3,
+      paging: { start: 0, count: 2, returned: 2, total: 3 },
+      nextStart: 2,
+      statsScope: "unavailable-from-linkedin-connections-api",
+    });
+    expect(run.finalUrl()).toBeNull();
+    expect(run.dispatches()).toBe(0);
+    expect(JSON.stringify(run.output())).not.toContain(ACCESS_TOKEN);
+  });
+
+  test("selects documented MultiLocaleString forms without failing rows on ambiguity", async () => {
+    const fake = fakeFetch([
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: { id: MEMBER_ID },
+      },
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: connectionsPage([
+          connectionRowWithNames(
+            "exact_and_country_variant",
+            multiLocaleConnectionName({ en: "Ada" }, { language: "en" }),
+            multiLocaleConnectionName({ de_DE: "Lovelace" }, { language: "de" }),
+          ),
+          connectionRowWithNames(
+            "long_and_named_variants",
+            multiLocaleConnectionName(
+              { en_US_WIN: "Grace" },
+              { country: "US", language: "en" },
+            ),
+            multiLocaleConnectionName({ de_POSIX: "Hopper" }, { language: "de" }),
+          ),
+          connectionRowWithNames(
+            "sole_without_preference",
+            multiLocaleConnectionName({ fr_MAC: "Jean" }),
+            localizedConnectionName("Luc"),
+          ),
+          connectionRowWithNames(
+            "preferred_unavailable",
+            multiLocaleConnectionName(
+              { en_GB: "Colour", en_US: "Color" },
+              { language: "en" },
+            ),
+            multiLocaleConnectionName({ de_DE: "Name" }, { language: "fr" }),
+          ),
+          connectionRowWithNames(
+            "no_preference_ambiguous",
+            multiLocaleConnectionName({ en_GB: "Given", en_US: "First" }),
+            localizedConnectionName("Person"),
+          ),
+        ], 0, 5, 5),
+      },
+    ]);
+    const run = harness("contacts.list", { start: 0, count: 5 }, fake.fetch, {
+      scopes: ["r_1st_connections", "r_liteprofile"],
+      subject: MEMBER,
+    });
+
+    await executeLinkedInProvider(run.context);
+
+    expect(run.output()).toMatchObject({
+      contacts: [
+        {
+          displayName: "Ada Lovelace",
+          firstName: "Ada",
+          localizedFirstName: { en: "Ada" },
+          firstNamePreferredLocale: { country: null, language: "en" },
+          firstNameSelectedLocale: "en",
+          firstNameSelectionBasis: "preferred-locale-exact",
+          lastName: "Lovelace",
+          localizedLastName: { de_DE: "Lovelace" },
+          lastNamePreferredLocale: { country: null, language: "de" },
+          lastNameSelectedLocale: "de_DE",
+          lastNameSelectionBasis: "preferred-locale-unambiguous-variant",
+        },
+        {
+          displayName: "Grace Hopper",
+          firstName: "Grace",
+          localizedFirstName: { en_US_WIN: "Grace" },
+          firstNamePreferredLocale: { country: "US", language: "en" },
+          firstNameSelectedLocale: "en_US_WIN",
+          firstNameSelectionBasis: "preferred-locale-unambiguous-variant",
+          lastName: "Hopper",
+          localizedLastName: { de_POSIX: "Hopper" },
+          lastNamePreferredLocale: { country: null, language: "de" },
+          lastNameSelectedLocale: "de_POSIX",
+          lastNameSelectionBasis: "preferred-locale-unambiguous-variant",
+        },
+        {
+          displayName: "Jean Luc",
+          firstName: "Jean",
+          localizedFirstName: { fr_MAC: "Jean" },
+          firstNamePreferredLocale: null,
+          firstNameSelectedLocale: "fr_MAC",
+          firstNameSelectionBasis: "sole-localized-value",
+        },
+        {
+          displayName: null,
+          firstName: null,
+          localizedFirstName: { en_GB: "Colour", en_US: "Color" },
+          firstNamePreferredLocale: { country: null, language: "en" },
+          firstNameSelectedLocale: null,
+          firstNameSelectionBasis: "unavailable",
+          lastName: null,
+          localizedLastName: { de_DE: "Name" },
+          lastNamePreferredLocale: { country: null, language: "fr" },
+          lastNameSelectedLocale: null,
+          lastNameSelectionBasis: "unavailable",
+        },
+        {
+          displayName: null,
+          firstName: null,
+          firstNamePreferredLocale: null,
+          firstNameSelectedLocale: null,
+          firstNameSelectionBasis: "unavailable",
+        },
+      ],
+    });
+  });
+
+  test("fails closed on malformed paging, person identity, locale shape, or duplicate rows", async () => {
+    const row = connectionRow("9HfhE6QlBz", "Louise", "Belcher");
+    const mismatchedDecoration = connectionRow("9HfhE6QlBz", "Louise", "Belcher");
+    (mismatchedDecoration["to~"] as Record<string, unknown>).id = "someone_else";
+    const malformedLocale = connectionRow("9HfhE6QlBz", "Louise", "Belcher");
+    const decorated = malformedLocale["to~"] as Record<string, unknown>;
+    decorated.firstName = {
+      localized: { EN_us: "Louise" },
+    };
+    const invalidCases: readonly [unknown, string, number][] = [
+      [{ ...connectionsPage([row], 0, 1, 1), unexpected: true }, "unreviewed property", 1],
+      [connectionsPage([row], 1, 1, 1), "exact requested page", 1],
+      [connectionsPage([row], 0, 2, 2), "page length contradicted", 2],
+      [connectionsPage([{ ...row, to: "urn:li:organization:123" }], 0, 1, 1), "invalid", 1],
+      [connectionsPage([mismatchedDecoration], 0, 1, 1), "did not match", 1],
+      [connectionsPage([malformedLocale], 0, 1, 1), "localized locale", 1],
+      [connectionsPage([row, row], 0, 2, 2), "duplicate connections", 2],
+      [connectionsPage([row], 0, 1, 2, [{
+        rel: "next",
+        href: "https://example.com/v2/connections?q=viewer&projection=%28elements%28*%28to%7E%29%29%2Cpaging%29&start=1&count=1",
+        type: "application/json",
+      }]), "different collection", 1],
+    ];
+
+    for (const [body, message, count] of invalidCases) {
+      const fake = fakeFetch([
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: { id: MEMBER_ID },
+        },
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body,
+        },
+      ]);
+      const run = harness("contacts.list", { start: 0, count }, fake.fetch, {
+        scopes: ["r_1st_connections", "r_liteprofile"],
+        subject: MEMBER,
+      });
+      expect(await rejectionMessage(executeLinkedInProvider(run.context))).toContain(message);
+      expect(fake.requests).toHaveLength(2);
+      expect(run.output()).toBeNull();
+      expect(run.finalUrl()).toBeNull();
+      expect(run.dispatches()).toBe(0);
+    }
+  });
+
+  test("labels an exact first-page terminal result as the complete connection set", async () => {
+    const fake = fakeFetch([
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: { id: MEMBER_ID },
+      },
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: connectionsPage([
+          connectionRow("9HfhE6QlBz", "Louise", "Belcher"),
+        ], 0, 50, 1),
+      },
+    ]);
+    const run = harness("contacts.list", { start: 0, count: 50 }, fake.fetch, {
+      scopes: ["r_1st_connections", "r_liteprofile"],
+      subject: MEMBER,
+    });
+
+    await executeLinkedInProvider(run.context);
+
+    expect(run.output()).toMatchObject({
+      contactSetCompleteness: "complete",
+      contactTruncated: false,
+      contactSetIncompleteReasons: [],
+      nextStart: null,
+      totalItems: 1,
+      paging: { start: 0, count: 50, returned: 1, total: 1 },
+    });
+  });
+
+  test("rejects a non-JSON response before projecting contacts", async () => {
+    const fake = fakeFetch([
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: { id: MEMBER_ID },
+      },
+      {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: connectionsPage([], 0, 10, 0),
+      },
+    ]);
+    const run = harness("contacts.list", {}, fake.fetch, {
+      scopes: ["r_1st_connections", "r_liteprofile"],
+      subject: MEMBER,
+    });
+
+    expect(await rejectionMessage(executeLinkedInProvider(run.context))).toContain(
+      "unsupported response media type",
+    );
+    expect(run.output()).toBeNull();
+  });
+
+  test("rejects a missing or non-person OAuth subject before network access", async () => {
+    for (const subject of [undefined, ORGANIZATION]) {
+      const fake = fakeFetch([]);
+      const run = harness("contacts.list", {}, fake.fetch, {
+        scopes: ["r_1st_connections", "r_liteprofile"],
+        ...(subject === undefined ? {} : { subject }),
+      });
+      expect(await rejectionMessage(executeLinkedInProvider(run.context))).toContain(
+        "exact person URN subject",
+      );
+      expect(fake.requests).toHaveLength(0);
+      expect(run.output()).toBeNull();
+    }
+  });
+
+  test("rejects malformed input before viewer verification", async () => {
+    const invalidCases: readonly [OperationInput, string][] = [
+      [{ start: 0.5 }, "input.start must be an integer"],
+      [{ count: 0 }, "input.count must be an integer"],
+      [{ start: 100_001 }, "input.start must be an integer"],
+      [{ unexpected: true }, "unreviewed property unexpected"],
+    ];
+    for (const [input, message] of invalidCases) {
+      const fake = fakeFetch([]);
+      const run = harness("contacts.list", input, fake.fetch, {
+        scopes: ["r_1st_connections", "r_liteprofile"],
+        subject: MEMBER,
+      });
+
+      expect(await rejectionMessage(executeLinkedInProvider(run.context))).toContain(message);
+      expect(fake.requests).toHaveLength(0);
+      expect(run.output()).toBeNull();
+      expect(run.finalUrl()).toBeNull();
+      expect(run.dispatches()).toBe(0);
+    }
+  });
+
+  test("requires both the contact and profile scopes before network access", async () => {
+    for (const scopes of [["r_1st_connections"], ["r_liteprofile"]]) {
+      const fake = fakeFetch([]);
+      const run = harness("contacts.list", {}, fake.fetch, {
+        scopes,
+        subject: MEMBER,
+      });
+
+      expect(await rejectionMessage(executeLinkedInProvider(run.context))).toContain("scope");
+      expect(fake.requests).toHaveLength(0);
+      expect(run.output()).toBeNull();
+      expect(run.finalUrl()).toBeNull();
+      expect(run.dispatches()).toBe(0);
+    }
+  });
+
+  test("rejects malformed or mismatched viewers after exactly one request", async () => {
+    const invalidCases: readonly [unknown, string][] = [
+      [
+        { id: "someone_else" },
+        "authenticated LinkedIn person does not match the OAuth locator subject",
+      ],
+      [{ id: MEMBER_ID, unexpected: true }, "unreviewed property unexpected"],
+      [{ id: `urn:li:person:${MEMBER_ID}` }, "invalid viewer response.id"],
+      [[], "must be a plain object"],
+    ];
+    for (const [body, message] of invalidCases) {
+      const fake = fakeFetch([{
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body,
+      }]);
+      const run = harness("contacts.list", {}, fake.fetch, {
+        scopes: ["r_1st_connections", "r_liteprofile"],
+        subject: MEMBER,
+      });
+
+      expect(await rejectionMessage(executeLinkedInProvider(run.context))).toContain(message);
+      expect(fake.requests).toHaveLength(1);
+      const request = fake.requests[0] as CapturedRequest;
+      expect(request.url).toBe("https://api.linkedin.com/v2/me?projection=%28id%29");
+      expect(request.method).toBe("GET");
+      assertLinkedInV2ApiHeaders(request);
+      expect(run.output()).toBeNull();
+      expect(run.finalUrl()).toBeNull();
+      expect(run.dispatches()).toBe(0);
+    }
+  });
+});
 
 describe("official LinkedIn provider reads", () => {
   test("reads one encoded post with fixed 202606 headers and a normalized result", async () => {

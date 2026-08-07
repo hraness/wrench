@@ -8,7 +8,10 @@ import {
   webImplementationSources,
 } from "../../provider-plugin-builtins";
 import { webSessionContractDefinitions } from "../../web-session-contract-definitions";
-import type { MetaWebSite } from "../../providers/meta-web";
+import {
+  isCanonicalMetaNumericId,
+  type MetaWebSite,
+} from "../../providers/meta-web";
 import { materializeInstagramMessagingList } from "../../providers/meta-omni";
 
 function metaOmniDefinitions(site: MetaWebSite) {
@@ -20,7 +23,7 @@ function metaOmniDefinitions(site: MetaWebSite) {
             state: "supported" as const,
             schemaVersion: 1 as const,
             materializerId: "instagram-messaging-list",
-            materializerVersion: 1,
+            materializerVersion: 2,
             materialize: materializeInstagramMessagingList,
           }
         : {
@@ -72,9 +75,13 @@ const subjectFormats = {
 } as const satisfies Readonly<Record<MetaWebSite, string>>;
 
 function subjectMatches(site: MetaWebSite, value: string): boolean {
-  if (site === "instagram") return /^instagram:[0-9]{1,32}$/u.test(value);
-  if (site === "threads") return /^threads:[0-9]{1,32}$/u.test(value);
-  return /^facebook:user:[0-9]{1,32}$/u.test(value);
+  const prefix = site === "instagram"
+    ? "instagram:"
+    : site === "threads"
+      ? "threads:"
+      : "facebook:user:";
+  return value.startsWith(prefix)
+    && isCanonicalMetaNumericId(value.slice(prefix.length));
 }
 
 const historicalVersions = Object.freeze({
@@ -103,9 +110,9 @@ const historicalVersions = Object.freeze({
 >);
 
 const contractSemanticIdentities = Object.freeze({
-  instagram: "ee545d5775348de09e1ca1c42acdf71583fff18cfb73f42be2d350dba20bad20",
+  instagram: "7f0acb6d0e978d6579a744f724bea39dd629614a04ca9e24f2c8c6ad4fe53c9f",
   threads: "c9329d9ca816dfc7898bfa862c9c6b986e974b206f87ea56011719b447f7a37d",
-  facebook: "d6398bbc522567efb2dc0267a40fea785261621e0f4ca855a1c20a47b980e1f2",
+  facebook: "f4724c9619794070da784d03fdaef5889cc4f3d237f9f402e9d5a53f7c156184",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
   "facebook-group": "30717a546b60658ecc2e199a14babb4fa2b46afd1e8d9113044a1b7afda3d376",
   "facebook-marketplace": "396567380895c017c3385048b4c6971e68be82f446fab052f1605d52934ee4cd",
@@ -130,6 +137,7 @@ export const metaWebPlugin = defineProviderPlugin({
     ["providers/meta-marketplace-relay.ts", "../../providers/meta-marketplace-relay.ts"],
     ["providers/meta-relay-bundle.ts", "../../providers/meta-relay-bundle.ts"],
     ["providers/meta-web-descriptors.ts", "../../providers/meta-web-descriptors.ts"],
+    ["providers/contact-projection.ts", "../../providers/contact-projection.ts"],
     ["providers/meta-omni.ts", "../../providers/meta-omni.ts"],
   ]),
   bindings: metaWebSites.map((site) => ({

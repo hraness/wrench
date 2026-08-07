@@ -651,6 +651,103 @@ describe("Meta authenticated internal-data runtime", () => {
     expect(callbacks).toBe(0);
   });
 
+  test("executes Instagram contacts through the exact inbox summary GET with unavailable statistics", async () => {
+    const calls: Call[] = [];
+    let callbacks = 0;
+    const result = await executeMetaWebOperation(
+      recipe("instagram", "contacts.list"),
+      { contact_limit: 1, thread_limit: 3 },
+      auth("instagram"),
+      {
+        beforeDispatch: () => {
+          callbacks += 1;
+          return Promise.resolve();
+        },
+        afterDispatchVerified: () => {
+          callbacks += 1;
+          return Promise.resolve();
+        },
+        dependencies: dependencies("instagram", calls, (call) => {
+          expect(call.method).toBe("GET");
+          if (call.url.pathname === "/") {
+            return new Response(instagramHtml, {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            });
+          }
+          expect(call.url.pathname).toBe("/api/v1/direct_v2/inbox/");
+          expect(Object.fromEntries(call.url.searchParams)).toEqual({
+            limit: "3",
+            thread_message_limit: "1",
+            persistentBadging: "true",
+            visual_message_return_type: "unseen",
+          });
+          expect(call.headers.get("x-ig-app-id")).toBe("936619743392459");
+          expect(call.headers.get("x-requested-with")).toBe("XMLHttpRequest");
+          expect(call.headers.get("referer"))
+            .toBe("https://www.instagram.com/direct/inbox/");
+          return new Response(JSON.stringify({
+            status: "ok",
+            viewer: { pk: "12345" },
+            inbox: {
+              oldest_cursor: "provider-only-cursor",
+              has_older: true,
+              threads: [{
+                thread_id: "thread-1",
+                users: [
+                  { pk: "12345", username: "viewer" },
+                  { pk: "222", username: "friend", full_name: "Friend" },
+                  { pk: "333", username: "other", full_name: "Other" },
+                ],
+              }],
+            },
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        provider: "instagram",
+        operation: "contacts.list",
+        accountSubject: "instagram:12345",
+        contacts: [{
+          providerId: "222",
+          displayName: "Friend",
+          handle: "friend",
+          sentCount: null,
+          sentCountComplete: false,
+          sentCountLowerBound: false,
+          receivedCount: null,
+          receivedCountComplete: false,
+          receivedCountLowerBound: false,
+          lastSentAt: null,
+          lastSentAtBasis: "unavailable",
+          sentStatsIncompleteReasons: ["message-history-capture-required"],
+          lastReceivedAt: null,
+          lastReceivedAtBasis: "unavailable",
+          receivedStatsIncompleteReasons: ["message-history-capture-required"],
+        }],
+        metadataScope: "first-page-inbox-participant-summary",
+        contactSetCompleteness: "first-page-only",
+        contactTruncated: true,
+        statsScope: "unavailable-without-acknowledgement-free-message-history",
+      },
+      finalUrl: "https://www.instagram.com/direct/inbox/",
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      "/api/v1/direct_v2/inbox/",
+    ]);
+    expect(callbacks).toBe(0);
+  });
+
   test("executes partial direct Relay feed preloads for Threads and Facebook", async () => {
     const threadsCalls: Call[] = [];
     const threads = await executeMetaWebOperation(
@@ -1189,6 +1286,27 @@ describe("Meta authenticated internal-data runtime", () => {
       },
       {
         site: "instagram",
+        action: "contacts.list",
+        input: { contact_limit: 0, thread_limit: 20 },
+        auth: auth("instagram"),
+        dependencySite: "instagram",
+      },
+      {
+        site: "instagram",
+        action: "contacts.list",
+        input: { contact_limit: 50, thread_limit: 51 },
+        auth: auth("instagram"),
+        dependencySite: "instagram",
+      },
+      {
+        site: "instagram",
+        action: "contacts.list",
+        input: { contact_limit: 50, thread_limit: 20, cursor: "raw" },
+        auth: auth("instagram"),
+        dependencySite: "instagram",
+      },
+      {
+        site: "instagram",
         action: "media.read",
         input: { media_id: "not/a/media-id" },
         auth: auth("instagram"),
@@ -1434,6 +1552,7 @@ describe("Meta authenticated internal-data runtime", () => {
       ["facebook-marketplace", "media.read"],
       ["instagram", "messaging.send"],
       ["threads", "likes.set"],
+      ["facebook", "contacts.list"],
       ["facebook", "messaging.list"],
       ["facebook", "posts.publish"],
     ] as const) {
