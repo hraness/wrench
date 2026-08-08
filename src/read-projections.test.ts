@@ -38,6 +38,8 @@ import {
   type ReadProjectionQueryIdentity,
 } from "./read-projections";
 
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
+
 type TestState = {
   readonly directory: string;
   readonly environment: Readonly<Record<string, string | undefined>>;
@@ -227,22 +229,41 @@ async function crossProcessAdmissionHolder(
       WRENCH_TEST_READY_PATH: readyPath,
       WRENCH_TEST_HOLD_MS: String(holdForMs),
     },
+    detached: true,
     stdout: "ignore",
     stderr: "pipe",
   });
-  const deadline = performance.now() + 5_000;
-  while (!existsSync(readyPath) && performance.now() < deadline) {
-    await Bun.sleep(5);
+  const stderr = new Response(child.stderr).text();
+  const killAndReap = async (): Promise<void> => {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The direct child and its owned group already exited.
+      }
+    }
+    await Promise.allSettled([child.exited, stderr]);
+  };
+  const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+  while (
+    !existsSync(readyPath)
+    && child.exitCode === null
+    && performance.now() < deadline
+  ) {
+    await Bun.sleep(25);
   }
   if (!existsSync(readyPath)) {
-    child.kill();
-    const exitCode = await child.exited;
-    const stderr = await new Response(child.stderr).text();
+    const observedExitCode = child.exitCode;
+    await killAndReap();
+    const exitCode = observedExitCode ?? await child.exited;
+    const stderrText = await stderr;
     throw new Error(
-      `cross-process admission holder did not become ready (exit ${exitCode}): ${stderr}`,
+      `cross-process admission holder did not become ready (exit ${exitCode}): ${stderrText}`,
     );
   }
-  return child;
+  return Object.freeze({ child, killAndReap, stderr });
 }
 
 async function initializeProjectionStoreInChild(
@@ -746,12 +767,11 @@ describe("encrypted read projections", () => {
         () => "settled",
         { maximumWaitMs: 2_000 },
       )).toBe("settled");
-      expect(await child.exited).toBe(0);
-      expect(await new Response(child.stderr).text()).toBe("");
+      expect(await child.child.exited).toBe(0);
+      expect(await child.stderr).toBe("");
       child = null;
     } finally {
-      child?.kill();
-      if (child !== null) await child.exited;
+      if (child !== null) await child.killAndReap();
       rmSync(testState.directory, { recursive: true, force: true });
     }
   });

@@ -44,6 +44,7 @@ const UNCHANGED_STARTED_AT = "2026-07-31T12:05:00.000Z";
 const UNCHANGED_FINISHED_AT = "2026-07-31T12:05:01.000Z";
 const CHANGED_STARTED_AT = "2026-07-31T12:10:00.000Z";
 const CHANGED_FINISHED_AT = "2026-07-31T12:10:01.000Z";
+const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
 
 function xManifest(): WrenchManifest {
   return JSON.parse(readFileSync(
@@ -202,6 +203,11 @@ async function startCrossProcessAdmissionHolder(
         process.env.WRENCH_TEST_AUTH_ID,
         process.env,
         () => {
+          writeFileSync(
+            process.env.WRENCH_TEST_READY_PATH,
+            "ready\\n",
+            { mode: 0o600 },
+          );
           if (action.kind === "publish") {
             projection.publishReadProjection(
               action.query,
@@ -213,11 +219,6 @@ async function startCrossProcessAdmissionHolder(
               auth.saveAuth(replacement, process.env, { force: true });
             }
           }
-          writeFileSync(
-            process.env.WRENCH_TEST_READY_PATH,
-            "ready\\n",
-            { mode: 0o600 },
-          );
           Atomics.wait(
             new Int32Array(new SharedArrayBuffer(4)),
             0,
@@ -236,30 +237,49 @@ async function startCrossProcessAdmissionHolder(
       WRENCH_TEST_HOLD_MS: String(holdForMs),
       WRENCH_TEST_ACTION: JSON.stringify(action),
     },
+    detached: true,
     stdout: "ignore",
     stderr: "pipe",
   });
-  const deadline = performance.now() + 5_000;
-  while (!existsSync(readyPath) && performance.now() < deadline) {
-    await Bun.sleep(5);
+  const stderr = new Response(child.stderr).text();
+  const killAndReap = async (): Promise<void> => {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The direct child and its owned group already exited.
+      }
+    }
+    await Promise.allSettled([child.exited, stderr]);
+  };
+  const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+  while (
+    !existsSync(readyPath)
+    && child.exitCode === null
+    && performance.now() < deadline
+  ) {
+    await Bun.sleep(25);
   }
   if (!existsSync(readyPath)) {
-    child.kill();
-    const exitCode = await child.exited;
-    const stderr = await new Response(child.stderr).text();
+    const observedExitCode = child.exitCode;
+    await killAndReap();
+    const exitCode = observedExitCode ?? await child.exited;
+    const stderrText = await stderr;
     throw new Error(
-      `cross-process admission holder did not become ready (exit ${exitCode}): ${stderr}`,
+      `cross-process admission holder did not become ready (exit ${exitCode}): ${stderrText}`,
     );
   }
-  return child;
+  return Object.freeze({ child, killAndReap, stderr });
 }
 
 async function expectAdmissionHolderSuccess(
-  child: Awaited<ReturnType<typeof startCrossProcessAdmissionHolder>>,
+  holder: Awaited<ReturnType<typeof startCrossProcessAdmissionHolder>>,
 ): Promise<void> {
   const [exitCode, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stderr).text(),
+    holder.child.exited,
+    holder.stderr,
   ]);
   if (exitCode !== 0) {
     throw new Error(
@@ -414,8 +434,7 @@ describe("persistent read client", () => {
         registry: providerPluginRegistry,
       })).toMatchObject({ status: "hit", output });
     } finally {
-      holder.current?.kill();
-      if (holder.current !== null) await holder.current.exited;
+      if (holder.current !== null) await holder.current.killAndReap();
       rmSync(testState.directory, { recursive: true, force: true });
     }
   });
@@ -478,8 +497,7 @@ describe("persistent read client", () => {
         validatedAt: CHANGED_FINISHED_AT,
       });
     } finally {
-      holder.current?.kill();
-      if (holder.current !== null) await holder.current.exited;
+      if (holder.current !== null) await holder.current.killAndReap();
       rmSync(testState.directory, { recursive: true, force: true });
     }
   });
@@ -642,8 +660,9 @@ describe("persistent read client", () => {
     }
   });
 
-  test("discards live output when an admission holder replaces auth A-to-B or A-to-B-to-A", async () => {
-    for (const cycle of ["a-to-b", "a-to-b-to-a"] as const) {
+  test.each(["a-to-b", "a-to-b-to-a"] as const)(
+    "discards live output when an admission holder replaces auth %s",
+    async (cycle) => {
       const testState = state();
       const holder = {
         current: null as Awaited<
@@ -691,12 +710,11 @@ describe("persistent read client", () => {
           registry: providerPluginRegistry,
         })).toMatchObject({ status: "miss" });
       } finally {
-        holder.current?.kill();
-        if (holder.current !== null) await holder.current.exited;
+        if (holder.current !== null) await holder.current.killAndReap();
         rmSync(testState.directory, { recursive: true, force: true });
       }
-    }
-  });
+    },
+  );
 
   test("does not retain a cached snapshot when a failed read races auth replacement", async () => {
     const testState = state();

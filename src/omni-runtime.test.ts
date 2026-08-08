@@ -3,7 +3,9 @@ import {
   chmodSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -159,6 +161,65 @@ function webSessionResult(
   });
 }
 
+async function setupSuccessfulPrivateContinuationBaseline(
+  environment: Readonly<Record<string, string | undefined>>,
+) {
+  setupExact(environment);
+  const liveRequest = {
+    ...request(),
+    page: { limit: 100 },
+  } as const;
+  const providerCursor = "t1_privatecursor777";
+  let receiptSequence = 0;
+  const nextReceiptSequence = () => {
+    receiptSequence += 1;
+    return receiptSequence;
+  };
+  const initial = await revalidateOmniViewInternal(liveRequest, {
+    environment,
+    registry: providerPluginRegistry,
+    now: new Date("2026-08-01T12:20:30.000Z"),
+    executeRead: (invocation) => Promise.resolve(webSessionResult(
+      invocation,
+      invocation.input.after === undefined
+        ? {
+            messages: [redditMessage],
+            after: providerCursor,
+            before: null,
+            requested: null,
+          }
+        : {
+            messages: [redditNotification],
+            after: null,
+            before: null,
+            requested: null,
+          },
+      nextReceiptSequence(),
+    )),
+  });
+  expect(initial.view?.entities).toHaveLength(2);
+
+  const continuationInvocation = prepareInvocation(
+    "reddit-web",
+    "messaging.list",
+    { folder: "inbox", after: providerCursor, limit: 25 },
+    "reddit-main",
+    environment,
+    providerPluginRegistry,
+  );
+  const continuationQuery = createReadProjectionQueryForInvocation(
+    continuationInvocation,
+    environment,
+    providerPluginRegistry,
+  );
+  return Object.freeze({
+    continuationQuery,
+    liveRequest,
+    nextReceiptSequence,
+    providerCursor,
+  });
+}
+
 describe("omni runtime", () => {
   test("bounds continuation admission and detects exact-query cycles", () => {
     const rootKey = "0".repeat(64);
@@ -189,7 +250,7 @@ describe("omni runtime", () => {
     );
   });
 
-  test("crawls private provider continuations and retains a partial refresh safely", async () => {
+  test("recovers a private provider continuation after retained drift", async () => {
     const testState = state();
     try {
       setupExact(testState.environment);
@@ -289,14 +350,66 @@ describe("omni runtime", () => {
         reason: "the provider materializer declared page-scoped coverage",
       });
       expect(JSON.stringify(live)).not.toContain(providerCursor);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
 
-      const cached = readCachedOmniViewInternal(liveRequest, {
+  test("retains a complete provider continuation view after a partial refresh failure", async () => {
+    const testState = state();
+    try {
+      const rootQuery = setupExact(testState.environment);
+      const liveRequest = {
+        ...request(),
+        page: { limit: 100 },
+      } as const;
+      const providerCursor = "t1_cursor999";
+      const continuationInvocation = prepareInvocation(
+        "reddit-web",
+        "messaging.list",
+        { folder: "inbox", after: providerCursor, limit: 25 },
+        "reddit-main",
+        testState.environment,
+        providerPluginRegistry,
+      );
+      const continuationQuery = createReadProjectionQueryForInvocation(
+        continuationInvocation,
+        testState.environment,
+        providerPluginRegistry,
+      );
+      publishReadProjection(rootQuery, {
+        messages: [redditMessage],
+        after: providerCursor,
+        before: null,
+        requested: null,
+      }, {
+        environment: testState.environment,
+        runId: "00000000-0000-4000-8000-000000000001",
+        startedAt: "2026-08-01T12:20:02.000Z",
+        finishedAt: "2026-08-01T12:20:03.000Z",
+      });
+      publishReadProjection(continuationQuery, {
+        messages: [redditNotification],
+        after: null,
+        before: null,
+        requested: null,
+      }, {
+        environment: testState.environment,
+        runId: "00000000-0000-4000-8000-000000000002",
+        startedAt: "2026-08-01T12:20:04.000Z",
+        finishedAt: "2026-08-01T12:20:05.000Z",
+      });
+      const live = rebuildOmniViewFromExactCache(liveRequest, {
         environment: testState.environment,
         registry: providerPluginRegistry,
-        now: new Date("2026-08-01T12:21:01.000Z"),
+        now: new Date("2026-08-01T12:21:00.000Z"),
       });
-      expect(cached.view?.entities).toEqual(live.view?.entities);
+      expect(live.view?.entities.map((entity) => entity.kind)).toEqual([
+        "notification",
+        "message",
+      ]);
 
+      let receiptSequence = 2;
       const failedInputs: unknown[] = [];
       const privateFailureReason = `provider receipt exposed ${providerCursor}`;
       const partial = await revalidateOmniViewInternal(liveRequest, {
@@ -337,23 +450,61 @@ describe("omni runtime", () => {
       expect(JSON.stringify(partial)).not.toContain(privateFailureReason);
       expect(JSON.stringify(partial)).not.toContain(providerCursor);
 
-      const continuationInvocation = prepareInvocation(
-        "reddit-web",
-        "messaging.list",
-        { folder: "inbox", after: providerCursor, limit: 25 },
-        "reddit-main",
-        testState.environment,
-        providerPluginRegistry,
-      );
-      const continuationQuery = createReadProjectionQueryForInvocation(
-        continuationInvocation,
-        testState.environment,
-        providerPluginRegistry,
-      );
       expect(partial.view?.sources[0]?.normalization).toMatchObject({
         state: "stale",
         exactQueryKey: continuationQuery.key,
       });
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("serves a complete provider continuation crawl from normalized cache", async () => {
+    const testState = state();
+    try {
+      setupExact(testState.environment);
+      const liveRequest = {
+        ...request(),
+        page: { limit: 100 },
+      } as const;
+      const providerCursor = "t1_cachecursor999";
+      let receiptSequence = 0;
+      const live = await revalidateOmniViewInternal(liveRequest, {
+        environment: testState.environment,
+        registry: providerPluginRegistry,
+        now: new Date("2026-08-01T12:21:00.000Z"),
+        executeRead: (invocation) => {
+          receiptSequence += 1;
+          return Promise.resolve(webSessionResult(
+            invocation,
+            invocation.input.after === undefined
+              ? {
+                  messages: [redditMessage],
+                  after: providerCursor,
+                  before: null,
+                  requested: null,
+                }
+              : {
+                  messages: [redditNotification],
+                  after: null,
+                  before: null,
+                  requested: null,
+                },
+            receiptSequence,
+          ));
+        },
+      });
+      expect(live.view?.entities.map((entity) => entity.kind)).toEqual([
+        "notification",
+        "message",
+      ]);
+
+      const cached = readCachedOmniViewInternal(liveRequest, {
+        environment: testState.environment,
+        registry: providerPluginRegistry,
+        now: new Date("2026-08-01T12:21:01.000Z"),
+      });
+      expect(cached.view?.entities).toEqual(live.view?.entities);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
@@ -453,44 +604,146 @@ describe("omni runtime", () => {
     }
   });
 
-  test("attributes private continuation failures without leaking provider diagnostics", async () => {
+  test("attributes private continuation executor rejection without leaking provider diagnostics", async () => {
     const testState = state();
     try {
-      setupExact(testState.environment);
+      const baseline = await setupSuccessfulPrivateContinuationBaseline(
+        testState.environment,
+      );
+      const executorSentinel = `private executor failure ${baseline.providerCursor}`;
+      const executorFailure = await revalidateOmniViewInternal(
+        baseline.liveRequest,
+        {
+          environment: testState.environment,
+          registry: providerPluginRegistry,
+          now: new Date("2026-08-01T12:21:00.000Z"),
+          freshForMs: 54_000,
+          executeRead: (invocation) => {
+            const receiptSequence = baseline.nextReceiptSequence();
+            if (invocation.input.after !== undefined) {
+              return Promise.reject(new Error(executorSentinel));
+            }
+            return Promise.resolve(webSessionResult(invocation, {
+              messages: [redditMessage],
+              after: baseline.providerCursor,
+              before: null,
+              requested: null,
+            }, receiptSequence));
+          },
+        },
+      );
+      expect(executorFailure.view?.sources[0]?.normalization).toMatchObject({
+        state: "stale",
+        exactQueryKey: baseline.continuationQuery.key,
+        reason: "provider read failed before the normalized source could be refreshed",
+      });
+      expect(executorFailure.view?.sources[0]?.exact).toMatchObject({
+        state: "hit",
+        freshness: { state: "fresh" },
+      });
+      expect(JSON.stringify(executorFailure)).not.toContain(executorSentinel);
+      expect(JSON.stringify(executorFailure)).not.toContain(baseline.providerCursor);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("attributes a private provider AbortError without caller cancellation", async () => {
+    const testState = state();
+    try {
+      const baseline = await setupSuccessfulPrivateContinuationBaseline(
+        testState.environment,
+      );
+      const liveSignal = new AbortController();
+      const providerAbortSentinel = `private provider abort ${baseline.providerCursor}`;
+      const providerAbort = await revalidateOmniViewInternal(baseline.liveRequest, {
+        environment: testState.environment,
+        registry: providerPluginRegistry,
+        now: new Date("2026-08-01T12:21:20.000Z"),
+        signal: liveSignal.signal,
+        executeRead: (invocation) => {
+          const receiptSequence = baseline.nextReceiptSequence();
+          if (invocation.input.after !== undefined) {
+            return Promise.reject(new DOMException(
+              providerAbortSentinel,
+              "AbortError",
+            ));
+          }
+          return Promise.resolve(webSessionResult(invocation, {
+            messages: [redditMessage],
+            after: baseline.providerCursor,
+            before: null,
+            requested: null,
+          }, receiptSequence));
+        },
+      });
+      expect(liveSignal.signal.aborted).toBeFalse();
+      expect(providerAbort.view?.sources[0]?.normalization).toMatchObject({
+        state: "stale",
+        exactQueryKey: baseline.continuationQuery.key,
+        reason: "provider read failed before the normalized source could be refreshed",
+      });
+      expect(JSON.stringify(providerAbort)).not.toContain(providerAbortSentinel);
+      expect(JSON.stringify(providerAbort)).not.toContain(baseline.providerCursor);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("attributes an exact-cache publication failure without leaking provider diagnostics", async () => {
+    const testState = state();
+    try {
+      const baseline = await setupSuccessfulPrivateContinuationBaseline(
+        testState.environment,
+      );
+      const cacheSentinel = `private cache output ${baseline.providerCursor}`;
+      const oversizedOutput = {
+        messages: Array.from({ length: 110_001 }, () => null),
+        after: null,
+        before: null,
+        requested: null,
+        privateDiagnostic: cacheSentinel,
+      };
+      const cacheFailure = await revalidateOmniViewInternal(baseline.liveRequest, {
+        environment: testState.environment,
+        registry: providerPluginRegistry,
+        now: new Date("2026-08-01T12:21:40.000Z"),
+        executeRead: (invocation) => {
+          return Promise.resolve(webSessionResult(
+            invocation,
+            invocation.input.after === undefined
+              ? {
+                  messages: [redditMessage],
+                  after: baseline.providerCursor,
+                  before: null,
+                  requested: null,
+                }
+              : oversizedOutput,
+            baseline.nextReceiptSequence(),
+          ));
+        },
+      });
+      expect(cacheFailure.view?.sources[0]?.normalization).toMatchObject({
+        state: "stale",
+        exactQueryKey: baseline.continuationQuery.key,
+        reason: "exact provider snapshot could not be published during omni revalidation",
+      });
+      expect(JSON.stringify(cacheFailure)).not.toContain(cacheSentinel);
+      expect(JSON.stringify(cacheFailure)).not.toContain(baseline.providerCursor);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a failed continuation receipt ahead of rematerialization failure", async () => {
+    const testState = state();
+    try {
+      const rootQuery = setupExact(testState.environment);
       const liveRequest = {
         ...request(),
         page: { limit: 100 },
       } as const;
-      const providerCursor = "t1_privatecursor777";
-      let receiptSequence = 0;
-      const executeSuccessfulChain = (invocation: PreparedInvocation) => {
-        receiptSequence += 1;
-        return Promise.resolve(webSessionResult(
-          invocation,
-          invocation.input.after === undefined
-            ? {
-                messages: [redditMessage],
-                after: providerCursor,
-                before: null,
-                requested: null,
-              }
-            : {
-                messages: [redditNotification],
-                after: null,
-                before: null,
-                requested: null,
-              },
-          receiptSequence,
-        ));
-      };
-      const initial = await revalidateOmniViewInternal(liveRequest, {
-        environment: testState.environment,
-        registry: providerPluginRegistry,
-        now: new Date("2026-08-01T12:20:30.000Z"),
-        executeRead: executeSuccessfulChain,
-      });
-      expect(initial.view?.entities).toHaveLength(2);
-
+      const providerCursor = "t1_privatecursor888";
       const continuationInvocation = prepareInvocation(
         "reddit-web",
         "messaging.list",
@@ -504,103 +757,90 @@ describe("omni runtime", () => {
         testState.environment,
         providerPluginRegistry,
       );
-      const executorSentinel = `private executor failure ${providerCursor}`;
-      const executorFailure = await revalidateOmniViewInternal(liveRequest, {
+      publishReadProjection(rootQuery, {
+        messages: [redditMessage],
+        after: providerCursor,
+        before: null,
+        requested: null,
+      }, {
         environment: testState.environment,
-        registry: providerPluginRegistry,
-        now: new Date("2026-08-01T12:21:00.000Z"),
-        freshForMs: 54_000,
-        executeRead: (invocation) => {
-          receiptSequence += 1;
-          if (invocation.input.after !== undefined) {
-            return Promise.reject(new Error(executorSentinel));
-          }
-          return Promise.resolve(webSessionResult(invocation, {
-            messages: [redditMessage],
-            after: providerCursor,
-            before: null,
-            requested: null,
-          }, receiptSequence));
-        },
+        runId: "00000000-0000-4000-8000-000000000001",
+        startedAt: "2026-08-01T12:20:02.000Z",
+        finishedAt: "2026-08-01T12:20:03.000Z",
       });
-      expect(executorFailure.view?.sources[0]?.normalization).toMatchObject({
-        state: "stale",
-        exactQueryKey: continuationQuery.key,
-        reason: "provider read failed before the normalized source could be refreshed",
-      });
-      expect(executorFailure.view?.sources[0]?.exact).toMatchObject({
-        state: "hit",
-        freshness: { state: "fresh" },
-      });
-      expect(JSON.stringify(executorFailure)).not.toContain(executorSentinel);
-      expect(JSON.stringify(executorFailure)).not.toContain(providerCursor);
-
-      const liveSignal = new AbortController();
-      const providerAbortSentinel = `private provider abort ${providerCursor}`;
-      const providerAbort = await revalidateOmniViewInternal(liveRequest, {
-        environment: testState.environment,
-        registry: providerPluginRegistry,
-        now: new Date("2026-08-01T12:21:20.000Z"),
-        signal: liveSignal.signal,
-        executeRead: (invocation) => {
-          receiptSequence += 1;
-          if (invocation.input.after !== undefined) {
-            return Promise.reject(new DOMException(
-              providerAbortSentinel,
-              "AbortError",
-            ));
-          }
-          return Promise.resolve(webSessionResult(invocation, {
-            messages: [redditMessage],
-            after: providerCursor,
-            before: null,
-            requested: null,
-          }, receiptSequence));
-        },
-      });
-      expect(liveSignal.signal.aborted).toBeFalse();
-      expect(providerAbort.view?.sources[0]?.normalization).toMatchObject({
-        state: "stale",
-        exactQueryKey: continuationQuery.key,
-        reason: "provider read failed before the normalized source could be refreshed",
-      });
-      expect(JSON.stringify(providerAbort)).not.toContain(providerAbortSentinel);
-
-      const cacheSentinel = `private cache output ${providerCursor}`;
-      const oversizedOutput = {
-        messages: Array.from({ length: 110_001 }, () => null),
+      publishReadProjection(continuationQuery, {
+        messages: [redditNotification],
         after: null,
         before: null,
         requested: null,
-        privateDiagnostic: cacheSentinel,
-      };
-      const cacheFailure = await revalidateOmniViewInternal(liveRequest, {
+      }, {
+        environment: testState.environment,
+        runId: "00000000-0000-4000-8000-000000000002",
+        startedAt: "2026-08-01T12:20:04.000Z",
+        finishedAt: "2026-08-01T12:20:05.000Z",
+      });
+      const initial = rebuildOmniViewFromExactCache(liveRequest, {
         environment: testState.environment,
         registry: providerPluginRegistry,
-        now: new Date("2026-08-01T12:21:40.000Z"),
+        now: new Date("2026-08-01T12:20:30.000Z"),
+      });
+      expect(initial.view?.entities).toHaveLength(2);
+
+      const continuationDirectory = join(
+        testState.directory,
+        "read-projections",
+        continuationQuery.realmKey,
+        continuationQuery.key,
+      );
+      const chunkName = readdirSync(continuationDirectory).find((name) =>
+        name.startsWith("chunk--"));
+      if (chunkName === undefined) {
+        throw new Error("expected an encrypted continuation projection chunk");
+      }
+      const chunkPath = join(continuationDirectory, chunkName);
+      const chunk = JSON.parse(
+        readFileSync(chunkPath, "utf8"),
+      ) as Record<string, unknown>;
+      const ciphertext = String(chunk.ciphertext);
+      chunk.ciphertext = `${ciphertext.startsWith("A") ? "B" : "A"}${ciphertext.slice(1)}`;
+      writeFileSync(chunkPath, `${canonicalJson(chunk)}\n`, { mode: 0o600 });
+
+      let receiptSequence = 2;
+      const privateFailureReason = `private failed receipt ${providerCursor}`;
+      const failed = await revalidateOmniViewInternal(liveRequest, {
+        environment: testState.environment,
+        registry: providerPluginRegistry,
+        now: new Date("2026-08-01T12:21:00.000Z"),
         executeRead: (invocation) => {
           receiptSequence += 1;
+          const continuation = invocation.input.after !== undefined;
           return Promise.resolve(webSessionResult(
             invocation,
-            invocation.input.after === undefined
-              ? {
+            continuation
+              ? null
+              : {
                   messages: [redditMessage],
                   after: providerCursor,
                   before: null,
                   requested: null,
-                }
-              : oversizedOutput,
+                },
             receiptSequence,
+            continuation ? "failed" : "succeeded",
+            privateFailureReason,
           ));
         },
       });
-      expect(cacheFailure.view?.sources[0]?.normalization).toMatchObject({
+
+      expect(failed.view?.sources[0]?.normalization).toMatchObject({
         state: "stale",
         exactQueryKey: continuationQuery.key,
-        reason: "exact provider snapshot could not be published during omni revalidation",
+        exactDataRevision: null,
+        reason: "provider read failed before the normalized source could be refreshed",
       });
-      expect(JSON.stringify(cacheFailure)).not.toContain(cacheSentinel);
-      expect(JSON.stringify(cacheFailure)).not.toContain(providerCursor);
+      expect(failed.view?.entities).toEqual(initial.view?.entities);
+      expect(failed.view?.viewRevision).toBe(initial.view?.viewRevision);
+      expect(JSON.stringify(failed)).not.toContain(privateFailureReason);
+      expect(JSON.stringify(failed)).not.toContain(providerCursor);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

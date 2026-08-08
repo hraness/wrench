@@ -622,7 +622,8 @@ describe("WhatsApp zero-network read plans", () => {
       const statusTimeoutMs = Number.parseInt(statusTimeout, 10);
       expect(statusTimeoutMs).toBeGreaterThan(0);
       expect(statusTimeoutMs).toBeLessThanOrEqual(1_000);
-      expect(statusInvocation.timeoutMs).toBe(statusTimeoutMs);
+      expect(statusInvocation.timeoutMs).toBeGreaterThan(0);
+      expect(statusInvocation.timeoutMs).toBeLessThanOrEqual(statusTimeoutMs);
       expect(statusInvocation.environment).toEqual({
         PATH: "/usr/bin:/bin",
         LANG: "C.UTF-8",

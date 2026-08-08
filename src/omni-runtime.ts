@@ -920,6 +920,9 @@ async function revalidateOneOmniSource(
     : live.cache.status === "error"
       ? EXACT_PUBLICATION_ERROR_REASON
       : undefined;
+  if (error !== undefined) {
+    return Object.freeze({ state: "failed" as const, error });
+  }
   let materialized: OmniMaterializationResult;
   try {
     materialized = materializeCurrentExact(source, options);

@@ -664,7 +664,9 @@ describe("test harness policy", () => {
     }
     const expectedTestCommand =
       "bun test --no-orphans --timeout 180000 --max-concurrency \"$"
-      + "{GOMAXPROCS:-4}\" ./src";
+      + "{GOMAXPROCS:-4}\" ./src --path-ignore-patterns='**/src/omni-runtime.test.ts'"
+      + " && bun test --no-orphans --timeout 180000 --max-concurrency 1"
+      + " ./src/omni-runtime.test.ts";
     expect(packageJson.scripts.test).toBe(
       expectedTestCommand,
     );
