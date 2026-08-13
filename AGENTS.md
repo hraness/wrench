@@ -12,6 +12,7 @@
 # Guidelines
 
 - Use Bun 1.3.14 and run `bun run check` before handing off a change.
+- Keep Wrench a bring-your-own-agent CLI and TypeScript SDK. Do not add a bundled model, planning or tool loop, agent runtime, application UI, native app, or app template; consumers own those layers.
 - Keep the package root import side-effect-free. Importing `@hraness/wrench` must not start the CLI, inspect local state, load built-in providers, or access the network.
 - Expose bounded semantic operations, never caller-selected requests, endpoints, headers, cookies, selectors, scripts, shell commands, or arbitrary file access.
 - Keep media acquisition to one authorized, accessible, finite, non-DRM item. Reject playlists, live streams, affirmative DRM, unsupported authentication, and access-control bypasses. Promote an item only after its inspectable archive, versioned manifest, and SHA-256 records pass complete verification.
