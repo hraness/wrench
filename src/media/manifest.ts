@@ -39,7 +39,7 @@ import {
 import { compareUtf8 } from "./utf8-order";
 
 export const WRENCH_MEDIA_SCHEMA_VERSION = 1 as const;
-export const WRENCH_MEDIA_VERSION = "0.6.0" as const;
+export const WRENCH_MEDIA_VERSION = "0.6.1" as const;
 export const WRENCH_MEDIA_MANIFEST_FILE = "wrench-media.json" as const;
 export const WRENCH_MEDIA_CHECKSUM_FILE = "manifest-sha256.txt" as const;
 const MAX_ITEM_ENTRIES = 4_096;

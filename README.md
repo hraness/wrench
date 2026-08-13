@@ -1,13 +1,16 @@
 # Wrench
 
-Wrench is a standard interface for coding agents to operate browser sessions
-through recorded private APIs. It records the private APIs behind a browser
-workflow, turns them into typed plugins, and exposes bounded semantic operations
-without returning raw browser access.
+Wrench is a bring-your-own-agent CLI and TypeScript SDK. It gives coding agents
+a standard interface for operating browser sessions through recorded private
+APIs. It records the private APIs behind a browser workflow, turns them into
+typed plugins, and exposes bounded semantic operations without returning raw
+browser access.
 
-The local-first Bun CLI also provides durable web capture, encrypted read
-projections, normalized cross-provider views, verified media archives, and
-bounded provider plugins.
+Wrench does not bundle an agent runtime or application. Use the CLI from any
+agent that can run commands, or import the SDK from agent code. The local-first
+Bun package also provides durable web capture, encrypted read projections,
+normalized cross-provider views, verified media archives, and bounded provider
+plugins.
 
 ```sh
 wrench https://example.com/article
@@ -19,10 +22,10 @@ Project site: [hraness.com/wrench](https://hraness.com/wrench)
 
 ## Install
 
-Pin the public repository to the immutable `v0.6.0` tag:
+Pin the public repository to the immutable `v0.6.1` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.6.0
+bun add --global github:hraness/wrench#v0.6.1
 wrench doctor
 ```
 
@@ -35,10 +38,13 @@ The public manifest projects each closure-attested package as an exact runtime
 dependency. Standalone validation installs without the repository lock, then
 verifies the resolved closure versions and reviewed entrypoint hashes.
 
-For programmatic plugin types and bounded validators:
+## SDK and code mode
+
+Install Wrench in an agent or application that owns its own model, planning,
+tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.6.0
+bun add github:hraness/wrench#v0.6.1
 ```
 
 ```ts
@@ -56,8 +62,11 @@ const plugin = candidate satisfies ProviderPluginDefinitionV1
 void plugin
 ```
 
-Importing the package root does not start the CLI, inspect local state, or
-load provider runtimes.
+The package root exposes programmatic plugin types and bounded validators.
+`@hraness/wrench/client` exposes persistent-read client helpers, while
+`@hraness/wrench/omni` exposes normalized cross-provider reads. Importing any
+SDK entrypoint does not start the CLI. Importing the package root also does not
+inspect local state or load provider runtimes.
 
 ## Capture and inspect
 
@@ -380,7 +389,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.6.0/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.6.1/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

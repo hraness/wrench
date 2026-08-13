@@ -1,7 +1,7 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.6.0",
-  "description": "A standard interface for coding agents to operate browser sessions through recorded private APIs.",
+  "version": "0.6.1",
+  "description": "A bring-your-own-agent CLI and TypeScript SDK for browser sessions, capture, and bounded provider operations.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [

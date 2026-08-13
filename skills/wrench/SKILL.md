@@ -1,11 +1,11 @@
 ---
 name: wrench
-description: Use the Wrench CLI to capture or read web content, archive media, query encrypted normalized cross-provider views, inspect installed semantic capabilities, and author, verify, package, install, or operate bounded provider plugins. Use when an agent needs a new site integration without adding raw HTTP, DOM automation, or credentials to its tool surface.
+description: Use the bring-your-own-agent Wrench CLI and SDK to capture or read web content, archive media, query encrypted normalized cross-provider views, inspect installed semantic capabilities, and operate bounded provider plugins. Use when an agent needs a new site integration without adding raw HTTP, DOM automation, or credentials to its tool surface.
 ---
 
 # Wrench
 
-Use the installed `wrench` command. Start with `wrench --help`; if it is unavailable, report that the CLI must be installed instead of guessing a source-tree command.
+Wrench supplies bounded CLI and SDK capabilities, not an agent runtime or application. Use it from the caller's own agent loop. Start with the installed `wrench --help`; if it is unavailable, report that the CLI must be installed instead of guessing a source-tree command.
 
 ## Choose the smallest path
 
