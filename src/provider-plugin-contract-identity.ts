@@ -37,6 +37,8 @@ const identities = Object.freeze({
       development: "d5ada0c9f22748494b12def42560c761777e69f5a58496523cd9641984787aa5",
     },
     reviewedClosureSha256: [
+      "1fa9238a96976edec5a9d3f3833397da7f5f9efd9042dd654843d73d7d24f4e0",
+      "fb67944f6957fc3fd3458145ac75f26e8fc9a0409561bf5004a8263fbe097427",
       "eea1bb952545f6b3cf2ec735bb5449d3f542c9c21cf23ba89180f05cb42dc814",
       "684517eb2d5c84c6f47c727dd18ce6122a7fb037ce6edde1312fc8036f74b80b",
       "634483110c47ac7f9f3b5603f30b9933768375577a551ae9b78f91a7cfab8162",
@@ -103,6 +105,7 @@ const identities = Object.freeze({
       development: "ff716adff5a4f962a765020474325037d0d4795c61f086c13e5d2adc61484ec8",
     },
     reviewedClosureSha256: [
+      "f5ea7bd0b76fb55dd41c77f7d7eeeb8d9f7254d57c276de8fbcfe51b82fce863",
       "66bd89c3cec17a41a4b629e0eb74737ce7ecbd92eef8f85c97eba9a5035aec3c",
       "369706494465e302cccfbe7a996082d315a360b1ed1539856acdfac3e75888a5",
       "8af55c08e11b85757951adbfbc7c2b2dfbb243627568ce1f8adda0f23b1e5448",
@@ -168,6 +171,8 @@ const identities = Object.freeze({
       development: "101e7f112a6e563a875dcc5ece4d97bfa5b7c30950de8c4da8d3fad3eaf27c41",
     },
     reviewedClosureSha256: [
+      "c83a347ed587d8331072e36658aa678ededbaa578f632e4336a59f0fd76d243c",
+      "e47977104ed356eea3690af21b388b3cdae00325fe6d56afbf33b51d5c773b03",
       "e8afbfb439cbb3c0d33088fb06077ca241817beba711c100344418ac01c410eb",
       "b68a84b2e2b626f19fc92c37d72916562a7dce6e91269373aa5590b930579851",
       "78285b1b44006bb6ce65061008e3c4cdfd9ca093d3e58eaff442f95f1ad83432",
@@ -214,6 +219,8 @@ const identities = Object.freeze({
       development: "1339b1d792a6cfd8e411d90ec419f8c2ab5de35edb38ff10941481fae1ade8e9",
     },
     reviewedClosureSha256: [
+      "0b02d995f7a2b12cb725f8b71d382273de36f4a0fab39e73533279f68abf61ba",
+      "23bc0e7754b6c2c3d44ab847cc9f35bde3503eef724f82c0346993fda341322e",
       "d2ee6cccdb8122f575bee2a9edca36e1bf9c2fa9bc9e6def00fd63139778bee3",
       "8c9c5574ff06688ae35f2a54ec968b4725927db192db3a5cec9679c68cd80e47",
       "d099303fa7ab8f6b3ed6699326ea43b071c96f2280d52fd1bacc865c34da1e0d",
@@ -256,6 +263,7 @@ const identities = Object.freeze({
       development: "05173089ec6d555845fa5fb7b08a70bd0bf810a18882c9ecdd784a437db791c5",
     },
     reviewedClosureSha256: [
+      "19bb3fb020f404a73c58d5ac08aba26e0434f32af7ac90e7f59e7fb420e78581",
       "64c159e9f170eff7a83e86152fc0a7a99625312cf2aa7b00e920a7bd2b65441d",
       "cde0cd4fe8954aff68ad86e537edfbf0b876eaeffc3d34f68d84a91e8f7067e4",
       "e6de1cabf552663a704a1dc12cabe82bf9bc8a4659e29cf1aa0bc8bbc2a6b7d1",
@@ -288,6 +296,7 @@ const identities = Object.freeze({
       development: "58c2b588db7154883a154d05194cde62ff19b8e14045d10f854aacc9a4433e73",
     },
     reviewedClosureSha256: [
+      "40acce9ee4ba2c10e4daa6f0fa1bccf7f82baf3c69d6e453731c93bdb8ba4641",
       "e50798cdad324f91eee0e2c7c0d14e4b871856dc110dd6b107c70f31e5b8221c",
       "9f54941ccb4eabdc02d28ad84f65d0357b50d3c7adaf124e989ffdb013f3daa7",
       "b2a13f43de778244193e399e1d7261192f5480986a2459209b14a8263803645a",
@@ -320,6 +329,7 @@ const identities = Object.freeze({
       development: "0f70eaee8275a922d6c6fff85507caf3f5000a8c7a32a3cc01f05d643da85b0d",
     },
     reviewedClosureSha256: [
+      "f8de1c7291d450ef33223bdcd15802d8cb0b05fc359814a60d8df0964235af84",
       "089c9c6474c69aad4babd52bdea3f8bc47911eacdf9328978e5f284c92bc7d2f",
       "3d23a2953d0aafd2da64f2a05219861043a3cdd33845ab55d4ecc406e63f8d81",
       "af3b3827f64f611ed1143c8dd78d0be264f3b8c6cad4985a0c272d0c975063ef",
@@ -351,6 +361,8 @@ const identities = Object.freeze({
       development: "5692fed6cbece0dc2a057d33f2e6d82220663f6edcac7cf636337f323c391f86",
     },
     reviewedClosureSha256: [
+      "e20e1d9c1116d93489630497fcdf07a86609a8cb98664f1aa19754bb0d28db5b",
+      "54ab5074c54088cc8315668feb8461dba0d65a9d76975aa10a994cc6e306c2d7",
       "64ee39e4eca64b61e2e5361a412c2d635d329e2ae8f7ab505f0d117f8e186d72",
       "4d03dc005b88c715c2dcb05684d38999fb365c685bce64d626f7b5934ee8811f",
       "44fa92d824ee60fbf5caa6b21ec0ca095bddad8e8e14272235be127f6643e022",
@@ -429,6 +441,7 @@ const identities = Object.freeze({
       development: "c9e10ff1af5d4f102cfc73bc5b7def23a41db7cba978f516b0bc515616b6506c",
     },
     reviewedClosureSha256: [
+      "424e8c5c0931f08b95c19b71f49392ae07da06473359dbea20f177b7b39ee52b",
       "6a92ce97a7d3c6d243943ebf8ab05e3a4de47bf4f7c33f0ce1c49cfa0f10cf6b",
       "971e28e03a8b21f5a8f4555f04b55865fd98c738b883f53a567925c8295176fc",
       "385d832624347604a81cd67f0d6879d9a0c699d2cb314b94a733f87ae5324e21",
@@ -462,6 +475,7 @@ const identities = Object.freeze({
       development: "ce6527db4e1d109aa2d3d67ae81e8222568865edcba489528c30d5010137a1bd",
     },
     reviewedClosureSha256: [
+      "875cd5ff8ac4a61972ecb4c0d30a82aff334be83c90a5e120498016d0c9d20a8",
       "efabeb142292c2af49abc9d185481476d792a505635eef453828c544e61eda12",
       "5c69143794f108087f8ba0bd2f31c18fe1a9ac32b3761754cf4d75bd2041ae2e",
       "4ad74dd9483b19149afb53df66214424846eabb96d288137707b630a1cead8ff",

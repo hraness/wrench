@@ -9,6 +9,7 @@ import {
   isBrowserOperation,
   isProviderOperation,
   isReviewedTemplateOperation,
+  isWebSessionOperation,
   manifestHash,
   operationRisks,
   parseDiagnosticManifest as parseDiagnosticManifestWithRegistry,
@@ -896,6 +897,42 @@ describe("wrench manifest parsing", () => {
     if (priorArticle === undefined || !isProviderOperation(priorArticle)) return;
     expect(priorArticle.provider.contractVersion).toBe(1);
     expect(priorArticle.input.properties.draft_only).toBeUndefined();
+  });
+
+  test("ships the current X authenticated-web Article draft-only contract with an exact upgrade baseline", () => {
+    const currentValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "x", "wrench-web-adapter.json"),
+      "utf8",
+    )) as unknown;
+    const current = parseRuntimeManifest(currentValue);
+    expect(current.ok).toBeTrue();
+    if (!current.ok) return;
+    expect(current.value.version).toBe("1.2.0");
+    const article = current.value.operations["articles.publish"];
+    expect(article !== undefined && isWebSessionOperation(article)).toBeTrue();
+    if (article === undefined || !isWebSessionOperation(article)) return;
+    expect(article.webSession.contractVersion).toBe(2);
+    expect(article.input.properties.draft_only).toMatchObject({
+      type: "boolean",
+      enum: [true],
+    });
+    expect(article.input.required).toEqual(["title", "body", "draft_only"]);
+    expect(article.input.properties.cover_image).toBeUndefined();
+
+    const priorValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "x", "wrench-web-adapter.v1.1.0.json"),
+      "utf8",
+    )) as unknown;
+    const prior = parseDiagnosticManifest(priorValue);
+    expect(prior.ok).toBeTrue();
+    if (!prior.ok) return;
+    const priorArticle = prior.value.operations["articles.publish"];
+    expect(prior.value.version).toBe("1.1.0");
+    expect(priorArticle !== undefined && isWebSessionOperation(priorArticle)).toBeTrue();
+    if (priorArticle === undefined || !isWebSessionOperation(priorArticle)) return;
+    expect(priorArticle.webSession.contractVersion).toBe(1);
+    expect(priorArticle.input.properties.draft_only).toBeUndefined();
+    expect(priorArticle.input.properties.cover_image?.type).toBe("file");
   });
 
   test("ships only an inert generic capture reservation and rejects retired DOM recipes at runtime boundaries", () => {

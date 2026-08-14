@@ -43,6 +43,9 @@ const X_ASSET_ORIGIN = "https://abs.twimg.com";
 const MAX_HOME_BYTES = 2 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_LIMIT = 20;
+const MAX_ARTICLE_TITLE_CHARACTERS = 100;
+const MAX_ARTICLE_BODY_CHARACTERS = 20_000;
+const MAX_ARTICLE_BLOCKS = 2_000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -86,8 +89,9 @@ type FeedRequest = {
 const viewerEvidence = Object.freeze({
   operationName: "Viewer",
   operationType: "query" as const,
-  queryId: "u4ni7JqpqdAQxWQfkLsdUQ",
-  sourceChunk: "main.9929b02a.js",
+  queryId: "5XShkXk2oO2J7SYmTu6pvw",
+  sourceChunk: "main.e4aca26a.js",
+  observedOn: "2026-08-14",
 });
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -136,6 +140,43 @@ function booleanInput(input: OperationInput, name: string): boolean {
   const value = input[name];
   if (typeof value !== "boolean") throw new Error(`input.${name} must be boolean`);
   return value;
+}
+
+export type XWebArticleContentState = {
+  readonly blocks: readonly {
+    readonly type: "unstyled";
+    readonly text: string;
+    readonly data: Readonly<Record<string, never>>;
+    readonly entity_ranges: readonly never[];
+    readonly inline_style_ranges: readonly never[];
+  }[];
+  readonly entity_map: readonly never[];
+};
+
+/** Convert confirmed plain text into X's reviewed native Article block shape. */
+export function buildXWebArticleContentState(value: unknown): XWebArticleContentState {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > MAX_ARTICLE_BODY_CHARACTERS
+    || /[\0\r]/u.test(value)
+  ) {
+    throw new Error("input.body must be a 1-20000 character plain-text Article body");
+  }
+  const lines = value.split("\n");
+  if (lines.length > MAX_ARTICLE_BLOCKS) {
+    throw new Error(`input.body must contain at most ${MAX_ARTICLE_BLOCKS} plain-text blocks`);
+  }
+  return Object.freeze({
+    blocks: Object.freeze(lines.map((text) => Object.freeze({
+      type: "unstyled" as const,
+      text,
+      data: Object.freeze({}),
+      entity_ranges: Object.freeze([]),
+      inline_style_ranges: Object.freeze([]),
+    }))),
+    entity_map: Object.freeze([]),
+  });
 }
 
 function integerInput(input: OperationInput, name: string, fallback: number, minimum: number, maximum: number): number {
@@ -889,6 +930,21 @@ function createTweetVariables(text: string, replyTo: string | null, quote: strin
   };
 }
 
+function createdArticleDraft(
+  response: unknown,
+  expectedTitle: string,
+): { readonly id: string; readonly title: string; readonly url: string } {
+  const data = graphQlData(response, "X ArticleEntityDraftCreate response");
+  const create = record(data.articleentity_create_draft, "X ArticleEntityDraftCreate response.articleentity_create_draft");
+  const results = record(create.article_entity_results, "X ArticleEntityDraftCreate response.article_entity_results");
+  const result = record(results.result, "X ArticleEntityDraftCreate response.result");
+  const id = postId(result.rest_id, "X Article draft rest_id");
+  if (result.title !== expectedTitle) {
+    throw new Error("X Article draft response did not bind the confirmed title");
+  }
+  return { id, title: expectedTitle, url: `${X_ORIGIN}/compose/articles/edit/${id}` };
+}
+
 function dispatchEvent(id: string, index: number, planned: number, started: number, verified: number): WebSessionDispatchEvent {
   return { id, index, progress: { planned, started, verified } };
 }
@@ -988,6 +1044,77 @@ async function executePublish(
       error: started > verified
         ? "X may have accepted the current post dispatch; reconcile before retrying"
         : "X post dispatch failed before a response-bound result was verified",
+    };
+  }
+}
+
+async function executeArticleDraft(
+  bootstrap: XBootstrap,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+  },
+): Promise<WebSessionExecution> {
+  await requireBoundViewer(bootstrap, auth);
+  if (recipe.contractVersion !== 2 || input.draft_only !== true) {
+    throw new Error("X authenticated web Articles support only contract v2 with input.draft_only=true");
+  }
+  const unsupported = ["cover", "cover_image", "cover_alt_text"].find((name) => input[name] !== undefined);
+  if (unsupported !== undefined) {
+    throw new Error(`X authenticated web Article drafts do not support input.${unsupported}`);
+  }
+  const title = requiredString(input.title, "input.title", MAX_ARTICLE_TITLE_CHARACTERS);
+  if (/[\0\r\n]/u.test(title)) {
+    throw new Error("input.title must be one plain-text line");
+  }
+  const contentState = buildXWebArticleContentState(input.body);
+  let started = 0;
+  let verified = 0;
+  try {
+    const descriptor = await resolveDescriptor(bootstrap, "ArticleEntityDraftCreate", "mutation");
+    const response = await graphQl(
+      bootstrap,
+      descriptor,
+      { content_state: contentState, title },
+      "POST",
+      undefined,
+      "articles.draft",
+      async () => {
+        await options.beforeDispatch?.(dispatchEvent(recipe.action, 1, 1, 0, 0));
+        started = 1;
+      },
+    );
+    const draft = createdArticleDraft(response, title);
+    await options.afterDispatchVerified?.(dispatchEvent(recipe.action, 1, 1, 1, 1));
+    verified = 1;
+    return {
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.publish",
+        published: false,
+        mode: "draft",
+        draftId: draft.id,
+        title: draft.title,
+        url: draft.url,
+      },
+      finalUrl: draft.url,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: null,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? "X may have created the private Article draft but its exact response was not verified; reconcile before retrying"
+        : "X Article draft creation failed before submission",
     };
   }
 }
@@ -1125,6 +1252,9 @@ export async function executeXWebOperation(
     || recipe.action === "replies.create"
     || recipe.action === "posts.quote"
   ) return executePublish(bootstrap, recipe, input, auth, options);
+  if (recipe.action === "articles.publish") {
+    return executeArticleDraft(bootstrap, recipe, input, auth, options);
+  }
   if (recipe.action === "likes.set" || recipe.action === "content.save" || recipe.action === "posts.repost") {
     return executeDesiredState(bootstrap, recipe, input, auth, options);
   }

@@ -5,6 +5,7 @@ import {
   isReviewedInternalDynamicMapField,
   parseBoundedInternalHarUrl,
   reviewedInternalFieldName,
+  reviewedXGraphQlVariableFieldName,
   type BoundedInternalHarUrl,
   type InternalHarCandidate,
 } from "./har-internal";
@@ -262,8 +263,11 @@ type MatchState = {
   readonly values: readonly { readonly label: string; readonly value: string }[];
   readonly locations: Map<string, Set<string>>;
   readonly truncated: Set<string>;
+  readonly xGraphQlRequest: boolean;
   visited: number;
 };
+
+type JsonObjectKeyReview = "structural" | "x-graphql-variable";
 
 function addMatch(state: MatchState, label: string, location: string): void {
   const locations = state.locations.get(label);
@@ -309,6 +313,7 @@ function walkJson(
   location: string,
   depth = 0,
   redactObjectKeys = false,
+  keyReview: JsonObjectKeyReview = "structural",
 ): void {
   if (depth >= MAX_WALK_DEPTH) {
     if (hasSearchableContent(value)) truncateEveryFixture(state);
@@ -324,7 +329,7 @@ function walkJson(
     const items = value.slice(0, MAX_ARRAY_ITEMS);
     if (value.length > items.length) truncateEveryFixture(state);
     for (let index = 0; index < items.length; index += 1) {
-      walkJson(state, items[index], `${location}[]`, depth + 1, false);
+      walkJson(state, items[index], `${location}[]`, depth + 1, false, "structural");
       if (state.visited >= MAX_WALK_NODES && items.slice(index + 1).some(hasSearchableContent)) {
         truncateEveryFixture(state);
         return;
@@ -364,14 +369,24 @@ function walkJson(
     // let a fixture probe reveal whether a credential subtree contains a value
     // and return its sanitized location. Treat every sensitive-key value as an
     // opaque leaf, including nested objects and arrays.
-    const renderedKey = redactObjectKeys ? ":dynamic" : reviewedInternalFieldName(key);
+    const renderedKey = redactObjectKeys
+      ? ":dynamic"
+      : keyReview === "x-graphql-variable"
+        ? reviewedXGraphQlVariableFieldName(key)
+        : reviewedInternalFieldName(key);
     const childLocation = `${location}.${renderedKey}`;
+    const childKeyReview = state.xGraphQlRequest
+      && location === "request.body"
+      && key === "variables"
+      ? "x-graphql-variable"
+      : "structural";
     walkJson(
       state,
       child,
       childLocation,
       depth + 1,
       !redactObjectKeys && isRecord(child) && isReviewedInternalDynamicMapField(key),
+      childKeyReview,
     );
     if (
       state.visited >= MAX_WALK_NODES
@@ -466,6 +481,10 @@ function matchEntryFixtures(
     values,
     locations: new Map(values.map(({ label }) => [label, new Set<string>()])),
     truncated: new Set(),
+    xGraphQlRequest: isRecord(entry.request)
+      && entry.request.method === "POST"
+      && url.origin === "https://x.com"
+      && /^\/i\/api\/graphql\/[A-Za-z0-9_-]{20,64}\/[A-Z][A-Za-z0-9_]{2,100}$/u.test(url.pathname),
     visited: 0,
   };
 

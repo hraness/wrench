@@ -23,6 +23,7 @@ export type XWebBundleQueryDescriptor = XWebQueryDescriptorKey & {
 
 export type XWebQueryDescriptorEvidence = XWebQueryDescriptorKey & {
   readonly sourceChunk: string;
+  readonly observedOn?: string;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -108,13 +109,16 @@ function parseBundleQueryDescriptor(value: unknown, label: string): XWebBundleQu
 function parseDescriptorKey(value: unknown, label: string): XWebQueryDescriptorKey {
   const key = record(value, label);
   const required = ["queryId", "operationName", "operationType"] as const;
-  const allowed = new Set([...required, "metadata", "sourceChunk"]);
+  const allowed = new Set([...required, "metadata", "sourceChunk", "observedOn"]);
   const missing = required.filter((name) => !Object.hasOwn(key, name));
   const extra = Object.keys(key).filter((name) => !allowed.has(name));
   if (missing.length > 0) throw new Error(`${label} omitted ${missing.join(", ")}`);
   if (extra.length > 0) throw new Error(`${label} contained unsupported field(s): ${extra.join(", ")}`);
   if (key.sourceChunk !== undefined && (typeof key.sourceChunk !== "string" || !key.sourceChunk.endsWith(".js"))) {
     throw new Error(`${label}.sourceChunk must be a JavaScript bundle name`);
+  }
+  if (key.observedOn !== undefined && (typeof key.observedOn !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(key.observedOn))) {
+    throw new Error(`${label}.observedOn must be an ISO date`);
   }
   if (key.metadata !== undefined) {
     const metadata = record(key.metadata, `${label}.metadata`);
@@ -264,12 +268,13 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
     { operationName: "DmAllSearchSlice", operationType: "query", queryId: "zd0F6a_svKAXdlMGbCZDFg", sourceChunk: "bundle.DirectMessages.265735ba.js" },
     { operationName: "DmGroupSearchSlice", operationType: "query", queryId: "LxrvmqF3Lokl_BYZ1c83LA", sourceChunk: "bundle.DirectMessages.265735ba.js" },
     { operationName: "DmPeopleSearchSlice", operationType: "query", queryId: "c1MnRRmI-_Bggpntlq9-hQ", sourceChunk: "bundle.DirectMessages.265735ba.js" },
-    { operationName: "ArticleEntityDraftCreate", operationType: "mutation", queryId: "rSvnWw6CAJo4F9xVieZhLA", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityUpdateContent", operationType: "mutation", queryId: "CPOMQigUs99fzPmNe_1-EA", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityUpdateTitle", operationType: "mutation", queryId: "PplP1XRcflB3VYMQJdd_hw", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityUpdateCoverMedia", operationType: "mutation", queryId: "AbzX20PDk6TTzqmN67hiPQ", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityPublish", operationType: "mutation", queryId: "xkPT5esHwPTNtJfp-1xKaQ", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityResultByRestId", operationType: "query", queryId: "NYcREZ9msGwridku2068ng", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
+    { operationName: "Viewer", operationType: "query", queryId: "5XShkXk2oO2J7SYmTu6pvw", sourceChunk: "main.e4aca26a.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityDraftCreate", operationType: "mutation", queryId: "btD9FyMDa3_vydVp7fr87Q", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityUpdateContent", operationType: "mutation", queryId: "P5Nc3DYs9D4XqVthNrig8w", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityUpdateTitle", operationType: "mutation", queryId: "z_xdvTUbZjSVjt232b4D4A", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityUpdateCoverMedia", operationType: "mutation", queryId: "BXQicEDA0v2F5SmsjObjDQ", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityPublish", operationType: "mutation", queryId: "UyL9qgpV23A8471opeYQbw", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityResultByRestId", operationType: "query", queryId: "rPdndX2XxQoXIMUafLSSJQ", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
   ] satisfies readonly XWebQueryDescriptorEvidence[]),
 });
 
@@ -607,6 +612,7 @@ export const xWebMutationOperationIds = Object.freeze([
   "bookmarks.disable",
   "reposts.enable",
   "reposts.disable",
+  "articles.draft",
 ] as const);
 
 export type XWebMutationOperationId = (typeof xWebMutationOperationIds)[number];
@@ -623,6 +629,7 @@ const mutationOperationNames = Object.freeze({
   "bookmarks.disable": "DeleteBookmark",
   "reposts.enable": "CreateRetweet",
   "reposts.disable": "DeleteRetweet",
+  "articles.draft": "ArticleEntityDraftCreate",
 } as const satisfies Readonly<Record<XWebMutationOperationId, string>>);
 
 function exactMutationKeys(value: JsonRecord, keys: readonly string[], label: string): void {
@@ -688,6 +695,53 @@ function validateDesiredStateVariables(operationId: XWebMutationOperationId, var
   exactMutationPostId(variables.tweet_id, `X ${operationId} target`);
 }
 
+function validateArticleDraftVariables(variables: JsonRecord): void {
+  exactMutationKeys(variables, ["content_state", "title"], "X articles.draft variables");
+  if (
+    typeof variables.title !== "string"
+    || variables.title.length < 1
+    || variables.title.length > 100
+    || /[\0\r\n]/u.test(variables.title)
+  ) {
+    throw new Error("X articles.draft title must be a bounded string");
+  }
+  const contentState = record(variables.content_state, "X articles.draft content_state");
+  exactMutationKeys(contentState, ["blocks", "entity_map"], "X articles.draft content_state");
+  if (!Array.isArray(contentState.blocks) || contentState.blocks.length < 1 || contentState.blocks.length > 2_000) {
+    throw new Error("X articles.draft content_state.blocks must contain 1-2000 plain-text blocks");
+  }
+  if (!Array.isArray(contentState.entity_map) || contentState.entity_map.length !== 0) {
+    throw new Error("X articles.draft supports only an empty plain-text entity_map");
+  }
+  const lines: string[] = [];
+  for (const [index, value] of contentState.blocks.entries()) {
+    const block = record(value, `X articles.draft block ${index + 1}`);
+    exactMutationKeys(
+      block,
+      ["data", "text", "type", "entity_ranges", "inline_style_ranges"],
+      `X articles.draft block ${index + 1}`,
+    );
+    const data = record(block.data, `X articles.draft block ${index + 1}.data`);
+    exactMutationKeys(data, [], `X articles.draft block ${index + 1}.data`);
+    if (
+      typeof block.text !== "string"
+      || /[\0\r\n]/u.test(block.text)
+      || block.type !== "unstyled"
+      || !Array.isArray(block.entity_ranges)
+      || block.entity_ranges.length !== 0
+      || !Array.isArray(block.inline_style_ranges)
+      || block.inline_style_ranges.length !== 0
+    ) {
+      throw new Error(`X articles.draft block ${index + 1} left the reviewed plain-text shape`);
+    }
+    lines.push(block.text);
+  }
+  const body = lines.join("\n");
+  if (body.length < 1 || body.length > 20_000) {
+    throw new Error("X articles.draft body must be 1-20000 characters");
+  }
+}
+
 /**
  * Bind a state-changing request to one semantic operation and its complete
  * variable/metadata shape before the durable dispatch boundary is crossed.
@@ -712,6 +766,7 @@ export function authorizeXWebMutationRequest(
   if (body.queryId !== binding.queryId) throw new Error(`X ${operationId} body queryId drifted`);
   const variables = record(body.variables, `X ${operationId} variables`);
   if (expectedName === "CreateTweet") validateCreateTweetVariables(operationId, variables);
+  else if (expectedName === "ArticleEntityDraftCreate") validateArticleDraftVariables(variables);
   else validateDesiredStateVariables(operationId, variables);
   exactBooleanMap(body.features, descriptor.metadata.featureSwitches, `X ${operationId} features`);
   if (descriptor.metadata.fieldToggles.length > 0) {

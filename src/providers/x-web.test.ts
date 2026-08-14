@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   assertExactXWebGraphQlBinding,
   authorizeXWebLegacyDmR1Read,
+  authorizeXWebMutationRequest,
   authorizeXWebR1GraphQlRequest,
   bindXWebOperationMetadataValues,
   buildXWebGraphQlPath,
@@ -115,6 +116,19 @@ describe("X query descriptor revision evidence", () => {
     expect(bookmarks.queryId).not.toBe("LoLaMO4GuHLEPJWrenchH9kjAw");
     expect(JSON.stringify(xWebQueryDescriptorEvidenceSnapshot))
       .not.toContain("LoLaMO4GuHLEPJWrenchH9kjAw");
+  });
+
+  test("records the current reviewed Viewer and Article descriptor observations", () => {
+    expect(evidence("Viewer")).toMatchObject({
+      queryId: "5XShkXk2oO2J7SYmTu6pvw",
+      sourceChunk: "main.e4aca26a.js",
+      observedOn: "2026-08-14",
+    });
+    expect(evidence("ArticleEntityDraftCreate")).toMatchObject({
+      queryId: "btD9FyMDa3_vydVp7fr87Q",
+      sourceChunk: "bundle.TwitterArticles.305538ca.js",
+      observedOn: "2026-08-14",
+    });
   });
 
   test("keeps transport query IDs out of the semantic registry", () => {
@@ -444,6 +458,61 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
       url: graphqlUrl(resolved),
       descriptor: resolved,
     })).toThrow("mutations require POST");
+  });
+
+  test("authorizes only the exact reviewed plain-text Article draft payload", () => {
+    const resolved = descriptor("ArticleEntityDraftCreate");
+    const variables = {
+      content_state: {
+        blocks: [{
+          type: "unstyled",
+          text: "First paragraph",
+          data: {},
+          entity_ranges: [],
+          inline_style_ranges: [],
+        }],
+        entity_map: [],
+      },
+      title: "Private draft",
+    };
+    const body = {
+      variables,
+      features: { responsive_web_graphql_timeline_navigation_enabled: true },
+      fieldToggles: { withAuxiliaryUserLabels: false },
+      queryId: resolved.queryId,
+    };
+    expect(authorizeXWebMutationRequest("articles.draft", {
+      method: "POST",
+      url: graphqlUrl(resolved),
+      descriptor: resolved,
+      body,
+    })).toMatchObject({ operationName: "ArticleEntityDraftCreate", method: "POST" });
+
+    for (const invalidVariables of [
+      { ...variables, publish: true },
+      { ...variables, title: "Private\ndraft" },
+      { ...variables, content_state: { ...variables.content_state, entity_map: [{ key: "1" }] } },
+      {
+        ...variables,
+        content_state: {
+          ...variables.content_state,
+          blocks: [{ ...variables.content_state.blocks[0], type: "header-one" }],
+        },
+      },
+    ]) {
+      expect(() => authorizeXWebMutationRequest("articles.draft", {
+        method: "POST",
+        url: graphqlUrl(resolved),
+        descriptor: resolved,
+        body: { ...body, variables: invalidVariables },
+      })).toThrow();
+    }
+    expect(() => authorizeXWebMutationRequest("posts.publish", {
+      method: "POST",
+      url: graphqlUrl(resolved),
+      descriptor: resolved,
+      body,
+    })).toThrow("did not bind its reviewed");
   });
 
   test("rejects origin, credential, fragment, path, and method confusion", () => {

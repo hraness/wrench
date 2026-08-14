@@ -7,7 +7,7 @@ First-party traffic is not the same as a documented public API. Use this local c
 ## Contents
 
 - [Install and inspect](#install-and-inspect)
-- [Save an official Article draft](#save-an-official-article-draft)
+- [Save an Article draft](#save-an-article-draft)
 - [Configure and bind the signed-in realm](#configure-and-bind-the-signed-in-realm)
 - [Use observed R1 contracts](#use-observed-r1-contracts)
 - [Resolve current X material](#resolve-current-x-material)
@@ -28,7 +28,7 @@ wrench capabilities x-web --json
 
 The separate `x` adapter uses X's documented OAuth API. It covers documented reverse-chronological/user/mentions/List/recent-search/bookmark reads and approved posting, reply, thread, repost, bookmark, Article, media, and legacy-DM surfaces; it never supplies For You. Encrypted X Chat remains a separate cryptographic contract. Keep these transports and auth realms distinct, and never switch among them after preview or because one lacks coverage.
 
-## Save an official Article draft
+## Save an Article draft
 
 Use the documented OAuth adapter when the intent is to save an X Article without publishing it. Contract version 2 accepts the literal `draft_only: true`, calls the draft endpoint, and returns before any publish request. Omitting the flag preserves the publishing operation, so require it in every draft workflow and inspect the preview before confirmation.
 
@@ -46,6 +46,32 @@ wrench confirm <preview-digest> --json
 ```
 
 The operation remains R3 because the same semantic operation can publish when the flag is absent. Confirm only an exact preview whose input includes `draft_only: true`, whose dispatch contract is version 2, and whose body is the final reviewed draft. The result must report `published: false` and `mode: "draft"`; never treat a returned draft ID as permission to call the separate publish endpoint.
+
+When an existing Arc, Chrome, or Chromium session is the authorized realm, the
+`x-web` adapter can save the same private draft without an OAuth token. This is
+a distinct, first-party internal-API transport. Its version-2 Article contract
+requires `draft_only: true`, rejects cover fields, issues exactly one
+response-bound `ArticleEntityDraftCreate` mutation, and has no publish-capable
+branch.
+
+```sh
+wrench adapter sync-bundled --json
+wrench auth add x-arc --cookie-source arc
+wrench auth bind x-arc --site x
+
+wrench x-web articles.publish \
+  --input '{"title":"Reviewed title","body":"Reviewed body","draft_only":true}' \
+  --auth x-arc --preview --json
+
+wrench confirm <preview-digest> --json
+```
+
+Confirm only the exact final title, body, bound numeric account subject,
+contract version 2, and `draft_only: true`. Require `published: false` and
+`mode: "draft"` in the result. A failure after dispatch is indeterminate: do
+not retry or clear it until a separate exact read proves whether X saved the
+draft. Never reuse the preview with the official OAuth adapter or silently
+switch auth realms.
 
 ## Configure and bind the signed-in realm
 
@@ -133,7 +159,9 @@ The current `x-web` registry keeps these unavailable:
 - `messaging.list` and `messaging.read` (`R1`) until verified X Chat key recovery, plaintext projection, and acknowledgement-free handling are installed;
 - `messaging.send` (`R3`) until its exact current mutation, conversation/user target, response, and media path are captured;
 - `articles.read` (`R1`) until the entitlement-specific detail read is captured;
-- `x-web articles.publish` (`R3`) until editor, cover upload, publish response, and account/article bindings are captured.
+- `x-web articles.publish` is observed only for the version-2, plain-text,
+  draft-only path described above; cover upload and `ArticleEntityPublish`
+  remain outside that contract.
 
 No operation may be guessed from downloaded bundles or copied network snippets. A capture-required DM send must not type into X's message composer.
 
@@ -141,7 +169,7 @@ Encrypted X Chat is not a normal HAR template. Plaintext and send require a sepa
 
 ## Risk and confirmation
 
-R1 reads run only after account binding and exclusion of seen/read acknowledgement requests. Likes and bookmarks are R2 desired state. Posts, replies, quotes, reposts, threads, DMs, and Articles are R3.
+R1 reads run only after account binding and exclusion of seen/read acknowledgement requests. Likes and bookmarks are R2 desired state. Posts, replies, quotes, reposts, threads, DMs, and Article drafts are R3.
 
 Preview the exact account realm, target, body/items, attachment hashes, reply settings, desired state, contract hash, and dispatch schedule. Confirm once. Require duplicate refusal. If a request left but its response or target binding is uncertain, report `indeterminate` and preserve the ledger.
 

@@ -11,8 +11,8 @@ import { webSessionContractDefinitions } from "../../web-session-contract-defini
 
 const operations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "1e18e78882a88581c81def646f5c1e925249b066bda3672b5d9ca32a5e1b763d",
-  { "likes.set": [1] },
+  "f47814256dcb8aad7c1a6b67a870eec70c088c2833f6ebe569a4a3f2068d29f7",
+  { "articles.publish": [1], "likes.set": [1] },
   {
     "messaging.list": {
       state: "unsupported",

@@ -7,6 +7,7 @@ import type { BrowserSession } from "../browser";
 import type { WebSessionRecipe } from "../model";
 import type { WebSessionDispatchEvent } from "../web-session";
 import {
+  buildXWebArticleContentState,
   executeXWebOperation,
   readXWebDesiredState,
   resolveCurrentXWebChunkUrl,
@@ -14,6 +15,9 @@ import {
 } from "./x-web-runtime";
 
 const MAIN_URL = "https://abs.twimg.com/responsive-web/client-web/main.abcdef12.js";
+const VIEWER_QUERY_ID = "5XShkXk2oO2J7SYmTu6pvw";
+const ARTICLE_QUERY_ID = "btD9FyMDa3_vydVp7fr87Q";
+const ARTICLE_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/bundle.TwitterArticles.305538ca.js";
 const VIEWER_ID = "123456789012345678";
 const FOCAL_POST_ID = "2078889282404569267";
 const CREATED_POST_ID = "2078889282404569266";
@@ -67,11 +71,15 @@ function descriptor(
 function mainBundle(...descriptors: readonly string[]): string {
   return [
     `const authorization="${CURRENT_BEARER}"`,
-    ...descriptors,
+    ...descriptors.map((value) => value.replaceAll("u4ni7JqpqdAQxWQfkLsdUQ", VIEWER_QUERY_ID)),
     "previousModule()},991160(e,t,r){\"use strict\";let transactionRuntime;r.d(t,{Ay:()=>l,_E:()=>s,kc:()=>a})",
     "transactionRuntime=transactionRuntime||new Promise(done=>{r.e(59924).then(r.bind(r,208932)).then(module=>done(module.default()))})",
     "feature.isTrue(\"rweb_client_transaction_id_enabled\")&&(headers[\"x-client-transaction-id\"]=await a(request.host,request.path,request.method))}",
   ].join(";");
+}
+
+function articleHtml(): string {
+  return `${homeHtml()}<script>p.u=e=>({31770:"bundle.TwitterArticles"})[e]||e)+"."+({31770:"305538c"})[e]+"a.js"</script>`;
 }
 
 function homeHtml(): string {
@@ -380,6 +388,21 @@ describe("X authenticated internal-API runtime", () => {
     )).toThrow("duplicate webpack chunk hash");
   });
 
+  test("converts exact plain text to the reviewed native Article content state", () => {
+    expect(buildXWebArticleContentState("First paragraph\n\nAudio: https://example.com/track")).toEqual({
+      blocks: [
+        { type: "unstyled", text: "First paragraph", data: {}, entity_ranges: [], inline_style_ranges: [] },
+        { type: "unstyled", text: "", data: {}, entity_ranges: [], inline_style_ranges: [] },
+        { type: "unstyled", text: "Audio: https://example.com/track", data: {}, entity_ranges: [], inline_style_ranges: [] },
+      ],
+      entity_map: [],
+    });
+    expect(() => buildXWebArticleContentState("")).toThrow("1-20000");
+    expect(() => buildXWebArticleContentState("x\r\ny")).toThrow("1-20000");
+    expect(() => buildXWebArticleContentState(Array.from({ length: 2_001 }, () => "x").join("\n")))
+      .toThrow("at most 2000");
+  });
+
   test("binds user-feed responses to the requested user before exposing a page", async () => {
     for (const [returnedUserId, expected] of [
       [VIEWER_ID, "succeeded"],
@@ -556,7 +579,7 @@ describe("X authenticated internal-API runtime", () => {
     expect(calls.map((call) => `${call.method} ${call.url.origin}${call.url.pathname}`)).toEqual([
       "GET https://x.com/home",
       "GET https://abs.twimg.com/responsive-web/client-web/main.abcdef12.js",
-      "GET https://x.com/i/api/graphql/u4ni7JqpqdAQxWQfkLsdUQ/Viewer",
+      `GET https://x.com/i/api/graphql/${VIEWER_QUERY_ID}/Viewer`,
       "GET https://x.com/i/api/graphql/rZA6K31W4E90vZKBmxXV3g/TweetDetail",
     ]);
   });
@@ -701,6 +724,187 @@ describe("X authenticated internal-API runtime", () => {
     ));
     expect(switchedMessage).toContain("no longer matches");
     expect(switchedCalls.some((call) => call.url.pathname.endsWith("/TweetDetail"))).toBeFalse();
+  });
+
+  test("creates one response-bound private Article draft and never calls the publish mutation", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Private native Article";
+    const body = "First paragraph\n\nAudio: https://hraness.com/example-track";
+    const articleId = "2088317732278190081";
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(articleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", VIEWER_QUERY_ID, "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response(descriptor("ArticleEntityDraftCreate", ARTICLE_QUERY_ID, "mutation"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/ArticleEntityDraftCreate")) {
+        expect(request.method).toBe("POST");
+        expect(request.headers.get("x-client-transaction-id")).toBe(CLIENT_TRANSACTION_ID);
+        expect(JSON.parse(request.body ?? "null")).toEqual({
+          variables: {
+            content_state: {
+              blocks: [
+                { type: "unstyled", text: "First paragraph", data: {}, entity_ranges: [], inline_style_ranges: [] },
+                { type: "unstyled", text: "", data: {}, entity_ranges: [], inline_style_ranges: [] },
+                { type: "unstyled", text: "Audio: https://hraness.com/example-track", data: {}, entity_ranges: [], inline_style_ranges: [] },
+              ],
+              entity_map: [],
+            },
+            title,
+          },
+          features: {},
+          queryId: ARTICLE_QUERY_ID,
+        });
+        return jsonResponse({
+          data: {
+            articleentity_create_draft: {
+              article_entity_results: { result: { rest_id: articleId, title } },
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected Article draft request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.publish", 2),
+      { title, body, draft_only: true },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.publish",
+        published: false,
+        mode: "draft",
+        draftId: articleId,
+        title,
+        url: `https://x.com/compose/articles/edit/${articleId}`,
+      },
+      finalUrl: `https://x.com/compose/articles/edit/${articleId}`,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(before).toEqual([{
+      id: "articles.publish",
+      index: 1,
+      progress: { planned: 1, started: 0, verified: 0 },
+    }]);
+    expect(after).toEqual([{
+      id: "articles.publish",
+      index: 1,
+      progress: { planned: 1, started: 1, verified: 1 },
+    }]);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("refuses publish-capable Article inputs before mutation dispatch", async () => {
+    const calls: CapturedRequest[] = [];
+    let transactionSessions = 0;
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(articleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      throw new Error(`unexpected request after Article draft preflight ${request.url.href}`);
+    }, {
+      createBrowserSession: () => {
+        transactionSessions += 1;
+        throw new Error("Article draft preflight must not create a transaction browser");
+      },
+    });
+
+    expect(await rejectionMessage(executeXWebOperation(
+      xRecipe("articles.publish", 2),
+      { title: "No publish", body: "Body", draft_only: false },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    ))).toContain("draft_only=true");
+    expect(transactionSessions).toBe(0);
+    expect(calls.some((call) => call.method === "POST")).toBeFalse();
+  });
+
+  test("leaves an Article draft indeterminate when the create response does not bind the confirmed title", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(articleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response(descriptor("ArticleEntityDraftCreate", ARTICLE_QUERY_ID, "mutation"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/ArticleEntityDraftCreate")) {
+        return jsonResponse({
+          data: {
+            articleentity_create_draft: {
+              article_entity_results: {
+                result: { rest_id: "2088317732278190082", title: "Different title" },
+              },
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected mismatched Article response request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.publish", 2),
+      { title: "Confirmed title", body: "Body", draft_only: true },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+    });
+    expect(after).toEqual([]);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
   });
 
   test("records mutation dispatch only immediately before the direct CreateTweet request and verifies afterward", async () => {
@@ -1110,7 +1314,7 @@ describe("X authenticated internal-API runtime", () => {
       expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual([
         "GET /home",
         "GET /responsive-web/client-web/main.abcdef12.js",
-        "GET /i/api/graphql/u4ni7JqpqdAQxWQfkLsdUQ/Viewer",
+        `GET /i/api/graphql/${VIEWER_QUERY_ID}/Viewer`,
         "GET /i/api/graphql/4hhGRbehkcUVTKf8n0f0xw/TweetResultByRestId",
         `POST ${mutationPath}`,
         "GET /i/api/graphql/4hhGRbehkcUVTKf8n0f0xw/TweetResultByRestId",

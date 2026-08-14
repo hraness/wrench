@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.2.0",
+  "version": "1.1.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -533,9 +533,9 @@
       }
     },
     "articles.publish": {
-      "description": "Observed draft-only contract: save one confirmed plain-text native X Article through the current ArticleEntityDraftCreate mutation. This operation never calls ArticleEntityPublish.",
+      "description": "Capture-required contract reservation: publish one confirmed native X article only after the entitled editor, optional cover upload, and publish sequence is captured and response-bound.",
       "risk": "R3",
-      "sideEffect": "Creates one private native X Article draft with the exact confirmed title and plain-text body; it never publishes the draft.",
+      "sideEffect": "Publishes one externally visible native X article with the exact confirmed title, body, and cover.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -548,28 +548,29 @@
           },
           "body": {
             "type": "string",
-            "description": "Exact plain-text native Article body converted to deterministic unstyled X content-state blocks",
+            "description": "Exact native article body",
             "minLength": 1,
             "maxLength": 20000
           },
-          "draft_only": {
-            "type": "boolean",
-            "description": "Must be true; the authenticated-web contract can save a private draft but cannot publish it",
-            "enum": [
-              true
+          "cover_image": {
+            "type": "file",
+            "description": "Optional reviewed native-article cover image",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png"
             ]
           }
         },
         "required": [
           "title",
-          "body",
-          "draft_only"
+          "body"
         ]
       },
       "webSession": {
         "site": "x",
         "action": "articles.publish",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }

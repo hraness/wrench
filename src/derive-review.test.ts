@@ -253,6 +253,59 @@ describe("private derivation review", () => {
     expect(rendered).not.toContain("Bearer");
   });
 
+  test("retains only safe top-level X GraphQL variable schema names during fixture review", () => {
+    const fixtures = parseDerivationReviewFixtures({
+      article_id: "article-id-fixture",
+      title: "article-title-fixture",
+      credential: "credential-fixture",
+      nested_user: "nested-user-fixture",
+    });
+    const dynamicUserKey = "dynamic-user-key";
+    const result = reviewDerivationHarValue(
+      {
+        log: {
+          entries: [{
+            request: {
+              method: "POST",
+              url: "https://x.com/i/api/graphql/btD9FyMDa3_vydVp7fr87Q/ArticleEntityDraftCreate",
+              postData: {
+                mimeType: "application/json",
+                text: JSON.stringify({
+                  variables: {
+                    articleEntityKey: "article-id-fixture",
+                    title: "article-title-fixture",
+                    authToken: "credential-fixture",
+                    users: {
+                      [dynamicUserKey]: { text: "nested-user-fixture" },
+                    },
+                  },
+                }),
+              },
+            },
+            response: {
+              status: 200,
+              content: { mimeType: "application/json", text: "{}" },
+            },
+          }],
+        },
+      },
+      "https://x.com",
+      { kind: "entry", entryIndex: 0, fixtures },
+    );
+
+    expect(result.kind).toBe("entry");
+    if (result.kind !== "entry") throw new Error("expected entry review");
+    expect(Object.fromEntries(result.fixtureMatches.map((match) => [match.label, match.locations]))).toEqual({
+      article_id: ["request.body.variables.articleEntityKey"],
+      title: ["request.body.variables.title"],
+      credential: [],
+      nested_user: ["request.body.variables.users.:dynamic.text"],
+    });
+    const rendered = JSON.stringify(result);
+    expect(rendered).not.toContain(dynamicUserKey);
+    for (const value of Object.values(fixtures)) expect(rendered).not.toContain(value);
+  });
+
   test("never searches request or response JSON values beneath sensitive keys", () => {
     const fixtures = parseDerivationReviewFixtures({
       visible_request: "visible-request-fixture",
