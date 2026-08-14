@@ -1,0 +1,6 @@
+.env*
+.git
+.vercel
+dist
+node_modules
+website/dist

@@ -1,0 +1,17 @@
+# Contents
+
+- `source/` – checked HTML, CSS, analytics, discovery, and fallback sources.
+- `public/` – checked public social assets.
+- `build.ts` – deterministic static output generation from the root package release.
+- `*.test.ts` – identity, SEO, accessibility, analytics-privacy, and build regressions.
+- `dist/` – ignored generated deployment output.
+
+# Guidelines
+
+- Keep the page useful without JavaScript. JavaScript is optional analytics enhancement only.
+- Keep every product claim observable in the public Wrench release and put each qualification beside the claim it limits.
+- Derive release identity and install commands from the validated root `package.json`; never copy a version into page source.
+- Keep canonical metadata, robots, sitemap, Open Graph, X metadata, and the linked JSON-LD graph aligned to `https://wrench.rip/`.
+- Keep analytics canonical-host-only, cookieless, personless, memory-only, DNT-aware, query-free, and restricted to page lifecycle plus the two explicit GitHub links.
+- Do not add private packages, private assets, cookies, replay, identity, feature flags, broad autocapture, console capture, or application behavior.
+- Preserve semantic headings, native disclosures, visible focus, keyboard-scrolling tables, touch-sized links, reduced-motion behavior, and forced-color legibility.

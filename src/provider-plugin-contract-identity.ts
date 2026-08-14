@@ -64,6 +64,7 @@ const identities = Object.freeze({
       "b3a58634349f6a78b706a3e2e67e668766e2b79f2d8513f725440b24c4fc8a5c",
       "7abbd25b2e3162e1fb90592834c5e15c03780b5421ef8dd6abcf2557bb8cf7ce",
       "62febfc0b6c6c7849bfad47bb0ef1b99d2f9808e25ab4c71d333cc56fe701088",
+      "3b30f11b2620217306444589e96579106296c37c1596ef7d7f9ffbdc8811c13a",
     ],
   },
   "gmail-official": {
@@ -194,6 +195,7 @@ const identities = Object.freeze({
       "68d7507dfa69399cad34fdce6b55c686739be5af5e5278a86dcde3bf4fd3fc14",
       "7c5edac03287df90921618983b04fb7fa26a8b189508bf69b1853ac6055d256a",
       "434a9a9cde8034f3e9449bdd9c3d26754d4cd7d4fdabbfbe78085f8dffce3a58",
+      "12a60095cd913fa590d82d4e8d82c4b573be6b3b76c7a1e5bece3cd452e21b24",
     ],
   },
   "meta-web": {
@@ -235,6 +237,7 @@ const identities = Object.freeze({
       "cf5f3337424abc1b7b4390070fc486a37fdc219811746757b973e18e14397bff",
       "96e46f7c9e8b0140dfbfa43c729287f298cacd54472006e0e6c6837e63efa5b5",
       "c21fe9272d053120355212c9b3dfab55a5eeccab41c3199b7c97b09277367f3d",
+      "7bea49c4d8d8594e89caa2d06fe4253ef3dd93bef61f3d3cb2cb500dfcd52172",
     ],
   },
   "reddit-web": {
@@ -373,6 +376,7 @@ const identities = Object.freeze({
       "4d84f5ee82848ac1416cb6cee8f7878897e04dbc1391cf8e71a5b9bbb25d25fb",
       "81d51abef0da4d6e89f91b35ae992b6570326fd827b81f3fbe8b4d699c9de7d5",
       "6cccf269397615f915d042d954aa7b61b13c0c73587adc92caefef1621712a1e",
+      "e6351226902399d70b4ef52a4bd317b928f7d42041d75feeb3059110e2a8ef3d",
     ],
   },
   "x-official": {

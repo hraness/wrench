@@ -5,6 +5,7 @@
 - `skills/wrench/` – the packaged Agent Skill and focused operational references.
 - `docs/` – provider-plugin authoring and trust-boundary guidance.
 - `scripts/` – standalone CLI, plugin lifecycle, and clean-consumer package verification.
+- `website/` – the dependency-free, statically generated `wrench.rip` documentation and landing surface; it is excluded from the published package.
 - `.github/workflows/` – read-only Linux and macOS checks plus checks-gated immutable releases.
 - `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `LICENSE` – usage, project policy, security reporting, and terms.
 - `package.json`, `bunfig.toml`, `tsconfig.json`, and `bun.lock` – the standalone Bun package, isolated dependency layout, and frozen dependency graph.
@@ -13,6 +14,7 @@
 
 - Use Bun 1.3.14 and run `bun run check` before handing off a change.
 - Keep Wrench a bring-your-own-agent CLI and TypeScript SDK. Do not add a bundled model, planning or tool loop, agent runtime, application UI, native app, or app template; consumers own those layers.
+- Keep `website/` informational: it may explain and document Wrench, but must not grow an agent runtime, authenticated product surface, or browser-based substitute for the CLI and SDK.
 - Keep the package root import side-effect-free. Importing `@hraness/wrench` must not start the CLI, inspect local state, load built-in providers, or access the network.
 - Expose bounded semantic operations, never caller-selected requests, endpoints, headers, cookies, selectors, scripts, shell commands, or arbitrary file access.
 - Keep media acquisition to one authorized, accessible, finite, non-DRM item. Reject playlists, live streams, affirmative DRM, unsupported authentication, and access-control bypasses. Promote an item only after its inspectable archive, versioned manifest, and SHA-256 records pass complete verification.

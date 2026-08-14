@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#181817">
+    <title>Wrench: precise web capabilities for AI agents</title>
+    <meta name="description" content="{{WRENCH_DESCRIPTION}}">
+    <meta name="application-name" content="Wrench">
+    <meta name="generator" content="Bun 1.3.14">
+    <meta name="keywords" content="AI agent tools, coding agents, TypeScript SDK, CLI, web capture, media archive, provider plugins, local-first, web automation">
+    <link rel="canonical" href="https://wrench.rip/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:description" content="{{WRENCH_DESCRIPTION}}">
+    <meta property="og:url" content="https://wrench.rip/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Wrench: precise web capabilities for AI agents">
+    <meta name="twitter:description" content="{{WRENCH_DESCRIPTION}}">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="#how">How it works</a>
+        <a href="#start">Install</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section aria-labelledby="brand-name" class="hero">
+        <div aria-hidden="true" class="hero-field">
+          <span class="hero-orbit hero-orbit-a"></span>
+          <span class="hero-orbit hero-orbit-b"></span>
+          <span class="hero-glyph">🔧</span>
+        </div>
+        <div class="hero-content">
+          <p class="eyebrow">A capability and custody layer for any command-capable agent</p>
+          <h1 id="brand-name"><span>W</span>rench</h1>
+          <p class="hero-statement">Give your agent a precise handle on the web.</p>
+          <p class="hero-explainer">
+            Wrench lets an AI capture pages, preserve media, read supported connected
+            services, and invoke reviewed account operations. Each authenticated
+            operation is typed, bounded, and tied to one account and transport.
+          </p>
+          <p class="hero-explainer">
+            Bring the model and interface you prefer. Wrench supplies the local
+            capability and custody layer.
+          </p>
+          <div class="action-row">
+            <a class="button button-primary" href="#start">Get started</a>
+            <a class="button button-secondary" href="#how">See how it works</a>
+            <a
+              class="button button-quiet"
+              data-analytics-event="project link opened"
+              data-analytics-id="hero-github"
+              data-analytics-kind="repository"
+              href="https://github.com/hraness/wrench"
+            >GitHub <span aria-hidden="true">↗</span></a>
+          </div>
+          <ul aria-label="Project facts" class="proof-list">
+            <li>Free and open source</li>
+            <li>MIT licensed</li>
+            <li>macOS + Linux</li>
+            <li>CLI + TypeScript SDK</li>
+          </ul>
+        </div>
+      </section>
+
+      <div class="content">
+        <section aria-labelledby="use-cases-title" class="section">
+          <div class="section-heading">
+            <p class="eyebrow">Useful on the first command. Rigorous when it matters.</p>
+            <h2 id="use-cases-title">What can you do with it?</h2>
+            <p>
+              Start with a public URL. Add authenticated capabilities only when you
+              need them. The same command surface scales from a readable page capture
+              to account-bound provider operations.
+            </p>
+          </div>
+          <div class="card-grid">
+            <article class="card">
+              <span aria-hidden="true" class="card-index">01</span>
+              <h3>Capture knowledge</h3>
+              <p>Turn a URL into durable Markdown, inspect it without saving, and search the knowledge you keep locally.</p>
+            </article>
+            <article class="card">
+              <span aria-hidden="true" class="card-index">02</span>
+              <h3>Preserve media</h3>
+              <p>Archive one authorized, accessible media item with its source bytes, requested derivatives, transcript, manifest, and SHA-256 records.</p>
+            </article>
+            <article class="card">
+              <span aria-hidden="true" class="card-index">03</span>
+              <h3>Read connected services</h3>
+              <p>Keep validated reads from installed capabilities in encrypted local snapshots, then load them without reopening a browser or contacting the provider.</p>
+            </article>
+            <article class="card">
+              <span aria-hidden="true" class="card-index">04</span>
+              <h3>Add one capability</h3>
+              <p>Turn one authorized first-party exchange into a named operation such as <code>messaging.list</code>, with exact origins, typed inputs, strict outputs, and explicit trust.</p>
+            </article>
+          </div>
+        </section>
+
+        <section aria-labelledby="how" class="section section-dark">
+          <div class="section-heading section-heading-wide">
+            <p class="eyebrow">One job, one handle</p>
+            <h2 id="how">The browser stays behind the boundary.</h2>
+            <p>
+              Wrench begins with the exact outcome an agent may request. It exposes a
+              small semantic operation and keeps the browser, provider plumbing,
+              account session, and credentials inside a local kernel.
+            </p>
+          </div>
+          <ol class="flow">
+            <li>
+              <span aria-hidden="true" class="flow-index">01</span>
+              <div><h3>Name the job</h3><p>The agent asks for a named outcome, such as reading an inbox or preserving one video.</p></div>
+            </li>
+            <li>
+              <span aria-hidden="true" class="flow-index">02</span>
+              <div><h3>Select a capability</h3><p>Wrench resolves one installed, observed capability instead of handing the caller a general browser or request tool.</p></div>
+            </li>
+            <li>
+              <span aria-hidden="true" class="flow-index">03</span>
+              <div><h3>Check the boundary</h3><p>The kernel binds the exact provider, transport, account realm, contract version, implementation, input, and risk.</p></div>
+            </li>
+            <li>
+              <span aria-hidden="true" class="flow-index">04</span>
+              <div><h3>Run one exchange</h3><p>Credentials remain opaque to the caller and can terminate only at sinks declared by that capability.</p></div>
+            </li>
+            <li>
+              <span aria-hidden="true" class="flow-index">05</span>
+              <div><h3>Return evidence</h3><p>The caller receives a bounded result, explicit completeness, or durable evidence that the outcome remains unsettled.</p></div>
+            </li>
+          </ol>
+        </section>
+
+        <section aria-labelledby="start" class="section start-section">
+          <div class="section-heading">
+            <p class="eyebrow">A public page is the easiest first step</p>
+            <h2 id="start">Try Wrench in four commands.</h2>
+            <p>
+              Wrench requires Bun 1.3.14 and runs on macOS and Linux.
+              <code>wrench read</code> inspects a page without saving it, and
+              <code>wrench capabilities</code> reports the operations that are
+              actually installed and observed on this machine.
+            </p>
+          </div>
+          <div class="command-stack">
+            <div class="command-panel">
+              <div class="command-label"><span>terminal</span><span>{{WRENCH_RELEASE}}</span></div>
+              <pre><code>{{WRENCH_INSTALL_COMMAND}}
+wrench doctor
+wrench read https://example.com/article
+wrench capabilities</code></pre>
+            </div>
+            <aside class="prompt-card">
+              <p class="prompt-label">Or ask a command-capable agent</p>
+              <p>“Install Wrench {{WRENCH_RELEASE}}, run <code>wrench doctor</code>, then use it to read this URL: …”</p>
+            </aside>
+          </div>
+        </section>
+
+        <section aria-labelledby="philosophy-title" class="section">
+          <div class="section-heading section-heading-wide">
+            <p class="eyebrow">Design philosophy</p>
+            <h2 id="philosophy-title">Power comes from the boundary.</h2>
+            <p>
+              Wrench is useful because its kernel refuses broad authority. The
+              capability stays small enough to inspect, test, cache, revoke, and
+              reason about when a provider changes.
+            </p>
+          </div>
+          <div class="principle-grid">
+            <article><h3>Intent over mechanism</h3><p>Operations name the job. Provider requests, browser sessions, cookies, and selectors stay behind the contract.</p></article>
+            <article><h3>Evidence before authority</h3><p>A captured exchange is private evidence. It remains inert until its inputs, outputs, account proof, side effects, and failure behavior are reviewed and tested.</p></article>
+            <article><h3>Drift stays visible</h3><p>When an origin, account, status, field, or response shape changes, the capability stops and returns to <code>capture-required</code>. Wrench never switches to a browser fallback silently.</p></article>
+            <article><h3>Unknown stays unknown</h3><p>Incomplete reads remain incomplete. An ambiguous write stays unsettled until separately obtained evidence can reconcile it.</p></article>
+            <article><h3>Local custody</h3><p>Archives stay inspectable, account-bound reads stay encrypted, and exact cached views can load without a provider roundtrip.</p></article>
+            <article><h3>Interchangeable intelligence</h3><p>Wrench supplies no model, planning loop, approval interface, or application shell. Use the agent system you already prefer.</p></article>
+          </div>
+        </section>
+
+        <section aria-labelledby="technical-title" class="section technical-section">
+          <div class="section-heading">
+            <p class="eyebrow">For technical readers</p>
+            <h2 id="technical-title">Small surface. Strong invariants.</h2>
+            <p>
+              Each rule closes a specific failure mode: confused accounts, ambient
+              credentials, provider drift, stale state, duplicated mutations, or
+              trusted code that changed after review.
+            </p>
+          </div>
+          <dl class="invariants">
+            <div><dt>Strict inputs</dt><dd>Foreign manifests, messages, plans, receipts, responses, and CLI values reject unknown fields and malformed bounds.</dd></div>
+            <div><dt>Exact identity</dt><dd>Authenticated calls bind one account realm, provider surface, transport, contract version, and implementation identity.</dd></div>
+            <div><dt>Opaque credentials</dt><dd>Plugins receive declared handles. The caller does not receive cookies, tokens, ambient environment, unrestricted files, a shell, or caller-selected HTTP.</dd></div>
+            <div><dt>Content-bound trust</dt><dd>Portable-plugin trust applies to one verified bundle. Process separation contains ordinary failures and is not described as a hostile-code sandbox.</dd></div>
+            <div><dt>Last-good reads</dt><dd>Exact snapshots preserve provider paging and completeness. A failed refresh or drifted projection does not erase the last verified state.</dd></div>
+            <div><dt>At-most-once evidence</dt><dd>Consequential changes require a short-lived exact preview and confirmation. An indeterminate dispatch is reconciled from separate evidence and never blindly retried.</dd></div>
+          </dl>
+        </section>
+
+        <section aria-labelledby="comparison-title" class="section">
+          <div class="section-heading section-heading-wide">
+            <p class="eyebrow">How it fits</p>
+            <h2 id="comparison-title">Use Wrench with the tools you already have.</h2>
+            <p>
+              Wrench owns the capability and custody layer. Browser tools, provider
+              SDKs, MCP servers, and agent frameworks continue to do the jobs they
+              are designed for.
+            </p>
+          </div>
+          <div aria-labelledby="comparison-title" class="table-scroll" role="region" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">Approach</th><th scope="col">Best at</th><th scope="col">What Wrench adds</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Browser automation</th><td>Visual workflows, UI testing, and exploratory interaction</td><td>Reviewed semantic operations with no hidden DOM-action fallback</td></tr>
+                <tr><th scope="row">Direct API scripts</th><td>Calling a known API with complete developer control</td><td>Shared account, risk, preview, receipt, drift, and encrypted-state rules</td></tr>
+                <tr><th scope="row">MCP</th><td>Transporting discoverable tools and context between hosts and servers</td><td>A provider-side custody and execution contract that can sit behind an MCP tool</td></tr>
+                <tr><th scope="row">Agent frameworks</th><td>Models, planning, tool loops, approvals, and interfaces</td><td>A model-agnostic CLI and SDK capability layer beneath the framework</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section aria-labelledby="faq-title" class="section faq-section">
+          <div class="section-heading">
+            <p class="eyebrow">The important limits</p>
+            <h2 id="faq-title">Questions Wrench should answer plainly.</h2>
+          </div>
+          <div class="faq-list">
+            <details><summary>Is Wrench an AI agent?</summary><p>No. Wrench provides <code>@hraness/wrench</code>, a CLI, and an SDK. Your agent owns the model, planning loop, approvals, and interface.</p></details>
+            <details><summary>Does it work with every service?</summary><p>No. Public capture and authenticated provider operations have different boundaries. <code>wrench capabilities</code> is the source of truth for operations installed and observed on the current machine.</p></details>
+            <details><summary>Does it bypass login, paywalls, access controls, or DRM?</summary><p>No. Media acquisition is limited to one authorized, accessible, finite, non-DRM item. Wrench does not bypass payment, authentication, access controls, or DRM.</p></details>
+            <details><summary>What happens when a provider changes?</summary><p>The affected operation fails closed and returns to <code>capture-required</code> until a new contract is captured, reviewed, and tested. Wrench does not switch to a browser fallback silently.</p></details>
+            <details><summary>Why does Wrench refuse to retry some writes?</summary><p>If a request left the machine and its response was lost, the effect may already exist. Wrench retains that uncertainty and reconciles it from separately obtained evidence.</p></details>
+          </div>
+        </section>
+
+        <section aria-labelledby="final-title" class="section final-section">
+          <div><p class="eyebrow">Bring the intelligence</p><h2 id="final-title">Give it better boundaries.</h2></div>
+          <div class="action-row">
+            <a class="button button-primary" href="#start">Install Wrench</a>
+            <a
+              class="button button-secondary"
+              data-analytics-event="project link opened"
+              data-analytics-id="final-source"
+              data-analytics-kind="repository"
+              href="https://github.com/hraness/wrench"
+            >Read the source <span aria-hidden="true">↗</span></a>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · Built for agents that benefit from smaller, stronger boundaries.</p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle, Core Web Vitals, and the two GitHub links. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>
