@@ -77,7 +77,8 @@ type PrivateStateBatchReadFaultForTest =
   | "replace-directory-after-bind";
 type PrivateStateCasFaultForTest =
   | "fail-after-cas-commit"
-  | "pause-after-cas-claim";
+  | "pause-after-cas-claim"
+  | "pause-after-mutation-claim-read";
 type StateHelperFaultForTest =
   | EmptyDirectoryRemovalRaceForTest
   | PrivateStateBatchReadFaultForTest
@@ -738,6 +739,7 @@ function runStateHelper(
             || faultForTest === "replace-target-after-validation"
             ? { WRENCH_TEST_EMPTY_DIRECTORY_REMOVAL_RACE: faultForTest }
             : faultForTest === "pause-after-cas-claim"
+                || faultForTest === "pause-after-mutation-claim-read"
                 || faultForTest === "fail-after-cas-commit"
               ? { WRENCH_TEST_CAS_FAULT: faultForTest }
               : { WRENCH_TEST_BATCH_READ_FAULT: faultForTest }),
@@ -749,6 +751,7 @@ function runStateHelper(
       : 180 * 1024 * 1024,
     shell: false,
     timeout: faultForTest === "pause-after-cas-claim"
+      || faultForTest === "pause-after-mutation-claim-read"
       ? TEST_STATE_HELPER_TIMEOUT_MS
       : 30_000,
     windowsHide: true,
@@ -1669,6 +1672,8 @@ export function writePrivateJsonIfUnchanged(
     readonly maximumExpectedCurrentBytes?: number;
     /** Test-only seam that pauses the winning helper after exclusive admission. */
     readonly pauseAfterClaimForTest?: boolean;
+    /** Test-only seam that pauses after reading a competing mutation claim. */
+    readonly pauseAfterMutationClaimReadForTest?: boolean;
     /** Test-only seam that reports failure after the replacement is durable. */
     readonly failAfterCommitForTest?: boolean;
   },
@@ -1688,6 +1693,7 @@ export function writePrivateJsonIfUnchanged(
   }
   if (
     (options.pauseAfterClaimForTest === true
+      || options.pauseAfterMutationClaimReadForTest === true
       || options.failAfterCommitForTest === true)
     && process.env.NODE_ENV !== "test"
   ) {
@@ -1719,9 +1725,11 @@ export function writePrivateJsonIfUnchanged(
       false,
       options.pauseAfterClaimForTest === true
         ? "pause-after-cas-claim"
-        : options.failAfterCommitForTest === true
-          ? "fail-after-cas-commit"
-          : undefined,
+        : options.pauseAfterMutationClaimReadForTest === true
+          ? "pause-after-mutation-claim-read"
+          : options.failAfterCommitForTest === true
+            ? "fail-after-cas-commit"
+            : undefined,
     );
     return true;
   } catch (error) {

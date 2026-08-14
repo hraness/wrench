@@ -69,6 +69,7 @@ const casOverlapFaultForTest = process.env.NODE_ENV === "test"
   ? process.env.WRENCH_TEST_CAS_FAULT
   : undefined;
 const TEST_BARRIER_TIMEOUT_MS = 90_000;
+let pausedAfterStateMutationClaimReadForTest = false;
 const writeTemporaryFaultForTest = process.env.NODE_ENV === "test"
   ? process.env.WRENCH_TEST_WRITE_TEMP_FAULT
   : undefined;
@@ -98,6 +99,10 @@ type StateMutationStageSnapshot = {
   readonly ctimeNs: bigint;
   readonly mode: bigint;
 };
+const stateMutationClaimSnapshotMoved = Symbol(
+  "state-mutation-claim-snapshot-moved",
+);
+type StateMutationClaimSnapshotMoved = typeof stateMutationClaimSnapshotMoved;
 type DirectoryEntry = {
   readonly name: string;
   readonly kind: "file" | "directory" | "symbolic-link" | "other";
@@ -1138,7 +1143,25 @@ function fileName(segments: readonly string[]): string {
   return name;
 }
 
-function readStablePrivateFile(descriptor: number, maximumBytes: number): Buffer {
+class StateFileChangedWhileReadError extends Error {
+  readonly before: BigIntStats;
+  readonly after: BigIntStats;
+
+  constructor(
+    before: BigIntStats,
+    after: BigIntStats,
+  ) {
+    super("state file changed while it was read");
+    this.before = before;
+    this.after = after;
+  }
+}
+
+function readStablePrivateFile(
+  descriptor: number,
+  maximumBytes: number,
+  afterReadForTest?: () => void,
+): Buffer {
   const before = fstatSync(descriptor, { bigint: true });
   if (
     !before.isFile()
@@ -1149,6 +1172,7 @@ function readStablePrivateFile(descriptor: number, maximumBytes: number): Buffer
     throw new Error("state file is not a bounded private owned file");
   }
   const content = readDescriptorBounded(descriptor, maximumBytes);
+  afterReadForTest?.();
   const after: BigIntStats = fstatSync(descriptor, { bigint: true });
   if (
     !sameIdentity(identity(before), identity(after))
@@ -1157,7 +1181,7 @@ function readStablePrivateFile(descriptor: number, maximumBytes: number): Buffer
     || before.ctimeNs !== after.ctimeNs
     || before.mode !== after.mode
   ) {
-    throw new Error("state file changed while it was read");
+    throw new StateFileChangedWhileReadError(before, after);
   }
   return content;
 }
@@ -1271,11 +1295,88 @@ function parseStateMutationClaim(
   return claim;
 }
 
+function stateMutationClaimLifecycleMovedDuringRead(
+  name: string,
+  before: BigIntStats,
+  after: BigIntStats,
+): boolean {
+  if (
+    !before.isFile()
+    || !after.isFile()
+    || !ownedByCurrentUser(before)
+    || !ownedByCurrentUser(after)
+    || (before.mode & 0o077n) !== 0n
+    || (after.mode & 0o077n) !== 0n
+    || !sameIdentity(identity(before), identity(after))
+    || before.size !== after.size
+    || before.mtimeNs !== after.mtimeNs
+    || before.mode !== after.mode
+    || before.uid !== after.uid
+    || before.gid !== after.gid
+    || before.nlink !== 1n
+    || (after.nlink !== 1n && after.nlink !== 0n)
+    || before.ctimeNs === after.ctimeNs
+  ) return false;
+  try {
+    lstatSync(name);
+    return false;
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return true;
+    throw error;
+  }
+}
+
+function pauseAfterStateMutationClaimReadForTest(): void {
+  if (
+    casOverlapFaultForTest !== "pause-after-mutation-claim-read"
+    || pausedAfterStateMutationClaimReadForTest
+  ) return;
+  pausedAfterStateMutationClaimReadForTest = true;
+  const readyName = ".wrench-test-claim-read-ready";
+  const releaseName = ".wrench-test-claim-read-release";
+  const descriptor = openSync(
+    readyName,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    0o600,
+  );
+  try {
+    fchmodSync(descriptor, 0o600);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  syncDirectory(".");
+  const deadline = Date.now() + TEST_BARRIER_TIMEOUT_MS;
+  for (;;) {
+    try {
+      const release = lstatSync(releaseName);
+      if (
+        release.isSymbolicLink()
+        || !release.isFile()
+        || !ownedByCurrentUser(release)
+        || (release.mode & 0o077) !== 0
+      ) {
+        throw new Error("state claim-read test release is not one private file");
+      }
+      break;
+    } catch (error) {
+      if (!hasCode(error, "ENOENT")) throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("state claim-read overlap test timed out");
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  unlinkSync(readyName);
+  unlinkSync(releaseName);
+  syncDirectory(".");
+}
+
 function readStateMutationClaim(
   name: string,
   targetSha256: string,
   claimId: string,
-): StateMutationClaim | null {
+): StateMutationClaim | StateMutationClaimSnapshotMoved | null {
   let descriptor: number;
   try {
     descriptor = openPrivateFileForRead(name);
@@ -1284,11 +1385,27 @@ function readStateMutationClaim(
     throw error;
   }
   try {
-    return parseStateMutationClaim(
-      readStablePrivateFile(descriptor, 4 * 1024),
-      targetSha256,
-      claimId,
-    );
+    try {
+      return parseStateMutationClaim(
+        readStablePrivateFile(
+          descriptor,
+          4 * 1024,
+          pauseAfterStateMutationClaimReadForTest,
+        ),
+        targetSha256,
+        claimId,
+      );
+    } catch (error) {
+      if (
+        error instanceof StateFileChangedWhileReadError
+        && stateMutationClaimLifecycleMovedDuringRead(
+          name,
+          error.before,
+          error.after,
+        )
+      ) return stateMutationClaimSnapshotMoved;
+      throw error;
+    }
   } finally {
     closeSync(descriptor);
   }
@@ -1483,6 +1600,10 @@ function listLiveStateMutationClaims(
         parsedName.claimId,
       );
       if (claim === null) {
+        retry = true;
+        break;
+      }
+      if (claim === stateMutationClaimSnapshotMoved) {
         retry = true;
         break;
       }
