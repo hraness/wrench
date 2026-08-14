@@ -22,10 +22,11 @@ Project site: [wrench.rip](https://wrench.rip)
 
 ## Install
 
-Pin the public repository to the immutable `v0.6.1` tag:
+Pin the public repository to the immutable `v0.7.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.6.1
+bun add --global github:hraness/wrench#v0.7.0
+wrench adapter sync-bundled --json
 wrench doctor
 ```
 
@@ -33,6 +34,10 @@ Wrench requires Bun 1.3.14. It runs on macOS and Linux. `wrench doctor`
 reports capture, media, authentication, provider, plugin, and durable-recovery
 readiness. Provider-specific commands remain unavailable until their exact
 local dependency and auth contracts are ready.
+
+`wrench adapter sync-bundled` atomically installs the reviewed data manifests
+shipped by that exact package version. It upgrades only an exact current or
+archived bundled baseline and preserves any independently modified install.
 
 The public manifest projects each closure-attested package as an exact runtime
 dependency. Standalone validation installs without the repository lock, then
@@ -44,7 +49,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.6.1
+bun add github:hraness/wrench#v0.7.0
 ```
 
 ```ts
@@ -293,6 +298,45 @@ provider-hosted attachment endpoints remain independently bounded to 100 MiB
 per file, so profile, thread, and attachment responses never share one broad
 memory allowance.
 
+### X Article drafts
+
+X Article drafts use the documented OAuth API. Create a current-user-owned
+mode-0600 token document whose stable numeric subject and sorted scopes exactly
+match the Wrench auth locator:
+
+```json
+{
+  "schemaVersion": 1,
+  "provider": "x",
+  "subject": "123456789",
+  "scopes": ["tweet.read", "tweet.write", "users.read"],
+  "accessToken": "replace-with-the-access-token",
+  "expiresAt": "2099-01-01T00:00:00.000Z"
+}
+```
+
+```sh
+wrench adapter sync-bundled --json
+wrench capabilities x --json
+
+wrench auth add x-api --oauth-provider x \
+  --token-file /absolute/private/x-token.json \
+  --scopes tweet.read,tweet.write,users.read \
+  --subject 123456789
+
+wrench x articles.publish \
+  --input '{"title":"Reviewed title","body":"Reviewed body","draft_only":true}' \
+  --auth x-api --preview --json
+
+wrench confirm <preview-digest> --json
+```
+
+The current Article contract treats `draft_only: true` as a literal safety
+boundary: it creates the draft and returns without calling X's publish
+endpoint. The operation remains R3 because omitting that flag preserves the
+separate publish behavior. Confirm only an exact version-2 preview containing
+the flag, then require `published: false` and `mode: "draft"` in the result.
+
 ## Normalized omni views
 
 The omni layer materializes selected exact inbox snapshots into a strict shared
@@ -389,7 +433,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.6.1/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.7.0/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

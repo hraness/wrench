@@ -2056,6 +2056,25 @@ async function runCommand(
     }
     return 0;
   }
+  if (arguments_.command === "adapter-sync-bundled") {
+    const { syncBundledAdapters } = await import(
+      "./scripts/sync-bundled-adapters"
+    );
+    const result = await syncBundledAdapters({
+      environment,
+      output: arguments_.json
+        ? { stdout: () => {}, stderr: output.stderr }
+        : output,
+    });
+    if (arguments_.json) {
+      print(output, { ok: true, ...result }, true);
+    } else {
+      output.stdout(
+        `Bundled adapter generation ${safe(result.commitId)} installed ${String(result.installed)} and preserved ${String(result.preserved)}.\n`,
+      );
+    }
+    return 0;
+  }
   if (arguments_.command === "adapter-validate") {
     const result = readManifestFile(
       resolve(arguments_.path),

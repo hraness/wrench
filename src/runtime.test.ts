@@ -1412,7 +1412,7 @@ describe("encrypted confirmation plans", () => {
         digest: stored.digest,
         createdAt: stored.plan.createdAt,
         expiresAt: stored.plan.expiresAt,
-        adapter: { id: "x", version: "1.0.0" },
+        adapter: { id: "x", version: "1.1.0" },
         operation: "posts.publish",
         risk: "R3",
         auth: { id: "x-official", kind: "oauth-token-file" },

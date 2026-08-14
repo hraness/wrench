@@ -5,6 +5,7 @@ import {
   type ProviderContract,
   type ProviderCoverage,
 } from "./provider-contract-definitions";
+import type * as XProviderContracts from "./provider-contract-definitions-x";
 import type {
   OfficialProviderId,
   OperationInput,
@@ -14,6 +15,22 @@ import type { ProviderApiPluginOperationV1 } from "./provider-plugin";
 import type { ProviderPluginRegistry } from "./provider-plugin-registry";
 
 export type { ProviderContract, ProviderCoverage };
+
+type XArticlePublishV2Contract = Extract<
+  (typeof XProviderContracts.xProviderContractDefinitions)[number],
+  { readonly operation: "articles.publish"; readonly contractVersion: 2 }
+>;
+
+type ProjectedProviderContractCatalog = Readonly<
+  Record<string, Readonly<Record<string, ProviderContract>>>
+> & Omit<typeof providerContractDefinitions, "x"> & {
+  readonly x: Omit<
+    typeof providerContractDefinitions.x,
+    "articles.publish"
+  > & {
+    readonly "articles.publish": XArticlePublishV2Contract;
+  };
+};
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
@@ -136,9 +153,7 @@ function projectProviderRegistry(
 
 export function projectProviderContracts(
   registry: ProviderPluginRegistry,
-): Readonly<
-  Record<string, Readonly<Record<string, ProviderContract>>>
-> & typeof providerContractDefinitions {
+): ProjectedProviderContractCatalog {
   return Object.freeze(Object.fromEntries(
     registry.list().flatMap((plugin) =>
   plugin.bindings
@@ -147,9 +162,7 @@ export function projectProviderContracts(
       binding.surfaceId,
       projectProviderRegistry(binding.surfaceId, registry),
     ])),
-  )) as Readonly<
-    Record<string, Readonly<Record<string, ProviderContract>>>
-  > & typeof providerContractDefinitions;
+  )) as ProjectedProviderContractCatalog;
 }
 
 export function getProviderContract(

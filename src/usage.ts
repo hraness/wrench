@@ -74,6 +74,7 @@ export const wrenchUsage = `Usage:
 
   wrench adapter init <id> (--origin <https-origin> | --platform <surface-id>)
                              --output <directory> [--force]
+  wrench adapter sync-bundled [--json]                 Install or safely upgrade reviewed bundled manifests
   wrench adapter scaffold [plugin-scaffold-options]  Compatibility alias for 'wrench plugin scaffold'
   wrench adapter validate <manifest> [--json]
   wrench adapter install <manifest> [--force | --upgrade-from <prior-bundled-manifest>...]

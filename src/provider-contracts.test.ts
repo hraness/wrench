@@ -61,14 +61,24 @@ describe("official provider contract registry", () => {
       }
       expect(Object.keys(contracts).sort()).toEqual([...advertised].sort());
       for (const [operation, contract] of Object.entries(contracts)) {
-        expect(contract).toMatchObject({ provider, operation, contractVersion: 1 });
-        expect(getProviderContract(recipe(provider, operation as SemanticOperationName))).toBe(contract);
+        expect(contract).toMatchObject({ provider, operation });
+        expect(getProviderContract(recipe(
+          provider,
+          operation as SemanticOperationName,
+          contract.contractVersion,
+        ))).toBe(contract);
         expect(contract.requiredScopeSets.length).toBeGreaterThan(0);
         expect(contract.requiredScopeSets.every((set) => set.length > 0 && new Set(set).size === set.length)).toBeTrue();
         expect(contract.coverage.length).toBeGreaterThan(0);
       }
     }
     expect("likes.set" in providerContracts.x).toBeFalse();
+    expect(providerContracts.x["articles.publish"].contractVersion).toBe(2);
+    expect(getProviderContract(recipe("x", "articles.publish", 1))).toMatchObject({
+      provider: "x",
+      operation: "articles.publish",
+      contractVersion: 1,
+    });
   });
 
   test("hashes canonical contract semantics deterministically", () => {

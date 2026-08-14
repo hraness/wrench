@@ -239,6 +239,25 @@ async function exerciseCli(
   const doctor = await runCli(target, "doctor", ["doctor", "--json"], [0, 3]);
   assertDoctorSchema(`${target.label} doctor`, doctor.stdout);
 
+  const adapterSync = await runCli(
+    target,
+    "adapter sync-bundled",
+    ["adapter", "sync-bundled", "--json"],
+  );
+  const adapterSyncResult = parseJsonObject(
+    `${target.label} adapter sync-bundled`,
+    adapterSync.stdout,
+  );
+  requireKeys(`${target.label} adapter sync-bundled`, adapterSyncResult, [
+    "commitId",
+    "installed",
+    "ok",
+    "preserved",
+  ]);
+  if (adapterSyncResult.ok !== true) {
+    throw new Error(`${target.label} adapter sync-bundled did not succeed`);
+  }
+
   const capabilities = await runCli(target, "capabilities", ["capabilities", "--json"]);
   parseJsonObject(`${target.label} capabilities`, capabilities.stdout);
 
