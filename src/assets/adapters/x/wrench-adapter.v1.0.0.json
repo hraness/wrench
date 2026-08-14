@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "id": "x",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "displayName": "X (Official API)",
   "surfaceId": "x",
   "origins": [
@@ -648,7 +648,7 @@
       }
     },
     "articles.publish": {
-      "description": "Use the code-owned official x API contract for articles.publish. optional official image upload; POST /2/articles/draft; when draft_only is true stop with an unpublished draft, otherwise POST /2/articles/{id}/publish; account eligibility required",
+      "description": "Use the code-owned official x API contract for articles.publish. optional official image upload; POST /2/articles/draft; POST /2/articles/{id}/publish; account eligibility required",
       "risk": "R3",
       "sideEffect": "Mutates x through the exact confirmed articles.publish official API contract.",
       "idempotency": "local-at-most-once",
@@ -681,13 +681,6 @@
             "description": "Optional accessibility text applied to the reviewed Article cover",
             "minLength": 1,
             "maxLength": 1000
-          },
-          "draft_only": {
-            "type": "boolean",
-            "description": "When true, save the reviewed Article as a private draft and never call the publish endpoint",
-            "enum": [
-              true
-            ]
           }
         },
         "required": [
@@ -698,7 +691,7 @@
       "provider": {
         "provider": "x",
         "action": "articles.publish",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }

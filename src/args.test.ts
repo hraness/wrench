@@ -174,6 +174,10 @@ describe("wrench CLI grammar", () => {
       ok: true,
       value: { command: "adapter-validate", path: "./wrench-adapter.json", json: true },
     });
+    expect(parseWrenchArguments(["adapter", "sync-bundled", "--json"])).toEqual({
+      ok: true,
+      value: { command: "adapter-sync-bundled", json: true },
+    });
     expect(parseWrenchArguments(["adapter", "install", "./wrench-adapter.json", "--force"])).toEqual({
       ok: true,
       value: { command: "adapter-install", path: "./wrench-adapter.json", force: true },

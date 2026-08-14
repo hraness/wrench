@@ -73,7 +73,7 @@ function createHarness(
   const recipe: ProviderRecipe = {
     provider: "x",
     action,
-    contractVersion: 1,
+    contractVersion: contract.contractVersion,
     timeoutMs: options.timeoutMs ?? 30_000,
     maxOutputBytes: 1024 * 1024,
   };
@@ -1034,6 +1034,67 @@ describe("official X writes", () => {
       url: "https://x.com/i/web/status/802",
     });
     expect(harness.dispatches()).toBe(1);
+  });
+
+  test("saves an Article draft without issuing a publish request", async () => {
+    const captured = captureFetch([
+      json({ data: { id: "42", username: "me" } }),
+      json({ data: { id: "805", title: "Private draft" } }, 201),
+    ]);
+    const harness = createHarness("articles.publish", {
+      title: "Private draft",
+      body: "First paragraph\n\nSecond paragraph",
+      draft_only: true,
+    }, captured.fetch, { subject: "42" });
+
+    await executeXProvider(harness.context);
+
+    expect(captured.requests.map((request) => [request.init.method, request.url.pathname])).toEqual([
+      ["GET", "/2/users/me"],
+      ["POST", "/2/articles/draft"],
+    ]);
+    expect(requestJson(captured.requests[1] as RequestCapture)).toEqual({
+      title: "Private draft",
+      content_state: {
+        blocks: [
+          { type: "unstyled", text: "First paragraph", data: {}, entity_ranges: [], inline_style_ranges: [] },
+          { type: "unstyled", text: "", data: {}, entity_ranges: [], inline_style_ranges: [] },
+          { type: "unstyled", text: "Second paragraph", data: {}, entity_ranges: [], inline_style_ranges: [] },
+        ],
+        entities: [],
+      },
+    });
+    expect(harness.output()).toMatchObject({
+      provider: "x",
+      operation: "articles.publish",
+      published: false,
+      mode: "draft",
+      draftId: "805",
+    });
+    expect(harness.finalUrl()).toBeNull();
+    expect(harness.dispatches()).toBe(1);
+  });
+
+  test("rejects draft_only on the retained Article contract version 1", async () => {
+    const captured = captureFetch([]);
+    const harness = createHarness("articles.publish", {
+      title: "Private draft",
+      body: "Reviewed body",
+      draft_only: true,
+    }, captured.fetch, { subject: "42" });
+    const versionOneContext = {
+      ...harness.context,
+      recipe: {
+        ...harness.context.recipe,
+        contractVersion: 1,
+      },
+    };
+
+    await expect(executeXProvider(versionOneContext)).rejects.toThrow(
+      "input.draft_only requires official X Article contract version 2",
+    );
+    expect(captured.requests).toHaveLength(0);
+    expect(harness.dispatches()).toBe(0);
   });
 
   test("fails a write response that contains provider errors even when data is present", async () => {

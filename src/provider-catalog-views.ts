@@ -32,7 +32,9 @@ export function projectOfficialProviderOperations(
   return Object.freeze(Object.fromEntries(
     providerApiBindings(registry).map((binding) => [
       binding.surfaceId,
-      Object.freeze(binding.operations.map((operation) => operation.name)),
+      Object.freeze([
+        ...new Set(binding.operations.map((operation) => operation.name)),
+      ]),
     ]),
   ));
 }

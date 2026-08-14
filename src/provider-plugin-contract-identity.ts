@@ -391,6 +391,7 @@ const identities = Object.freeze({
       development: "e5f5982e62b415ca7b4cfe314996377295d6bbc65574ab3e1b10639649418490",
     },
     reviewedClosureSha256: [
+      "b3c899ec08e9f48671af1dc838914ca0dfce54c2f46904ab6b3eeea09cacb623",
       "b6e2b143fea44019c11a5ade5a555f5d5683548630dd6cbaa810c43c3fa0c471",
       "f5e693393054655fe0b10eb7fcc468a7251f6a36eb02b4184df11ddcabbf2ae4",
       "c023ddd13cfe36149c93228d94c034abbf8b00c79143493420c3a9a0f9127a42",

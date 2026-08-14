@@ -1,6 +1,6 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "A bring-your-own-agent CLI and TypeScript SDK for browser sessions, capture, and bounded provider operations.",
   "license": "MIT",
   "type": "module",
@@ -86,6 +86,7 @@
     "src/assets/adapters/whatsapp/wrench-web-adapter.v1.0.0.json",
     "src/assets/adapters/whatsapp/wrench-web-adapter.v1.1.0.json",
     "src/assets/adapters/x/wrench-adapter.json",
+    "src/assets/adapters/x/wrench-adapter.v1.0.0.json",
     "src/assets/adapters/x/wrench-web-adapter.json",
     "src/assets/adapters/youtube/wrench-web-adapter.json",
     "src/assets/code-owned-provider-template/plugin.test.ts.template",
@@ -166,6 +167,7 @@
     "src/provider-catalog-views.ts",
     "src/provider-context.ts",
     "src/provider-contract-definitions.ts",
+    "src/provider-contract-definitions-x.ts",
     "src/provider-contract-input-gmail.ts",
     "src/provider-contract-input-linkedin.ts",
     "src/provider-contract-input-x.ts",

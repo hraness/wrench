@@ -7,6 +7,7 @@ First-party traffic is not the same as a documented public API. Use this local c
 ## Contents
 
 - [Install and inspect](#install-and-inspect)
+- [Save an official Article draft](#save-an-official-article-draft)
 - [Configure and bind the signed-in realm](#configure-and-bind-the-signed-in-realm)
 - [Use observed R1 contracts](#use-observed-r1-contracts)
 - [Resolve current X material](#resolve-current-x-material)
@@ -26,6 +27,25 @@ wrench capabilities x-web --json
 `observed` means the exact code-owned contract version may execute. `capture-required` performs no request and never opens a browser-action fallback.
 
 The separate `x` adapter uses X's documented OAuth API. It covers documented reverse-chronological/user/mentions/List/recent-search/bookmark reads and approved posting, reply, thread, repost, bookmark, Article, media, and legacy-DM surfaces; it never supplies For You. Encrypted X Chat remains a separate cryptographic contract. Keep these transports and auth realms distinct, and never switch among them after preview or because one lacks coverage.
+
+## Save an official Article draft
+
+Use the documented OAuth adapter when the intent is to save an X Article without publishing it. Contract version 2 accepts the literal `draft_only: true`, calls the draft endpoint, and returns before any publish request. Omitting the flag preserves the publishing operation, so require it in every draft workflow and inspect the preview before confirmation.
+
+Configure the official `x` OAuth locator with the exact mode-0600 token document, stable numeric subject, and sorted scopes documented in the public Wrench README. The signed-in cookie realm below belongs only to `x-web` and cannot authorize this operation.
+
+```sh
+wrench adapter sync-bundled --json
+wrench capabilities x --json
+
+wrench x articles.publish \
+  --input '{"title":"Reviewed title","body":"Reviewed body","draft_only":true}' \
+  --auth x-api --preview --json
+
+wrench confirm <preview-digest> --json
+```
+
+The operation remains R3 because the same semantic operation can publish when the flag is absent. Confirm only an exact preview whose input includes `draft_only: true`, whose dispatch contract is version 2, and whose body is the final reviewed draft. The result must report `published: false` and `mode: "draft"`; never treat a returned draft ID as permission to call the separate publish endpoint.
 
 ## Configure and bind the signed-in realm
 
@@ -108,12 +128,12 @@ Media remains capture-required where the exact upload/finalize/attach exchange h
 
 ## Other capture-required operations
 
-The current registry keeps these unavailable:
+The current `x-web` registry keeps these unavailable:
 
 - `messaging.list` and `messaging.read` (`R1`) until verified X Chat key recovery, plaintext projection, and acknowledgement-free handling are installed;
 - `messaging.send` (`R3`) until its exact current mutation, conversation/user target, response, and media path are captured;
 - `articles.read` (`R1`) until the entitlement-specific detail read is captured;
-- `articles.publish` (`R3`) until editor, cover upload, publish response, and account/article bindings are captured.
+- `x-web articles.publish` (`R3`) until editor, cover upload, publish response, and account/article bindings are captured.
 
 No operation may be guessed from downloaded bundles or copied network snippets. A capture-required DM send must not type into X's message composer.
 

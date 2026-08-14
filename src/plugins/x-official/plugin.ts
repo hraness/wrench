@@ -1,4 +1,4 @@
-import { providerContractDefinitions } from "../../provider-contract-definitions";
+import { xProviderContractDefinitions } from "../../provider-contract-definitions-x";
 import { xProviderConditionalInputIssues } from "../../provider-contract-input-x";
 import {
   defineProviderPlugin,
@@ -21,7 +21,13 @@ export const xOfficialPlugin = defineProviderPlugin({
   version: "1.0.0",
   displayName: "X Official API",
   sourceKind: "built-in",
-  implementationSources: officialImplementationSources(import.meta.url, "x"),
+  implementationSources: Object.freeze([
+    ...officialImplementationSources(import.meta.url, "x"),
+    Object.freeze({
+      label: "contracts/x-versioned.ts",
+      url: new URL("../../provider-contract-definitions-x.ts", import.meta.url),
+    }),
+  ]),
   bindings: [{
     transport: "provider-api",
     surfaceId: "x",
@@ -30,9 +36,9 @@ export const xOfficialPlugin = defineProviderPlugin({
     protectedHostnameFamilies: ["twitter.com", "x.com"],
     authKinds: oauthTokenAuthKinds,
     operations: officialContractOperations(
-      Object.values(providerContractDefinitions.x),
+      xProviderContractDefinitions,
       {
-        semanticIdentity: "2e0c82c2a43c84d5acd79ae734943e2bc8290f8580d3f2435d979bb92f574c8d",
+        semanticIdentity: "efdfe84cea39e04c98800486f476e31c678e43ae93eb83eb47070c7e66b3d6d8",
         validateInput: (contract, input) =>
           xProviderConditionalInputIssues(contract.operation, input),
         omni: {

@@ -1757,6 +1757,10 @@ function draftBlocks(body: string): readonly JsonRecord[] {
 async function executeArticlePublish(context: ProviderActionContext): Promise<void> {
   const title = inputString(context, "title");
   const body = inputString(context, "body");
+  const draftOnly = optionalInputBoolean(context, "draft_only") ?? false;
+  if (draftOnly && context.recipe.contractVersion !== 2) {
+    throw new Error("input.draft_only requires official X Article contract version 2");
+  }
   const covers = await context.resolveFiles("cover");
   if (covers.length > 1) throw new Error("official X Articles support one cover image");
   const cover = covers[0];
@@ -1804,10 +1808,12 @@ async function executeArticlePublish(context: ProviderActionContext): Promise<vo
       provider: "x",
       operation: "articles.publish",
       published: false,
+      mode: draftOnly ? "draft" : "publish",
       draftId: articleId,
       draft,
       uploadedCover: uploaded,
     });
+    if (draftOnly) return;
     const publishResponse = await request(
       context,
       `${X_API_ORIGIN}/2/articles/${encodedSegment(articleId)}/publish`,

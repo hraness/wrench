@@ -129,6 +129,7 @@ export type WrenchArguments =
       readonly json: boolean;
     }
   | { readonly command: "adapter-validate"; readonly path: string; readonly json: boolean }
+  | { readonly command: "adapter-sync-bundled"; readonly json: boolean }
   | {
       readonly command: "adapter-install";
       readonly path: string;
@@ -1046,6 +1047,12 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
   }
   if (first === "adapter") {
     const subcommand = raw[1];
+    if (subcommand === "sync-bundled") {
+      const json = simpleJsonOptions(raw.slice(2), "adapter sync-bundled");
+      return typeof json === "boolean"
+        ? { ok: true, value: { command: "adapter-sync-bundled", json } }
+        : json;
+    }
     if (subcommand === "scaffold") {
       return parsePluginScaffoldArguments(raw.slice(2), "adapter scaffold");
     }
@@ -1123,7 +1130,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       const parsed = optionValues(raw.slice(3), [], ["--yes"]);
       return isFailure(parsed) ? parsed : { ok: true, value: { command: "adapter-remove", id, yes: parsed.booleans.has("--yes") } };
     }
-    return { ok: false, message: "adapter requires init, validate, install, remove, or the scaffold compatibility alias" };
+    return { ok: false, message: "adapter requires sync-bundled, init, validate, install, remove, or the scaffold compatibility alias" };
   }
   if (first === "derive") {
     const subcommand = raw[1];

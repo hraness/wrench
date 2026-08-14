@@ -865,6 +865,39 @@ describe("wrench manifest parsing", () => {
     }
   });
 
+  test("ships the current X Article draft-only contract with an exact upgrade baseline", () => {
+    const currentValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "x", "wrench-adapter.json"),
+      "utf8",
+    )) as unknown;
+    const current = parseRuntimeManifest(currentValue);
+    expect(current.ok).toBeTrue();
+    if (!current.ok) return;
+    expect(current.value.version).toBe("1.1.0");
+    const article = current.value.operations["articles.publish"];
+    expect(article !== undefined && isProviderOperation(article)).toBeTrue();
+    if (article === undefined || !isProviderOperation(article)) return;
+    expect(article.provider.contractVersion).toBe(2);
+    expect(article.input.properties.draft_only).toMatchObject({
+      type: "boolean",
+      enum: [true],
+    });
+
+    const priorValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "x", "wrench-adapter.v1.0.0.json"),
+      "utf8",
+    )) as unknown;
+    const prior = parseDiagnosticManifest(priorValue);
+    expect(prior.ok).toBeTrue();
+    if (!prior.ok) return;
+    const priorArticle = prior.value.operations["articles.publish"];
+    expect(prior.value.version).toBe("1.0.0");
+    expect(priorArticle !== undefined && isProviderOperation(priorArticle)).toBeTrue();
+    if (priorArticle === undefined || !isProviderOperation(priorArticle)) return;
+    expect(priorArticle.provider.contractVersion).toBe(1);
+    expect(priorArticle.input.properties.draft_only).toBeUndefined();
+  });
+
   test("ships only an inert generic capture reservation and rejects retired DOM recipes at runtime boundaries", () => {
     const value = JSON.parse(readFileSync(join(import.meta.dir, "assets", "adapter-template", "wrench-adapter.json"), "utf8")) as unknown;
     const result = parseManifest(value);
