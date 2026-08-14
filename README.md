@@ -18,7 +18,7 @@ wrench capabilities
 wrench plugin list
 ```
 
-Project site: [wrench.rip](https://wrench.rip)
+Project site: [hraness.com/wrench](https://hraness.com/wrench)
 
 ## Install
 
