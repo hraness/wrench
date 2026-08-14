@@ -1,7 +1,7 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.7.0",
-  "description": "A bring-your-own-agent CLI and TypeScript SDK for browser sessions, capture, and bounded provider operations.",
+  "version": "0.7.1",
+  "description": "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
@@ -15,13 +15,20 @@
     "type": "git",
     "url": "git+https://github.com/hraness/wrench.git"
   },
-  "homepage": "https://hraness.com/wrench",
+  "homepage": "https://wrench.rip",
   "bugs": {
     "url": "https://github.com/hraness/wrench/issues"
   },
   "keywords": [
+    "ai-agents",
+    "coding-agents",
     "agent-tools",
+    "typescript",
+    "typescript-sdk",
+    "cli",
+    "tool-calling",
     "web-capture",
+    "web-automation",
     "knowledge-base",
     "media-archive",
     "provider-plugins",

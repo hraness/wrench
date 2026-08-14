@@ -1,16 +1,23 @@
 # Wrench
 
-Wrench is a bring-your-own-agent CLI and TypeScript SDK. It gives coding agents
-a standard interface for operating browser sessions through recorded private
-APIs. It records the private APIs behind a browser workflow, turns them into
-typed plugins, and exposes bounded semantic operations without returning raw
-browser access.
+[![Wrench: precise web capabilities for AI agents](https://wrench.rip/og.png)](https://wrench.rip)
 
-Wrench does not bundle an agent runtime or application. Use the CLI from any
-agent that can run commands, or import the SDK from agent code. The local-first
-Bun package also provides durable web capture, encrypted read projections,
-normalized cross-provider views, verified media archives, and bounded provider
-plugins.
+**Give your agent a precise handle on the web.**
+
+Wrench is an open-source, bring-your-own-agent CLI and TypeScript SDK. It is the
+capability and custody layer beneath any AI agent that can run a command: a way
+to capture pages, preserve media, query encrypted snapshots, and use reviewed
+account capabilities without handing the model a mouse, keyboard, cookie jar,
+arbitrary HTTP client, or every signed-in tab.
+
+The caller asks for a named outcome such as `messaging.list`. Wrench binds that
+operation to one exact provider, transport, account realm, contract version,
+implementation, and risk level. If those facts drift, the operation stops. It
+does not silently fall back to general browser control.
+
+Bring the model, planner, tool loop, approval interface, and application shell
+you prefer. Wrench supplies precise web capabilities with local custody and
+explicit evidence.
 
 ```sh
 wrench https://example.com/article
@@ -18,14 +25,46 @@ wrench capabilities
 wrench plugin list
 ```
 
-Project site: [hraness.com/wrench](https://hraness.com/wrench)
+[Project site](https://wrench.rip) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md)
+
+## What Wrench does
+
+- **Capture knowledge.** Turn a public URL into durable Markdown, inspect it
+  without saving, and search the knowledge you keep locally.
+- **Preserve media.** Archive one authorized, accessible, finite media item
+  with source bytes, requested derivatives, transcript, manifest, and SHA-256
+  integrity records.
+- **Read connected services.** Store validated account-bound reads as encrypted
+  exact-query snapshots, then load the last verified state without reopening a
+  browser or contacting the provider.
+- **Add one capability.** Turn a reviewed first-party exchange into a typed,
+  semantic operation with strict inputs, bounded outputs, and explicit trust.
+
+## Why Wrench is different
+
+- **Intent over mechanism.** Agents receive labeled operations, not credentials,
+  selectors, scripts, caller-selected endpoints, or unrestricted browser access.
+- **Exact identity.** Authenticated calls bind the provider, origin, transport,
+  account, contract, and implementation instead of relying on ambient state.
+- **Visible drift.** A changed origin, account proof, status, field, or response
+  shape returns to `capture-required` rather than guessing or changing tools.
+- **Local custody.** Archives remain inspectable and exact provider snapshots
+  remain encrypted. Verified cached reads can work without a provider roundtrip.
+- **Honest mutations.** Consequential writes require an exact preview and durable
+  dispatch evidence. An indeterminate write is reconciled and never blindly retried.
+- **Content-bound trust.** Portable plugin approval applies to one verified
+  content-addressed bundle, so changed code requires a new trust decision.
+
+Wrench complements browser automation, direct API clients, MCP, and agent
+frameworks. Those tools own interfaces, transports, models, and planning. Wrench
+owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
-Pin the public repository to the immutable `v0.7.0` tag:
+Pin the public repository to the immutable `v0.7.1` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.7.0
+bun add --global github:hraness/wrench#v0.7.1
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -49,7 +88,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.7.0
+bun add github:hraness/wrench#v0.7.1
 ```
 
 ```ts
@@ -433,7 +472,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.7.0/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.7.1/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation
