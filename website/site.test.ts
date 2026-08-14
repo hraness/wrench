@@ -85,7 +85,9 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('<a class="skip-link" href="#main">');
     expect(html.match(/data-analytics-event="project link opened"/gu)).toHaveLength(2);
     expect(html.match(new RegExp(`href="${REPOSITORY_URL}"`, "gu"))).toHaveLength(2);
+    expect(html).toContain("Privacy: cookieless PostHog analytics");
     expect(notFound).toContain('<meta name="robots" content="noindex, nofollow">');
+    expect(notFound).toContain("Privacy: this page uses cookieless, personless PostHog analytics");
     expect(robots).toBe(`User-agent: *\nAllow: /\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`);
     expect(sitemap).toContain(`<loc>${SITE_ORIGIN}/</loc>`);
     expect(sitemap).not.toContain("hraness.com");

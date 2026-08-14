@@ -69,10 +69,22 @@ type BrowserEvidence = Readonly<{
   referrer: string;
 }>;
 
-type PostHogQueue = unknown[] & {
+type PostHogCaptureOptions = Readonly<{
+  send_instantly: true;
+  transport: "sendBeacon";
+}>;
+
+type PostHogCaptureTarget = Readonly<{
+  capture?: (
+    event: string,
+    properties?: Readonly<Record<string, unknown>>,
+    options?: PostHogCaptureOptions,
+  ) => void;
+}>;
+
+type PostHogQueue = unknown[] & PostHogCaptureTarget & {
   __SV?: number;
   _i?: unknown[];
-  capture?: (event: string, properties?: Readonly<Record<string, unknown>>) => void;
   init?: (token: string, config: Readonly<Record<string, unknown>>, name?: string) => void;
   people?: unknown[] & { toString?: () => string };
   toString?: (stub?: number) => string;
@@ -299,6 +311,16 @@ export function createBrowserConfig(host: string, evidence: BrowserEvidence): Re
   };
 }
 
+export function captureProjectLink(
+  posthog: PostHogCaptureTarget,
+  properties: Readonly<Record<string, string>>,
+): void {
+  posthog.capture?.("project link opened", properties, {
+    send_instantly: true,
+    transport: "sendBeacon",
+  });
+}
+
 function stubMethod(target: PostHogQueue, method: string): void {
   target[method] = (...args: unknown[]) => target.push([method, ...args]);
 }
@@ -396,7 +418,7 @@ function initializeBrowserAnalytics(): void {
     } catch {
       // A malformed link contributes no destination dimensions.
     }
-    posthog.capture?.("project link opened", properties);
+    captureProjectLink(posthog, properties);
   });
 }
 

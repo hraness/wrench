@@ -759,6 +759,11 @@ code:not(pre code) {
   margin: 0;
 }
 
+.privacy-note {
+  line-height: 1.5;
+  max-width: 48rem;
+}
+
 .footer a {
   color: var(--dark-foreground);
 }
@@ -783,6 +788,12 @@ code:not(pre code) {
 
 .route-state .button {
   justify-self: start;
+}
+
+.route-state > .privacy-note {
+  font-size: 0.78rem;
+  margin: 1.25rem 0 0;
+  max-width: 40rem;
 }
 
 .visually-hidden {

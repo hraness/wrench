@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { createBrowserConfig, sanitizeCapture } from "./source/analytics";
+import {
+  captureProjectLink,
+  createBrowserConfig,
+  sanitizeCapture,
+} from "./source/analytics";
 
 const evidence = {
   href: "https://wrench.rip/?utm_source=private#fragment",
@@ -8,6 +12,27 @@ const evidence = {
 } as const;
 
 describe("Wrench browser analytics", () => {
+  test("sends repository interest immediately with an unload-safe transport", () => {
+    const captures: unknown[][] = [];
+    const properties = {
+      target_host: "github.com",
+      target_id: "hero-github",
+      target_kind: "repository",
+      target_path: "/hraness/wrench",
+    } as const;
+
+    captureProjectLink({
+      capture: (event, capturedProperties, options) => {
+        captures.push([event, capturedProperties, options]);
+      },
+    }, properties);
+
+    expect(captures).toEqual([["project link opened", properties, {
+      send_instantly: true,
+      transport: "sendBeacon",
+    }]]);
+  });
+
   test("keeps the shared cookieless and personless privacy posture", () => {
     const config = createBrowserConfig("https://us.i.posthog.com", evidence);
     expect(config).toMatchObject({
