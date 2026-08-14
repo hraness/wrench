@@ -280,6 +280,10 @@
     "LICENSE"
   ],
   "scripts": {
+    "website:build": "bun run website/build.ts",
+    "website:test": "bun test ./website",
+    "website:typecheck": "tsc --noEmit --project website/tsconfig.json",
+    "website:check": "bun run website:typecheck && bun run website:test && bun run website:build",
     "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts ./src/omni-client.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test --no-orphans --timeout 180000 --max-concurrency \"${GOMAXPROCS:-4}\" ./src --path-ignore-patterns='**/src/omni-runtime.test.ts' && bun test --no-orphans --timeout 180000 --max-concurrency 1 ./src/omni-runtime.test.ts",
@@ -287,7 +291,7 @@
     "accept:media:authenticated": "bun run scripts/media/authenticated-capture-acceptance.ts",
     "test:standalone": "bun run scripts/standalone-smoke.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check": "bun run typecheck && bun run build && bun run test:package && bun run test && bun run test:standalone",
+    "check": "bun run typecheck && bun run website:check && bun run build && bun run test:package && bun run test && bun run test:standalone",
     "prepack": "bun run check"
   },
   "dependencies": {
