@@ -11,8 +11,8 @@ import { webSessionContractDefinitions } from "../../web-session-contract-defini
 
 const operations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "f47814256dcb8aad7c1a6b67a870eec70c088c2833f6ebe569a4a3f2068d29f7",
-  { "articles.publish": [1], "likes.set": [1] },
+  "38b816f0c309d4768e48cc48fa4e6976c5a164422bd87bc56a4df9a028a61ada",
+  { "articles.publish": [1, 2], "likes.set": [1] },
   {
     "messaging.list": {
       state: "unsupported",
@@ -24,8 +24,33 @@ const operations = webSessionContractOperations(
     },
   },
 ).map((operation) => {
-  if (operation.name !== "content.save" && operation.name !== "likes.set") {
+  if (
+    operation.name !== "content.save"
+    && operation.name !== "likes.set"
+    && operation.name !== "articles.publish"
+  ) {
     return operation;
+  }
+  if (operation.name === "articles.publish") {
+    return Object.freeze({
+      ...operation,
+      reconciliation: Object.freeze({
+        kind: "boolean-desired-state" as const,
+        desiredState: (input: Readonly<Record<string, unknown>>): boolean => {
+          if (
+            input.draft_only !== true
+            || typeof input.draft_id !== "string"
+            || input.inline_images !== undefined
+            || input.cover_image !== undefined
+          ) {
+            throw new Error(
+              "X articles.publish reconciliation requires one existing text-and-links-only private draft",
+            );
+          }
+          return true;
+        },
+      }),
+    });
   }
   const stateKey = operation.name === "content.save" ? "saved" : "liked";
   return Object.freeze({
@@ -75,6 +100,19 @@ export const xWebPlugin = defineProviderPlugin({
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeXWebOperation(recipe, input, auth, options),
         reconcile: async (operation, input, auth) => {
+          if (operation === "articles.publish") {
+            const readback = await runtime.readXWebRichArticleDesiredState({
+              site: "x",
+              action: operation,
+              contractVersion: 3,
+              timeoutMs: 60_000,
+              maxOutputBytes: 2 * 1024 * 1024,
+            }, input, auth);
+            return {
+              actualState: readback.matches,
+              reason: "exact-readback",
+            };
+          }
           if (operation !== "content.save" && operation !== "likes.set") {
             throw new Error(`X ${operation} has no reconciliation hook`);
           }

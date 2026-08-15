@@ -37,7 +37,7 @@ export type WebSessionContract = {
   readonly idempotency: IdempotencyKind;
   readonly dedupeWindowMs: number;
   readonly state: WebSessionContractState;
-  readonly dispatch: "none" | "single" | "thread-items";
+  readonly dispatch: "none" | "single" | "thread-items" | "article-rich-draft";
   readonly implementation: string;
 };
 
@@ -373,7 +373,11 @@ const contract = (
   risk,
   ...bundledOperationSemantics(site, operation, risk),
   state,
-  dispatch: risk === "R1" ? "none" : operation === "threads.publish" ? "thread-items" : "single",
+  dispatch: risk === "R1"
+    ? "none"
+    : site === "x" && operation === "articles.publish" && contractVersion >= 3
+      ? "article-rich-draft"
+      : operation === "threads.publish" ? "thread-items" : "single",
   implementation,
 });
 
@@ -473,7 +477,7 @@ const x = {
   "posts.quote": contract("x", "posts.quote", "R3", "capture-required", "CreateTweet quote needs an authorized live fixture and reviewed transaction-header behavior"),
   "likes.set": contract("x", "likes.set", "R2", "observed", "current FavoriteTweet/UnfavoriteTweet desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback", 2),
   "content.save": contract("x", "content.save", "R2", "observed", "current CreateBookmark/DeleteBookmark desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback"),
-  "articles.publish": contract("x", "articles.publish", "R3", "observed", "current ArticleEntityDraftCreate mutation saves one response-bound private plain-text draft and never calls ArticleEntityPublish", 2),
+  "articles.publish": contract("x", "articles.publish", "R3", "observed", "current segmented media upload plus Article entity create/update mutations save one response-bound private rich draft and never call ArticleEntityPublish", 3),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const reddit = {

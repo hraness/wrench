@@ -1,6 +1,18 @@
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+
 import type { WrenchAuth } from "../auth";
-import { browserCleanupBarrier } from "../browser";
-import type { OperationInput, WebSessionRecipe } from "../model";
+import {
+  browserCleanupBarrier,
+  type BrowserFileResolver,
+} from "../browser";
+import type {
+  FileInputValue,
+  OperationInput,
+  WebSessionRecipe,
+} from "../model";
+import { canonicalJson } from "../canonical-json";
 import {
   createWebSessionClient,
   fetchPublicWebAsset,
@@ -30,6 +42,7 @@ import {
   normalizeXWebGraphQlTimelineResponse,
   resolveUniqueXWebBundleDescriptor,
   validateXWebDesiredStateMutation,
+  validateXWebRichArticleContentState,
   xWebQueryDescriptorEvidenceSnapshot,
   type XWebBundleQueryDescriptor,
   type XWebOperationType,
@@ -40,12 +53,18 @@ import {
 
 const X_ORIGIN = "https://x.com";
 const X_ASSET_ORIGIN = "https://abs.twimg.com";
+const X_DEFAULT_UPLOAD_ORIGIN = "https://upload.x.com";
+const X_UPLOAD_HOSTS = new Set(["upload.x.com", "upload-a.x.com", "upload-b.x.com"]);
 const MAX_HOME_BYTES = 2 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_LIMIT = 20;
 const MAX_ARTICLE_TITLE_CHARACTERS = 100;
 const MAX_ARTICLE_BODY_CHARACTERS = 20_000;
 const MAX_ARTICLE_BLOCKS = 2_000;
+const MAX_ARTICLE_DOCUMENT_BYTES = 128 * 1024;
+const MAX_ARTICLE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_ARTICLE_INLINE_IMAGES = 20;
+const MAX_MEDIA_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -140,6 +159,289 @@ function booleanInput(input: OperationInput, name: string): boolean {
   const value = input[name];
   if (typeof value !== "boolean") throw new Error(`input.${name} must be boolean`);
   return value;
+}
+
+function exactObjectKeys(value: JsonRecord, allowed: readonly string[], label: string): void {
+  const actual = Object.keys(value).sort().join(",");
+  const expected = [...allowed].sort().join(",");
+  if (actual !== expected) throw new Error(`${label} must contain exactly ${expected || "no fields"}`);
+}
+
+type XWebArticleTextBlockType =
+  | "paragraph"
+  | "heading1"
+  | "heading2"
+  | "blockquote"
+  | "unordered-list-item"
+  | "ordered-list-item";
+
+type XWebArticleTextBlock = {
+  readonly type: XWebArticleTextBlockType;
+  readonly text: string;
+  readonly links: readonly {
+    readonly offset: number;
+    readonly length: number;
+    readonly url: string;
+  }[];
+  readonly styles: readonly {
+    readonly offset: number;
+    readonly length: number;
+    readonly style: "bold" | "italic" | "strikethrough";
+  }[];
+};
+
+type XWebArticleImageBlock = {
+  readonly type: "image";
+  readonly imageIndex: number;
+  readonly caption?: string;
+};
+
+export type XWebRichArticleDocument = {
+  readonly schemaVersion: 1;
+  readonly blocks: readonly (XWebArticleTextBlock | XWebArticleImageBlock)[];
+};
+
+export type XWebRichArticleContentState = {
+  readonly blocks: readonly Readonly<Record<string, unknown>>[];
+  readonly entity_map: readonly Readonly<Record<string, unknown>>[];
+};
+
+function boundedHttpsUrl(value: unknown, label: string): string {
+  const raw = requiredString(value, label, 2_048);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${label} must be an absolute HTTPS URL`);
+  }
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") {
+    throw new Error(`${label} must be an absolute HTTPS URL`);
+  }
+  return parsed.href;
+}
+
+function validTextRangeBoundary(text: string, offset: number): boolean {
+  if (offset <= 0 || offset >= text.length) return true;
+  const previous = text.charCodeAt(offset - 1);
+  const next = text.charCodeAt(offset);
+  return !(previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff);
+}
+
+function boundedDocumentRange(
+  value: unknown,
+  text: string,
+  label: string,
+): { readonly offset: number; readonly length: number } {
+  const range = record(value, label);
+  const offset = range.offset;
+  const length = range.length;
+  if (
+    !Number.isSafeInteger(offset)
+    || !Number.isSafeInteger(length)
+    || (offset as number) < 0
+    || (length as number) < 1
+    || (offset as number) + (length as number) > text.length
+    || !validTextRangeBoundary(text, offset as number)
+    || !validTextRangeBoundary(text, (offset as number) + (length as number))
+  ) throw new Error(`${label} must stay on UTF-16 boundaries inside its text`);
+  return Object.freeze({ offset: offset as number, length: length as number });
+}
+
+/** Parse the versioned caller-owned rich document before any remote dispatch. */
+export function parseXWebRichArticleDocument(value: unknown): XWebRichArticleDocument {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || Buffer.byteLength(value, "utf8") > MAX_ARTICLE_DOCUMENT_BYTES
+    || value.includes("\0")
+  ) throw new Error("input.document must be bounded version-1 rich Article JSON");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("input.document must be valid version-1 rich Article JSON");
+  }
+  const root = record(parsed, "input.document");
+  exactObjectKeys(root, ["schemaVersion", "blocks"], "input.document");
+  if (root.schemaVersion !== 1 || !Array.isArray(root.blocks)) {
+    throw new Error("input.document must use rich Article schemaVersion 1");
+  }
+  if (root.blocks.length < 1 || root.blocks.length > MAX_ARTICLE_BLOCKS) {
+    throw new Error(`input.document must contain 1-${MAX_ARTICLE_BLOCKS} blocks`);
+  }
+  const blocks: (XWebArticleTextBlock | XWebArticleImageBlock)[] = [];
+  const imageIndexes = new Set<number>();
+  let totalCharacters = 0;
+  const textTypes = new Set<XWebArticleTextBlockType>([
+    "paragraph",
+    "heading1",
+    "heading2",
+    "blockquote",
+    "unordered-list-item",
+    "ordered-list-item",
+  ]);
+  for (const [index, rawBlock] of root.blocks.entries()) {
+    const label = `input.document.blocks[${index}]`;
+    const block = record(rawBlock, label);
+    if (block.type === "image") {
+      const allowed = block.caption === undefined ? ["type", "imageIndex"] : ["type", "imageIndex", "caption"];
+      exactObjectKeys(block, allowed, label);
+      if (
+        !Number.isSafeInteger(block.imageIndex)
+        || (block.imageIndex as number) < 0
+        || (block.imageIndex as number) >= MAX_ARTICLE_INLINE_IMAGES
+        || imageIndexes.has(block.imageIndex as number)
+      ) throw new Error(`${label}.imageIndex must be a unique zero-based image index`);
+      const caption = block.caption;
+      if (caption !== undefined && (
+        typeof caption !== "string"
+        || caption.length > 1_000
+        || /[\0\r]/u.test(caption)
+      )) throw new Error(`${label}.caption must be bounded text`);
+      imageIndexes.add(block.imageIndex as number);
+      blocks.push(Object.freeze({
+        type: "image",
+        imageIndex: block.imageIndex as number,
+        ...(caption === undefined ? {} : { caption }),
+      }));
+      continue;
+    }
+    if (typeof block.type !== "string" || !textTypes.has(block.type as XWebArticleTextBlockType)) {
+      throw new Error(`${label}.type is outside the reviewed rich Article block types`);
+    }
+    const allowed = ["type", "text", ...(block.links === undefined ? [] : ["links"]), ...(block.styles === undefined ? [] : ["styles"])];
+    exactObjectKeys(block, allowed, label);
+    if (typeof block.text !== "string" || /[\0\r\n]/u.test(block.text)) {
+      throw new Error(`${label}.text must be one bounded line`);
+    }
+    totalCharacters += block.text.length;
+    if (totalCharacters > MAX_ARTICLE_BODY_CHARACTERS) {
+      throw new Error(`input.document text must contain at most ${MAX_ARTICLE_BODY_CHARACTERS} characters`);
+    }
+    const rawLinks = block.links ?? [];
+    const rawStyles = block.styles ?? [];
+    if (!Array.isArray(rawLinks) || rawLinks.length > 500 || !Array.isArray(rawStyles) || rawStyles.length > 500) {
+      throw new Error(`${label} ranges exceeded their reviewed bounds`);
+    }
+    const links = rawLinks.map((rawLink, rangeIndex) => {
+      const rangeLabel = `${label}.links[${rangeIndex}]`;
+      const link = record(rawLink, rangeLabel);
+      exactObjectKeys(link, ["offset", "length", "url"], rangeLabel);
+      const range = boundedDocumentRange(link, block.text as string, rangeLabel);
+      return Object.freeze({ ...range, url: boundedHttpsUrl(link.url, `${rangeLabel}.url`) });
+    });
+    let linkEnd = 0;
+    for (const link of links) {
+      if (link.offset < linkEnd) throw new Error(`${label}.links must be ordered and non-overlapping`);
+      linkEnd = link.offset + link.length;
+    }
+    const styles = rawStyles.map((rawStyle, rangeIndex) => {
+      const rangeLabel = `${label}.styles[${rangeIndex}]`;
+      const style = record(rawStyle, rangeLabel);
+      exactObjectKeys(style, ["offset", "length", "style"], rangeLabel);
+      const range = boundedDocumentRange(style, block.text as string, rangeLabel);
+      if (style.style !== "bold" && style.style !== "italic" && style.style !== "strikethrough") {
+        throw new Error(`${rangeLabel}.style is outside the reviewed rich Article styles`);
+      }
+      return Object.freeze({ ...range, style: style.style });
+    });
+    blocks.push(Object.freeze({
+      type: block.type as XWebArticleTextBlockType,
+      text: block.text,
+      links: Object.freeze(links),
+      styles: Object.freeze(styles),
+    }));
+  }
+  if (totalCharacters < 1) throw new Error("input.document must contain Article text");
+  return Object.freeze({ schemaVersion: 1, blocks: Object.freeze(blocks) });
+}
+
+/** Build X's current API content-state shape after every referenced image has a verified media ID. */
+export function buildXWebRichArticleContentState(
+  document: XWebRichArticleDocument,
+  uploadedImageIds: readonly string[],
+): XWebRichArticleContentState {
+  if (uploadedImageIds.length > MAX_ARTICLE_INLINE_IMAGES || uploadedImageIds.some((id) => !/^[0-9]{1,19}$/u.test(id))) {
+    throw new Error("X rich Article image uploads must be exact media IDs");
+  }
+  const entities: Readonly<Record<string, unknown>>[] = [];
+  const blocks: Readonly<Record<string, unknown>>[] = [];
+  const usedImages = new Set<number>();
+  const blockType = Object.freeze({
+    paragraph: "unstyled",
+    heading1: "header-one",
+    heading2: "header-two",
+    blockquote: "blockquote",
+    "unordered-list-item": "unordered-list-item",
+    "ordered-list-item": "ordered-list-item",
+  } as const);
+  const styleName = Object.freeze({ bold: "Bold", italic: "Italic", strikethrough: "Strikethrough" } as const);
+  for (const [blockIndex, block] of document.blocks.entries()) {
+    const key = blockIndex.toString(36).padStart(5, "0");
+    if (block.type === "image") {
+      const mediaId = uploadedImageIds[block.imageIndex];
+      if (mediaId === undefined || usedImages.has(block.imageIndex)) {
+        throw new Error("input.document imageIndex did not bind one uploaded inline image");
+      }
+      usedImages.add(block.imageIndex);
+      const entityKey = `${entities.length}`;
+      entities.push(Object.freeze({
+        key: entityKey,
+        value: Object.freeze({
+          data: Object.freeze({
+            ...(block.caption === undefined || block.caption === "" ? {} : { caption: block.caption }),
+            entity_key: entityKey,
+            media_items: Object.freeze([Object.freeze({
+              local_media_id: block.imageIndex + 1,
+              media_category: "DraftTweetImage",
+              media_id: mediaId,
+            })]),
+          }),
+          type: "MEDIA",
+          mutability: "Immutable",
+        }),
+      }));
+      blocks.push(Object.freeze({
+        data: Object.freeze({}),
+        key,
+        text: " ",
+        type: "atomic",
+        entity_ranges: Object.freeze([Object.freeze({ key: Number(entityKey), offset: 0, length: 1 })]),
+        inline_style_ranges: Object.freeze([]),
+      }));
+      continue;
+    }
+    const entityRanges = block.links.map((link) => {
+      const key = entities.length;
+      entities.push(Object.freeze({
+        key: `${key}`,
+        value: Object.freeze({
+          data: Object.freeze({ url: link.url }),
+          type: "LINK",
+          mutability: "Mutable",
+        }),
+      }));
+      return Object.freeze({ key, offset: link.offset, length: link.length });
+    });
+    blocks.push(Object.freeze({
+      data: Object.freeze({}),
+      key,
+      text: block.text,
+      type: blockType[block.type],
+      entity_ranges: Object.freeze(entityRanges),
+      inline_style_ranges: Object.freeze(block.styles.map((style) => Object.freeze({
+        length: style.length,
+        offset: style.offset,
+        style: styleName[style.style],
+      }))),
+    }));
+  }
+  if (usedImages.size !== uploadedImageIds.length) {
+    throw new Error("every input.inline_images item must be referenced exactly once by input.document");
+  }
+  const contentState = Object.freeze({ blocks: Object.freeze(blocks), entity_map: Object.freeze(entities) });
+  validateXWebRichArticleContentState(contentState);
+  return contentState;
 }
 
 export type XWebArticleContentState = {
@@ -401,10 +703,14 @@ function descriptorEvidence(operationName: string, operationType: XWebOperationT
 }
 
 async function sourceText(bootstrap: XBootstrap, evidence: XWebQueryDescriptorEvidence): Promise<string> {
-  if (evidence.sourceChunk.startsWith("main.")) return bootstrap.mainText;
-  const cached = bootstrap.chunks.get(evidence.sourceChunk);
+  return currentChunkText(bootstrap, evidence.sourceChunk);
+}
+
+async function currentChunkText(bootstrap: XBootstrap, sourceChunk: string): Promise<string> {
+  if (sourceChunk.startsWith("main.")) return bootstrap.mainText;
+  const cached = bootstrap.chunks.get(sourceChunk);
   if (cached !== undefined) return cached;
-  const currentUrl = resolveCurrentXWebChunkUrl(bootstrap.html, evidence.sourceChunk);
+  const currentUrl = resolveCurrentXWebChunkUrl(bootstrap.html, sourceChunk);
   const text = await fetchPublicWebAsset(
     currentUrl,
     {
@@ -419,8 +725,53 @@ async function sourceText(bootstrap: XBootstrap, evidence: XWebQueryDescriptorEv
       ...(bootstrap.dependencies === undefined ? {} : { dependencies: bootstrap.dependencies }),
     },
   );
-  bootstrap.chunks.set(evidence.sourceChunk, text);
+  bootstrap.chunks.set(sourceChunk, text);
   return text;
+}
+
+const articleRichContractEvidence = Object.freeze({
+  uploader: "shared~bundle.LoggedInMain~ondemand.HoverCard~loader.AudioDock~loader.Dock~bundle.BookmarkFolders~bundle.Book.a9bac6ba.js",
+  entities: "shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory.d1314bba.js",
+  converter: "shared~bundle.Grok~bundle.GrokDrawer~bundle.ReaderMode~bundle.Birdwatch~bundle.TwitterArticles~bundle.Compose.02f6dc7a.js",
+  observedOn: "2026-08-14",
+});
+
+function requireCurrentBundleTokens(text: string, tokens: readonly string[], label: string): void {
+  if (tokens.some((token) => !text.includes(token))) {
+    throw new Error(`X current ${label} bundle drifted outside the reviewed rich Article contract`);
+  }
+}
+
+async function assertCurrentArticleRichContract(bootstrap: XBootstrap): Promise<void> {
+  const [uploader, entities, converter] = await Promise.all([
+    currentChunkText(bootstrap, articleRichContractEvidence.uploader),
+    currentChunkText(bootstrap, articleRichContractEvidence.entities),
+    currentChunkText(bootstrap, articleRichContractEvidence.converter),
+  ]);
+  requireCurrentBundleTokens(uploader, [
+    '"upload.x.com"',
+    '"upload-a.x.com"',
+    '"upload-b.x.com"',
+    '/i/media/${l}',
+    '"INIT"',
+    '"APPEND"',
+    '"FINALIZE"',
+    'media_category=${p}',
+    'TweetImage:"tweet_image"',
+    'TwitterArticle:"twitter_article"',
+  ], "media uploader");
+  requireCurrentBundleTokens(entities, [
+    'createEntity(p.LA.MEDIA,p.Ei.IMMUTABLE',
+    'mediaCategory:E(e)',
+    'mediaId:e.uploadId',
+    'createEntity(w.Sg,"MUTABLE",{url:',
+  ], "Article entity");
+  requireCurrentBundleTokens(converter, [
+    'media_items:r.data?.mediaItems?.map',
+    'media_category:e.mediaCategory',
+    'mutability:s[r.mutability]',
+    'inline_style_ranges:',
+  ], "Article content converter");
 }
 
 async function resolveDescriptor(
@@ -448,6 +799,23 @@ function featureValue(bootstrap: XBootstrap, name: string): boolean {
     throw new Error(`X user feature configuration changed type for feature ${name}`);
   }
   return entry.value;
+}
+
+function featureStringValue(bootstrap: XBootstrap, name: string): string | undefined {
+  const entry = bootstrap.features.get(name);
+  if (entry === undefined) return undefined;
+  if (!isRecord(entry) || (entry.value !== undefined && typeof entry.value !== "string")) {
+    throw new Error(`X user feature configuration changed type for feature ${name}`);
+  }
+  return entry.value as string | undefined;
+}
+
+function articleUploadOrigin(bootstrap: XBootstrap): string {
+  const configured = featureStringValue(bootstrap, "responsive_web_media_upload_host");
+  if (configured === undefined) return X_DEFAULT_UPLOAD_ORIGIN;
+  const host = configured;
+  if (!X_UPLOAD_HOSTS.has(host)) throw new Error("X selected an unreviewed media upload host");
+  return new URL(`https://${host}`).origin;
 }
 
 function fieldToggleValue(bootstrap: XBootstrap, name: string): boolean {
@@ -890,6 +1258,53 @@ export async function readXWebDesiredState(
   };
 }
 
+export async function readXWebRichArticleDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly dependencies?: XWebRuntimeDependencies;
+  } = {},
+): Promise<{
+  readonly matches: boolean;
+  readonly draftId: string;
+}> {
+  if (
+    recipe.site !== "x"
+    || recipe.action !== "articles.publish"
+    || recipe.contractVersion !== 3
+  ) {
+    throw new Error("X rich Article recovery supports only articles.publish@3");
+  }
+  if (
+    input.draft_only !== true
+    || input.inline_images !== undefined
+    || input.cover_image !== undefined
+  ) {
+    throw new Error(
+      "X rich Article recovery supports only an existing text-and-links draft without pending media",
+    );
+  }
+  const draftId = postId(input.draft_id, "input.draft_id");
+  const title = requiredString(
+    input.title,
+    "input.title",
+    MAX_ARTICLE_TITLE_CHARACTERS,
+  );
+  const document = parseXWebRichArticleDocument(input.document);
+  const expectedContent = buildXWebRichArticleContentState(document, []);
+  const bootstrap = await bootstrapX(auth, recipe, options.dependencies);
+  const currentViewer = await requireBoundViewer(bootstrap, auth);
+  const article = await readArticleDraft(bootstrap, draftId);
+  requirePrivateDraftArticle(article, draftId, currentViewer.id);
+  const actualContent = normalizeArticleContentReadback(article.content_state);
+  return {
+    matches: article.title === title
+      && canonicalJson(actualContent) === canonicalJson(expectedContent),
+    draftId,
+  };
+}
+
 function createdTweet(
   response: unknown,
   expectedText: string,
@@ -943,6 +1358,724 @@ function createdArticleDraft(
     throw new Error("X Article draft response did not bind the confirmed title");
   }
   return { id, title: expectedTitle, url: `${X_ORIGIN}/compose/articles/edit/${id}` };
+}
+
+type BoundArticleImage = {
+  readonly bytes: Uint8Array;
+  readonly mediaType: "image/jpeg" | "image/png" | "image/webp";
+};
+
+function fileInput(value: OperationInput[string], label: string): FileInputValue {
+  if (!isRecord(value)) throw new Error(`${label} must be one plan-bound file`);
+  exactObjectKeys(value, ["kind", "reference"], label);
+  if (value.kind !== "file" || typeof value.reference !== "string" || value.reference.length < 1) {
+    throw new Error(`${label} must be one plan-bound file`);
+  }
+  return Object.freeze({ kind: "file", reference: value.reference });
+}
+
+function articleFileInputs(input: OperationInput): {
+  readonly inline: readonly FileInputValue[];
+  readonly cover: FileInputValue | null;
+  readonly ordered: readonly FileInputValue[];
+} {
+  const rawInline = input.inline_images;
+  if (rawInline !== undefined && !Array.isArray(rawInline)) {
+    throw new Error("input.inline_images must be an ordered plan-bound file array");
+  }
+  const inline = Object.freeze((rawInline ?? []).map((value, index) =>
+    fileInput(value, `input.inline_images[${index}]`)));
+  if (inline.length > MAX_ARTICLE_INLINE_IMAGES) {
+    throw new Error(`input.inline_images supports at most ${MAX_ARTICLE_INLINE_IMAGES} files`);
+  }
+  const cover = input.cover_image === undefined ? null : fileInput(input.cover_image, "input.cover_image");
+  return Object.freeze({
+    inline,
+    cover,
+    ordered: Object.freeze([...inline, ...(cover === null ? [] : [cover])]),
+  });
+}
+
+function sniffArticleImage(bytes: Uint8Array): BoundArticleImage["mediaType"] {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (
+    bytes.length >= 8
+    && bytes[0] === 0x89
+    && bytes[1] === 0x50
+    && bytes[2] === 0x4e
+    && bytes[3] === 0x47
+    && bytes[4] === 0x0d
+    && bytes[5] === 0x0a
+    && bytes[6] === 0x1a
+    && bytes[7] === 0x0a
+  ) return "image/png";
+  if (
+    bytes.length >= 12
+    && String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF"
+    && String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP"
+  ) return "image/webp";
+  throw new Error("X Article images must be exact JPEG, PNG, or WebP bytes");
+}
+
+async function readArticleImage(
+  path: string,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<BoundArticleImage> {
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = operationDeadline === undefined
+    ? await open(path, constants.O_RDONLY | noFollow)
+    : await operationDeadline.run(
+        () => open(path, constants.O_RDONLY | noFollow),
+        "authenticated web operation deadline",
+      );
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(() => handle.stat(), "authenticated web operation deadline");
+    if (!before.isFile() || before.size < 1 || before.size > MAX_ARTICLE_IMAGE_BYTES) {
+      throw new Error(`X Article images must be regular files no larger than ${MAX_ARTICLE_IMAGE_BYTES} bytes`);
+    }
+    const raw = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(() => handle.readFile(), "authenticated web operation deadline");
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(() => handle.stat(), "authenticated web operation deadline");
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || raw.byteLength !== before.size
+    ) throw new Error("X Article image changed while it was materialized");
+    const bytes = new Uint8Array(raw);
+    return Object.freeze({ bytes, mediaType: sniffArticleImage(bytes) });
+  } finally {
+    await handle.close();
+  }
+}
+
+async function materializeArticleImages(
+  input: OperationInput,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<{ readonly inline: readonly BoundArticleImage[]; readonly cover: BoundArticleImage | null }> {
+  const files = articleFileInputs(input);
+  if (files.ordered.length === 0) return Object.freeze({ inline: Object.freeze([]), cover: null });
+  if (fileResolver === undefined) throw new Error("X rich Article media requires the plan-bound file resolver");
+  const paths = operationDeadline === undefined
+    ? await fileResolver(files.ordered)
+    : await operationDeadline.run(
+        () => fileResolver(files.ordered),
+        "authenticated web operation deadline",
+      );
+  operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
+  if (
+    paths.length !== files.ordered.length
+    || paths.some((path) => typeof path !== "string" || path.length < 1)
+  ) throw new Error("X Article file resolver did not return every exact plan-bound path");
+  const images: BoundArticleImage[] = [];
+  for (const path of paths) images.push(await readArticleImage(path!, operationDeadline));
+  return Object.freeze({
+    inline: Object.freeze(images.slice(0, files.inline.length)),
+    cover: files.cover === null ? null : images.at(-1)!,
+  });
+}
+
+function xUploadHeaders(bootstrap: XBootstrap): Readonly<Record<string, string>> {
+  const fixed = enforceXWebHeaderSinkPolicy({
+    source: "code",
+    sink: "network-request",
+    headers: {
+      accept: "application/json",
+      "x-twitter-auth-type": "OAuth2Session",
+      "x-twitter-active-user": "yes",
+    },
+  }).values;
+  const session = enforceXWebHeaderSinkPolicy({
+    source: "in-origin-session",
+    sink: "network-request",
+    headers: {
+      authorization: `Bearer ${bootstrap.bearer}`,
+      "x-csrf-token": bootstrap.csrf,
+    },
+  }).values;
+  return { ...fixed, ...session, origin: X_ORIGIN, referer: `${X_ORIGIN}/compose/articles` };
+}
+
+function mediaUploadUrl(
+  origin: string,
+  command: "INIT" | "APPEND" | "FINALIZE",
+  values: Readonly<Record<string, string>>,
+): URL {
+  const url = new URL("/i/media/upload.json", origin);
+  url.searchParams.set("command", command);
+  for (const [name, value] of Object.entries(values)) url.searchParams.set(name, value);
+  const expected = command === "INIT"
+    ? ["command", "media_category", "media_type", "total_bytes"]
+    : command === "APPEND" ? ["command", "media_id", "segment_index"] : ["command", "media_id"];
+  if (Object.keys(Object.fromEntries(url.searchParams)).sort().join(",") !== expected.sort().join(",")) {
+    throw new Error("X media upload request left its reviewed query shape");
+  }
+  return url;
+}
+
+function uploadMediaId(value: unknown, label: string): string {
+  const response = record(value, label);
+  const id = response.media_id_string;
+  if (typeof id !== "string" || !/^[0-9]{1,19}$/u.test(id)) {
+    throw new Error(`${label} did not return one exact media ID`);
+  }
+  if (
+    response.expires_after_secs !== undefined
+    && (!Number.isSafeInteger(response.expires_after_secs) || (response.expires_after_secs as number) < 1)
+  ) throw new Error(`${label} returned an invalid expiry`);
+  return id;
+}
+
+function containsBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  outer: for (let index = 0; index <= haystack.length - needle.length; index += 1) {
+    for (let offset = 0; offset < needle.length; offset += 1) {
+      if (haystack[index + offset] !== needle[offset]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+function articleMediaMultipart(image: BoundArticleImage): {
+  readonly body: Uint8Array;
+  readonly contentType: string;
+} {
+  const digest = createHash("sha256").update(image.bytes).digest("hex");
+  let boundary = `----wrench-x-article-${digest}`;
+  const encoder = new TextEncoder();
+  for (let suffix = 0; containsBytes(image.bytes, encoder.encode(boundary)); suffix += 1) {
+    if (suffix >= 16) throw new Error("X Article media could not bind a safe multipart boundary");
+    boundary = `----wrench-x-article-${digest}-${suffix + 1}`;
+  }
+  const prefix = encoder.encode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="blob"\r\nContent-Type: ${image.mediaType}\r\n\r\n`,
+  );
+  const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
+  const body = new Uint8Array(prefix.length + image.bytes.length + suffix.length);
+  body.set(prefix, 0);
+  body.set(image.bytes, prefix.length);
+  body.set(suffix, prefix.length + image.bytes.length);
+  return Object.freeze({ body, contentType: `multipart/form-data; boundary=${boundary}` });
+}
+
+async function appendArticleMedia(
+  client: WebSessionClient,
+  url: URL,
+  image: BoundArticleImage,
+  headers: Readonly<Record<string, string>>,
+): Promise<void> {
+  const multipart = articleMediaMultipart(image);
+  await client.requestStatus({
+    url,
+    method: "POST",
+    headers: { ...headers, "content-type": multipart.contentType },
+    body: multipart.body,
+    expectedStatuses: [200, 204],
+  });
+}
+
+async function uploadArticleImage(
+  bootstrap: XBootstrap,
+  client: WebSessionClient,
+  image: BoundArticleImage,
+  beforeInit: () => Promise<void>,
+): Promise<string> {
+  const origin = client.origin;
+  const headers = xUploadHeaders(bootstrap);
+  const initUrl = mediaUploadUrl(origin, "INIT", {
+    total_bytes: `${image.bytes.byteLength}`,
+    media_type: image.mediaType,
+    media_category: "tweet_image",
+  });
+  await beforeInit();
+  const init = await client.requestJson({
+    url: initUrl,
+    method: "POST",
+    headers,
+    maxBytes: MAX_MEDIA_RESPONSE_BYTES,
+  });
+  const mediaId = uploadMediaId(init, "X media INIT response");
+  await appendArticleMedia(
+    client,
+    mediaUploadUrl(origin, "APPEND", { media_id: mediaId, segment_index: "0" }),
+    image,
+    headers,
+  );
+  const finalized = await client.requestJson({
+    url: mediaUploadUrl(origin, "FINALIZE", { media_id: mediaId }),
+    method: "POST",
+    headers,
+    maxBytes: MAX_MEDIA_RESPONSE_BYTES,
+  });
+  if (uploadMediaId(finalized, "X media FINALIZE response") !== mediaId) {
+    throw new Error("X media FINALIZE response changed the uploaded media ID");
+  }
+  const finalRecord = record(finalized, "X media FINALIZE response");
+  if (finalRecord.processing_info !== undefined) {
+    throw new Error("X image upload unexpectedly entered an unreviewed processing branch");
+  }
+  return mediaId;
+}
+
+function articleEntityResult(response: unknown, rootName: string, label: string): JsonRecord {
+  const data = graphQlData(response, label);
+  const root = record(data[rootName], `${label}.${rootName}`);
+  if (isRecord(root.result)) return record(root.result, `${label}.${rootName}.result`);
+  if (isRecord(root.article_entity_results)) {
+    const results = record(root.article_entity_results, `${label}.${rootName}.article_entity_results`);
+    return record(results.result, `${label}.${rootName}.article_entity_results.result`);
+  }
+  return root;
+}
+
+function responseBoundArticle(
+  response: unknown,
+  rootName: string,
+  expectedId: string | null,
+  expectedTitle?: string,
+): JsonRecord {
+  const article = articleEntityResult(response, rootName, `X ${rootName} response`);
+  const id = postId(article.rest_id, `X ${rootName} response rest_id`);
+  if (expectedId !== null && id !== expectedId) {
+    throw new Error(`X ${rootName} response changed the confirmed Article draft`);
+  }
+  if (expectedTitle !== undefined && article.title !== expectedTitle) {
+    throw new Error(`X ${rootName} response did not bind the confirmed title`);
+  }
+  return article;
+}
+
+function articleAuthorId(article: JsonRecord): string {
+  const metadata = record(article.metadata, "X Article metadata");
+  const authorResults = record(metadata.author_results, "X Article metadata.author_results");
+  const author = record(authorResults.result, "X Article metadata.author_results.result");
+  return postId(author.rest_id, "X Article author rest_id");
+}
+
+function requirePrivateDraftArticle(
+  article: JsonRecord,
+  expectedId: string,
+  expectedViewerId: string,
+): void {
+  if (postId(article.rest_id, "X Article rest_id") !== expectedId) {
+    throw new Error("X Article readback changed the confirmed draft ID");
+  }
+  if (articleAuthorId(article) !== expectedViewerId) {
+    throw new Error("X Article draft does not belong to the bound viewer");
+  }
+  const lifecycle = record(article.lifecycle_state, "X Article lifecycle_state");
+  if (lifecycle.lifecycle !== "Draft") {
+    throw new Error("X Article target must remain an unpublished private draft");
+  }
+}
+
+function normalizedArticleEntityKey(value: unknown, label: string): string {
+  if (
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= 0
+    && value <= MAX_ARTICLE_BLOCKS
+  ) {
+    return `${value}`;
+  }
+  if (typeof value === "string" && /^(?:0|[1-9][0-9]{0,3})$/u.test(value)) {
+    return value;
+  }
+  throw new Error(`${label} is not one bounded Article entity key`);
+}
+
+function articleReadbackEntityKeyMap(
+  values: readonly unknown[],
+  blocks: readonly unknown[],
+  rangesKey: "entity_ranges" | "entityRanges",
+): ReadonlyMap<string, string> {
+  const known = new Set<string>();
+  values.forEach((value, index) => {
+    const entity = record(value, `X Article readback entity ${index}`);
+    const source = normalizedArticleEntityKey(
+      entity.key,
+      `X Article readback entity ${index}.key`,
+    );
+    if (known.has(source)) {
+      throw new Error("X Article readback repeated one entity key");
+    }
+    known.add(source);
+  });
+  const result = new Map<string, string>();
+  blocks.forEach((value, blockIndex) => {
+    const block = record(value, `X Article readback block ${blockIndex + 1}`);
+    const ranges = block[rangesKey];
+    if (!Array.isArray(ranges)) {
+      throw new Error("X Article readback block ranges changed shape");
+    }
+    ranges.forEach((value) => {
+      const range = record(value, "X Article readback entity range");
+      const source = normalizedArticleEntityKey(
+        range.key,
+        "X Article readback entity range key",
+      );
+      if (!known.has(source)) {
+        throw new Error("X Article readback range referenced an unknown entity");
+      }
+      if (result.has(source)) {
+        throw new Error("X Article readback repeated one entity reference");
+      }
+      result.set(source, `${result.size}`);
+    });
+  });
+  if (result.size !== values.length) {
+    throw new Error("X Article readback contained one unreferenced entity");
+  }
+  return result;
+}
+
+function orderedArticleReadbackEntities(
+  values: readonly unknown[],
+  keys: ReadonlyMap<string, string>,
+): readonly unknown[] {
+  return [...values].sort((left, right) => {
+    const leftKey = normalizedArticleEntityKey(
+      record(left, "X Article readback entity").key,
+      "X Article readback entity key",
+    );
+    const rightKey = normalizedArticleEntityKey(
+      record(right, "X Article readback entity").key,
+      "X Article readback entity key",
+    );
+    return Number(keys.get(leftKey)) - Number(keys.get(rightKey));
+  });
+}
+
+function remappedArticleEntityKey(
+  value: unknown,
+  keys: ReadonlyMap<string, string>,
+  label: string,
+): string {
+  const source = normalizedArticleEntityKey(value, label);
+  const normalized = keys.get(source);
+  if (normalized === undefined) {
+    throw new Error(`${label} referenced an unknown Article entity`);
+  }
+  return normalized;
+}
+
+function normalizedArticleBlockData(
+  value: unknown,
+  label: string,
+  blockText: unknown,
+): Readonly<Record<string, never>> {
+  if (typeof blockText !== "string") {
+    throw new Error(`${label} has no bounded block text`);
+  }
+  const data = record(value, label);
+  const keys = Object.keys(data);
+  if (keys.length === 0) return Object.freeze({});
+  if (keys.length !== 1 || keys[0] !== "urls" || !Array.isArray(data.urls)) {
+    throw new Error(`${label} left the reviewed empty-or-urls shape`);
+  }
+  if (data.urls.length > 100) {
+    throw new Error(`${label}.urls exceeded its reviewed bound`);
+  }
+  let previousEnd = 0;
+  data.urls.forEach((value, index) => {
+    const url = record(value, `${label}.urls[${index}]`);
+    const urlKeys = Object.keys(url).sort();
+    if (urlKeys.join(",") !== "fromIndex,text,toIndex") {
+      throw new Error(`${label}.urls[${index}] left its reviewed range shape`);
+    }
+    if (
+      !Number.isSafeInteger(url.fromIndex)
+      || !Number.isSafeInteger(url.toIndex)
+      || (url.fromIndex as number) < previousEnd
+      || (url.fromIndex as number) < 0
+      || (url.toIndex as number) <= (url.fromIndex as number)
+      || (url.toIndex as number) > blockText.length
+    ) {
+      throw new Error(`${label}.urls[${index}] escaped its block text`);
+    }
+    if (
+      typeof url.text !== "string"
+      || /[\0\r\n]/u.test(url.text)
+      || blockText.slice(
+        url.fromIndex as number,
+        url.toIndex as number,
+      ) !== url.text
+    ) {
+      throw new Error(`${label}.urls[${index}].text did not bind its block range`);
+    }
+    previousEnd = url.toIndex as number;
+  });
+  return Object.freeze({});
+}
+
+function normalizedArticleBlockKey(
+  value: unknown,
+  index: number,
+  observed: Set<string>,
+): string {
+  if (
+    typeof value !== "string"
+    || !/^[a-z0-9]{5}$/u.test(value)
+    || observed.has(value)
+  ) {
+    throw new Error(`X Article readback block ${index + 1} has an invalid key`);
+  }
+  observed.add(value);
+  return index.toString(36).padStart(5, "0");
+}
+
+function normalizeArticleContentReadback(value: unknown): XWebRichArticleContentState {
+  const state = record(value, "X Article readback content_state");
+  if (Array.isArray(state.entity_map)) {
+    if (!Array.isArray(state.blocks)) {
+      throw new Error("X Article readback omitted its rich content blocks");
+    }
+    const entityKeys = articleReadbackEntityKeyMap(
+      state.entity_map,
+      state.blocks,
+      "entity_ranges",
+    );
+    const observedBlockKeys = new Set<string>();
+    const blocks = state.blocks.map((value, index) => {
+      const block = record(value, `X Article readback block ${index + 1}`);
+      if (
+        !Array.isArray(block.entity_ranges)
+        || !Array.isArray(block.inline_style_ranges)
+      ) {
+        throw new Error("X Article readback block ranges changed shape");
+      }
+      return Object.freeze({
+        data: normalizedArticleBlockData(
+          block.data,
+          `X Article readback block ${index + 1}.data`,
+          block.text,
+        ),
+        text: block.text,
+        key: normalizedArticleBlockKey(
+          block.key,
+          index,
+          observedBlockKeys,
+        ),
+        type: block.type,
+        entity_ranges: Object.freeze(block.entity_ranges.map((range) => {
+          const item = record(range, "X Article readback entity range");
+          return Object.freeze({
+            key: Number(remappedArticleEntityKey(
+              item.key,
+              entityKeys,
+              "X Article readback entity range key",
+            )),
+            offset: item.offset,
+            length: item.length,
+          });
+        })),
+        inline_style_ranges: Object.freeze(block.inline_style_ranges.map(
+          (range) => {
+            const item = record(range, "X Article readback style range");
+            return Object.freeze({
+              length: item.length,
+              offset: item.offset,
+              style: item.style,
+            });
+          },
+        )),
+      });
+    });
+    const entity_map = orderedArticleReadbackEntities(
+      state.entity_map,
+      entityKeys,
+    ).map((value, index) => {
+      const entity = record(value, `X Article readback entity ${index}`);
+      const sourceEntityKey = normalizedArticleEntityKey(
+        entity.key,
+        `X Article readback entity ${index}.key`,
+      );
+      const entry = record(
+        entity.value,
+        `X Article readback entity ${index}.value`,
+      );
+      const data = record(
+        entry.data,
+        `X Article readback entity ${index}.data`,
+      );
+      const normalizedData = entry.type === "MEDIA"
+        ? Object.freeze({
+            ...(data.caption === undefined || data.caption === null || data.caption === ""
+              ? {}
+              : { caption: data.caption }),
+            entity_key: (() => {
+              const sourceDataKey = normalizedArticleEntityKey(
+                data.entity_key,
+                `X Article readback entity ${index}.data.entity_key`,
+              );
+              if (sourceDataKey !== sourceEntityKey) {
+                throw new Error(
+                  `X Article readback entity ${index} changed its media entity key`,
+                );
+              }
+              return `${index}`;
+            })(),
+            media_items: data.media_items,
+          })
+        : Object.freeze({ url: data.url });
+      return Object.freeze({
+        key: `${index}`,
+        value: Object.freeze({
+          data: normalizedData,
+          type: entry.type,
+          mutability: entry.mutability,
+        }),
+      });
+    });
+    const normalized = Object.freeze({
+      blocks: Object.freeze(blocks),
+      entity_map: Object.freeze(entity_map),
+    });
+    validateXWebRichArticleContentState(normalized);
+    return normalized;
+  }
+  if (!Array.isArray(state.blocks) || !Array.isArray(state.entityMap)) {
+    throw new Error("X Article readback omitted its rich content state");
+  }
+  const entityKeys = articleReadbackEntityKeyMap(
+    state.entityMap,
+    state.blocks,
+    "entityRanges",
+  );
+  const observedBlockKeys = new Set<string>();
+  const blocks = state.blocks.map((value, index) => {
+    const block = record(value, `X Article readback block ${index + 1}`);
+    if (!Array.isArray(block.entityRanges) || !Array.isArray(block.inlineStyleRanges)) {
+      throw new Error("X Article readback block ranges changed shape");
+    }
+    return Object.freeze({
+      data: normalizedArticleBlockData(
+        block.data,
+        `X Article readback block ${index + 1}.data`,
+        block.text,
+      ),
+      text: block.text,
+      key: normalizedArticleBlockKey(
+        block.key,
+        index,
+        observedBlockKeys,
+      ),
+      type: block.type,
+      entity_ranges: Object.freeze(block.entityRanges.map((range) => {
+        const item = record(range, "X Article readback entity range");
+        return Object.freeze({
+          key: Number(remappedArticleEntityKey(
+            item.key,
+            entityKeys,
+            "X Article readback entity range key",
+          )),
+          offset: item.offset,
+          length: item.length,
+        });
+      })),
+      inline_style_ranges: Object.freeze(block.inlineStyleRanges.map((range) => {
+        const item = record(range, "X Article readback style range");
+        return Object.freeze({ length: item.length, offset: item.offset, style: item.style });
+      })),
+    });
+  });
+  const entity_map = orderedArticleReadbackEntities(
+    state.entityMap,
+    entityKeys,
+  ).map((value, index) => {
+    const entity = record(value, `X Article readback entity ${index}`);
+    const sourceEntityKey = normalizedArticleEntityKey(
+      entity.key,
+      `X Article readback entity ${index}.key`,
+    );
+    const entry = record(entity.value, `X Article readback entity ${index}.value`);
+    const data = record(entry.data, `X Article readback entity ${index}.data`);
+    const normalizedData = entry.type === "MEDIA"
+      ? Object.freeze({
+          ...(data.caption === undefined || data.caption === null || data.caption === "" ? {} : { caption: data.caption }),
+          entity_key: (() => {
+            const sourceDataKey = normalizedArticleEntityKey(
+              data.entityKey,
+              `X Article readback entity ${index}.data.entityKey`,
+            );
+            if (sourceDataKey !== sourceEntityKey) {
+              throw new Error(
+                `X Article readback entity ${index} changed its media entity key`,
+              );
+            }
+            return `${index}`;
+          })(),
+          media_items: Array.isArray(data.mediaItems)
+            ? Object.freeze(data.mediaItems.map((value) => {
+                const item = record(value, "X Article readback media item");
+                return Object.freeze({
+                  local_media_id: item.localMediaId,
+                  media_category: item.mediaCategory,
+                  media_id: item.mediaId,
+                });
+              }))
+            : data.mediaItems,
+        })
+      : Object.freeze({ url: data.url });
+    return Object.freeze({
+      key: `${index}`,
+      value: Object.freeze({ data: normalizedData, type: entry.type, mutability: entry.mutability }),
+    });
+  });
+  const normalized = Object.freeze({ blocks: Object.freeze(blocks), entity_map: Object.freeze(entity_map) });
+  validateXWebRichArticleContentState(normalized);
+  return normalized;
+}
+
+function articleCoverMediaId(article: JsonRecord): string | null {
+  if (article.cover_media === undefined || article.cover_media === null) return null;
+  const cover = record(article.cover_media, "X Article cover_media");
+  if (typeof cover.media_id === "string" && /^[0-9]{1,19}$/u.test(cover.media_id)) return cover.media_id;
+  if (typeof cover.media_id_string === "string" && /^[0-9]{1,19}$/u.test(cover.media_id_string)) {
+    return cover.media_id_string;
+  }
+  if (typeof cover.media_key === "string") {
+    const match = /^[0-9]+_([0-9]{1,19})$/u.exec(cover.media_key);
+    if (match?.[1] !== undefined) return match[1];
+  }
+  throw new Error("X Article cover_media omitted its exact media ID");
+}
+
+async function readArticleDraft(
+  bootstrap: XBootstrap,
+  id: string,
+): Promise<JsonRecord> {
+  const descriptor = await resolveDescriptor(bootstrap, "ArticleEntityResultByRestId", "query");
+  const response = await graphQl(bootstrap, descriptor, { articleEntityId: id }, "GET");
+  return responseBoundArticle(response, "article_result_by_rest_id", id);
+}
+
+function verifyFinalRichArticle(
+  article: JsonRecord,
+  expected: {
+    readonly id: string;
+    readonly viewerId: string;
+    readonly title: string;
+    readonly contentState: XWebRichArticleContentState;
+    readonly coverMediaId: string | null;
+  },
+): void {
+  requirePrivateDraftArticle(article, expected.id, expected.viewerId);
+  if (article.title !== expected.title) throw new Error("X Article readback did not bind the confirmed title");
+  const content = normalizeArticleContentReadback(article.content_state);
+  if (canonicalJson(content) !== canonicalJson(expected.contentState)) {
+    throw new Error("X Article readback did not bind the confirmed rich content state");
+  }
+  if (expected.coverMediaId !== null && articleCoverMediaId(article) !== expected.coverMediaId) {
+    throw new Error("X Article readback did not bind the confirmed cover image");
+  }
 }
 
 function dispatchEvent(id: string, index: number, planned: number, started: number, verified: number): WebSessionDispatchEvent {
@@ -1119,6 +2252,244 @@ async function executeArticleDraft(
   }
 }
 
+async function executeRichArticleDraft(
+  bootstrap: XBootstrap,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly fileResolver?: BrowserFileResolver;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+  },
+): Promise<WebSessionExecution> {
+  if (recipe.contractVersion !== 3 || input.draft_only !== true) {
+    throw new Error("X rich Articles support only contract v3 with input.draft_only=true");
+  }
+  const title = requiredString(input.title, "input.title", MAX_ARTICLE_TITLE_CHARACTERS);
+  if (/[\0\r\n]/u.test(title)) throw new Error("input.title must be one plain-text line");
+  const document = parseXWebRichArticleDocument(input.document);
+  const materialized = await materializeArticleImages(input, options.fileResolver, bootstrap.operationDeadline);
+  // Prove the document/file bijection before the first remote media INIT.
+  buildXWebRichArticleContentState(
+    document,
+    materialized.inline.map((_image, index) => `${index + 1}`),
+  );
+  await assertCurrentArticleRichContract(bootstrap);
+  const currentViewer = await requireBoundViewer(bootstrap, auth);
+  const requestedDraftId = input.draft_id === undefined ? null : postId(input.draft_id, "input.draft_id");
+  if (requestedDraftId !== null) {
+    requirePrivateDraftArticle(await readArticleDraft(bootstrap, requestedDraftId), requestedDraftId, currentViewer.id);
+  }
+
+  const imageCount = materialized.inline.length;
+  const hasCover = materialized.cover !== null;
+  const planned = imageCount + (hasCover ? 1 : 0) + (requestedDraftId === null ? 1 : 2) + (hasCover ? 1 : 0);
+  let started = 0;
+  let verified = 0;
+  let draftId = requestedDraftId;
+  let contentState: XWebRichArticleContentState | null = null;
+  let coverMediaId: string | null = null;
+  const uploadedInline: string[] = [];
+  let nextIndex = 0;
+  let failureStage = "binding the Article mutation session";
+  const begin = async (id: string): Promise<number> => {
+    const index = nextIndex + 1;
+    await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
+    nextIndex = index;
+    started = index;
+    return index;
+  };
+  const complete = async (id: string, index: number): Promise<void> => {
+    await options.afterDispatchVerified?.(dispatchEvent(id, index, planned, started, index));
+    verified = index;
+  };
+
+  try {
+    let uploadClient: WebSessionClient | null = null;
+    if (imageCount > 0 || hasCover) {
+      failureStage = "binding the media upload session";
+      uploadClient = await createWebSessionClient(articleUploadOrigin(bootstrap), auth, {
+        timeoutMs: bootstrap.timeoutMs,
+        ...(bootstrap.signal === undefined ? {} : { signal: bootstrap.signal }),
+        ...(bootstrap.operationDeadline === undefined ? {} : { operationDeadline: bootstrap.operationDeadline }),
+        ...(bootstrap.dependencies === undefined ? {} : { dependencies: bootstrap.dependencies }),
+      });
+      if (webSessionCookie(uploadClient.cookies, "ct0") !== bootstrap.csrf) {
+        throw new Error("X media upload session did not bind the Article session CSRF realm");
+      }
+    }
+    for (const [offset, image] of materialized.inline.entries()) {
+      const id = `articles.media.inline[${offset + 1}]`;
+      failureStage = `uploading inline image ${offset + 1}`;
+      let index = 0;
+      const mediaId = await uploadArticleImage(bootstrap, uploadClient!, image, async () => {
+        index = await begin(id);
+      });
+      uploadedInline.push(mediaId);
+      await complete(id, index);
+    }
+    if (materialized.cover !== null) {
+      const id = "articles.media.cover";
+      failureStage = "uploading the cover image";
+      let index = 0;
+      coverMediaId = await uploadArticleImage(bootstrap, uploadClient!, materialized.cover, async () => {
+        index = await begin(id);
+      });
+      await complete(id, index);
+    }
+    contentState = buildXWebRichArticleContentState(document, uploadedInline);
+
+    if (draftId === null) {
+      const id = "articles.create";
+      failureStage = "resolving the Article create mutation";
+      const descriptor = await resolveDescriptor(bootstrap, "ArticleEntityDraftCreate", "mutation");
+      let index = 0;
+      failureStage = "preparing the Article create mutation";
+      const response = await graphQl(
+        bootstrap,
+        descriptor,
+        { content_state: contentState, title },
+        "POST",
+        undefined,
+        "articles.create",
+        async () => {
+          index = await begin(id);
+        },
+      );
+      const article = responseBoundArticle(response, "articleentity_create_draft", null, title);
+      draftId = postId(article.rest_id, "X created Article draft rest_id");
+      if (!hasCover) {
+        const finalArticle = await readArticleDraft(bootstrap, draftId);
+        verifyFinalRichArticle(finalArticle, {
+          id: draftId,
+          viewerId: currentViewer.id,
+          title,
+          contentState,
+          coverMediaId: null,
+        });
+      }
+      await complete(id, index);
+    } else {
+      const titleId = "articles.title";
+      failureStage = "resolving the Article title mutation";
+      const titleDescriptor = await resolveDescriptor(bootstrap, "ArticleEntityUpdateTitle", "mutation");
+      let titleIndex = 0;
+      failureStage = "preparing the Article title mutation";
+      const titleResponse = await graphQl(
+        bootstrap,
+        titleDescriptor,
+        { articleEntityId: draftId, title },
+        "POST",
+        undefined,
+        "articles.title",
+        async () => {
+          titleIndex = await begin(titleId);
+        },
+      );
+      responseBoundArticle(titleResponse, "articleentity_update_title", draftId, title);
+      await complete(titleId, titleIndex);
+
+      const contentId = "articles.content";
+      failureStage = "resolving the Article content mutation";
+      const contentDescriptor = await resolveDescriptor(bootstrap, "ArticleEntityUpdateContent", "mutation");
+      let contentIndex = 0;
+      failureStage = "preparing the Article content mutation";
+      const contentResponse = await graphQl(
+        bootstrap,
+        contentDescriptor,
+        { content_state: contentState, article_entity: draftId },
+        "POST",
+        undefined,
+        "articles.content",
+        async () => {
+          contentIndex = await begin(contentId);
+        },
+      );
+      responseBoundArticle(contentResponse, "articleentity_update_content_state", draftId);
+      if (!hasCover) {
+        const finalArticle = await readArticleDraft(bootstrap, draftId);
+        verifyFinalRichArticle(finalArticle, {
+          id: draftId,
+          viewerId: currentViewer.id,
+          title,
+          contentState,
+          coverMediaId: null,
+        });
+      }
+      await complete(contentId, contentIndex);
+    }
+
+    if (coverMediaId !== null) {
+      const id = "articles.cover";
+      failureStage = "resolving the Article cover mutation";
+      const descriptor = await resolveDescriptor(bootstrap, "ArticleEntityUpdateCoverMedia", "mutation");
+      let index = 0;
+      failureStage = "preparing the Article cover mutation";
+      const response = await graphQl(
+        bootstrap,
+        descriptor,
+        {
+          articleEntityId: draftId,
+          coverMedia: { media_id: coverMediaId, media_category: "DraftTweetImage" },
+        },
+        "POST",
+        undefined,
+        "articles.cover",
+        async () => {
+          index = await begin(id);
+        },
+      );
+      responseBoundArticle(response, "articleentity_update_cover_media", draftId);
+      const finalArticle = await readArticleDraft(bootstrap, draftId!);
+      verifyFinalRichArticle(finalArticle, {
+        id: draftId!,
+        viewerId: currentViewer.id,
+        title,
+        contentState: contentState!,
+        coverMediaId,
+      });
+      await complete(id, index);
+    }
+    if (draftId === null || contentState === null || nextIndex !== planned || verified !== planned) {
+      throw new Error("X rich Article workflow did not complete its exact dispatch schedule");
+    }
+    const url = `${X_ORIGIN}/compose/articles/edit/${draftId}`;
+    return {
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.publish",
+        published: false,
+        mode: "draft",
+        draftId,
+        title,
+        rich: true,
+        inlineImageCount: uploadedInline.length,
+        hasCover,
+        url,
+      },
+      finalUrl: url,
+      dispatchStarted: started > 0,
+      dispatch: { planned, started, verified },
+    };
+  } catch {
+    const url = draftId === null ? null : `${X_ORIGIN}/compose/articles/edit/${draftId}`;
+    return {
+      status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
+      output: null,
+      finalUrl: url,
+      dispatchStarted: started > 0,
+      dispatch: { planned, started, verified },
+      error: started > verified
+        ? "X may have accepted the current private Article dispatch; reconcile the exact draft before retrying"
+        : verified > 0
+          ? "X verified only part of the confirmed private rich Article workflow; inspect the draft before retrying"
+          : `X rich Article draft failed before remote submission while ${failureStage}`,
+    };
+  }
+}
+
 async function executeDesiredState(
   bootstrap: XBootstrap,
   recipe: WebSessionRecipe,
@@ -1216,6 +2587,7 @@ export async function executeXWebOperation(
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: XWebRuntimeDependencies;
+    readonly fileResolver?: BrowserFileResolver;
   } = {},
 ): Promise<WebSessionExecution> {
   const bootstrap = await bootstrapX(
@@ -1253,7 +2625,9 @@ export async function executeXWebOperation(
     || recipe.action === "posts.quote"
   ) return executePublish(bootstrap, recipe, input, auth, options);
   if (recipe.action === "articles.publish") {
-    return executeArticleDraft(bootstrap, recipe, input, auth, options);
+    return recipe.contractVersion === 3
+      ? executeRichArticleDraft(bootstrap, recipe, input, auth, options)
+      : executeArticleDraft(bootstrap, recipe, input, auth, options);
   }
   if (recipe.action === "likes.set" || recipe.action === "content.save" || recipe.action === "posts.repost") {
     return executeDesiredState(bootstrap, recipe, input, auth, options);

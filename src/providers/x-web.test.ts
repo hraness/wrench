@@ -515,6 +515,86 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
     })).toThrow("did not bind its reviewed");
   });
 
+  test("authorizes only exact native rich Article create, update, and cover payloads", () => {
+    const contentState = {
+      blocks: [{
+        data: {},
+        text: "Hraness",
+        key: "00000",
+        type: "unstyled",
+        entity_ranges: [{ key: 0, offset: 0, length: 7 }],
+        inline_style_ranges: [{ length: 7, offset: 0, style: "Bold" }],
+      }],
+      entity_map: [{
+        key: "0",
+        value: {
+          data: { url: "https://hraness.com/" },
+          type: "LINK",
+          mutability: "Mutable",
+        },
+      }],
+    };
+    const cases = [
+      ["articles.create", "ArticleEntityDraftCreate", { content_state: contentState, title: "Private draft" }],
+      ["articles.title", "ArticleEntityUpdateTitle", { articleEntityId: "700000000000000001", title: "Private draft" }],
+      ["articles.content", "ArticleEntityUpdateContent", { content_state: contentState, article_entity: "700000000000000001" }],
+      ["articles.cover", "ArticleEntityUpdateCoverMedia", {
+        articleEntityId: "700000000000000001",
+        coverMedia: { media_id: "700000000000000002", media_category: "DraftTweetImage" },
+      }],
+    ] as const;
+    for (const [operationId, operationName, variables] of cases) {
+      const resolved = descriptor(operationName);
+      const features = Object.fromEntries(resolved.metadata.featureSwitches.map((name) => [name, false]));
+      const fieldToggles = Object.fromEntries(resolved.metadata.fieldToggles.map((name) => [name, false]));
+      expect(authorizeXWebMutationRequest(operationId, {
+        method: "POST",
+        url: graphqlUrl(resolved),
+        descriptor: resolved,
+        body: {
+          variables,
+          features,
+          ...(resolved.metadata.fieldToggles.length === 0 ? {} : { fieldToggles }),
+          queryId: resolved.queryId,
+        },
+      })).toMatchObject({ operationName, method: "POST" });
+    }
+
+    const create = descriptor("ArticleEntityDraftCreate");
+    const createFeatures = Object.fromEntries(create.metadata.featureSwitches.map((name) => [name, false]));
+    const createToggles = Object.fromEntries(create.metadata.fieldToggles.map((name) => [name, false]));
+    for (const invalidState of [
+      { ...contentState, blocks: [{ ...contentState.blocks[0], key: "" }] },
+      { ...contentState, entity_map: [{ ...contentState.entity_map[0], key: "1" }] },
+      {
+        ...contentState,
+        entity_map: [{
+          key: "0",
+          value: {
+            data: {
+              entity_key: "0",
+              media_items: [{ local_media_id: 1, media_category: "tweet_image", media_id: "2" }],
+            },
+            type: "MEDIA",
+            mutability: "Immutable",
+          },
+        }],
+      },
+    ]) {
+      expect(() => authorizeXWebMutationRequest("articles.create", {
+        method: "POST",
+        url: graphqlUrl(create),
+        descriptor: create,
+        body: {
+          variables: { content_state: invalidState, title: "Private draft" },
+          features: createFeatures,
+          ...(create.metadata.fieldToggles.length === 0 ? {} : { fieldToggles: createToggles }),
+          queryId: create.queryId,
+        },
+      })).toThrow();
+    }
+  });
+
   test("rejects origin, credential, fragment, path, and method confusion", () => {
     const resolved = descriptor("HomeTimeline");
     const exactPath = buildXWebGraphQlPath(resolved);

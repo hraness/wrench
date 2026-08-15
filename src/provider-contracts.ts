@@ -98,7 +98,7 @@ function projectProviderContract(
     input: operation.input,
     state: operation.state,
     requiredScopeSets: operation.requiredScopeSets,
-    dispatch: operation.dispatch,
+    dispatch: operation.dispatch as ProviderContract["dispatch"],
     coverage: operation.coverage,
     implementation: operation.implementation,
   });

@@ -244,6 +244,37 @@ describe("authenticated text API transport", () => {
   });
 });
 
+describe("reviewed authenticated status transport", () => {
+  test("preserves a bounded binary POST body and binds the acquired cookies", async () => {
+    const body = new Uint8Array([0, 1, 2, 127, 255]);
+    let observedBody: number[] = [];
+    let observedCookie = "";
+    const client = await createWebSessionClient("https://x.com", auth, {
+      timeoutMs: 1_000,
+      dependencies: {
+        acquireCookies: () => Promise.resolve({ cookies, warnings: [] }),
+        fetch: async (_value, init) => {
+          observedBody = Array.from(
+            new Uint8Array(await new Response(init?.body).arrayBuffer()),
+          );
+          observedCookie = new Headers(init?.headers).get("cookie") ?? "";
+          return new Response(null, { status: 204 });
+        },
+      },
+    });
+
+    expect(await client.requestStatus({
+      url: new URL("https://x.com/i/media/upload.json"),
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body,
+      expectedStatuses: [204],
+    })).toEqual({ status: 204, location: null });
+    expect(observedBody).toEqual(Array.from(body));
+    expect(observedCookie).toContain("auth_token=private-cookie");
+  });
+});
+
 describe("reviewed authenticated response-cookie rotation", () => {
   test("absorbs only an allowlisted exact-origin cookie and reuses it on the next request", async () => {
     const cookieHeaders: string[] = [];

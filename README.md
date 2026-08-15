@@ -342,8 +342,9 @@ memory allowance.
 Wrench has two distinct Article-draft transports. The documented OAuth API can
 save a draft or, after a separate exact confirmation, publish it. The
 authenticated-web adapter uses a signed-in Arc, Chrome, or Chromium cookie
-realm and is intentionally draft-only: it can save one private plain-text
-Article but has no publish path.
+realm and is intentionally draft-only: it can create or replace one private
+native rich Article with links, inline images, and a cover, but it has no
+publish path.
 
 For the documented API, create a current-user-owned mode-0600 token document
 whose stable numeric subject and sorted scopes exactly match the Wrench auth
@@ -384,7 +385,18 @@ the flag, then require `published: false` and `mode: "draft"` in the result.
 
 To let Wrench use an existing signed-in Arc session instead of an OAuth token,
 install the authenticated-web adapter, bind the cookie realm to the exact X
-account, and preview the same final title and body:
+account, and put the strict version-1 rich document plus any exact local image
+paths in a private JSON input file:
+
+```json
+{
+  "title": "Reviewed title",
+  "document": "{\"schemaVersion\":1,\"blocks\":[{\"type\":\"paragraph\",\"text\":\"Read the source\",\"links\":[{\"offset\":9,\"length\":6,\"url\":\"https://example.com/source\"}]},{\"type\":\"image\",\"imageIndex\":0,\"caption\":\"Reviewed caption\"}]}",
+  "inline_images": ["/absolute/private/inline.webp"],
+  "cover_image": "/absolute/private/cover.jpg",
+  "draft_only": true
+}
+```
 
 ```sh
 wrench adapter sync-bundled --json
@@ -392,17 +404,21 @@ wrench auth add x-arc --cookie-source arc
 wrench auth bind x-arc --site x
 
 wrench x-web articles.publish \
-  --input '{"title":"Reviewed title","body":"Reviewed body","draft_only":true}' \
+  --input @/absolute/private/article-input.json \
   --auth x-arc --preview --json
 
 wrench confirm <preview-digest> --json
 ```
 
-The `x-web` contract requires `draft_only: true`, rejects cover inputs, sends
-one response-bound `ArticleEntityDraftCreate` request, and never calls
-`ArticleEntityPublish`. Its result must likewise report `published: false` and
-`mode: "draft"`. Keep OAuth and cookie locators distinct; Wrench never silently
-switches transports.
+The `x-web` version-3 contract requires `draft_only: true`, accepts only its
+bounded native block/link/style/image grammar, binds every image to the exact
+preview assets, and uses the reviewed INIT/APPEND/FINALIZE plus Article entity
+mutations. Add `draft_id` only to replace that exact current-user-owned private
+draft. Its result must report `published: false` and `mode: "draft"`; it never
+calls `ArticleEntityPublish`. A text-and-links-only replacement can be
+reconciled by exact readback after an indeterminate response. Pending media
+cannot: do not retry an uncertain upload. Keep OAuth and cookie locators
+distinct; Wrench never silently switches transports.
 
 ## Normalized omni views
 

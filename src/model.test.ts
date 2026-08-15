@@ -907,32 +907,47 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.2.0");
+    expect(current.value.version).toBe("1.3.0");
     const article = current.value.operations["articles.publish"];
     expect(article !== undefined && isWebSessionOperation(article)).toBeTrue();
     if (article === undefined || !isWebSessionOperation(article)) return;
-    expect(article.webSession.contractVersion).toBe(2);
+    expect(article.webSession.contractVersion).toBe(3);
     expect(article.input.properties.draft_only).toMatchObject({
       type: "boolean",
       enum: [true],
     });
-    expect(article.input.required).toEqual(["title", "body", "draft_only"]);
-    expect(article.input.properties.cover_image).toBeUndefined();
+    expect(article.input.required).toEqual(["title", "document", "draft_only"]);
+    expect(article.input.properties.inline_images).toMatchObject({ type: "array", maxItems: 20 });
+    expect(article.input.properties.cover_image).toMatchObject({ type: "file", maxBytes: 5 * 1024 * 1024 });
+    expect(article.input.properties.draft_id).toMatchObject({ type: "string", maxLength: 19 });
+    const richInput = validateOperationInput(article.input, {
+      title: "Harnessing Puerto Rico",
+      document: JSON.stringify({ schemaVersion: 1, blocks: [{ type: "paragraph", text: "Body" }] }),
+      draft_only: true,
+    }, current.value.origins);
+    expect(richInput.ok).toBeTrue();
+    if (richInput.ok) {
+      expect(validatePlatformOperationInput(current.value, "articles.publish", richInput.value)).toEqual({
+        ok: true,
+        value: richInput.value,
+      });
+    }
 
     const priorValue = JSON.parse(readFileSync(
-      join(import.meta.dir, "assets", "adapters", "x", "wrench-web-adapter.v1.1.0.json"),
+      join(import.meta.dir, "assets", "adapters", "x", "wrench-web-adapter.v1.2.0.json"),
       "utf8",
     )) as unknown;
     const prior = parseDiagnosticManifest(priorValue);
     expect(prior.ok).toBeTrue();
     if (!prior.ok) return;
     const priorArticle = prior.value.operations["articles.publish"];
-    expect(prior.value.version).toBe("1.1.0");
+    expect(prior.value.version).toBe("1.2.0");
     expect(priorArticle !== undefined && isWebSessionOperation(priorArticle)).toBeTrue();
     if (priorArticle === undefined || !isWebSessionOperation(priorArticle)) return;
-    expect(priorArticle.webSession.contractVersion).toBe(1);
-    expect(priorArticle.input.properties.draft_only).toBeUndefined();
-    expect(priorArticle.input.properties.cover_image?.type).toBe("file");
+    expect(priorArticle.webSession.contractVersion).toBe(2);
+    expect(priorArticle.input.properties.draft_only).toMatchObject({ type: "boolean", enum: [true] });
+    expect(priorArticle.input.required).toEqual(["title", "body", "draft_only"]);
+    expect(priorArticle.input.properties.cover_image).toBeUndefined();
   });
 
   test("ships only an inert generic capture reservation and rejects retired DOM recipes at runtime boundaries", () => {

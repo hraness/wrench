@@ -613,6 +613,10 @@ export const xWebMutationOperationIds = Object.freeze([
   "reposts.enable",
   "reposts.disable",
   "articles.draft",
+  "articles.create",
+  "articles.title",
+  "articles.content",
+  "articles.cover",
 ] as const);
 
 export type XWebMutationOperationId = (typeof xWebMutationOperationIds)[number];
@@ -630,6 +634,10 @@ const mutationOperationNames = Object.freeze({
   "reposts.enable": "CreateRetweet",
   "reposts.disable": "DeleteRetweet",
   "articles.draft": "ArticleEntityDraftCreate",
+  "articles.create": "ArticleEntityDraftCreate",
+  "articles.title": "ArticleEntityUpdateTitle",
+  "articles.content": "ArticleEntityUpdateContent",
+  "articles.cover": "ArticleEntityUpdateCoverMedia",
 } as const satisfies Readonly<Record<XWebMutationOperationId, string>>);
 
 function exactMutationKeys(value: JsonRecord, keys: readonly string[], label: string): void {
@@ -742,6 +750,217 @@ function validateArticleDraftVariables(variables: JsonRecord): void {
   }
 }
 
+const richArticleBlockTypes = new Set([
+  "unstyled",
+  "header-one",
+  "header-two",
+  "blockquote",
+  "unordered-list-item",
+  "ordered-list-item",
+  "atomic",
+]);
+const richArticleInlineStyles = new Set(["Bold", "Italic", "Strikethrough"]);
+
+function exactArticleRange(
+  value: unknown,
+  label: string,
+  maximum: number,
+): { readonly key?: number; readonly offset: number; readonly length: number; readonly style?: string } {
+  const range = record(value, label);
+  const hasKey = Object.hasOwn(range, "key");
+  const hasStyle = Object.hasOwn(range, "style");
+  if (hasKey === hasStyle) throw new Error(`${label} must be exactly one entity or style range`);
+  exactMutationKeys(range, hasKey ? ["key", "offset", "length"] : ["length", "offset", "style"], label);
+  if (
+    !Number.isSafeInteger(range.offset)
+    || !Number.isSafeInteger(range.length)
+    || (range.offset as number) < 0
+    || (range.length as number) < 1
+    || (range.offset as number) + (range.length as number) > maximum
+  ) throw new Error(`${label} must stay inside its block text`);
+  if (hasKey && (!Number.isSafeInteger(range.key) || (range.key as number) < 0)) {
+    throw new Error(`${label}.key must be a non-negative integer`);
+  }
+  if (hasStyle && (typeof range.style !== "string" || !richArticleInlineStyles.has(range.style))) {
+    throw new Error(`${label}.style is outside the reviewed Article styles`);
+  }
+  return Object.freeze({
+    ...(hasKey ? { key: range.key as number } : { style: range.style as string }),
+    offset: range.offset as number,
+    length: range.length as number,
+  });
+}
+
+function exactArticleUrl(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 2_048 || /[\0\r\n]/u.test(value)) {
+    throw new Error(`${label} must be a bounded HTTPS URL`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a bounded HTTPS URL`);
+  }
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") {
+    throw new Error(`${label} must be a bounded HTTPS URL`);
+  }
+  return parsed.href;
+}
+
+/** Validate the exact API-side rich content state emitted by X's current converter. */
+export function validateXWebRichArticleContentState(value: unknown): void {
+  const contentState = record(value, "X rich Article content_state");
+  exactMutationKeys(contentState, ["blocks", "entity_map"], "X rich Article content_state");
+  if (!Array.isArray(contentState.blocks) || contentState.blocks.length < 1 || contentState.blocks.length > 2_000) {
+    throw new Error("X rich Article content_state.blocks must contain 1-2000 blocks");
+  }
+  if (!Array.isArray(contentState.entity_map) || contentState.entity_map.length > 2_000) {
+    throw new Error("X rich Article content_state.entity_map exceeded its reviewed bound");
+  }
+  const entityKinds: ("LINK" | "MEDIA")[] = [];
+  let mediaCount = 0;
+  for (const [index, value] of contentState.entity_map.entries()) {
+    const entity = record(value, `X rich Article entity ${index}`);
+    exactMutationKeys(entity, ["key", "value"], `X rich Article entity ${index}`);
+    if (entity.key !== `${index}`) throw new Error("X rich Article entity keys must be contiguous strings");
+    const entry = record(entity.value, `X rich Article entity ${index}.value`);
+    exactMutationKeys(entry, ["data", "type", "mutability"], `X rich Article entity ${index}.value`);
+    const data = record(entry.data, `X rich Article entity ${index}.data`);
+    if (entry.type === "LINK") {
+      if (entry.mutability !== "Mutable") throw new Error("X rich Article links must be mutable");
+      exactMutationKeys(data, ["url"], `X rich Article entity ${index}.data`);
+      exactArticleUrl(data.url, `X rich Article entity ${index}.data.url`);
+      entityKinds.push("LINK");
+      continue;
+    }
+    if (entry.type !== "MEDIA" || entry.mutability !== "Immutable") {
+      throw new Error("X rich Article entities support only reviewed LINK and MEDIA values");
+    }
+    const mediaKeys = Object.keys(data).sort().join(",");
+    if (mediaKeys !== "entity_key,media_items" && mediaKeys !== "caption,entity_key,media_items") {
+      throw new Error(`X rich Article entity ${index}.data contained unsupported media fields`);
+    }
+    if (data.entity_key !== `${index}`) throw new Error("X rich Article media entity_key must bind its entity");
+    if (data.caption !== undefined && (
+      typeof data.caption !== "string"
+      || data.caption.length > 1_000
+      || /[\0\r]/u.test(data.caption)
+    )) throw new Error("X rich Article media caption must be bounded text");
+    if (!Array.isArray(data.media_items) || data.media_items.length !== 1) {
+      throw new Error("X rich Article media entities must contain one image");
+    }
+    const media = record(data.media_items[0], `X rich Article entity ${index}.media_items[0]`);
+    exactMutationKeys(media, ["local_media_id", "media_category", "media_id"], `X rich Article entity ${index}.media_items[0]`);
+    if (!Number.isSafeInteger(media.local_media_id) || (media.local_media_id as number) < 1) {
+      throw new Error("X rich Article local media IDs must be positive integers");
+    }
+    if (media.media_category !== "DraftTweetImage") {
+      throw new Error("X rich Article inline media must use DraftTweetImage");
+    }
+    exactMutationPostId(media.media_id, "X rich Article media ID");
+    mediaCount += 1;
+    if (mediaCount > 20) throw new Error("X rich Article supports at most 20 inline images");
+    entityKinds.push("MEDIA");
+  }
+
+  const references = Array.from({ length: entityKinds.length }, () => 0);
+  const blockKeys = new Set<string>();
+  let characters = 0;
+  for (const [index, value] of contentState.blocks.entries()) {
+    const block = record(value, `X rich Article block ${index + 1}`);
+    exactMutationKeys(
+      block,
+      ["data", "text", "key", "type", "entity_ranges", "inline_style_ranges"],
+      `X rich Article block ${index + 1}`,
+    );
+    const data = record(block.data, `X rich Article block ${index + 1}.data`);
+    exactMutationKeys(data, [], `X rich Article block ${index + 1}.data`);
+    if (
+      typeof block.text !== "string"
+      || /[\0\r\n]/u.test(block.text)
+      || typeof block.key !== "string"
+      || !/^[a-z0-9]{5}$/u.test(block.key)
+      || blockKeys.has(block.key)
+      || typeof block.type !== "string"
+      || !richArticleBlockTypes.has(block.type)
+      || !Array.isArray(block.entity_ranges)
+      || !Array.isArray(block.inline_style_ranges)
+    ) throw new Error(`X rich Article block ${index + 1} left the reviewed shape`);
+    const blockText = block.text;
+    blockKeys.add(block.key);
+    characters += blockText.length;
+    if (characters > 20_000) throw new Error("X rich Article text exceeds 20000 characters");
+    const entityRanges = block.entity_ranges.map((range, rangeIndex) =>
+      exactArticleRange(range, `X rich Article block ${index + 1}.entity_ranges[${rangeIndex}]`, blockText.length));
+    block.inline_style_ranges.forEach((range, rangeIndex) => {
+      exactArticleRange(range, `X rich Article block ${index + 1}.inline_style_ranges[${rangeIndex}]`, blockText.length);
+    });
+    let previousEnd = 0;
+    for (const range of entityRanges) {
+      if (range.offset < previousEnd) throw new Error("X rich Article entity ranges may not overlap");
+      previousEnd = range.offset + range.length;
+      const key = range.key!;
+      const kind = entityKinds[key];
+      if (kind === undefined) throw new Error("X rich Article entity range referenced an unknown entity");
+      references[key] = (references[key] ?? 0) + 1;
+      if (block.type === "atomic" ? kind !== "MEDIA" : kind !== "LINK") {
+        throw new Error("X rich Article entity range used the wrong block kind");
+      }
+    }
+    if (block.type === "atomic") {
+      if (
+        blockText !== " "
+        || entityRanges.length !== 1
+        || entityRanges[0]?.offset !== 0
+        || entityRanges[0]?.length !== 1
+        || block.inline_style_ranges.length !== 0
+      ) throw new Error("X rich Article atomic image blocks must bind one media entity");
+    }
+  }
+  if (references.some((count) => count !== 1)) {
+    throw new Error("X rich Article entities must each be referenced exactly once");
+  }
+}
+
+function validateRichArticleCreateVariables(variables: JsonRecord): void {
+  exactMutationKeys(variables, ["content_state", "title"], "X articles.create variables");
+  if (
+    typeof variables.title !== "string"
+    || variables.title.length < 1
+    || variables.title.length > 100
+    || /[\0\r\n]/u.test(variables.title)
+  ) throw new Error("X articles.create title must be one bounded line");
+  validateXWebRichArticleContentState(variables.content_state);
+}
+
+function validateRichArticleUpdateVariables(operationId: XWebMutationOperationId, variables: JsonRecord): void {
+  if (operationId === "articles.title") {
+    exactMutationKeys(variables, ["articleEntityId", "title"], "X articles.title variables");
+    exactMutationPostId(variables.articleEntityId, "X articles.title draft");
+    if (
+      typeof variables.title !== "string"
+      || variables.title.length < 1
+      || variables.title.length > 100
+      || /[\0\r\n]/u.test(variables.title)
+    ) throw new Error("X articles.title title must be one bounded line");
+    return;
+  }
+  if (operationId === "articles.content") {
+    exactMutationKeys(variables, ["content_state", "article_entity"], "X articles.content variables");
+    exactMutationPostId(variables.article_entity, "X articles.content draft");
+    validateXWebRichArticleContentState(variables.content_state);
+    return;
+  }
+  exactMutationKeys(variables, ["articleEntityId", "coverMedia"], "X articles.cover variables");
+  exactMutationPostId(variables.articleEntityId, "X articles.cover draft");
+  const cover = record(variables.coverMedia, "X articles.cover coverMedia");
+  exactMutationKeys(cover, ["media_id", "media_category"], "X articles.cover coverMedia");
+  exactMutationPostId(cover.media_id, "X articles.cover media ID");
+  if (cover.media_category !== "DraftTweetImage") {
+    throw new Error("X articles.cover media category must be DraftTweetImage");
+  }
+}
+
 /**
  * Bind a state-changing request to one semantic operation and its complete
  * variable/metadata shape before the durable dispatch boundary is crossed.
@@ -766,7 +985,11 @@ export function authorizeXWebMutationRequest(
   if (body.queryId !== binding.queryId) throw new Error(`X ${operationId} body queryId drifted`);
   const variables = record(body.variables, `X ${operationId} variables`);
   if (expectedName === "CreateTweet") validateCreateTweetVariables(operationId, variables);
-  else if (expectedName === "ArticleEntityDraftCreate") validateArticleDraftVariables(variables);
+  else if (operationId === "articles.draft") validateArticleDraftVariables(variables);
+  else if (operationId === "articles.create") validateRichArticleCreateVariables(variables);
+  else if (operationId === "articles.title" || operationId === "articles.content" || operationId === "articles.cover") {
+    validateRichArticleUpdateVariables(operationId, variables);
+  }
   else validateDesiredStateVariables(operationId, variables);
   exactBooleanMap(body.features, descriptor.metadata.featureSwitches, `X ${operationId} features`);
   if (descriptor.metadata.fieldToggles.length > 0) {

@@ -85,7 +85,7 @@ type ProviderPluginOperationDefinitionBaseV1 = {
   readonly idempotency: IdempotencyKind;
   readonly dedupeWindowMs: number;
   readonly state: ProviderPluginContractStateV1;
-  readonly dispatch: "none" | "single" | "thread-items";
+  readonly dispatch: "none" | "single" | "thread-items" | "article-rich-draft";
   readonly implementation: string;
   readonly planDispatches: (input: OperationInput) => readonly BrowserDispatchPlan[];
   readonly validateInput: (input: OperationInput) => readonly string[];
@@ -449,6 +449,20 @@ function parseProviderPluginDispatches(
       throw new Error(
         `${label} must return exactly one dispatch for each input.items value`,
       );
+    }
+  }
+  if (operation.dispatch === "article-rich-draft") {
+    const inlineImages = input.inline_images;
+    if (inlineImages !== undefined && !Array.isArray(inlineImages)) {
+      throw new Error(`${label} requires input.inline_images to be an array`);
+    }
+    const imageCount = Array.isArray(inlineImages) ? inlineImages.length : 0;
+    const expected = imageCount
+      + (input.cover_image === undefined ? 0 : 1)
+      + (input.draft_id === undefined ? 1 : 2)
+      + (input.cover_image === undefined ? 0 : 1);
+    if (dispatches.length !== expected) {
+      throw new Error(`${label} returned the wrong rich Article dispatch count`);
     }
   }
 
@@ -2261,7 +2275,12 @@ function freezeOperation(
   if (operation.state !== "observed" && operation.state !== "capture-required") {
     throw new Error(`provider plugin operation ${operation.name} has an invalid state`);
   }
-  if (operation.dispatch !== "none" && operation.dispatch !== "single" && operation.dispatch !== "thread-items") {
+  if (
+    operation.dispatch !== "none"
+    && operation.dispatch !== "single"
+    && operation.dispatch !== "thread-items"
+    && operation.dispatch !== "article-rich-draft"
+  ) {
     throw new Error(`provider plugin operation ${operation.name} has an invalid dispatch policy`);
   }
   if (
