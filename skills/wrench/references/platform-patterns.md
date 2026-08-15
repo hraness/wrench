@@ -20,12 +20,12 @@ Leave the state `capture-required` when current evidence is absent, ambiguous, e
 ## LinkedIn
 
 - Use `linkedin-web` with a browser-session/cookie realm for consumer Home feed, inbox folders, conversations, and native article-editor surfaces. The separate official `linkedin` OAuth adapter covers approved post, comment, reply, repost, and reaction scopes; it does not supply the consumer Home feed or inbox.
-- No current LinkedIn web operation is observed. `messaging.list` was observed in archived bundle 1.1.0, but current bundle 1.2.0 demotes it after durable current-account projection drift; every directly exported semantic execution path refuses before cookie acquisition, browser bootstrap, or network traffic.
-- Every LinkedIn web operation remains capture-required. Explicit reservations cover inbox folders, one member profile, one organization Page, one bounded page of recommended connections, and one connection invitation; none has an executable internal request. Article, feed, relationship, message, post, and comment evidence does not graduate without exact current variables, bounded target-bound projections, member binding, completeness, and acknowledgement-free behavior.
+- No current LinkedIn web operation is observed. `messaging.list` was observed in archived bundle 1.1.0, then bundle 1.2.0 demoted it after durable current-account projection drift; the current 1.4.0 bundle remains capture-required, and every directly exported semantic execution path refuses before cookie acquisition, browser bootstrap, or network traffic.
+- Every LinkedIn web operation remains capture-required. Explicit reservations cover inbox folders, one member profile, one organization Page, one bounded page of recommended connections, one connection invitation, and private native Article draft saving; none has an executable internal request. Article, feed, relationship, message, post, and comment evidence does not graduate without exact current variables, bounded target-bound projections, member binding, completeness, and acknowledgement-free behavior.
 - Exclude presence, messaging badges, delivery acknowledgements, seen/read receipts, and notification badge traffic from every R1 contract.
 - Bind the current viewer's person/member identity to the auth realm. `organizations.read` views a Page and does not confer Page-actor authority. For organization actions, additionally bind the administered organization actor selected by the plan.
-- Treat messages, posts, comments, replies, reposts, quotes, connection requests, and native article publication as R3. Treat reversible reaction/follow/save desired state as R2 only after both create and delete exchanges are captured.
-- Keep `messaging.send`, `relationships.connect`, post/comment mutations, reactions, and native article publication `capture-required` until their exact request, response, actor, and target contracts pass a low-stakes fixture. `comments.create` targets a post rather than a profile/Page itself. Never send through a textbox fallback.
+- Treat private `articles.draft.save` as R2 only after the exact editor autosave, stable draft identity, current-member binding, and unpublished readback are captured. Keep `articles.publish` separate as R3. Messages, posts, comments, replies, reposts, quotes, connection requests, and native article publication are also R3. Treat reversible reaction/follow/save desired state as R2 only after both create and delete exchanges are captured.
+- Keep `articles.draft.save`, `articles.publish`, `messaging.send`, `relationships.connect`, post/comment mutations, and reactions `capture-required` until their exact request, response, actor, target, and readback contracts pass a low-stakes fixture. `comments.create` targets a post rather than a profile/Page itself. Never send through a textbox or editor fallback.
 - Every available LinkedIn realm returned `401` at current-account preflight during verification on July 23, 2026. A fresh authenticated realm is necessary but not sufficient: recapture and review the current mailbox projection before promotion. Browser control is not an authentication or action fallback.
 - Avoid employment and recruiting threads as fixtures.
 
@@ -34,14 +34,21 @@ Read [linkedin-adapter.md](linkedin-adapter.md) before changing the LinkedIn reg
 ## X
 
 - Use `x-web` for consumer For You/Following/user/List/search/bookmark feeds, post/conversation reads, inbox/request folders, and consumer publishing surfaces. The separate official `x` OAuth adapter covers documented reverse-chronological/user/mentions/List/recent-search/bookmark feeds and approved writes, but never For You. Keep encrypted X Chat separate from both.
+- The official OAuth adapter exposes `articles.draft.save` as a distinct R2
+  private draft create and `articles.publish@3` as the active R3 publish-only
+  contract. The retained `articles.publish@2` draft-only branch is historical
+  recovery for already durable evidence, never the route for a new preview.
 - Current GraphQL query IDs, feature sets, and authorization/CSRF material are dynamic inputs to owned code, not manifest fields. Resolve each by an exact reviewed source and require one unambiguous current value.
 - The observed R1 set includes feed, post, and reply-tree reads. Authorized direct live evidence for the current contract version covers For You, bookmarks, one exact post, and its comments. DM folder and conversation reads remain capture-required because current X Chat events require the separate reviewed key-recovery and acknowledgement-free contract. Native Article reads remain capture-required where entitlement changes the exchange.
 - Never pair a sliced provider page with its end cursor. Return the cursor only after projecting the complete matching page; fail closed on an over-limit page. Require user and List responses to echo the exact requested identity.
-- `likes.set` and `content.save` are the only observed X web writes. Prior reversible fixtures proved exact like/bookmark desired state: the transaction header, create/delete response, account/target binding, and independent post readback passed false → true → false with the original false state restored. Text post, self-thread, reply, repost, and quote mutations remain capture-required.
-- Keep DM list/read/send, media variants, native Article operations, and every other mutation capture-required until their cryptographic, request/response, and account/target bindings are complete. Never open the composer as a fallback.
+- The observed X web writes are `likes.set`, `content.save`, and private `articles.draft.save`, all R2. Prior reversible fixtures proved exact like/bookmark desired state. The Article contract separately creates or replaces one bound private text-and-native-links draft and verifies the unpublished readback; it has no publish-capable branch. Text post, self-thread, reply, repost, and quote mutations remain capture-required.
+- Keep DM list/read/send, media variants, `articles.publish`, and every other mutation capture-required until their cryptographic, request/response, and account/target bindings are complete. Article images and covers are outside the observed draft contract. Never open the composer or Article editor as a fallback.
 - Bind the current X user ID before private reads and mutations. Bind reply/quote/root IDs and every returned created post ID in ordered threads.
 
-Read [x-adapter.md](x-adapter.md) before changing the X registry. Treat encrypted X Chat plaintext/send as a separate cryptographic contract, not a normal HAR template.
+Read [native article drafts](article-drafts.md) for the shared private-draft seam
+and [x-adapter.md](x-adapter.md) before changing the X registry. Treat encrypted
+X Chat plaintext/send as a separate cryptographic contract, not a normal HAR
+template.
 
 ## Reddit and Hacker News
 

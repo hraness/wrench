@@ -826,7 +826,8 @@ export function providerContractConditionalInputIssues(
       if (typeof value === "number" && !Number.isSafeInteger(value)) issues.push(`input.${name} must be a safe integer`);
     }
   }
-  if (recipe.provider === "x" && recipe.action === "articles.publish"
+  if (recipe.provider === "x"
+    && (recipe.action === "articles.draft.save" || recipe.action === "articles.publish")
     && input.cover_alt_text !== undefined && !isFileInputValue(input.cover)) {
     issues.push("input.cover_alt_text requires input.cover");
   }

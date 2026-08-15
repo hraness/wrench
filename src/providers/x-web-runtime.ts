@@ -1,6 +1,16 @@
+import {
+  parseArticleDraftDocument,
+  type ArticleDraftDocument,
+} from "../article-draft-document";
 import type { WrenchAuth } from "../auth";
-import { browserCleanupBarrier } from "../browser";
-import type { OperationInput, WebSessionRecipe } from "../model";
+import {
+  browserCleanupBarrier,
+} from "../browser";
+import type {
+  OperationInput,
+  WebSessionRecipe,
+} from "../model";
+import { canonicalJson } from "../canonical-json";
 import {
   createWebSessionClient,
   fetchPublicWebAsset,
@@ -30,6 +40,7 @@ import {
   normalizeXWebGraphQlTimelineResponse,
   resolveUniqueXWebBundleDescriptor,
   validateXWebDesiredStateMutation,
+  validateXWebRichArticleContentState,
   xWebQueryDescriptorEvidenceSnapshot,
   type XWebBundleQueryDescriptor,
   type XWebOperationType,
@@ -43,6 +54,9 @@ const X_ASSET_ORIGIN = "https://abs.twimg.com";
 const MAX_HOME_BYTES = 2 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_LIMIT = 20;
+const MAX_ARTICLE_TITLE_CHARACTERS = 100;
+const MAX_ARTICLE_BODY_CHARACTERS = 20_000;
+const MAX_ARTICLE_BLOCKS = 2_000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -86,8 +100,9 @@ type FeedRequest = {
 const viewerEvidence = Object.freeze({
   operationName: "Viewer",
   operationType: "query" as const,
-  queryId: "u4ni7JqpqdAQxWQfkLsdUQ",
-  sourceChunk: "main.9929b02a.js",
+  queryId: "5XShkXk2oO2J7SYmTu6pvw",
+  sourceChunk: "main.e4aca26a.js",
+  observedOn: "2026-08-14",
 });
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -136,6 +151,58 @@ function booleanInput(input: OperationInput, name: string): boolean {
   const value = input[name];
   if (typeof value !== "boolean") throw new Error(`input.${name} must be boolean`);
   return value;
+}
+
+export type XWebRichArticleContentState = {
+  readonly blocks: readonly Readonly<Record<string, unknown>>[];
+  readonly entity_map: readonly Readonly<Record<string, unknown>>[];
+};
+
+/** Build X's current API content-state shape from the provider-neutral document. */
+export function buildXWebRichArticleContentState(
+  document: ArticleDraftDocument,
+): XWebRichArticleContentState {
+  const entities: Readonly<Record<string, unknown>>[] = [];
+  const blocks: Readonly<Record<string, unknown>>[] = [];
+  const blockType = Object.freeze({
+    paragraph: "unstyled",
+    heading1: "header-one",
+    heading2: "header-two",
+    blockquote: "blockquote",
+    "unordered-list-item": "unordered-list-item",
+    "ordered-list-item": "ordered-list-item",
+  } as const);
+  const styleName = Object.freeze({ bold: "Bold", italic: "Italic", strikethrough: "Strikethrough" } as const);
+  for (const [blockIndex, block] of document.blocks.entries()) {
+    const key = blockIndex.toString(36).padStart(5, "0");
+    const entityRanges = block.links.map((link) => {
+      const key = entities.length;
+      entities.push(Object.freeze({
+        key: `${key}`,
+        value: Object.freeze({
+          data: Object.freeze({ url: link.url }),
+          type: "LINK",
+          mutability: "Mutable",
+        }),
+      }));
+      return Object.freeze({ key, offset: link.offset, length: link.length });
+    });
+    blocks.push(Object.freeze({
+      data: Object.freeze({}),
+      key,
+      text: block.text,
+      type: blockType[block.type],
+      entity_ranges: Object.freeze(entityRanges),
+      inline_style_ranges: Object.freeze(block.styles.map((style) => Object.freeze({
+        length: style.length,
+        offset: style.offset,
+        style: styleName[style.style],
+      }))),
+    }));
+  }
+  const contentState = Object.freeze({ blocks: Object.freeze(blocks), entity_map: Object.freeze(entities) });
+  validateXWebRichArticleContentState(contentState);
+  return contentState;
 }
 
 function integerInput(input: OperationInput, name: string, fallback: number, minimum: number, maximum: number): number {
@@ -360,10 +427,14 @@ function descriptorEvidence(operationName: string, operationType: XWebOperationT
 }
 
 async function sourceText(bootstrap: XBootstrap, evidence: XWebQueryDescriptorEvidence): Promise<string> {
-  if (evidence.sourceChunk.startsWith("main.")) return bootstrap.mainText;
-  const cached = bootstrap.chunks.get(evidence.sourceChunk);
+  return currentChunkText(bootstrap, evidence.sourceChunk);
+}
+
+async function currentChunkText(bootstrap: XBootstrap, sourceChunk: string): Promise<string> {
+  if (sourceChunk.startsWith("main.")) return bootstrap.mainText;
+  const cached = bootstrap.chunks.get(sourceChunk);
   if (cached !== undefined) return cached;
-  const currentUrl = resolveCurrentXWebChunkUrl(bootstrap.html, evidence.sourceChunk);
+  const currentUrl = resolveCurrentXWebChunkUrl(bootstrap.html, sourceChunk);
   const text = await fetchPublicWebAsset(
     currentUrl,
     {
@@ -378,8 +449,34 @@ async function sourceText(bootstrap: XBootstrap, evidence: XWebQueryDescriptorEv
       ...(bootstrap.dependencies === undefined ? {} : { dependencies: bootstrap.dependencies }),
     },
   );
-  bootstrap.chunks.set(evidence.sourceChunk, text);
+  bootstrap.chunks.set(sourceChunk, text);
   return text;
+}
+
+const articleRichContractEvidence = Object.freeze({
+  entities: "shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory.d1314bba.js",
+  converter: "shared~bundle.Grok~bundle.GrokDrawer~bundle.ReaderMode~bundle.Birdwatch~bundle.TwitterArticles~bundle.Compose.02f6dc7a.js",
+  observedOn: "2026-08-14",
+});
+
+function requireCurrentBundleTokens(text: string, tokens: readonly string[], label: string): void {
+  if (tokens.some((token) => !text.includes(token))) {
+    throw new Error(`X current ${label} bundle drifted outside the reviewed rich Article contract`);
+  }
+}
+
+async function assertCurrentArticleRichContract(bootstrap: XBootstrap): Promise<void> {
+  const [entities, converter] = await Promise.all([
+    currentChunkText(bootstrap, articleRichContractEvidence.entities),
+    currentChunkText(bootstrap, articleRichContractEvidence.converter),
+  ]);
+  requireCurrentBundleTokens(entities, [
+    'createEntity(w.Sg,"MUTABLE",{url:',
+  ], "Article entity");
+  requireCurrentBundleTokens(converter, [
+    'mutability:s[r.mutability]',
+    'inline_style_ranges:',
+  ], "Article content converter");
 }
 
 async function resolveDescriptor(
@@ -849,6 +946,47 @@ export async function readXWebDesiredState(
   };
 }
 
+export async function readXWebArticleDraftDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly dependencies?: XWebRuntimeDependencies;
+  } = {},
+): Promise<{
+  readonly matches: boolean;
+  readonly draftId: string;
+}> {
+  if (
+    recipe.site !== "x"
+    || recipe.action !== "articles.draft.save"
+    || recipe.contractVersion !== 1
+  ) {
+    throw new Error("X Article draft recovery supports only articles.draft.save@1");
+  }
+  const draftId = postId(input.draft_id, "input.draft_id");
+  const title = requiredString(
+    input.title,
+    "input.title",
+    MAX_ARTICLE_TITLE_CHARACTERS,
+  );
+  const document = parseArticleDraftDocument(input.document, {
+    maximumBlocks: MAX_ARTICLE_BLOCKS,
+    maximumCharacters: MAX_ARTICLE_BODY_CHARACTERS,
+  });
+  const expectedContent = buildXWebRichArticleContentState(document);
+  const bootstrap = await bootstrapX(auth, recipe, options.dependencies);
+  const currentViewer = await requireBoundViewer(bootstrap, auth);
+  const article = await readArticleDraft(bootstrap, draftId);
+  requirePrivateDraftArticle(article, draftId, currentViewer.id);
+  const actualContent = normalizeArticleContentReadback(article.content_state);
+  return {
+    matches: article.title === title
+      && canonicalJson(actualContent) === canonicalJson(expectedContent),
+    draftId,
+  };
+}
+
 function createdTweet(
   response: unknown,
   expectedText: string,
@@ -887,6 +1025,399 @@ function createTweetVariables(text: string, replyTo: string | null, quote: strin
     ...(replyTo === null ? {} : { reply: { in_reply_to_tweet_id: replyTo, exclude_reply_user_ids: [] } }),
     ...(quote === null ? {} : { attachment_url: `${X_ORIGIN}/i/status/${quote}` }),
   };
+}
+
+function articleEntityResult(response: unknown, rootName: string, label: string): JsonRecord {
+  const data = graphQlData(response, label);
+  const root = record(data[rootName], `${label}.${rootName}`);
+  if (isRecord(root.result)) return record(root.result, `${label}.${rootName}.result`);
+  if (isRecord(root.article_entity_results)) {
+    const results = record(root.article_entity_results, `${label}.${rootName}.article_entity_results`);
+    return record(results.result, `${label}.${rootName}.article_entity_results.result`);
+  }
+  return root;
+}
+
+function responseBoundArticle(
+  response: unknown,
+  rootName: string,
+  expectedId: string | null,
+  expectedTitle?: string,
+): JsonRecord {
+  const article = articleEntityResult(response, rootName, `X ${rootName} response`);
+  const id = postId(article.rest_id, `X ${rootName} response rest_id`);
+  if (expectedId !== null && id !== expectedId) {
+    throw new Error(`X ${rootName} response changed the confirmed Article draft`);
+  }
+  if (expectedTitle !== undefined && article.title !== expectedTitle) {
+    throw new Error(`X ${rootName} response did not bind the confirmed title`);
+  }
+  return article;
+}
+
+function articleAuthorId(article: JsonRecord): string {
+  const metadata = record(article.metadata, "X Article metadata");
+  const authorResults = record(metadata.author_results, "X Article metadata.author_results");
+  const author = record(authorResults.result, "X Article metadata.author_results.result");
+  return postId(author.rest_id, "X Article author rest_id");
+}
+
+function requirePrivateDraftArticle(
+  article: JsonRecord,
+  expectedId: string,
+  expectedViewerId: string,
+): void {
+  if (postId(article.rest_id, "X Article rest_id") !== expectedId) {
+    throw new Error("X Article readback changed the confirmed draft ID");
+  }
+  if (articleAuthorId(article) !== expectedViewerId) {
+    throw new Error("X Article draft does not belong to the bound viewer");
+  }
+  const lifecycle = record(article.lifecycle_state, "X Article lifecycle_state");
+  if (lifecycle.lifecycle !== "Draft") {
+    throw new Error("X Article target must remain an unpublished private draft");
+  }
+}
+
+function normalizedArticleEntityKey(value: unknown, label: string): string {
+  if (
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= 0
+    && value <= MAX_ARTICLE_BLOCKS
+  ) {
+    return `${value}`;
+  }
+  if (typeof value === "string" && /^(?:0|[1-9][0-9]{0,3})$/u.test(value)) {
+    return value;
+  }
+  throw new Error(`${label} is not one bounded Article entity key`);
+}
+
+function articleReadbackEntityKeyMap(
+  values: readonly unknown[],
+  blocks: readonly unknown[],
+  rangesKey: "entity_ranges" | "entityRanges",
+): ReadonlyMap<string, string> {
+  const known = new Set<string>();
+  values.forEach((value, index) => {
+    const entity = record(value, `X Article readback entity ${index}`);
+    const source = normalizedArticleEntityKey(
+      entity.key,
+      `X Article readback entity ${index}.key`,
+    );
+    if (known.has(source)) {
+      throw new Error("X Article readback repeated one entity key");
+    }
+    known.add(source);
+  });
+  const result = new Map<string, string>();
+  blocks.forEach((value, blockIndex) => {
+    const block = record(value, `X Article readback block ${blockIndex + 1}`);
+    const ranges = block[rangesKey];
+    if (!Array.isArray(ranges)) {
+      throw new Error("X Article readback block ranges changed shape");
+    }
+    ranges.forEach((value) => {
+      const range = record(value, "X Article readback entity range");
+      const source = normalizedArticleEntityKey(
+        range.key,
+        "X Article readback entity range key",
+      );
+      if (!known.has(source)) {
+        throw new Error("X Article readback range referenced an unknown entity");
+      }
+      if (result.has(source)) {
+        throw new Error("X Article readback repeated one entity reference");
+      }
+      result.set(source, `${result.size}`);
+    });
+  });
+  if (result.size !== values.length) {
+    throw new Error("X Article readback contained one unreferenced entity");
+  }
+  return result;
+}
+
+function orderedArticleReadbackEntities(
+  values: readonly unknown[],
+  keys: ReadonlyMap<string, string>,
+): readonly unknown[] {
+  return [...values].sort((left, right) => {
+    const leftKey = normalizedArticleEntityKey(
+      record(left, "X Article readback entity").key,
+      "X Article readback entity key",
+    );
+    const rightKey = normalizedArticleEntityKey(
+      record(right, "X Article readback entity").key,
+      "X Article readback entity key",
+    );
+    return Number(keys.get(leftKey)) - Number(keys.get(rightKey));
+  });
+}
+
+function remappedArticleEntityKey(
+  value: unknown,
+  keys: ReadonlyMap<string, string>,
+  label: string,
+): string {
+  const source = normalizedArticleEntityKey(value, label);
+  const normalized = keys.get(source);
+  if (normalized === undefined) {
+    throw new Error(`${label} referenced an unknown Article entity`);
+  }
+  return normalized;
+}
+
+function normalizedArticleBlockData(
+  value: unknown,
+  label: string,
+  blockText: unknown,
+): Readonly<Record<string, never>> {
+  if (typeof blockText !== "string") {
+    throw new Error(`${label} has no bounded block text`);
+  }
+  const data = record(value, label);
+  const keys = Object.keys(data);
+  if (keys.length === 0) return Object.freeze({});
+  if (keys.length !== 1 || keys[0] !== "urls" || !Array.isArray(data.urls)) {
+    throw new Error(`${label} left the reviewed empty-or-urls shape`);
+  }
+  if (data.urls.length > 100) {
+    throw new Error(`${label}.urls exceeded its reviewed bound`);
+  }
+  let previousEnd = 0;
+  data.urls.forEach((value, index) => {
+    const url = record(value, `${label}.urls[${index}]`);
+    const urlKeys = Object.keys(url).sort();
+    if (urlKeys.join(",") !== "fromIndex,text,toIndex") {
+      throw new Error(`${label}.urls[${index}] left its reviewed range shape`);
+    }
+    if (
+      !Number.isSafeInteger(url.fromIndex)
+      || !Number.isSafeInteger(url.toIndex)
+      || (url.fromIndex as number) < previousEnd
+      || (url.fromIndex as number) < 0
+      || (url.toIndex as number) <= (url.fromIndex as number)
+      || (url.toIndex as number) > blockText.length
+    ) {
+      throw new Error(`${label}.urls[${index}] escaped its block text`);
+    }
+    if (
+      typeof url.text !== "string"
+      || /[\0\r\n]/u.test(url.text)
+      || blockText.slice(
+        url.fromIndex as number,
+        url.toIndex as number,
+      ) !== url.text
+    ) {
+      throw new Error(`${label}.urls[${index}].text did not bind its block range`);
+    }
+    previousEnd = url.toIndex as number;
+  });
+  return Object.freeze({});
+}
+
+function normalizedArticleBlockKey(
+  value: unknown,
+  index: number,
+  observed: Set<string>,
+): string {
+  if (
+    typeof value !== "string"
+    || !/^[a-z0-9]{5}$/u.test(value)
+    || observed.has(value)
+  ) {
+    throw new Error(`X Article readback block ${index + 1} has an invalid key`);
+  }
+  observed.add(value);
+  return index.toString(36).padStart(5, "0");
+}
+
+function normalizeArticleContentReadback(value: unknown): XWebRichArticleContentState {
+  const state = record(value, "X Article readback content_state");
+  if (Array.isArray(state.entity_map)) {
+    if (!Array.isArray(state.blocks)) {
+      throw new Error("X Article readback omitted its rich content blocks");
+    }
+    const entityKeys = articleReadbackEntityKeyMap(
+      state.entity_map,
+      state.blocks,
+      "entity_ranges",
+    );
+    const observedBlockKeys = new Set<string>();
+    const blocks = state.blocks.map((value, index) => {
+      const block = record(value, `X Article readback block ${index + 1}`);
+      if (
+        !Array.isArray(block.entity_ranges)
+        || !Array.isArray(block.inline_style_ranges)
+      ) {
+        throw new Error("X Article readback block ranges changed shape");
+      }
+      return Object.freeze({
+        data: normalizedArticleBlockData(
+          block.data,
+          `X Article readback block ${index + 1}.data`,
+          block.text,
+        ),
+        text: block.text,
+        key: normalizedArticleBlockKey(
+          block.key,
+          index,
+          observedBlockKeys,
+        ),
+        type: block.type,
+        entity_ranges: Object.freeze(block.entity_ranges.map((range) => {
+          const item = record(range, "X Article readback entity range");
+          return Object.freeze({
+            key: Number(remappedArticleEntityKey(
+              item.key,
+              entityKeys,
+              "X Article readback entity range key",
+            )),
+            offset: item.offset,
+            length: item.length,
+          });
+        })),
+        inline_style_ranges: Object.freeze(block.inline_style_ranges.map(
+          (range) => {
+            const item = record(range, "X Article readback style range");
+            return Object.freeze({
+              length: item.length,
+              offset: item.offset,
+              style: item.style,
+            });
+          },
+        )),
+      });
+    });
+    const entity_map = orderedArticleReadbackEntities(
+      state.entity_map,
+      entityKeys,
+    ).map((value, index) => {
+      const entity = record(value, `X Article readback entity ${index}`);
+      normalizedArticleEntityKey(
+        entity.key,
+        `X Article readback entity ${index}.key`,
+      );
+      const entry = record(
+        entity.value,
+        `X Article readback entity ${index}.value`,
+      );
+      const data = record(
+        entry.data,
+        `X Article readback entity ${index}.data`,
+      );
+      return Object.freeze({
+        key: `${index}`,
+        value: Object.freeze({
+          data: Object.freeze({ url: data.url }),
+          type: entry.type,
+          mutability: entry.mutability,
+        }),
+      });
+    });
+    const normalized = Object.freeze({
+      blocks: Object.freeze(blocks),
+      entity_map: Object.freeze(entity_map),
+    });
+    validateXWebRichArticleContentState(normalized);
+    return normalized;
+  }
+  if (!Array.isArray(state.blocks) || !Array.isArray(state.entityMap)) {
+    throw new Error("X Article readback omitted its rich content state");
+  }
+  const entityKeys = articleReadbackEntityKeyMap(
+    state.entityMap,
+    state.blocks,
+    "entityRanges",
+  );
+  const observedBlockKeys = new Set<string>();
+  const blocks = state.blocks.map((value, index) => {
+    const block = record(value, `X Article readback block ${index + 1}`);
+    if (!Array.isArray(block.entityRanges) || !Array.isArray(block.inlineStyleRanges)) {
+      throw new Error("X Article readback block ranges changed shape");
+    }
+    return Object.freeze({
+      data: normalizedArticleBlockData(
+        block.data,
+        `X Article readback block ${index + 1}.data`,
+        block.text,
+      ),
+      text: block.text,
+      key: normalizedArticleBlockKey(
+        block.key,
+        index,
+        observedBlockKeys,
+      ),
+      type: block.type,
+      entity_ranges: Object.freeze(block.entityRanges.map((range) => {
+        const item = record(range, "X Article readback entity range");
+        return Object.freeze({
+          key: Number(remappedArticleEntityKey(
+            item.key,
+            entityKeys,
+            "X Article readback entity range key",
+          )),
+          offset: item.offset,
+          length: item.length,
+        });
+      })),
+      inline_style_ranges: Object.freeze(block.inlineStyleRanges.map((range) => {
+        const item = record(range, "X Article readback style range");
+        return Object.freeze({ length: item.length, offset: item.offset, style: item.style });
+      })),
+    });
+  });
+  const entity_map = orderedArticleReadbackEntities(
+    state.entityMap,
+    entityKeys,
+  ).map((value, index) => {
+    const entity = record(value, `X Article readback entity ${index}`);
+    normalizedArticleEntityKey(
+      entity.key,
+      `X Article readback entity ${index}.key`,
+    );
+    const entry = record(entity.value, `X Article readback entity ${index}.value`);
+    const data = record(entry.data, `X Article readback entity ${index}.data`);
+    return Object.freeze({
+      key: `${index}`,
+      value: Object.freeze({
+        data: Object.freeze({ url: data.url }),
+        type: entry.type,
+        mutability: entry.mutability,
+      }),
+    });
+  });
+  const normalized = Object.freeze({ blocks: Object.freeze(blocks), entity_map: Object.freeze(entity_map) });
+  validateXWebRichArticleContentState(normalized);
+  return normalized;
+}
+
+async function readArticleDraft(
+  bootstrap: XBootstrap,
+  id: string,
+): Promise<JsonRecord> {
+  const descriptor = await resolveDescriptor(bootstrap, "ArticleEntityResultByRestId", "query");
+  const response = await graphQl(bootstrap, descriptor, { articleEntityId: id }, "GET");
+  return responseBoundArticle(response, "article_result_by_rest_id", id);
+}
+
+function verifyFinalRichArticle(
+  article: JsonRecord,
+  expected: {
+    readonly id: string;
+    readonly viewerId: string;
+    readonly title: string;
+    readonly contentState: XWebRichArticleContentState;
+  },
+): void {
+  requirePrivateDraftArticle(article, expected.id, expected.viewerId);
+  if (article.title !== expected.title) throw new Error("X Article readback did not bind the confirmed title");
+  const content = normalizeArticleContentReadback(article.content_state);
+  if (canonicalJson(content) !== canonicalJson(expected.contentState)) {
+    throw new Error("X Article readback did not bind the confirmed rich content state");
+  }
 }
 
 function dispatchEvent(id: string, index: number, planned: number, started: number, verified: number): WebSessionDispatchEvent {
@@ -988,6 +1519,165 @@ async function executePublish(
       error: started > verified
         ? "X may have accepted the current post dispatch; reconcile before retrying"
         : "X post dispatch failed before a response-bound result was verified",
+    };
+  }
+}
+
+async function executeArticleDraftSave(
+  bootstrap: XBootstrap,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+  },
+): Promise<WebSessionExecution> {
+  if (recipe.contractVersion !== 1 || recipe.action !== "articles.draft.save") {
+    throw new Error("X Article draft saving supports only articles.draft.save@1");
+  }
+  const title = requiredString(input.title, "input.title", MAX_ARTICLE_TITLE_CHARACTERS);
+  if (/[\0\r\n]/u.test(title)) throw new Error("input.title must be one plain-text line");
+  const document = parseArticleDraftDocument(input.document, {
+    maximumBlocks: MAX_ARTICLE_BLOCKS,
+    maximumCharacters: MAX_ARTICLE_BODY_CHARACTERS,
+  });
+  const contentState = buildXWebRichArticleContentState(document);
+  await assertCurrentArticleRichContract(bootstrap);
+  const currentViewer = await requireBoundViewer(bootstrap, auth);
+  const requestedDraftId = input.draft_id === undefined ? null : postId(input.draft_id, "input.draft_id");
+  if (requestedDraftId !== null) {
+    requirePrivateDraftArticle(await readArticleDraft(bootstrap, requestedDraftId), requestedDraftId, currentViewer.id);
+  }
+
+  const planned = requestedDraftId === null ? 1 : 2;
+  let started = 0;
+  let verified = 0;
+  let draftId = requestedDraftId;
+  let nextIndex = 0;
+  let failureStage = "binding the Article mutation session";
+  const begin = async (id: string): Promise<number> => {
+    const index = nextIndex + 1;
+    await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
+    nextIndex = index;
+    started = index;
+    return index;
+  };
+  const complete = async (id: string, index: number): Promise<void> => {
+    await options.afterDispatchVerified?.(dispatchEvent(id, index, planned, started, index));
+    verified = index;
+  };
+
+  try {
+    if (draftId === null) {
+      const id = "articles.create";
+      failureStage = "resolving the Article create mutation";
+      const descriptor = await resolveDescriptor(bootstrap, "ArticleEntityDraftCreate", "mutation");
+      let index = 0;
+      failureStage = "preparing the Article create mutation";
+      const response = await graphQl(
+        bootstrap,
+        descriptor,
+        { content_state: contentState, title },
+        "POST",
+        undefined,
+        "articles.create",
+        async () => {
+          index = await begin(id);
+        },
+      );
+      const article = responseBoundArticle(response, "articleentity_create_draft", null, title);
+      draftId = postId(article.rest_id, "X created Article draft rest_id");
+      const finalArticle = await readArticleDraft(bootstrap, draftId);
+      verifyFinalRichArticle(finalArticle, {
+        id: draftId,
+        viewerId: currentViewer.id,
+        title,
+        contentState,
+      });
+      await complete(id, index);
+    } else {
+      const titleId = "articles.title";
+      failureStage = "resolving the Article title mutation";
+      const titleDescriptor = await resolveDescriptor(bootstrap, "ArticleEntityUpdateTitle", "mutation");
+      let titleIndex = 0;
+      failureStage = "preparing the Article title mutation";
+      const titleResponse = await graphQl(
+        bootstrap,
+        titleDescriptor,
+        { articleEntityId: draftId, title },
+        "POST",
+        undefined,
+        "articles.title",
+        async () => {
+          titleIndex = await begin(titleId);
+        },
+      );
+      responseBoundArticle(titleResponse, "articleentity_update_title", draftId, title);
+      await complete(titleId, titleIndex);
+
+      const contentId = "articles.content";
+      failureStage = "resolving the Article content mutation";
+      const contentDescriptor = await resolveDescriptor(bootstrap, "ArticleEntityUpdateContent", "mutation");
+      let contentIndex = 0;
+      failureStage = "preparing the Article content mutation";
+      const contentResponse = await graphQl(
+        bootstrap,
+        contentDescriptor,
+        { content_state: contentState, article_entity: draftId },
+        "POST",
+        undefined,
+        "articles.content",
+        async () => {
+          contentIndex = await begin(contentId);
+        },
+      );
+      responseBoundArticle(contentResponse, "articleentity_update_content_state", draftId);
+      const finalArticle = await readArticleDraft(bootstrap, draftId);
+      verifyFinalRichArticle(finalArticle, {
+        id: draftId,
+        viewerId: currentViewer.id,
+        title,
+        contentState,
+      });
+      await complete(contentId, contentIndex);
+    }
+
+    if (draftId === null || nextIndex !== planned || verified !== planned) {
+      throw new Error("X Article draft workflow did not complete its exact dispatch schedule");
+    }
+    const url = `${X_ORIGIN}/compose/articles/edit/${draftId}`;
+    return {
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.draft.save",
+        published: false,
+        mode: "draft",
+        draftId,
+        title,
+        documentSchemaVersion: 1,
+        url,
+      },
+      finalUrl: url,
+      dispatchStarted: started > 0,
+      dispatch: { planned, started, verified },
+    };
+  } catch {
+    const url = draftId === null ? null : `${X_ORIGIN}/compose/articles/edit/${draftId}`;
+    return {
+      status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
+      output: null,
+      finalUrl: url,
+      dispatchStarted: started > 0,
+      dispatch: { planned, started, verified },
+      error: started > verified
+        ? requestedDraftId === null
+          ? "X may have accepted the private Article create, but the confirmed input has no exact draft ID for safe reconciliation; preserve the indeterminate run and do not retry"
+          : "X may have accepted the current private Article replacement dispatch; reconcile the exact existing draft before retrying"
+        : verified > 0
+          ? "X verified only part of the confirmed private Article workflow; inspect the draft before retrying"
+          : `X Article draft failed before remote submission while ${failureStage}`,
     };
   }
 }
@@ -1125,6 +1815,9 @@ export async function executeXWebOperation(
     || recipe.action === "replies.create"
     || recipe.action === "posts.quote"
   ) return executePublish(bootstrap, recipe, input, auth, options);
+  if (recipe.action === "articles.draft.save") {
+    return executeArticleDraftSave(bootstrap, recipe, input, auth, options);
+  }
   if (recipe.action === "likes.set" || recipe.action === "content.save" || recipe.action === "posts.repost") {
     return executeDesiredState(bootstrap, recipe, input, auth, options);
   }

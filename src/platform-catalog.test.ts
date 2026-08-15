@@ -42,6 +42,7 @@ const r2Operations = new Set<SemanticOperationName>([
   "likes.set",
   "relationships.follow.set",
   "content.save",
+  "articles.draft.save",
   "communities.membership.set",
 ]);
 
@@ -572,6 +573,18 @@ describe("social platform catalog", () => {
         state: "adapter-eligible",
         operation: "articles.publish",
         form: "native-article",
+      });
+    }
+  });
+
+  test("catalogues private native Article draft saving only on LinkedIn and X", () => {
+    const eligible = platformSurfaceIds.filter((surfaceId) => (
+      socialPlatformCatalog[surfaceId].operations["articles.draft.save"].state === "adapter-eligible"
+    ));
+    expect(eligible).toEqual(["linkedin", "x"]);
+    for (const surfaceId of eligible) {
+      expect(socialPlatformCatalog[surfaceId].operations["articles.draft.save"]).toMatchObject({
+        risk: "R2",
       });
     }
   });

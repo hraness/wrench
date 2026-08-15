@@ -85,7 +85,7 @@ type ProviderPluginOperationDefinitionBaseV1 = {
   readonly idempotency: IdempotencyKind;
   readonly dedupeWindowMs: number;
   readonly state: ProviderPluginContractStateV1;
-  readonly dispatch: "none" | "single" | "thread-items";
+  readonly dispatch: "none" | "single" | "thread-items" | "bounded-items";
   readonly implementation: string;
   readonly planDispatches: (input: OperationInput) => readonly BrowserDispatchPlan[];
   readonly validateInput: (input: OperationInput) => readonly string[];
@@ -451,7 +451,6 @@ function parseProviderPluginDispatches(
       );
     }
   }
-
   const result = Object.freeze(dispatches);
   const encoded = JSON.stringify(result);
   if (Buffer.byteLength(encoded, "utf8") > MAX_PROVIDER_PLUGIN_PLAN_BYTES) {
@@ -2261,7 +2260,12 @@ function freezeOperation(
   if (operation.state !== "observed" && operation.state !== "capture-required") {
     throw new Error(`provider plugin operation ${operation.name} has an invalid state`);
   }
-  if (operation.dispatch !== "none" && operation.dispatch !== "single" && operation.dispatch !== "thread-items") {
+  if (
+    operation.dispatch !== "none"
+    && operation.dispatch !== "single"
+    && operation.dispatch !== "thread-items"
+    && operation.dispatch !== "bounded-items"
+  ) {
     throw new Error(`provider plugin operation ${operation.name} has an invalid dispatch policy`);
   }
   if (

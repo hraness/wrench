@@ -1541,6 +1541,7 @@ describe("doctor authenticated API readiness", () => {
         adapters: [],
         observedOperations: [],
         captureRequiredOperations: [
+          "articles.draft.save",
           "articles.publish",
           "articles.read",
           "comments.create",
@@ -1567,7 +1568,14 @@ describe("doctor authenticated API readiness", () => {
       expect(linkedinReport.wrench.webSessionSites.find((site) => site.site === "x")).toMatchObject({
         site: "x",
         adapters: ["x-web"],
-        observedOperations: ["comments.read", "content.save", "feeds.read", "likes.set", "posts.read"],
+        observedOperations: [
+          "articles.draft.save",
+          "comments.read",
+          "content.save",
+          "feeds.read",
+          "likes.set",
+          "posts.read",
+        ],
         accountBoundAuth: [],
         ready: false,
       });

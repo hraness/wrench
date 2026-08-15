@@ -158,10 +158,15 @@ describe("single-process bundled adapter generation sync", () => {
       "linkedin-web@1.0.0",
       "linkedin-web@1.1.0",
       "linkedin-web@1.2.0",
+      "linkedin-web@1.3.0",
       "threads-web@1.0.0",
       "whatsapp-web@1.0.0",
       "whatsapp-web@1.1.0",
       "x@1.0.0",
+      "x@1.1.0",
+      "x-web@1.1.0",
+      "x-web@1.2.0",
+      "x-web@1.3.0",
     ]);
     expect(Object.fromEntries(discovered.flatMap((adapter) =>
       adapter.upgradeFrom.map((baseline) => [

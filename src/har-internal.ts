@@ -58,6 +58,7 @@ export const INTERNAL_HAR_REVIEW_BOUNDS = Object.freeze({
 
 const sensitiveName = /(?:authorization|cookie|token|secret|password|passwd|session|credential|private|signature)/iu;
 const safeFieldName = /^[A-Za-z_$][A-Za-z0-9_$.-]{0,127}$/u;
+const safeGraphQlVariableFieldName = /^[_A-Za-z][_0-9A-Za-z]{0,127}$/u;
 const safeHeaderName = /^[a-z0-9!#$%&'*+.^_`|~-]{1,128}$/u;
 
 const reviewedHeaderNames: ReadonlySet<string> = new Set([
@@ -262,6 +263,20 @@ export function reviewedInternalFieldName(value: string): string {
     && safeFieldName.test(value)
     && !sensitiveName.test(value)
     && reviewedStructuralFieldNames.has(value)
+    ? value
+    : ":dynamic";
+}
+
+/**
+ * GraphQL top-level variable names are operation schema identifiers rather
+ * than caller values. Private review may retain one only for an exact
+ * first-party X GraphQL request; values and all nested unknown map keys remain
+ * redacted by the ordinary structural reviewer.
+ */
+export function reviewedXGraphQlVariableFieldName(value: string): string {
+  return value.length <= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters
+    && safeGraphQlVariableFieldName.test(value)
+    && !sensitiveName.test(value)
     ? value
     : ":dynamic";
 }
@@ -585,6 +600,22 @@ function requestFields(request: JsonRecord, url: URL): readonly string[] {
     (fieldName) => reviewedMetaRequestFieldName(url, fieldName),
     isExactFacebookOrigin(url) ? isReviewedMetaStructuralContainer : undefined,
   );
+  const xGraphQl = reviewedXGraphQlRoute(url);
+  if (
+    request.method === "POST"
+    && xGraphQl?.reviewed === true
+    && isRecord(value)
+    && isRecord(value.variables)
+  ) {
+    let inspected = 0;
+    for (const key in value.variables) {
+      if (!Object.prototype.hasOwnProperty.call(value.variables, key)) continue;
+      if (inspected >= INTERNAL_HAR_REVIEW_BOUNDS.maxObjectEntries) break;
+      inspected += 1;
+      fields.add(`variables.${reviewedXGraphQlVariableFieldName(key)}`);
+      if (fields.size >= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldPaths) break;
+    }
+  }
   return [...fields].sort();
 }
 

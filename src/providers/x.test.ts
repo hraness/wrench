@@ -13,11 +13,21 @@ import { join } from "node:path";
 
 import type { OperationInput, ProviderRecipe, WrenchManifest } from "../model";
 import type { ProviderActionContext, ProviderFile } from "../provider";
-import { providerContracts } from "../provider-catalog-views";
+import type { ProviderContract } from "../provider-contract-definitions";
+import { xProviderContractDefinitions } from "../provider-contract-definitions-x";
 import { ProviderHttpClient, type OAuthTokenAuth, type ProviderFetch } from "../provider-http";
 import { executeXProvider } from "./x";
 
-type XAction = keyof typeof providerContracts.x;
+type XAction = (typeof xProviderContractDefinitions)[number]["operation"];
+
+function currentXContract(action: XAction): ProviderContract {
+  const matches = xProviderContractDefinitions.filter((contract) =>
+    contract.operation === action);
+  const current = matches.toSorted((left, right) =>
+    left.contractVersion - right.contractVersion).at(-1);
+  if (current === undefined) throw new Error(`official X test contract ${action} is missing`);
+  return current;
+}
 
 type RequestCapture = {
   readonly url: URL;
@@ -69,7 +79,7 @@ function createHarness(
     readonly timeoutMs?: number;
   } = {},
 ): Harness {
-  const contract = providerContracts.x[action];
+  const contract = currentXContract(action);
   const recipe: ProviderRecipe = {
     provider: "x",
     action,
@@ -744,6 +754,25 @@ describe("official X read coverage", () => {
 });
 
 describe("official X writes", () => {
+  test("retains Article publication v1-v2 behind publish-only v3 and a separate R2 draft contract", () => {
+    const publishContracts = xProviderContractDefinitions.filter((contract) =>
+      contract.operation === "articles.publish").toSorted((left, right) =>
+      left.contractVersion - right.contractVersion);
+    expect(publishContracts.map((contract) => contract.contractVersion)).toEqual([1, 2, 3]);
+    expect((publishContracts[1]?.input.properties as Readonly<Record<string, unknown>>)
+      .draft_only).toMatchObject({
+      type: "boolean",
+      enum: [true],
+    });
+    expect((publishContracts[2]?.input.properties as Readonly<Record<string, unknown>>)
+      .draft_only).toBeUndefined();
+    expect(currentXContract("articles.draft.save")).toMatchObject({
+      operation: "articles.draft.save",
+      contractVersion: 1,
+      risk: "R2",
+    });
+  });
+
   test("publishes polls with the exact v2 payload and treats everyone as the default reply setting", async () => {
     const captured = captureFetch([
       json({ data: { id: "42", username: "me" } }),
@@ -819,6 +848,7 @@ describe("official X writes", () => {
       },
       { action: "posts.repost", input: { post_id: "700", enabled: true } },
       { action: "content.save", input: { post_id: "701", enabled: true } },
+      { action: "articles.draft.save", input: { title: "Draft", body: "Body" } },
       { action: "articles.publish", input: { title: "Article", body: "Body" } },
     ];
 
@@ -1041,10 +1071,9 @@ describe("official X writes", () => {
       json({ data: { id: "42", username: "me" } }),
       json({ data: { id: "805", title: "Private draft" } }, 201),
     ]);
-    const harness = createHarness("articles.publish", {
+    const harness = createHarness("articles.draft.save", {
       title: "Private draft",
       body: "First paragraph\n\nSecond paragraph",
-      draft_only: true,
     }, captured.fetch, { subject: "42" });
 
     await executeXProvider(harness.context);
@@ -1066,7 +1095,7 @@ describe("official X writes", () => {
     });
     expect(harness.output()).toMatchObject({
       provider: "x",
-      operation: "articles.publish",
+      operation: "articles.draft.save",
       published: false,
       mode: "draft",
       draftId: "805",
@@ -1075,26 +1104,57 @@ describe("official X writes", () => {
     expect(harness.dispatches()).toBe(1);
   });
 
-  test("rejects draft_only on the retained Article contract version 1", async () => {
+  test("rejects the retired draft_only branch before auth or dispatch", async () => {
     const captured = captureFetch([]);
     const harness = createHarness("articles.publish", {
       title: "Private draft",
       body: "Reviewed body",
       draft_only: true,
     }, captured.fetch, { subject: "42" });
-    const versionOneContext = {
-      ...harness.context,
-      recipe: {
-        ...harness.context.recipe,
-        contractVersion: 1,
-      },
-    };
 
-    await expect(executeXProvider(versionOneContext)).rejects.toThrow(
-      "input.draft_only requires official X Article contract version 2",
+    await expect(executeXProvider(harness.context)).rejects.toThrow(
+      "input.draft_only is unsupported; use articles.draft.save",
     );
     expect(captured.requests).toHaveLength(0);
     expect(harness.dispatches()).toBe(0);
+  });
+
+  test("retains exact articles.publish@2 draft-only execution for durable recovery", async () => {
+    const retainedContract = xProviderContractDefinitions.find((contract) =>
+      contract.operation === "articles.publish" && contract.contractVersion === 2);
+    if (retainedContract === undefined) throw new Error("retained X Article contract v2 is missing");
+    const captured = captureFetch([
+      json({ data: { id: "42", username: "me" } }),
+      json({ data: { id: "806", title: "Retained private draft" } }, 201),
+    ]);
+    const harness = createHarness("articles.publish", {
+      title: "Retained private draft",
+      body: "Reviewed body",
+      draft_only: true,
+    }, captured.fetch, { subject: "42" });
+    const retainedContext: ProviderActionContext = {
+      ...harness.context,
+      contract: retainedContract,
+      recipe: {
+        ...harness.context.recipe,
+        contractVersion: 2,
+      },
+    };
+
+    await executeXProvider(retainedContext);
+
+    expect(captured.requests.map((request) => [request.init.method, request.url.pathname])).toEqual([
+      ["GET", "/2/users/me"],
+      ["POST", "/2/articles/draft"],
+    ]);
+    expect(harness.output()).toMatchObject({
+      provider: "x",
+      operation: "articles.publish",
+      published: false,
+      mode: "draft",
+      draftId: "806",
+    });
+    expect(harness.dispatches()).toBe(1);
   });
 
   test("fails a write response that contains provider errors even when data is present", async () => {

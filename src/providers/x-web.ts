@@ -23,6 +23,7 @@ export type XWebBundleQueryDescriptor = XWebQueryDescriptorKey & {
 
 export type XWebQueryDescriptorEvidence = XWebQueryDescriptorKey & {
   readonly sourceChunk: string;
+  readonly observedOn?: string;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -108,13 +109,16 @@ function parseBundleQueryDescriptor(value: unknown, label: string): XWebBundleQu
 function parseDescriptorKey(value: unknown, label: string): XWebQueryDescriptorKey {
   const key = record(value, label);
   const required = ["queryId", "operationName", "operationType"] as const;
-  const allowed = new Set([...required, "metadata", "sourceChunk"]);
+  const allowed = new Set([...required, "metadata", "sourceChunk", "observedOn"]);
   const missing = required.filter((name) => !Object.hasOwn(key, name));
   const extra = Object.keys(key).filter((name) => !allowed.has(name));
   if (missing.length > 0) throw new Error(`${label} omitted ${missing.join(", ")}`);
   if (extra.length > 0) throw new Error(`${label} contained unsupported field(s): ${extra.join(", ")}`);
   if (key.sourceChunk !== undefined && (typeof key.sourceChunk !== "string" || !key.sourceChunk.endsWith(".js"))) {
     throw new Error(`${label}.sourceChunk must be a JavaScript bundle name`);
+  }
+  if (key.observedOn !== undefined && (typeof key.observedOn !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(key.observedOn))) {
+    throw new Error(`${label}.observedOn must be an ISO date`);
   }
   if (key.metadata !== undefined) {
     const metadata = record(key.metadata, `${label}.metadata`);
@@ -264,12 +268,12 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
     { operationName: "DmAllSearchSlice", operationType: "query", queryId: "zd0F6a_svKAXdlMGbCZDFg", sourceChunk: "bundle.DirectMessages.265735ba.js" },
     { operationName: "DmGroupSearchSlice", operationType: "query", queryId: "LxrvmqF3Lokl_BYZ1c83LA", sourceChunk: "bundle.DirectMessages.265735ba.js" },
     { operationName: "DmPeopleSearchSlice", operationType: "query", queryId: "c1MnRRmI-_Bggpntlq9-hQ", sourceChunk: "bundle.DirectMessages.265735ba.js" },
-    { operationName: "ArticleEntityDraftCreate", operationType: "mutation", queryId: "rSvnWw6CAJo4F9xVieZhLA", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityUpdateContent", operationType: "mutation", queryId: "CPOMQigUs99fzPmNe_1-EA", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityUpdateTitle", operationType: "mutation", queryId: "PplP1XRcflB3VYMQJdd_hw", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityUpdateCoverMedia", operationType: "mutation", queryId: "AbzX20PDk6TTzqmN67hiPQ", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityPublish", operationType: "mutation", queryId: "xkPT5esHwPTNtJfp-1xKaQ", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
-    { operationName: "ArticleEntityResultByRestId", operationType: "query", queryId: "NYcREZ9msGwridku2068ng", sourceChunk: "bundle.TwitterArticles.ab3ae60a.js" },
+    { operationName: "Viewer", operationType: "query", queryId: "5XShkXk2oO2J7SYmTu6pvw", sourceChunk: "main.e4aca26a.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityDraftCreate", operationType: "mutation", queryId: "btD9FyMDa3_vydVp7fr87Q", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityUpdateContent", operationType: "mutation", queryId: "P5Nc3DYs9D4XqVthNrig8w", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityUpdateTitle", operationType: "mutation", queryId: "z_xdvTUbZjSVjt232b4D4A", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityPublish", operationType: "mutation", queryId: "UyL9qgpV23A8471opeYQbw", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
+    { operationName: "ArticleEntityResultByRestId", operationType: "query", queryId: "rPdndX2XxQoXIMUafLSSJQ", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
   ] satisfies readonly XWebQueryDescriptorEvidence[]),
 });
 
@@ -607,6 +611,9 @@ export const xWebMutationOperationIds = Object.freeze([
   "bookmarks.disable",
   "reposts.enable",
   "reposts.disable",
+  "articles.create",
+  "articles.title",
+  "articles.content",
 ] as const);
 
 export type XWebMutationOperationId = (typeof xWebMutationOperationIds)[number];
@@ -623,6 +630,9 @@ const mutationOperationNames = Object.freeze({
   "bookmarks.disable": "DeleteBookmark",
   "reposts.enable": "CreateRetweet",
   "reposts.disable": "DeleteRetweet",
+  "articles.create": "ArticleEntityDraftCreate",
+  "articles.title": "ArticleEntityUpdateTitle",
+  "articles.content": "ArticleEntityUpdateContent",
 } as const satisfies Readonly<Record<XWebMutationOperationId, string>>);
 
 function exactMutationKeys(value: JsonRecord, keys: readonly string[], label: string): void {
@@ -688,6 +698,170 @@ function validateDesiredStateVariables(operationId: XWebMutationOperationId, var
   exactMutationPostId(variables.tweet_id, `X ${operationId} target`);
 }
 
+const richArticleBlockTypes = new Set([
+  "unstyled",
+  "header-one",
+  "header-two",
+  "blockquote",
+  "unordered-list-item",
+  "ordered-list-item",
+]);
+const richArticleInlineStyles = new Set(["Bold", "Italic", "Strikethrough"]);
+
+function exactArticleRange(
+  value: unknown,
+  label: string,
+  maximum: number,
+): { readonly key?: number; readonly offset: number; readonly length: number; readonly style?: string } {
+  const range = record(value, label);
+  const hasKey = Object.hasOwn(range, "key");
+  const hasStyle = Object.hasOwn(range, "style");
+  if (hasKey === hasStyle) throw new Error(`${label} must be exactly one entity or style range`);
+  exactMutationKeys(range, hasKey ? ["key", "offset", "length"] : ["length", "offset", "style"], label);
+  if (
+    !Number.isSafeInteger(range.offset)
+    || !Number.isSafeInteger(range.length)
+    || (range.offset as number) < 0
+    || (range.length as number) < 1
+    || (range.offset as number) + (range.length as number) > maximum
+  ) throw new Error(`${label} must stay inside its block text`);
+  if (hasKey && (!Number.isSafeInteger(range.key) || (range.key as number) < 0)) {
+    throw new Error(`${label}.key must be a non-negative integer`);
+  }
+  if (hasStyle && (typeof range.style !== "string" || !richArticleInlineStyles.has(range.style))) {
+    throw new Error(`${label}.style is outside the reviewed Article styles`);
+  }
+  return Object.freeze({
+    ...(hasKey ? { key: range.key as number } : { style: range.style as string }),
+    offset: range.offset as number,
+    length: range.length as number,
+  });
+}
+
+function exactArticleUrl(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 2_048 || /[\0\r\n]/u.test(value)) {
+    throw new Error(`${label} must be a bounded HTTPS URL`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a bounded HTTPS URL`);
+  }
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") {
+    throw new Error(`${label} must be a bounded HTTPS URL`);
+  }
+  return parsed.href;
+}
+
+/** Validate the exact API-side rich content state emitted by X's current converter. */
+export function validateXWebRichArticleContentState(value: unknown): void {
+  const contentState = record(value, "X rich Article content_state");
+  exactMutationKeys(contentState, ["blocks", "entity_map"], "X rich Article content_state");
+  if (!Array.isArray(contentState.blocks) || contentState.blocks.length < 1 || contentState.blocks.length > 2_000) {
+    throw new Error("X rich Article content_state.blocks must contain 1-2000 blocks");
+  }
+  if (!Array.isArray(contentState.entity_map) || contentState.entity_map.length > 2_000) {
+    throw new Error("X rich Article content_state.entity_map exceeded its reviewed bound");
+  }
+  const entityKinds: "LINK"[] = [];
+  for (const [index, value] of contentState.entity_map.entries()) {
+    const entity = record(value, `X rich Article entity ${index}`);
+    exactMutationKeys(entity, ["key", "value"], `X rich Article entity ${index}`);
+    if (entity.key !== `${index}`) throw new Error("X rich Article entity keys must be contiguous strings");
+    const entry = record(entity.value, `X rich Article entity ${index}.value`);
+    exactMutationKeys(entry, ["data", "type", "mutability"], `X rich Article entity ${index}.value`);
+    const data = record(entry.data, `X rich Article entity ${index}.data`);
+    if (entry.type !== "LINK" || entry.mutability !== "Mutable") {
+      throw new Error("X Article draft entities support only reviewed mutable LINK values");
+    }
+    exactMutationKeys(data, ["url"], `X rich Article entity ${index}.data`);
+    exactArticleUrl(data.url, `X rich Article entity ${index}.data.url`);
+    entityKinds.push("LINK");
+  }
+
+  const references = Array.from({ length: entityKinds.length }, () => 0);
+  const blockKeys = new Set<string>();
+  let characters = 0;
+  for (const [index, value] of contentState.blocks.entries()) {
+    const block = record(value, `X rich Article block ${index + 1}`);
+    exactMutationKeys(
+      block,
+      ["data", "text", "key", "type", "entity_ranges", "inline_style_ranges"],
+      `X rich Article block ${index + 1}`,
+    );
+    const data = record(block.data, `X rich Article block ${index + 1}.data`);
+    exactMutationKeys(data, [], `X rich Article block ${index + 1}.data`);
+    if (
+      typeof block.text !== "string"
+      || /[\0\r\n]/u.test(block.text)
+      || typeof block.key !== "string"
+      || !/^[a-z0-9]{5}$/u.test(block.key)
+      || blockKeys.has(block.key)
+      || typeof block.type !== "string"
+      || !richArticleBlockTypes.has(block.type)
+      || !Array.isArray(block.entity_ranges)
+      || !Array.isArray(block.inline_style_ranges)
+    ) throw new Error(`X rich Article block ${index + 1} left the reviewed shape`);
+    const blockText = block.text;
+    blockKeys.add(block.key);
+    characters += blockText.length;
+    if (characters > 20_000) throw new Error("X rich Article text exceeds 20000 characters");
+    const entityRanges = block.entity_ranges.map((range, rangeIndex) =>
+      exactArticleRange(range, `X rich Article block ${index + 1}.entity_ranges[${rangeIndex}]`, blockText.length));
+    block.inline_style_ranges.forEach((range, rangeIndex) => {
+      exactArticleRange(range, `X rich Article block ${index + 1}.inline_style_ranges[${rangeIndex}]`, blockText.length);
+    });
+    let previousEnd = 0;
+    for (const range of entityRanges) {
+      if (range.offset < previousEnd) throw new Error("X rich Article entity ranges may not overlap");
+      previousEnd = range.offset + range.length;
+      const key = range.key!;
+      const kind = entityKinds[key];
+      if (kind === undefined) throw new Error("X rich Article entity range referenced an unknown entity");
+      references[key] = (references[key] ?? 0) + 1;
+      if (kind !== "LINK") {
+        throw new Error("X rich Article entity range used the wrong block kind");
+      }
+    }
+  }
+  if (references.some((count) => count !== 1)) {
+    throw new Error("X rich Article entities must each be referenced exactly once");
+  }
+}
+
+function validateRichArticleCreateVariables(variables: JsonRecord): void {
+  exactMutationKeys(variables, ["content_state", "title"], "X articles.create variables");
+  if (
+    typeof variables.title !== "string"
+    || variables.title.length < 1
+    || variables.title.length > 100
+    || /[\0\r\n]/u.test(variables.title)
+  ) throw new Error("X articles.create title must be one bounded line");
+  validateXWebRichArticleContentState(variables.content_state);
+}
+
+function validateRichArticleUpdateVariables(operationId: XWebMutationOperationId, variables: JsonRecord): void {
+  if (operationId === "articles.title") {
+    exactMutationKeys(variables, ["articleEntityId", "title"], "X articles.title variables");
+    exactMutationPostId(variables.articleEntityId, "X articles.title draft");
+    if (
+      typeof variables.title !== "string"
+      || variables.title.length < 1
+      || variables.title.length > 100
+      || /[\0\r\n]/u.test(variables.title)
+    ) throw new Error("X articles.title title must be one bounded line");
+    return;
+  }
+  if (operationId === "articles.content") {
+    exactMutationKeys(variables, ["content_state", "article_entity"], "X articles.content variables");
+    exactMutationPostId(variables.article_entity, "X articles.content draft");
+    validateXWebRichArticleContentState(variables.content_state);
+    return;
+  }
+  throw new Error("X rich Article update operation is outside the reviewed title/content contract");
+}
+
 /**
  * Bind a state-changing request to one semantic operation and its complete
  * variable/metadata shape before the durable dispatch boundary is crossed.
@@ -712,6 +886,10 @@ export function authorizeXWebMutationRequest(
   if (body.queryId !== binding.queryId) throw new Error(`X ${operationId} body queryId drifted`);
   const variables = record(body.variables, `X ${operationId} variables`);
   if (expectedName === "CreateTweet") validateCreateTweetVariables(operationId, variables);
+  else if (operationId === "articles.create") validateRichArticleCreateVariables(variables);
+  else if (operationId === "articles.title" || operationId === "articles.content") {
+    validateRichArticleUpdateVariables(operationId, variables);
+  }
   else validateDesiredStateVariables(operationId, variables);
   exactBooleanMap(body.features, descriptor.metadata.featureSwitches, `X ${operationId} features`);
   if (descriptor.metadata.fieldToggles.length > 0) {

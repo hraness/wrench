@@ -296,6 +296,7 @@ const operationCompositions: Readonly<Partial<Record<SemanticOperationName, Comp
   "replies.create": "reply",
   "posts.publish": "post",
   "media.publish": "media",
+  "articles.draft.save": "article",
   "articles.publish": "article",
   "listings.publish": "listing",
 };
@@ -321,6 +322,7 @@ export const genericSemanticRisks = {
   "media.read": "R1",
   "media.publish": "R3",
   "articles.read": "R1",
+  "articles.draft.save": "R2",
   "articles.publish": "R3",
   "listings.read": "R1",
   "listings.publish": "R3",
@@ -2353,8 +2355,17 @@ export function validatePlatformOperationInput(
   const surface = socialPlatformCatalog[manifest.surfaceId] as PlatformSurfaceCatalogEntry;
   const composition = surface.compositions[compositionName];
   if (composition === undefined) return { ok: false, issues: [`${operationId} has no reviewed composition policy on ${manifest.surfaceId}`] };
+  const operation = manifest.operations[operationId];
+  const structuredArticleDraft = operationId === "articles.draft.save"
+    && operation !== undefined
+    && isWebSessionOperation(operation)
+    && operation.input.properties.document !== undefined;
   const issues: string[] = [];
   for (const field of composition.text) {
+    // The draft contract replaces the plain body with a strictly parsed
+    // versioned document. Its provider runtime owns text/range bounds, while the
+    // platform composition continues to enforce the title policy here.
+    if (structuredArticleDraft && field.name === "body") continue;
     const value = input[field.name];
     if (value === undefined) {
       if (field.required) issues.push(`input.${field.name} is required by the reviewed ${manifest.surfaceId} policy`);

@@ -61,10 +61,10 @@ owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
-Pin the public repository to the immutable `v0.7.1` tag:
+Pin the public repository to the immutable `v0.8.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.7.1
+bun add --global github:hraness/wrench#v0.8.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -88,7 +88,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.7.1
+bun add github:hraness/wrench#v0.8.0
 ```
 
 ```ts
@@ -337,44 +337,79 @@ provider-hosted attachment endpoints remain independently bounded to 100 MiB
 per file, so profile, thread, and attachment responses never share one broad
 memory allowance.
 
-### X Article drafts
+### Native Article drafts
 
-X Article drafts use the documented OAuth API. Create a current-user-owned
-mode-0600 token document whose stable numeric subject and sorted scopes exactly
-match the Wrench auth locator:
+Wrench separates private draft saving from publication:
+
+- `articles.draft.save` is R2. It creates or replaces one private native draft
+  and has no publish-capable branch.
+- `articles.publish` is R3. It is a different semantic operation with its own
+  installed contract, preview, confirmation, and exact result binding.
+
+A draft ID is not permission to publish, and a draft preview cannot be reused
+for publication. The separate official API and signed-in web adapters remain
+distinct transports and auth realms; Wrench never switches between them to
+fill a capability gap.
+
+The current provider state is explicit:
+
+| Adapter | `articles.draft.save` | `articles.publish` |
+| --- | --- | --- |
+| `x` | Observed R2 response-bound private draft create through the documented OAuth API | Observed R3 response-bound publication through the documented OAuth API |
+| `x-web` | Observed R2 private draft save | Capture-required R3 |
+| `linkedin-web` | Capture-required R2; the latest editor capture lacked exact API response projection | Capture-required R3 |
+
+The `x-web` draft operation accepts a title, a canonical provider-neutral
+`ArticleDraftDocument` schemaVersion 1 string, and an optional exact existing
+private `draft_id`. The document supports paragraphs, headings, blockquotes,
+list items, bold/italic/strikethrough ranges, and native canonical HTTPS link
+ranges. It does not accept Markdown, HTML, embeds, image blocks, covers, or
+files. The separate official `x` OAuth operation exposes only its reviewed
+plain-text `body` contract plus an optional cover. Inspect the exact installed
+capability instead of translating inputs or switching transports implicitly.
+
+Capture or read source material separately. The caller owns every editorial
+choice involved in translating, abridging, retitling, attributing, and linking
+it for the destination. Wrench sends only the final reviewed title and
+document; it does not turn a source URL into provider copy.
+
+For X, put the exact inner canonical JSON document in a private input file:
 
 ```json
 {
-  "schemaVersion": 1,
-  "provider": "x",
-  "subject": "123456789",
-  "scopes": ["tweet.read", "tweet.write", "users.read"],
-  "accessToken": "replace-with-the-access-token",
-  "expiresAt": "2099-01-01T00:00:00.000Z"
+  "title": "Reviewed title",
+  "document": "{\"blocks\":[{\"links\":[{\"length\":6,\"offset\":9,\"url\":\"https://example.com/source\"}],\"text\":\"Read the source\",\"type\":\"paragraph\"}],\"schemaVersion\":1}"
 }
 ```
 
+Then use one account-bound signed-in realm:
+
 ```sh
 wrench adapter sync-bundled --json
-wrench capabilities x --json
+wrench auth add x-main --cookie-source arc
+wrench auth bind x-main --site x
+wrench capabilities x-web --json
 
-wrench auth add x-api --oauth-provider x \
-  --token-file /absolute/private/x-token.json \
-  --scopes tweet.read,tweet.write,users.read \
-  --subject 123456789
-
-wrench x articles.publish \
-  --input '{"title":"Reviewed title","body":"Reviewed body","draft_only":true}' \
-  --auth x-api --preview --json
+wrench x-web articles.draft.save \
+  --input @/absolute/private/article-draft-input.json \
+  --auth x-main --preview --json
 
 wrench confirm <preview-digest> --json
 ```
 
-The current Article contract treats `draft_only: true` as a literal safety
-boundary: it creates the draft and returns without calling X's publish
-endpoint. The operation remains R3 because omitting that flag preserves the
-separate publish behavior. Confirm only an exact version-2 preview containing
-the flag, then require `published: false` and `mode: "draft"` in the result.
+Review the exact account, title, canonical document, optional draft ID,
+contract, and dispatch schedule. Require a successful result to identify
+`articles.draft.save`, report `published: false` and `mode: "draft"`, and return
+the private draft identity. Do not retry a partial or indeterminate save and do
+not call `articles.publish` as recovery. Signed-in X replacements with an exact
+input draft ID can use read-only reconciliation; an indeterminate create cannot
+be safely targeted and must remain unsettled.
+
+LinkedIn draft saving remains inert: it performs no request until a managed
+capture proves the exact current-member-bound editor autosave, stable draft
+identity, and independent unpublished readback. See the packaged [native
+article draft workflow](skills/wrench/references/article-drafts.md) for the
+shared document grammar and safety sequence.
 
 ## Normalized omni views
 
@@ -472,7 +507,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.7.1/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.8.0/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation

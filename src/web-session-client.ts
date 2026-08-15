@@ -92,7 +92,7 @@ export type WebSessionClient = {
     readonly url: URL;
     readonly method: "GET" | "POST";
     readonly headers: Readonly<Record<string, string>>;
-    readonly body?: string;
+    readonly body?: string | Uint8Array;
     readonly expectedStatuses: readonly number[];
   }) => Promise<{ readonly status: number; readonly location: string | null }>;
 };

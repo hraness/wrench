@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   assertExactXWebGraphQlBinding,
   authorizeXWebLegacyDmR1Read,
+  authorizeXWebMutationRequest,
   authorizeXWebR1GraphQlRequest,
   bindXWebOperationMetadataValues,
   buildXWebGraphQlPath,
@@ -115,6 +116,19 @@ describe("X query descriptor revision evidence", () => {
     expect(bookmarks.queryId).not.toBe("LoLaMO4GuHLEPJWrenchH9kjAw");
     expect(JSON.stringify(xWebQueryDescriptorEvidenceSnapshot))
       .not.toContain("LoLaMO4GuHLEPJWrenchH9kjAw");
+  });
+
+  test("records the current reviewed Viewer and Article descriptor observations", () => {
+    expect(evidence("Viewer")).toMatchObject({
+      queryId: "5XShkXk2oO2J7SYmTu6pvw",
+      sourceChunk: "main.e4aca26a.js",
+      observedOn: "2026-08-14",
+    });
+    expect(evidence("ArticleEntityDraftCreate")).toMatchObject({
+      queryId: "btD9FyMDa3_vydVp7fr87Q",
+      sourceChunk: "bundle.TwitterArticles.305538ca.js",
+      observedOn: "2026-08-14",
+    });
   });
 
   test("keeps transport query IDs out of the semantic registry", () => {
@@ -444,6 +458,86 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
       url: graphqlUrl(resolved),
       descriptor: resolved,
     })).toThrow("mutations require POST");
+  });
+
+  test("authorizes only exact text-only native Article create and update payloads", () => {
+    const contentState = {
+      blocks: [{
+        data: {},
+        text: "Hraness",
+        key: "00000",
+        type: "unstyled",
+        entity_ranges: [{ key: 0, offset: 0, length: 7 }],
+        inline_style_ranges: [{ length: 7, offset: 0, style: "Bold" }],
+      }],
+      entity_map: [{
+        key: "0",
+        value: {
+          data: { url: "https://hraness.com/" },
+          type: "LINK",
+          mutability: "Mutable",
+        },
+      }],
+    };
+    const cases = [
+      ["articles.create", "ArticleEntityDraftCreate", { content_state: contentState, title: "Private draft" }],
+      ["articles.title", "ArticleEntityUpdateTitle", { articleEntityId: "700000000000000001", title: "Private draft" }],
+      ["articles.content", "ArticleEntityUpdateContent", { content_state: contentState, article_entity: "700000000000000001" }],
+    ] as const;
+    for (const [operationId, operationName, variables] of cases) {
+      const resolved = descriptor(operationName);
+      const features = Object.fromEntries(resolved.metadata.featureSwitches.map((name) => [name, false]));
+      const fieldToggles = Object.fromEntries(resolved.metadata.fieldToggles.map((name) => [name, false]));
+      expect(authorizeXWebMutationRequest(operationId, {
+        method: "POST",
+        url: graphqlUrl(resolved),
+        descriptor: resolved,
+        body: {
+          variables,
+          features,
+          ...(resolved.metadata.fieldToggles.length === 0 ? {} : { fieldToggles }),
+          queryId: resolved.queryId,
+        },
+      })).toMatchObject({ operationName, method: "POST" });
+    }
+
+    const create = descriptor("ArticleEntityDraftCreate");
+    const createFeatures = Object.fromEntries(create.metadata.featureSwitches.map((name) => [name, false]));
+    const createToggles = Object.fromEntries(create.metadata.fieldToggles.map((name) => [name, false]));
+    for (const invalidState of [
+      { ...contentState, blocks: [{ ...contentState.blocks[0], key: "" }] },
+      { ...contentState, entity_map: [{ ...contentState.entity_map[0], key: "1" }] },
+      {
+        ...contentState,
+        blocks: [{ ...contentState.blocks[0], type: "atomic" }],
+      },
+      {
+        ...contentState,
+        entity_map: [{
+          key: "0",
+          value: {
+            data: {
+              entity_key: "0",
+              media_items: [{ local_media_id: 1, media_category: "tweet_image", media_id: "2" }],
+            },
+            type: "MEDIA",
+            mutability: "Immutable",
+          },
+        }],
+      },
+    ]) {
+      expect(() => authorizeXWebMutationRequest("articles.create", {
+        method: "POST",
+        url: graphqlUrl(create),
+        descriptor: create,
+        body: {
+          variables: { content_state: invalidState, title: "Private draft" },
+          features: createFeatures,
+          ...(create.metadata.fieldToggles.length === 0 ? {} : { fieldToggles: createToggles }),
+          queryId: create.queryId,
+        },
+      })).toThrow();
+    }
   });
 
   test("rejects origin, credential, fragment, path, and method confusion", () => {

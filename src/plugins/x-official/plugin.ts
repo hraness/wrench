@@ -38,7 +38,7 @@ export const xOfficialPlugin = defineProviderPlugin({
     operations: officialContractOperations(
       xProviderContractDefinitions,
       {
-        semanticIdentity: "efdfe84cea39e04c98800486f476e31c678e43ae93eb83eb47070c7e66b3d6d8",
+        semanticIdentity: "29653ed33e72d7c7770340a2299f126a27242743a98a6fcef8a886c3f2e3ebc2",
         validateInput: (contract, input) =>
           xProviderConditionalInputIssues(contract.operation, input),
         omni: {

@@ -64,6 +64,11 @@ const PLAN_DIGEST = "1".repeat(64);
 const CURRENT_ADAPTER_HASH = "2".repeat(64);
 const POST_ID = "2078889282404569267";
 
+type RecoveryOperation =
+  | "articles.draft.save"
+  | "content.save"
+  | "likes.set";
+
 function state(): TestState {
   const directory = mkdtempSync(join(tmpdir(), "wrench-web-recovery-test-"));
   chmodSync(directory, 0o700);
@@ -78,8 +83,16 @@ function xAuth(profile = "Profile 1"): WrenchAuth {
   });
 }
 
-function recipe(operation: "content.save" | "likes.set"): WebSessionRecipe {
-  return operation === "content.save"
+function recipe(operation: RecoveryOperation): WebSessionRecipe {
+  return operation === "articles.draft.save"
+    ? {
+        site: "x",
+        action: operation,
+        contractVersion: 1,
+        timeoutMs: 60_000,
+        maxOutputBytes: 2 * 1024 * 1024,
+      }
+    : operation === "content.save"
     ? {
         site: "x",
         action: operation,
@@ -96,8 +109,16 @@ function recipe(operation: "content.save" | "likes.set"): WebSessionRecipe {
       };
 }
 
-function desiredInput(operation: "content.save" | "likes.set"): OperationInput {
-  return operation === "content.save"
+function desiredInput(operation: RecoveryOperation): OperationInput {
+  return operation === "articles.draft.save"
+    ? {
+        title: "Uncertain private Article create",
+        document: canonicalJson({
+          schemaVersion: 1,
+          blocks: [{ type: "paragraph", text: "Reviewed private draft body" }],
+        }),
+      }
+    : operation === "content.save"
     ? { post_id: POST_ID, saved: true }
     : { post_id: POST_ID, liked: false };
 }
@@ -105,7 +126,7 @@ function desiredInput(operation: "content.save" | "likes.set"): OperationInput {
 function receipt(
   auth: WrenchAuth,
   options: {
-    readonly operation?: "content.save" | "likes.set";
+    readonly operation?: RecoveryOperation;
     readonly legacy?: boolean;
     readonly preProviderPlugin?: boolean;
     readonly status?: RunReceipt["status"];
@@ -168,7 +189,7 @@ function capsuleFor(
   input: OperationInput,
   overrides: Partial<WebSessionRecoveryCapsule> = {},
 ): WebSessionRecoveryCapsule {
-  const selectedRecipe = recipe(selectedReceipt.operation as "content.save" | "likes.set");
+  const selectedRecipe = recipe(selectedReceipt.operation as RecoveryOperation);
   return {
     schemaVersion: 1,
     runId: selectedReceipt.runId,
@@ -193,7 +214,7 @@ function capsuleFor(
 
 function installCurrentRun(
   testState: TestState,
-  operation: "content.save" | "likes.set" = "content.save",
+  operation: RecoveryOperation = "content.save",
 ): {
   readonly auth: WrenchAuth;
   readonly input: OperationInput;
@@ -363,6 +384,83 @@ describe("web-session run reconciliation", () => {
         testState.environment,
       )).toBeNull();
       expect(existsSync(recoveryBundle)).toBeFalse();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses indeterminate Article creates before readback and retains every recovery artifact", async () => {
+    const testState = state();
+    try {
+      const installed = installCurrentRun(testState, "articles.draft.save");
+      expect(installed.input).not.toHaveProperty("draft_id");
+      const recoveryBundle = installRecoveryBundle(testState);
+      const journal = terminalJournalFor(installed.receipt);
+      createRunJournal(journal, testState.environment);
+      if (journal.ledgerRelativePath === null) {
+        throw new Error("expected an Article create ledger coordinate");
+      }
+      const ledgerPath = join(
+        testState.directory,
+        ...journal.ledgerRelativePath.split("/"),
+      );
+      writePrivateJson(ledgerPath, ledgerFor(journal), {
+        privateParent: true,
+      });
+      const capsuleBefore = readRecoveryCapsule(
+        RUN_ID,
+        installed.auth.id,
+        sha256(canonicalJson(installed.auth)),
+        testState.environment,
+      );
+      const journalBefore = readRunJournal(RUN_ID, testState.environment)?.journal;
+      const receiptBefore = readFileSync(installed.receiptPath);
+      const ledgerBefore = readFileSync(ledgerPath);
+      const assetPath = join(recoveryBundle, "asset-01.png");
+      const assetBefore = readFileSync(assetPath);
+      let readbacks = 0;
+      let releases = 0;
+
+      const message = await rejectionMessage(reconcileWebSessionRun(
+        RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          dependencies: {
+            observeActualState: () => {
+              readbacks += 1;
+              return Promise.resolve({
+                actualState: true,
+                reason: "must-not-run",
+              });
+            },
+            releaseRecoveryArtifacts: () => {
+              releases += 1;
+            },
+          },
+        },
+      ));
+
+      expect(message).toContain(
+        "X articles.draft.save create has no safe reconciliation because input.draft_id is absent",
+      );
+      expect(message).toContain("preserve the indeterminate run and do not retry");
+      expect(readbacks).toBe(0);
+      expect(releases).toBe(0);
+      expect(listReconciliationObservations(RUN_ID, testState.environment))
+        .toEqual([]);
+      expect(readRecoveryCapsule(
+        RUN_ID,
+        installed.auth.id,
+        sha256(canonicalJson(installed.auth)),
+        testState.environment,
+      )).toEqual(capsuleBefore);
+      expect(readRunJournal(RUN_ID, testState.environment)?.journal)
+        .toEqual(journalBefore);
+      expect(readFileSync(installed.receiptPath)).toEqual(receiptBefore);
+      expect(readFileSync(ledgerPath)).toEqual(ledgerBefore);
+      expect(readFileSync(assetPath)).toEqual(assetBefore);
+      expect(existsSync(recoveryBundle)).toBeTrue();
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

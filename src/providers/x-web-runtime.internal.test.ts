@@ -2,18 +2,30 @@ import { describe, expect, test } from "bun:test";
 
 import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
+import { parseArticleDraftDocument } from "../article-draft-document";
 import type { WrenchAuth } from "../auth";
 import type { BrowserSession } from "../browser";
+import { canonicalJson } from "../canonical-json";
 import type { WebSessionRecipe } from "../model";
 import type { WebSessionDispatchEvent } from "../web-session";
 import {
+  buildXWebRichArticleContentState,
   executeXWebOperation,
+  readXWebArticleDraftDesiredState,
   readXWebDesiredState,
   resolveCurrentXWebChunkUrl,
   type XWebRuntimeDependencies,
 } from "./x-web-runtime";
 
 const MAIN_URL = "https://abs.twimg.com/responsive-web/client-web/main.abcdef12.js";
+const VIEWER_QUERY_ID = "5XShkXk2oO2J7SYmTu6pvw";
+const ARTICLE_QUERY_ID = "btD9FyMDa3_vydVp7fr87Q";
+const ARTICLE_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/bundle.TwitterArticles.305538ca.js";
+const ARTICLE_RESULT_QUERY_ID = "rPdndX2XxQoXIMUafLSSJQ";
+const ARTICLE_TITLE_QUERY_ID = "z_xdvTUbZjSVjt232b4D4A";
+const ARTICLE_CONTENT_QUERY_ID = "P5Nc3DYs9D4XqVthNrig8w";
+const ARTICLE_ENTITIES_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory.d1314bba.js";
+const ARTICLE_CONVERTER_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/shared~bundle.Grok~bundle.GrokDrawer~bundle.ReaderMode~bundle.Birdwatch~bundle.TwitterArticles~bundle.Compose.02f6dc7a.js";
 const VIEWER_ID = "123456789012345678";
 const FOCAL_POST_ID = "2078889282404569267";
 const CREATED_POST_ID = "2078889282404569266";
@@ -41,8 +53,8 @@ function strictCookie(name: string, value: string): StrictCookie {
   return {
     name,
     value,
-    domain: "x.com",
-    hostOnly: true,
+    domain: ".x.com",
+    hostOnly: false,
     path: "/",
     secure: true,
     httpOnly: true,
@@ -67,11 +79,19 @@ function descriptor(
 function mainBundle(...descriptors: readonly string[]): string {
   return [
     `const authorization="${CURRENT_BEARER}"`,
-    ...descriptors,
+    ...descriptors.map((value) => value.replaceAll("u4ni7JqpqdAQxWQfkLsdUQ", VIEWER_QUERY_ID)),
     "previousModule()},991160(e,t,r){\"use strict\";let transactionRuntime;r.d(t,{Ay:()=>l,_E:()=>s,kc:()=>a})",
     "transactionRuntime=transactionRuntime||new Promise(done=>{r.e(59924).then(r.bind(r,208932)).then(module=>done(module.default()))})",
     "feature.isTrue(\"rweb_client_transaction_id_enabled\")&&(headers[\"x-client-transaction-id\"]=await a(request.host,request.path,request.method))}",
   ].join(";");
+}
+
+function articleHtml(): string {
+  return `${homeHtml()}<script>p.u=e=>({31770:"bundle.TwitterArticles"})[e]||e)+"."+({31770:"305538c"})[e]+"a.js"</script>`;
+}
+
+function richArticleHtml(): string {
+  return `${homeHtml()}<script>p.u=e=>({31770:"bundle.TwitterArticles",31771:"shared~bundle.LoggedInMain~ondemand.HoverCard~loader.AudioDock~loader.Dock~bundle.BookmarkFolders~bundle.Book",31772:"shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory",31773:"shared~bundle.Grok~bundle.GrokDrawer~bundle.ReaderMode~bundle.Birdwatch~bundle.TwitterArticles~bundle.Compose"})[e]||e)+"."+({31770:"305538c",31771:"a9bac6b",31772:"d1314bb",31773:"02f6dc7"})[e]+"a.js"</script>`;
 }
 
 function homeHtml(): string {
@@ -380,6 +400,51 @@ describe("X authenticated internal-API runtime", () => {
     )).toThrow("duplicate webpack chunk hash");
   });
 
+  test("projects one provider-neutral ArticleDraftDocument to native links and styles with stable DraftJS keys", () => {
+    const document = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: 1,
+      blocks: [
+        {
+          type: "heading1",
+          text: "Visit Hraness",
+          links: [{ offset: 6, length: 7, url: "https://hraness.com/writing" }],
+          styles: [{ offset: 6, length: 7, style: "bold" }],
+        },
+        { type: "blockquote", text: "Welcome to my brain" },
+      ],
+    }), { maximumBlocks: 2_000, maximumCharacters: 20_000 });
+    expect(buildXWebRichArticleContentState(document)).toEqual({
+      blocks: [
+        {
+          data: {},
+          key: "00000",
+          text: "Visit Hraness",
+          type: "header-one",
+          entity_ranges: [{ key: 0, offset: 6, length: 7 }],
+          inline_style_ranges: [{ length: 7, offset: 6, style: "Bold" }],
+        },
+        {
+          data: {},
+          key: "00001",
+          text: "Welcome to my brain",
+          type: "blockquote",
+          entity_ranges: [],
+          inline_style_ranges: [],
+        },
+      ],
+      entity_map: [
+        {
+          key: "0",
+          value: {
+            data: { url: "https://hraness.com/writing" },
+            type: "LINK",
+            mutability: "Mutable",
+          },
+        },
+      ],
+    });
+  });
+
   test("binds user-feed responses to the requested user before exposing a page", async () => {
     for (const [returnedUserId, expected] of [
       [VIEWER_ID, "succeeded"],
@@ -556,7 +621,7 @@ describe("X authenticated internal-API runtime", () => {
     expect(calls.map((call) => `${call.method} ${call.url.origin}${call.url.pathname}`)).toEqual([
       "GET https://x.com/home",
       "GET https://abs.twimg.com/responsive-web/client-web/main.abcdef12.js",
-      "GET https://x.com/i/api/graphql/u4ni7JqpqdAQxWQfkLsdUQ/Viewer",
+      `GET https://x.com/i/api/graphql/${VIEWER_QUERY_ID}/Viewer`,
       "GET https://x.com/i/api/graphql/rZA6K31W4E90vZKBmxXV3g/TweetDetail",
     ]);
   });
@@ -701,6 +766,580 @@ describe("X authenticated internal-API runtime", () => {
     ));
     expect(switchedMessage).toContain("no longer matches");
     expect(switchedCalls.some((call) => call.url.pathname.endsWith("/TweetDetail"))).toBeFalse();
+  });
+
+  test("creates one response-bound private Article draft and never calls the publish mutation", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Private native Article";
+    const document = canonicalJson({
+      schemaVersion: 1,
+      blocks: [
+        {
+          type: "heading1",
+          text: "Welcome to my brain",
+          styles: [{ offset: 0, length: 7, style: "bold" }],
+        },
+        {
+          type: "paragraph",
+          text: "Listen to Jungle",
+          links: [{
+            offset: 10,
+            length: 6,
+            url: "https://hraness.com/writing/example/audio/jungle",
+          }],
+        },
+      ],
+    });
+    const contentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocument(document, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+      }),
+    );
+    const articleId = "700000000000000001";
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", VIEWER_QUERY_ID, "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response([
+          descriptor("ArticleEntityDraftCreate", ARTICLE_QUERY_ID, "mutation"),
+          descriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+        ].join(";"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+        return new Response('createEntity(w.Sg,"MUTABLE",{url:', {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+        return new Response("mutability:s[r.mutability];inline_style_ranges:", {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/ArticleEntityDraftCreate")) {
+        expect(request.method).toBe("POST");
+        expect(request.headers.get("x-client-transaction-id")).toBe(CLIENT_TRANSACTION_ID);
+        expect(JSON.parse(request.body ?? "null")).toEqual({
+          variables: { content_state: contentState, title },
+          features: {},
+          queryId: ARTICLE_QUERY_ID,
+        });
+        return jsonResponse({
+          data: {
+            articleentity_create_draft: {
+              article_entity_results: { result: { rest_id: articleId, title } },
+            },
+          },
+        });
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+        expect(request.method).toBe("GET");
+        return jsonResponse({
+          data: {
+            article_result_by_rest_id: {
+              rest_id: articleId,
+              title,
+              metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+              lifecycle_state: { lifecycle: "Draft" },
+              content_state: contentState,
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected Article draft request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save"),
+      { title, document },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.draft.save",
+        published: false,
+        mode: "draft",
+        draftId: articleId,
+        title,
+        documentSchemaVersion: 1,
+        url: `https://x.com/compose/articles/edit/${articleId}`,
+      },
+      finalUrl: `https://x.com/compose/articles/edit/${articleId}`,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(before).toEqual([{
+      id: "articles.create",
+      index: 1,
+      progress: { planned: 1, started: 0, verified: 0 },
+    }]);
+    expect(after).toEqual([{
+      id: "articles.create",
+      index: 1,
+      progress: { planned: 1, started: 1, verified: 1 },
+    }]);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("replaces one bound private text-rich Article draft and verifies exact readback", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Harnessing Puerto Rico";
+    const articleId = "700000000000000001";
+    const document = canonicalJson({
+      schemaVersion: 1,
+      blocks: [
+        { type: "heading2", text: "Welcome to my brain" },
+        {
+          type: "paragraph",
+          text: "Listen to Jungle and Beach",
+          links: [
+            {
+              offset: 10,
+              length: 6,
+              url: "https://hraness.com/writing/example/audio/jungle",
+            },
+            {
+              offset: 21,
+              length: 5,
+              url: "https://hraness.com/writing/example/audio/beach",
+            },
+          ],
+        },
+      ],
+    });
+    const expectedContentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocument(document, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+      }),
+    );
+    let readCount = 0;
+    let savedContentState: unknown = null;
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response([
+          descriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+          descriptor("ArticleEntityUpdateTitle", ARTICLE_TITLE_QUERY_ID, "mutation"),
+          descriptor("ArticleEntityUpdateContent", ARTICLE_CONTENT_QUERY_ID, "mutation"),
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+        return new Response('createEntity(w.Sg,"MUTABLE",{url:', {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+        return new Response("mutability:s[r.mutability];inline_style_ranges:", {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+        readCount += 1;
+        return jsonResponse({
+          data: {
+            article_result_by_rest_id: {
+              rest_id: articleId,
+              title: readCount === 1 ? "Old title" : title,
+              metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+              lifecycle_state: { lifecycle: "Draft" },
+              ...(readCount === 1 ? {} : { content_state: savedContentState }),
+            },
+          },
+        });
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityUpdateTitle")) {
+        expect(request.method).toBe("POST");
+        expect(request.headers.get("x-client-transaction-id")).toBe(CLIENT_TRANSACTION_ID);
+        const payload = JSON.parse(request.body ?? "null") as { variables: unknown };
+        expect(payload.variables).toEqual({ articleEntityId: articleId, title });
+        return jsonResponse({
+          data: { articleentity_update_title: { rest_id: articleId, title } },
+        });
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityUpdateContent")) {
+        expect(request.method).toBe("POST");
+        expect(request.headers.get("x-client-transaction-id")).toBe(CLIENT_TRANSACTION_ID);
+        const payload = JSON.parse(request.body ?? "null") as {
+          variables: { content_state: unknown; article_entity: string };
+        };
+        expect(payload.variables).toEqual({
+          content_state: expectedContentState,
+          article_entity: articleId,
+        });
+        savedContentState = payload.variables.content_state;
+        return jsonResponse({
+          data: { articleentity_update_content_state: { rest_id: articleId } },
+        });
+      }
+      throw new Error("unexpected text-rich Article request " + request.url.href);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save"),
+      { title, document, draft_id: articleId },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.draft.save",
+        published: false,
+        mode: "draft",
+        draftId: articleId,
+        title,
+        documentSchemaVersion: 1,
+        url: "https://x.com/compose/articles/edit/" + articleId,
+      },
+      finalUrl: "https://x.com/compose/articles/edit/" + articleId,
+      dispatchStarted: true,
+      dispatch: { planned: 2, started: 2, verified: 2 },
+    });
+    expect(before).toEqual([
+      {
+        id: "articles.title",
+        index: 1,
+        progress: { planned: 2, started: 0, verified: 0 },
+      },
+      {
+        id: "articles.content",
+        index: 2,
+        progress: { planned: 2, started: 1, verified: 1 },
+      },
+    ]);
+    expect(after).toEqual([
+      {
+        id: "articles.title",
+        index: 1,
+        progress: { planned: 2, started: 1, verified: 1 },
+      },
+      {
+        id: "articles.content",
+        index: 2,
+        progress: { planned: 2, started: 2, verified: 2 },
+      },
+    ]);
+    expect(readCount).toBe(2);
+    expect(savedContentState).toEqual(expectedContentState);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(2);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("reconciles one exact existing text-and-links Article without a mutation path", async () => {
+    const calls: CapturedRequest[] = [];
+    const title = "Harnessing Puerto Rico";
+    const articleId = "700000000000000001";
+    const document = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{
+        type: "paragraph",
+        text: "Listen to Jungle and Beach",
+        links: [
+          {
+            offset: 10,
+            length: 6,
+            url: "https://hraness.com/writing/example/audio/jungle",
+          },
+          {
+            offset: 21,
+            length: 5,
+            url: "https://hraness.com/writing/example/audio/beach",
+          },
+        ],
+      }],
+    });
+    const providerContentState = {
+      blocks: [{
+        key: "abcde",
+        text: "Listen to Jungle and Beach",
+        type: "unstyled",
+        data: {
+          urls: [
+            { fromIndex: 10, text: "Jungle", toIndex: 16 },
+            { fromIndex: 21, text: "Beach", toIndex: 26 },
+          ],
+        },
+        entity_ranges: [
+          { key: 7, offset: 10, length: 6 },
+          { key: 11, offset: 21, length: 5 },
+        ],
+        inline_style_ranges: [],
+      }],
+      entity_map: [
+        {
+          key: 11,
+          value: {
+            data: {
+              url: "https://hraness.com/writing/example/audio/beach",
+            },
+            type: "LINK",
+            mutability: "Mutable",
+          },
+        },
+        {
+          key: 7,
+          value: {
+            data: {
+              url: "https://hraness.com/writing/example/audio/jungle",
+            },
+            type: "LINK",
+            mutability: "Mutable",
+          },
+        },
+      ],
+    };
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(articleHtml(), {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", VIEWER_QUERY_ID, "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response(
+          descriptor(
+            "ArticleEntityResultByRestId",
+            ARTICLE_RESULT_QUERY_ID,
+            "query",
+          ),
+          { headers: { "content-type": "application/javascript" } },
+        );
+      }
+      if (request.url.pathname.endsWith("/Viewer")) {
+        return jsonResponse(viewerResponse());
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+        return jsonResponse({
+          data: {
+            article_result_by_rest_id: {
+              rest_id: articleId,
+              title,
+              metadata: {
+                author_results: { result: { rest_id: VIEWER_ID } },
+              },
+              lifecycle_state: { lifecycle: "Draft" },
+              content_state: providerContentState,
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected Article recovery request ${request.url.href}`);
+    });
+
+    expect(await readXWebArticleDraftDesiredState(
+      xRecipe("articles.draft.save"),
+      { title, document, draft_id: articleId },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    )).toEqual({ matches: true, draftId: articleId });
+    expect(calls.some((call) => call.method === "POST")).toBeFalse();
+  });
+
+  test("returns partial after verifying the title when the content mutation contract drifts before dispatch", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Confirmed title";
+    const articleId = "700000000000000001";
+    const document = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "paragraph", text: "Confirmed body" }],
+    });
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response([
+          descriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+          descriptor("ArticleEntityUpdateTitle", ARTICLE_TITLE_QUERY_ID, "mutation"),
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+        return new Response('createEntity(w.Sg,"MUTABLE",{url:', {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+        return new Response("mutability:s[r.mutability];inline_style_ranges:", {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+        return jsonResponse({
+          data: {
+            article_result_by_rest_id: {
+              rest_id: articleId,
+              title: "Old title",
+              metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+              lifecycle_state: { lifecycle: "Draft" },
+            },
+          },
+        });
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityUpdateTitle")) {
+        return jsonResponse({
+          data: { articleentity_update_title: { rest_id: articleId, title } },
+        });
+      }
+      throw new Error("unexpected partial Article request " + request.url.href);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save"),
+      { title, document, draft_id: articleId },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "partial",
+      finalUrl: "https://x.com/compose/articles/edit/" + articleId,
+      dispatchStarted: true,
+      dispatch: { planned: 2, started: 1, verified: 1 },
+    });
+    expect(before.map((event) => event.id)).toEqual(["articles.title"]);
+    expect(after.map((event) => event.id)).toEqual(["articles.title"]);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityUpdateContent"))).toBeFalse();
+  });
+
+  test("leaves an Article draft indeterminate when the create response does not bind the confirmed title", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const document = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "paragraph", text: "Body" }],
+    });
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response(descriptor("ArticleEntityDraftCreate", ARTICLE_QUERY_ID, "mutation"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+        return new Response('createEntity(w.Sg,"MUTABLE",{url:', {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+        return new Response("mutability:s[r.mutability];inline_style_ranges:", {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/ArticleEntityDraftCreate")) {
+        return jsonResponse({
+          data: {
+            articleentity_create_draft: {
+              article_entity_results: {
+                result: { rest_id: "700000000000000002", title: "Different title" },
+              },
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected mismatched Article response request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save"),
+      { title: "Confirmed title", document },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+      error: "X may have accepted the private Article create, but the confirmed input has no exact draft ID for safe reconciliation; preserve the indeterminate run and do not retry",
+    });
+    expect(after).toEqual([]);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
   });
 
   test("records mutation dispatch only immediately before the direct CreateTweet request and verifies afterward", async () => {
@@ -1110,7 +1749,7 @@ describe("X authenticated internal-API runtime", () => {
       expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual([
         "GET /home",
         "GET /responsive-web/client-web/main.abcdef12.js",
-        "GET /i/api/graphql/u4ni7JqpqdAQxWQfkLsdUQ/Viewer",
+        `GET /i/api/graphql/${VIEWER_QUERY_ID}/Viewer`,
         "GET /i/api/graphql/4hhGRbehkcUVTKf8n0f0xw/TweetResultByRestId",
         `POST ${mutationPath}`,
         "GET /i/api/graphql/4hhGRbehkcUVTKf8n0f0xw/TweetResultByRestId",

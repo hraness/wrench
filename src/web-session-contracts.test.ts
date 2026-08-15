@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
-import { canonicalJson, sha256, type WebSessionRecipe } from "./model";
+import {
+  canonicalJson,
+  parseDiagnosticManifest,
+  parseRuntimeManifest,
+  sha256,
+  type WebSessionRecipe,
+} from "./model";
 import {
   getWebSessionContract as getWebSessionContractWithRegistry,
   isCompatibleWebSessionContractHash as isCompatibleWebSessionContractHashWithRegistry,
@@ -131,6 +139,36 @@ describe("authenticated web-session contract identity", () => {
       action: "feeds.read",
       contractVersion: 3,
     })).toThrow("is not installed");
+
+    expect(contract({
+      site: "x",
+      action: "articles.publish",
+      contractVersion: 4,
+    })).toMatchObject({ contractVersion: 4, state: "capture-required" });
+    for (const contractVersion of [1, 2, 3, 5]) {
+      expect(() => contract({
+        site: "x",
+        action: "articles.publish",
+        contractVersion,
+      })).toThrow("is not installed");
+    }
+  });
+
+  test("keeps retired X Article manifests diagnostic-only instead of projecting v4 semantics", () => {
+    for (const adapterVersion of ["1.1.0", "1.2.0", "1.3.0"]) {
+      const archived = JSON.parse(readFileSync(join(
+        import.meta.dir,
+        "assets",
+        "adapters",
+        "x",
+        `wrench-web-adapter.v${adapterVersion}.json`,
+      ), "utf8")) as unknown;
+      expect(parseDiagnosticManifest(archived, providerPluginRegistry).ok).toBeTrue();
+      expect(parseRuntimeManifest(archived, providerPluginRegistry)).toMatchObject({
+        ok: false,
+        issues: [expect.stringContaining("articles.publish")],
+      });
+    }
   });
 
   test("keeps LinkedIn inbox and discovery contracts inert until recapture", () => {

@@ -45,6 +45,7 @@ describe("LinkedIn internal-web operation registry", () => {
       "reactions.set",
       "relationships.connect",
       "articles.read",
+      "articles.draft.save",
       "articles.publish",
     ]);
     expect(Object.keys(LINKEDIN_WEB_OPERATIONS).sort()).toEqual([...LINKEDIN_WEB_OPERATION_NAMES].sort());
@@ -65,6 +66,8 @@ describe("LinkedIn internal-web operation registry", () => {
       expect(contract.requests).toHaveLength(0);
     }
     expect(LINKEDIN_WEB_OPERATIONS["reactions.set"].risk).toBe("R2");
+    expect(LINKEDIN_WEB_OPERATIONS["articles.draft.save"].risk).toBe("R2");
+    expect(LINKEDIN_WEB_OPERATIONS["articles.draft.save"].evidence).toBe("live-har");
     for (const operation of [
       "messaging.send",
       "posts.publish",
@@ -416,7 +419,12 @@ describe("LinkedIn R1 internal-request gate", () => {
   });
 
   test("rejects writes and unknown operations before inspecting caller-controlled request data", () => {
-    for (const operation of ["messaging.send", "reactions.set", "articles.publish"] as const) {
+    for (const operation of [
+      "messaging.send",
+      "reactions.set",
+      "articles.draft.save",
+      "articles.publish",
+    ] as const) {
       expect(() => assertLinkedInWebR1RequestAllowed(operation, null)).toThrow(
         "LinkedIn web operation is not an R1 read",
       );

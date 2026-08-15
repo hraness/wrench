@@ -3,9 +3,10 @@
 The current `linkedin-web` schema-v4 adapter has no observed operation. Every
 consumer-web capability is `capture-required`, including inbox listing and the
 explicit member-profile, organization-Page, recommended-connection, and
-connection-invitation reservations. Its strict first-party implementation is
-retained as inert recapture material, but the execution boundary refuses before
-cookie acquisition, browser bootstrap, or network traffic.
+connection-invitation reservations, plus private native Article draft saving.
+Its strict first-party implementation is retained as inert recapture material,
+but the execution boundary refuses before cookie acquisition, browser
+bootstrap, or network traffic.
 
 A browser may record a managed HAR, bootstrap the private session, or resolve the current registered-query revision and CSRF material. It never lists an inbox, opens a conversation, sends a message, or performs another semantic action through LinkedIn's DOM.
 
@@ -16,6 +17,7 @@ First-party traffic is not the same as a documented public API. Use this local c
 - [Install and inspect](#install-and-inspect)
 - [Configure the signed-in realm](#configure-the-signed-in-realm)
 - [Recapture inbox listing](#recapture-inbox-listing)
+- [Recapture Article draft saving](#recapture-article-draft-saving)
 - [Resolve current LinkedIn material](#resolve-current-linkedin-material)
 - [Preserve capture-required operations](#preserve-capture-required-operations)
 - [Risk and confirmation](#risk-and-confirmation)
@@ -71,9 +73,9 @@ projection, and completeness semantics.
 ## Recapture inbox listing
 
 `messaging.list` is a capture-required reservation. Version 1.1.0 remains
-archived as historical evidence of the formerly observed bundle; current
-version 1.2.0 deliberately demotes it and cannot execute. The intended folder
-input still reserves:
+archived as historical evidence of the formerly observed bundle; version
+1.2.0 first demoted it, and the current 1.4.0 bundle remains capture-required
+and cannot execute. The intended folder input still reserves:
 
 - `focused` for the main inbox;
 - `other` for the additional inbox;
@@ -129,6 +131,41 @@ actor. `comments.create` targets an exact post URN; LinkedIn does not have a
 separate wrench operation for “commenting on a profile” or “commenting on a
 Page.” A member- or organization-authored post remains the comment target.
 
+## Recapture Article draft saving
+
+`articles.draft.save` is an R2 capture-required reservation for one private
+native LinkedIn Article draft. Its input uses the same canonical,
+provider-neutral `ArticleDraftDocument` described in [native article
+drafts](article-drafts.md): text blocks, styles, and native HTTPS link ranges
+only, with an optional exact existing `draft_id`. Images, covers, embeds, HTML,
+Markdown, and editor payloads are outside this contract. The caller owns any
+editorial translation from source material.
+
+Keep the operation inert until one managed low-stakes capture proves:
+
+1. the exact current-member-bound editor autosave exchange;
+2. distinct create and existing-draft replacement shapes, if both are claimed;
+3. one stable returned private draft identity;
+4. exact title, text structure, styles, and native-link preservation;
+5. an independent unpublished readback bound to that member and draft; and
+6. exclusion of publish, feed-share, notification, and unrelated editor
+   traffic.
+
+An authorized August 15, 2026 recapture proved the current first-party Article
+route family, a `201` create, same-identity `200` autosaves, a stable private
+edit identity, and editor-visible persistence of plain text, one native HTTPS
+link, and one heading after navigating away and reopening the draft. It did not
+retain mutation response fields or the Article API response body, so it could
+not prove a code-owned returned-ID parser, current-member ownership, private
+lifecycle projection, or exact API readback. Those missing response facts keep
+the operation `capture-required`; the observed request family is evidence for
+the next recapture, not an executable contract.
+
+The presence of a LinkedIn editor, a saved UI state, or an inferred Voyager
+operation name is not a contract. Do not type into the editor as a runtime
+fallback. `articles.publish` remains a separate capture-required R3 operation
+with its own publication and public-readback evidence.
+
 ## Resolve current LinkedIn material
 
 Derive the `csrf-token` header from exactly one bounded `JSESSIONID` cookie. Strip only the reviewed wrapper quotes and require the expected `ajax:` token form. Never log or return the cookie or derived token.
@@ -147,6 +184,7 @@ The current registry keeps these unavailable until their exact first-party excha
 - `comments.create` and `replies.create` (`R3`);
 - `relationships.connect` (`R3`);
 - `reactions.set` (`R2`);
+- `articles.draft.save` (`R2`);
 - `articles.publish` (`R3`);
 
 Do not guess a Voyager/GraphQL mutation from a bundle, replay a captured payload, or use the composer as a fallback. To graduate one operation:
@@ -168,10 +206,11 @@ independent relationship readback. A disabled Connect button is not evidence.
 
 ## Risk and confirmation
 
-R1 reads run only after they graduate and pass account binding. `reactions.set`
-is R2 only as an exact desired-state create/delete pair. Messages, comments,
-replies, posts, reposts, quotes, connection requests, and article publication
-are R3.
+R1 reads run only after they graduate and pass account binding.
+`reactions.set` is R2 only as an exact desired-state create/delete pair. A
+private `articles.draft.save` is R2 only after the editor autosave and exact
+unpublished readback graduate. Messages, comments, replies, posts, reposts,
+quotes, connection requests, and article publication are R3.
 
 Every R2/R3 operation must preview the exact account realm, actor, target, text/media hashes, side effect, contract hash, and dispatch schedule. Confirm once. Require local duplicate refusal. Treat an uncertain response after request start as `indeterminate`; never retry by clicking LinkedIn or by changing message whitespace.
 

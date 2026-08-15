@@ -102,7 +102,7 @@ function jsonResponse(value: unknown, status = 200): Response {
 function articleRecipe(): WebSessionRecipe {
   return {
     site: "linkedin",
-    action: "articles.read",
+    action: "articles.draft.save",
     contractVersion: 1,
     timeoutMs: 1_000,
     maxOutputBytes: 2 * 1024 * 1024,
@@ -639,7 +639,10 @@ describe("LinkedIn authenticated internal-API runtime", () => {
 
     for (const [recipe, input] of [
       [messagingListRecipe(), { folder: "focused", limit: 10 }],
-      [articleRecipe(), { author_urn: MEMBER_URN }],
+      [articleRecipe(), {
+        title: "Private fixture",
+        document: "{\"blocks\":[{\"text\":\"private fixture\",\"type\":\"paragraph\"}],\"schemaVersion\":1}",
+      }],
     ] as const) {
       const message = await rejectionMessage(executeLinkedInWebOperation(
         recipe,

@@ -4,8 +4,10 @@ import { assertProperty, fc } from "./test-support";
 import {
   analyzeInternalHarValue,
   INTERNAL_HAR_REVIEW_BOUNDS,
+  reviewedXGraphQlVariableFieldName,
   type InternalHarCandidate,
 } from "./har-internal";
+import { xWebQueryDescriptorEvidenceSnapshot } from "./providers/x-web";
 
 type HarEntryOptions = {
   readonly url: string;
@@ -677,6 +679,19 @@ describe("private Facebook internal-API HAR evidence", () => {
 });
 
 describe("private X internal-API HAR evidence", () => {
+  test("retains only non-sensitive GraphQL-safe top-level variable field names", () => {
+    expect(reviewedXGraphQlVariableFieldName("articleEntityKey")).toBe("articleEntityKey");
+    expect(reviewedXGraphQlVariableFieldName("_draftId2")).toBe("_draftId2");
+    for (const value of [
+      "authToken",
+      "sessionId",
+      "article-entity-key",
+      "article.entity.key",
+      "2articleEntityKey",
+      "x".repeat(INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters + 1),
+    ]) expect(reviewedXGraphQlVariableFieldName(value)).toBe(":dynamic");
+  });
+
   test("keeps GraphQL operation revisions and field paths but no values, auth material, or dynamic user keys", () => {
     const revision = "zd0F6a_svKAXdlMGbCZDFg";
     const url = new URL(`https://x.com/i/api/graphql/${revision}/DmAllSearchSlice`);
@@ -778,6 +793,42 @@ describe("private X internal-API HAR evidence", () => {
       "x-response-user-private",
       "response-cookie-private",
     ]) expect(serialized).not.toContain(forbidden);
+  });
+
+  test("retains reviewed top-level variable schema names only for the exact registered X GraphQL route", () => {
+    const operation = "ArticleEntityUpdateTitle";
+    const descriptor = xWebQueryDescriptorEvidenceSnapshot.descriptors.find(
+      (candidate) => candidate.operationName === operation,
+    );
+    if (descriptor === undefined) throw new Error("missing X article title descriptor");
+    const requestJson = {
+      variables: {
+        articleEntityId: "private-article-id",
+        titlePayload: { "private-user-key": { text: "private-title" } },
+        authToken: "private-auth-token",
+      },
+      features: {},
+      queryId: descriptor.queryId,
+    };
+    const exact = oneCandidate(analyzeInternalHarValue(har([entry({
+      method: "POST",
+      url: `https://x.com/i/api/graphql/${descriptor.queryId}/${operation}`,
+      requestJson,
+      responseJson: { data: {} },
+    })]), "x-internal", "https://x.com", new Date("2026-08-14T00:00:00.000Z")));
+    expect(exact.requestFieldPaths).toContain("variables.articleEntityId");
+    expect(exact.requestFieldPaths).toContain("variables.titlePayload");
+    expect(exact.requestFieldPaths).not.toContain("variables.authToken");
+    expect(JSON.stringify(exact)).not.toContain("private-user-key");
+
+    const stale = oneCandidate(analyzeInternalHarValue(har([entry({
+      method: "POST",
+      url: `https://x.com/i/api/graphql/${"a".repeat(22)}/${operation}`,
+      requestJson,
+      responseJson: { data: {} },
+    })]), "x-internal", "https://x.com", new Date("2026-08-14T00:00:00.000Z")));
+    expect(stale.requestFieldPaths).not.toContain("variables.articleEntityId");
+    expect(stale.requestFieldPaths).not.toContain("variables.titlePayload");
   });
 });
 

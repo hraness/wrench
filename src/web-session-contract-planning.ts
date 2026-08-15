@@ -20,6 +20,9 @@ export function planWebSessionContractDispatches(
       description: `Dispatch one reviewed ${selected.operation} internal API action`,
     }];
   }
+  if (selected.dispatch === "bounded-items") {
+    throw new Error(`${selected.site} ${selected.operation} requires its provider-owned bounded dispatch planner`);
+  }
   const items = input.items;
   if (
     !Array.isArray(items)

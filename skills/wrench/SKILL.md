@@ -1,6 +1,6 @@
 ---
 name: wrench
-description: Use the bring-your-own-agent Wrench CLI and SDK to capture or read web content, archive media, query encrypted normalized cross-provider views, inspect installed semantic capabilities, and operate bounded provider plugins. Use when an agent needs a new site integration without adding raw HTTP, DOM automation, or credentials to its tool surface.
+description: Use the bring-your-own-agent Wrench CLI and SDK to capture or read web content, archive media, save private native article drafts, query encrypted normalized cross-provider views, inspect installed semantic capabilities, and operate bounded provider plugins. Use when an agent needs a new site integration without adding raw HTTP, DOM automation, or credentials to its tool surface.
 ---
 
 # Wrench
@@ -17,6 +17,7 @@ Wrench supplies bounded CLI and SDK capabilities, not an agent runtime or applic
 - Invoke a supported semantic operation: `wrench invoke <adapter> <operation>` or its printed shorthand.
 - Read a previously validated exact query without a provider roundtrip: repeat the subject-bound R1 invocation with `--cache-only`; omit that flag to revalidate it explicitly.
 - Read a normalized cross-provider inbox without a provider roundtrip: `wrench omni read --input <json|@file|-> --cache-only --json`; use `--from-exact-cache` to rebuild from exact ciphertext or omit the mode to revalidate supported sources.
+- Save one private native article draft: inspect `articles.draft.save`, then follow [native article drafts](references/article-drafts.md). Never substitute `articles.publish`.
 - Add a provider without changing Wrench source: author a portable plugin.
 - Derive a reviewed first-party contract from authorized HAR evidence: follow [the derivation guide](references/derivation.md).
 
@@ -135,8 +136,3 @@ Use a managed derivation to capture the minimum authorized first-party exchange.
 - Inspect receipts and confirm credentials and payload text are absent.
 - Remove managed HARs, profile snapshots, bootstrap state, and plan assets when their lifecycle is complete.
 - Forward-test material skill changes with a fresh agent given only this skill and an installed `wrench` command.
-
-interface:
-  display_name: "wrench"
-  short_description: "Capture sites, query omni views, and build bounded provider plugins"
-  default_prompt: "Use $wrench to capture this site or add the smallest safe semantic provider capability."

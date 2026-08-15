@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.4.0",
+  "version": "1.3.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -532,10 +532,10 @@
         "maxOutputBytes": 2097152
       }
     },
-    "articles.draft.save": {
-      "description": "Create or replace one private native X Article draft from the strict provider-neutral ArticleDraftDocument. This operation has no publish-capable branch.",
-      "risk": "R2",
-      "sideEffect": "Creates one private native X Article draft, or replaces the exact confirmed existing private draft, with the confirmed title, structure, styles, and native links; it never publishes the draft.",
+    "articles.publish": {
+      "description": "Observed draft-only rich contract: create or replace one private native X Article using a strict versioned document, plan-bound inline images, an optional plan-bound cover, segmented media upload, and current Article entity mutations. This operation never calls ArticleEntityPublish.",
+      "risk": "R3",
+      "sideEffect": "Creates one private native X Article draft, or replaces the exact confirmed existing private draft, with the confirmed title, native rich links, inline images, and optional cover; it never publishes the draft.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -548,68 +548,61 @@
           },
           "document": {
             "type": "string",
-            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 1; supports bounded paragraphs, headings, lists, blockquotes, native HTTPS links, and text styles",
+            "description": "Canonical JSON for the strict version-1 rich Article document; supports bounded paragraphs, headings, lists, blockquotes, native links/styles, and indexed image blocks",
             "minLength": 1,
-            "maxLength": 524288
+            "maxLength": 131072
+          },
+          "inline_images": {
+            "type": "array",
+            "description": "Ordered plan-bound images referenced by zero-based imageIndex values in the rich document",
+            "items": {
+              "type": "file",
+              "description": "One exact inline Article image",
+              "maxBytes": 5242880,
+              "mediaTypes": [
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 20
+          },
+          "cover_image": {
+            "type": "file",
+            "description": "Optional exact plan-bound X Article cover image",
+            "maxBytes": 5242880,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ]
           },
           "draft_id": {
             "type": "string",
             "description": "Optional exact existing private X Article draft to replace in place",
             "minLength": 1,
             "maxLength": 19
+          },
+          "draft_only": {
+            "type": "boolean",
+            "description": "Must be true; the authenticated-web contract can save a private draft but cannot publish it",
+            "enum": [
+              true
+            ]
           }
         },
         "required": [
           "title",
-          "document"
-        ]
-      },
-      "webSession": {
-        "site": "x",
-        "action": "articles.draft.save",
-        "contractVersion": 1,
-        "timeoutMs": 180000,
-        "maxOutputBytes": 2097152
-      }
-    },
-    "articles.publish": {
-      "description": "Capture-required reservation: publish one exact existing private X Article draft only after the distinct publish mutation and public readback are captured and response-bound.",
-      "risk": "R3",
-      "sideEffect": "Publishes one externally visible native X Article from the exact confirmed private draft.",
-      "idempotency": "local-at-most-once",
-      "dedupeWindowMs": 86400000,
-      "input": {
-        "properties": {
-          "title": {
-            "type": "string",
-            "description": "Exact native article title used for confirmation",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "body": {
-            "type": "string",
-            "description": "Exact native article body used for confirmation",
-            "minLength": 1,
-            "maxLength": 20000
-          },
-          "draft_id": {
-            "type": "string",
-            "description": "Exact private X Article draft to publish",
-            "minLength": 1,
-            "maxLength": 19
-          }
-        },
-        "required": [
-          "title",
-          "body",
-          "draft_id"
+          "document",
+          "draft_only"
         ]
       },
       "webSession": {
         "site": "x",
         "action": "articles.publish",
-        "contractVersion": 4,
-        "timeoutMs": 60000,
+        "contractVersion": 3,
+        "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }
     }

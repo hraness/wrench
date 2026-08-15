@@ -86,3 +86,21 @@ export type {
   PortableProviderPluginMessageResult,
   PortableProviderPluginProcessMessage,
 } from "./provider-plugin-protocol";
+
+export {
+  ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION,
+  MAX_ARTICLE_DRAFT_BLOCKS,
+  MAX_ARTICLE_DRAFT_CHARACTERS,
+  MAX_ARTICLE_DRAFT_DOCUMENT_BYTES,
+  articleDraftDocumentIssues,
+  parseArticleDraftDocument,
+} from "./article-draft-document";
+
+export type {
+  ArticleDraftDocument,
+  ArticleDraftDocumentLimits,
+  ArticleDraftLinkRange,
+  ArticleDraftStyleRange,
+  ArticleDraftTextBlock,
+  ArticleDraftTextBlockType,
+} from "./article-draft-document";

@@ -7,9 +7,9 @@ First-party traffic is not the same as a documented public API. Use this local c
 ## Contents
 
 - [Install and inspect](#install-and-inspect)
-- [Save an official Article draft](#save-an-official-article-draft)
+- [Save an Article draft](#save-an-article-draft)
 - [Configure and bind the signed-in realm](#configure-and-bind-the-signed-in-realm)
-- [Use observed R1 contracts](#use-observed-r1-contracts)
+- [Use observed contracts](#use-observed-contracts)
 - [Resolve current X material](#resolve-current-x-material)
 - [Preserve capture-required mutations](#preserve-capture-required-mutations)
 - [Other capture-required operations](#other-capture-required-operations)
@@ -28,24 +28,63 @@ wrench capabilities x-web --json
 
 The separate `x` adapter uses X's documented OAuth API. It covers documented reverse-chronological/user/mentions/List/recent-search/bookmark reads and approved posting, reply, thread, repost, bookmark, Article, media, and legacy-DM surfaces; it never supplies For You. Encrypted X Chat remains a separate cryptographic contract. Keep these transports and auth realms distinct, and never switch among them after preview or because one lacks coverage.
 
-## Save an official Article draft
+## Save an Article draft
 
-Use the documented OAuth adapter when the intent is to save an X Article without publishing it. Contract version 2 accepts the literal `draft_only: true`, calls the draft endpoint, and returns before any publish request. Omitting the flag preserves the publishing operation, so require it in every draft workflow and inspect the preview before confirmation.
+Use `x-web articles.draft.save` to create or replace one private native X
+Article. This is an observed R2 contract with no publish-capable branch. It
+accepts a reviewed title, a canonical provider-neutral `ArticleDraftDocument`,
+and an optional exact existing private `draft_id`. Read [native article
+drafts](article-drafts.md) before constructing the document.
 
-Configure the official `x` OAuth locator with the exact mode-0600 token document, stable numeric subject, and sorted scopes documented in the public Wrench README. The signed-in cookie realm below belongs only to `x-web` and cannot authorize this operation.
+Keep the current contract text-only. It supports paragraphs, headings, lists,
+blockquotes, native HTTPS links, and bold, italic, or strikethrough ranges. It
+does not accept images, a cover, embeds, HTML, Markdown, or editor payloads. The
+caller owns any editorial translation from source material into the final
+title, text blocks, styles, and links.
 
 ```sh
 wrench adapter sync-bundled --json
-wrench capabilities x --json
+wrench auth add x-main --cookie-source arc
+wrench auth bind x-main --site x
+wrench capabilities x-web --json
 
-wrench x articles.publish \
-  --input '{"title":"Reviewed title","body":"Reviewed body","draft_only":true}' \
-  --auth x-api --preview --json
+wrench x-web articles.draft.save \
+  --input @/absolute/private/article-draft-input.json \
+  --auth x-main --preview --json
 
 wrench confirm <preview-digest> --json
 ```
 
-The operation remains R3 because the same semantic operation can publish when the flag is absent. Confirm only an exact preview whose input includes `draft_only: true`, whose dispatch contract is version 2, and whose body is the final reviewed draft. The result must report `published: false` and `mode: "draft"`; never treat a returned draft ID as permission to call the separate publish endpoint.
+Review the bound numeric account, exact title, canonical document, optional
+draft ID, contract version 1, and one-step create or two-step replacement
+schedule. A successful result must identify `articles.draft.save`, report
+`published: false` and `mode: "draft"`, and return the private draft ID and edit
+URL. The runtime independently reads the result and binds its unpublished
+state, owner, title, and content.
+
+Only replacement input containing an exact `draft_id` can use the installed
+read-only reconciliation path. If a create becomes indeterminate, the
+confirmed input has no exact draft target: preserve that run and do not retry,
+search by title, or guess an ID.
+
+`articles.publish` is a distinct capture-required R3 operation. Its mutation
+and public readback are outside the observed private-draft contract. Never use
+a saved draft ID, a draft preview, or the presence of an
+`ArticleEntityPublish` descriptor as publication authority. Keep the separate
+official `x` OAuth transport and its previews isolated from this signed-in
+cookie realm.
+
+The documented OAuth `x` adapter also exposes draft saving and publication as
+two semantic operations. `x articles.draft.save` is an observed R2 private
+draft create using its reviewed plain-text body and optional-cover schema;
+it binds the returned draft ID and title but does not make a separate
+unpublished read. `x articles.publish` is the separate R3 publish-only
+operation and binds the publish response rather than claiming an independent
+public readback. The retired
+`draft_only` input is accepted by neither current contract. The retained
+`articles.publish@2` route is available only for exact recovery of already
+durable v2 evidence; it is not selected for a new preview. Inspect both current
+capabilities and keep their OAuth plans separate from the `x-web` cookie realm.
 
 ## Configure and bind the signed-in realm
 
@@ -61,7 +100,7 @@ Use a private profile snapshot only when current local/session storage or first-
 
 Before private reads or mutations, resolve the current stable X user ID through a reviewed account request and compare it with the realm's expected binding. Bind created posts, replies, quotes, reposts, likes, bookmarks, and DMs to that account plus the exact requested target. Fail before dispatch on account ambiguity or mismatch.
 
-## Use observed R1 contracts
+## Use observed contracts
 
 The current registry marks these code-owned reads observed:
 
@@ -71,7 +110,14 @@ The current registry marks these code-owned reads observed:
 
 Authorized direct live evidence for this contract version covers For You, bookmarks, one exact post, and its bounded comments. Following, user, List, and search remain declared modes of the observed `feeds.read` contract; check `wrench capabilities x-web --json` for the installed input schema and let current preflight fail closed on revision drift.
 
-The only observed web writes are `likes.set` and `content.save`, both R2 desired-state mutations. Their evidence comes from prior reversible live fixtures, not the current read-only probes. Preview the exact post ID and desired `liked` or `saved` boolean, confirm the returned digest, and inspect the receipt. wrench does not mark either mutation verified until an independent TweetResultByRestId readback matches that boolean.
+The observed web writes are `likes.set`, `content.save`, and
+`articles.draft.save`, all R2. Like and bookmark evidence comes from prior
+reversible live fixtures, not the current read-only probes. Preview the exact
+post ID and desired `liked` or `saved` boolean, confirm the returned digest, and
+inspect the receipt. wrench does not mark either desired-state mutation
+verified until an independent TweetResultByRestId readback matches that
+boolean. Article draft saving uses the separate exact unpublished Article
+readback described above.
 
 Examples:
 
@@ -118,13 +164,15 @@ The current registry keeps these text/desired-state exchanges capture-required:
 
 Current `x-client-transaction-id` generation is code-owned: wrench resolves the unique wrapper module, exported helper, and lazy-module evidence from the current first-party main bundle, calls that cached helper through one contained private agent-browser session, closes and cleans the session, then places the ephemeral value only on the already-reviewed in-origin mutation request. Drift or bootstrap failure occurs before the durable dispatch boundary and is never retried. This prerequisite does not by itself graduate the contract states listed above.
 
-`likes.set` and `content.save` (`R2`) are the only observed web mutations. Each binds the exact account and post, selects only the matching create/delete mutation for the confirmed desired state, validates the operation-specific `Done` response, and independently reads the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. Text posts, threads, replies, reposts, quotes, media, DMs, and Articles did not graduate from those fixtures.
+`likes.set` and `content.save` (`R2`) bind the exact account and post, select only the matching create/delete mutation for the confirmed desired state, validate the operation-specific `Done` response, and independently read the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. `articles.draft.save` is the separate observed private text-and-links contract above. Text posts, threads, replies, reposts, quotes, DMs, and Article publishing did not graduate from those fixtures.
 
 Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.
 
 Treat repost, like, and bookmark as desired state only when both create and delete mutations are reviewed and response-bound. A state mismatch is not permission to issue another mutation blindly.
 
-Media remains capture-required where the exact upload/finalize/attach exchange has not graduated with the text mutation. Do not ignore a supplied file or fall back to DOM upload.
+Article images, covers, embeds, and other media are outside
+`articles.draft.save`. Do not ignore a supplied file or fall back to DOM
+upload.
 
 ## Other capture-required operations
 
@@ -133,7 +181,9 @@ The current `x-web` registry keeps these unavailable:
 - `messaging.list` and `messaging.read` (`R1`) until verified X Chat key recovery, plaintext projection, and acknowledgement-free handling are installed;
 - `messaging.send` (`R3`) until its exact current mutation, conversation/user target, response, and media path are captured;
 - `articles.read` (`R1`) until the entitlement-specific detail read is captured;
-- `x-web articles.publish` (`R3`) until editor, cover upload, publish response, and account/article bindings are captured.
+- `articles.publish` (`R3`) until the distinct publish mutation and public
+  readback are captured and response-bound. `articles.draft.save` never
+  authorizes `ArticleEntityPublish`.
 
 No operation may be guessed from downloaded bundles or copied network snippets. A capture-required DM send must not type into X's message composer.
 
@@ -141,7 +191,10 @@ Encrypted X Chat is not a normal HAR template. Plaintext and send require a sepa
 
 ## Risk and confirmation
 
-R1 reads run only after account binding and exclusion of seen/read acknowledgement requests. Likes and bookmarks are R2 desired state. Posts, replies, quotes, reposts, threads, DMs, and Articles are R3.
+R1 reads run only after account binding and exclusion of seen/read
+acknowledgement requests. Likes, bookmarks, and private Article draft saves are
+R2. Posts, replies, quotes, reposts, threads, DMs, and Article publication are
+R3.
 
 Preview the exact account realm, target, body/items, attachment hashes, reply settings, desired state, contract hash, and dispatch schedule. Confirm once. Require duplicate refusal. If a request left but its response or target binding is uncertain, report `indeterminate` and preserve the ledger.
 
