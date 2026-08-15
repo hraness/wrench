@@ -567,6 +567,40 @@ describe("run reconciliation CLI", () => {
 });
 
 describe("auth CLI", () => {
+  test("lists exact reviewed Google scopes without exposing the token file", async () => {
+    const testState = state();
+    try {
+      const tokenFile = join(testState.directory, "private-google-token.json");
+      const scopes = [
+        "https://www.googleapis.com/auth/contacts.other.readonly",
+        "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/gmail.readonly",
+      ].sort();
+      saveAuth(createAuth("gmail-main", {
+        oauthProvider: "gmail",
+        tokenFile,
+        scopes,
+        subject: "person@gmail.com",
+        managed: true,
+      }), testState.environment);
+
+      const listed = capture();
+      expect(await main(
+        ["auth", "list", "--json"],
+        testState.environment,
+        listed.output,
+      )).toBe(0);
+      const result = JSON.parse(listed.stdout()) as {
+        readonly auth: readonly { readonly scopes?: readonly string[] }[];
+      };
+      expect(result.auth[0]?.scopes).toEqual(scopes);
+      expect(listed.stdout()).toContain("contacts.other.readonly");
+      expect(listed.stdout()).not.toContain(tokenFile);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("onboards, binds, and explicitly syncs a distinct WhatsApp linked device", async () => {
     const testState = state();
     try {
@@ -1939,6 +1973,47 @@ describe("reviewed platform policy helpers", () => {
       expect(operation?.providerContractHash).toBeString();
       expect(operation?.providerContractHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(wrench.stdout()).toContain("sequential POST /2/tweets");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps reviewed URL-form OAuth scopes exact in capability JSON", async () => {
+    const testState = state();
+    const manifestPath = join(
+      import.meta.dir,
+      "assets",
+      "adapters",
+      "gmail",
+      "wrench-adapter.json",
+    );
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as WrenchManifest;
+    try {
+      installManifest(manifest, {
+        force: false,
+        environment: testState.environment,
+      });
+      const wrench = capture();
+      expect(await main(
+        ["capabilities", "gmail", "--json"],
+        testState.environment,
+        wrench.output,
+      )).toBe(0);
+      const view = JSON.parse(wrench.stdout()) as {
+        readonly adapters: readonly {
+          readonly operations: readonly {
+            readonly id: string;
+            readonly requiredScopeSets?: readonly (readonly string[])[];
+          }[];
+        }[];
+      };
+      const contacts = view.adapters[0]?.operations.find(
+        (operation) => operation.id === "contacts.list",
+      );
+      expect(contacts?.requiredScopeSets?.every((scopeSet) =>
+        scopeSet.includes(
+          "https://www.googleapis.com/auth/contacts.other.readonly",
+        ))).toBeTrue();
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

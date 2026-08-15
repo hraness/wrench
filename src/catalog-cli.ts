@@ -68,10 +68,17 @@ function safe(value: string): string {
   return sanitizeTerminalLine(redactSensitiveText(value));
 }
 
-function safeJson(value: unknown): string {
+function safeJson(
+  value: unknown,
+  reviewedPublicStrings: ReadonlySet<string> = new Set(),
+): string {
   return `${JSON.stringify(value, (_key, candidate: unknown) =>
     typeof candidate === "string"
-      ? sanitizeTerminalText(redactSensitiveText(candidate))
+      ? sanitizeTerminalText(
+          reviewedPublicStrings.has(candidate)
+            ? candidate
+            : redactSensitiveText(candidate),
+        )
       : candidate, 2)}\n`;
 }
 
@@ -79,10 +86,11 @@ function print(
   output: WrenchCatalogOutput,
   value: unknown,
   json: boolean,
+  reviewedPublicStrings: ReadonlySet<string> = new Set(),
 ): void {
   output.stdout(
     json
-      ? safeJson(value)
+      ? safeJson(value, reviewedPublicStrings)
       : `${safe(
           typeof value === "string"
             ? value
@@ -320,6 +328,7 @@ function listRuntimeManifests(
 function capabilitySummary(
   environment: Readonly<Record<string, string | undefined>>,
   registry: ProviderPluginRegistry,
+  reviewedPublicStrings: Set<string>,
 ): readonly unknown[] {
   return listRuntimeManifests(environment, registry).map(({ id, result }) =>
     result.ok
@@ -341,6 +350,11 @@ function capabilitySummary(
               const reviewedTemplate = isReviewedTemplateOperation(operation)
                 ? operation.reviewedTemplate
                 : null;
+              if (provider !== null) {
+                for (const scopeSet of provider.requiredScopeSets) {
+                  for (const scope of scopeSet) reviewedPublicStrings.add(scope);
+                }
+              }
               return {
                 id: operationId,
                 description: operation.description,
@@ -406,7 +420,12 @@ export function runCapabilities(
   output: WrenchCatalogOutput,
   registry: ProviderPluginRegistry,
 ): number {
-  const values = capabilitySummary(environment, registry);
+  const reviewedPublicStrings = new Set<string>();
+  const values = capabilitySummary(
+    environment,
+    registry,
+    reviewedPublicStrings,
+  );
   const selected = command.adapterId === undefined
     ? values
     : values.filter((entry) =>
@@ -414,7 +433,12 @@ export function runCapabilities(
         && entry !== null
         && (entry as { readonly id?: unknown }).id === command.adapterId);
   const found = selected.length > 0 || command.adapterId === undefined;
-  print(output, command.json ? { ok: found, adapters: selected } : selected, command.json);
+  print(
+    output,
+    command.json ? { ok: found, adapters: selected } : selected,
+    command.json,
+    reviewedPublicStrings,
+  );
   return found ? 0 : 3;
 }
 

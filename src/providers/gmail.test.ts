@@ -88,6 +88,7 @@ function harness(
       scopes: [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
       ],
       path: "/private/test-token.json",
     },
@@ -113,6 +114,267 @@ function harness(
 }
 
 describe("official Gmail provider reads", () => {
+  test("scans mailbox metadata once and projects directional relationship filters", async () => {
+    const before = "2026-08-14T12:00:00.000Z";
+    const messages = [{
+      id: "message_1",
+      threadId: "thread_a",
+      labelIds: ["SENT"],
+      internalDate: "2026-08-10T12:00:00.000Z",
+      headers: [
+        { name: "From", value: "person@example.com" },
+        { name: "To", value: "Friend <friend@example.com>, person@example.com, friend@example.com" },
+        { name: "Cc", value: "friend@example.com, other@example.com" },
+      ],
+    }, {
+      id: "message_2",
+      threadId: "thread_a",
+      labelIds: ["INBOX"],
+      internalDate: "2025-01-01T00:00:00.000Z",
+      headers: [{ name: "From", value: "Friend <friend@example.com>" }],
+    }, {
+      id: "message_3",
+      threadId: "thread_b",
+      labelIds: ["INBOX"],
+      internalDate: "2026-04-01T00:00:00.000Z",
+      headers: [{ name: "From", value: "friend@example.com" }],
+    }, {
+      id: "message_4",
+      threadId: "thread_b",
+      labelIds: ["SENT"],
+      internalDate: "2026-06-01T00:00:00.000Z",
+      headers: [{ name: "To", value: "friend@example.com" }],
+    }, {
+      id: "message_5",
+      threadId: "thread_draft",
+      labelIds: ["DRAFT"],
+      internalDate: "2026-08-12T00:00:00.000Z",
+      headers: [{ name: "To", value: "friend@example.com" }],
+    }, {
+      id: "message_6",
+      threadId: "thread_c",
+      labelIds: ["INBOX"],
+      internalDate: null,
+      headers: [{ name: "From", value: "friend@example.com" }],
+    }, {
+      id: "message_7",
+      threadId: "thread_chat",
+      labelIds: ["CHAT"],
+      internalDate: "2026-08-13T00:00:00.000Z",
+      headers: [{ name: "From", value: "friend@example.com" }],
+    }] as const;
+    const requests: URL[] = [];
+    const fetch: ProviderFetch = (input) => {
+      const url = urlOf(input);
+      requests.push(url);
+      if (url.pathname.endsWith("/profile")) return Promise.resolve(json(profile()));
+      if (url.pathname.endsWith("/settings/sendAs")) {
+        return Promise.resolve(json({
+          sendAs: [{ sendAsEmail: "person@example.com", verificationStatus: "accepted" }],
+        }));
+      }
+      if (url.pathname.endsWith("/messages")) {
+        return Promise.resolve(json({
+          messages: messages.map((message) => ({
+            id: message.id,
+            threadId: message.threadId,
+          })),
+          nextPageToken: "older-messages",
+          resultSizeEstimate: 2_345,
+        }));
+      }
+      const message = messages.find((candidate) =>
+        url.pathname.endsWith(`/messages/${candidate.id}`));
+      if (message !== undefined) {
+        return Promise.resolve(json({
+          id: message.id,
+          threadId: message.threadId,
+          labelIds: message.labelIds,
+          ...(message.internalDate === null
+            ? {}
+            : { internalDate: String(new Date(message.internalDate).getTime()) }),
+          payload: { headers: message.headers },
+        }));
+      }
+      throw new Error(`unexpected request ${url.href}`);
+    };
+    const run = harness("contacts.list", {
+      collection: "interactions",
+      before,
+      cursor: "newer-page",
+      limit: 7,
+    }, fetch);
+
+    await executeGmailProvider(run.context);
+
+    const listRequest = requests.find((url) => url.pathname.endsWith("/messages"));
+    expect(listRequest?.searchParams.get("q")).toBe(
+      `before:${String(new Date(before).getTime() / 1_000)}`,
+    );
+    expect(listRequest?.searchParams.get("includeSpamTrash")).toBe("false");
+    expect(listRequest?.searchParams.get("pageToken")).toBe("newer-page");
+    const metadataRequests = requests.filter((url) =>
+      url.searchParams.get("format") === "metadata");
+    expect(metadataRequests).toHaveLength(7);
+    for (const request of metadataRequests) {
+      expect(request.searchParams.get("fields"))
+        .toBe("id,threadId,labelIds,internalDate,payload(headers(name,value))");
+      expect(request.searchParams.getAll("metadataHeaders"))
+        .toEqual(["From", "To", "Cc", "Bcc"]);
+    }
+    expect(run.dispatches()).toBe(0);
+    expect(run.output()).toMatchObject({
+      provider: "gmail",
+      operation: "contacts.list",
+      contactCollection: "interactions",
+      accountSubject: "person@example.com",
+      accountAddresses: [],
+      after: null,
+      before,
+      interactions: [{
+        email: "friend@example.com",
+        sentCount: 2,
+        receivedCount: 2,
+        sentCountComplete: true,
+        receivedCountComplete: false,
+        firstSentAt: "2026-06-01T00:00:00.000Z",
+        lastSentAt: "2026-08-10T12:00:00.000Z",
+        firstReceivedAt: "2025-01-01T00:00:00.000Z",
+        lastReceivedAt: "2026-04-01T00:00:00.000Z",
+        sent30d: 1,
+        sent90d: 2,
+        sent365d: 2,
+        received30d: 0,
+        received90d: 0,
+        received365d: 1,
+      }, {
+        email: "other@example.com",
+        sentCount: 1,
+        receivedCount: 0,
+      }],
+      messagesScanned: 7,
+      messagesIncluded: 4,
+      messagesSkipped: {
+        draftOrChat: 2,
+        missingInternalDate: 1,
+        noExternalAddress: 0,
+        outsideWindow: 0,
+      },
+      nextCursor: "older-messages",
+      resultSizeEstimate: 2_345,
+      scanScope: "messages-in-half-open-window-excluding-spam-trash-drafts-chats",
+    });
+    const output = run.output() as {
+      readonly messageKeys: readonly string[];
+      readonly threadKeys: readonly string[];
+    };
+    expect(output.messageKeys).toHaveLength(7);
+    expect(output.threadKeys).toHaveLength(5);
+    expect(output.messageKeys.every((key) => /^[0-9a-f]{64}$/u.test(key))).toBeTrue();
+    expect(JSON.stringify(output)).not.toContain("message_1");
+    expect(JSON.stringify(output)).not.toContain("thread_a");
+  });
+
+  test("rejects a non-canonical interaction cutoff before account preflight", async () => {
+    let requests = 0;
+    const run = harness("contacts.list", {
+      collection: "interactions",
+      before: "2026-08-14T12:00:00Z",
+    }, () => {
+      requests += 1;
+      return Promise.resolve(json(profile()));
+    });
+    await expectRejected(
+      executeGmailProvider(run.context),
+      "must be a canonical whole-second UTC timestamp",
+    );
+    expect(requests).toBe(0);
+  });
+
+  test("scans one exact incremental Gmail window with a guarded lower-bound overlap", async () => {
+    const after = "2026-08-14T12:00:00.000Z";
+    const before = "2026-08-14T13:00:00.000Z";
+    const messages = [{
+      id: "overlap",
+      threadId: "thread_overlap",
+      labelIds: ["INBOX"],
+      internalDate: "2026-08-14T11:59:59.999Z",
+      headers: [{ name: "From", value: "old@example.com" }],
+    }, {
+      id: "boundary",
+      threadId: "thread_boundary",
+      labelIds: ["INBOX"],
+      internalDate: after,
+      headers: [{ name: "From", value: "friend@example.com" }],
+    }, {
+      id: "new-message",
+      threadId: "thread_new",
+      labelIds: ["SENT"],
+      internalDate: "2026-08-14T12:30:00.000Z",
+      headers: [{ name: "To", value: "friend@example.com" }],
+    }] as const;
+    let listQuery: string | null = null;
+    const fetch: ProviderFetch = input => {
+      const url = urlOf(input);
+      if (url.pathname.endsWith("/profile")) return Promise.resolve(json(profile()));
+      if (url.pathname.endsWith("/settings/sendAs")) {
+        return Promise.resolve(json({
+          sendAs: [
+            { sendAsEmail: "person@example.com", verificationStatus: "accepted" },
+            { sendAsEmail: "alias@example.com", verificationStatus: "accepted" },
+          ],
+        }));
+      }
+      if (url.pathname.endsWith("/messages")) {
+        listQuery = url.searchParams.get("q");
+        return Promise.resolve(json({
+          messages: messages.map(message => ({ id: message.id, threadId: message.threadId })),
+          resultSizeEstimate: messages.length,
+        }));
+      }
+      const message = messages.find(candidate => url.pathname.endsWith(`/messages/${candidate.id}`));
+      if (message === undefined) throw new Error(`unexpected request ${url.href}`);
+      return Promise.resolve(json({
+        id: message.id,
+        threadId: message.threadId,
+        labelIds: message.labelIds,
+        internalDate: String(new Date(message.internalDate).getTime()),
+        payload: { headers: message.headers },
+      }));
+    };
+    const run = harness("contacts.list", {
+      collection: "interactions",
+      after,
+      before,
+      limit: 3,
+    }, fetch);
+
+    await executeGmailProvider(run.context);
+
+    expect(String(listQuery)).toBe(
+      `after:${String(new Date(after).getTime() / 1_000 - 1)} ` +
+        `before:${String(new Date(before).getTime() / 1_000)}`,
+    );
+    expect(run.output()).toMatchObject({
+      after,
+      before,
+      accountAddresses: ["alias@example.com", "person@example.com"],
+      interactions: [{
+        email: "friend@example.com",
+        sentCount: 1,
+        receivedCount: 1,
+      }],
+      messagesScanned: 3,
+      messagesIncluded: 2,
+      messagesSkipped: {
+        draftOrChat: 0,
+        missingInternalDate: 0,
+        noExternalAddress: 0,
+        outsideWindow: 1,
+      },
+    });
+  });
+
   test("preflights the account, expands list stubs with metadata, and emits exact readInput", async () => {
     const requests: { url: URL; init: RequestInit }[] = [];
     const fetch: ProviderFetch = (input, init = {}) => {
@@ -404,6 +666,7 @@ describe("official Gmail provider reads", () => {
     await executeGmailProvider(run.context);
     expect(run.dispatches()).toBe(0);
     expect(run.output()).toMatchObject({
+      contactCollection: "contacts",
       contacts: [{
         resourceName: "people/c1",
         emailAddresses: [{
@@ -436,6 +699,120 @@ describe("official Gmail provider reads", () => {
       statsScope: "per-contact-gmail-search-excluding-spam-trash",
     });
     expect(requests.some((url) => url.pathname.endsWith("/messages/sent_2"))).toBeTrue();
+  });
+
+  test("selects Other contacts and retains collection identity in the output", async () => {
+    const requests: URL[] = [];
+    const fetch: ProviderFetch = (input) => {
+      const url = urlOf(input);
+      requests.push(url);
+      if (url.pathname.endsWith("/profile")) return Promise.resolve(json(profile()));
+      if (url.pathname.endsWith("/v1/otherContacts")) {
+        return Promise.resolve(json({
+          otherContacts: [{
+            resourceName: "otherContacts/c1",
+            metadata: {
+              sources: [{ type: "OTHER_CONTACT", id: "other-1" }],
+            },
+            names: [{ displayName: "Other Friend" }],
+            emailAddresses: [{ value: "other.friend@example.com" }],
+          }],
+          totalSize: 1,
+        }));
+      }
+      if (url.pathname.endsWith("/messages")) {
+        return Promise.resolve(json({ resultSizeEstimate: 0 }));
+      }
+      throw new Error(`unexpected request ${url.href}`);
+    };
+    const run = harness("contacts.list", {
+      collection: "other-contacts",
+      limit: 1,
+      stats_scan_limit: 1,
+    }, fetch);
+    await executeGmailProvider(run.context);
+    expect(run.output()).toMatchObject({
+      operation: "contacts.list",
+      accountSubject: "person@example.com",
+      contactCollection: "other-contacts",
+      contacts: [{
+        resourceName: "otherContacts/c1",
+        displayName: "Other Friend",
+        sentCount: 0,
+        receivedCount: 0,
+      }],
+      nextCursor: null,
+      totalItems: 1,
+    });
+    expect(requests.filter((url) => url.hostname === "people.googleapis.com"))
+      .toHaveLength(1);
+    expect(requests.some((url) => url.pathname.endsWith("/people:batchGet")))
+      .toBeFalse();
+  });
+
+  test("lists a full contact page without Gmail statistic requests when disabled", async () => {
+    const requests: URL[] = [];
+    const contacts = Array.from({ length: 100 }, (_unused, index) => ({
+      resourceName: `otherContacts/c${index}`,
+      emailAddresses: [{ value: `friend${index}@example.com` }],
+    }));
+    const fetch: ProviderFetch = (input) => {
+      const url = urlOf(input);
+      requests.push(url);
+      if (url.pathname.endsWith("/profile")) return Promise.resolve(json(profile()));
+      if (url.pathname.endsWith("/v1/otherContacts")) {
+        return Promise.resolve(json({ otherContacts: contacts, totalSize: 100 }));
+      }
+      throw new Error(`unexpected request ${url.href}`);
+    };
+    const run = harness("contacts.list", {
+      collection: "other-contacts",
+      include_stats: false,
+      limit: 100,
+    }, fetch);
+    await executeGmailProvider(run.context);
+    expect(run.output()).toMatchObject({
+      contactCollection: "other-contacts",
+      statsIncluded: false,
+      statsScanLimit: null,
+      statsScope: "not-requested",
+      totalItems: 100,
+    });
+    const output = run.output() as {
+      readonly contacts: readonly Record<string, unknown>[];
+    };
+    expect(output.contacts).toHaveLength(100);
+    expect(output.contacts[0]).not.toHaveProperty("sentCount");
+    expect(requests).toHaveLength(2);
+    expect(requests.some((url) => url.pathname.endsWith("/messages"))).toBeFalse();
+  });
+
+  test("does not silently ignore a stats limit when statistics are disabled", async () => {
+    const run = harness("contacts.list", {
+      include_stats: false,
+      stats_scan_limit: 1,
+    }, () => {
+      throw new Error("invalid input must not make an HTTP request");
+    });
+    await expectRejected(
+      executeGmailProvider(run.context),
+      "stats_scan_limit is accepted only when include_stats is true",
+    );
+  });
+
+  test("rejects an unreviewed contact collection before account preflight", async () => {
+    let requests = 0;
+    const run = harness("contacts.list", {
+      collection: "directory",
+    }, () => {
+      requests += 1;
+      return Promise.resolve(json(profile()));
+    });
+    await expectRejected(
+      executeGmailProvider(run.context),
+      "input.collection must be contacts or other-contacts",
+    );
+    expect(requests).toBe(0);
   });
 
   test("reports mixed, unsupported, and absent contact addresses as explicit lower bounds", async () => {

@@ -61,24 +61,71 @@ export function gmailProviderConditionalInputIssues(
   if (cursorIssue !== null) issues.push(cursorIssue);
 
   if (action === "contacts.list") {
-    for (const name of ["limit", "stats_scan_limit"] as const) {
-      const issue = safeIntegerIssue(name, input[name]);
-      if (issue !== null) issues.push(issue);
-    }
-    const limit = input.limit ?? 20;
-    const statsScanLimit = input.stats_scan_limit ?? 100;
-    if (
-      typeof limit === "number"
-      && Number.isSafeInteger(limit)
-      && limit >= 1
-      && limit <= 100
-      && typeof statsScanLimit === "number"
-      && Number.isSafeInteger(statsScanLimit)
-      && statsScanLimit >= 1
-      && statsScanLimit <= 2_000
-      && limit * statsScanLimit > 2_000
-    ) {
-      issues.push("input.limit multiplied by input.stats_scan_limit must not exceed 2000");
+    const limitIssue = safeIntegerIssue("limit", input.limit);
+    if (limitIssue !== null) issues.push(limitIssue);
+    if (input.collection === "interactions") {
+      if (input.include_stats !== undefined) {
+        issues.push("input.include_stats is not accepted for the interactions collection");
+      }
+      if (input.stats_scan_limit !== undefined) {
+        issues.push("input.stats_scan_limit is not accepted for the interactions collection");
+      }
+      if (typeof input.before !== "string") {
+        issues.push("input.before is required for the interactions collection");
+      } else {
+        const parsed = new Date(input.before);
+        if (
+          !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/u.test(input.before)
+          || !Number.isFinite(parsed.getTime())
+          || parsed.toISOString() !== input.before
+        ) issues.push("input.before must be a canonical whole-second UTC timestamp");
+      }
+      if (input.after !== undefined) {
+        if (typeof input.after !== "string") {
+          issues.push("input.after must be a canonical whole-second UTC timestamp");
+        } else {
+          const parsed = new Date(input.after);
+          if (
+            !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/u.test(input.after)
+            || !Number.isFinite(parsed.getTime())
+            || parsed.toISOString() !== input.after
+          ) issues.push("input.after must be a canonical whole-second UTC timestamp");
+        }
+        if (
+          typeof input.before === "string"
+          && typeof input.after === "string"
+          && new Date(input.after).getTime() >= new Date(input.before).getTime()
+        ) issues.push("input.after must precede input.before");
+      }
+    } else {
+      if (input.before !== undefined) {
+        issues.push("input.before is accepted only for the interactions collection");
+      }
+      if (input.after !== undefined) {
+        issues.push("input.after is accepted only for the interactions collection");
+      }
+      const statsScanLimitIssue = safeIntegerIssue("stats_scan_limit", input.stats_scan_limit);
+      if (statsScanLimitIssue !== null) issues.push(statsScanLimitIssue);
+      if (input.include_stats === false && input.stats_scan_limit !== undefined) {
+        issues.push("input.stats_scan_limit is accepted only when include_stats is true");
+      }
+      const limit = input.limit ?? 20;
+      const statsScanLimit = input.stats_scan_limit ?? 100;
+      if (
+        input.include_stats !== false
+        &&
+        typeof limit === "number"
+        && Number.isSafeInteger(limit)
+        && limit >= 1
+        && limit <= 100
+        && typeof statsScanLimit === "number"
+        && Number.isSafeInteger(statsScanLimit)
+        && statsScanLimit >= 1
+        && statsScanLimit <= 2_000
+        && limit * statsScanLimit > 2_000
+      ) {
+        issues.push("input.limit multiplied by input.stats_scan_limit must not exceed 2000");
+      }
     }
   }
 

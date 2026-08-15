@@ -6,11 +6,11 @@ import {
   providerConditionalInputIssues,
 } from "./provider-contracts";
 import {
-  loadOAuthToken,
   ProviderHttpClient,
   requireOAuthScopes,
   type ProviderFetch,
 } from "./provider-http";
+import { resolveOAuthToken } from "./oauth-google";
 import type {
   FileInputValue,
   OperationInput,
@@ -158,11 +158,17 @@ export async function executeProviderOperation(
     if (conditionalIssues.length > 0) throw new Error(conditionalIssues.join("; "));
     requireOAuthScopes(auth, contract.requiredScopeSets);
     deadline.throwIfUnavailable(PROVIDER_OPERATION_LABEL);
-    const token = loadOAuthToken(
-      auth,
-      options.now ?? new Date(),
-      deadline.remainingTimeMs() + OAUTH_VALIDITY_SKEW_MS,
-    );
+    const tokenResolution = resolveOAuthToken(auth, {
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+      now: options.now ?? new Date(),
+      minimumValidityMs: deadline.remainingTimeMs() + OAUTH_VALIDITY_SKEW_MS,
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.pinnedFetch === undefined ? {} : { pinnedFetch: options.pinnedFetch }),
+      signal: deadline.signal,
+    });
+    const token = tokenResolution instanceof Promise
+      ? await deadline.run(() => tokenResolution, PROVIDER_OPERATION_LABEL)
+      : tokenResolution;
     deadline.throwIfUnavailable(PROVIDER_OPERATION_LABEL);
     const http = new ProviderHttpClient(
       options.fetch ?? pinnedProviderFetch(

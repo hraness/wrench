@@ -8,6 +8,7 @@ import {
   realpathSync,
   type BigIntStats,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { isAbsolute, parse, resolve, sep } from "node:path";
 
 import { BoundedByteBuffer } from "@hraness/kb/clip/bounded-byte-buffer";
@@ -23,6 +24,20 @@ export type LoadedOAuthToken = {
   readonly accessToken: string;
   readonly expiresAt: string | null;
 };
+
+export type GoogleInstalledAppRefresh = Readonly<{
+  kind: "google-installed-app";
+  clientId: string;
+  clientSecret: string | null;
+  refreshToken: string;
+  refreshTokenExpiresAt: string | null;
+}>;
+
+export type LoadedOAuthCredential = LoadedOAuthToken & Readonly<{
+  schemaVersion: 1 | 2;
+  contentSha256: string;
+  refresh: GoogleInstalledAppRefresh | null;
+}>;
 
 const MAX_TOKEN_FILE_BYTES = 64 * 1024;
 const MAX_ACCESS_TOKEN_BYTES = 16 * 1024;
@@ -129,6 +144,115 @@ function hasForbiddenAccessTokenCharacter(value: string): boolean {
   return false;
 }
 
+function boundedOAuthSecret(
+  value: unknown,
+  label: string,
+  minimumBytes: number,
+  maximumBytes: number,
+): string {
+  if (
+    typeof value !== "string"
+    || Buffer.byteLength(value, "utf8") < minimumBytes
+    || Buffer.byteLength(value, "utf8") > maximumBytes
+    || hasForbiddenAccessTokenCharacter(value)
+  ) throw new Error(`OAuth token document contains an invalid ${label}`);
+  return value;
+}
+
+function parseGoogleInstalledAppRefresh(value: unknown): GoogleInstalledAppRefresh {
+  if (!isRecord(value)) throw new Error("OAuth token document refresh configuration must be an object");
+  if (!exactKeys(value, [
+    "kind",
+    "clientId",
+    "clientSecret",
+    "refreshToken",
+    "refreshTokenExpiresAt",
+  ])) throw new Error("OAuth token document refresh configuration has unsupported fields");
+  if (value.kind !== "google-installed-app") {
+    throw new Error("OAuth token document has an unsupported refresh configuration");
+  }
+  const clientId = boundedOAuthSecret(value.clientId, "Google OAuth clientId", 16, 1_024);
+  if (!/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/u.test(clientId)) {
+    throw new Error("OAuth token document contains an invalid Google OAuth clientId");
+  }
+  const clientSecret = value.clientSecret === null
+    ? null
+    : boundedOAuthSecret(value.clientSecret, "Google OAuth clientSecret", 1, 4_096);
+  const refreshToken = boundedOAuthSecret(value.refreshToken, "Google OAuth refreshToken", 8, 16 * 1_024);
+  const refreshTokenExpiresAt = tokenExpiry(value.refreshTokenExpiresAt);
+  return Object.freeze({
+    kind: "google-installed-app" as const,
+    clientId,
+    clientSecret,
+    refreshToken,
+    refreshTokenExpiresAt,
+  });
+}
+
+/** Load and strictly bind a private token document without enforcing freshness. */
+export function loadOAuthCredential(auth: OAuthTokenAuth): LoadedOAuthCredential {
+  let content: string;
+  let parsed: unknown;
+  try {
+    content = readPrivateTokenFile(auth.path);
+    parsed = JSON.parse(content) as unknown;
+  } catch (error) {
+    throw new Error(`could not load private ${auth.provider} OAuth token document`, { cause: error });
+  }
+  if (!isRecord(parsed)) throw new Error("OAuth token document must be an object");
+  const schemaVersion = parsed.schemaVersion;
+  if (schemaVersion !== 1 && schemaVersion !== 2) {
+    throw new Error("OAuth token document provider or schema version does not match its locator");
+  }
+  const expected = ["schemaVersion", "provider", "subject", "scopes", "accessToken", "expiresAt"];
+  if (schemaVersion === 2) expected.push("refresh");
+  if (!exactKeys(parsed, expected)) throw new Error("OAuth token document has unsupported fields");
+  if (parsed.provider !== auth.provider) {
+    throw new Error("OAuth token document provider or schema version does not match its locator");
+  }
+  if ((parsed.subject ?? null) !== (auth.subject ?? null)) {
+    throw new Error("OAuth token document subject does not match its locator");
+  }
+  if (
+    !Array.isArray(parsed.scopes)
+    || !parsed.scopes.every((scope) => typeof scope === "string")
+    || parsed.scopes.length !== auth.scopes.length
+    || parsed.scopes.some((scope, index) => scope !== auth.scopes[index])
+  ) throw new Error("OAuth token document scopes do not match its locator");
+  const accessToken = boundedOAuthSecret(
+    parsed.accessToken,
+    "accessToken",
+    8,
+    MAX_ACCESS_TOKEN_BYTES,
+  );
+  const expiresAt = tokenExpiry(parsed.expiresAt);
+  if (schemaVersion === 1) {
+    if (auth.managed === true) {
+      throw new Error("Wrench-managed OAuth auth requires a renewable schema-version-2 credential");
+    }
+    return Object.freeze({
+      schemaVersion,
+      accessToken,
+      expiresAt,
+      refresh: null,
+      contentSha256: createHash("sha256").update(content, "utf8").digest("hex"),
+    });
+  }
+  if (auth.managed !== true || auth.provider !== "gmail") {
+    throw new Error("renewable OAuth credentials require a Wrench-managed Gmail auth locator");
+  }
+  if (expiresAt === null) {
+    throw new Error("renewable OAuth credentials require an access-token expiry");
+  }
+  return Object.freeze({
+    schemaVersion,
+    accessToken,
+    expiresAt,
+    refresh: parseGoogleInstalledAppRefresh(parsed.refresh),
+    contentSha256: createHash("sha256").update(content, "utf8").digest("hex"),
+  });
+}
+
 /**
  * Load a canonical private token document. The locator remains secret-free;
  * provider, subject, and scopes are repeated here to prevent a path mix-up
@@ -147,34 +271,8 @@ export function loadOAuthToken(
   }
   const nowMs = now.getTime();
   if (!Number.isFinite(nowMs)) throw new Error("OAuth token validity reference time is invalid");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readPrivateTokenFile(auth.path)) as unknown;
-  } catch (error) {
-    throw new Error(`could not load private ${auth.provider} OAuth token document`, { cause: error });
-  }
-  if (!isRecord(parsed)) throw new Error("OAuth token document must be an object");
-  const expected = ["schemaVersion", "provider", "subject", "scopes", "accessToken", "expiresAt"];
-  if (!exactKeys(parsed, expected)) throw new Error("OAuth token document has unsupported fields");
-  if (parsed.schemaVersion !== 1 || parsed.provider !== auth.provider) {
-    throw new Error("OAuth token document provider or schema version does not match its locator");
-  }
-  if ((parsed.subject ?? null) !== (auth.subject ?? null)) {
-    throw new Error("OAuth token document subject does not match its locator");
-  }
-  if (
-    !Array.isArray(parsed.scopes)
-    || !parsed.scopes.every((scope) => typeof scope === "string")
-    || parsed.scopes.length !== auth.scopes.length
-    || parsed.scopes.some((scope, index) => scope !== auth.scopes[index])
-  ) throw new Error("OAuth token document scopes do not match its locator");
-  if (
-    typeof parsed.accessToken !== "string"
-    || Buffer.byteLength(parsed.accessToken, "utf8") < 8
-    || Buffer.byteLength(parsed.accessToken, "utf8") > MAX_ACCESS_TOKEN_BYTES
-    || hasForbiddenAccessTokenCharacter(parsed.accessToken)
-  ) throw new Error("OAuth token document contains an invalid accessToken");
-  const expiresAt = tokenExpiry(parsed.expiresAt);
+  const credential = loadOAuthCredential(auth);
+  const expiresAt = credential.expiresAt;
   if (
     expiresAt !== null
     && Date.parse(expiresAt) - nowMs <= minimumValidityMs
@@ -184,7 +282,7 @@ export function loadOAuthToken(
       : `does not remain valid for the required ${minimumValidityMs}ms budget`;
     throw new Error(`the ${auth.provider} OAuth access token is expired or ${budget}; rotate the private token file`);
   }
-  return { accessToken: parsed.accessToken, expiresAt };
+  return { accessToken: credential.accessToken, expiresAt };
 }
 
 export function requireOAuthScopes(

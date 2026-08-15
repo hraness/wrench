@@ -55,6 +55,8 @@ export const wrenchUsage = `Usage:
   wrench operator doctor [--json]                Compatibility alias for 'wrench doctor'
 
   wrench auth list [--json]
+  wrench auth login <id> --client-file <desktop-client.json>
+                         [--no-open] [--force] [--json]
   wrench auth bind <id> --site <provider-surface-id> [--force] [--json]
   wrench auth add <id> --cookie-source <browser> [--cookie-profile <name>]
                        [--subject <provider-viewer-or-account-id>] [--force]

@@ -224,9 +224,40 @@ and message-history completeness without weakening the linked-device boundary.
 
 ### Gmail
 
-Gmail uses the official Gmail and People APIs. Create a current-user-owned
-mode-0600 token document whose provider, subject, and sorted scopes exactly
-match its Wrench auth locator:
+Gmail uses the official Gmail and People APIs. Download one Google OAuth
+**Desktop app** client JSON, then let Wrench open the system browser:
+
+```sh
+wrench auth login gmail-main --client-file /absolute/path/client_secret.json
+```
+
+The user completes Google's consent page. Wrench uses PKCE and a loopback
+callback, verifies the exact Gmail account, stores the refresh credential in
+mode-restricted private Wrench state, and renews access tokens automatically.
+The managed JSON contains the refresh token, current access token, and needed
+Desktop client fields; it is not an OS keychain and is not encrypted at rest.
+Keep Wrench state out of shared backups and protect the local disk account. It
+never asks an agent to copy or print a token. If Google reports that the refresh
+credential is time-limited, the command prints its expiry; publish the personal
+consent app to production and repeat with `--force` to obtain durable renewal.
+`gmail.readonly` is a Google restricted scope whose consent grants mailbox-read
+access even though the relationship projection's code-owned contract fetches
+metadata only and never message bodies.
+
+After login, confirm the account with a bounded live read:
+
+```sh
+wrench gmail contacts.list --auth gmail-main \
+  --input '{"collection":"contacts","limit":1,"include_stats":false}' --json
+```
+
+`wrench auth remove gmail-main --yes` removes Wrench's local managed credential.
+Revoking the Google grant itself remains a separate account-owner action in
+Google's third-party connections settings.
+
+Manual mode-0600 schema-1 token documents remain supported for externally
+managed or legacy OAuth. Their provider, subject, and sorted scopes must match
+the Wrench auth locator exactly:
 
 ```json
 {
@@ -234,6 +265,7 @@ match its Wrench auth locator:
   "provider": "gmail",
   "subject": "person@example.com",
   "scopes": [
+    "https://www.googleapis.com/auth/contacts.other.readonly",
     "https://www.googleapis.com/auth/contacts.readonly",
     "https://www.googleapis.com/auth/gmail.readonly"
   ],
@@ -245,11 +277,17 @@ match its Wrench auth locator:
 ```sh
 wrench auth add gmail-main --oauth-provider gmail \
   --token-file /absolute/private/gmail-token.json \
-  --scopes https://www.googleapis.com/auth/contacts.readonly,https://www.googleapis.com/auth/gmail.readonly \
+  --scopes https://www.googleapis.com/auth/contacts.other.readonly,https://www.googleapis.com/auth/contacts.readonly,https://www.googleapis.com/auth/gmail.readonly \
   --subject person@example.com
 
 wrench gmail contacts.list --auth gmail-main \
-  --input '{"limit":20,"stats_scan_limit":100}' --json
+  --input '{"collection":"contacts","limit":20,"stats_scan_limit":100}' --json
+wrench gmail contacts.list --auth gmail-main \
+  --input '{"collection":"other-contacts","limit":100,"include_stats":false}' --json
+wrench gmail contacts.list --auth gmail-main \
+  --input '{"collection":"interactions","before":"2026-08-14T12:00:00.000Z","limit":100}' --json
+wrench gmail contacts.list --auth gmail-main \
+  --input '{"collection":"interactions","after":"2026-08-14T12:00:00.000Z","before":"2026-08-15T12:00:00.000Z","limit":100}' --json
 wrench gmail messaging.list --auth gmail-main \
   --input '{"view":"inbox","limit":25}' --json
 wrench gmail messaging.list --auth gmail-main \
@@ -258,7 +296,12 @@ wrench gmail messaging.read --auth gmail-main \
   --input '{"thread_id":"thread-id-from-list"}' --json
 ```
 
-Contact statistics report sent and received counts plus the maximum internal
+`contacts.list` selects saved Google Contacts, interaction-created Other
+contacts, or the mailbox-wide `interactions` projection. Paginate each
+collection independently with its returned
+`nextCursor`; the OAuth token must carry both People read scopes. Contact
+statistics are optional so bulk enumeration can avoid per-contact Gmail
+queries. When requested, they report sent and received counts plus the maximum internal
 date across every bounded matched message. Count and date completeness flags
 remain explicit when the scan bound truncates a query or a message lacks a
 date. Contacts with mixed, unsupported, or absent addresses report `partial`,
@@ -268,6 +311,20 @@ exceed 2,000, which bounds the per-direction Gmail scan before its paired
 metadata reads. Inbox and search rows include a provider-derived `threadUrl`
 and the exact `messaging.read` input. Reading does not mark a message seen or
 emit a protocol acknowledgement.
+
+The `interactions` projection scans each matching Gmail message once in a
+fixed half-open window. Omit `after` for the initial mailbox scan; later calls
+can pass the prior `before` as an inclusive lower bound and fetch only newer
+messages. A guarded one-second search overlap is filtered by exact internal
+date before aggregation. The projection reads headers, labels, and internal
+dates but never message bodies. Per canonical external address it emits sent/received
+counts, first/last timestamps, 30/90/365-day counts, and direction-specific
+completeness. Spam, trash, drafts, and chats are outside the projection;
+the first page lists the account's configured Gmail send-as addresses so
+callers can exclude every self alias from all pages. Missing internal dates
+become explicit lower bounds. Opaque hashes and the
+unchanged window let a caller reject repeated pages without exposing raw Gmail
+message IDs.
 
 Pass a returned Gmail `threadUrl` to `wrench read` or `wrench clip` with the
 same auth locator. Gmail clips default to private Wrench state rather than the
