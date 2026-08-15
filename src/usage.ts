@@ -104,6 +104,16 @@ export const wrenchUsage = `Usage:
   wrench runs show <run-id> [--json]
   wrench runs reconcile <run-id> [--input <json|@file|->] [--json]  Reconcile from transport-specific external evidence
 
+Local browser admission:
+  Wrench runs at most two locally owned browsers across processes sharing one
+  state home for fresh/profile page capture. Polling consumes the capture
+  timeout and has a 30-second budget; an in-flight bounded state helper may
+  settle later, but no browser launches after deadline revalidation. Initialize
+  a new state home serially with 'wrench runs list --json'.
+  Explicit CDP and browser-live attachments skip this gate. Same-boot stale
+  claims stay occupied; use 'wrench doctor --json' for the state-home path.
+  Managed provider/bootstrap and derivation sessions remain outside this cap.
+
 Risk policy:
   R1 authenticated reads execute directly. R2/R3 writes create an exact, five-minute
   preview plan; run 'wrench confirm <digest>' to execute it once. R4 is blocked.

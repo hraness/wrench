@@ -30,6 +30,7 @@ import {
   PreservedBrowserArtifactsError,
   profilePath,
 } from "./browser";
+import { runCaptureWithBrowserAdmission } from "./browser-admission";
 import {
   createBrowserSnapshotDirectory,
   purgeOrphanedBrowserSnapshots,
@@ -237,6 +238,7 @@ export function renderWrenchUsage(): string {
 
 export type WrenchDependencies = {
   readonly clipMain: typeof clipMain;
+  readonly runCapture: typeof runCaptureWithBrowserAdmission;
   readonly gmailCaptureMain: GmailCaptureRunner;
   readonly inspectClipEnvironment: () => Promise<WrenchClipEnvironmentInspection>;
   readonly loadMediaRuntime: () => Promise<MediaRuntime>;
@@ -288,6 +290,7 @@ export type WrenchDependencies = {
 
 const defaultDependencies: WrenchDependencies = {
   clipMain,
+  runCapture: runCaptureWithBrowserAdmission,
   gmailCaptureMain: runDefaultGmailCapture,
   inspectClipEnvironment: inspectDefaultClipEnvironment,
   loadMediaRuntime,
@@ -345,6 +348,7 @@ const defaultDependencies: WrenchDependencies = {
 function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDependencies {
   return {
     clipMain: overrides.clipMain ?? defaultDependencies.clipMain,
+    runCapture: overrides.runCapture ?? defaultDependencies.runCapture,
     gmailCaptureMain:
       overrides.gmailCaptureMain ?? defaultDependencies.gmailCaptureMain,
     inspectClipEnvironment: overrides.inspectClipEnvironment ?? defaultDependencies.inspectClipEnvironment,
@@ -547,6 +551,7 @@ async function runCaptureCommand(
   environment: Readonly<Record<string, string | undefined>>,
   output: Output,
   dependencies: WrenchDependencies,
+  signal?: AbortSignal,
 ): Promise<number> {
   const resolved = resolveCaptureArgumentsWithAuth(arguments_, environment);
   const unresolvedArguments = [...prefix, ...resolved.arguments];
@@ -587,7 +592,13 @@ async function runCaptureCommand(
       [...prefix, ...prepared.arguments],
       environment,
       output,
-      {},
+      {
+        runCapture: (captureArguments) => dependencies.runCapture(
+          captureArguments,
+          environment,
+          signal === undefined ? {} : { signal },
+        ),
+      },
       prepared.runtimeOptions,
     );
   } finally {
@@ -1491,10 +1502,24 @@ async function runCommand(
     return 0;
   }
   if (arguments_.command === "clip") {
-    return runCaptureCommand([], arguments_.arguments, environment, output, dependencies);
+    return runCaptureCommand(
+      [],
+      arguments_.arguments,
+      environment,
+      output,
+      dependencies,
+      signal,
+    );
   }
   if (arguments_.command === "read") {
-    return runCaptureCommand(["inspect"], arguments_.arguments, environment, output, dependencies);
+    return runCaptureCommand(
+      ["inspect"],
+      arguments_.arguments,
+      environment,
+      output,
+      dependencies,
+      signal,
+    );
   }
   if (arguments_.command === "media") {
     const media = await dependencies.loadMediaRuntime();

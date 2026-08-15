@@ -24,6 +24,32 @@ transport. Wrench does not silently switch between official API, browser
 session, linked-device, or portable transports. Mutations require durable
 dispatch evidence and do not retry after a partial or indeterminate result.
 
+Wrench caps locally owned browser acquisition at two across processes sharing
+one state home for fresh and profile-backed page capture. Admission claims use
+atomic create and conditional removal, bind a random token to an exact
+operating-system process-start identity, and are held through upstream browser,
+proxy, process, and isolation cleanup settlement. PID reuse alone cannot
+reclaim a claim. Automatic reclamation requires a verified prior
+operating-system boot; a same-boot claim stays occupied after its Wrench owner
+dies because its owned browser processes may survive. A malformed claim, an
+unverifiable owner, or an unsafe state path reduces available capture capacity
+and never creates an extra slot. Admission polling consumes the capture timeout
+and has a budget equal to the lesser of its remaining time and 30 seconds. An
+in-flight bounded state-helper operation may settle after that budget, but
+deadline revalidation and conditional rollback prevent a browser launch after
+expiry. Explicit CDP and browser-live attachment are outside this ownership cap
+because Wrench does not own the attached browser process. Managed
+provider/bootstrap and derivation browser sessions remain outside this first
+cap and retain their existing containment.
+
+Claim a new state home serially with `wrench runs list --json` before launching
+parallel captures. For blocked capacity, use `wrench doctor --json` to locate
+`wrench.home` and its `captures/browser-admissions` directory. Reboot before
+retrying when possible. Same-boot manual repair is safe only after the exact
+orphaned agent-browser and Chromium process group has been terminated; remove
+only the matching `slot-N.json`, never a claim inferred stale from a dead PID
+alone.
+
 Wrench archives one accessible, finite, non-DRM media item at a time. It
 rejects playlists, live streams, affirmative DRM, and unsupported
 authentication, and it never supplies decryption keys or access-control bypass

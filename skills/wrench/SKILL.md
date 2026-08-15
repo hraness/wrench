@@ -23,6 +23,21 @@ Wrench supplies bounded CLI and SDK capabilities, not an agent runtime or applic
 
 Do not expose raw requests, endpoints, GraphQL, Rest.li, JavaScript, selectors, cookies, headers, storage, arbitrary paths, or unrestricted file transfer. A capability is a bounded semantic operation with an exact transport, origin, account binding, input schema, risk, side effect, and response projection.
 
+Wrench admits at most two locally owned fresh or profile-backed page-capture
+browsers across processes sharing its state home. Let capture wait for the
+lesser of its remaining timeout and the 30-second admission polling budget;
+queueing consumes that timeout. A bounded state helper may settle after the
+polling budget, but the browser cannot launch after deadline revalidation. Do
+not bypass the gate by spawning agent-browser directly. Explicit CDP and
+browser-live attachment skip admission because Wrench does not own those
+browser processes. Managed provider/bootstrap and derivation sessions remain
+outside this first cap. Before parallel first use of a new state home, run
+`wrench runs list --json` once serially. Malformed, unverifiable, and same-boot
+dead-owner claims remain occupied. Run
+`wrench doctor --json` to locate the state home. Prefer reboot recovery; remove
+one same-boot claim manually only after terminating its exact orphaned
+agent-browser and Chromium process group.
+
 ## Author a portable provider
 
 Read [provider plugins](references/provider-plugins.md), [the adapter contract](references/adapter-contract.md), and [safety and state](references/safety-and-state.md). Then create an inert package:

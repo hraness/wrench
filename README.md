@@ -128,6 +128,45 @@ wrench url-metadata backfill --root kb
 wrench doctor --json
 ```
 
+### Local browser admission
+
+Wrench permits at most two locally owned browser acquisitions at once across
+all Wrench processes that share the same state home. This first gate covers
+fresh and profile-backed page capture. Explicit `--cdp` and `--browser-live`
+attachments do not launch a Wrench-owned browser and therefore do not consume
+a slot.
+
+Admission is automatic. Polling uses bounded jitter and a budget equal to the
+lesser of the remaining capture timeout and 30 seconds. Queueing consumes the
+capture timeout. An in-flight bounded state-safety operation may settle after
+that polling budget expires, but Wrench rechecks the deadline and rolls back a
+late claim, so no browser launches after it. Each claim binds a random token to
+the owner's exact process-start identity. Wrench automatically reclaims a claim
+only after it verifies that the claim came from an earlier operating-system
+boot. A same-boot claim remains occupied even when its Wrench owner is dead
+because an owned agent-browser daemon or Chromium process may have survived.
+Malformed and unverifiable claims also remain occupied, so ambiguous state can
+reduce capacity but cannot raise it above two.
+
+Initialize a brand-new state home once before starting several Wrench processes:
+
+```sh
+wrench runs list --json
+```
+
+If a crash leaves capacity blocked, run `wrench doctor --json` and read
+`wrench.home` from the report. The admission files are under
+`<wrench.home>/captures/browser-admissions`. Rebooting is the safest recovery;
+the next capture can verify the prior-boot claim and retire it. Manual recovery
+on the same boot requires first finding and terminating the exact orphaned
+agent-browser and Chromium process group, then removing only its corresponding
+`slot-N.json`. Never remove a claim merely because its Wrench PID is gone.
+
+The slot remains held through upstream browser, proxy, process, and isolation
+cleanup settlement. Managed provider/bootstrap and derivation browser sessions
+remain outside this first gate and keep their existing containment and cleanup
+boundaries.
+
 `wrench url-metadata` delegates to the shared `@hraness/kb` URL-intelligence
 boundary. Backfill searches for bounded metadata through its pinned Rust search
 helper, records resumable `url-metadata.json` sidecars beside saved URLs, and

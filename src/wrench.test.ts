@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { parseCaptureArguments } from "@hraness/kb/capture";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1043,6 +1044,51 @@ describe("auth CLI", () => {
     }
   });
 
+  test("threads the command cancellation signal into capture admission", async () => {
+    const testState = state();
+    const wrench = capture();
+    const controller = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    try {
+      const code = await main(
+        ["read", "https://example.com/article", "--mode", "browser"],
+        testState.environment,
+        wrench.output,
+        {
+          clipMain: async (
+            arguments_,
+            environment,
+            _output,
+            clipDependencies,
+          ) => {
+            const parsed = parseCaptureArguments(arguments_ ?? [], environment);
+            if (!parsed.ok || parsed.value.command !== "inspect") {
+              throw new Error("cancellation capture fixture did not parse");
+            }
+            const runCapture = clipDependencies?.runCapture;
+            if (runCapture === undefined) {
+              throw new Error("capture dependency was not installed");
+            }
+            await runCapture(parsed.value);
+            return 0;
+          },
+          runCapture: async (_arguments, _environment, dependencies) => {
+            observedSignal = dependencies?.signal;
+            throw new Error("stop after observing capture cancellation signal");
+          },
+        },
+        controller.signal,
+      );
+      expect(code).toBe(3);
+      expect(observedSignal).toBe(controller.signal);
+      expect(wrench.stderr()).toContain(
+        "stop after observing capture cancellation signal",
+      );
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("reuses a stored hybrid Arc locator for clipping without exposing its path", async () => {
     const testState = state();
     const wrench = capture();
@@ -1067,7 +1113,8 @@ describe("auth CLI", () => {
         testState.environment,
         wrench.output,
         {
-          clipMain: (arguments_, _environment, _output, _dependencies, runtimeOptions) => {
+          clipMain: (arguments_, _environment, _output, clipDependencies, runtimeOptions) => {
+            expect(clipDependencies?.runCapture).toBeFunction();
             const values = [...(arguments_ ?? [])];
             const profileIndex = values.indexOf("--browser-profile");
             const selected = values[profileIndex + 1];
