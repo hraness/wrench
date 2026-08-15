@@ -53,6 +53,7 @@ export const INTERNAL_HAR_REVIEW_BOUNDS = Object.freeze({
   maxTotalFieldPaths: 20_000,
   maxTotalRevisions: 20_000,
   maxTraversalDepth: 8,
+  maxLinkedInArticleTraversalDepth: 12,
   maxUrlCharacters: 4_096 + (2 * 1024 * 1024) + 8_192,
 } as const);
 
@@ -74,6 +75,7 @@ const reviewedHeaderNames: ReadonlySet<string> = new Set([
   "x-client-transaction-id",
   "x-csrf-token",
   "x-li-lang",
+  "x-restli-id",
   "x-restli-method",
   "x-restli-protocol-version",
   "x-twitter-active-user",
@@ -145,6 +147,42 @@ const reviewedStructuralFieldNames: ReadonlySet<string> = new Set([
   "withAuxiliaryUserLabels",
 ] as const);
 
+/** Exact schema vocabulary reviewed only for LinkedIn's native Article route. */
+const reviewedLinkedInArticleFieldNames: ReadonlySet<string> = new Set([
+  "$set",
+  "$type",
+  "activityUrn",
+  "article",
+  "articleType",
+  "articleUrn",
+  "attributesV2",
+  "author",
+  "authors",
+  "content",
+  "contentHtml",
+  "createdAt",
+  "detailDataUnion",
+  "entity",
+  "firstPartyArticle",
+  "firstPartyArticleUrn",
+  "hyperlink",
+  "included",
+  "length",
+  "linkedInArticleUrn",
+  "patch",
+  "permalink",
+  "profileUrn",
+  "publishedAt",
+  "q",
+  "state",
+  "textBlock",
+  "title",
+  "type",
+  "ugcPostUrn",
+  "updatedAt",
+  "version",
+] as const);
+
 const reviewedPathSegments: ReadonlySet<string> = new Set([
   "2",
   "api",
@@ -179,6 +217,7 @@ const reviewedPathSegments: ReadonlySet<string> = new Set([
   "upload",
   "users",
   "voyager",
+  "voyagerPublishingDashFirstPartyArticles",
 ] as const);
 
 /** Fields whose object value is a provider-normalized map keyed by IDs/URNs. */
@@ -245,13 +284,41 @@ function isExactFacebookOrigin(url: URL): boolean {
   return url.origin === "https://www.facebook.com";
 }
 
+export function isReviewedLinkedInArticleRoute(url: URL): boolean {
+  if (url.origin !== "https://www.linkedin.com") return false;
+  const segments = url.pathname.split("/").filter(Boolean);
+  if (
+    segments[0] !== "voyager"
+    || segments[1] !== "api"
+    || segments[2] !== "voyagerPublishingDashFirstPartyArticles"
+    || (segments.length !== 3 && segments.length !== 4)
+  ) return false;
+  if (segments.length === 3) return true;
+  try {
+    return /^urn:li:fsd_firstPartyArticle:[0-9]{1,32}$/u.test(decodeURIComponent(segments[3] ?? ""));
+  } catch {
+    return false;
+  }
+}
+
+export function reviewedInternalFieldNameForUrl(url: URL, value: string): string {
+  if (
+    isReviewedLinkedInArticleRoute(url)
+    && value.length <= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters
+    && safeFieldName.test(value)
+    && !sensitiveName.test(value)
+    && reviewedLinkedInArticleFieldNames.has(value)
+  ) return value;
+  return reviewedInternalFieldName(value);
+}
+
 function reviewedMetaRequestFieldName(url: URL, value: string): string {
   return isExactFacebookOrigin(url)
     && value.length <= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters
     && safeFieldName.test(value)
     && reviewedMetaRequestFieldNames.has(value)
     ? value
-    : reviewedInternalFieldName(value);
+    : reviewedInternalFieldNameForUrl(url, value);
 }
 
 function isReviewedMetaStructuralContainer(value: string): boolean {
@@ -452,9 +519,10 @@ function addFieldPaths(
   redactObjectKeys = false,
   fieldNameReviewer: (value: string) => string = reviewedInternalFieldName,
   shouldTraverseField: (value: string) => boolean = () => true,
+  maximumDepth: number = INTERNAL_HAR_REVIEW_BOUNDS.maxTraversalDepth,
 ): void {
   if (
-    depth >= INTERNAL_HAR_REVIEW_BOUNDS.maxTraversalDepth
+    depth >= maximumDepth
     || output.size >= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldPaths
   ) return;
   if (Array.isArray(value)) {
@@ -468,6 +536,7 @@ function addFieldPaths(
         false,
         fieldNameReviewer,
         shouldTraverseField,
+        maximumDepth,
       );
       if (output.size >= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldPaths) return;
     }
@@ -492,6 +561,7 @@ function addFieldPaths(
       !redactObjectKeys && isRecord(child) && reviewedDynamicMapFieldNames.has(key),
       fieldNameReviewer,
       shouldTraverseField,
+      maximumDepth,
     );
     if (output.size >= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldPaths) return;
   }
@@ -599,6 +669,9 @@ function requestFields(request: JsonRecord, url: URL): readonly string[] {
     false,
     (fieldName) => reviewedMetaRequestFieldName(url, fieldName),
     isExactFacebookOrigin(url) ? isReviewedMetaStructuralContainer : undefined,
+    isReviewedLinkedInArticleRoute(url)
+      ? INTERNAL_HAR_REVIEW_BOUNDS.maxLinkedInArticleTraversalDepth
+      : INTERNAL_HAR_REVIEW_BOUNDS.maxTraversalDepth,
   );
   const xGraphQl = reviewedXGraphQlRoute(url);
   if (
@@ -696,7 +769,18 @@ function responseFields(response: unknown, url: URL): readonly string[] {
     ? parsedMetaGraphQlDocuments(response.content.text)
     : [parsedJson(response.content.text)];
   for (const document of documents) {
-    addFieldPaths(document, fields);
+    addFieldPaths(
+      document,
+      fields,
+      "",
+      0,
+      false,
+      (fieldName) => reviewedMetaRequestFieldName(url, fieldName),
+      isExactFacebookOrigin(url) ? isReviewedMetaStructuralContainer : undefined,
+      isReviewedLinkedInArticleRoute(url)
+        ? INTERNAL_HAR_REVIEW_BOUNDS.maxLinkedInArticleTraversalDepth
+        : INTERNAL_HAR_REVIEW_BOUNDS.maxTraversalDepth,
+    );
     if (fields.size >= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldPaths) break;
   }
   return [...fields].sort();

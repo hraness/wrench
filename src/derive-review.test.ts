@@ -59,6 +59,34 @@ function fixtureHar(): unknown {
   };
 }
 
+function reviewedContractHeaderHar(): unknown {
+  return {
+    log: {
+      entries: [{
+        request: {
+          method: "POST",
+          url: `${targetOrigin}/voyager/api/articles/7000000000000000001`,
+          headers: [
+            { name: "X-RestLi-Method", value: "PARTIAL_UPDATE" },
+            { name: "authorization", value: "Bearer never-match-this" },
+            { name: "cookie", value: "session=never-match-this" },
+            { name: "x-unreviewed", value: "never-match-this" },
+          ],
+          postData: { mimeType: "application/json", text: "{}" },
+        },
+        response: {
+          status: 200,
+          headers: [
+            { name: "x-restli-id", value: "7000000000000000001" },
+            { name: "set-cookie", value: "never-match-this" },
+          ],
+          content: { mimeType: "application/json", text: "{}" },
+        },
+      }],
+    },
+  };
+}
+
 function sensitiveJsonHar(): unknown {
   return {
     log: {
@@ -179,6 +207,28 @@ function deeplyNestedFixture(value: string): unknown {
 }
 
 describe("private derivation review", () => {
+  test("matches only reviewed non-secret contract headers and returns locations, never values", () => {
+    const fixtures = parseDerivationReviewFixtures({
+      method: "PARTIAL_UPDATE",
+      created_id: "7000000000000000001",
+      forbidden: "never-match-this",
+    });
+    const result = reviewDerivationHarValue(
+      reviewedContractHeaderHar(),
+      targetOrigin,
+      { kind: "entry", entryIndex: 0, fixtures },
+    );
+    expect(result.kind).toBe("entry");
+    if (result.kind !== "entry") throw new Error("expected entry review");
+    expect(Object.fromEntries(result.fixtureMatches.map((match) => [match.label, match.locations]))).toEqual({
+      method: ["request.header.x-restli-method[0]"],
+      created_id: ["request.path.segment[3]", "response.header.x-restli-id[0]"],
+      forbidden: [],
+    });
+    const rendered = JSON.stringify(result);
+    for (const value of Object.values(fixtures)) expect(rendered).not.toContain(value);
+  });
+
   test("lists bounded first-party API entries with raw HAR indices and no values", () => {
     const result = reviewDerivationHarValue(
       fixtureHar(),
