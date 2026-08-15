@@ -7,11 +7,12 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  realpathSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { isIP } from "node:net";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { acquireCookieRecords, browserCookieCommands } from "@hraness/kb/clip/acquire";
@@ -1675,6 +1676,29 @@ function validateBrowserDomains(domains: readonly string[], hostname: string): r
  * rejected because they would be opened directly instead of cloned.
  */
 export function assertDerivationAuthCompatibility(target: URL, auth: WrenchAuth): void {
+  const isArcExecutable = (path: string): boolean => {
+    const hasArcExecutableName = (candidate: string): boolean =>
+      ["arc", "arc.exe"].includes(basename(candidate).toLowerCase());
+    if (hasArcExecutableName(path)) return true;
+    try {
+      return hasArcExecutableName(realpathSync(path));
+    } catch {
+      // Path validity is owned by auth/execution boundaries. Do not disclose
+      // a local executable path through this provider-specific safety check.
+      return false;
+    }
+  };
+  if (
+    auth.kind === "browser-profile"
+    && auth.browserExecutable !== undefined
+    && isArcExecutable(auth.browserExecutable)
+  ) {
+    throw new Error(
+      "managed derivation cannot use Arc as --browser-executable because Arc may attach its source user-data root "
+      + "to task-private launches; keep Arc fully closed as the --browser-profile or --cookie-source and use an exact "
+      + "Chrome or Chromium executable for the isolated clone",
+    );
+  }
   const hostname = target.hostname.toLowerCase();
   const linkedin = hostname === "linkedin.com" || hostname.endsWith(".linkedin.com");
   if (!linkedin) return;

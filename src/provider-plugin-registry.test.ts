@@ -42,6 +42,7 @@ import {
   isProviderOperation,
   isWebSessionOperation,
   parseDiagnosticManifest,
+  parseRuntimeManifest,
   type WrenchManifest,
 } from "./model";
 
@@ -3186,8 +3187,23 @@ describe("provider plugin definition and registry", () => {
     }
   });
 
-  test("resolves every bundled schema-v3/v4 operation at its durable route version", () => {
+  test("resolves every installed bundled schema-v3/v4 operation at its durable route version", () => {
     const root = join(import.meta.dir, "assets", "adapters");
+    const retiredDiagnosticOnlyManifests = new Map([
+      [
+        join(root, "x", "wrench-web-adapter.v1.1.0.json"),
+        "authenticated web contract x/articles.publish@1 is not installed",
+      ],
+      [
+        join(root, "x", "wrench-web-adapter.v1.2.0.json"),
+        "authenticated web contract x/articles.publish@2 is not installed",
+      ],
+      [
+        join(root, "x", "wrench-web-adapter.v1.3.0.json"),
+        "authenticated web contract x/articles.publish@3 is not installed",
+      ],
+    ] as const);
+    const checkedRetiredManifests = new Set<string>();
     let checked = 0;
     for (const path of manifestFiles(root)) {
       const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
@@ -3202,6 +3218,15 @@ describe("provider plugin definition and registry", () => {
       expect(parsed.ok, path).toBeTrue();
       if (!parsed.ok) throw new Error(`${path}: ${parsed.issues.join("; ")}`);
       const manifest: WrenchManifest = parsed.value;
+      const retiredIssue = retiredDiagnosticOnlyManifests.get(path);
+      if (retiredIssue !== undefined) {
+        expect(parseRuntimeManifest(raw, providerPluginRegistry), path).toEqual({
+          ok: false,
+          issues: [retiredIssue],
+        });
+        checkedRetiredManifests.add(path);
+        continue;
+      }
       for (const candidate of Object.values(manifest.operations)) {
         if (isProviderOperation(candidate)) {
           expect(providerPluginRegistry.resolveOperationDefinition(
@@ -3225,6 +3250,9 @@ describe("provider plugin definition and registry", () => {
         }
       }
     }
+    expect(checkedRetiredManifests).toEqual(
+      new Set(retiredDiagnosticOnlyManifests.keys()),
+    );
     expect(checked).toBeGreaterThan(100);
   });
 });

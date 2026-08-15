@@ -85,7 +85,7 @@ type ProviderPluginOperationDefinitionBaseV1 = {
   readonly idempotency: IdempotencyKind;
   readonly dedupeWindowMs: number;
   readonly state: ProviderPluginContractStateV1;
-  readonly dispatch: "none" | "single" | "thread-items" | "article-rich-draft";
+  readonly dispatch: "none" | "single" | "thread-items" | "bounded-items";
   readonly implementation: string;
   readonly planDispatches: (input: OperationInput) => readonly BrowserDispatchPlan[];
   readonly validateInput: (input: OperationInput) => readonly string[];
@@ -451,21 +451,6 @@ function parseProviderPluginDispatches(
       );
     }
   }
-  if (operation.dispatch === "article-rich-draft") {
-    const inlineImages = input.inline_images;
-    if (inlineImages !== undefined && !Array.isArray(inlineImages)) {
-      throw new Error(`${label} requires input.inline_images to be an array`);
-    }
-    const imageCount = Array.isArray(inlineImages) ? inlineImages.length : 0;
-    const expected = imageCount
-      + (input.cover_image === undefined ? 0 : 1)
-      + (input.draft_id === undefined ? 1 : 2)
-      + (input.cover_image === undefined ? 0 : 1);
-    if (dispatches.length !== expected) {
-      throw new Error(`${label} returned the wrong rich Article dispatch count`);
-    }
-  }
-
   const result = Object.freeze(dispatches);
   const encoded = JSON.stringify(result);
   if (Buffer.byteLength(encoded, "utf8") > MAX_PROVIDER_PLUGIN_PLAN_BYTES) {
@@ -2279,7 +2264,7 @@ function freezeOperation(
     operation.dispatch !== "none"
     && operation.dispatch !== "single"
     && operation.dispatch !== "thread-items"
-    && operation.dispatch !== "article-rich-draft"
+    && operation.dispatch !== "bounded-items"
   ) {
     throw new Error(`provider plugin operation ${operation.name} has an invalid dispatch policy`);
   }

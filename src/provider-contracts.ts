@@ -16,19 +16,22 @@ import type { ProviderPluginRegistry } from "./provider-plugin-registry";
 
 export type { ProviderContract, ProviderCoverage };
 
-type XArticlePublishV2Contract = Extract<
+type XArticleDraftSaveV1Contract = Extract<
   (typeof XProviderContracts.xProviderContractDefinitions)[number],
-  { readonly operation: "articles.publish"; readonly contractVersion: 2 }
+  { readonly operation: "articles.draft.save"; readonly contractVersion: 1 }
+>;
+
+type XArticlePublishV3Contract = Extract<
+  (typeof XProviderContracts.xProviderContractDefinitions)[number],
+  { readonly operation: "articles.publish"; readonly contractVersion: 3 }
 >;
 
 type ProjectedProviderContractCatalog = Readonly<
   Record<string, Readonly<Record<string, ProviderContract>>>
 > & Omit<typeof providerContractDefinitions, "x"> & {
-  readonly x: Omit<
-    typeof providerContractDefinitions.x,
-    "articles.publish"
-  > & {
-    readonly "articles.publish": XArticlePublishV2Contract;
+  readonly x: Omit<typeof providerContractDefinitions.x, "articles.publish"> & {
+    readonly "articles.draft.save": XArticleDraftSaveV1Contract;
+    readonly "articles.publish": XArticlePublishV3Contract;
   };
 };
 

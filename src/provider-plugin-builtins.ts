@@ -12,7 +12,7 @@ import type {
 } from "./provider-plugin";
 import type { WebSessionContract } from "./web-session-contract-definitions";
 import { planWebSessionContractDispatches } from "./web-session-contract-planning";
-import type { OperationInput } from "./model";
+import type { BrowserDispatchPlan, OperationInput } from "./model";
 
 export type ProviderPluginOmniDefinitionsV1 = Readonly<
   Record<string, ProviderPluginOmniDefinitionV1>
@@ -136,6 +136,7 @@ export function webSessionContractOperations(
   semanticIdentity: string,
   historicalVersions: Readonly<Record<string, readonly number[]>> = {},
   omni?: ProviderPluginOmniDefinitionsV1,
+  planners: Readonly<Record<string, (input: OperationInput) => readonly BrowserDispatchPlan[]>> = {},
 ): readonly WebSessionPluginOperationDefinitionV1[] {
   assertOmniDefinitionCoverage(
     contracts.map((contract) => contract.operation),
@@ -146,6 +147,12 @@ export function webSessionContractOperations(
     contracts,
     semanticIdentity,
   );
+  const installedOperations = new Set(contracts.map((contract) => contract.operation));
+  for (const operation of Object.keys(planners)) {
+    if (!installedOperations.has(operation)) {
+      throw new Error(`provider dispatch planner references uninstalled operation ${operation}`);
+    }
+  }
   return Object.freeze(contracts.map((contract) => Object.freeze({
     name: contract.operation,
     contractVersion: contract.contractVersion,
@@ -160,8 +167,8 @@ export function webSessionContractOperations(
     state: contract.state,
     dispatch: contract.dispatch,
     implementation: contract.implementation,
-    planDispatches: (input: OperationInput) =>
-      planWebSessionContractDispatches(contract, input),
+    planDispatches: planners[contract.operation] ?? ((input: OperationInput) =>
+      planWebSessionContractDispatches(contract, input)),
     validateInput: () => Object.freeze([]),
     ...omniDefinition(contract.operation, omni),
   })));

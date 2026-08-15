@@ -403,6 +403,14 @@ describe("derivation session path defenses", () => {
       })).not.toThrow();
       expect(() => assertDerivationAuthCompatibility(target, {
         schemaVersion: 1,
+        id: "linkedin-arc-executable",
+        kind: "browser-profile",
+        profile,
+        trustUnfilteredEgress: true,
+        browserExecutable: "/Applications/Arc.app/Contents/MacOS/Arc",
+      })).toThrow("cannot use Arc as --browser-executable");
+      expect(() => assertDerivationAuthCompatibility(target, {
+        schemaVersion: 1,
         id: "linkedin-missing-executable",
         kind: "browser-profile",
         profile,
@@ -423,6 +431,45 @@ describe("derivation session path defenses", () => {
         source: "arc",
         profile: "Profile 1",
       })).not.toThrow();
+      expect(() => assertDerivationAuthCompatibility(new URL("https://news.ycombinator.com/"), {
+        schemaVersion: 1,
+        id: "public-arc-executable",
+        kind: "browser-profile",
+        profile,
+        trustUnfilteredEgress: true,
+        browserExecutable: "/Applications/Arc.app/Contents/MacOS/Arc",
+      })).toThrow("cannot use Arc as --browser-executable");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an Arc executable reached through a differently named symlink without disclosing paths", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-arc-executable-alias-test-")));
+    const profile = join(root, "profile");
+    const arcExecutable = join(root, "Arc");
+    const chromiumAlias = join(root, "Chromium");
+    try {
+      mkdirSync(profile, { mode: 0o700 });
+      writeFileSync(arcExecutable, "test executable", { mode: 0o700 });
+      symlinkSync(arcExecutable, chromiumAlias);
+      let message = "";
+      try {
+        assertDerivationAuthCompatibility(new URL("https://www.linkedin.com/feed/"), {
+          schemaVersion: 1,
+          id: "linkedin-arc-executable-alias",
+          kind: "browser-profile",
+          profile,
+          trustUnfilteredEgress: true,
+          browserExecutable: chromiumAlias,
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("cannot use Arc as --browser-executable");
+      expect(message).not.toContain(root);
+      expect(message).not.toContain(chromiumAlias);
+      expect(message).not.toContain(arcExecutable);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

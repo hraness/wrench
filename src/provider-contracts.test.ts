@@ -73,11 +73,23 @@ describe("official provider contract registry", () => {
       }
     }
     expect("likes.set" in providerContracts.x).toBeFalse();
-    expect(providerContracts.x["articles.publish"].contractVersion).toBe(2);
+    expect(providerContracts.x["articles.publish"].contractVersion).toBe(3);
+    expect(providerContracts.x["articles.draft.save"]).toMatchObject({
+      provider: "x",
+      operation: "articles.draft.save",
+      contractVersion: 1,
+      risk: "R2",
+    });
     expect(getProviderContract(recipe("x", "articles.publish", 1))).toMatchObject({
       provider: "x",
       operation: "articles.publish",
       contractVersion: 1,
+    });
+    expect(getProviderContract(recipe("x", "articles.publish", 2))).toMatchObject({
+      provider: "x",
+      operation: "articles.publish",
+      contractVersion: 2,
+      risk: "R3",
     });
   });
 

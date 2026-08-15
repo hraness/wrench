@@ -27,6 +27,7 @@ export const LINKEDIN_WEB_OPERATION_NAMES = Object.freeze([
   "reactions.set",
   "relationships.connect",
   "articles.read",
+  "articles.draft.save",
   "articles.publish",
 ] as const);
 
@@ -180,6 +181,13 @@ export const LINKEDIN_WEB_OPERATIONS = {
   "articles.read": {
     effect: "read",
     risk: "R1",
+    state: "capture-required",
+    evidence: "live-har",
+    requests: [],
+  },
+  "articles.draft.save": {
+    effect: "write",
+    risk: "R2",
     state: "capture-required",
     evidence: "live-har",
     requests: [],

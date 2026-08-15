@@ -296,6 +296,7 @@ const operationCompositions: Readonly<Partial<Record<SemanticOperationName, Comp
   "replies.create": "reply",
   "posts.publish": "post",
   "media.publish": "media",
+  "articles.draft.save": "article",
   "articles.publish": "article",
   "listings.publish": "listing",
 };
@@ -321,6 +322,7 @@ export const genericSemanticRisks = {
   "media.read": "R1",
   "media.publish": "R3",
   "articles.read": "R1",
+  "articles.draft.save": "R2",
   "articles.publish": "R3",
   "listings.read": "R1",
   "listings.publish": "R3",
@@ -2354,17 +2356,16 @@ export function validatePlatformOperationInput(
   const composition = surface.compositions[compositionName];
   if (composition === undefined) return { ok: false, issues: [`${operationId} has no reviewed composition policy on ${manifest.surfaceId}`] };
   const operation = manifest.operations[operationId];
-  const richXWebArticle = manifest.surfaceId === "x"
-    && operationId === "articles.publish"
+  const structuredArticleDraft = operationId === "articles.draft.save"
     && operation !== undefined
     && isWebSessionOperation(operation)
-    && operation.webSession.contractVersion >= 3;
+    && operation.input.properties.document !== undefined;
   const issues: string[] = [];
   for (const field of composition.text) {
-    // Contract v3 replaces the plain body with a strictly parsed versioned
-    // document. Its provider runtime owns text/range/media bounds, while the
+    // The draft contract replaces the plain body with a strictly parsed
+    // versioned document. Its provider runtime owns text/range bounds, while the
     // platform composition continues to enforce the title policy here.
-    if (richXWebArticle && field.name === "body") continue;
+    if (structuredArticleDraft && field.name === "body") continue;
     const value = input[field.name];
     if (value === undefined) {
       if (field.required) issues.push(`input.${field.name} is required by the reviewed ${manifest.surfaceId} policy`);

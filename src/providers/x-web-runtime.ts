@@ -1,14 +1,12 @@
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
-
+import {
+  parseArticleDraftDocument,
+  type ArticleDraftDocument,
+} from "../article-draft-document";
 import type { WrenchAuth } from "../auth";
 import {
   browserCleanupBarrier,
-  type BrowserFileResolver,
 } from "../browser";
 import type {
-  FileInputValue,
   OperationInput,
   WebSessionRecipe,
 } from "../model";
@@ -53,18 +51,12 @@ import {
 
 const X_ORIGIN = "https://x.com";
 const X_ASSET_ORIGIN = "https://abs.twimg.com";
-const X_DEFAULT_UPLOAD_ORIGIN = "https://upload.x.com";
-const X_UPLOAD_HOSTS = new Set(["upload.x.com", "upload-a.x.com", "upload-b.x.com"]);
 const MAX_HOME_BYTES = 2 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_LIMIT = 20;
 const MAX_ARTICLE_TITLE_CHARACTERS = 100;
 const MAX_ARTICLE_BODY_CHARACTERS = 20_000;
 const MAX_ARTICLE_BLOCKS = 2_000;
-const MAX_ARTICLE_DOCUMENT_BYTES = 128 * 1024;
-const MAX_ARTICLE_IMAGE_BYTES = 5 * 1024 * 1024;
-const MAX_ARTICLE_INLINE_IMAGES = 20;
-const MAX_MEDIA_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -161,212 +153,17 @@ function booleanInput(input: OperationInput, name: string): boolean {
   return value;
 }
 
-function exactObjectKeys(value: JsonRecord, allowed: readonly string[], label: string): void {
-  const actual = Object.keys(value).sort().join(",");
-  const expected = [...allowed].sort().join(",");
-  if (actual !== expected) throw new Error(`${label} must contain exactly ${expected || "no fields"}`);
-}
-
-type XWebArticleTextBlockType =
-  | "paragraph"
-  | "heading1"
-  | "heading2"
-  | "blockquote"
-  | "unordered-list-item"
-  | "ordered-list-item";
-
-type XWebArticleTextBlock = {
-  readonly type: XWebArticleTextBlockType;
-  readonly text: string;
-  readonly links: readonly {
-    readonly offset: number;
-    readonly length: number;
-    readonly url: string;
-  }[];
-  readonly styles: readonly {
-    readonly offset: number;
-    readonly length: number;
-    readonly style: "bold" | "italic" | "strikethrough";
-  }[];
-};
-
-type XWebArticleImageBlock = {
-  readonly type: "image";
-  readonly imageIndex: number;
-  readonly caption?: string;
-};
-
-export type XWebRichArticleDocument = {
-  readonly schemaVersion: 1;
-  readonly blocks: readonly (XWebArticleTextBlock | XWebArticleImageBlock)[];
-};
-
 export type XWebRichArticleContentState = {
   readonly blocks: readonly Readonly<Record<string, unknown>>[];
   readonly entity_map: readonly Readonly<Record<string, unknown>>[];
 };
 
-function boundedHttpsUrl(value: unknown, label: string): string {
-  const raw = requiredString(value, label, 2_048);
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error(`${label} must be an absolute HTTPS URL`);
-  }
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") {
-    throw new Error(`${label} must be an absolute HTTPS URL`);
-  }
-  return parsed.href;
-}
-
-function validTextRangeBoundary(text: string, offset: number): boolean {
-  if (offset <= 0 || offset >= text.length) return true;
-  const previous = text.charCodeAt(offset - 1);
-  const next = text.charCodeAt(offset);
-  return !(previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff);
-}
-
-function boundedDocumentRange(
-  value: unknown,
-  text: string,
-  label: string,
-): { readonly offset: number; readonly length: number } {
-  const range = record(value, label);
-  const offset = range.offset;
-  const length = range.length;
-  if (
-    !Number.isSafeInteger(offset)
-    || !Number.isSafeInteger(length)
-    || (offset as number) < 0
-    || (length as number) < 1
-    || (offset as number) + (length as number) > text.length
-    || !validTextRangeBoundary(text, offset as number)
-    || !validTextRangeBoundary(text, (offset as number) + (length as number))
-  ) throw new Error(`${label} must stay on UTF-16 boundaries inside its text`);
-  return Object.freeze({ offset: offset as number, length: length as number });
-}
-
-/** Parse the versioned caller-owned rich document before any remote dispatch. */
-export function parseXWebRichArticleDocument(value: unknown): XWebRichArticleDocument {
-  if (
-    typeof value !== "string"
-    || value.length < 1
-    || Buffer.byteLength(value, "utf8") > MAX_ARTICLE_DOCUMENT_BYTES
-    || value.includes("\0")
-  ) throw new Error("input.document must be bounded version-1 rich Article JSON");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value) as unknown;
-  } catch {
-    throw new Error("input.document must be valid version-1 rich Article JSON");
-  }
-  const root = record(parsed, "input.document");
-  exactObjectKeys(root, ["schemaVersion", "blocks"], "input.document");
-  if (root.schemaVersion !== 1 || !Array.isArray(root.blocks)) {
-    throw new Error("input.document must use rich Article schemaVersion 1");
-  }
-  if (root.blocks.length < 1 || root.blocks.length > MAX_ARTICLE_BLOCKS) {
-    throw new Error(`input.document must contain 1-${MAX_ARTICLE_BLOCKS} blocks`);
-  }
-  const blocks: (XWebArticleTextBlock | XWebArticleImageBlock)[] = [];
-  const imageIndexes = new Set<number>();
-  let totalCharacters = 0;
-  const textTypes = new Set<XWebArticleTextBlockType>([
-    "paragraph",
-    "heading1",
-    "heading2",
-    "blockquote",
-    "unordered-list-item",
-    "ordered-list-item",
-  ]);
-  for (const [index, rawBlock] of root.blocks.entries()) {
-    const label = `input.document.blocks[${index}]`;
-    const block = record(rawBlock, label);
-    if (block.type === "image") {
-      const allowed = block.caption === undefined ? ["type", "imageIndex"] : ["type", "imageIndex", "caption"];
-      exactObjectKeys(block, allowed, label);
-      if (
-        !Number.isSafeInteger(block.imageIndex)
-        || (block.imageIndex as number) < 0
-        || (block.imageIndex as number) >= MAX_ARTICLE_INLINE_IMAGES
-        || imageIndexes.has(block.imageIndex as number)
-      ) throw new Error(`${label}.imageIndex must be a unique zero-based image index`);
-      const caption = block.caption;
-      if (caption !== undefined && (
-        typeof caption !== "string"
-        || caption.length > 1_000
-        || /[\0\r]/u.test(caption)
-      )) throw new Error(`${label}.caption must be bounded text`);
-      imageIndexes.add(block.imageIndex as number);
-      blocks.push(Object.freeze({
-        type: "image",
-        imageIndex: block.imageIndex as number,
-        ...(caption === undefined ? {} : { caption }),
-      }));
-      continue;
-    }
-    if (typeof block.type !== "string" || !textTypes.has(block.type as XWebArticleTextBlockType)) {
-      throw new Error(`${label}.type is outside the reviewed rich Article block types`);
-    }
-    const allowed = ["type", "text", ...(block.links === undefined ? [] : ["links"]), ...(block.styles === undefined ? [] : ["styles"])];
-    exactObjectKeys(block, allowed, label);
-    if (typeof block.text !== "string" || /[\0\r\n]/u.test(block.text)) {
-      throw new Error(`${label}.text must be one bounded line`);
-    }
-    totalCharacters += block.text.length;
-    if (totalCharacters > MAX_ARTICLE_BODY_CHARACTERS) {
-      throw new Error(`input.document text must contain at most ${MAX_ARTICLE_BODY_CHARACTERS} characters`);
-    }
-    const rawLinks = block.links ?? [];
-    const rawStyles = block.styles ?? [];
-    if (!Array.isArray(rawLinks) || rawLinks.length > 500 || !Array.isArray(rawStyles) || rawStyles.length > 500) {
-      throw new Error(`${label} ranges exceeded their reviewed bounds`);
-    }
-    const links = rawLinks.map((rawLink, rangeIndex) => {
-      const rangeLabel = `${label}.links[${rangeIndex}]`;
-      const link = record(rawLink, rangeLabel);
-      exactObjectKeys(link, ["offset", "length", "url"], rangeLabel);
-      const range = boundedDocumentRange(link, block.text as string, rangeLabel);
-      return Object.freeze({ ...range, url: boundedHttpsUrl(link.url, `${rangeLabel}.url`) });
-    });
-    let linkEnd = 0;
-    for (const link of links) {
-      if (link.offset < linkEnd) throw new Error(`${label}.links must be ordered and non-overlapping`);
-      linkEnd = link.offset + link.length;
-    }
-    const styles = rawStyles.map((rawStyle, rangeIndex) => {
-      const rangeLabel = `${label}.styles[${rangeIndex}]`;
-      const style = record(rawStyle, rangeLabel);
-      exactObjectKeys(style, ["offset", "length", "style"], rangeLabel);
-      const range = boundedDocumentRange(style, block.text as string, rangeLabel);
-      if (style.style !== "bold" && style.style !== "italic" && style.style !== "strikethrough") {
-        throw new Error(`${rangeLabel}.style is outside the reviewed rich Article styles`);
-      }
-      return Object.freeze({ ...range, style: style.style });
-    });
-    blocks.push(Object.freeze({
-      type: block.type as XWebArticleTextBlockType,
-      text: block.text,
-      links: Object.freeze(links),
-      styles: Object.freeze(styles),
-    }));
-  }
-  if (totalCharacters < 1) throw new Error("input.document must contain Article text");
-  return Object.freeze({ schemaVersion: 1, blocks: Object.freeze(blocks) });
-}
-
-/** Build X's current API content-state shape after every referenced image has a verified media ID. */
+/** Build X's current API content-state shape from the provider-neutral document. */
 export function buildXWebRichArticleContentState(
-  document: XWebRichArticleDocument,
-  uploadedImageIds: readonly string[],
+  document: ArticleDraftDocument,
 ): XWebRichArticleContentState {
-  if (uploadedImageIds.length > MAX_ARTICLE_INLINE_IMAGES || uploadedImageIds.some((id) => !/^[0-9]{1,19}$/u.test(id))) {
-    throw new Error("X rich Article image uploads must be exact media IDs");
-  }
   const entities: Readonly<Record<string, unknown>>[] = [];
   const blocks: Readonly<Record<string, unknown>>[] = [];
-  const usedImages = new Set<number>();
   const blockType = Object.freeze({
     paragraph: "unstyled",
     heading1: "header-one",
@@ -378,39 +175,6 @@ export function buildXWebRichArticleContentState(
   const styleName = Object.freeze({ bold: "Bold", italic: "Italic", strikethrough: "Strikethrough" } as const);
   for (const [blockIndex, block] of document.blocks.entries()) {
     const key = blockIndex.toString(36).padStart(5, "0");
-    if (block.type === "image") {
-      const mediaId = uploadedImageIds[block.imageIndex];
-      if (mediaId === undefined || usedImages.has(block.imageIndex)) {
-        throw new Error("input.document imageIndex did not bind one uploaded inline image");
-      }
-      usedImages.add(block.imageIndex);
-      const entityKey = `${entities.length}`;
-      entities.push(Object.freeze({
-        key: entityKey,
-        value: Object.freeze({
-          data: Object.freeze({
-            ...(block.caption === undefined || block.caption === "" ? {} : { caption: block.caption }),
-            entity_key: entityKey,
-            media_items: Object.freeze([Object.freeze({
-              local_media_id: block.imageIndex + 1,
-              media_category: "DraftTweetImage",
-              media_id: mediaId,
-            })]),
-          }),
-          type: "MEDIA",
-          mutability: "Immutable",
-        }),
-      }));
-      blocks.push(Object.freeze({
-        data: Object.freeze({}),
-        key,
-        text: " ",
-        type: "atomic",
-        entity_ranges: Object.freeze([Object.freeze({ key: Number(entityKey), offset: 0, length: 1 })]),
-        inline_style_ranges: Object.freeze([]),
-      }));
-      continue;
-    }
     const entityRanges = block.links.map((link) => {
       const key = entities.length;
       entities.push(Object.freeze({
@@ -436,49 +200,9 @@ export function buildXWebRichArticleContentState(
       }))),
     }));
   }
-  if (usedImages.size !== uploadedImageIds.length) {
-    throw new Error("every input.inline_images item must be referenced exactly once by input.document");
-  }
   const contentState = Object.freeze({ blocks: Object.freeze(blocks), entity_map: Object.freeze(entities) });
   validateXWebRichArticleContentState(contentState);
   return contentState;
-}
-
-export type XWebArticleContentState = {
-  readonly blocks: readonly {
-    readonly type: "unstyled";
-    readonly text: string;
-    readonly data: Readonly<Record<string, never>>;
-    readonly entity_ranges: readonly never[];
-    readonly inline_style_ranges: readonly never[];
-  }[];
-  readonly entity_map: readonly never[];
-};
-
-/** Convert confirmed plain text into X's reviewed native Article block shape. */
-export function buildXWebArticleContentState(value: unknown): XWebArticleContentState {
-  if (
-    typeof value !== "string"
-    || value.length < 1
-    || value.length > MAX_ARTICLE_BODY_CHARACTERS
-    || /[\0\r]/u.test(value)
-  ) {
-    throw new Error("input.body must be a 1-20000 character plain-text Article body");
-  }
-  const lines = value.split("\n");
-  if (lines.length > MAX_ARTICLE_BLOCKS) {
-    throw new Error(`input.body must contain at most ${MAX_ARTICLE_BLOCKS} plain-text blocks`);
-  }
-  return Object.freeze({
-    blocks: Object.freeze(lines.map((text) => Object.freeze({
-      type: "unstyled" as const,
-      text,
-      data: Object.freeze({}),
-      entity_ranges: Object.freeze([]),
-      inline_style_ranges: Object.freeze([]),
-    }))),
-    entity_map: Object.freeze([]),
-  });
 }
 
 function integerInput(input: OperationInput, name: string, fallback: number, minimum: number, maximum: number): number {
@@ -730,7 +454,6 @@ async function currentChunkText(bootstrap: XBootstrap, sourceChunk: string): Pro
 }
 
 const articleRichContractEvidence = Object.freeze({
-  uploader: "shared~bundle.LoggedInMain~ondemand.HoverCard~loader.AudioDock~loader.Dock~bundle.BookmarkFolders~bundle.Book.a9bac6ba.js",
   entities: "shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory.d1314bba.js",
   converter: "shared~bundle.Grok~bundle.GrokDrawer~bundle.ReaderMode~bundle.Birdwatch~bundle.TwitterArticles~bundle.Compose.02f6dc7a.js",
   observedOn: "2026-08-14",
@@ -743,32 +466,14 @@ function requireCurrentBundleTokens(text: string, tokens: readonly string[], lab
 }
 
 async function assertCurrentArticleRichContract(bootstrap: XBootstrap): Promise<void> {
-  const [uploader, entities, converter] = await Promise.all([
-    currentChunkText(bootstrap, articleRichContractEvidence.uploader),
+  const [entities, converter] = await Promise.all([
     currentChunkText(bootstrap, articleRichContractEvidence.entities),
     currentChunkText(bootstrap, articleRichContractEvidence.converter),
   ]);
-  requireCurrentBundleTokens(uploader, [
-    '"upload.x.com"',
-    '"upload-a.x.com"',
-    '"upload-b.x.com"',
-    '/i/media/${l}',
-    '"INIT"',
-    '"APPEND"',
-    '"FINALIZE"',
-    'media_category=${p}',
-    'TweetImage:"tweet_image"',
-    'TwitterArticle:"twitter_article"',
-  ], "media uploader");
   requireCurrentBundleTokens(entities, [
-    'createEntity(p.LA.MEDIA,p.Ei.IMMUTABLE',
-    'mediaCategory:E(e)',
-    'mediaId:e.uploadId',
     'createEntity(w.Sg,"MUTABLE",{url:',
   ], "Article entity");
   requireCurrentBundleTokens(converter, [
-    'media_items:r.data?.mediaItems?.map',
-    'media_category:e.mediaCategory',
     'mutability:s[r.mutability]',
     'inline_style_ranges:',
   ], "Article content converter");
@@ -799,23 +504,6 @@ function featureValue(bootstrap: XBootstrap, name: string): boolean {
     throw new Error(`X user feature configuration changed type for feature ${name}`);
   }
   return entry.value;
-}
-
-function featureStringValue(bootstrap: XBootstrap, name: string): string | undefined {
-  const entry = bootstrap.features.get(name);
-  if (entry === undefined) return undefined;
-  if (!isRecord(entry) || (entry.value !== undefined && typeof entry.value !== "string")) {
-    throw new Error(`X user feature configuration changed type for feature ${name}`);
-  }
-  return entry.value as string | undefined;
-}
-
-function articleUploadOrigin(bootstrap: XBootstrap): string {
-  const configured = featureStringValue(bootstrap, "responsive_web_media_upload_host");
-  if (configured === undefined) return X_DEFAULT_UPLOAD_ORIGIN;
-  const host = configured;
-  if (!X_UPLOAD_HOSTS.has(host)) throw new Error("X selected an unreviewed media upload host");
-  return new URL(`https://${host}`).origin;
 }
 
 function fieldToggleValue(bootstrap: XBootstrap, name: string): boolean {
@@ -1258,7 +946,7 @@ export async function readXWebDesiredState(
   };
 }
 
-export async function readXWebRichArticleDesiredState(
+export async function readXWebArticleDraftDesiredState(
   recipe: WebSessionRecipe,
   input: OperationInput,
   auth: WrenchAuth,
@@ -1271,19 +959,10 @@ export async function readXWebRichArticleDesiredState(
 }> {
   if (
     recipe.site !== "x"
-    || recipe.action !== "articles.publish"
-    || recipe.contractVersion !== 3
+    || recipe.action !== "articles.draft.save"
+    || recipe.contractVersion !== 1
   ) {
-    throw new Error("X rich Article recovery supports only articles.publish@3");
-  }
-  if (
-    input.draft_only !== true
-    || input.inline_images !== undefined
-    || input.cover_image !== undefined
-  ) {
-    throw new Error(
-      "X rich Article recovery supports only an existing text-and-links draft without pending media",
-    );
+    throw new Error("X Article draft recovery supports only articles.draft.save@1");
   }
   const draftId = postId(input.draft_id, "input.draft_id");
   const title = requiredString(
@@ -1291,8 +970,11 @@ export async function readXWebRichArticleDesiredState(
     "input.title",
     MAX_ARTICLE_TITLE_CHARACTERS,
   );
-  const document = parseXWebRichArticleDocument(input.document);
-  const expectedContent = buildXWebRichArticleContentState(document, []);
+  const document = parseArticleDraftDocument(input.document, {
+    maximumBlocks: MAX_ARTICLE_BLOCKS,
+    maximumCharacters: MAX_ARTICLE_BODY_CHARACTERS,
+  });
+  const expectedContent = buildXWebRichArticleContentState(document);
   const bootstrap = await bootstrapX(auth, recipe, options.dependencies);
   const currentViewer = await requireBoundViewer(bootstrap, auth);
   const article = await readArticleDraft(bootstrap, draftId);
@@ -1343,285 +1025,6 @@ function createTweetVariables(text: string, replyTo: string | null, quote: strin
     ...(replyTo === null ? {} : { reply: { in_reply_to_tweet_id: replyTo, exclude_reply_user_ids: [] } }),
     ...(quote === null ? {} : { attachment_url: `${X_ORIGIN}/i/status/${quote}` }),
   };
-}
-
-function createdArticleDraft(
-  response: unknown,
-  expectedTitle: string,
-): { readonly id: string; readonly title: string; readonly url: string } {
-  const data = graphQlData(response, "X ArticleEntityDraftCreate response");
-  const create = record(data.articleentity_create_draft, "X ArticleEntityDraftCreate response.articleentity_create_draft");
-  const results = record(create.article_entity_results, "X ArticleEntityDraftCreate response.article_entity_results");
-  const result = record(results.result, "X ArticleEntityDraftCreate response.result");
-  const id = postId(result.rest_id, "X Article draft rest_id");
-  if (result.title !== expectedTitle) {
-    throw new Error("X Article draft response did not bind the confirmed title");
-  }
-  return { id, title: expectedTitle, url: `${X_ORIGIN}/compose/articles/edit/${id}` };
-}
-
-type BoundArticleImage = {
-  readonly bytes: Uint8Array;
-  readonly mediaType: "image/jpeg" | "image/png" | "image/webp";
-};
-
-function fileInput(value: OperationInput[string], label: string): FileInputValue {
-  if (!isRecord(value)) throw new Error(`${label} must be one plan-bound file`);
-  exactObjectKeys(value, ["kind", "reference"], label);
-  if (value.kind !== "file" || typeof value.reference !== "string" || value.reference.length < 1) {
-    throw new Error(`${label} must be one plan-bound file`);
-  }
-  return Object.freeze({ kind: "file", reference: value.reference });
-}
-
-function articleFileInputs(input: OperationInput): {
-  readonly inline: readonly FileInputValue[];
-  readonly cover: FileInputValue | null;
-  readonly ordered: readonly FileInputValue[];
-} {
-  const rawInline = input.inline_images;
-  if (rawInline !== undefined && !Array.isArray(rawInline)) {
-    throw new Error("input.inline_images must be an ordered plan-bound file array");
-  }
-  const inline = Object.freeze((rawInline ?? []).map((value, index) =>
-    fileInput(value, `input.inline_images[${index}]`)));
-  if (inline.length > MAX_ARTICLE_INLINE_IMAGES) {
-    throw new Error(`input.inline_images supports at most ${MAX_ARTICLE_INLINE_IMAGES} files`);
-  }
-  const cover = input.cover_image === undefined ? null : fileInput(input.cover_image, "input.cover_image");
-  return Object.freeze({
-    inline,
-    cover,
-    ordered: Object.freeze([...inline, ...(cover === null ? [] : [cover])]),
-  });
-}
-
-function sniffArticleImage(bytes: Uint8Array): BoundArticleImage["mediaType"] {
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (
-    bytes.length >= 8
-    && bytes[0] === 0x89
-    && bytes[1] === 0x50
-    && bytes[2] === 0x4e
-    && bytes[3] === 0x47
-    && bytes[4] === 0x0d
-    && bytes[5] === 0x0a
-    && bytes[6] === 0x1a
-    && bytes[7] === 0x0a
-  ) return "image/png";
-  if (
-    bytes.length >= 12
-    && String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF"
-    && String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP"
-  ) return "image/webp";
-  throw new Error("X Article images must be exact JPEG, PNG, or WebP bytes");
-}
-
-async function readArticleImage(
-  path: string,
-  operationDeadline?: WebSessionOperationDeadline,
-): Promise<BoundArticleImage> {
-  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-  const handle = operationDeadline === undefined
-    ? await open(path, constants.O_RDONLY | noFollow)
-    : await operationDeadline.run(
-        () => open(path, constants.O_RDONLY | noFollow),
-        "authenticated web operation deadline",
-      );
-  try {
-    const before = operationDeadline === undefined
-      ? await handle.stat()
-      : await operationDeadline.run(() => handle.stat(), "authenticated web operation deadline");
-    if (!before.isFile() || before.size < 1 || before.size > MAX_ARTICLE_IMAGE_BYTES) {
-      throw new Error(`X Article images must be regular files no larger than ${MAX_ARTICLE_IMAGE_BYTES} bytes`);
-    }
-    const raw = operationDeadline === undefined
-      ? await handle.readFile()
-      : await operationDeadline.run(() => handle.readFile(), "authenticated web operation deadline");
-    const after = operationDeadline === undefined
-      ? await handle.stat()
-      : await operationDeadline.run(() => handle.stat(), "authenticated web operation deadline");
-    if (
-      before.dev !== after.dev
-      || before.ino !== after.ino
-      || before.size !== after.size
-      || raw.byteLength !== before.size
-    ) throw new Error("X Article image changed while it was materialized");
-    const bytes = new Uint8Array(raw);
-    return Object.freeze({ bytes, mediaType: sniffArticleImage(bytes) });
-  } finally {
-    await handle.close();
-  }
-}
-
-async function materializeArticleImages(
-  input: OperationInput,
-  fileResolver: BrowserFileResolver | undefined,
-  operationDeadline?: WebSessionOperationDeadline,
-): Promise<{ readonly inline: readonly BoundArticleImage[]; readonly cover: BoundArticleImage | null }> {
-  const files = articleFileInputs(input);
-  if (files.ordered.length === 0) return Object.freeze({ inline: Object.freeze([]), cover: null });
-  if (fileResolver === undefined) throw new Error("X rich Article media requires the plan-bound file resolver");
-  const paths = operationDeadline === undefined
-    ? await fileResolver(files.ordered)
-    : await operationDeadline.run(
-        () => fileResolver(files.ordered),
-        "authenticated web operation deadline",
-      );
-  operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
-  if (
-    paths.length !== files.ordered.length
-    || paths.some((path) => typeof path !== "string" || path.length < 1)
-  ) throw new Error("X Article file resolver did not return every exact plan-bound path");
-  const images: BoundArticleImage[] = [];
-  for (const path of paths) images.push(await readArticleImage(path!, operationDeadline));
-  return Object.freeze({
-    inline: Object.freeze(images.slice(0, files.inline.length)),
-    cover: files.cover === null ? null : images.at(-1)!,
-  });
-}
-
-function xUploadHeaders(bootstrap: XBootstrap): Readonly<Record<string, string>> {
-  const fixed = enforceXWebHeaderSinkPolicy({
-    source: "code",
-    sink: "network-request",
-    headers: {
-      accept: "application/json",
-      "x-twitter-auth-type": "OAuth2Session",
-      "x-twitter-active-user": "yes",
-    },
-  }).values;
-  const session = enforceXWebHeaderSinkPolicy({
-    source: "in-origin-session",
-    sink: "network-request",
-    headers: {
-      authorization: `Bearer ${bootstrap.bearer}`,
-      "x-csrf-token": bootstrap.csrf,
-    },
-  }).values;
-  return { ...fixed, ...session, origin: X_ORIGIN, referer: `${X_ORIGIN}/compose/articles` };
-}
-
-function mediaUploadUrl(
-  origin: string,
-  command: "INIT" | "APPEND" | "FINALIZE",
-  values: Readonly<Record<string, string>>,
-): URL {
-  const url = new URL("/i/media/upload.json", origin);
-  url.searchParams.set("command", command);
-  for (const [name, value] of Object.entries(values)) url.searchParams.set(name, value);
-  const expected = command === "INIT"
-    ? ["command", "media_category", "media_type", "total_bytes"]
-    : command === "APPEND" ? ["command", "media_id", "segment_index"] : ["command", "media_id"];
-  if (Object.keys(Object.fromEntries(url.searchParams)).sort().join(",") !== expected.sort().join(",")) {
-    throw new Error("X media upload request left its reviewed query shape");
-  }
-  return url;
-}
-
-function uploadMediaId(value: unknown, label: string): string {
-  const response = record(value, label);
-  const id = response.media_id_string;
-  if (typeof id !== "string" || !/^[0-9]{1,19}$/u.test(id)) {
-    throw new Error(`${label} did not return one exact media ID`);
-  }
-  if (
-    response.expires_after_secs !== undefined
-    && (!Number.isSafeInteger(response.expires_after_secs) || (response.expires_after_secs as number) < 1)
-  ) throw new Error(`${label} returned an invalid expiry`);
-  return id;
-}
-
-function containsBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
-  if (needle.length === 0 || needle.length > haystack.length) return false;
-  outer: for (let index = 0; index <= haystack.length - needle.length; index += 1) {
-    for (let offset = 0; offset < needle.length; offset += 1) {
-      if (haystack[index + offset] !== needle[offset]) continue outer;
-    }
-    return true;
-  }
-  return false;
-}
-
-function articleMediaMultipart(image: BoundArticleImage): {
-  readonly body: Uint8Array;
-  readonly contentType: string;
-} {
-  const digest = createHash("sha256").update(image.bytes).digest("hex");
-  let boundary = `----wrench-x-article-${digest}`;
-  const encoder = new TextEncoder();
-  for (let suffix = 0; containsBytes(image.bytes, encoder.encode(boundary)); suffix += 1) {
-    if (suffix >= 16) throw new Error("X Article media could not bind a safe multipart boundary");
-    boundary = `----wrench-x-article-${digest}-${suffix + 1}`;
-  }
-  const prefix = encoder.encode(
-    `--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="blob"\r\nContent-Type: ${image.mediaType}\r\n\r\n`,
-  );
-  const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
-  const body = new Uint8Array(prefix.length + image.bytes.length + suffix.length);
-  body.set(prefix, 0);
-  body.set(image.bytes, prefix.length);
-  body.set(suffix, prefix.length + image.bytes.length);
-  return Object.freeze({ body, contentType: `multipart/form-data; boundary=${boundary}` });
-}
-
-async function appendArticleMedia(
-  client: WebSessionClient,
-  url: URL,
-  image: BoundArticleImage,
-  headers: Readonly<Record<string, string>>,
-): Promise<void> {
-  const multipart = articleMediaMultipart(image);
-  await client.requestStatus({
-    url,
-    method: "POST",
-    headers: { ...headers, "content-type": multipart.contentType },
-    body: multipart.body,
-    expectedStatuses: [200, 204],
-  });
-}
-
-async function uploadArticleImage(
-  bootstrap: XBootstrap,
-  client: WebSessionClient,
-  image: BoundArticleImage,
-  beforeInit: () => Promise<void>,
-): Promise<string> {
-  const origin = client.origin;
-  const headers = xUploadHeaders(bootstrap);
-  const initUrl = mediaUploadUrl(origin, "INIT", {
-    total_bytes: `${image.bytes.byteLength}`,
-    media_type: image.mediaType,
-    media_category: "tweet_image",
-  });
-  await beforeInit();
-  const init = await client.requestJson({
-    url: initUrl,
-    method: "POST",
-    headers,
-    maxBytes: MAX_MEDIA_RESPONSE_BYTES,
-  });
-  const mediaId = uploadMediaId(init, "X media INIT response");
-  await appendArticleMedia(
-    client,
-    mediaUploadUrl(origin, "APPEND", { media_id: mediaId, segment_index: "0" }),
-    image,
-    headers,
-  );
-  const finalized = await client.requestJson({
-    url: mediaUploadUrl(origin, "FINALIZE", { media_id: mediaId }),
-    method: "POST",
-    headers,
-    maxBytes: MAX_MEDIA_RESPONSE_BYTES,
-  });
-  if (uploadMediaId(finalized, "X media FINALIZE response") !== mediaId) {
-    throw new Error("X media FINALIZE response changed the uploaded media ID");
-  }
-  const finalRecord = record(finalized, "X media FINALIZE response");
-  if (finalRecord.processing_info !== undefined) {
-    throw new Error("X image upload unexpectedly entered an unreviewed processing branch");
-  }
-  return mediaId;
 }
 
 function articleEntityResult(response: unknown, rootName: string, label: string): JsonRecord {
@@ -1893,7 +1296,7 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
       entityKeys,
     ).map((value, index) => {
       const entity = record(value, `X Article readback entity ${index}`);
-      const sourceEntityKey = normalizedArticleEntityKey(
+      normalizedArticleEntityKey(
         entity.key,
         `X Article readback entity ${index}.key`,
       );
@@ -1905,30 +1308,10 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
         entry.data,
         `X Article readback entity ${index}.data`,
       );
-      const normalizedData = entry.type === "MEDIA"
-        ? Object.freeze({
-            ...(data.caption === undefined || data.caption === null || data.caption === ""
-              ? {}
-              : { caption: data.caption }),
-            entity_key: (() => {
-              const sourceDataKey = normalizedArticleEntityKey(
-                data.entity_key,
-                `X Article readback entity ${index}.data.entity_key`,
-              );
-              if (sourceDataKey !== sourceEntityKey) {
-                throw new Error(
-                  `X Article readback entity ${index} changed its media entity key`,
-                );
-              }
-              return `${index}`;
-            })(),
-            media_items: data.media_items,
-          })
-        : Object.freeze({ url: data.url });
       return Object.freeze({
         key: `${index}`,
         value: Object.freeze({
-          data: normalizedData,
+          data: Object.freeze({ url: data.url }),
           type: entry.type,
           mutability: entry.mutability,
         }),
@@ -1991,61 +1374,24 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
     entityKeys,
   ).map((value, index) => {
     const entity = record(value, `X Article readback entity ${index}`);
-    const sourceEntityKey = normalizedArticleEntityKey(
+    normalizedArticleEntityKey(
       entity.key,
       `X Article readback entity ${index}.key`,
     );
     const entry = record(entity.value, `X Article readback entity ${index}.value`);
     const data = record(entry.data, `X Article readback entity ${index}.data`);
-    const normalizedData = entry.type === "MEDIA"
-      ? Object.freeze({
-          ...(data.caption === undefined || data.caption === null || data.caption === "" ? {} : { caption: data.caption }),
-          entity_key: (() => {
-            const sourceDataKey = normalizedArticleEntityKey(
-              data.entityKey,
-              `X Article readback entity ${index}.data.entityKey`,
-            );
-            if (sourceDataKey !== sourceEntityKey) {
-              throw new Error(
-                `X Article readback entity ${index} changed its media entity key`,
-              );
-            }
-            return `${index}`;
-          })(),
-          media_items: Array.isArray(data.mediaItems)
-            ? Object.freeze(data.mediaItems.map((value) => {
-                const item = record(value, "X Article readback media item");
-                return Object.freeze({
-                  local_media_id: item.localMediaId,
-                  media_category: item.mediaCategory,
-                  media_id: item.mediaId,
-                });
-              }))
-            : data.mediaItems,
-        })
-      : Object.freeze({ url: data.url });
     return Object.freeze({
       key: `${index}`,
-      value: Object.freeze({ data: normalizedData, type: entry.type, mutability: entry.mutability }),
+      value: Object.freeze({
+        data: Object.freeze({ url: data.url }),
+        type: entry.type,
+        mutability: entry.mutability,
+      }),
     });
   });
   const normalized = Object.freeze({ blocks: Object.freeze(blocks), entity_map: Object.freeze(entity_map) });
   validateXWebRichArticleContentState(normalized);
   return normalized;
-}
-
-function articleCoverMediaId(article: JsonRecord): string | null {
-  if (article.cover_media === undefined || article.cover_media === null) return null;
-  const cover = record(article.cover_media, "X Article cover_media");
-  if (typeof cover.media_id === "string" && /^[0-9]{1,19}$/u.test(cover.media_id)) return cover.media_id;
-  if (typeof cover.media_id_string === "string" && /^[0-9]{1,19}$/u.test(cover.media_id_string)) {
-    return cover.media_id_string;
-  }
-  if (typeof cover.media_key === "string") {
-    const match = /^[0-9]+_([0-9]{1,19})$/u.exec(cover.media_key);
-    if (match?.[1] !== undefined) return match[1];
-  }
-  throw new Error("X Article cover_media omitted its exact media ID");
 }
 
 async function readArticleDraft(
@@ -2064,7 +1410,6 @@ function verifyFinalRichArticle(
     readonly viewerId: string;
     readonly title: string;
     readonly contentState: XWebRichArticleContentState;
-    readonly coverMediaId: string | null;
   },
 ): void {
   requirePrivateDraftArticle(article, expected.id, expected.viewerId);
@@ -2072,9 +1417,6 @@ function verifyFinalRichArticle(
   const content = normalizeArticleContentReadback(article.content_state);
   if (canonicalJson(content) !== canonicalJson(expected.contentState)) {
     throw new Error("X Article readback did not bind the confirmed rich content state");
-  }
-  if (expected.coverMediaId !== null && articleCoverMediaId(article) !== expected.coverMediaId) {
-    throw new Error("X Article readback did not bind the confirmed cover image");
   }
 }
 
@@ -2181,7 +1523,7 @@ async function executePublish(
   }
 }
 
-async function executeArticleDraft(
+async function executeArticleDraftSave(
   bootstrap: XBootstrap,
   recipe: WebSessionRecipe,
   input: OperationInput,
@@ -2191,90 +1533,16 @@ async function executeArticleDraft(
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
   },
 ): Promise<WebSessionExecution> {
-  await requireBoundViewer(bootstrap, auth);
-  if (recipe.contractVersion !== 2 || input.draft_only !== true) {
-    throw new Error("X authenticated web Articles support only contract v2 with input.draft_only=true");
-  }
-  const unsupported = ["cover", "cover_image", "cover_alt_text"].find((name) => input[name] !== undefined);
-  if (unsupported !== undefined) {
-    throw new Error(`X authenticated web Article drafts do not support input.${unsupported}`);
-  }
-  const title = requiredString(input.title, "input.title", MAX_ARTICLE_TITLE_CHARACTERS);
-  if (/[\0\r\n]/u.test(title)) {
-    throw new Error("input.title must be one plain-text line");
-  }
-  const contentState = buildXWebArticleContentState(input.body);
-  let started = 0;
-  let verified = 0;
-  try {
-    const descriptor = await resolveDescriptor(bootstrap, "ArticleEntityDraftCreate", "mutation");
-    const response = await graphQl(
-      bootstrap,
-      descriptor,
-      { content_state: contentState, title },
-      "POST",
-      undefined,
-      "articles.draft",
-      async () => {
-        await options.beforeDispatch?.(dispatchEvent(recipe.action, 1, 1, 0, 0));
-        started = 1;
-      },
-    );
-    const draft = createdArticleDraft(response, title);
-    await options.afterDispatchVerified?.(dispatchEvent(recipe.action, 1, 1, 1, 1));
-    verified = 1;
-    return {
-      status: "succeeded",
-      output: {
-        provider: "x",
-        operation: "articles.publish",
-        published: false,
-        mode: "draft",
-        draftId: draft.id,
-        title: draft.title,
-        url: draft.url,
-      },
-      finalUrl: draft.url,
-      dispatchStarted: true,
-      dispatch: { planned: 1, started, verified },
-    };
-  } catch {
-    return {
-      status: started > 0 ? "indeterminate" : "failed",
-      output: null,
-      finalUrl: null,
-      dispatchStarted: started > 0,
-      dispatch: { planned: 1, started, verified },
-      error: started > 0
-        ? "X may have created the private Article draft but its exact response was not verified; reconcile before retrying"
-        : "X Article draft creation failed before submission",
-    };
-  }
-}
-
-async function executeRichArticleDraft(
-  bootstrap: XBootstrap,
-  recipe: WebSessionRecipe,
-  input: OperationInput,
-  auth: WrenchAuth,
-  options: {
-    readonly fileResolver?: BrowserFileResolver;
-    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
-    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
-  },
-): Promise<WebSessionExecution> {
-  if (recipe.contractVersion !== 3 || input.draft_only !== true) {
-    throw new Error("X rich Articles support only contract v3 with input.draft_only=true");
+  if (recipe.contractVersion !== 1 || recipe.action !== "articles.draft.save") {
+    throw new Error("X Article draft saving supports only articles.draft.save@1");
   }
   const title = requiredString(input.title, "input.title", MAX_ARTICLE_TITLE_CHARACTERS);
   if (/[\0\r\n]/u.test(title)) throw new Error("input.title must be one plain-text line");
-  const document = parseXWebRichArticleDocument(input.document);
-  const materialized = await materializeArticleImages(input, options.fileResolver, bootstrap.operationDeadline);
-  // Prove the document/file bijection before the first remote media INIT.
-  buildXWebRichArticleContentState(
-    document,
-    materialized.inline.map((_image, index) => `${index + 1}`),
-  );
+  const document = parseArticleDraftDocument(input.document, {
+    maximumBlocks: MAX_ARTICLE_BLOCKS,
+    maximumCharacters: MAX_ARTICLE_BODY_CHARACTERS,
+  });
+  const contentState = buildXWebRichArticleContentState(document);
   await assertCurrentArticleRichContract(bootstrap);
   const currentViewer = await requireBoundViewer(bootstrap, auth);
   const requestedDraftId = input.draft_id === undefined ? null : postId(input.draft_id, "input.draft_id");
@@ -2282,15 +1550,10 @@ async function executeRichArticleDraft(
     requirePrivateDraftArticle(await readArticleDraft(bootstrap, requestedDraftId), requestedDraftId, currentViewer.id);
   }
 
-  const imageCount = materialized.inline.length;
-  const hasCover = materialized.cover !== null;
-  const planned = imageCount + (hasCover ? 1 : 0) + (requestedDraftId === null ? 1 : 2) + (hasCover ? 1 : 0);
+  const planned = requestedDraftId === null ? 1 : 2;
   let started = 0;
   let verified = 0;
   let draftId = requestedDraftId;
-  let contentState: XWebRichArticleContentState | null = null;
-  let coverMediaId: string | null = null;
-  const uploadedInline: string[] = [];
   let nextIndex = 0;
   let failureStage = "binding the Article mutation session";
   const begin = async (id: string): Promise<number> => {
@@ -2306,40 +1569,6 @@ async function executeRichArticleDraft(
   };
 
   try {
-    let uploadClient: WebSessionClient | null = null;
-    if (imageCount > 0 || hasCover) {
-      failureStage = "binding the media upload session";
-      uploadClient = await createWebSessionClient(articleUploadOrigin(bootstrap), auth, {
-        timeoutMs: bootstrap.timeoutMs,
-        ...(bootstrap.signal === undefined ? {} : { signal: bootstrap.signal }),
-        ...(bootstrap.operationDeadline === undefined ? {} : { operationDeadline: bootstrap.operationDeadline }),
-        ...(bootstrap.dependencies === undefined ? {} : { dependencies: bootstrap.dependencies }),
-      });
-      if (webSessionCookie(uploadClient.cookies, "ct0") !== bootstrap.csrf) {
-        throw new Error("X media upload session did not bind the Article session CSRF realm");
-      }
-    }
-    for (const [offset, image] of materialized.inline.entries()) {
-      const id = `articles.media.inline[${offset + 1}]`;
-      failureStage = `uploading inline image ${offset + 1}`;
-      let index = 0;
-      const mediaId = await uploadArticleImage(bootstrap, uploadClient!, image, async () => {
-        index = await begin(id);
-      });
-      uploadedInline.push(mediaId);
-      await complete(id, index);
-    }
-    if (materialized.cover !== null) {
-      const id = "articles.media.cover";
-      failureStage = "uploading the cover image";
-      let index = 0;
-      coverMediaId = await uploadArticleImage(bootstrap, uploadClient!, materialized.cover, async () => {
-        index = await begin(id);
-      });
-      await complete(id, index);
-    }
-    contentState = buildXWebRichArticleContentState(document, uploadedInline);
-
     if (draftId === null) {
       const id = "articles.create";
       failureStage = "resolving the Article create mutation";
@@ -2359,16 +1588,13 @@ async function executeRichArticleDraft(
       );
       const article = responseBoundArticle(response, "articleentity_create_draft", null, title);
       draftId = postId(article.rest_id, "X created Article draft rest_id");
-      if (!hasCover) {
-        const finalArticle = await readArticleDraft(bootstrap, draftId);
-        verifyFinalRichArticle(finalArticle, {
-          id: draftId,
-          viewerId: currentViewer.id,
-          title,
-          contentState,
-          coverMediaId: null,
-        });
-      }
+      const finalArticle = await readArticleDraft(bootstrap, draftId);
+      verifyFinalRichArticle(finalArticle, {
+        id: draftId,
+        viewerId: currentViewer.id,
+        title,
+        contentState,
+      });
       await complete(id, index);
     } else {
       const titleId = "articles.title";
@@ -2407,66 +1633,30 @@ async function executeRichArticleDraft(
         },
       );
       responseBoundArticle(contentResponse, "articleentity_update_content_state", draftId);
-      if (!hasCover) {
-        const finalArticle = await readArticleDraft(bootstrap, draftId);
-        verifyFinalRichArticle(finalArticle, {
-          id: draftId,
-          viewerId: currentViewer.id,
-          title,
-          contentState,
-          coverMediaId: null,
-        });
-      }
+      const finalArticle = await readArticleDraft(bootstrap, draftId);
+      verifyFinalRichArticle(finalArticle, {
+        id: draftId,
+        viewerId: currentViewer.id,
+        title,
+        contentState,
+      });
       await complete(contentId, contentIndex);
     }
 
-    if (coverMediaId !== null) {
-      const id = "articles.cover";
-      failureStage = "resolving the Article cover mutation";
-      const descriptor = await resolveDescriptor(bootstrap, "ArticleEntityUpdateCoverMedia", "mutation");
-      let index = 0;
-      failureStage = "preparing the Article cover mutation";
-      const response = await graphQl(
-        bootstrap,
-        descriptor,
-        {
-          articleEntityId: draftId,
-          coverMedia: { media_id: coverMediaId, media_category: "DraftTweetImage" },
-        },
-        "POST",
-        undefined,
-        "articles.cover",
-        async () => {
-          index = await begin(id);
-        },
-      );
-      responseBoundArticle(response, "articleentity_update_cover_media", draftId);
-      const finalArticle = await readArticleDraft(bootstrap, draftId!);
-      verifyFinalRichArticle(finalArticle, {
-        id: draftId!,
-        viewerId: currentViewer.id,
-        title,
-        contentState: contentState!,
-        coverMediaId,
-      });
-      await complete(id, index);
-    }
-    if (draftId === null || contentState === null || nextIndex !== planned || verified !== planned) {
-      throw new Error("X rich Article workflow did not complete its exact dispatch schedule");
+    if (draftId === null || nextIndex !== planned || verified !== planned) {
+      throw new Error("X Article draft workflow did not complete its exact dispatch schedule");
     }
     const url = `${X_ORIGIN}/compose/articles/edit/${draftId}`;
     return {
       status: "succeeded",
       output: {
         provider: "x",
-        operation: "articles.publish",
+        operation: "articles.draft.save",
         published: false,
         mode: "draft",
         draftId,
         title,
-        rich: true,
-        inlineImageCount: uploadedInline.length,
-        hasCover,
+        documentSchemaVersion: 1,
         url,
       },
       finalUrl: url,
@@ -2482,10 +1672,12 @@ async function executeRichArticleDraft(
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
       error: started > verified
-        ? "X may have accepted the current private Article dispatch; reconcile the exact draft before retrying"
+        ? requestedDraftId === null
+          ? "X may have accepted the private Article create, but the confirmed input has no exact draft ID for safe reconciliation; preserve the indeterminate run and do not retry"
+          : "X may have accepted the current private Article replacement dispatch; reconcile the exact existing draft before retrying"
         : verified > 0
-          ? "X verified only part of the confirmed private rich Article workflow; inspect the draft before retrying"
-          : `X rich Article draft failed before remote submission while ${failureStage}`,
+          ? "X verified only part of the confirmed private Article workflow; inspect the draft before retrying"
+          : `X Article draft failed before remote submission while ${failureStage}`,
     };
   }
 }
@@ -2587,7 +1779,6 @@ export async function executeXWebOperation(
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: XWebRuntimeDependencies;
-    readonly fileResolver?: BrowserFileResolver;
   } = {},
 ): Promise<WebSessionExecution> {
   const bootstrap = await bootstrapX(
@@ -2624,10 +1815,8 @@ export async function executeXWebOperation(
     || recipe.action === "replies.create"
     || recipe.action === "posts.quote"
   ) return executePublish(bootstrap, recipe, input, auth, options);
-  if (recipe.action === "articles.publish") {
-    return recipe.contractVersion === 3
-      ? executeRichArticleDraft(bootstrap, recipe, input, auth, options)
-      : executeArticleDraft(bootstrap, recipe, input, auth, options);
+  if (recipe.action === "articles.draft.save") {
+    return executeArticleDraftSave(bootstrap, recipe, input, auth, options);
   }
   if (recipe.action === "likes.set" || recipe.action === "content.save" || recipe.action === "posts.repost") {
     return executeDesiredState(bootstrap, recipe, input, auth, options);

@@ -52,6 +52,10 @@ derivation is rejected for LinkedIn: the pinned agent-browser containment
 bootstrap can lose LinkedIn's authenticated execution context, terminate its
 Chrome child, and thereby lose the in-memory HAR while leaving the daemon
 socket alive. Never treat an automatic `about:blank` relaunch as continuity.
+Use Chrome or Chromium as the exact executable for an Arc snapshot. Arc may
+attach its normal source user-data root to a task-private launch, so wrench
+rejects Arc itself as the managed derivation executable. Arc remains supported
+as a fully closed source profile and as an explicitly selected cookie source.
 Fully quit the source Chromium browser first; wrench rejects an active or stale
 `Singleton*`/`DevToolsActivePort` lock rather than copying unsettled LevelDB or
 SQLite state. A path-backed profile also disables agent-browser domain

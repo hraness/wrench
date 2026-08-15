@@ -1754,13 +1754,18 @@ function draftBlocks(body: string): readonly JsonRecord[] {
   }));
 }
 
-async function executeArticlePublish(context: ProviderActionContext): Promise<void> {
+async function executeArticle(
+  context: ProviderActionContext,
+  operation: "articles.draft.save" | "articles.publish",
+): Promise<void> {
+  const retainedV2DraftOnly = operation === "articles.publish"
+    && context.recipe.contractVersion === 2
+    && context.input.draft_only === true;
+  if (context.input.draft_only !== undefined && !retainedV2DraftOnly) {
+    throw new Error("input.draft_only is unsupported; use articles.draft.save to save a private X Article draft");
+  }
   const title = inputString(context, "title");
   const body = inputString(context, "body");
-  const draftOnly = optionalInputBoolean(context, "draft_only") ?? false;
-  if (draftOnly && context.recipe.contractVersion !== 2) {
-    throw new Error("input.draft_only requires official X Article contract version 2");
-  }
   const covers = await context.resolveFiles("cover");
   if (covers.length > 1) throw new Error("official X Articles support one cover image");
   const cover = covers[0];
@@ -1780,7 +1785,7 @@ async function executeArticlePublish(context: ProviderActionContext): Promise<vo
     const uploadedRaw = preparedCover === undefined ? null : await uploadMedia(context, preparedCover, "tweet");
     const uploaded = uploadedRaw === null ? null : await applyMediaAltText(context, uploadedRaw, coverAltText);
     if (uploaded !== null) {
-      context.setOutput({ provider: "x", operation: "articles.publish", published: false, uploadedCover: uploaded });
+      context.setOutput({ provider: "x", operation, published: false, uploadedCover: uploaded });
     }
     const draftPayload: JsonRecord = {
       title,
@@ -1806,14 +1811,16 @@ async function executeArticlePublish(context: ProviderActionContext): Promise<vo
     }
     context.setOutput({
       provider: "x",
-      operation: "articles.publish",
+      operation,
       published: false,
-      mode: draftOnly ? "draft" : "publish",
+      mode: operation === "articles.draft.save" || retainedV2DraftOnly
+        ? "draft"
+        : "publish",
       draftId: articleId,
       draft,
       uploadedCover: uploaded,
     });
-    if (draftOnly) return;
+    if (operation === "articles.draft.save" || retainedV2DraftOnly) return;
     const publishResponse = await request(
       context,
       `${X_API_ORIGIN}/2/articles/${encodedSegment(articleId)}/publish`,
@@ -1856,6 +1863,7 @@ export async function executeXProvider(context: ProviderActionContext): Promise<
   else if (action === "threads.publish") await executeThreadPublish(context);
   else if (action === "posts.repost") await executeRepost(context);
   else if (action === "content.save") await executeBookmark(context);
-  else if (action === "articles.publish") await executeArticlePublish(context);
+  else if (action === "articles.draft.save") await executeArticle(context, action);
+  else if (action === "articles.publish") await executeArticle(context, action);
   else throw new Error(`official X provider action ${action} is not implemented`);
 }

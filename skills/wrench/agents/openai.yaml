@@ -1,4 +1,4 @@
 interface:
-  display_name: "wrench"
-  short_description: "Clip sites and build safe direct-API capabilities"
-  default_prompt: "Use $wrench to capture this site or turn one authenticated first-party exchange into a fail-closed code-owned CLI capability."
+  display_name: "Wrench"
+  short_description: "Capture, archive, and use bounded provider APIs"
+  default_prompt: "Use $wrench to capture or archive this source, inspect a bounded capability, or save a private native article draft without publishing."

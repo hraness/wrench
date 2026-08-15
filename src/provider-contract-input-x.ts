@@ -294,7 +294,7 @@ export function xProviderConditionalInputIssues(
     }
   }
   if (
-    action === "articles.publish"
+    (action === "articles.draft.save" || action === "articles.publish")
     && input.cover_alt_text !== undefined
     && !isFileInputValue(input.cover)
   ) {

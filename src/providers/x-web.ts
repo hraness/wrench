@@ -272,7 +272,6 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
     { operationName: "ArticleEntityDraftCreate", operationType: "mutation", queryId: "btD9FyMDa3_vydVp7fr87Q", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
     { operationName: "ArticleEntityUpdateContent", operationType: "mutation", queryId: "P5Nc3DYs9D4XqVthNrig8w", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
     { operationName: "ArticleEntityUpdateTitle", operationType: "mutation", queryId: "z_xdvTUbZjSVjt232b4D4A", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
-    { operationName: "ArticleEntityUpdateCoverMedia", operationType: "mutation", queryId: "BXQicEDA0v2F5SmsjObjDQ", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
     { operationName: "ArticleEntityPublish", operationType: "mutation", queryId: "UyL9qgpV23A8471opeYQbw", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
     { operationName: "ArticleEntityResultByRestId", operationType: "query", queryId: "rPdndX2XxQoXIMUafLSSJQ", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
   ] satisfies readonly XWebQueryDescriptorEvidence[]),
@@ -612,11 +611,9 @@ export const xWebMutationOperationIds = Object.freeze([
   "bookmarks.disable",
   "reposts.enable",
   "reposts.disable",
-  "articles.draft",
   "articles.create",
   "articles.title",
   "articles.content",
-  "articles.cover",
 ] as const);
 
 export type XWebMutationOperationId = (typeof xWebMutationOperationIds)[number];
@@ -633,11 +630,9 @@ const mutationOperationNames = Object.freeze({
   "bookmarks.disable": "DeleteBookmark",
   "reposts.enable": "CreateRetweet",
   "reposts.disable": "DeleteRetweet",
-  "articles.draft": "ArticleEntityDraftCreate",
   "articles.create": "ArticleEntityDraftCreate",
   "articles.title": "ArticleEntityUpdateTitle",
   "articles.content": "ArticleEntityUpdateContent",
-  "articles.cover": "ArticleEntityUpdateCoverMedia",
 } as const satisfies Readonly<Record<XWebMutationOperationId, string>>);
 
 function exactMutationKeys(value: JsonRecord, keys: readonly string[], label: string): void {
@@ -703,53 +698,6 @@ function validateDesiredStateVariables(operationId: XWebMutationOperationId, var
   exactMutationPostId(variables.tweet_id, `X ${operationId} target`);
 }
 
-function validateArticleDraftVariables(variables: JsonRecord): void {
-  exactMutationKeys(variables, ["content_state", "title"], "X articles.draft variables");
-  if (
-    typeof variables.title !== "string"
-    || variables.title.length < 1
-    || variables.title.length > 100
-    || /[\0\r\n]/u.test(variables.title)
-  ) {
-    throw new Error("X articles.draft title must be a bounded string");
-  }
-  const contentState = record(variables.content_state, "X articles.draft content_state");
-  exactMutationKeys(contentState, ["blocks", "entity_map"], "X articles.draft content_state");
-  if (!Array.isArray(contentState.blocks) || contentState.blocks.length < 1 || contentState.blocks.length > 2_000) {
-    throw new Error("X articles.draft content_state.blocks must contain 1-2000 plain-text blocks");
-  }
-  if (!Array.isArray(contentState.entity_map) || contentState.entity_map.length !== 0) {
-    throw new Error("X articles.draft supports only an empty plain-text entity_map");
-  }
-  const lines: string[] = [];
-  for (const [index, value] of contentState.blocks.entries()) {
-    const block = record(value, `X articles.draft block ${index + 1}`);
-    exactMutationKeys(
-      block,
-      ["data", "text", "type", "entity_ranges", "inline_style_ranges"],
-      `X articles.draft block ${index + 1}`,
-    );
-    const data = record(block.data, `X articles.draft block ${index + 1}.data`);
-    exactMutationKeys(data, [], `X articles.draft block ${index + 1}.data`);
-    if (
-      typeof block.text !== "string"
-      || /[\0\r\n]/u.test(block.text)
-      || block.type !== "unstyled"
-      || !Array.isArray(block.entity_ranges)
-      || block.entity_ranges.length !== 0
-      || !Array.isArray(block.inline_style_ranges)
-      || block.inline_style_ranges.length !== 0
-    ) {
-      throw new Error(`X articles.draft block ${index + 1} left the reviewed plain-text shape`);
-    }
-    lines.push(block.text);
-  }
-  const body = lines.join("\n");
-  if (body.length < 1 || body.length > 20_000) {
-    throw new Error("X articles.draft body must be 1-20000 characters");
-  }
-}
-
 const richArticleBlockTypes = new Set([
   "unstyled",
   "header-one",
@@ -757,7 +705,6 @@ const richArticleBlockTypes = new Set([
   "blockquote",
   "unordered-list-item",
   "ordered-list-item",
-  "atomic",
 ]);
 const richArticleInlineStyles = new Set(["Bold", "Italic", "Strikethrough"]);
 
@@ -817,8 +764,7 @@ export function validateXWebRichArticleContentState(value: unknown): void {
   if (!Array.isArray(contentState.entity_map) || contentState.entity_map.length > 2_000) {
     throw new Error("X rich Article content_state.entity_map exceeded its reviewed bound");
   }
-  const entityKinds: ("LINK" | "MEDIA")[] = [];
-  let mediaCount = 0;
+  const entityKinds: "LINK"[] = [];
   for (const [index, value] of contentState.entity_map.entries()) {
     const entity = record(value, `X rich Article entity ${index}`);
     exactMutationKeys(entity, ["key", "value"], `X rich Article entity ${index}`);
@@ -826,41 +772,12 @@ export function validateXWebRichArticleContentState(value: unknown): void {
     const entry = record(entity.value, `X rich Article entity ${index}.value`);
     exactMutationKeys(entry, ["data", "type", "mutability"], `X rich Article entity ${index}.value`);
     const data = record(entry.data, `X rich Article entity ${index}.data`);
-    if (entry.type === "LINK") {
-      if (entry.mutability !== "Mutable") throw new Error("X rich Article links must be mutable");
-      exactMutationKeys(data, ["url"], `X rich Article entity ${index}.data`);
-      exactArticleUrl(data.url, `X rich Article entity ${index}.data.url`);
-      entityKinds.push("LINK");
-      continue;
+    if (entry.type !== "LINK" || entry.mutability !== "Mutable") {
+      throw new Error("X Article draft entities support only reviewed mutable LINK values");
     }
-    if (entry.type !== "MEDIA" || entry.mutability !== "Immutable") {
-      throw new Error("X rich Article entities support only reviewed LINK and MEDIA values");
-    }
-    const mediaKeys = Object.keys(data).sort().join(",");
-    if (mediaKeys !== "entity_key,media_items" && mediaKeys !== "caption,entity_key,media_items") {
-      throw new Error(`X rich Article entity ${index}.data contained unsupported media fields`);
-    }
-    if (data.entity_key !== `${index}`) throw new Error("X rich Article media entity_key must bind its entity");
-    if (data.caption !== undefined && (
-      typeof data.caption !== "string"
-      || data.caption.length > 1_000
-      || /[\0\r]/u.test(data.caption)
-    )) throw new Error("X rich Article media caption must be bounded text");
-    if (!Array.isArray(data.media_items) || data.media_items.length !== 1) {
-      throw new Error("X rich Article media entities must contain one image");
-    }
-    const media = record(data.media_items[0], `X rich Article entity ${index}.media_items[0]`);
-    exactMutationKeys(media, ["local_media_id", "media_category", "media_id"], `X rich Article entity ${index}.media_items[0]`);
-    if (!Number.isSafeInteger(media.local_media_id) || (media.local_media_id as number) < 1) {
-      throw new Error("X rich Article local media IDs must be positive integers");
-    }
-    if (media.media_category !== "DraftTweetImage") {
-      throw new Error("X rich Article inline media must use DraftTweetImage");
-    }
-    exactMutationPostId(media.media_id, "X rich Article media ID");
-    mediaCount += 1;
-    if (mediaCount > 20) throw new Error("X rich Article supports at most 20 inline images");
-    entityKinds.push("MEDIA");
+    exactMutationKeys(data, ["url"], `X rich Article entity ${index}.data`);
+    exactArticleUrl(data.url, `X rich Article entity ${index}.data.url`);
+    entityKinds.push("LINK");
   }
 
   const references = Array.from({ length: entityKinds.length }, () => 0);
@@ -903,18 +820,9 @@ export function validateXWebRichArticleContentState(value: unknown): void {
       const kind = entityKinds[key];
       if (kind === undefined) throw new Error("X rich Article entity range referenced an unknown entity");
       references[key] = (references[key] ?? 0) + 1;
-      if (block.type === "atomic" ? kind !== "MEDIA" : kind !== "LINK") {
+      if (kind !== "LINK") {
         throw new Error("X rich Article entity range used the wrong block kind");
       }
-    }
-    if (block.type === "atomic") {
-      if (
-        blockText !== " "
-        || entityRanges.length !== 1
-        || entityRanges[0]?.offset !== 0
-        || entityRanges[0]?.length !== 1
-        || block.inline_style_ranges.length !== 0
-      ) throw new Error("X rich Article atomic image blocks must bind one media entity");
     }
   }
   if (references.some((count) => count !== 1)) {
@@ -951,14 +859,7 @@ function validateRichArticleUpdateVariables(operationId: XWebMutationOperationId
     validateXWebRichArticleContentState(variables.content_state);
     return;
   }
-  exactMutationKeys(variables, ["articleEntityId", "coverMedia"], "X articles.cover variables");
-  exactMutationPostId(variables.articleEntityId, "X articles.cover draft");
-  const cover = record(variables.coverMedia, "X articles.cover coverMedia");
-  exactMutationKeys(cover, ["media_id", "media_category"], "X articles.cover coverMedia");
-  exactMutationPostId(cover.media_id, "X articles.cover media ID");
-  if (cover.media_category !== "DraftTweetImage") {
-    throw new Error("X articles.cover media category must be DraftTweetImage");
-  }
+  throw new Error("X rich Article update operation is outside the reviewed title/content contract");
 }
 
 /**
@@ -985,9 +886,8 @@ export function authorizeXWebMutationRequest(
   if (body.queryId !== binding.queryId) throw new Error(`X ${operationId} body queryId drifted`);
   const variables = record(body.variables, `X ${operationId} variables`);
   if (expectedName === "CreateTweet") validateCreateTweetVariables(operationId, variables);
-  else if (operationId === "articles.draft") validateArticleDraftVariables(variables);
   else if (operationId === "articles.create") validateRichArticleCreateVariables(variables);
-  else if (operationId === "articles.title" || operationId === "articles.content" || operationId === "articles.cover") {
+  else if (operationId === "articles.title" || operationId === "articles.content") {
     validateRichArticleUpdateVariables(operationId, variables);
   }
   else validateDesiredStateVariables(operationId, variables);

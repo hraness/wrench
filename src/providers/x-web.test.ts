@@ -460,62 +460,7 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
     })).toThrow("mutations require POST");
   });
 
-  test("authorizes only the exact reviewed plain-text Article draft payload", () => {
-    const resolved = descriptor("ArticleEntityDraftCreate");
-    const variables = {
-      content_state: {
-        blocks: [{
-          type: "unstyled",
-          text: "First paragraph",
-          data: {},
-          entity_ranges: [],
-          inline_style_ranges: [],
-        }],
-        entity_map: [],
-      },
-      title: "Private draft",
-    };
-    const body = {
-      variables,
-      features: { responsive_web_graphql_timeline_navigation_enabled: true },
-      fieldToggles: { withAuxiliaryUserLabels: false },
-      queryId: resolved.queryId,
-    };
-    expect(authorizeXWebMutationRequest("articles.draft", {
-      method: "POST",
-      url: graphqlUrl(resolved),
-      descriptor: resolved,
-      body,
-    })).toMatchObject({ operationName: "ArticleEntityDraftCreate", method: "POST" });
-
-    for (const invalidVariables of [
-      { ...variables, publish: true },
-      { ...variables, title: "Private\ndraft" },
-      { ...variables, content_state: { ...variables.content_state, entity_map: [{ key: "1" }] } },
-      {
-        ...variables,
-        content_state: {
-          ...variables.content_state,
-          blocks: [{ ...variables.content_state.blocks[0], type: "header-one" }],
-        },
-      },
-    ]) {
-      expect(() => authorizeXWebMutationRequest("articles.draft", {
-        method: "POST",
-        url: graphqlUrl(resolved),
-        descriptor: resolved,
-        body: { ...body, variables: invalidVariables },
-      })).toThrow();
-    }
-    expect(() => authorizeXWebMutationRequest("posts.publish", {
-      method: "POST",
-      url: graphqlUrl(resolved),
-      descriptor: resolved,
-      body,
-    })).toThrow("did not bind its reviewed");
-  });
-
-  test("authorizes only exact native rich Article create, update, and cover payloads", () => {
+  test("authorizes only exact text-only native Article create and update payloads", () => {
     const contentState = {
       blocks: [{
         data: {},
@@ -538,10 +483,6 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
       ["articles.create", "ArticleEntityDraftCreate", { content_state: contentState, title: "Private draft" }],
       ["articles.title", "ArticleEntityUpdateTitle", { articleEntityId: "700000000000000001", title: "Private draft" }],
       ["articles.content", "ArticleEntityUpdateContent", { content_state: contentState, article_entity: "700000000000000001" }],
-      ["articles.cover", "ArticleEntityUpdateCoverMedia", {
-        articleEntityId: "700000000000000001",
-        coverMedia: { media_id: "700000000000000002", media_category: "DraftTweetImage" },
-      }],
     ] as const;
     for (const [operationId, operationName, variables] of cases) {
       const resolved = descriptor(operationName);
@@ -566,6 +507,10 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
     for (const invalidState of [
       { ...contentState, blocks: [{ ...contentState.blocks[0], key: "" }] },
       { ...contentState, entity_map: [{ ...contentState.entity_map[0], key: "1" }] },
+      {
+        ...contentState,
+        blocks: [{ ...contentState.blocks[0], type: "atomic" }],
+      },
       {
         ...contentState,
         entity_map: [{

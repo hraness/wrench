@@ -37,7 +37,7 @@ export type WebSessionContract = {
   readonly idempotency: IdempotencyKind;
   readonly dedupeWindowMs: number;
   readonly state: WebSessionContractState;
-  readonly dispatch: "none" | "single" | "thread-items" | "article-rich-draft";
+  readonly dispatch: "none" | "single" | "thread-items" | "bounded-items";
   readonly implementation: string;
 };
 
@@ -375,8 +375,8 @@ const contract = (
   state,
   dispatch: risk === "R1"
     ? "none"
-    : site === "x" && operation === "articles.publish" && contractVersion >= 3
-      ? "article-rich-draft"
+    : operation === "articles.draft.save"
+      ? "bounded-items"
       : operation === "threads.publish" ? "thread-items" : "single",
   implementation,
 });
@@ -437,6 +437,7 @@ const linkedin = {
   "messaging.list": contract("linkedin", "messaging.list", "R1", "capture-required", "the prior mailbox projection drifted; exact current normalized identity-to-mailbox binding, registered query, paging, completeness, and acknowledgement-free behavior require a new reviewed capture"),
   "messaging.read": contract("linkedin", "messaging.read", "R1", "capture-required", "message query revision is known, but exact current variables and acknowledgement-free response handling need a fresh reviewed capture"),
   "articles.read": contract("linkedin", "articles.read", "R1", "capture-required", "exact response author, authenticated identity, and paging bindings require a fresh reviewed capture"),
+  "articles.draft.save": contract("linkedin", "articles.draft.save", "R2", "capture-required", "native Article autosave, stable draft identity, and exact unpublished readback require one fresh reviewed first-party capture"),
   "posts.read": contract("linkedin", "posts.read", "R1", "capture-required", "exact consumer-web post read requires a reviewed capture"),
   "comments.read": contract("linkedin", "comments.read", "R1", "capture-required", "exact comment collection requires a reviewed capture"),
   "messaging.send": contract("linkedin", "messaging.send", "R3", "capture-required", "createMessage mutation requires a reviewed capture and response binding"),
@@ -447,7 +448,7 @@ const linkedin = {
   "replies.create": contract("linkedin", "replies.create", "R3", "capture-required", "reply creation requires exact actor/root/parent response binding"),
   "reactions.set": contract("linkedin", "reactions.set", "R2", "capture-required", "desired-state reaction requires reviewed create/delete contracts"),
   "relationships.connect": contract("linkedin", "relationships.connect", "R3", "capture-required", "connection invitation requires exact viewer, target, optional note, response, and duplicate-state bindings"),
-  "articles.publish": contract("linkedin", "articles.publish", "R3", "capture-required", "native article draft/media/publish workflow requires reviewed multi-step capture"),
+  "articles.publish": contract("linkedin", "articles.publish", "R3", "capture-required", "native Article publication remains a distinct unobserved operation"),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const hackerNews = {
@@ -469,6 +470,7 @@ const x = {
   "messaging.list": contract("x", "messaging.list", "R1", "capture-required", "current X Chat inbox events are encrypted and require the reviewed key-recovery runtime before plaintext listing"),
   "messaging.read": contract("x", "messaging.read", "R1", "capture-required", "current X Chat conversation events are encrypted and require verified key recovery before plaintext projection"),
   "articles.read": contract("x", "articles.read", "R1", "capture-required", "native article detail requires entitlement-specific reviewed capture"),
+  "articles.draft.save": contract("x", "articles.draft.save", "R2", "observed", "current Article entity create/title/content mutations save one response-bound private rich-text draft and never call ArticleEntityPublish"),
   "messaging.send": contract("x", "messaging.send", "R3", "capture-required", "DM send requires exact current mutation and target binding"),
   "posts.publish": contract("x", "posts.publish", "R3", "capture-required", "CreateTweet requires an authorized live fixture and reviewed transaction-header behavior"),
   "threads.publish": contract("x", "threads.publish", "R3", "capture-required", "ordered CreateTweet root/self-reply dispatch needs an authorized live fixture and reviewed transaction-header behavior"),
@@ -477,7 +479,7 @@ const x = {
   "posts.quote": contract("x", "posts.quote", "R3", "capture-required", "CreateTweet quote needs an authorized live fixture and reviewed transaction-header behavior"),
   "likes.set": contract("x", "likes.set", "R2", "observed", "current FavoriteTweet/UnfavoriteTweet desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback", 2),
   "content.save": contract("x", "content.save", "R2", "observed", "current CreateBookmark/DeleteBookmark desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback"),
-  "articles.publish": contract("x", "articles.publish", "R3", "observed", "current segmented media upload plus Article entity create/update mutations save one response-bound private rich draft and never call ArticleEntityPublish", 3),
+  "articles.publish": contract("x", "articles.publish", "R3", "capture-required", "ArticleEntityPublish and public readback remain outside the private draft contract", 4),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const reddit = {

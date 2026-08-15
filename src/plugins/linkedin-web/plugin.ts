@@ -2,6 +2,7 @@ import {
   defineProviderPlugin,
   lazyWebSessionRuntime,
 } from "../../provider-plugin";
+import { articleDraftDocumentIssues } from "../../article-draft-document";
 import {
   browserSessionAuthKinds,
   webSessionContractOperations,
@@ -14,6 +15,31 @@ if (linkedinContracts === undefined) {
   throw new Error("LinkedIn web-session contracts are not installed");
 }
 
+const operations = webSessionContractOperations(
+  Object.values(linkedinContracts),
+  "6e5e6c9616c8e4748b1a63e18a9f331f5b29d7368db072ab292346f7335c52df",
+  {},
+  {
+    "messaging.list": {
+      state: "unsupported",
+      reason: "LinkedIn web mailbox projection and paging remain capture-required",
+    },
+    "messaging.read": {
+      state: "unsupported",
+      reason: "LinkedIn web message variables and acknowledgement-free response handling remain capture-required",
+    },
+  },
+).map((operation) => operation.name === "articles.draft.save"
+  ? Object.freeze({
+      ...operation,
+      validateInput: (input: Readonly<Record<string, unknown>>) =>
+        articleDraftDocumentIssues(input.document, {
+          maximumBlocks: 5_000,
+          maximumCharacters: 125_000,
+        }),
+    })
+  : operation);
+
 export const linkedinWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "linkedin-web",
@@ -22,6 +48,7 @@ export const linkedinWebPlugin = defineProviderPlugin({
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
     ["kernel/browser.ts", "../../browser.ts"],
+    ["kernel/article-draft-document.ts", "../../article-draft-document.ts"],
     ["kernel/session-secrets.ts", "../../session-secrets.ts"],
     ["providers/linkedin-web.ts", "../../providers/linkedin-web.ts"],
     ["providers/linkedin-web-bootstrap.ts", "../../providers/linkedin-web-bootstrap.ts"],
@@ -33,21 +60,7 @@ export const linkedinWebPlugin = defineProviderPlugin({
     origin: "https://www.linkedin.com",
     protectedHostnameFamilies: ["linkedin.com"],
     authKinds: browserSessionAuthKinds,
-    operations: webSessionContractOperations(
-      Object.values(linkedinContracts),
-      "4c7603dd77900786b4aecb29296c8a2188ee6514ee0b64e0b076526eb4559c3f",
-      {},
-      {
-        "messaging.list": {
-          state: "unsupported",
-          reason: "LinkedIn web mailbox projection and paging remain capture-required",
-        },
-        "messaging.read": {
-          state: "unsupported",
-          reason: "LinkedIn web message variables and acknowledgement-free response handling remain capture-required",
-        },
-      },
-    ),
+    operations,
     subject: {
       format: "urn:li:fsd_profile:<numeric-id>",
       matches: (value) => /^urn:li:fsd_profile:[0-9]{1,32}$/u.test(value),

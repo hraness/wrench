@@ -1541,6 +1541,7 @@ describe("doctor authenticated API readiness", () => {
         adapters: [],
         observedOperations: [],
         captureRequiredOperations: [
+          "articles.draft.save",
           "articles.publish",
           "articles.read",
           "comments.create",
@@ -1568,7 +1569,7 @@ describe("doctor authenticated API readiness", () => {
         site: "x",
         adapters: ["x-web"],
         observedOperations: [
-          "articles.publish",
+          "articles.draft.save",
           "comments.read",
           "content.save",
           "feeds.read",
