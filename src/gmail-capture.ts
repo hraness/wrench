@@ -34,11 +34,11 @@ import {
   type WrenchAuth,
 } from "./auth";
 import {
-  loadOAuthToken,
   ProviderHttpClient,
   requireOAuthScopes,
   type ProviderFetch,
 } from "./provider-http";
+import { resolveOAuthToken } from "./oauth-google";
 import {
   buildGmailThreadUrl,
   createGmailApiClient,
@@ -942,6 +942,7 @@ function beginPrivateCapture(options: CaptureArguments, slug: string): CaptureBu
 async function captureGmailThread(
   options: CaptureArguments,
   auth: GmailOAuthAuth,
+  environment: Readonly<Record<string, string | undefined>>,
   dependencies: GmailCaptureDependencies,
 ): Promise<GmailCaptureOutcome> {
   const sourceUrl = validateCaptureOptions(options);
@@ -952,9 +953,14 @@ async function captureGmailThread(
   } catch (error) {
     throw publicFailure("capture target must be one exact Gmail thread URL", { cause: error });
   }
-  let token: ReturnType<typeof loadOAuthToken>;
+  let token: Awaited<ReturnType<typeof resolveOAuthToken>>;
   try {
-    token = loadOAuthToken(auth, new Date(), options.timeoutMs);
+    token = await resolveOAuthToken(auth, {
+      environment,
+      now: dependencies.now?.() ?? new Date(),
+      minimumValidityMs: options.timeoutMs,
+      ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
+    });
   } catch (error) {
     throw publicFailure("could not load a valid private Gmail OAuth token", { cause: error });
   }
@@ -1203,7 +1209,7 @@ function publicErrorMessage(error: unknown): string {
 export const runGmailCapture: GmailCaptureRunner = async (
   options,
   auth,
-  _environment,
+  environment,
   output,
   dependencies = {},
 ) => {
@@ -1212,7 +1218,7 @@ export const runGmailCapture: GmailCaptureRunner = async (
     if (!options.quiet && !options.json) {
       output.stderr("Capturing one Gmail thread through the official API ...\n");
     }
-    const outcome = await captureGmailThread(options, auth, dependencies);
+    const outcome = await captureGmailThread(options, auth, environment, dependencies);
     if (!options.json) {
       for (const warning of outcome.warnings) {
         output.stderr(`warning: ${sanitizeTerminalLine(warning)}\n`);

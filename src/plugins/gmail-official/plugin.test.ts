@@ -44,29 +44,36 @@ describe("Gmail official provider plugin", () => {
 
     const contacts = binding.operations.find((operation) =>
       operation.name === "contacts.list");
+    expect(contacts?.contractVersion).toBe(4);
     expect(contacts?.requiredScopeSets).toEqual([
       [
         "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
         "https://www.googleapis.com/auth/gmail.readonly",
       ],
       [
         "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
         "https://www.googleapis.com/auth/gmail.modify",
       ],
       [
         "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
         "https://mail.google.com/",
       ],
       [
         "https://www.googleapis.com/auth/contacts",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
         "https://www.googleapis.com/auth/gmail.readonly",
       ],
       [
         "https://www.googleapis.com/auth/contacts",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
         "https://www.googleapis.com/auth/gmail.modify",
       ],
       [
         "https://www.googleapis.com/auth/contacts",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
         "https://mail.google.com/",
       ],
     ]);
@@ -74,19 +81,35 @@ describe("Gmail official provider plugin", () => {
       minimum: 1,
       maximum: 100,
     });
+    expect(contacts?.input.properties.collection).toMatchObject({
+      enum: ["contacts", "other-contacts", "interactions"],
+    });
     expect(contacts?.input.properties.stats_scan_limit).toMatchObject({
       minimum: 1,
       maximum: 2_000,
     });
+    expect(contacts?.input.properties.include_stats).toMatchObject({
+      type: "boolean",
+    });
     expect(contacts?.coverage).toEqual([
       "contacts",
+      "other-contacts",
       "contact-metadata",
       "contact-email-addresses",
-      "sent-counts",
-      "received-counts",
-      "last-sent-at",
-      "last-received-at",
+      "optional-sent-counts",
+      "optional-received-counts",
+      "optional-last-sent-at",
+      "optional-last-received-at",
       "bounded-stat-completeness",
+      "messages-in-fixed-half-open-window",
+      "spam-and-trash-excluded",
+      "draft-and-chat-excluded",
+      "sent-and-received-message-counts",
+      "first-and-last-interaction-times",
+      "30-90-365-day-counts",
+      "per-direction-completeness",
+      "opaque-pagination-evidence",
+      "send-as-alias-exclusion",
     ]);
 
     const list = binding.operations.find((operation) =>

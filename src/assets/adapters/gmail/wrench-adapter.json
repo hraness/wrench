@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "id": "gmail",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "displayName": "Gmail (Official API)",
   "surfaceId": "gmail",
   "origins": [
@@ -14,28 +14,53 @@
   ],
   "operations": {
     "contacts.list": {
-      "description": "Use the code-owned official gmail API contract for contacts.list. subject-bound GET Google People API /v1/people/me/connections plus bounded per-contact and per-direction Gmail queries for sent and received statistics; complete, lower-bound, and truncated states are explicit",
+      "description": "Use the code-owned official gmail API contract for contacts.list. Select saved contacts, Other contacts, or a metadata-only Gmail interaction projection with explicit completeness and send-as alias exclusion",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
+          "collection": {
+            "type": "string",
+            "description": "Google contact projection; defaults to saved contacts",
+            "enum": [
+              "contacts",
+              "other-contacts",
+              "interactions"
+            ]
+          },
+          "after": {
+            "type": "string",
+            "description": "Optional inclusive whole-second UTC lower bound for incremental interactions",
+            "minLength": 24,
+            "maxLength": 24
+          },
+          "before": {
+            "type": "string",
+            "description": "Fixed whole-second UTC cutoff required only for the interactions projection",
+            "minLength": 24,
+            "maxLength": 24
+          },
           "cursor": {
             "type": "string",
-            "description": "Opaque Google People API next-page token",
+            "description": "Opaque Google People or Gmail API next-page token",
             "minLength": 1,
             "maxLength": 4096
           },
+          "include_stats": {
+            "type": "boolean",
+            "description": "Compute bounded sent and received Gmail statistics; defaults to true"
+          },
           "limit": {
             "type": "number",
-            "description": "Bounded contact count; defaults to 20",
+            "description": "Bounded page count; defaults to 20 for contacts and 100 for interactions",
             "minimum": 1,
             "maximum": 100
           },
           "stats_scan_limit": {
             "type": "number",
-            "description": "Maximum messages scanned per contact and direction for sent and received statistics; defaults to 100; limit multiplied by this value cannot exceed 2000",
+            "description": "Maximum messages scanned per contact and direction when include_stats is true; defaults to 100; limit multiplied by this value cannot exceed 2000",
             "minimum": 1,
             "maximum": 2000
           }
@@ -45,7 +70,7 @@
       "provider": {
         "provider": "gmail",
         "action": "contacts.list",
-        "contractVersion": 1,
+        "contractVersion": 4,
         "timeoutMs": 600000,
         "maxOutputBytes": 10485760
       }

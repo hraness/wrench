@@ -88,6 +88,8 @@ export type WrenchAuth =
       readonly provider: OAuthProvider;
       readonly path: string;
       readonly scopes: readonly string[];
+      /** The credential lifecycle and token file are owned by Wrench. */
+      readonly managed?: true;
       readonly subject?: string;
     }
   | {
@@ -116,6 +118,7 @@ export type AuthInput =
       readonly oauthProvider: OAuthProvider;
       readonly tokenFile: string;
       readonly scopes: readonly string[];
+      readonly managed?: true;
       readonly subject?: string;
     }
   | {
@@ -272,6 +275,7 @@ export function createAuth(id: string, input: AuthInput): WrenchAuth {
       provider: input.oauthProvider,
       path: resolve(input.tokenFile),
       scopes: normalizeOAuthScopes(input.scopes),
+      ...(input.managed === true ? { managed: true as const } : {}),
       ...(subject === undefined ? {} : { subject }),
     };
   }
@@ -630,6 +634,7 @@ export function parseAuth(value: unknown): WrenchAuth {
   }
   if (record.kind === "oauth-token-file") {
     const expected = ["schemaVersion", "id", "kind", "provider", "path", "scopes"];
+    if (record.managed !== undefined) expected.push("managed");
     if (record.subject !== undefined) expected.push("subject");
     if (!exactKeys(record, expected)) throw new Error("auth record has unsupported fields");
     if (!isProviderPluginSurfaceId(record.provider)) {
@@ -637,6 +642,9 @@ export function parseAuth(value: unknown): WrenchAuth {
     }
     if (!isSafeOAuthTokenPath(record.path) || !isAbsolute(record.path)) {
       throw new Error("auth record has an invalid or non-absolute OAuth token file path");
+    }
+    if (record.managed !== undefined && record.managed !== true) {
+      throw new Error("auth record has an invalid managed OAuth lifecycle marker");
     }
     const rawScopes = record.scopes;
     if (!Array.isArray(rawScopes) || !rawScopes.every((scope) => typeof scope === "string")) {
@@ -657,6 +665,7 @@ export function parseAuth(value: unknown): WrenchAuth {
       provider: record.provider,
       path: record.path,
       scopes,
+      ...(record.managed === true ? { managed: true as const } : {}),
       ...(subject === undefined ? {} : { subject }),
     };
   }
@@ -1028,6 +1037,30 @@ export function listAuth(environment: Readonly<Record<string, string | undefined
   });
 }
 
+function managedOAuthCredentialSnapshot(
+  auth: WrenchAuth,
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<{ path: string; contentSha256: string }> | null {
+  if (auth.kind !== "oauth-token-file" || auth.managed !== true) return null;
+  const expectedDirectory = join(wrenchStateHome(environment), "auth", "oauth-tokens");
+  if (
+    dirname(auth.path) !== expectedDirectory
+    || !new RegExp(`^${auth.id}-[0-9a-f-]{36}\\.json$`, "u").test(basename(auth.path))
+  ) throw new Error("managed OAuth credential path does not match its auth locator");
+  const content = readPrivateStateFileIfPresent(
+    auth.path,
+    64 * 1024,
+    "managed OAuth credential",
+    environment,
+  );
+  return content === null
+    ? null
+    : Object.freeze({
+        path: auth.path,
+        contentSha256: createHash("sha256").update(content, "utf8").digest("hex"),
+      });
+}
+
 export function removeAuth(id: string, environment: Readonly<Record<string, string | undefined>> = process.env): boolean {
   const path = authPath(id, environment);
   let current: AuthSnapshot | null;
@@ -1051,6 +1084,10 @@ export function removeAuth(id: string, environment: Readonly<Record<string, stri
       return false;
     });
   }
+  const managedCredential = managedOAuthCredentialSnapshot(
+    current.auth,
+    environment,
+  );
   return withLinkedDeviceAuthMutationAdmissions(
     current.auth,
     undefined,
@@ -1076,6 +1113,18 @@ export function removeAuth(id: string, environment: Readonly<Record<string, stri
       if (!removed) {
         throw new Error(
           `auth locator ${id} changed concurrently before removal`,
+        );
+      }
+      if (
+        managedCredential !== null
+        && !removePrivateStateFileIfUnchanged(
+          managedCredential.path,
+          { expectedCurrentContentSha256: managedCredential.contentSha256 },
+          environment,
+        )
+      ) {
+        throw new Error(
+          `managed OAuth credential for ${id} changed concurrently before removal`,
         );
       }
       return true;

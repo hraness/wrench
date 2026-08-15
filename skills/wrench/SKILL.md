@@ -12,6 +12,7 @@ Wrench supplies bounded CLI and SDK capabilities, not an agent runtime or applic
 - Capture a URL: `wrench <url>` or `wrench clip <url>`.
 - Read without persistence: `wrench read <url>`.
 - Archive media: `wrench archive <url>` or `wrench audio|video|transcript <url>`.
+- Discover supported article embeds through the provider's bounded semantic media read, then archive each exact returned finite item separately. Do not treat a collection page as one media item or scrape its DOM to manufacture asset routes.
 - Inspect support: `wrench plugin list`, `wrench plugin show <id>`, and `wrench capabilities [adapter]`.
 - Diagnose state: `wrench operator doctor --json`.
 - Invoke a supported semantic operation: `wrench invoke <adapter> <operation>` or its printed shorthand.
@@ -95,6 +96,27 @@ wrench auth list --json
 ```
 
 Use OAuth only for a reviewed `provider-api` plugin. Use browser cookies or a private profile only for a reviewed `web-session-api` plugin. Never silently switch transports. A profile snapshot requires the source browser to be closed and may require `--browser-executable` plus explicit `--trust-profile-egress` because a path-backed browser has no domain-containment boundary.
+
+For Gmail/Google Contacts, prefer managed native OAuth:
+
+```sh
+wrench auth login gmail-main --client-file /absolute/path/to/google-desktop-client.json
+```
+
+Wrench opens the system browser, uses PKCE plus a loopback callback, verifies
+the Gmail subject, stores the refresh credential and Desktop client fields in
+a mode-restricted local JSON file, and renews access tokens. This is not an OS
+keychain or encrypted-at-rest store. The user—not browser automation—handles
+Google sign-in, account choice, warnings, and consent. Tell them that
+`gmail.readonly` is a Google restricted mailbox-read grant even though the
+relationship contract fetches metadata only. Never ask the user to paste a
+token. Confirm `accountSubject` with a one-row live `contacts.list` read before
+syncing. Use `contacts.list` with collection
+`contacts`, `other-contacts`, or `interactions`; the last requires one fixed
+whole-second `before` cutoff, accepts the prior cutoff as an optional inclusive
+`after` bound for incremental reads, and exposes message-count/timestamp
+completeness plus first-page send-as aliases for self-address exclusion without
+reading bodies.
 
 Treat each auth ID as one stable provider account. Probe and bind the current account before private reads or writes; reject missing, ambiguous, changed, or mismatched identities. Keep tokens, cookies, HAR content, profile state, messages, and attachment paths out of output, logs, receipts, and Git.
 

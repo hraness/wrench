@@ -36,6 +36,15 @@ export type WrenchArguments =
       readonly json: boolean;
     }
   | { readonly command: "auth-list"; readonly json: boolean }
+  | {
+      readonly command: "auth-login";
+      readonly id: string;
+      readonly provider: "gmail";
+      readonly clientFile: string;
+      readonly openBrowser: boolean;
+      readonly force: boolean;
+      readonly json: boolean;
+    }
   | { readonly command: "auth-bind"; readonly id: string; readonly site: ProviderPluginSurfaceId; readonly force: boolean; readonly json: boolean }
   | { readonly command: "auth-pair"; readonly id: string; readonly phone?: string }
   | { readonly command: "auth-sync"; readonly id: string; readonly once: true; readonly json: boolean }
@@ -844,6 +853,40 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       const json = simpleJsonOptions(raw.slice(2), "auth list");
       return typeof json === "boolean" ? { ok: true, value: { command: "auth-list", json } } : json;
     }
+    if (subcommand === "login") {
+      const id = raw[2];
+      if (id === undefined) return { ok: false, message: "auth login requires an ID" };
+      const issue = validId(id, "auth ID");
+      if (issue !== null) return { ok: false, message: issue };
+      const parsed = optionValues(
+        raw.slice(3),
+        ["--provider", "--client-file"],
+        ["--no-open", "--force", "--json"],
+      );
+      if (isFailure(parsed)) return parsed;
+      if (
+        parsed.values["--provider"] !== undefined
+        && parsed.values["--provider"] !== "gmail"
+      ) {
+        return { ok: false, message: "auth login supports only --provider gmail" };
+      }
+      const clientFile = parsed.values["--client-file"];
+      if (clientFile === undefined || clientFile.length > 4_096) {
+        return { ok: false, message: "auth login requires --client-file <downloaded-desktop-client.json>" };
+      }
+      return {
+        ok: true,
+        value: {
+          command: "auth-login",
+          id,
+          provider: "gmail",
+          clientFile,
+          openBrowser: !parsed.booleans.has("--no-open"),
+          force: parsed.booleans.has("--force"),
+          json: parsed.booleans.has("--json"),
+        },
+      };
+    }
     if (subcommand === "add") {
       const id = raw[2];
       if (id === undefined) return { ok: false, message: "auth add requires an ID" };
@@ -1067,7 +1110,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       const parsed = optionValues(raw.slice(3), [], ["--yes"]);
       return isFailure(parsed) ? parsed : { ok: true, value: { command: "auth-remove", id, yes: parsed.booleans.has("--yes") } };
     }
-    return { ok: false, message: "auth requires list, add, pair, sync, bind, or remove" };
+    return { ok: false, message: "auth requires list, login, add, pair, sync, bind, or remove" };
   }
   if (first === "adapter") {
     const subcommand = raw[1];

@@ -529,6 +529,32 @@ describe("wrench CLI grammar", () => {
 
   test("parses secret-free auth locators and explicit removal", () => {
     expect(parseWrenchArguments([
+      "auth", "login", "gmail-main",
+      "--client-file", "/private/google-desktop-client.json",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "auth-login",
+        id: "gmail-main",
+        provider: "gmail",
+        clientFile: "/private/google-desktop-client.json",
+        openBrowser: true,
+        force: false,
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "auth", "login", "gmail-main",
+      "--provider", "gmail",
+      "--client-file", "/private/google-desktop-client.json",
+      "--no-open",
+      "--force",
+    ])).toMatchObject({
+      ok: true,
+      value: { openBrowser: false, force: true },
+    });
+    expect(parseWrenchArguments([
       "auth",
       "add",
       "linkedin",

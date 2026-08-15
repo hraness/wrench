@@ -9,12 +9,14 @@ import {
   createGmailApiClient,
   fetchGmailAttachmentBytes,
   fetchGmailContacts,
+  fetchGmailMessageInteractionMetadata,
   fetchGmailMessageList,
   fetchGmailMessageMetadata,
   fetchGmailThread,
   fetchGmailThreadList,
   fetchGmailThreadMetadata,
   getAuthenticatedGmailProfile,
+  listGmailSendAsAliases,
   parseGmailThread,
   parseGmailThreadUrl,
   resolveGmailAttachmentBytes,
@@ -182,6 +184,35 @@ describe("official Gmail API helpers", () => {
     );
   });
 
+  test("lists only bounded canonical send-as aliases under the mailbox read grant", async () => {
+    const requests: URL[] = [];
+    const api = client(input => {
+      requests.push(urlOf(input));
+      return Promise.resolve(json({
+        sendAs: [
+          { sendAsEmail: "person@example.com" },
+          { sendAsEmail: "Alias@Example.com", verificationStatus: "pending" },
+        ],
+      }));
+    });
+    expect(await listGmailSendAsAliases(api)).toEqual([
+      "alias@example.com",
+      "person@example.com",
+    ]);
+    expect(requests[0]?.pathname)
+      .toBe("/gmail/v1/users/me/settings/sendAs");
+    expect(requests[0]?.searchParams.get("fields"))
+      .toBe("sendAs(sendAsEmail,verificationStatus)");
+
+    const missingSubject = client(() => Promise.resolve(json({
+      sendAs: [{ sendAsEmail: "alias@example.com", verificationStatus: "accepted" }],
+    })));
+    await expectRejected(
+      listGmailSendAsAliases(missingSubject),
+      "does not contain the authenticated subject",
+    );
+  });
+
   test("pins exact Gmail partial-response masks without classification labels", async () => {
     const requests: URL[] = [];
     const api = client((input) => {
@@ -213,6 +244,7 @@ describe("official Gmail API helpers", () => {
     await fetchGmailThread(api, "thread_1");
     await fetchGmailThreadMetadata(api, "thread_1");
     await fetchGmailMessageMetadata(api, "message_1");
+    await fetchGmailMessageInteractionMetadata(api, "message_1");
     await fetchGmailAttachmentBytes(api, "message_1", "attachment_1");
 
     const fields = requests.map((url) => url.searchParams.get("fields"));
@@ -222,8 +254,145 @@ describe("official Gmail API helpers", () => {
     expect(fields[2]).toBe(`id,snippet,historyId,messages(${messageFields})`);
     expect(fields[3]).toBe(fields[2]);
     expect(fields[4]).toBe(messageFields);
-    expect(fields[5]).toBe("attachmentId,size,data");
+    expect(fields[5]).toBe("id,threadId,labelIds,internalDate,payload(headers(name,value))");
+    expect(fields[6]).toBe("attachmentId,size,data");
     expect(fields.every((value) => !value?.includes("classificationLabelValues"))).toBeTrue();
+  });
+
+  test("requests only address headers for contact interaction metadata", async () => {
+    const requests: URL[] = [];
+    const api = client((input) => {
+      requests.push(urlOf(input));
+      return Promise.resolve(json({
+        id: "message_1",
+        threadId: "thread_1",
+        labelIds: ["SENT"],
+        internalDate: "1785888000000",
+        payload: {
+          headers: [
+            { name: "From", value: "person@example.com" },
+            { name: "To", value: "friend@example.com" },
+          ],
+        },
+      }));
+    });
+
+    await expect(fetchGmailMessageInteractionMetadata(api, "message_1"))
+      .resolves.toMatchObject({
+        id: "message_1",
+        threadId: "thread_1",
+        from: "person@example.com",
+        to: "friend@example.com",
+      });
+
+    const request = requests[0];
+    if (request === undefined) throw new Error("expected one interaction metadata request");
+    expect(request.searchParams.get("format")).toBe("metadata");
+    expect(request.searchParams.get("fields"))
+      .toBe("id,threadId,labelIds,internalDate,payload(headers(name,value))");
+    expect(request.searchParams.getAll("metadataHeaders"))
+      .toEqual(["From", "To", "Cc", "Bcc"]);
+    expect(request.searchParams.getAll("metadataHeaders")).not.toContain("Subject");
+    expect(request.searchParams.getAll("metadataHeaders")).not.toContain("Date");
+    expect(request.searchParams.getAll("metadataHeaders")).not.toContain("Message-ID");
+    expect(request.searchParams.getAll("metadataHeaders")).not.toContain("In-Reply-To");
+  });
+
+  test("combines repeated destination headers only for interaction metadata", async () => {
+    const api = client(() => Promise.resolve(json({
+      id: "message_1",
+      threadId: "thread_1",
+      labelIds: ["SENT"],
+      internalDate: "1785888000000",
+      payload: {
+        headers: [
+          { name: "From", value: "person@example.com" },
+          { name: "To", value: "first@example.com" },
+          { name: "to", value: "second@example.com" },
+          { name: "Cc", value: "third@example.com" },
+          { name: "CC", value: "fourth@example.com" },
+        ],
+      },
+    })));
+
+    await expect(fetchGmailMessageInteractionMetadata(api, "message_1"))
+      .resolves.toMatchObject({
+        from: "person@example.com",
+        to: "first@example.com, second@example.com",
+        cc: "third@example.com, fourth@example.com",
+      });
+
+    const duplicateFrom = client(() => Promise.resolve(json({
+      id: "message_1",
+      payload: { headers: [
+        { name: "From", value: "first@example.com" },
+        { name: "from", value: "second@example.com" },
+      ] },
+    })));
+    await expectRejected(
+      fetchGmailMessageInteractionMetadata(duplicateFrom, "message_1"),
+      "headers.from must not be duplicated",
+    );
+
+    const unexpected = client(() => Promise.resolve(json({
+      id: "message_1",
+      payload: { headers: [{ name: "Subject", value: "not requested" }] },
+    })));
+    await expectRejected(
+      fetchGmailMessageInteractionMetadata(unexpected, "message_1"),
+      "is outside the reviewed interaction projection",
+    );
+  });
+
+  test("omits tainted interaction address values without weakening ordinary parsing", async () => {
+    const metadata = (value: unknown) => client(() => Promise.resolve(json({
+      id: "message_1",
+      labelIds: ["SENT"],
+      payload: { headers: [
+        { name: "From", value: "person@example.com" },
+        { name: "To", value },
+        { name: "Cc", value: "safe@example.com" },
+      ] },
+    })));
+    for (const value of [
+      "tainted\u0000@example.com",
+      "a".repeat(64 * 1024 + 1),
+      "\ud800",
+    ]) {
+      await expect(fetchGmailMessageInteractionMetadata(metadata(value), "message_1"))
+        .resolves.toMatchObject({
+        from: "person@example.com",
+        to: null,
+        cc: "safe@example.com",
+      });
+    }
+
+    await expectRejected(
+      fetchGmailMessageInteractionMetadata(metadata(42), "message_1"),
+      "must be bounded text without unsafe controls",
+    );
+
+    const invalidName = client(() => Promise.resolve(json({
+      id: "message_1",
+      payload: { headers: [{ name: "T\u0000o", value: "person@example.com" }] },
+    })));
+    await expectRejected(
+      fetchGmailMessageInteractionMetadata(invalidName, "message_1"),
+      "must be bounded text without unsafe controls",
+    );
+
+    expect(() => parseGmailThread({
+      id: "thread_1",
+      messages: [{
+        id: "message_1",
+        payload: {
+          partId: "",
+          mimeType: "application/octet-stream",
+          filename: "",
+          headers: [{ name: "To", value: "tainted\u0000@example.com" }],
+        },
+      }],
+    })).toThrow("must be bounded text without unsafe controls");
   });
 
   test("parses copied mailbox, label, category, and search URLs into a stable thread target", () => {
@@ -819,7 +988,11 @@ describe("official Gmail API helpers", () => {
         }],
       }));
     });
-    const page = await fetchGmailContacts(api, { limit: 25, pageToken: null });
+    const page = await fetchGmailContacts(api, {
+      collection: "contacts",
+      limit: 25,
+      pageToken: null,
+    });
     expect(page.contacts[0]).toMatchObject({
       resourceName: "people/c123",
       etag: "person-etag",
@@ -864,7 +1037,7 @@ describe("official Gmail API helpers", () => {
             totalItems: 2,
           }
         : { responses }));
-    }), { limit: 2, pageToken: null });
+    }), { collection: "contacts", limit: 2, pageToken: null });
 
     const reordered = await run([{
       requestedResourceName: "people/c2",
@@ -912,7 +1085,11 @@ describe("official Gmail API helpers", () => {
 
     await expectRejected(fetchGmailContacts(client(() => {
       throw new Error("an over-limit request must not dispatch");
-    }), { limit: 201, pageToken: null }), "integer from 1 through 200");
+    }), {
+      collection: "contacts",
+      limit: 201,
+      pageToken: null,
+    }), "integer from 1 through 200");
   });
 
   test("rejects calendar-invalid People timestamps", async () => {
@@ -933,9 +1110,94 @@ describe("official Gmail API helpers", () => {
       }] }));
     });
     await expectRejected(
-      fetchGmailContacts(api, { limit: 1, pageToken: null }),
+      fetchGmailContacts(api, {
+        collection: "contacts",
+        limit: 1,
+        pageToken: null,
+      }),
       "valid UTC calendar date and time",
     );
+  });
+
+  test("lists Other contacts directly with their limited People projection", async () => {
+    const requests: URL[] = [];
+    const api = client((input) => {
+      const url = urlOf(input);
+      requests.push(url);
+      return Promise.resolve(json({
+        otherContacts: [{
+          resourceName: "otherContacts/c123",
+          etag: "other-etag",
+          metadata: {
+            sources: [{
+              type: "OTHER_CONTACT",
+              id: "other-source-1",
+              updateTime: "2026-08-13T20:00:00Z",
+            }],
+          },
+          names: [{ displayName: "Other Friend" }],
+          emailAddresses: [{ value: "other.friend@example.com" }],
+          phoneNumbers: [{ value: "+1 787 555 0100" }],
+          photos: [{
+            url: "https://lh3.googleusercontent.com/plain-photo",
+            default: false,
+          }],
+        }],
+        nextPageToken: "other-page-2",
+        totalSize: 300,
+      }));
+    });
+    const page = await fetchGmailContacts(api, {
+      collection: "other-contacts",
+      limit: 100,
+      pageToken: "other-page-1",
+    });
+    expect(page).toMatchObject({
+      contacts: [{
+        resourceName: "otherContacts/c123",
+        displayName: "Other Friend",
+        emailAddresses: [{
+          value: "other.friend@example.com",
+          canonicalValue: "other.friend@example.com",
+        }],
+        organizations: [],
+      }],
+      nextPageToken: "other-page-2",
+      totalItems: 300,
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.pathname).toBe("/v1/otherContacts");
+    expect(requests[0]?.searchParams.get("pageSize")).toBe("100");
+    expect(requests[0]?.searchParams.get("pageToken")).toBe("other-page-1");
+    expect(requests[0]?.searchParams.get("readMask"))
+      .toBe("metadata,names,emailAddresses,phoneNumbers,photos");
+    expect(requests[0]?.searchParams.get("sources"))
+      .toBe("READ_SOURCE_TYPE_CONTACT");
+    expect(requests[0]?.searchParams.get("fields"))
+      .toContain("otherContacts(resourceName,etag,metadata");
+    expect(requests[0]?.searchParams.get("fields")).not.toContain("organizations");
+  });
+
+  test("rejects widened or mismatched Other contacts pages", async () => {
+    const run = (body: unknown) => fetchGmailContacts(client(() =>
+      Promise.resolve(json(body))), {
+      collection: "other-contacts",
+      limit: 10,
+      pageToken: null,
+    });
+    await expectRejected(run({
+      otherContacts: [{ resourceName: "people/not-an-other-contact" }],
+    }), "must identify an Other contact");
+    await expectRejected(run({
+      otherContacts: [
+        { resourceName: "otherContacts/duplicate" },
+        { resourceName: "otherContacts/duplicate" },
+      ],
+    }), "contains duplicate resource names");
+    await expectRejected(run({
+      otherContacts: [],
+      nextSyncToken: "unrequested-sync-token",
+    }), "contains unreviewed property nextSyncToken");
   });
 
   test("rejects response shape widening and MIME size ambiguity", () => {

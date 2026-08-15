@@ -130,6 +130,10 @@ import {
 import { reconcileWebSessionRun } from "./web-session-recovery";
 import { loadOAuthToken, requireOAuthScopes } from "./provider-http";
 import {
+  installManagedGoogleOAuth,
+  loginGoogleOAuth,
+} from "./oauth-google";
+import {
   compositionNames,
   platformSurfaceIds,
   semanticOperationNames,
@@ -1589,6 +1593,48 @@ async function runCommand(
       dependencies.providerPluginRegistry,
     );
   }
+  if (arguments_.command === "auth-login") {
+    const login = await loginGoogleOAuth({
+      clientFile: resolve(arguments_.clientFile),
+      openBrowser: arguments_.openBrowser,
+      onAuthorizationUrl: (url) => {
+        output.stderr(
+          `Approve Google access in your system browser. If it did not open, use this one-time URL:\n${safe(url)}\n`,
+        );
+      },
+      ...(signal === undefined ? {} : { signal }),
+    });
+    const installed = installManagedGoogleOAuth(
+      arguments_.id,
+      login,
+      environment,
+      arguments_.force ? { force: true } : {},
+    );
+    const result = {
+      ok: true,
+      id: installed.auth.id,
+      provider: installed.auth.provider,
+      subject: installed.auth.subject,
+      scopes: installed.auth.scopes,
+      renewal: "automatic",
+      refreshExpiresAt: login.refreshTokenExpiresAt,
+    } as const;
+    // This bounded view contains intentionally exposed, validated auth metadata
+    // and no credential or token-file fields. Keep its public scope identifiers
+    // exact instead of passing them through the generic URL credential redactor.
+    if (arguments_.json) output.stdout(exactTerminalJson(result));
+    else {
+      output.stdout(
+        `Connected ${safe(login.subject)} as ${safe(arguments_.id)}. Wrench will renew Google access automatically.\n`,
+      );
+    }
+    if (login.refreshTokenExpiresAt !== null) {
+      output.stderr(
+        `Google made this refresh credential time-limited until ${safe(login.refreshTokenExpiresAt)}. Publish the personal OAuth app to production and repeat with --force for durable renewal.\n`,
+      );
+    }
+    return 0;
+  }
   if (arguments_.command === "auth-list") {
     const values = listAuth(environment).map((auth) => ({
       id: auth.id,
@@ -1604,12 +1650,14 @@ async function runCommand(
       ...(auth.kind === "oauth-token-file" ? {
         provider: auth.provider,
         scopes: auth.scopes,
+        managed: auth.managed === true,
       } : {}),
       ...(auth.kind === "linked-device-store" ? {
         provider: auth.provider,
       } : {}),
     }));
-    print(output, arguments_.json ? { ok: true, auth: values } : values, arguments_.json);
+    if (arguments_.json) output.stdout(exactTerminalJson({ ok: true, auth: values }));
+    else print(output, values, false);
     return 0;
   }
   if (arguments_.command === "auth-bind") {
@@ -1832,7 +1880,7 @@ async function runCommand(
   if (arguments_.command === "auth-remove") {
     if (!arguments_.yes) {
       throw new Error(
-        "auth remove requires --yes; this removes the locator and Wrench-owned session/projection caches, not browser or provider credentials",
+        "auth remove requires --yes; this removes the locator, any Wrench-managed OAuth credential, and local caches, but does not revoke browser or provider-side grants",
       );
     }
     const removed = removeAuth(arguments_.id, environment);

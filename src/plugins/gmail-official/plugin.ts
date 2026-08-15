@@ -42,7 +42,7 @@ const runtime = lazyProviderApiRuntime(async () => {
 export const gmailOfficialPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "gmail-official",
-  version: "1.0.0",
+  version: "1.2.0",
   displayName: "Gmail Official API",
   sourceKind: "built-in",
   implementationSources,
@@ -68,7 +68,7 @@ export const gmailOfficialPlugin = defineProviderPlugin({
     operations: officialContractOperations(
       Object.values(providerContractDefinitions.gmail),
       {
-        semanticIdentity: "d4e6ebcf19a3558604f96a0da1b2da55280b611e0e3d5acede161b090280dc0a",
+        semanticIdentity: "48c6afcb50558029ca0822b84bc91a9fc5a27f02ccf138db535a38f4f3353ddf",
         validateInput: (contract, input) =>
           gmailProviderConditionalInputIssues(contract.operation, input),
         omni: {

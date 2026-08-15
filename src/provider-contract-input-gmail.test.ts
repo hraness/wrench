@@ -59,6 +59,54 @@ describe("Gmail provider conditional input", () => {
       limit: 1,
       stats_scan_limit: 2_000,
     })).toEqual([]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      include_stats: false,
+      limit: 100,
+    })).toEqual([]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      include_stats: false,
+      stats_scan_limit: 1,
+    })).toContain(
+      "input.stats_scan_limit is accepted only when include_stats is true",
+    );
+  });
+
+  test("enforces the three exact Google contact projection shapes", () => {
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "contacts",
+      limit: 20,
+      stats_scan_limit: 100,
+    })).toEqual([]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "other-contacts",
+      limit: 20,
+      stats_scan_limit: 100,
+    })).toEqual([]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "interactions",
+      before: "2026-08-14T12:00:00.000Z",
+      limit: 100,
+    })).toEqual([]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "interactions",
+      include_stats: false,
+    })).toEqual([
+      "input.include_stats is not accepted for the interactions collection",
+      "input.before is required for the interactions collection",
+    ]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "contacts",
+      before: "2026-08-14T12:00:00.000Z",
+    })).toContain("input.before is accepted only for the interactions collection");
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "contacts",
+      after: "2026-08-14T11:00:00.000Z",
+    })).toContain("input.after is accepted only for the interactions collection");
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "interactions",
+      after: "2026-08-14T12:00:00.000Z",
+      before: "2026-08-14T12:00:00.000Z",
+    })).toContain("input.after must precede input.before");
   });
 
   test("accepts only exact bounded Gmail thread IDs", () => {
