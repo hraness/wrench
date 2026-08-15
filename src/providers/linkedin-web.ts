@@ -1,3 +1,9 @@
+import type {
+  ArticleDraftDocument,
+  ArticleDraftLinkRange,
+  ArticleDraftTextBlock,
+} from "../article-draft-document";
+
 const MAX_CSRF_TOKEN_CHARACTERS = 1_024;
 const MAX_QUERY_CANDIDATES = 4_096;
 const MAX_QUERY_CANDIDATE_CHARACTERS = 512;
@@ -188,7 +194,7 @@ export const LINKEDIN_WEB_OPERATIONS = {
   "articles.draft.save": {
     effect: "write",
     risk: "R2",
-    state: "capture-required",
+    state: "observed",
     evidence: "live-har",
     requests: [],
   },
@@ -633,6 +639,345 @@ export function linkedInMailboxUrnFromMiniProfile(value: unknown): string {
   const suffix = /^urn:li:fs_miniProfile:([A-Za-z0-9_-]{1,256})$/u.exec(miniProfile)?.[1];
   if (suffix === undefined) throw new Error("LinkedIn normalized mini-profile URN is invalid");
   return `urn:li:fsd_profile:${suffix}`;
+}
+
+export const LINKEDIN_FIRST_PARTY_ARTICLES_PATH =
+  "/voyager/api/voyagerPublishingDashFirstPartyArticles";
+
+const LINKEDIN_ARTICLE_TYPE = "com.linkedin.voyager.dash.publishing.FirstPartyArticle";
+const LINKEDIN_TEXT_BLOCK_TYPE = "com.linkedin.voyager.dash.publishing.TextBlock";
+const LINKEDIN_TEXT_VIEW_MODEL_TYPE = "com.linkedin.voyager.dash.common.text.TextViewModel";
+const LINKEDIN_TEXT_ATTRIBUTE_TYPE = "com.linkedin.voyager.dash.common.text.TextAttribute";
+
+export type LinkedInArticleDraftReadback = {
+  readonly draftId: string;
+  readonly title: string;
+  readonly document: ArticleDraftDocument;
+  readonly profileUrn: string;
+};
+
+function exactObjectKeys(
+  value: Readonly<Record<string, unknown>>,
+  expected: readonly string[],
+  label: string,
+): void {
+  if (Object.keys(value).sort().join(",") !== [...expected].sort().join(",")) {
+    throw new Error(`${label} has unsupported fields`);
+  }
+}
+
+export function linkedInArticleDraftId(value: unknown, label = "LinkedIn Article draft ID"): string {
+  if (typeof value !== "string" || !/^[0-9]{1,32}$/u.test(value)) {
+    throw new Error(`${label} must be one exact 1-32 digit private LinkedIn Article ID`);
+  }
+  return value;
+}
+
+export function linkedInArticleDraftUrn(value: unknown): string {
+  return `urn:li:fsd_firstPartyArticle:${linkedInArticleDraftId(value)}`;
+}
+
+function linkedInArticleProfileUrn(value: unknown): string {
+  if (
+    typeof value !== "string"
+    || value.length > 512
+    || !/^urn:li:fsd_profile:[A-Za-z0-9_-]{1,256}$/u.test(value)
+  ) throw new Error("LinkedIn Article profile URN is invalid");
+  return value;
+}
+
+export function linkedInArticleDraftReadUrl(value: unknown): URL {
+  const urn = linkedInArticleDraftUrn(value);
+  const url = new URL(LINKEDIN_FIRST_PARTY_ARTICLES_PATH, "https://www.linkedin.com");
+  url.searchParams.set("articleUrn", urn);
+  url.searchParams.set("q", "articleUrn");
+  return url;
+}
+
+export function linkedInArticleDraftEntityUrl(value: unknown): URL {
+  const urn = linkedInArticleDraftUrn(value);
+  return new URL(
+    `${LINKEDIN_FIRST_PARTY_ARTICLES_PATH}/${encodeURIComponent(urn)}`,
+    "https://www.linkedin.com",
+  );
+}
+
+function linkedInArticleBlockType(type: ArticleDraftTextBlock["type"]): string {
+  if (type === "paragraph") return "PARAGRAPH";
+  if (type === "heading1") return "HEADING_1";
+  if (type === "heading2") return "HEADING_2";
+  throw new Error(
+    "LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks",
+  );
+}
+
+function linkedInArticleDocumentBlockType(value: unknown, label: string): ArticleDraftTextBlock["type"] {
+  if (value === "PARAGRAPH") return "paragraph";
+  if (value === "HEADING_1") return "heading1";
+  if (value === "HEADING_2") return "heading2";
+  throw new Error(`${label} has an unsupported LinkedIn Article text-block type`);
+}
+
+function linkedInArticleAttribute(link: ArticleDraftLinkRange): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    $type: LINKEDIN_TEXT_ATTRIBUTE_TYPE,
+    detailDataUnion: Object.freeze({ hyperlink: link.url }),
+    length: link.length,
+    start: link.offset,
+  });
+}
+
+/** Project the reviewed text/headings/native-link subset into LinkedIn's Article model. */
+export function buildLinkedInArticleContent(
+  document: ArticleDraftDocument,
+): readonly Readonly<Record<string, unknown>>[] {
+  return Object.freeze(document.blocks.map((block) => {
+    if (block.styles.length !== 0) {
+      throw new Error("LinkedIn Article text styles remain capture-required");
+    }
+    return Object.freeze({
+      textBlock: Object.freeze({
+        $type: LINKEDIN_TEXT_BLOCK_TYPE,
+        content: Object.freeze({
+          $type: LINKEDIN_TEXT_VIEW_MODEL_TYPE,
+          attributesV2: Object.freeze(block.links.map(linkedInArticleAttribute)),
+          text: block.text,
+        }),
+        type: linkedInArticleBlockType(block.type),
+      }),
+    });
+  }));
+}
+
+export function buildLinkedInArticleCreateBody(
+  profileUrnValue: unknown,
+  titleValue: unknown,
+): Readonly<Record<string, unknown>> {
+  const profileUrn = linkedInArticleProfileUrn(profileUrnValue);
+  if (
+    typeof titleValue !== "string"
+    || titleValue.length < 1
+    || titleValue.length > 150
+    || /[\0\r\n]/u.test(titleValue)
+  ) throw new Error("input.title must be one bounded plain-text line");
+  return Object.freeze({
+    authors: Object.freeze([Object.freeze({ profileUrn })]),
+    contentHtml: null,
+    state: null,
+    title: titleValue,
+  });
+}
+
+export function buildLinkedInArticleTitlePatch(titleValue: unknown): Readonly<Record<string, unknown>> {
+  const title = buildLinkedInArticleCreateBody("urn:li:fsd_profile:fixture", titleValue).title;
+  return Object.freeze({ patch: Object.freeze({ $set: Object.freeze({ state: null, title }) }) });
+}
+
+export function buildLinkedInArticleContentPatch(
+  document: ArticleDraftDocument,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    patch: Object.freeze({
+      $set: Object.freeze({
+        content: buildLinkedInArticleContent(document),
+        state: null,
+      }),
+    }),
+  });
+}
+
+function normalizeLinkedInArticleLink(
+  value: unknown,
+  text: string,
+  label: string,
+): ArticleDraftLinkRange {
+  const attribute = graphqlRecord(value, label);
+  exactObjectKeys(attribute, ["$type", "detailDataUnion", "length", "start"], label);
+  if (attribute.$type !== LINKEDIN_TEXT_ATTRIBUTE_TYPE) {
+    throw new Error(`${label} changed its reviewed LinkedIn text-attribute type`);
+  }
+  const detail = graphqlRecord(attribute.detailDataUnion, `${label}.detailDataUnion`);
+  exactObjectKeys(detail, ["hyperlink"], `${label}.detailDataUnion`);
+  const start = attribute.start;
+  const length = attribute.length;
+  if (
+    !Number.isSafeInteger(start)
+    || !Number.isSafeInteger(length)
+    || (start as number) < 0
+    || (length as number) < 1
+    || (start as number) + (length as number) > text.length
+  ) throw new Error(`${label} escaped its LinkedIn Article text`);
+  const hyperlink = boundedText(detail.hyperlink, `${label}.hyperlink`, 8_192);
+  let parsed: URL;
+  try {
+    parsed = new URL(hyperlink);
+  } catch {
+    throw new Error(`${label}.hyperlink is not an absolute HTTPS URL`);
+  }
+  if (
+    parsed.protocol !== "https:"
+    || parsed.username !== ""
+    || parsed.password !== ""
+    || parsed.href !== hyperlink
+  ) throw new Error(`${label}.hyperlink is not one canonical absolute HTTPS URL`);
+  return Object.freeze({ offset: start as number, length: length as number, url: hyperlink });
+}
+
+function normalizeLinkedInArticleBlock(value: unknown, index: number): ArticleDraftTextBlock {
+  const label = `LinkedIn Article content[${index}]`;
+  const wrapper = graphqlRecord(value, label);
+  exactObjectKeys(wrapper, ["textBlock"], label);
+  const textBlock = graphqlRecord(wrapper.textBlock, `${label}.textBlock`);
+  exactObjectKeys(textBlock, ["$type", "content", "type"], `${label}.textBlock`);
+  if (textBlock.$type !== LINKEDIN_TEXT_BLOCK_TYPE) {
+    throw new Error(`${label}.textBlock changed its reviewed type`);
+  }
+  const content = graphqlRecord(textBlock.content, `${label}.textBlock.content`);
+  exactObjectKeys(content, ["$type", "attributesV2", "text"], `${label}.textBlock.content`);
+  if (content.$type !== LINKEDIN_TEXT_VIEW_MODEL_TYPE) {
+    throw new Error(`${label}.textBlock.content changed its reviewed type`);
+  }
+  if (typeof content.text !== "string" || /[\0\r\n]/u.test(content.text)) {
+    throw new Error(`${label}.textBlock.content.text must be one bounded line`);
+  }
+  if (!Array.isArray(content.attributesV2) || content.attributesV2.length > 500) {
+    throw new Error(`${label}.textBlock.content.attributesV2 exceeded its reviewed bound`);
+  }
+  const links = content.attributesV2.map((attribute, linkIndex) =>
+    normalizeLinkedInArticleLink(
+      attribute,
+      content.text as string,
+      `${label}.textBlock.content.attributesV2[${linkIndex}]`,
+    ));
+  let linkEnd = 0;
+  for (const link of links) {
+    if (link.offset < linkEnd) throw new Error(`${label} links must be ordered and non-overlapping`);
+    linkEnd = link.offset + link.length;
+  }
+  return Object.freeze({
+    type: linkedInArticleDocumentBlockType(textBlock.type, `${label}.textBlock.type`),
+    text: content.text,
+    links: Object.freeze(links),
+    styles: Object.freeze([]),
+  });
+}
+
+function normalizeLinkedInArticleDraftValue(
+  value: unknown,
+  draftIdValue: unknown,
+  profileUrnValue: unknown,
+  allowEmptyContent: boolean,
+): Omit<LinkedInArticleDraftReadback, "document"> & { readonly document: ArticleDraftDocument | null } {
+  const draftId = linkedInArticleDraftId(draftIdValue);
+  const profileUrn = linkedInArticleProfileUrn(profileUrnValue);
+  const urn = linkedInArticleDraftUrn(draftId);
+  const normalized = normalizeLinkedInGraphqlEnvelope(value);
+  exactObjectKeys(normalized.data, ["*elements"], "LinkedIn Article response.data");
+  if (
+    !Array.isArray(normalized.data["*elements"])
+    || normalized.data["*elements"].length !== 1
+    || normalized.data["*elements"][0] !== urn
+  ) throw new Error("LinkedIn Article readback did not select the exact draft");
+  const article = normalized.entitiesByUrn.get(urn);
+  if (article === undefined) throw new Error("LinkedIn Article readback omitted the exact draft entity");
+  exactObjectKeys(article, [
+    "$type",
+    "activityUrn",
+    "articleType",
+    "authors",
+    "content",
+    "contentHtml",
+    "createdAt",
+    "entityUrn",
+    "linkedInArticleUrn",
+    "permalink",
+    "publishedAt",
+    "state",
+    "title",
+    "ugcPostUrn",
+    "updatedAt",
+    "version",
+  ], "LinkedIn Article readback entity");
+  if (
+    article.$type !== LINKEDIN_ARTICLE_TYPE
+    || article.entityUrn !== urn
+    || article.linkedInArticleUrn !== `urn:li:linkedInArticle:${draftId}`
+    || article.state !== "DRAFT"
+    || article.articleType !== "FIRST_PARTY_ARTICLE"
+    || article.activityUrn !== null
+    || article.publishedAt !== null
+    || article.ugcPostUrn !== null
+    || article.permalink !== null
+  ) throw new Error("LinkedIn Article readback was not the exact private unpublished draft");
+  if (!Array.isArray(article.authors) || article.authors.length !== 1) {
+    throw new Error("LinkedIn Article readback did not bind one exact author");
+  }
+  const author = graphqlRecord(article.authors[0], "LinkedIn Article readback author");
+  exactObjectKeys(author, ["profileUrn"], "LinkedIn Article readback author");
+  if (author.profileUrn !== profileUrn) {
+    throw new Error("LinkedIn Article readback author no longer matches the current member");
+  }
+  const title = boundedText(article.title, "LinkedIn Article readback title", 150);
+  if (
+    (article.contentHtml !== null && (typeof article.contentHtml !== "string" || article.contentHtml.length > 524_288))
+    || !Array.isArray(article.content)
+    || (!allowEmptyContent && article.content.length < 1)
+    || article.content.length > 5_000
+  ) throw new Error("LinkedIn Article readback content exceeded its reviewed bounds");
+  nonnegativeInteger(article.createdAt, "LinkedIn Article readback createdAt");
+  nonnegativeInteger(article.updatedAt, "LinkedIn Article readback updatedAt");
+  nonnegativeInteger(article.version, "LinkedIn Article readback version");
+  const blocks = article.content.map(normalizeLinkedInArticleBlock);
+  return Object.freeze({
+    draftId,
+    title,
+    profileUrn,
+    document: blocks.length === 0
+      ? null
+      : Object.freeze({ schemaVersion: 1, blocks: Object.freeze(blocks) }),
+  });
+}
+
+/** Normalize the exact owner/private/title binding of a newly created empty draft. */
+export function normalizeLinkedInArticleDraftMetadata(
+  value: unknown,
+  draftIdValue: unknown,
+  profileUrnValue: unknown,
+): Readonly<Omit<LinkedInArticleDraftReadback, "document">> {
+  const normalized = normalizeLinkedInArticleDraftValue(
+    value,
+    draftIdValue,
+    profileUrnValue,
+    true,
+  );
+  return Object.freeze({
+    draftId: normalized.draftId,
+    profileUrn: normalized.profileUrn,
+    title: normalized.title,
+  });
+}
+
+/** Normalize one exact owner-bound, unpublished native Article readback. */
+export function normalizeLinkedInArticleDraft(
+  value: unknown,
+  draftIdValue: unknown,
+  profileUrnValue: unknown,
+): LinkedInArticleDraftReadback {
+  const normalized = normalizeLinkedInArticleDraftValue(
+    value,
+    draftIdValue,
+    profileUrnValue,
+    false,
+  );
+  if (normalized.document === null) {
+    throw new Error("LinkedIn Article readback omitted its confirmed document");
+  }
+  return Object.freeze({
+    draftId: normalized.draftId,
+    profileUrn: normalized.profileUrn,
+    title: normalized.title,
+    document: normalized.document,
+  });
 }
 
 export function linkedInMessengerConversationsUrl(

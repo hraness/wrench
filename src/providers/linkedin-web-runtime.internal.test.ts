@@ -4,15 +4,23 @@ import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
 import type { WrenchAuth } from "../auth";
 import type { WebSessionRecipe } from "../model";
+import { canonicalJson } from "../canonical-json";
+import {
+  buildLinkedInArticleContent,
+} from "./linkedin-web";
+import { parseArticleDraftDocument } from "../article-draft-document";
 import {
   executeLinkedInWebOperation,
   probeLinkedInWebSubject,
+  readLinkedInWebArticleDraftDesiredState,
   type LinkedInWebRuntimeDependencies,
 } from "./linkedin-web-runtime";
 
 const MEMBER_ID = "123456789";
 const MEMBER_URN = `urn:li:fsd_profile:${MEMBER_ID}`;
 const MINI_PROFILE_URN = "urn:li:fs_miniProfile:ACoAAExactCurrentProfile";
+const ARTICLE_PROFILE_URN = "urn:li:fsd_profile:ACoAAExactCurrentProfile";
+const ARTICLE_ID = "7000000000000000001";
 
 const linkedinAuth = {
   schemaVersion: 1,
@@ -97,6 +105,43 @@ function jsonResponse(value: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/vnd.linkedin.normalized+json+2.1; charset=utf-8" },
   });
+}
+
+function currentIdentityResponse(): unknown {
+  return {
+    data: { plainId: MEMBER_ID, miniProfile: MINI_PROFILE_URN },
+    included: [{
+      entityUrn: MINI_PROFILE_URN,
+      objectUrn: `urn:li:member:${MEMBER_ID}`,
+    }],
+  };
+}
+
+function articleResponse(
+  title: string,
+  content: readonly Readonly<Record<string, unknown>>[],
+): unknown {
+  return {
+    data: { "*elements": [`urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`] },
+    included: [{
+      $type: "com.linkedin.voyager.dash.publishing.FirstPartyArticle",
+      activityUrn: null,
+      articleType: "FIRST_PARTY_ARTICLE",
+      authors: [{ profileUrn: ARTICLE_PROFILE_URN }],
+      content,
+      contentHtml: null,
+      createdAt: 1,
+      entityUrn: `urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`,
+      linkedInArticleUrn: `urn:li:linkedInArticle:${ARTICLE_ID}`,
+      permalink: null,
+      publishedAt: null,
+      state: "DRAFT",
+      title,
+      ugcPostUrn: null,
+      updatedAt: 2,
+      version: 3,
+    }],
+  };
 }
 
 function articleRecipe(): WebSessionRecipe {
@@ -591,7 +636,204 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     }
   });
 
-  test("refuses every direct execution boundary before any dependency or callback can run", async () => {
+  test("creates one private linked Article draft, verifies exact unpublished readback, and never publishes", async () => {
+    const title = "Private fixture";
+    const documentValue = canonicalJson({
+      schemaVersion: 1,
+      blocks: [
+        { type: "heading1", text: "Harnessing Puerto Rico" },
+        {
+          type: "paragraph",
+          text: "Read the source",
+          links: [{ offset: 9, length: 6, url: "https://example.com/source" }],
+        },
+      ],
+    });
+    const document = parseArticleDraftDocument(documentValue, {
+      maximumBlocks: 5_000,
+      maximumCharacters: 125_000,
+    });
+    const expectedContent = buildLinkedInArticleContent(document);
+    const calls: CapturedRequest[] = [];
+    let contentSaved = false;
+    const dispatches: string[] = [];
+    const result = await executeLinkedInWebOperation(
+      articleRecipe(),
+      { title, document: documentValue },
+      linkedinAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.pathname === "/voyager/api/me") {
+            return jsonResponse(currentIdentityResponse());
+          }
+          if (
+            request.url.pathname === "/voyager/api/voyagerPublishingDashFirstPartyArticles/"
+            && request.method === "POST"
+          ) {
+            expect(JSON.parse(request.body ?? "null")).toEqual({
+              authors: [{ profileUrn: ARTICLE_PROFILE_URN }],
+              contentHtml: null,
+              state: null,
+              title,
+            });
+            return new Response(null, {
+              status: 201,
+              headers: { "x-restli-id": `urn:li:fsd_firstPartyArticle:${ARTICLE_ID}` },
+            });
+          }
+          if (
+            request.url.pathname === "/voyager/api/voyagerPublishingDashFirstPartyArticles"
+            && request.method === "GET"
+          ) {
+            expect([...request.url.searchParams.entries()]).toEqual([
+              ["articleUrn", `urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`],
+              ["q", "articleUrn"],
+            ]);
+            return jsonResponse(articleResponse(title, contentSaved ? expectedContent : []));
+          }
+          if (
+            request.url.pathname.endsWith(encodeURIComponent(`urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`))
+            && request.method === "POST"
+          ) {
+            expect(request.headers.get("x-restli-method")).toBe("PARTIAL_UPDATE");
+            expect(JSON.parse(request.body ?? "null")).toEqual({
+              patch: { $set: { content: expectedContent, state: null } },
+            });
+            contentSaved = true;
+            return new Response(null, { status: 200 });
+          }
+          throw new Error(`unexpected test request ${request.method} ${request.url.pathname}`);
+        }),
+        beforeDispatch: (event) => {
+          dispatches.push(`start:${event.id}`);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          dispatches.push(`verified:${event.id}`);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalUrl: `https://www.linkedin.com/article/edit/${ARTICLE_ID}/`,
+      dispatchStarted: true,
+      dispatch: { planned: 2, started: 2, verified: 2 },
+      output: {
+        provider: "linkedin",
+        operation: "articles.draft.save",
+        published: false,
+        draftId: ARTICLE_ID,
+        title,
+      },
+    });
+    expect(dispatches).toEqual([
+      "start:articles.create",
+      "verified:articles.create",
+      "start:articles.content",
+      "verified:articles.content",
+    ]);
+    expect(calls.some((call) => /(?:^|\/)(?:publish|share)(?:\/|$)/iu.test(call.url.pathname))).toBeFalse();
+  });
+
+  test("replaces one exact private draft in place and reconciles only from unpublished readback", async () => {
+    let title = "Old private title";
+    let document = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "paragraph", text: "Old body" }],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+    const nextTitle = "Updated private title";
+    const nextDocumentValue = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "paragraph", text: "Updated linked body", links: [{
+        offset: 8,
+        length: 6,
+        url: "https://example.com/updated",
+      }] }],
+    });
+    const nextDocument = parseArticleDraftDocument(nextDocumentValue, {
+      maximumBlocks: 5_000,
+      maximumCharacters: 125_000,
+    });
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.pathname === "/voyager/api/me") return jsonResponse(currentIdentityResponse());
+      if (request.method === "GET") {
+        return jsonResponse(articleResponse(title, buildLinkedInArticleContent(document)));
+      }
+      const body = JSON.parse(request.body ?? "null") as {
+        patch: { $set: { title?: string; content?: readonly Readonly<Record<string, unknown>>[] } };
+      };
+      if (body.patch.$set.title !== undefined) title = body.patch.$set.title;
+      if (body.patch.$set.content !== undefined) document = nextDocument;
+      return new Response(null, { status: 200 });
+    });
+    const input = {
+      title: nextTitle,
+      document: nextDocumentValue,
+      draft_id: ARTICLE_ID,
+    };
+    const dispatches: string[] = [];
+    const result = await executeLinkedInWebOperation(articleRecipe(), input, linkedinAuth, {
+      dependencies: runtimeDependencies,
+      beforeDispatch: (event) => {
+        dispatches.push(`start:${event.id}`);
+        return Promise.resolve();
+      },
+      afterDispatchVerified: (event) => {
+        dispatches.push(`verified:${event.id}`);
+        return Promise.resolve();
+      },
+    });
+    expect(result).toMatchObject({
+      status: "succeeded",
+      dispatch: { planned: 2, started: 2, verified: 2 },
+      output: { draftId: ARTICLE_ID, published: false, title: nextTitle },
+    });
+    expect(dispatches).toEqual([
+      "start:articles.title",
+      "verified:articles.title",
+      "start:articles.content",
+      "verified:articles.content",
+    ]);
+    expect(await readLinkedInWebArticleDraftDesiredState(
+      articleRecipe(),
+      input,
+      linkedinAuth,
+      { dependencies: runtimeDependencies },
+    )).toEqual({ draftId: ARTICLE_ID, matches: true });
+  });
+
+  test("keeps an accepted create without a stable response ID indeterminate and never retries", async () => {
+    const document = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "paragraph", text: "Uncertain private body" }],
+    });
+    const calls: CapturedRequest[] = [];
+    const result = await executeLinkedInWebOperation(
+      articleRecipe(),
+      { title: "Uncertain private title", document },
+      linkedinAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.pathname === "/voyager/api/me") {
+            return jsonResponse(currentIdentityResponse());
+          }
+          return new Response(null, { status: 201 });
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      finalUrl: null,
+      dispatchStarted: true,
+      dispatch: { planned: 2, started: 1, verified: 0 },
+      error: expect.stringContaining("do not retry"),
+    });
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+  });
+
+  test("keeps ungraduated direct execution boundaries inert before dependencies or callbacks", async () => {
     const calls: string[] = [];
     const runtimeDependencies: LinkedInWebRuntimeDependencies = {
       acquireCookies: () => {
@@ -637,21 +879,13 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       },
     } as const;
 
-    for (const [recipe, input] of [
-      [messagingListRecipe(), { folder: "focused", limit: 10 }],
-      [articleRecipe(), {
-        title: "Private fixture",
-        document: "{\"blocks\":[{\"text\":\"private fixture\",\"type\":\"paragraph\"}],\"schemaVersion\":1}",
-      }],
-    ] as const) {
-      const message = await rejectionMessage(executeLinkedInWebOperation(
-        recipe,
-        input,
-        linkedinAuth,
-        options,
-      ));
-      expect(message).toContain("LinkedIn authenticated web operations are capture-required");
-    }
+    const message = await rejectionMessage(executeLinkedInWebOperation(
+      messagingListRecipe(),
+      { folder: "focused", limit: 10 },
+      linkedinAuth,
+      options,
+    ));
+    expect(message).toContain("LinkedIn authenticated web operations are capture-required");
     expect(calls).toEqual([]);
   });
 });

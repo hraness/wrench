@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.5.0",
+  "version": "1.4.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -713,7 +713,7 @@
       }
     },
     "articles.draft.save": {
-      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 1 using the reviewed current-member-bound title/content autosave and exact unpublished readback contract.",
+      "description": "Capture-required reservation: create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 1 after the autosave and exact unpublished readback exchanges are captured and response-bound.",
       "risk": "R2",
       "sideEffect": "Creates one private native LinkedIn Article draft, or replaces the exact confirmed existing private draft; it never publishes the draft.",
       "idempotency": "local-at-most-once",
@@ -728,7 +728,7 @@
           },
           "document": {
             "type": "string",
-            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 1; this reviewed LinkedIn contract supports bounded paragraphs, H1/H2 headings, and native HTTPS links",
+            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 1; supports bounded paragraphs, headings, lists, blockquotes, native HTTPS links, and text styles",
             "minLength": 1,
             "maxLength": 524288
           },

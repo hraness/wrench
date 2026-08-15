@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { canonicalJson } from "../canonical-json";
+import { parseArticleDraftDocument } from "../article-draft-document";
 
 import {
   LINKEDIN_MESSENGER_CONVERSATIONS_OBSERVED_QUERY_ID,
@@ -7,12 +9,19 @@ import {
   LINKEDIN_WEB_OPERATION_NAMES,
   RESTLI_V2_VALUE_LIMITS,
   assertLinkedInWebR1RequestAllowed,
+  buildLinkedInArticleContent,
+  buildLinkedInArticleContentPatch,
+  buildLinkedInArticleCreateBody,
+  buildLinkedInArticleTitlePatch,
   encodeRestliV2Value,
   linkedInCsrfTokenFromJSessionId,
+  linkedInArticleDraftEntityUrl,
+  linkedInArticleDraftReadUrl,
   linkedInMailboxUrnFromMiniProfile,
   linkedInMessengerConversationsUrl,
   linkedInWebFolderCategory,
   normalizeLinkedInGraphqlEnvelope,
+  normalizeLinkedInArticleDraft,
   normalizeLinkedInMessagingList,
   resolveLinkedInRegisteredQueryId,
 } from "./linkedin-web";
@@ -59,10 +68,10 @@ describe("LinkedIn internal-web operation registry", () => {
     }
   });
 
-  test("keeps every LinkedIn consumer-web operation capture-required", () => {
+  test("graduates only private native Article draft saving", () => {
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
-      expect(contract.state).toBe("capture-required");
+      expect(contract.state).toBe(operation === "articles.draft.save" ? "observed" : "capture-required");
       expect(contract.requests).toHaveLength(0);
     }
     expect(LINKEDIN_WEB_OPERATIONS["reactions.set"].risk).toBe("R2");
@@ -408,9 +417,9 @@ describe("LinkedIn R1 internal-request gate", () => {
   test("keeps every consumer-web read capture-required with no executable request rule", () => {
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
-      expect(contract.state).toBe("capture-required");
       expect(contract.requests).toHaveLength(0);
       if (contract.risk !== "R1" || contract.effect !== "read") continue;
+      expect(contract.state).toBe("capture-required");
       expect(() => assertLinkedInWebR1RequestAllowed(operation, {
         method: "GET",
         url: "https://www.linkedin.com/voyager/api/graphql?variables=private",
@@ -432,6 +441,88 @@ describe("LinkedIn R1 internal-request gate", () => {
     expect(() => assertLinkedInWebR1RequestAllowed("unknown.operation", {
       secret: "must-not-be-reflected",
     })).toThrow("LinkedIn web operation is unknown");
+  });
+});
+
+describe("LinkedIn native Article draft contract", () => {
+  const draftId = "7000000000000000001";
+  const profileUrn = "urn:li:fsd_profile:ACoAAExactCurrentProfile";
+  const title = "Exact private draft";
+  const document = parseArticleDraftDocument(canonicalJson({
+    schemaVersion: 1,
+    blocks: [
+      { type: "heading1", text: "Harnessing Puerto Rico" },
+      {
+        type: "paragraph",
+        text: "Read the source",
+        links: [{ offset: 9, length: 6, url: "https://example.com/source" }],
+      },
+    ],
+  }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+
+  test("builds only the observed create, title, content, and exact-read routes", () => {
+    expect(buildLinkedInArticleCreateBody(profileUrn, title)).toEqual({
+      authors: [{ profileUrn }],
+      contentHtml: null,
+      state: null,
+      title,
+    });
+    expect(buildLinkedInArticleTitlePatch(title)).toEqual({
+      patch: { $set: { state: null, title } },
+    });
+    expect(buildLinkedInArticleContentPatch(document)).toEqual({
+      patch: { $set: { content: buildLinkedInArticleContent(document), state: null } },
+    });
+    expect(linkedInArticleDraftEntityUrl(draftId).pathname).toBe(
+      `/voyager/api/voyagerPublishingDashFirstPartyArticles/${encodeURIComponent(`urn:li:fsd_firstPartyArticle:${draftId}`)}`,
+    );
+    const readUrl = linkedInArticleDraftReadUrl(draftId);
+    expect([...readUrl.searchParams.entries()]).toEqual([
+      ["articleUrn", `urn:li:fsd_firstPartyArticle:${draftId}`],
+      ["q", "articleUrn"],
+    ]);
+  });
+
+  test("normalizes one exact current-author private readback with native links", () => {
+    const content = buildLinkedInArticleContent(document);
+    expect(normalizeLinkedInArticleDraft({
+      data: { "*elements": [`urn:li:fsd_firstPartyArticle:${draftId}`] },
+      included: [{
+        $type: "com.linkedin.voyager.dash.publishing.FirstPartyArticle",
+        activityUrn: null,
+        articleType: "FIRST_PARTY_ARTICLE",
+        authors: [{ profileUrn }],
+        content,
+        contentHtml: null,
+        createdAt: 1,
+        entityUrn: `urn:li:fsd_firstPartyArticle:${draftId}`,
+        linkedInArticleUrn: `urn:li:linkedInArticle:${draftId}`,
+        permalink: null,
+        publishedAt: null,
+        state: "DRAFT",
+        title,
+        ugcPostUrn: null,
+        updatedAt: 2,
+        version: 3,
+      }],
+    }, draftId, profileUrn)).toEqual({ draftId, profileUrn, title, document });
+  });
+
+  test("rejects unsupported styles, blocks, author drift, and published state", () => {
+    const styleDocument = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: 1,
+      blocks: [{
+        type: "paragraph",
+        text: "bold",
+        styles: [{ offset: 0, length: 4, style: "bold" }],
+      }],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+    expect(() => buildLinkedInArticleContent(styleDocument)).toThrow("styles remain capture-required");
+    const listDocument = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "ordered-list-item", text: "one" }],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+    expect(() => buildLinkedInArticleContent(listDocument)).toThrow("currently support only");
   });
 });
 

@@ -989,7 +989,7 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.4.0");
+    expect(current.value.version).toBe("1.5.0");
     const draft = current.value.operations["articles.draft.save"];
     expect(draft !== undefined && isWebSessionOperation(draft)).toBeTrue();
     if (draft === undefined || !isWebSessionOperation(draft)) return;
@@ -1000,6 +1000,18 @@ describe("wrench manifest parsing", () => {
     });
     expect(draft.input.required).toEqual(["title", "document"]);
     expect(draft.input.properties.cover_image).toBeUndefined();
+
+    const capturedReservationValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.4.0.json"),
+      "utf8",
+    )) as unknown;
+    const capturedReservation = parseDiagnosticManifest(capturedReservationValue);
+    expect(capturedReservation.ok).toBeTrue();
+    if (!capturedReservation.ok) return;
+    expect(capturedReservation.value.version).toBe("1.4.0");
+    expect(capturedReservation.value.operations["articles.draft.save"]?.description).toContain(
+      "Capture-required reservation",
+    );
 
     const publish = current.value.operations["articles.publish"];
     expect(publish !== undefined && isWebSessionOperation(publish)).toBeTrue();

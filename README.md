@@ -61,10 +61,10 @@ owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
-Pin the public repository to the immutable `v0.8.0` tag:
+Pin the public repository to the immutable `v0.9.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.8.0
+bun add --global github:hraness/wrench#v0.9.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -88,7 +88,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.8.0
+bun add github:hraness/wrench#v0.9.0
 ```
 
 ```ts
@@ -396,7 +396,7 @@ The current provider state is explicit:
 | --- | --- | --- |
 | `x` | Observed R2 response-bound private draft create through the documented OAuth API | Observed R3 response-bound publication through the documented OAuth API |
 | `x-web` | Observed R2 private draft save | Capture-required R3 |
-| `linkedin-web` | Capture-required R2; the latest editor capture lacked exact API response projection | Capture-required R3 |
+| `linkedin-web` | Observed R2 paragraphs/headings/native-link private draft save with exact unpublished readback | Capture-required R3 |
 
 The `x-web` draft operation accepts a title, a canonical provider-neutral
 `ArticleDraftDocument` schemaVersion 1 string, and an optional exact existing
@@ -444,11 +444,13 @@ not call `articles.publish` as recovery. Signed-in X replacements with an exact
 input draft ID can use read-only reconciliation; an indeterminate create cannot
 be safely targeted and must remain unsettled.
 
-LinkedIn draft saving remains inert: it performs no request until a managed
-capture proves the exact current-member-bound editor autosave, stable draft
-identity, and independent unpublished readback. See the packaged [native
-article draft workflow](skills/wrench/references/article-drafts.md) for the
-shared document grammar and safety sequence.
+Signed-in LinkedIn now exposes the same private R2 seam through
+`linkedin-web articles.draft.save`. The observed contract supports paragraphs,
+H1/H2 headings, and native HTTPS links; it creates or replaces only one bound
+private draft and independently verifies the exact unpublished result. Covers,
+inline media, lists, blockquotes, styles, and publication remain unavailable.
+See the packaged [native article draft workflow](skills/wrench/references/article-drafts.md)
+for the shared document grammar and safety sequence.
 
 ## Normalized omni views
 
@@ -546,7 +548,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.8.0/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.9.0/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary.
 
 ## Risk and confirmation
