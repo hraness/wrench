@@ -768,6 +768,158 @@ code:not(pre code) {
   color: var(--dark-foreground);
 }
 
+.guide-main {
+  margin-inline: auto;
+  max-width: 100rem;
+  padding: 0 var(--page-inline) var(--section-block);
+}
+
+.breadcrumbs {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.76rem;
+  padding: 1.25rem 0;
+}
+
+.breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.breadcrumbs li + li::before {
+  color: var(--line);
+  content: "/";
+  margin-right: 0.55rem;
+}
+
+.guide-article {
+  margin-inline: auto;
+  max-width: 72rem;
+}
+
+.guide-hero {
+  padding: clamp(4.5rem, 10vw, 8rem) 0 clamp(3.5rem, 8vw, 6rem);
+}
+
+.guide-hero h1 {
+  font-size: clamp(2.8rem, 7vw, 6.6rem);
+  font-weight: 840;
+  letter-spacing: -0.075em;
+  line-height: 0.94;
+  margin: 0;
+  max-width: 64rem;
+  text-wrap: balance;
+}
+
+.answer-lede {
+  color: var(--foreground);
+  font-size: clamp(1.16rem, 2.2vw, 1.55rem);
+  letter-spacing: -0.025em;
+  line-height: 1.55;
+  margin: 2rem 0 0;
+  max-width: 61rem;
+  text-wrap: pretty;
+}
+
+.review-note {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 1.5rem 0 0;
+  max-width: 52rem;
+}
+
+.guide-article > section {
+  border-top: 1px solid var(--line);
+  padding: clamp(3rem, 7vw, 5.5rem) 0;
+}
+
+.guide-article > section > :not(.table-scroll, .command-panel) {
+  max-width: 54rem;
+}
+
+.guide-article h2,
+.guide-callout h2 {
+  font-size: clamp(1.8rem, 4.2vw, 3.5rem);
+  font-weight: 810;
+  letter-spacing: -0.06em;
+  line-height: 1;
+  margin: 0 0 1.6rem;
+  text-wrap: balance;
+}
+
+.guide-article section > p,
+.guide-callout p,
+.guide-list,
+.guide-steps {
+  color: var(--muted);
+  font-size: clamp(1rem, 1.3vw, 1.1rem);
+  line-height: 1.72;
+}
+
+.guide-article section > p {
+  margin: 1.1rem 0 0;
+}
+
+.guide-article .command-panel {
+  margin: 1.75rem 0;
+}
+
+.guide-list,
+.guide-steps {
+  display: grid;
+  gap: 0.85rem;
+  margin-block: 1.5rem;
+  padding-left: 1.35rem;
+}
+
+.guide-callout {
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--surface-raised) 94%, transparent), color-mix(in srgb, var(--accent-soft) 38%, var(--surface)));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  margin-top: clamp(2rem, 6vw, 5rem);
+  padding: clamp(1.75rem, 5vw, 3.5rem);
+}
+
+.guide-callout p {
+  margin: 0;
+  max-width: 52rem;
+}
+
+.guide-footer {
+  margin-top: 0;
+}
+
+.guide-cluster .card {
+  min-height: 0;
+}
+
+.guide-cluster .card h3 a {
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.provider-table table {
+  min-width: 70rem;
+}
+
+.provider-table tbody th {
+  width: 14%;
+}
+
+.provider-table td {
+  width: 28.66%;
+}
+
+.security-levels {
+  margin: 1.75rem 0;
+  max-width: 50rem;
+}
+
 .route-state {
   align-content: center;
   display: grid;
@@ -843,6 +995,24 @@ code:not(pre code) {
 @media (max-width: 45rem) {
   .topbar nav a:not(:last-child) {
     display: none;
+  }
+
+  .guide-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .guide-topbar nav {
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+    width: 100%;
+  }
+
+  .guide-topbar nav a,
+  .guide-topbar nav a:not(:last-child) {
+    display: block;
+    flex: 0 0 auto;
   }
 
   .hero {

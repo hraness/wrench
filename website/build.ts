@@ -14,8 +14,61 @@ export const SITE_TITLE = "Wrench: precise web capabilities for AI agents" as co
 export const SITE_DESCRIPTION =
   "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations." as const;
 export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
-export const UPDATED_AT = "2026-08-14" as const;
+export const PUBLISHER_URL = "https://github.com/hraness" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.9.0" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
+
+export const PUBLIC_PAGES = [
+  {
+    canonicalPath: "/",
+    description: SITE_DESCRIPTION,
+    outputFile: "index.html",
+    sourceFile: "index.html",
+    title: SITE_TITLE,
+  },
+  {
+    canonicalPath: "/getting-started/",
+    description:
+      "Install Wrench with Bun, verify local readiness, capture a first URL, and inspect the exact capabilities available on your machine.",
+    outputFile: "getting-started/index.html",
+    sourceFile: "getting-started.html",
+    title: "Install Wrench: CLI and TypeScript SDK getting started guide",
+  },
+  {
+    canonicalPath: "/capture-and-archives/",
+    description:
+      "Capture public URLs as Markdown and preserve one authorized media item with manifests, transcripts, provenance, and SHA-256 verification.",
+    outputFile: "capture-and-archives/index.html",
+    sourceFile: "capture-and-archives.html",
+    title: "Capture URLs and create verified media archives with Wrench",
+  },
+  {
+    canonicalPath: "/provider-capabilities/",
+    description:
+      "See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.",
+    outputFile: "provider-capabilities/index.html",
+    sourceFile: "provider-capabilities.html",
+    title: "Wrench provider capabilities for contacts, email, and messages",
+  },
+  {
+    canonicalPath: "/security/",
+    description:
+      "Understand Wrench local custody, encrypted snapshots, exact account binding, fail-closed provider contracts, risk levels, and mutation recovery.",
+    outputFile: "security/index.html",
+    sourceFile: "security.html",
+    title: "Wrench security: local custody and bounded provider contracts",
+  },
+  {
+    canonicalPath: "/plugins/",
+    description:
+      "Create, statically check, test, reproducibly pack, trust, and install a content-addressed Wrench provider plugin without weakening the kernel boundary.",
+    outputFile: "plugins/index.html",
+    sourceFile: "plugins.html",
+    title: "Author and verify Wrench provider plugins",
+  },
+] as const;
+
+export type PublicPage = (typeof PUBLIC_PAGES)[number];
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(websiteRoot, "..");
@@ -99,90 +152,168 @@ function replaceRequired(template: string, placeholder: string, value: string): 
   return template.replaceAll(placeholder, value);
 }
 
-function jsonLd(identity: PackageIdentity): Readonly<Record<string, unknown>> {
+function sharedJsonLd(identity: PackageIdentity): ReadonlyArray<Readonly<Record<string, unknown>>> {
+  return [
+    {
+      "@id": `${SITE_ORIGIN}/#organization`,
+      "@type": "Organization",
+      name: "Hraness",
+      sameAs: [PUBLISHER_URL],
+      url: PUBLISHER_URL,
+    },
+    {
+      "@id": `${SITE_ORIGIN}/#website`,
+      "@type": "WebSite",
+      description: SITE_DESCRIPTION,
+      inLanguage: "en",
+      name: "Wrench",
+      publisher: { "@id": `${SITE_ORIGIN}/#organization` },
+      url: `${SITE_ORIGIN}/`,
+    },
+    {
+      "@id": `${SITE_ORIGIN}/#software`,
+      "@type": "SoftwareApplication",
+      applicationCategory: "DeveloperApplication",
+      author: { "@id": `${SITE_ORIGIN}/#organization` },
+      description: SITE_DESCRIPTION,
+      featureList: [
+        "Durable Markdown page capture",
+        "Verified finite-item media archives",
+        "Encrypted exact-query read snapshots",
+        "Typed and bounded provider operations",
+        "Fail-closed provider contract drift",
+      ],
+      installUrl: `${SITE_ORIGIN}/getting-started/`,
+      isAccessibleForFree: true,
+      license: "https://opensource.org/license/mit",
+      name: "Wrench",
+      offers: {
+        "@type": "Offer",
+        availability: "https://schema.org/InStock",
+        price: 0,
+        priceCurrency: "USD",
+      },
+      operatingSystem: ["macOS", "Linux"],
+      publisher: { "@id": `${SITE_ORIGIN}/#organization` },
+      sameAs: [REPOSITORY_URL],
+      softwareRequirements: "Bun 1.3.14 on macOS or Linux",
+      softwareVersion: identity.version,
+      url: `${SITE_ORIGIN}/`,
+    },
+    {
+      "@id": `${SITE_ORIGIN}/#source`,
+      "@type": "SoftwareSourceCode",
+      codeRepository: REPOSITORY_URL,
+      license: "https://opensource.org/license/mit",
+      name: "Wrench source code",
+      programmingLanguage: {
+        "@type": "ComputerLanguage",
+        name: "TypeScript",
+      },
+      runtimePlatform: "Bun 1.3.14",
+      targetProduct: { "@id": `${SITE_ORIGIN}/#software` },
+      version: identity.version,
+    },
+  ];
+}
+
+function jsonLd(identity: PackageIdentity, page: PublicPage): Readonly<Record<string, unknown>> {
+  const url = `${SITE_ORIGIN}${page.canonicalPath}`;
+  const pageId = `${url}#webpage`;
+  const isHome = page.canonicalPath === "/";
+  const pageGraph: Array<Readonly<Record<string, unknown>>> = [
+    {
+      "@id": pageId,
+      "@type": "WebPage",
+      breadcrumb: isHome ? undefined : { "@id": `${url}#breadcrumb` },
+      description: page.description,
+      inLanguage: "en",
+      isPartOf: { "@id": `${SITE_ORIGIN}/#website` },
+      mainEntity: { "@id": isHome ? `${SITE_ORIGIN}/#software` : `${url}#article` },
+      name: page.title,
+      url,
+    },
+  ];
+
+  if (!isHome) {
+    pageGraph.push(
+      {
+        "@id": `${url}#article`,
+        "@type": "TechArticle",
+        about: { "@id": `${SITE_ORIGIN}/#software` },
+        author: { "@id": `${SITE_ORIGIN}/#organization` },
+        description: page.description,
+        headline: page.title,
+        inLanguage: "en",
+        isPartOf: { "@id": `${SITE_ORIGIN}/#website` },
+        mainEntityOfPage: { "@id": pageId },
+        publisher: { "@id": `${SITE_ORIGIN}/#organization` },
+      },
+      {
+        "@id": `${url}#breadcrumb`,
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          {
+            "@type": "ListItem",
+            item: `${SITE_ORIGIN}/`,
+            name: "Wrench",
+            position: 1,
+          },
+          {
+            "@type": "ListItem",
+            item: url,
+            name: page.title,
+            position: 2,
+          },
+        ],
+      },
+    );
+  }
+
   return {
     "@context": "https://schema.org",
-    "@graph": [
-      {
-        "@id": `${SITE_ORIGIN}/#website`,
-        "@type": "WebSite",
-        description: SITE_DESCRIPTION,
-        name: "Wrench",
-        url: `${SITE_ORIGIN}/`,
-      },
-      {
-        "@id": `${SITE_ORIGIN}/#webpage`,
-        "@type": "WebPage",
-        description: SITE_DESCRIPTION,
-        isPartOf: { "@id": `${SITE_ORIGIN}/#website` },
-        mainEntity: { "@id": `${SITE_ORIGIN}/#software` },
-        name: SITE_TITLE,
-        url: `${SITE_ORIGIN}/`,
-      },
-      {
-        "@id": `${SITE_ORIGIN}/#software`,
-        "@type": "SoftwareApplication",
-        applicationCategory: "DeveloperApplication",
-        description: SITE_DESCRIPTION,
-        featureList: [
-          "Durable Markdown page capture",
-          "Verified finite-item media archives",
-          "Encrypted exact-query read snapshots",
-          "Typed and bounded provider operations",
-          "Fail-closed provider contract drift",
-        ],
-        installUrl: `${SITE_ORIGIN}/#start`,
-        isAccessibleForFree: true,
-        license: "https://opensource.org/license/mit",
-        name: "Wrench",
-        offers: {
-          "@type": "Offer",
-          availability: "https://schema.org/InStock",
-          price: 0,
-          priceCurrency: "USD",
-        },
-        operatingSystem: ["macOS", "Linux"],
-        sameAs: [REPOSITORY_URL],
-        softwareRequirements: "Bun 1.3.14 on macOS or Linux",
-        softwareVersion: identity.version,
-        url: `${SITE_ORIGIN}/`,
-      },
-      {
-        "@id": `${SITE_ORIGIN}/#source`,
-        "@type": "SoftwareSourceCode",
-        codeRepository: REPOSITORY_URL,
-        license: "https://opensource.org/license/mit",
-        name: "Wrench source code",
-        programmingLanguage: {
-          "@type": "ComputerLanguage",
-          name: "TypeScript",
-        },
-        runtimePlatform: "Bun 1.3.14",
-        targetProduct: { "@id": `${SITE_ORIGIN}/#software` },
-        version: identity.version,
-      },
-    ],
+    "@graph": [...sharedJsonLd(identity), ...pageGraph],
   };
 }
 
-export function renderIndex(template: string, options: RenderOptions): string {
+function renderTemplate(
+  template: string,
+  options: RenderOptions,
+  page?: PublicPage,
+): string {
   const { packageIdentity: identity } = options;
   const installCommand = `bun add --global github:hraness/wrench#${identity.release}`;
-  const structuredData = JSON.stringify(jsonLd(identity)).replaceAll("<", "\\u003c");
   let rendered = template;
   rendered = replaceRequired(rendered, "{{ANALYTICS_ASSET}}", escapeHtml(options.analyticsAsset));
   rendered = replaceRequired(rendered, "{{CSS_ASSET}}", escapeHtml(options.cssAsset));
-  rendered = replaceRequired(rendered, "{{JSON_LD}}", structuredData);
+  if (page) {
+    const structuredData = JSON.stringify(jsonLd(identity, page)).replaceAll("<", "\\u003c");
+    rendered = replaceRequired(rendered, "{{JSON_LD}}", structuredData);
+  } else if (rendered.includes("{{JSON_LD}}")) {
+    throw new Error("A non-indexable page must not include structured data.");
+  }
   rendered = replaceRequired(rendered, "{{POSTHOG_HOST}}", escapeHtml(options.postHogHost));
   rendered = replaceRequired(rendered, "{{POSTHOG_KEY}}", escapeHtml(options.postHogKey));
-  rendered = replaceRequired(rendered, "{{WRENCH_DESCRIPTION}}", escapeHtml(identity.description));
-  rendered = replaceRequired(rendered, "{{WRENCH_INSTALL_COMMAND}}", escapeHtml(installCommand));
-  rendered = replaceRequired(rendered, "{{WRENCH_RELEASE}}", escapeHtml(identity.release));
-  rendered = replaceRequired(rendered, "{{WRENCH_VERSION}}", escapeHtml(identity.version));
+  const optionalValues = new Map([
+    ["{{WRENCH_DESCRIPTION}}", identity.description],
+    ["{{WRENCH_INSTALL_COMMAND}}", installCommand],
+    ["{{WRENCH_RELEASE}}", identity.release],
+    ["{{WRENCH_REPOSITORY}}", REPOSITORY_URL],
+    ["{{WRENCH_VERSION}}", identity.version],
+  ]);
+  for (const [placeholder, value] of optionalValues) {
+    if (rendered.includes(placeholder)) {
+      rendered = rendered.replaceAll(placeholder, escapeHtml(value));
+    }
+  }
   if (/\{\{[A-Z0-9_]+\}\}/u.test(rendered)) {
     throw new Error("The rendered page contains an unresolved template value.");
   }
   return rendered;
+}
+
+export function renderIndex(template: string, options: RenderOptions): string {
+  return renderTemplate(template, options, PUBLIC_PAGES[0]);
 }
 
 function contentHash(value: Uint8Array | string): string {
@@ -207,9 +338,9 @@ function postHogEnvironment(environment: Readonly<Record<string, string | undefi
 export async function buildWebsite(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<void> {
-  const [manifest, indexTemplate, notFoundTemplate, css, analyticsBuild] = await Promise.all([
+  const [manifest, publicTemplates, notFoundTemplate, css, analyticsBuild] = await Promise.all([
     Bun.file(join(repositoryRoot, "package.json")).json(),
-    readFile(join(sourceRoot, "index.html"), "utf8"),
+    Promise.all(PUBLIC_PAGES.map((page) => readFile(join(sourceRoot, page.sourceFile), "utf8"))),
     readFile(join(sourceRoot, "404.html"), "utf8"),
     readFile(join(sourceRoot, "styles.css")),
     Bun.build({
@@ -226,6 +357,11 @@ export async function buildWebsite(
   }
   const analytics = new Uint8Array(await analyticsBuild.outputs[0]!.arrayBuffer());
   const identity = parsePackageIdentity(manifest);
+  if (identity.release !== CONTENT_REVIEWED_RELEASE) {
+    throw new Error(
+      `Website content is reviewed for ${CONTENT_REVIEWED_RELEASE}, not ${identity.release}. Review every public page before updating CONTENT_REVIEWED_RELEASE.`,
+    );
+  }
   const postHog = postHogEnvironment(environment);
   const cssAsset = `/assets/styles-${contentHash(css)}.css`;
   const analyticsAsset = `/assets/analytics-${contentHash(analytics)}.js`;
@@ -239,9 +375,15 @@ export async function buildWebsite(
 
   await rm(outputRoot, { force: true, recursive: true });
   await mkdir(join(outputRoot, "assets"), { recursive: true });
+  await Promise.all(PUBLIC_PAGES.map((page) => mkdir(dirname(join(outputRoot, page.outputFile)), {
+    recursive: true,
+  })));
   await Promise.all([
-    writeFile(join(outputRoot, "index.html"), renderIndex(indexTemplate, renderOptions)),
-    writeFile(join(outputRoot, "404.html"), renderIndex(notFoundTemplate, renderOptions)),
+    ...PUBLIC_PAGES.map((page, index) => writeFile(
+      join(outputRoot, page.outputFile),
+      renderTemplate(publicTemplates[index]!, renderOptions, page),
+    )),
+    writeFile(join(outputRoot, "404.html"), renderTemplate(notFoundTemplate, renderOptions)),
     writeFile(join(outputRoot, cssAsset.slice(1)), css),
     writeFile(join(outputRoot, analyticsAsset.slice(1)), analytics),
     writeFile(
@@ -250,10 +392,14 @@ export async function buildWebsite(
     ),
     writeFile(
       join(outputRoot, "sitemap.xml"),
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url>\n    <loc>${SITE_ORIGIN}/</loc>\n    <lastmod>${UPDATED_AT}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>1.0</priority>\n  </url>\n</urlset>\n`,
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${PUBLIC_PAGES.map((page) => `  <url>\n    <loc>${SITE_ORIGIN}${page.canonicalPath}</loc>\n  </url>`).join("\n")}\n</urlset>\n`,
     ),
     copyFile(join(publicRoot, "favicon.svg"), join(outputRoot, "favicon.svg")),
     copyFile(join(publicRoot, "og.png"), join(outputRoot, "og.png")),
+    copyFile(
+      join(publicRoot, "dc84ee4863539f2fff50ef5f0a164168.txt"),
+      join(outputRoot, "dc84ee4863539f2fff50ef5f0a164168.txt"),
+    ),
   ]);
 }
 

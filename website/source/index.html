@@ -9,7 +9,7 @@
     <meta name="description" content="{{WRENCH_DESCRIPTION}}">
     <meta name="application-name" content="Wrench">
     <meta name="generator" content="Bun 1.3.14">
-    <meta name="keywords" content="AI agent tools, coding agents, TypeScript SDK, CLI, web capture, media archive, provider plugins, local-first, web automation">
+    <meta name="robots" content="max-image-preview:large">
     <link rel="canonical" href="https://wrench.rip/">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="{{CSS_ASSET}}">
@@ -41,8 +41,11 @@
     <header class="topbar">
       <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
       <nav aria-label="Primary">
-        <a href="#how">How it works</a>
-        <a href="#start">Install</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+        <a href="/getting-started/">Get started</a>
       </nav>
     </header>
 
@@ -271,11 +274,26 @@ wrench capabilities</code></pre>
             >Read the source <span aria-hidden="true">↗</span></a>
           </div>
         </section>
+
+        <section aria-labelledby="guides-title" class="section guide-cluster">
+          <div class="section-heading section-heading-wide">
+            <p class="eyebrow">Documentation by task</p>
+            <h2 id="guides-title">Start with the outcome you need.</h2>
+            <p>These focused guides describe the current release, the commands to use, and the limits that stay in force.</p>
+          </div>
+          <div class="card-grid">
+            <article class="card"><h3><a href="/getting-started/">Install and verify Wrench</a></h3><p>Pin the current release, run the doctor, capture a first URL, and inspect local capabilities.</p></article>
+            <article class="card"><h3><a href="/capture-and-archives/">Capture URLs and archive media</a></h3><p>Choose between an inspection, durable Markdown capture, or one verified finite-item media archive.</p></article>
+            <article class="card"><h3><a href="/provider-capabilities/">Check provider coverage</a></h3><p>See current contact, Gmail, inbox, and message support with provider-specific completeness limits.</p></article>
+            <article class="card"><h3><a href="/security/">Understand the security boundary</a></h3><p>Review local custody, account binding, encrypted state, risk levels, and fail-closed drift behavior.</p></article>
+            <article class="card"><h3><a href="/plugins/">Author a provider plugin</a></h3><p>Create an inert reservation, prove one operation, then check, test, pack, trust, and install exact code.</p></article>
+          </div>
+        </section>
       </div>
     </main>
 
     <footer class="footer">
-      <p>Wrench {{WRENCH_VERSION}} · MIT · Built for agents that benefit from smaller, stronger boundaries.</p>
+      <p>Wrench {{WRENCH_VERSION}} is maintained and published in the open by the <a href="https://github.com/hraness">Hraness GitHub organization</a>. MIT licensed.</p>
       <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle, Core Web Vitals, and the two GitHub links. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
     </footer>
   </body>

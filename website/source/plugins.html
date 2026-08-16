@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#181817">
+    <title>Author and verify Wrench provider plugins</title>
+    <meta name="description" content="Create, statically check, test, reproducibly pack, trust, and install a content-addressed Wrench provider plugin without weakening the kernel boundary.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/plugins/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Author and verify Wrench provider plugins">
+    <meta property="og:description" content="Create, statically check, test, reproducibly pack, trust, and install a content-addressed Wrench provider plugin without weakening the kernel boundary.">
+    <meta property="og:url" content="https://wrench.rip/plugins/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Author and verify Wrench provider plugins">
+    <meta name="twitter:description" content="Create, statically check, test, reproducibly pack, trust, and install a content-addressed Wrench provider plugin without weakening the kernel boundary.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a aria-current="page" href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Provider plugins</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Plugin authoring · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Start a provider plugin inert, then prove one operation.</h1>
+          <p class="answer-lede">A Wrench portable plugin begins as a private, network-inert <code>capture-required</code> reservation. It becomes executable only after its exact provider contract and secret-free fixtures are reviewed, the package passes static and runtime verification, and the operator explicitly trusts that content-addressed bundle.</p>
+          <p class="review-note">This guide describes {{WRENCH_RELEASE}} and was checked against the public plugin protocol and authoring guide for that immutable release.</p>
+        </header>
+
+        <section aria-labelledby="plugin-forms">
+          <h2 id="plugin-forms">Two plugin forms share one semantic catalog</h2>
+          <p>A source plugin ships with Wrench, loads in process, and may implement a reviewed provider transport. It is trusted application code. A portable plugin is independently authored, content-addressed, installed into local state after an explicit code-trust decision, and run through a versioned, denied-by-default child-process protocol.</p>
+          <p>Neither plugin form can redefine Wrench's custody rules. The kernel owns input resolution, auth selection, risk, preview and confirmation, dispatch journals, recovery, receipts, bounds, redaction, activation, and lifecycle serialization. A plugin owns the exact provider identity, operation descriptors, request and response contracts, account probes, execution, and reconciliation logic.</p>
+        </section>
+
+        <section aria-labelledby="initialize">
+          <h2 id="initialize">1. Create a network-inert reservation</h2>
+          <div class="command-panel"><pre><code>wrench plugin init example-web \
+  --display-name "Example" \
+  --surface example \
+  --origin https://www.example.com \
+  --operation feeds.read \
+  --output /absolute/private/example-web</code></pre></div>
+          <p>The initializer writes a strict <code>wrench-plugin.json</code>, one self-contained runtime, inert operation metadata, secret-free fixtures, and package-local guidance. <code>capture-required</code> means the operation cannot plan or execute. That is the correct state until authorized evidence proves the full contract.</p>
+        </section>
+
+        <section aria-labelledby="prove">
+          <h2 id="prove">2. Prove the whole operation contract</h2>
+          <p>Before marking an operation observed, establish one semantic operation and bounded input schema; the exact transport, HTTPS origin, route, method, and request shape; a current-account probe; stable subject identity; response, target, side-effect, and completion projections; credential names and allowed sinks; risk and uncertainty behavior; fail-closed drift; and secret-free fixtures for success and every relevant rejection or unsettled outcome.</p>
+          <p>A UI label, route name, or one captured traffic shape is not enough. Wrench does not treat DOM automation as an execution or recovery fallback.</p>
+        </section>
+
+        <section aria-labelledby="verify-plugin">
+          <h2 id="verify-plugin">3. Check, test, pack, and install as separate decisions</h2>
+          <div class="command-panel"><pre><code>wrench plugin check /absolute/private/example-web --json
+wrench plugin test /absolute/private/example-web --trust-code --json
+wrench plugin pack /absolute/private/example-web \
+  --output /absolute/private/example-web.wrenchplugin --json
+wrench plugin install /absolute/private/example-web.wrenchplugin \
+  --trust-code --json</code></pre></div>
+          <ol class="guide-steps">
+            <li><strong><code>check</code></strong> parses and validates the package without executing plugin code.</li>
+            <li><strong><code>test --trust-code</code></strong> is the first execution boundary. It binds trust to the verified plugin identity and runs declared secret-free fixtures.</li>
+            <li><strong><code>pack</code></strong> verifies the fixed file set and produces reproducible, content-addressed package bytes.</li>
+            <li><strong><code>install --trust-code</code></strong> records a separate decision to let that exact package run and activates it only after catalog conflict checks.</li>
+          </ol>
+          <p>An update changes package identity and requires a new trust decision. Disable, update, and removal serialize with invocation leases, confirmations, run journals, recovery capsules, and linked-device lifecycles; Wrench refuses a transition while the old bundle owns live or unknown work.</p>
+        </section>
+
+        <section aria-labelledby="host-capabilities">
+          <h2 id="host-capabilities">Portable host capabilities are declared and bounded</h2>
+          <ul class="guide-list">
+            <li>Exact-origin HTTPS with bounded request and response bodies.</li>
+            <li>Opaque cookie material bound only to its cookie jar and OAuth material bound only to the Authorization header.</li>
+            <li>Content-bound file handles with bounded reads and namespaced JSON state.</li>
+            <li>Bounded diagnostics plus explicit mutation dispatch-begin and verification steps.</li>
+            <li>Declared session-material handles.</li>
+          </ul>
+          <p>The host does not expose a shell, package manager, ambient environment, raw auth locator, unrestricted filesystem, arbitrary redirect, automatic retry, or caller-chosen network primitive. Native code and undeclared module imports are rejected.</p>
+          <p>This protocol contains ordinary failures but is not a hostile-code sandbox. Plugin code runs with the current account's ambient operating-system authority. Review it before trust and read the <a href="/security/">security guide</a> for the exact boundary.</p>
+        </section>
+
+        <section aria-labelledby="types">
+          <h2 id="types">Use the public types without triggering runtime state</h2>
+          <p>The package root exports bounded identifier and version validators plus the types used to describe source plugins and portable protocol messages. It is intentionally side-effect-free. Use <code>wrench plugin check</code> as the authoritative validation of a complete authoring directory and <code>wrench plugin test --trust-code</code> as the explicit runtime boundary.</p>
+          <p>The complete source guide lives at <a href="https://github.com/hraness/wrench/blob/{{WRENCH_RELEASE}}/docs/plugins.md">docs/plugins.md for {{WRENCH_RELEASE}}</a>. Pinning the tag keeps the prose and protocol tied to the release described here.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="plugins-next">
+          <h2 id="plugins-next">Inspect before you extend</h2>
+          <p>Install and inspect the existing catalog with the <a href="/getting-started/">getting started guide</a>. If your operation overlaps contacts or inboxes, compare its limitations with the <a href="/provider-capabilities/">current provider reference</a>.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>
