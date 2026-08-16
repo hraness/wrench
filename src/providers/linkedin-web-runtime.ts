@@ -37,19 +37,22 @@ import type {
 } from "../web-session-execution";
 import { startWebSessionCleanupTrackedOperation } from "../web-session-execution";
 import {
+  LINKEDIN_ARTICLE_PAGE_MAX_CHARACTERS,
   LINKEDIN_FIRST_PARTY_ARTICLES_PATH,
   LINKEDIN_MESSENGER_CONVERSATIONS_OBSERVED_QUERY_ID,
   buildLinkedInArticleContentPatch,
   buildLinkedInArticleCreateBody,
   buildLinkedInArticleTitlePatch,
+  linkedInArticleDraftEditUrl,
+  linkedInArticleDraftEnvelopeFromHtml,
   linkedInArticleDraftEntityUrl,
   linkedInArticleDraftId,
-  linkedInArticleDraftReadUrl,
   linkedInCsrfTokenFromJSessionId,
   linkedInMailboxUrnFromMiniProfile,
   linkedInMessengerConversationsUrl,
   normalizeLinkedInArticleDraft,
   normalizeLinkedInArticleDraftMetadata,
+  normalizeLinkedInArticleDraftSnapshot,
   normalizeLinkedInMessagingList,
 } from "./linkedin-web";
 import { resolveLinkedInMessengerConversationsQueryId } from "./linkedin-web-bootstrap";
@@ -557,8 +560,13 @@ function identityFromMeResponse(value: unknown): LinkedInCurrentIdentity {
     entities.push(item);
   }
 
-  if (data.miniProfile !== undefined) {
-    const reference = linkedInMiniProfileUrn(data.miniProfile);
+  const profileReferences = [data["*miniProfile"], data.miniProfile]
+    .filter((reference) => reference !== undefined);
+  if (profileReferences.length > 1) {
+    throw new Error("LinkedIn /voyager/api/me included ambiguous normalized profile references");
+  }
+  if (profileReferences.length === 1) {
+    const reference = linkedInMiniProfileUrn(profileReferences[0]);
     if (reference === null) {
       throw new Error("LinkedIn /voyager/api/me included an invalid normalized profile reference");
     }
@@ -683,12 +691,10 @@ function assertLinkedInWebExecutionAvailable(): void {
 function linkedInArticleHeaders(
   csrf: string,
   referer: string,
-  partialUpdate: boolean,
 ): Readonly<Record<string, string>> {
   return Object.freeze({
     ...headers(csrf, referer),
     "content-type": "application/json; charset=UTF-8",
-    ...(partialUpdate ? { "x-restli-method": "PARTIAL_UPDATE" } : {}),
   });
 }
 
@@ -717,6 +723,7 @@ async function createDirectLinkedInArticleTransport(
       ],
       maxBytes: MAX_SUBJECT_BYTES,
     }),
+    prepareCreateDraft: () => Promise.resolve(),
     createDraft: async (profileUrn, title) => {
       const response = await client.requestStatus({
         url: new URL(`${LINKEDIN_FIRST_PARTY_ARTICLES_PATH}/`, LINKEDIN_ORIGIN),
@@ -724,7 +731,6 @@ async function createDirectLinkedInArticleTransport(
         headers: linkedInArticleHeaders(
           csrf,
           `${LINKEDIN_ORIGIN}/article/new/`,
-          false,
         ),
         body: canonicalJson(buildLinkedInArticleCreateBody(profileUrn, title)),
         expectedStatuses: [201],
@@ -732,21 +738,21 @@ async function createDirectLinkedInArticleTransport(
       });
       return response.responseId ?? null;
     },
-    readDraftResponse: (draftId) => client.requestJson({
-      url: linkedInArticleDraftReadUrl(draftId),
-      method: "GET",
-      headers: headers(csrf, articleEditUrl(draftId)),
-      expectedContentTypes: [
-        "application/vnd.linkedin.normalized+json+2.1",
-        "application/json",
-      ],
-      maxBytes: MAX_SUBJECT_BYTES,
-    }),
+    readDraftResponse: async (draftId) => {
+      const url = linkedInArticleDraftEditUrl(draftId);
+      const html = await client.requestText({
+        url,
+        headers: { accept: "text/html", referer: url.href },
+        expectedContentTypes: ["text/html"],
+        maxBytes: LINKEDIN_ARTICLE_PAGE_MAX_CHARACTERS,
+      });
+      return linkedInArticleDraftEnvelopeFromHtml(html, draftId);
+    },
     updateTitle: async (draftId, title) => {
       await client.requestStatus({
         url: linkedInArticleDraftEntityUrl(draftId),
         method: "POST",
-        headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId), true),
+        headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId)),
         body: canonicalJson(buildLinkedInArticleTitlePatch(title)),
         expectedStatuses: [200],
       });
@@ -755,7 +761,7 @@ async function createDirectLinkedInArticleTransport(
       await client.requestStatus({
         url: linkedInArticleDraftEntityUrl(draftId),
         method: "POST",
-        headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId), true),
+        headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId)),
         body: canonicalJson(buildLinkedInArticleContentPatch(document)),
         expectedStatuses: [200],
       });
@@ -821,6 +827,20 @@ function linkedInCreatedArticleId(value: unknown): string {
   return linkedInArticleDraftId(urnMatch?.[1] ?? value, "LinkedIn created Article draft ID");
 }
 
+function linkedInArticleFailureCategory(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  const response = /\((session-rejected|request-rejected-(?:400|422)(?::[a-z0-9+_-]+)?|contract-route-(?:not-found|retired)|provider-(?:conflict|throttled|unavailable)|status-drift|content-type-drift|response-drift)\)$/u.exec(message)?.[1];
+  if (response !== undefined) return response;
+  if (message.includes("agent-browser")) return "browser-command-failed";
+  if (message.includes("cleanup") || message.includes("finalization")) return "browser-cleanup-failed";
+  if (message.includes("page-instance") || message.includes("page instance")) {
+    return "page-instance-binding-missing";
+  }
+  if (message.includes("bootstrap")) return "bootstrap-response-drift";
+  if (message.includes("readback")) return "readback-rejected";
+  return "contract-step-failed";
+}
+
 async function readLinkedInArticleDraft(
   transport: LinkedInArticleBrowserTransport,
   draftId: string,
@@ -837,6 +857,15 @@ async function readLinkedInArticleDraftMetadata(
 ): Promise<ReturnType<typeof normalizeLinkedInArticleDraftMetadata>> {
   const response = await transport.readDraftResponse(draftId);
   return normalizeLinkedInArticleDraftMetadata(response, draftId, profileUrn);
+}
+
+async function readLinkedInArticleDraftSnapshot(
+  transport: LinkedInArticleBrowserTransport,
+  draftId: string,
+  profileUrn: string,
+): Promise<ReturnType<typeof normalizeLinkedInArticleDraftSnapshot>> {
+  const response = await transport.readDraftResponse(draftId);
+  return normalizeLinkedInArticleDraftSnapshot(response, draftId, profileUrn);
 }
 
 function requireBoundLinkedInIdentity(
@@ -876,8 +905,8 @@ export async function readLinkedInWebArticleDraftDesiredState(
   if (
     recipe.site !== "linkedin"
     || recipe.action !== "articles.draft.save"
-    || recipe.contractVersion !== 1
-  ) throw new Error("LinkedIn Article draft recovery supports only articles.draft.save@1");
+    || recipe.contractVersion !== 2
+  ) throw new Error("LinkedIn Article draft recovery supports only articles.draft.save@2");
   const draftId = linkedInArticleDraftId(input.draft_id, "input.draft_id");
   const title = linkedInArticleTitle(input.title);
   const document = parseArticleDraftDocument(input.document, {
@@ -902,7 +931,7 @@ export async function readLinkedInWebArticleDraftDesiredState(
       identityFromMeResponse(await transport.currentIdentityResponse()),
       auth,
     );
-    const actual = await readLinkedInArticleDraft(
+    const actual = await readLinkedInArticleDraftSnapshot(
       transport,
       draftId,
       profileUrn,
@@ -910,6 +939,7 @@ export async function readLinkedInWebArticleDraftDesiredState(
     return Object.freeze({
       draftId,
       matches: actual.title === title
+        && actual.document !== null
         && canonicalJson(actual.document) === canonicalJson(document),
     });
   } finally {
@@ -926,8 +956,8 @@ async function executeLinkedInArticleDraftSave(
   if (
     recipe.site !== "linkedin"
     || recipe.action !== "articles.draft.save"
-    || recipe.contractVersion !== 1
-  ) throw new Error("LinkedIn Article draft saving supports only articles.draft.save@1");
+    || recipe.contractVersion !== 2
+  ) throw new Error("LinkedIn Article draft saving supports only articles.draft.save@2");
   const title = linkedInArticleTitle(input.title);
   const document = parseArticleDraftDocument(input.document, {
     maximumBlocks: MAX_LINKEDIN_ARTICLE_BLOCKS,
@@ -939,7 +969,7 @@ async function executeLinkedInArticleDraftSave(
   const requestedDraftId = input.draft_id === undefined
     ? null
     : linkedInArticleDraftId(input.draft_id, "input.draft_id");
-  const planned = 2;
+  const planned = requestedDraftId === null ? 2 : 1;
   let started = 0;
   let verified = 0;
   let nextIndex = 0;
@@ -973,13 +1003,18 @@ async function executeLinkedInArticleDraftSave(
       auth,
     );
 
+    let finalDispatchId: string;
+    let finalDispatchIndex: number;
     if (draftId === null) {
+      failureStage = "opening the private Article editor before creation";
+      await transport.prepareCreateDraft();
       const dispatchId = "articles.create";
       failureStage = "creating the private Article title shell";
       const index = await begin(dispatchId);
       draftId = linkedInCreatedArticleId(
         await transport.createDraft(profileUrn, title),
       );
+      failureStage = "verifying the new private Article title shell";
       const created = await readLinkedInArticleDraftMetadata(
         transport,
         draftId,
@@ -989,28 +1024,54 @@ async function executeLinkedInArticleDraftSave(
         throw new Error("LinkedIn Article create readback did not bind the confirmed title");
       }
       await complete(dispatchId, index);
+      finalDispatchId = "articles.content";
+      failureStage = "replacing the new private Article document";
+      finalDispatchIndex = await begin(finalDispatchId);
+      await transport.updateContent(draftId, document);
     } else {
       failureStage = "reading the exact existing private Article";
-      await readLinkedInArticleDraftMetadata(transport, draftId, profileUrn);
-      const dispatchId = "articles.title";
-      failureStage = "replacing the exact private Article title";
-      const index = await begin(dispatchId);
-      await transport.updateTitle(draftId, title);
-      const titled = await readLinkedInArticleDraftMetadata(
+      const existing = await readLinkedInArticleDraftSnapshot(
         transport,
         draftId,
         profileUrn,
       );
-      if (titled.title !== title) {
-        throw new Error("LinkedIn Article title readback did not bind the confirmed title");
+      const titleMatches = existing.title === title;
+      const documentMatches = existing.document !== null
+        && canonicalJson(existing.document) === canonicalJson(document);
+      if (titleMatches && documentMatches) {
+        const url = articleEditUrl(draftId);
+        return {
+          status: "succeeded",
+          output: {
+            provider: "linkedin",
+            operation: "articles.draft.save",
+            published: false,
+            mode: "draft",
+            draftId,
+            title,
+            documentSchemaVersion: 1,
+            effect: "already-satisfied",
+          },
+          finalUrl: url,
+          noOp: true,
+          dispatchStarted: false,
+          dispatch: { planned, started: 0, verified: 0 },
+        };
       }
-      await complete(dispatchId, index);
+      finalDispatchId = "articles.replace";
+      failureStage = "starting the exact private Article replacement";
+      finalDispatchIndex = await begin(finalDispatchId);
+      if (!titleMatches) {
+        failureStage = "replacing the exact private Article title";
+        await transport.updateTitle(draftId, title);
+      }
+      if (!documentMatches) {
+        failureStage = "replacing the exact private Article document";
+        await transport.updateContent(draftId, document);
+      }
     }
 
-    const contentId = "articles.content";
-    failureStage = "replacing the exact private Article document";
-    const contentIndex = await begin(contentId);
-    await transport.updateContent(draftId, document);
+    failureStage = "verifying the replaced private Article document";
     const final = await readLinkedInArticleDraft(
       transport,
       draftId,
@@ -1020,7 +1081,7 @@ async function executeLinkedInArticleDraftSave(
       final.title !== title
       || canonicalJson(final.document) !== canonicalJson(document)
     ) throw new Error("LinkedIn Article final readback did not bind the confirmed draft");
-    await complete(contentId, contentIndex);
+    await complete(finalDispatchId, finalDispatchIndex);
 
     if (nextIndex !== planned || verified !== planned) {
       throw new Error("LinkedIn Article draft workflow did not complete its exact dispatch schedule");
@@ -1042,8 +1103,9 @@ async function executeLinkedInArticleDraftSave(
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
     };
-  } catch {
+  } catch (error) {
     const url = draftId === null ? null : articleEditUrl(draftId);
+    const diagnostic = `${failureStage}; ${linkedInArticleFailureCategory(error)}`;
     return {
       status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
       output: null,
@@ -1053,10 +1115,10 @@ async function executeLinkedInArticleDraftSave(
       error: started > verified
         ? requestedDraftId === null && verified === 0
           ? "LinkedIn may have accepted the private Article create, but the confirmed input has no exact draft ID for safe reconciliation; preserve the indeterminate run and do not retry"
-          : "LinkedIn may have accepted the current private Article replacement dispatch; reconcile the exact existing draft before retrying"
+          : `LinkedIn may have accepted the current private Article replacement dispatch while ${diagnostic}; reconcile the exact existing draft before retrying`
         : verified > 0
-          ? "LinkedIn verified only part of the confirmed private Article workflow; inspect the draft before retrying"
-          : `LinkedIn Article draft failed before remote submission while ${failureStage}`,
+          ? `LinkedIn verified only part of the confirmed private Article workflow while ${diagnostic}; inspect the draft before retrying`
+          : `LinkedIn Article draft failed before remote submission while ${diagnostic}`,
     };
   } finally {
     await transport?.close();
@@ -1071,7 +1133,7 @@ export async function executeLinkedInWebOperation(
 ): Promise<WebSessionExecution> {
   if (
     recipe.site === "linkedin"
-    && recipe.contractVersion === 1
+    && recipe.contractVersion === 2
     && recipe.action === "articles.draft.save"
   ) {
     return startWebSessionCleanupTrackedOperation(

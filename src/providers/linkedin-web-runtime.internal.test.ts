@@ -7,6 +7,7 @@ import type { WebSessionRecipe } from "../model";
 import { canonicalJson } from "../canonical-json";
 import {
   buildLinkedInArticleContent,
+  buildLinkedInArticleContentHtml,
 } from "./linkedin-web";
 import { parseArticleDraftDocument } from "../article-draft-document";
 import {
@@ -110,7 +111,7 @@ function jsonResponse(value: unknown, status = 200): Response {
 
 function currentIdentityResponse(): unknown {
   return {
-    data: { plainId: MEMBER_ID, miniProfile: MINI_PROFILE_URN },
+    data: { plainId: MEMBER_ID, "*miniProfile": MINI_PROFILE_URN },
     included: [{
       entityUrn: MINI_PROFILE_URN,
       objectUrn: `urn:li:member:${MEMBER_ID}`,
@@ -122,34 +123,89 @@ function articleResponse(
   title: string,
   content: readonly Readonly<Record<string, unknown>>[],
 ): unknown {
+  const urn = `urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`;
   return {
-    data: { "*elements": [`urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`] },
+    data: {
+      $type: "com.linkedin.restli.common.CollectionResponse",
+      "*elements": [urn],
+      entityUrn: "urn:li:collectionResponse:article-fixture",
+      paging: { count: 10, links: [], start: 0 },
+    },
     included: [{
       $type: "com.linkedin.voyager.dash.publishing.FirstPartyArticle",
       activityUrn: null,
+      annotation: null,
+      annotationActionType: null,
+      articleActionUnions: [],
+      articleAnnotation: null,
+      articlePublishedTimeDescription: null,
       articleType: "FIRST_PARTY_ARTICLE",
       authors: [{ profileUrn: ARTICLE_PROFILE_URN }],
+      availableLocales: [],
       content,
-      contentHtml: null,
+      contentDescription: null,
+      contentHtml: "<p>bounded derived HTML</p>",
+      contentSegments: null,
+      coverMedia: null,
+      coverMediaV2Union: null,
       createdAt: 1,
-      entityUrn: `urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`,
+      entityUrn: urn,
+      featured: null,
+      followingStateUrn: "urn:li:fsd_followingState:article-fixture",
+      gatedArticleMetadata: null,
+      initialUpdateUrn: null,
+      issueNumber: null,
       linkedInArticleUrn: `urn:li:linkedInArticle:${ARTICLE_ID}`,
+      locale: null,
+      memberContributionInsight: null,
       permalink: null,
       publishedAt: null,
+      scheduledAt: null,
+      seoDescription: null,
+      seoTitle: null,
+      series: null,
+      servedLocale: null,
+      socialDetailUrn: null,
+      socialProofInsight: null,
+      sponsoredAccountUrn: null,
       state: "DRAFT",
+      surveyComponent: null,
       title,
+      trackingId: null,
       ugcPostUrn: null,
       updatedAt: 2,
       version: 3,
+      viewerAllowedToEdit: null,
     }],
   };
+}
+
+function articleHtmlResponse(
+  title: string,
+  content: readonly Readonly<Record<string, unknown>>[],
+): Response {
+  const encoded = JSON.stringify(articleResponse(title, content)).replace(
+    /[&<>"=\\]/gu,
+    (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "=": "&#61;",
+      "\\": "&#92;",
+    })[character] ?? character,
+  );
+  return new Response(
+    `<html><body><code id="bpr-guid-123456" style="display: none">${encoded}</code></body></html>`,
+    { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
+  );
 }
 
 function articleRecipe(): WebSessionRecipe {
   return {
     site: "linkedin",
     action: "articles.draft.save",
-    contractVersion: 1,
+    contractVersion: 2,
     timeoutMs: 1_000,
     maxOutputBytes: 2 * 1024 * 1024,
   };
@@ -527,6 +583,17 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     const cases = [
       {
         body: {
+          data: {
+            plainId: MEMBER_ID,
+            "*miniProfile": MINI_PROFILE_URN,
+            miniProfile: MINI_PROFILE_URN,
+          },
+          included: [{ entityUrn: MINI_PROFILE_URN, objectUrn: `urn:li:member:${MEMBER_ID}` }],
+        },
+        expected: "ambiguous normalized profile references",
+      },
+      {
+        body: {
           data: { plainId: MEMBER_ID },
           included: [{ entityUrn: "urn:li:fsd_profile:999" }],
         },
@@ -655,6 +722,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       maximumCharacters: 125_000,
     });
     const expectedContent = buildLinkedInArticleContent(document);
+    const expectedContentHtml = buildLinkedInArticleContentHtml(document);
     const calls: CapturedRequest[] = [];
     let contentSaved = false;
     const dispatches: string[] = [];
@@ -673,8 +741,8 @@ describe("LinkedIn authenticated internal-API runtime", () => {
           ) {
             expect(JSON.parse(request.body ?? "null")).toEqual({
               authors: [{ profileUrn: ARTICLE_PROFILE_URN }],
-              contentHtml: null,
-              state: null,
+              contentHtml: "",
+              state: "AUTOSAVED",
               title,
             });
             return new Response(null, {
@@ -683,22 +751,29 @@ describe("LinkedIn authenticated internal-API runtime", () => {
             });
           }
           if (
-            request.url.pathname === "/voyager/api/voyagerPublishingDashFirstPartyArticles"
+            request.url.pathname === `/article/edit/${ARTICLE_ID}/`
             && request.method === "GET"
           ) {
-            expect([...request.url.searchParams.entries()]).toEqual([
-              ["articleUrn", `urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`],
-              ["q", "articleUrn"],
-            ]);
-            return jsonResponse(articleResponse(title, contentSaved ? expectedContent : []));
+            expect([...request.url.searchParams.entries()]).toEqual([]);
+            expect(request.headers.get("accept")).toBe("text/html");
+            expect(request.headers.get("referer")).toBe(
+              `https://www.linkedin.com/article/edit/${ARTICLE_ID}/`,
+            );
+            return articleHtmlResponse(title, contentSaved ? expectedContent : []);
           }
           if (
-            request.url.pathname.endsWith(encodeURIComponent(`urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`))
+            request.url.pathname.endsWith(`urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`)
             && request.method === "POST"
           ) {
-            expect(request.headers.get("x-restli-method")).toBe("PARTIAL_UPDATE");
+            expect(request.headers.get("x-restli-method")).toBeNull();
             expect(JSON.parse(request.body ?? "null")).toEqual({
-              patch: { $set: { content: expectedContent, state: null } },
+              patch: {
+                $set: {
+                  content: expectedContent,
+                  contentHtml: expectedContentHtml,
+                  state: "AUTOSAVED",
+                },
+              },
             });
             contentSaved = true;
             return new Response(null, { status: 200 });
@@ -755,6 +830,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     const cleanupPublisher = () => undefined;
     const transport: LinkedInArticleBrowserTransport = {
       currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      prepareCreateDraft: () => Promise.resolve(),
       createDraft: () => Promise.resolve(`urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`),
       readDraftResponse: () => Promise.resolve(articleResponse(
         title,
@@ -825,7 +901,8 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     const runtimeDependencies = dependencies(calls, (request) => {
       if (request.url.pathname === "/voyager/api/me") return jsonResponse(currentIdentityResponse());
       if (request.method === "GET") {
-        return jsonResponse(articleResponse(title, buildLinkedInArticleContent(document)));
+        expect(request.url.pathname).toBe(`/article/edit/${ARTICLE_ID}/`);
+        return articleHtmlResponse(title, buildLinkedInArticleContent(document));
       }
       const body = JSON.parse(request.body ?? "null") as {
         patch: { $set: { title?: string; content?: readonly Readonly<Record<string, unknown>>[] } };
@@ -853,14 +930,12 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     });
     expect(result).toMatchObject({
       status: "succeeded",
-      dispatch: { planned: 2, started: 2, verified: 2 },
+      dispatch: { planned: 1, started: 1, verified: 1 },
       output: { draftId: ARTICLE_ID, published: false, title: nextTitle },
     });
     expect(dispatches).toEqual([
-      "start:articles.title",
-      "verified:articles.title",
-      "start:articles.content",
-      "verified:articles.content",
+      "start:articles.replace",
+      "verified:articles.replace",
     ]);
     expect(await readLinkedInWebArticleDraftDesiredState(
       articleRecipe(),
@@ -868,6 +943,118 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       linkedinAuth,
       { dependencies: runtimeDependencies },
     )).toEqual({ draftId: ARTICLE_ID, matches: true });
+  });
+
+  test("skips an already exact title and replaces only the changed private document", async () => {
+    const title = "Harnessing Puerto Rico";
+    const nextDocumentValue = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{
+        type: "paragraph",
+        text: "Listen to Jungle",
+        links: [{ offset: 10, length: 6, url: "https://hraness.com/audio/jungle" }],
+      }],
+    });
+    const nextDocument = parseArticleDraftDocument(nextDocumentValue, {
+      maximumBlocks: 5_000,
+      maximumCharacters: 125_000,
+    });
+    const calls: string[] = [];
+    let document: ReturnType<typeof parseArticleDraftDocument> | null = null;
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
+      createDraft: () => Promise.reject(new Error("replacement must not create")),
+      readDraftResponse: () => Promise.resolve(articleResponse(
+        title,
+        document === null ? [] : buildLinkedInArticleContent(document),
+      )),
+      updateTitle: () => {
+        calls.push("title");
+        return Promise.reject(new Error("an exact title must not be submitted"));
+      },
+      updateContent: (_draftId, receivedDocument) => {
+        calls.push("content");
+        expect(receivedDocument).toEqual(nextDocument);
+        document = nextDocument;
+        return Promise.resolve();
+      },
+      close: () => Promise.resolve(),
+    };
+    const dispatches: string[] = [];
+    const result = await executeLinkedInWebOperation(
+      articleRecipe(),
+      { title, document: nextDocumentValue, draft_id: ARTICLE_ID },
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.resolve(transport),
+        },
+        beforeDispatch: (event) => {
+          dispatches.push(`start:${event.id}`);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          dispatches.push(`verified:${event.id}`);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      dispatch: { planned: 1, started: 1, verified: 1 },
+      output: { draftId: ARTICLE_ID, published: false, title },
+    });
+    expect(calls).toEqual(["content"]);
+    expect(dispatches).toEqual([
+      "start:articles.replace",
+      "verified:articles.replace",
+    ]);
+  });
+
+  test.each([
+    {
+      privateDiagnostic: "LinkedIn Article page omitted its bounded page-instance binding",
+      publicCategory: "page-instance-binding-missing",
+    },
+    {
+      privateDiagnostic: "LinkedIn Article bootstrap did not isolate one exact hidden payload",
+      publicCategory: "bootstrap-response-drift",
+    },
+  ])("categorizes private Article read failures without exposing their diagnostics", async ({
+    privateDiagnostic,
+    publicCategory,
+  }) => {
+    const document = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "paragraph", text: "Unchanged private body" }],
+    });
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
+      createDraft: () => Promise.reject(new Error("replacement must not create")),
+      readDraftResponse: () => Promise.reject(new Error(privateDiagnostic)),
+      updateTitle: () => Promise.reject(new Error("failed reads must not dispatch")),
+      updateContent: () => Promise.reject(new Error("failed reads must not dispatch")),
+      close: () => Promise.resolve(),
+    };
+    const result = await executeLinkedInWebOperation(
+      articleRecipe(),
+      { title: "Private fixture", document, draft_id: ARTICLE_ID },
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.resolve(transport),
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+      error: expect.stringContaining(publicCategory),
+    });
+    expect(JSON.stringify(result)).not.toContain(privateDiagnostic);
   });
 
   test("keeps an accepted create without a stable response ID indeterminate and never retries", async () => {

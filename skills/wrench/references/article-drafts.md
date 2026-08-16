@@ -79,8 +79,9 @@ wrench confirm <preview-digest> --json
 
 Use the same sequence with `linkedin-web` and its bound LinkedIn cookie realm;
 never switch the adapter or auth realm after preview. LinkedIn draft saving
-runs the fixed reviewed internal-API exchange inside a contained headed Chrome
-session. The browser window may appear, but Wrench does not type into or read
+runs the fixed reviewed API/write plus authenticated editor-response readback
+exchange inside a contained headed Chrome session. The browser window may
+appear, but Wrench does not type into or read
 the Article editor DOM and callers cannot supply a URL, header, script, or
 selector.
 
@@ -88,6 +89,11 @@ Review the exact account, title, canonical document, optional draft ID, R2 side
 effect, contract version, and dispatch schedule. Require a successful result to
 identify `articles.draft.save`, report `published: false` and `mode: "draft"`,
 and return the private draft identity. Never continue into publication.
+
+LinkedIn create previews name separate title-shell and content dispatches.
+LinkedIn exact-replacement previews use one conservative replacement dispatch:
+the runtime first reads the bound private draft, skips fields that already match,
+and verifies the complete title/document state before success.
 
 Do not retry a partial or indeterminate save. Preserve the run evidence and use
 only the installed operation's exact recovery path for the same bound draft.
@@ -115,7 +121,8 @@ a recovery step.
 - `linkedin-web`: `articles.draft.save` is observed for a bound signed-in
   LinkedIn member. It creates or replaces one private paragraphs/headings/link
   draft through the reviewed first-party autosave contract inside contained
-  Chrome, then verifies the exact current-author unpublished readback. This
+  Chrome, then verifies the exact current-author unpublished state from one
+  bounded hidden JSON payload in the editor-page server response. This
   browser-network transport preserves LinkedIn's device session without using
   DOM automation. Styles, lists, blockquotes, covers, inline media, and
   `articles.publish` remain capture-required.

@@ -989,17 +989,31 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.5.0");
+    expect(current.value.version).toBe("1.6.0");
     const draft = current.value.operations["articles.draft.save"];
     expect(draft !== undefined && isWebSessionOperation(draft)).toBeTrue();
     if (draft === undefined || !isWebSessionOperation(draft)) return;
     expect(draft.risk).toBe("R2");
     expect(draft.webSession).toMatchObject({
       action: "articles.draft.save",
-      contractVersion: 1,
+      contractVersion: 2,
     });
     expect(draft.input.required).toEqual(["title", "document"]);
     expect(draft.input.properties.cover_image).toBeUndefined();
+
+    const priorObservedValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.5.0.json"),
+      "utf8",
+    )) as unknown;
+    const priorObserved = parseDiagnosticManifest(priorObservedValue);
+    expect(priorObserved.ok).toBeTrue();
+    if (!priorObserved.ok) return;
+    expect(priorObserved.value.version).toBe("1.5.0");
+    const priorDraft = priorObserved.value.operations["articles.draft.save"];
+    expect(priorDraft !== undefined && isWebSessionOperation(priorDraft)).toBeTrue();
+    if (priorDraft !== undefined && isWebSessionOperation(priorDraft)) {
+      expect(priorDraft.webSession.contractVersion).toBe(1);
+    }
 
     const capturedReservationValue = JSON.parse(readFileSync(
       join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.4.0.json"),

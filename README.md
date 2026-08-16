@@ -396,7 +396,7 @@ The current provider state is explicit:
 | --- | --- | --- |
 | `x` | Observed R2 response-bound private draft create through the documented OAuth API | Observed R3 response-bound publication through the documented OAuth API |
 | `x-web` | Observed R2 private draft save | Capture-required R3 |
-| `linkedin-web` | Observed R2 paragraphs/headings/native-link private draft save with exact unpublished readback | Capture-required R3 |
+| `linkedin-web` | Observed R2 paragraphs/headings/native-link private draft save with exact unpublished editor-response readback | Capture-required R3 |
 
 The `x-web` draft operation accepts a title, a canonical provider-neutral
 `ArticleDraftDocument` schemaVersion 1 string, and an optional exact existing
@@ -447,8 +447,9 @@ be safely targeted and must remain unsettled.
 Signed-in LinkedIn now exposes the same private R2 seam through
 `linkedin-web articles.draft.save`. The observed contract supports paragraphs,
 H1/H2 headings, and native HTTPS links; it creates or replaces only one bound
-private draft and independently verifies the exact unpublished result. Its
-fixed first-party API requests run inside a contained, account-bound Chrome
+private draft and independently verifies the exact unpublished result from one
+bounded hidden server payload in the authenticated editor HTML. Its fixed
+first-party writes and server-response read run inside a contained, account-bound Chrome
 session because LinkedIn rejects the same editor traffic when replayed by a
 standalone HTTP client. Wrench does not type into or inspect the editor DOM,
 and the contained headed browser may be visible while the private save runs.

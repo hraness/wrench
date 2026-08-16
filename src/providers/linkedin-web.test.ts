@@ -10,13 +10,15 @@ import {
   RESTLI_V2_VALUE_LIMITS,
   assertLinkedInWebR1RequestAllowed,
   buildLinkedInArticleContent,
+  buildLinkedInArticleContentHtml,
   buildLinkedInArticleContentPatch,
   buildLinkedInArticleCreateBody,
   buildLinkedInArticleTitlePatch,
   encodeRestliV2Value,
   linkedInCsrfTokenFromJSessionId,
+  linkedInArticleDraftEditUrl,
+  linkedInArticleDraftEnvelopeFromHtml,
   linkedInArticleDraftEntityUrl,
-  linkedInArticleDraftReadUrl,
   linkedInMailboxUrnFromMiniProfile,
   linkedInMessengerConversationsUrl,
   linkedInWebFolderCategory,
@@ -460,55 +462,127 @@ describe("LinkedIn native Article draft contract", () => {
     ],
   }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
 
-  test("builds only the observed create, title, content, and exact-read routes", () => {
-    expect(buildLinkedInArticleCreateBody(profileUrn, title)).toEqual({
-      authors: [{ profileUrn }],
-      contentHtml: null,
-      state: null,
-      title,
-    });
-    expect(buildLinkedInArticleTitlePatch(title)).toEqual({
-      patch: { $set: { state: null, title } },
-    });
-    expect(buildLinkedInArticleContentPatch(document)).toEqual({
-      patch: { $set: { content: buildLinkedInArticleContent(document), state: null } },
-    });
-    expect(linkedInArticleDraftEntityUrl(draftId).pathname).toBe(
-      `/voyager/api/voyagerPublishingDashFirstPartyArticles/${encodeURIComponent(`urn:li:fsd_firstPartyArticle:${draftId}`)}`,
-    );
-    const readUrl = linkedInArticleDraftReadUrl(draftId);
-    expect([...readUrl.searchParams.entries()]).toEqual([
-      ["articleUrn", `urn:li:fsd_firstPartyArticle:${draftId}`],
-      ["q", "articleUrn"],
-    ]);
-  });
-
-  test("normalizes one exact current-author private readback with native links", () => {
-    const content = buildLinkedInArticleContent(document);
-    expect(normalizeLinkedInArticleDraft({
-      data: { "*elements": [`urn:li:fsd_firstPartyArticle:${draftId}`] },
+  function articleResponse(
+    content: readonly Readonly<Record<string, unknown>>[],
+    overrides: Readonly<Record<string, unknown>> = {},
+  ): unknown {
+    const urn = `urn:li:fsd_firstPartyArticle:${draftId}`;
+    return {
+      data: {
+        $type: "com.linkedin.restli.common.CollectionResponse",
+        "*elements": [urn],
+        entityUrn: "urn:li:collectionResponse:article-fixture",
+        paging: { count: 10, links: [], start: 0 },
+      },
       included: [{
         $type: "com.linkedin.voyager.dash.publishing.FirstPartyArticle",
         activityUrn: null,
+        annotation: null,
+        annotationActionType: null,
+        articleActionUnions: [],
+        articleAnnotation: null,
+        articlePublishedTimeDescription: null,
         articleType: "FIRST_PARTY_ARTICLE",
         authors: [{ profileUrn }],
+        availableLocales: [],
         content,
-        contentHtml: null,
+        contentDescription: null,
+        contentHtml: "<p>bounded derived HTML</p>",
+        contentSegments: null,
+        coverMedia: null,
+        coverMediaV2Union: null,
         createdAt: 1,
-        entityUrn: `urn:li:fsd_firstPartyArticle:${draftId}`,
+        entityUrn: urn,
+        featured: null,
+        followingStateUrn: "urn:li:fsd_followingState:article-fixture",
+        gatedArticleMetadata: null,
+        initialUpdateUrn: null,
+        issueNumber: null,
         linkedInArticleUrn: `urn:li:linkedInArticle:${draftId}`,
+        locale: null,
+        memberContributionInsight: null,
         permalink: null,
         publishedAt: null,
+        scheduledAt: null,
+        seoDescription: null,
+        seoTitle: null,
+        series: null,
+        servedLocale: null,
+        socialDetailUrn: null,
+        socialProofInsight: null,
+        sponsoredAccountUrn: null,
         state: "DRAFT",
+        surveyComponent: null,
         title,
+        trackingId: null,
         ugcPostUrn: null,
         updatedAt: 2,
         version: 3,
+        viewerAllowedToEdit: null,
+        ...overrides,
       }],
-    }, draftId, profileUrn)).toEqual({ draftId, profileUrn, title, document });
+    };
+  }
+
+  function articlePage(response: unknown): string {
+    const encoded = JSON.stringify(response).replace(/[&<>"=\\]/gu, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "=": "&#61;",
+      "\\": "&#92;",
+    })[character] ?? character);
+    return `<html><body><code style="display: none" id="bpr-guid-123456">${encoded}</code></body></html>`;
+  }
+
+  test("builds only the observed create, title, content, and exact-read routes", () => {
+    expect(buildLinkedInArticleCreateBody(profileUrn, title)).toEqual({
+      authors: [{ profileUrn }],
+      contentHtml: "",
+      state: "AUTOSAVED",
+      title,
+    });
+    expect(buildLinkedInArticleTitlePatch(title)).toEqual({
+      patch: { $set: { state: "AUTOSAVED", title } },
+    });
+    expect(buildLinkedInArticleContentPatch(document)).toEqual({
+      patch: {
+        $set: {
+          content: buildLinkedInArticleContent(document),
+          contentHtml: buildLinkedInArticleContentHtml(document),
+          state: "AUTOSAVED",
+        },
+      },
+    });
+    expect(buildLinkedInArticleContentHtml(document)).toBe(
+      "<h2>Harnessing Puerto Rico</h2>"
+      + "<p>Read the <a href=\"https://example.com/source\" target=\"_blank\">source</a></p>",
+    );
+    expect(linkedInArticleDraftEntityUrl(draftId).pathname).toBe(
+      `/voyager/api/voyagerPublishingDashFirstPartyArticles/urn:li:fsd_firstPartyArticle:${draftId}`,
+    );
+    const readUrl = linkedInArticleDraftEditUrl(draftId);
+    expect(readUrl.pathname).toBe(`/article/edit/${draftId}/`);
+    expect([...readUrl.searchParams.entries()]).toEqual([]);
   });
 
-  test("rejects unsupported styles, blocks, author drift, and published state", () => {
+  test("extracts and normalizes one exact current-author private server readback with native links", () => {
+    const content = buildLinkedInArticleContent(document);
+    const response = articleResponse(content);
+    const extracted = linkedInArticleDraftEnvelopeFromHtml(
+      articlePage(response),
+      draftId,
+    );
+    expect(normalizeLinkedInArticleDraft(extracted, draftId, profileUrn)).toEqual({
+      draftId,
+      profileUrn,
+      title,
+      document,
+    });
+  });
+
+  test("rejects payload ambiguity, unsupported styles and blocks, author drift, and published state", () => {
     const styleDocument = parseArticleDraftDocument(canonicalJson({
       schemaVersion: 1,
       blocks: [{
@@ -523,6 +597,28 @@ describe("LinkedIn native Article draft contract", () => {
       blocks: [{ type: "ordered-list-item", text: "one" }],
     }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
     expect(() => buildLinkedInArticleContent(listDocument)).toThrow("currently support only");
+
+    const content = buildLinkedInArticleContent(document);
+    const response = articleResponse(content);
+    const page = articlePage(response);
+    expect(() => linkedInArticleDraftEnvelopeFromHtml(
+      `${page}${page}`,
+      draftId,
+    )).toThrow("did not isolate one exact hidden payload");
+    expect(() => linkedInArticleDraftEnvelopeFromHtml(
+      page.replace("display: none", "display: block"),
+      draftId,
+    )).toThrow("no longer hidden");
+    expect(() => normalizeLinkedInArticleDraft(
+      articleResponse(content, { authors: [{ profileUrn: "urn:li:fsd_profile:other" }] }),
+      draftId,
+      profileUrn,
+    )).toThrow("author no longer matches");
+    expect(() => normalizeLinkedInArticleDraft(
+      articleResponse(content, { state: "PUBLISHED", publishedAt: 3 }),
+      draftId,
+      profileUrn,
+    )).toThrow("not the exact private unpublished draft");
   });
 });
 

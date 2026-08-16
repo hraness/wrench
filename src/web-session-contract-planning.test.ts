@@ -107,10 +107,10 @@ describe("authenticated web contract planning", () => {
     expect(operation?.historicalContractVersions).toBeUndefined();
   });
 
-  test("the LinkedIn plugin plans only reviewed private title/content autosaves", () => {
+  test("the LinkedIn plugin plans only reviewed private create/content and exact replacement autosaves", () => {
     const contract = webSessionContractDefinitions.linkedin["articles.draft.save"];
     expect(contract).toMatchObject({
-      contractVersion: 1,
+      contractVersion: 2,
       dispatch: "bounded-items",
       risk: "R2",
       state: "observed",
@@ -130,8 +130,7 @@ describe("authenticated web contract planning", () => {
       document: "{}",
       draft_id: "7000000000000000001",
     }).map((dispatch) => dispatch.id)).toEqual([
-      "articles.title",
-      "articles.content",
+      "articles.replace",
     ]);
     const supported = canonicalJson({
       schemaVersion: 1,

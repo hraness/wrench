@@ -643,8 +643,14 @@ export function linkedInMailboxUrnFromMiniProfile(value: unknown): string {
 
 export const LINKEDIN_FIRST_PARTY_ARTICLES_PATH =
   "/voyager/api/voyagerPublishingDashFirstPartyArticles";
+export const LINKEDIN_ARTICLE_PAGE_MAX_CHARACTERS = 2 * 1024 * 1024;
+
+const LINKEDIN_ARTICLE_CODE_PAYLOAD_MAX_CHARACTERS = 1024 * 1024;
+const LINKEDIN_ARTICLE_CODE_TAG_MAX_COUNT = 5_000;
+const LINKEDIN_ARTICLE_MATCHING_PAYLOAD_MAX_COUNT = 20;
 
 const LINKEDIN_ARTICLE_TYPE = "com.linkedin.voyager.dash.publishing.FirstPartyArticle";
+const LINKEDIN_ARTICLE_COLLECTION_TYPE = "com.linkedin.restli.common.CollectionResponse";
 const LINKEDIN_TEXT_BLOCK_TYPE = "com.linkedin.voyager.dash.publishing.TextBlock";
 const LINKEDIN_TEXT_VIEW_MODEL_TYPE = "com.linkedin.voyager.dash.common.text.TextViewModel";
 const LINKEDIN_TEXT_ATTRIBUTE_TYPE = "com.linkedin.voyager.dash.common.text.TextAttribute";
@@ -654,6 +660,10 @@ export type LinkedInArticleDraftReadback = {
   readonly title: string;
   readonly document: ArticleDraftDocument;
   readonly profileUrn: string;
+};
+
+export type LinkedInArticleDraftSnapshot = Omit<LinkedInArticleDraftReadback, "document"> & {
+  readonly document: ArticleDraftDocument | null;
 };
 
 function exactObjectKeys(
@@ -697,9 +707,158 @@ export function linkedInArticleDraftReadUrl(value: unknown): URL {
 export function linkedInArticleDraftEntityUrl(value: unknown): URL {
   const urn = linkedInArticleDraftUrn(value);
   return new URL(
-    `${LINKEDIN_FIRST_PARTY_ARTICLES_PATH}/${encodeURIComponent(urn)}`,
+    `${LINKEDIN_FIRST_PARTY_ARTICLES_PATH}/${urn}`,
     "https://www.linkedin.com",
   );
+}
+
+export function linkedInArticleDraftEditUrl(value: unknown): URL {
+  const draftId = linkedInArticleDraftId(value);
+  return new URL(`/article/edit/${draftId}/`, "https://www.linkedin.com");
+}
+
+type LinkedInArticleCodePayload = {
+  readonly attributes: string;
+  readonly body: string;
+};
+
+function linkedInArticleCodeAttributes(value: unknown): void {
+  if (typeof value !== "string" || value.length > 4_096) {
+    throw new Error("LinkedIn Article bootstrap code attributes exceeded their reviewed bound");
+  }
+  const attributes = new Map<string, string>();
+  let remaining = value.trim();
+  while (remaining.length > 0) {
+    const match = /^([A-Za-z][A-Za-z0-9:_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/u.exec(remaining);
+    if (match === null) {
+      throw new Error("LinkedIn Article bootstrap code attributes changed shape");
+    }
+    const name = match[1]?.toLowerCase();
+    const attributeValue = match[2] ?? match[3];
+    if (name === undefined || attributeValue === undefined || attributes.has(name)) {
+      throw new Error("LinkedIn Article bootstrap code attributes were ambiguous");
+    }
+    attributes.set(name, attributeValue);
+    remaining = remaining.slice(match[0].length).trimStart();
+  }
+  if ([...attributes.keys()].sort().join(",") !== "id,style") {
+    throw new Error("LinkedIn Article bootstrap code attributes changed shape");
+  }
+  if (!/^bpr-guid-[0-9]{1,12}$/u.test(attributes.get("id") ?? "")) {
+    throw new Error("LinkedIn Article bootstrap code identifier changed shape");
+  }
+  const style = (attributes.get("style") ?? "").replace(/\s/gu, "");
+  if (style !== "display:none" && style !== "display:none;") {
+    throw new Error("LinkedIn Article bootstrap code payload is no longer hidden");
+  }
+}
+
+const LINKEDIN_ARTICLE_HTML_ENTITY =
+  /&(?:quot|amp|lt|gt|apos|#(?:[xX][0-9A-Fa-f]{1,6}|[0-9]{1,7}));/gu;
+
+function decodeLinkedInArticleEntity(entity: string): string {
+  if (entity === "&quot;") return '"';
+  if (entity === "&amp;") return "&";
+  if (entity === "&lt;") return "<";
+  if (entity === "&gt;") return ">";
+  if (entity === "&apos;") return "'";
+  const numeric = /^&#(?:[xX]([0-9A-Fa-f]{1,6})|([0-9]{1,7}));$/u.exec(entity);
+  if (numeric === null) {
+    throw new Error("LinkedIn Article bootstrap used an unsupported HTML entity");
+  }
+  const codePoint = Number.parseInt(numeric[1] ?? numeric[2] ?? "", numeric[1] === undefined ? 10 : 16);
+  if (
+    !Number.isSafeInteger(codePoint)
+    || codePoint < 0
+    || codePoint > 0x10_FFFF
+    || (codePoint >= 0xD800 && codePoint <= 0xDFFF)
+  ) throw new Error("LinkedIn Article bootstrap used an invalid numeric HTML entity");
+  return String.fromCodePoint(codePoint);
+}
+
+function parseLinkedInArticleCodePayload(
+  value: LinkedInArticleCodePayload,
+  draftUrn: string,
+): unknown {
+  linkedInArticleCodeAttributes(value.attributes);
+  if (
+    value.body.length < 1
+    || value.body.length > LINKEDIN_ARTICLE_CODE_PAYLOAD_MAX_CHARACTERS
+    || !value.body.includes(draftUrn)
+  ) throw new Error("LinkedIn Article bootstrap code payload did not bind the exact draft");
+  const json = value.body.replace(
+    LINKEDIN_ARTICLE_HTML_ENTITY,
+    (entity) => decodeLinkedInArticleEntity(entity),
+  ).trim();
+  if (!json.startsWith("{") || !json.endsWith("}")) {
+    throw new Error("LinkedIn Article bootstrap code payload changed its JSON boundary");
+  }
+  try {
+    return JSON.parse(json) as unknown;
+  } catch {
+    throw new Error("LinkedIn Article bootstrap code payload contained malformed JSON");
+  }
+}
+
+/**
+ * Select the one exact hidden server-response payload for a private draft.
+ * Payloads are produced by the contained browser's bounded HTML scan; callers
+ * cannot provide HTML, selectors, or code through the semantic operation.
+ */
+export function linkedInArticleDraftEnvelopeFromCodePayloads(
+  value: unknown,
+  draftIdValue: unknown,
+): unknown {
+  const draftUrn = linkedInArticleDraftUrn(draftIdValue);
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new Error("LinkedIn Article bootstrap did not isolate one exact hidden payload");
+  }
+  const payload = graphqlRecord(value[0], "Article bootstrap code payload");
+  exactObjectKeys(
+    payload,
+    ["attributes", "body"],
+    "LinkedIn Article bootstrap code payload",
+  );
+  const attributes = boundedText(
+    payload.attributes,
+    "LinkedIn Article bootstrap code attributes",
+    4_096,
+  );
+  const body = boundedText(
+    payload.body,
+    "LinkedIn Article bootstrap code body",
+    LINKEDIN_ARTICLE_CODE_PAYLOAD_MAX_CHARACTERS,
+  );
+  return parseLinkedInArticleCodePayload({ attributes, body }, draftUrn);
+}
+
+/** Extract the same bounded hidden payload from an authenticated HTML response. */
+export function linkedInArticleDraftEnvelopeFromHtml(
+  value: unknown,
+  draftIdValue: unknown,
+): unknown {
+  const draftUrn = linkedInArticleDraftUrn(draftIdValue);
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > LINKEDIN_ARTICLE_PAGE_MAX_CHARACTERS
+  ) throw new Error("LinkedIn Article page exceeded its reviewed HTML bound");
+  const payloads: LinkedInArticleCodePayload[] = [];
+  let codeTags = 0;
+  for (const match of value.matchAll(/<code\b([^>]*)>([\s\S]*?)<\/code>/giu)) {
+    codeTags += 1;
+    if (codeTags > LINKEDIN_ARTICLE_CODE_TAG_MAX_COUNT) {
+      throw new Error("LinkedIn Article page returned too many code payloads");
+    }
+    const attributes = match[1];
+    const body = match[2];
+    if (attributes === undefined || body === undefined || !body.includes(draftUrn)) continue;
+    payloads.push(Object.freeze({ attributes, body }));
+    if (payloads.length > LINKEDIN_ARTICLE_MATCHING_PAYLOAD_MAX_COUNT) {
+      throw new Error("LinkedIn Article page returned too many matching payloads");
+    }
+  }
+  return linkedInArticleDraftEnvelopeFromCodePayloads(payloads, draftIdValue);
 }
 
 function linkedInArticleBlockType(type: ArticleDraftTextBlock["type"]): string {
@@ -749,6 +908,55 @@ export function buildLinkedInArticleContent(
   }));
 }
 
+function escapeLinkedInArticleHtmlText(value: string): string {
+  return value.replace(/[&<>]/gu, (character) => {
+    if (character === "&") return "&amp;";
+    if (character === "<") return "&lt;";
+    return "&gt;";
+  });
+}
+
+function escapeLinkedInArticleHtmlAttribute(value: string): string {
+  return value.replace(/[&<>"]/gu, (character) => {
+    if (character === "&") return "&amp;";
+    if (character === "<") return "&lt;";
+    if (character === ">") return "&gt;";
+    return "&quot;";
+  });
+}
+
+function linkedInArticleHtmlTag(type: ArticleDraftTextBlock["type"]): "p" | "h2" | "h3" {
+  if (type === "paragraph") return "p";
+  if (type === "heading1") return "h2";
+  if (type === "heading2") return "h3";
+  throw new Error(
+    "LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks",
+  );
+}
+
+/** Project the reviewed Article subset into LinkedIn's required rendered HTML. */
+export function buildLinkedInArticleContentHtml(document: ArticleDraftDocument): string {
+  return document.blocks.map((block) => {
+    if (block.styles.length !== 0) {
+      throw new Error("LinkedIn Article text styles remain capture-required");
+    }
+    let cursor = 0;
+    let content = "";
+    for (const link of block.links) {
+      content += escapeLinkedInArticleHtmlText(block.text.slice(cursor, link.offset));
+      content += `<a href="${escapeLinkedInArticleHtmlAttribute(link.url)}" target="_blank">`;
+      content += escapeLinkedInArticleHtmlText(
+        block.text.slice(link.offset, link.offset + link.length),
+      );
+      content += "</a>";
+      cursor = link.offset + link.length;
+    }
+    content += escapeLinkedInArticleHtmlText(block.text.slice(cursor));
+    const tag = linkedInArticleHtmlTag(block.type);
+    return `<${tag}>${content}</${tag}>`;
+  }).join("");
+}
+
 export function buildLinkedInArticleCreateBody(
   profileUrnValue: unknown,
   titleValue: unknown,
@@ -762,15 +970,17 @@ export function buildLinkedInArticleCreateBody(
   ) throw new Error("input.title must be one bounded plain-text line");
   return Object.freeze({
     authors: Object.freeze([Object.freeze({ profileUrn })]),
-    contentHtml: null,
-    state: null,
+    contentHtml: "",
+    state: "AUTOSAVED",
     title: titleValue,
   });
 }
 
 export function buildLinkedInArticleTitlePatch(titleValue: unknown): Readonly<Record<string, unknown>> {
   const title = buildLinkedInArticleCreateBody("urn:li:fsd_profile:fixture", titleValue).title;
-  return Object.freeze({ patch: Object.freeze({ $set: Object.freeze({ state: null, title }) }) });
+  return Object.freeze({
+    patch: Object.freeze({ $set: Object.freeze({ state: "AUTOSAVED", title }) }),
+  });
 }
 
 export function buildLinkedInArticleContentPatch(
@@ -780,7 +990,8 @@ export function buildLinkedInArticleContentPatch(
     patch: Object.freeze({
       $set: Object.freeze({
         content: buildLinkedInArticleContent(document),
-        state: null,
+        contentHtml: buildLinkedInArticleContentHtml(document),
+        state: "AUTOSAVED",
       }),
     }),
   });
@@ -867,12 +1078,38 @@ function normalizeLinkedInArticleDraftValue(
   draftIdValue: unknown,
   profileUrnValue: unknown,
   allowEmptyContent: boolean,
-): Omit<LinkedInArticleDraftReadback, "document"> & { readonly document: ArticleDraftDocument | null } {
+): LinkedInArticleDraftSnapshot {
   const draftId = linkedInArticleDraftId(draftIdValue);
   const profileUrn = linkedInArticleProfileUrn(profileUrnValue);
   const urn = linkedInArticleDraftUrn(draftId);
   const normalized = normalizeLinkedInGraphqlEnvelope(value);
-  exactObjectKeys(normalized.data, ["*elements"], "LinkedIn Article response.data");
+  exactObjectKeys(
+    normalized.data,
+    ["$type", "*elements", "entityUrn", "paging"],
+    "LinkedIn Article response.data",
+  );
+  if (normalized.data.$type !== LINKEDIN_ARTICLE_COLLECTION_TYPE) {
+    throw new Error("LinkedIn Article readback changed its collection response type");
+  }
+  linkedInUrn(
+    normalized.data.entityUrn,
+    "LinkedIn Article readback collection entityUrn",
+  );
+  const paging = graphqlRecord(
+    normalized.data.paging,
+    "LinkedIn Article response.data.paging",
+  );
+  exactObjectKeys(
+    paging,
+    ["count", "links", "start"],
+    "LinkedIn Article response.data.paging",
+  );
+  if (
+    nonnegativeInteger(paging.count, "LinkedIn Article response.data.paging.count") !== 10
+    || nonnegativeInteger(paging.start, "LinkedIn Article response.data.paging.start") !== 0
+    || !Array.isArray(paging.links)
+    || paging.links.length !== 0
+  ) throw new Error("LinkedIn Article readback changed its exact draft paging boundary");
   if (
     !Array.isArray(normalized.data["*elements"])
     || normalized.data["*elements"].length !== 1
@@ -883,32 +1120,100 @@ function normalizeLinkedInArticleDraftValue(
   exactObjectKeys(article, [
     "$type",
     "activityUrn",
+    "annotation",
+    "annotationActionType",
+    "articleActionUnions",
+    "articleAnnotation",
+    "articlePublishedTimeDescription",
     "articleType",
     "authors",
+    "availableLocales",
     "content",
+    "contentDescription",
     "contentHtml",
+    "contentSegments",
+    "coverMedia",
+    "coverMediaV2Union",
     "createdAt",
     "entityUrn",
+    "featured",
+    "followingStateUrn",
+    "gatedArticleMetadata",
+    "initialUpdateUrn",
+    "issueNumber",
     "linkedInArticleUrn",
+    "locale",
+    "memberContributionInsight",
     "permalink",
     "publishedAt",
+    "scheduledAt",
+    "seoDescription",
+    "seoTitle",
+    "series",
+    "servedLocale",
+    "socialDetailUrn",
+    "socialProofInsight",
+    "sponsoredAccountUrn",
     "state",
+    "surveyComponent",
     "title",
+    "trackingId",
     "ugcPostUrn",
     "updatedAt",
     "version",
+    "viewerAllowedToEdit",
   ], "LinkedIn Article readback entity");
+  const nullFields = [
+    "activityUrn",
+    "annotation",
+    "annotationActionType",
+    "articleAnnotation",
+    "articlePublishedTimeDescription",
+    "contentDescription",
+    "contentSegments",
+    "coverMedia",
+    "coverMediaV2Union",
+    "featured",
+    "gatedArticleMetadata",
+    "initialUpdateUrn",
+    "issueNumber",
+    "locale",
+    "memberContributionInsight",
+    "permalink",
+    "publishedAt",
+    "scheduledAt",
+    "seoDescription",
+    "seoTitle",
+    "series",
+    "servedLocale",
+    "socialDetailUrn",
+    "socialProofInsight",
+    "sponsoredAccountUrn",
+    "surveyComponent",
+    "trackingId",
+    "ugcPostUrn",
+    "viewerAllowedToEdit",
+  ] as const;
+  if (nullFields.some((field) => article[field] !== null)) {
+    throw new Error("LinkedIn Article readback was not the exact private unpublished draft");
+  }
   if (
     article.$type !== LINKEDIN_ARTICLE_TYPE
     || article.entityUrn !== urn
     || article.linkedInArticleUrn !== `urn:li:linkedInArticle:${draftId}`
     || article.state !== "DRAFT"
     || article.articleType !== "FIRST_PARTY_ARTICLE"
-    || article.activityUrn !== null
-    || article.publishedAt !== null
-    || article.ugcPostUrn !== null
-    || article.permalink !== null
   ) throw new Error("LinkedIn Article readback was not the exact private unpublished draft");
+  if (
+    !Array.isArray(article.articleActionUnions)
+    || article.articleActionUnions.length !== 0
+    || !Array.isArray(article.availableLocales)
+    || article.availableLocales.length !== 0
+  ) throw new Error("LinkedIn Article readback added unsupported actions or locales");
+  linkedInUrn(
+    article.followingStateUrn,
+    "LinkedIn Article readback followingStateUrn",
+  );
   if (!Array.isArray(article.authors) || article.authors.length !== 1) {
     throw new Error("LinkedIn Article readback did not bind one exact author");
   }
@@ -938,17 +1243,30 @@ function normalizeLinkedInArticleDraftValue(
   });
 }
 
+/** Normalize an owner-bound private draft before its first content autosave. */
+export function normalizeLinkedInArticleDraftSnapshot(
+  value: unknown,
+  draftIdValue: unknown,
+  profileUrnValue: unknown,
+): LinkedInArticleDraftSnapshot {
+  return normalizeLinkedInArticleDraftValue(
+    value,
+    draftIdValue,
+    profileUrnValue,
+    true,
+  );
+}
+
 /** Normalize the exact owner/private/title binding of a newly created empty draft. */
 export function normalizeLinkedInArticleDraftMetadata(
   value: unknown,
   draftIdValue: unknown,
   profileUrnValue: unknown,
 ): Readonly<Omit<LinkedInArticleDraftReadback, "document">> {
-  const normalized = normalizeLinkedInArticleDraftValue(
+  const normalized = normalizeLinkedInArticleDraftSnapshot(
     value,
     draftIdValue,
     profileUrnValue,
-    true,
   );
   return Object.freeze({
     draftId: normalized.draftId,

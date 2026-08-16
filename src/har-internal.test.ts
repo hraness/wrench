@@ -241,7 +241,7 @@ describe("private LinkedIn internal-API HAR evidence", () => {
     const title = "private fixture title";
     const text = "private fixture text";
     const hyperlink = "https://example.com/private-fixture";
-    const url = new URL(`https://www.linkedin.com/voyager/api/voyagerPublishingDashFirstPartyArticles/${encodeURIComponent(`urn:li:fsd_firstPartyArticle:${draftId}`)}`);
+    const url = new URL(`https://www.linkedin.com/voyager/api/voyagerPublishingDashFirstPartyArticles/urn:li:fsd_firstPartyArticle:${draftId}`);
     url.searchParams.set("author", profileUrn);
     url.searchParams.set("q", "author");
     url.searchParams.set("start", "0");
@@ -251,7 +251,6 @@ describe("private LinkedIn internal-API HAR evidence", () => {
       url: url.href,
       status: 200,
       requestHeaders: [
-        { name: "X-RestLi-Method", value: "PARTIAL_UPDATE" },
         { name: "Authorization", value: "Bearer private" },
       ],
       requestJson: {
@@ -295,7 +294,7 @@ describe("private LinkedIn internal-API HAR evidence", () => {
     const candidate = oneCandidate(evidence);
     expect(candidate.path).toBe("/voyager/api/voyagerPublishingDashFirstPartyArticles/:segment1");
     expect(candidate.queryNames).toEqual(["author", "q", "start", "state"]);
-    expect(candidate.headerNames).toEqual(["authorization", "x-restli-method"]);
+    expect(candidate.headerNames).toEqual(["authorization"]);
     for (const path of [
       "patch.$set.title",
       "patch.$set.content[].textBlock.type",

@@ -55,7 +55,7 @@ function linkedinArticleDraftIssues(
 
 const operations = webSessionContractOperations(
   Object.values(linkedinContracts),
-  "6db6764bd62b5a01c0c217585053b8453228d1b7f78049a67b2711570358d3b5",
+  "f9997478269d07e7411716070365be462abc073cf148f84eb59d09ea6d6a12c8",
   {},
   {
     "messaging.list": {
@@ -81,12 +81,8 @@ const operations = webSessionContractOperations(
         ])
       : Object.freeze([
           Object.freeze({
-            id: "articles.title",
-            description: "Replace the exact private LinkedIn Article title",
-          }),
-          Object.freeze({
-            id: "articles.content",
-            description: "Replace the exact private LinkedIn Article document",
+            id: "articles.replace",
+            description: "Bring the exact private LinkedIn Article title and document to the confirmed state",
           }),
         ]),
   },
@@ -147,7 +143,7 @@ export const linkedinWebPlugin = defineProviderPlugin({
           const readback = await runtime.readLinkedInWebArticleDraftDesiredState({
             site: "linkedin",
             action: operation,
-            contractVersion: 1,
+            contractVersion: 2,
             timeoutMs: 60_000,
             maxOutputBytes: 2 * 1024 * 1024,
           }, input, auth);

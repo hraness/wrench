@@ -1,14 +1,15 @@
 # LinkedIn authenticated web API adapter
 
 The current `linkedin-web` schema-v4 adapter has one observed operation:
-`articles.draft.save@1`. It creates or replaces one private native Article
+`articles.draft.save@2`. It creates or replaces one private native Article
 draft for the bound current member, supports paragraphs, H1/H2 headings, and
-native HTTPS links, and independently verifies the exact unpublished result.
+native HTTPS links, and independently verifies the exact unpublished result
+from the authenticated editor-page server payload.
 Every other consumer-web capability remains `capture-required` and inert.
 
 A browser may record a managed HAR, bootstrap the private session, or resolve
 current session material. Runtime draft saving executes only Wrench's fixed
-reviewed first-party API contract inside a contained headed Chrome session;
+reviewed first-party API/write and editor-response readback contract inside a contained headed Chrome session;
 LinkedIn rejects the same editor exchange from a standalone HTTP client after
 its initial authenticated probe. It never types into or reads the Article
 editor DOM. Callers cannot choose a URL, header, script, or selector. Wrench
@@ -148,7 +149,7 @@ editor payloads are rejected. The caller owns editorial translation from
 source material.
 
 Create has two confirmed dispatches: create the private title shell, bind the
-returned stable draft identity and exact current-author unpublished readback,
+returned stable draft identity and exact current-author unpublished server-response readback,
 then save and read back the exact document. Replacement reads the exact private
 draft first, then performs separately verified title and document autosaves.
 Neither schedule contains a publication or feed-share request.
@@ -156,17 +157,19 @@ Neither schedule contains a publication or feed-share request.
 The contained browser is an authenticated transport, not a browser-operation
 fallback. Chrome supplies the bound device session, cookies, user agent, and
 TLS context; code-owned evaluation sends only the fixed current-member,
-create, exact-draft readback, title-autosave, and content-autosave requests.
+create, exact editor-page readback, title-autosave, and content-autosave requests.
 The headed window may be visible during the save. Cleanup is tracked as part
 of the durable operation and an unverified close preserves private artifacts
 for explicit recovery instead of silently deleting evidence.
 
-Authorized August 15, 2026 captures proved the current first-party Article
+Authorized August 15–16, 2026 captures proved the current first-party Article
 route family, exact create and partial-update bodies, the returned Rest.li
 draft identity, normalized current-member-to-Article-author binding, private
 `DRAFT` lifecycle, null publication/share fields, exact title/content/link
-projection, and persistence after reopening. Covers and inline media were
-deliberately excluded.
+projection, and persistence after reopening. The August 16 live recapture also
+proved that exact draft reads now come from one bounded hidden JSON payload in
+the authenticated editor HTML response rather than the retired Rest.li finder.
+Covers and inline media were deliberately excluded.
 
 The presence of a LinkedIn editor or saved UI state alone is not a contract.
 Do not type into the editor as a runtime fallback. `articles.publish` remains a
