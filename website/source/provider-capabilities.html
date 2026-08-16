@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#181817">
+    <title>Wrench provider capabilities for contacts, email, and messages</title>
+    <meta name="description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/provider-capabilities/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Wrench provider capabilities for contacts, email, and messages">
+    <meta property="og:description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <meta property="og:url" content="https://wrench.rip/provider-capabilities/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Wrench provider capabilities for contacts, email, and messages">
+    <meta name="twitter:description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a aria-current="page" href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Provider capabilities</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Provider capability reference · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Contacts, email, and messages are provider-specific capabilities.</h1>
+          <p class="answer-lede">Wrench currently supports Gmail contacts, inbox search, thread reading, and private thread clipping through official Google APIs. Other contact and messaging providers expose narrower reviewed surfaces. A missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control.</p>
+          <p class="review-note">This reference describes {{WRENCH_RELEASE}} and was checked against the bundled public adapter manifests for that immutable release. Run <code>wrench capabilities --json</code> for the exact state installed on your machine.</p>
+        </header>
+
+        <section aria-labelledby="matrix">
+          <h2 id="matrix">Current contact and messaging coverage</h2>
+          <div class="table-scroll provider-table" role="region" aria-labelledby="matrix" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">Provider</th><th scope="col">Contacts</th><th scope="col">Inbox and messages</th><th scope="col">Important limit</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Gmail official</th><td>Google People connections plus bounded directional Gmail statistics</td><td>Observed inbox or bounded search listing, exact thread read, and private thread clipping with attachments</td><td>Counts and dates expose completeness; scanning is bounded and reading does not mark mail seen</td></tr>
+                <tr><th scope="row">LinkedIn official</th><td>Observed first-degree connections with exact account binding and locale-selection evidence</td><td>No ordinary inbox operation through the official API; consumer-web inbox operations remain capture-required</td><td>Requires approved <code>r_1st_connections</code> and <code>r_liteprofile</code>; message statistics are unavailable</td></tr>
+                <tr><th scope="row">Instagram web</th><td>Observed unique non-viewer participants from one reviewed first Direct inbox page</td><td>Observed bounded first inbox summary page; individual thread read remains capture-required</td><td>Contact set and message statistics are explicitly incomplete; no acknowledgement or presence request is issued</td></tr>
+                <tr><th scope="row">WhatsApp linked device</th><td>Observed bounded page from the private, quiescent Whatsmeow contact store</td><td>Observed bounded local linked-device conversation list and exact conversation read</td><td>No new WhatsApp connection or acknowledgement is emitted; directional contact statistics are unavailable</td></tr>
+                <tr><th scope="row">Facebook web</th><td>Capture-required reservation for friends or Messenger participants</td><td>Inbox listing and conversation reading are capture-required</td><td>Actor binding, paging, completeness, acknowledgement, and Messenger transport still require review</td></tr>
+                <tr><th scope="row">Telegram</th><td>Not installed</td><td>Not installed</td><td>Requires a reviewed TDLib user-session lifecycle; Wrench does not substitute the Bot API or claim contact access</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>This matrix covers the contact and messaging providers above. Wrench also ships other provider adapters and operations. Their current installed contract states remain discoverable through the CLI rather than being generalized from this table.</p>
+        </section>
+
+        <section aria-labelledby="gmail">
+          <h2 id="gmail">Gmail contacts, inbox search, thread reads, and clips</h2>
+          <p>Gmail uses the official Gmail and Google People APIs. Its auth locator must match a current-user-owned mode-0600 token document with the exact provider, subject, and sorted <code>contacts.readonly</code> and <code>gmail.readonly</code> scopes.</p>
+          <div class="command-panel"><pre><code>wrench gmail contacts.list --auth gmail-main \
+  --input '{"limit":20,"stats_scan_limit":100}' --json
+
+wrench gmail messaging.list --auth gmail-main \
+  --input '{"view":"inbox","limit":25}' --json
+
+wrench gmail messaging.list --auth gmail-main \
+  --input '{"view":"search","query":"from:example.com has:attachment","limit":25}' --json
+
+wrench gmail messaging.read --auth gmail-main \
+  --input '{"thread_id":"thread-id-from-list"}' --json</code></pre></div>
+          <p>Contact statistics report sent and received counts plus the maximum internal date across each bounded matched-message scan. A count is complete, a lower bound, or <code>null</code>; dates carry the same basis and completeness evidence. <code>limit * stats_scan_limit</code> cannot exceed 2,000 per-direction query candidates before paired metadata reads.</p>
+          <p>Inbox and search rows include a provider-derived <code>threadUrl</code> and the exact <code>messaging.read</code> input. Reading does not mark a message seen or emit an acknowledgement. Pass the returned URL to <code>wrench read</code> or <code>wrench clip</code> with the same auth locator. Clips default to private Wrench state and can include every MIME attachment as content-addressed, integrity-recorded objects. The <a href="/capture-and-archives/">capture guide</a> documents the plaintext export and attachment boundary.</p>
+        </section>
+
+        <section aria-labelledby="social-contacts">
+          <h2 id="social-contacts">LinkedIn, Instagram, and WhatsApp contacts keep their missing data visible</h2>
+          <div class="command-panel"><pre><code>wrench linkedin contacts.list --auth linkedin-main \
+  --input '{"start":0,"count":25}' --json
+
+wrench instagram-web contacts.list --auth instagram-main \
+  --input '{"thread_limit":25,"contact_limit":50}' --json
+
+wrench whatsapp-web contacts.list --auth whatsapp-main \
+  --input '{"limit":50}' --json</code></pre></div>
+          <p>LinkedIn's official Connections API does not expose ordinary inbox history, so Wrench reports directional statistics as unavailable. Its separate consumer-web contact and inbox reservations do not inherit authority from the official adapter.</p>
+          <p>Instagram projects only participants visible in one reviewed first inbox page. Provider pagination and local thread or contact limits remain incomplete. WhatsApp reads one page from the authenticated account owner's private, quiescent contact store without opening a connection; it does not reinterpret a linked-device message cache as complete account-owned history.</p>
+        </section>
+
+        <section aria-labelledby="persistent">
+          <h2 id="persistent">Verified reads can remain available locally</h2>
+          <p>Successful R1 calls with a verified account subject can publish encrypted snapshots of the exact validated query and bounded output. Repeating the same operation with <code>--cache-only</code> can return the last verified state without opening a browser or provider connection.</p>
+          <p>A failed refresh does not erase the last good snapshot. Provider paging, completeness, and unsupported states remain explicit. WhatsApp revalidation reads its local linked-device projection; synchronizing that projection remains the separate explicit <code>wrench auth sync &lt;id&gt; --once</code> operation.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="provider-next">
+          <h2 id="provider-next">Capability discovery comes before credentials</h2>
+          <p>Follow the <a href="/getting-started/">installation guide</a>, inspect <code>wrench capabilities PROVIDER --json</code>, then read the <a href="/security/">security and local-custody guide</a> before binding an account.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>

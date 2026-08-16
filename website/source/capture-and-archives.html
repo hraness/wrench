@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#181817">
+    <title>Capture URLs and create verified media archives with Wrench</title>
+    <meta name="description" content="Capture public URLs as Markdown and preserve one authorized media item with manifests, transcripts, provenance, and SHA-256 verification.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/capture-and-archives/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Capture URLs and create verified media archives with Wrench">
+    <meta property="og:description" content="Capture public URLs as Markdown and preserve one authorized media item with manifests, transcripts, provenance, and SHA-256 verification.">
+    <meta property="og:url" content="https://wrench.rip/capture-and-archives/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Capture URLs and create verified media archives with Wrench">
+    <meta name="twitter:description" content="Capture public URLs as Markdown and preserve one authorized media item with manifests, transcripts, provenance, and SHA-256 verification.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a aria-current="page" href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Capture and archives</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Capture and preservation · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Capture a URL or preserve one verified media item.</h1>
+          <p class="answer-lede">Use <code>wrench read</code> for a non-persistent inspection, pass a URL to Wrench for durable Markdown capture, or use <code>wrench archive</code> for one authorized, accessible, finite, non-DRM media item with integrity evidence.</p>
+          <p class="review-note">This guide describes {{WRENCH_RELEASE}} and was checked against the public source for that immutable release.</p>
+        </header>
+
+        <section aria-labelledby="choose-mode">
+          <h2 id="choose-mode">Choose the result before you run the command</h2>
+          <div class="table-scroll" role="region" aria-labelledby="choose-mode" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">Command</th><th scope="col">Result</th><th scope="col">Persistence</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>wrench read URL</code></th><td>Readable page inspection</td><td>Does not save the page</td></tr>
+                <tr><th scope="row"><code>wrench URL</code></th><td>Durable Markdown page capture and local assets when applicable</td><td>Saves to the configured knowledge base</td></tr>
+                <tr><th scope="row"><code>wrench archive URL</code></th><td>Verified source media plus requested derivatives, transcript, manifest, and hashes</td><td>Saves one archive item</td></tr>
+                <tr><th scope="row"><code>wrench audio|video|transcript URL</code></th><td>One focused derivative from the same bounded media pipeline</td><td>Saves the requested archive view</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section aria-labelledby="page-capture">
+          <h2 id="page-capture">Capture readable web knowledge</h2>
+          <div class="command-panel"><pre><code>wrench read https://example.com/article
+wrench https://example.com/article
+wrench search "bounded provider contracts"
+wrench context path/to/code</code></pre></div>
+          <p>The saved form is Markdown intended to remain inspectable and searchable in local knowledge. <code>wrench context</code> resolves nearby agent context for a repository path, while <code>wrench search</code> queries the knowledge already kept locally.</p>
+          <p>Wrench also exposes the shared <code>@hraness/kb</code> URL-intelligence boundary:</p>
+          <div class="command-panel"><pre><code>wrench url-metadata backfill --root kb</code></pre></div>
+          <p>The backfill uses a pinned Rust search helper for bounded metadata lookup, writes resumable <code>url-metadata.json</code> sidecars beside saved URLs, and performs read-only Archive.today discovery, including archive.is URLs, by default. <code>--no-archive</code> disables archive discovery; <code>--refresh</code> replaces an existing sidecar after a fresh bounded lookup.</p>
+        </section>
+
+        <section aria-labelledby="media-archive">
+          <h2 id="media-archive">Preserve media with recomputable integrity</h2>
+          <div class="command-panel"><pre><code>wrench archive https://example.com/authorized-media
+wrench verify path/to/archive-item</code></pre></div>
+          <p>A completed media item retains the acquired encoded media, privacy-projected provider metadata, requested derivatives and transcripts, a versioned manifest, and SHA-256 integrity records. <code>wrench verify</code> recomputes every recorded artifact hash so the archive can be checked independently after capture.</p>
+          <p>The unit of work is exactly one accessible, finite item. Wrench rejects playlists, live streams, affirmative DRM, and unsupported authentication rather than silently weakening the boundary. It does not bypass authentication, payment, access controls, or DRM.</p>
+        </section>
+
+        <section aria-labelledby="browser-admission">
+          <h2 id="browser-admission">Local browser work is bounded</h2>
+          <p>Fresh and profile-backed page capture share at most two locally owned browser acquisitions across Wrench processes using the same state home. Admission consumes the capture timeout and remains held through browser, proxy, process, and isolation cleanup.</p>
+          <p>An explicit <code>--cdp</code> or <code>--browser-live</code> attachment does not launch a Wrench-owned browser and does not consume one of those two slots. Ambiguous same-boot admission state stays occupied rather than allowing capacity to exceed the bound. Run <code>wrench doctor --json</code> for the exact state home and recovery evidence.</p>
+        </section>
+
+        <section aria-labelledby="gmail-clip">
+          <h2 id="gmail-clip">Email thread clipping is a separate authenticated path</h2>
+          <p>A Gmail <code>messaging.list</code> result includes a provider-derived <code>threadUrl</code>. Pass that URL to <code>wrench read</code> or <code>wrench clip</code> with the same Gmail auth locator. Gmail clips default to private Wrench state; <code>--output &lt;directory&gt;</code> is the explicit plaintext export boundary.</p>
+          <p>The default and <code>--media all</code> include every MIME attachment. <code>--media none</code> omits attachment bytes, while <code>--media images</code> is rejected because it would misrepresent non-image files. Attachment objects are content-addressed, integrity-recorded, and stored under deterministic SHA-256 names. See the <a href="/provider-capabilities/">provider capability guide</a> for inbox, search, thread, and contact-statistics limits.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="capture-next">
+          <h2 id="capture-next">Keep the capture boundary explicit</h2>
+          <p>Install and verify the CLI with the <a href="/getting-started/">getting started guide</a>. For account-bound reads, review <a href="/security/">local custody and provider contracts</a> before adding credentials.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>

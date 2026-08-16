@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#181817">
+    <title>Wrench security: local custody and bounded provider contracts</title>
+    <meta name="description" content="Understand Wrench local custody, encrypted snapshots, exact account binding, fail-closed provider contracts, risk levels, and mutation recovery.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/security/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Wrench security: local custody and bounded provider contracts">
+    <meta property="og:description" content="Understand Wrench local custody, encrypted snapshots, exact account binding, fail-closed provider contracts, risk levels, and mutation recovery.">
+    <meta property="og:url" content="https://wrench.rip/security/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Wrench security: local custody and bounded provider contracts">
+    <meta name="twitter:description" content="Understand Wrench local custody, encrypted snapshots, exact account binding, fail-closed provider contracts, risk levels, and mutation recovery.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a aria-current="page" href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Security</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Security model · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Wrench limits authority before an agent reaches the web.</h1>
+          <p class="answer-lede">An authenticated Wrench operation binds one named outcome to an exact provider, transport, account realm, contract version, implementation, input, and risk. Credentials stay opaque to the caller. When those facts drift, the operation stops instead of changing transports or falling back to general browser control.</p>
+          <p class="review-note">This guide summarizes the public security contract for {{WRENCH_RELEASE}} and was checked against that immutable release. Report vulnerabilities through <a href="https://github.com/hraness/wrench/security/advisories/new">GitHub private vulnerability reporting</a>, never a public issue containing private material.</p>
+        </header>
+
+        <section aria-labelledby="threat-boundary">
+          <h2 id="threat-boundary">Foreign data is parsed; authority is selected separately</h2>
+          <p>Wrench treats CLI input, URLs, manifests, packages, plugin messages, provider responses, browser output, files, durable state, and subprocess diagnostics as untrusted. Foreign values are strictly parsed and bounded, and sensitive values are redacted from terminal output, receipts, and diagnostics.</p>
+          <p>Operations expose semantic jobs such as <code>messaging.list</code>, not raw cookies, selectors, scripts, arbitrary HTTP, or every signed-in tab. The exact auth locator is bound to one provider account and transport. Wrench does not silently move between an official API, browser session, linked-device store, or portable plugin.</p>
+        </section>
+
+        <section aria-labelledby="custody">
+          <h2 id="custody">Account-bound reads stay under local custody</h2>
+          <p>A successful R1 read with a verified account subject can publish an encrypted snapshot of the exact validated query and bounded provider output. The same query can later load from local ciphertext without contacting the provider. Inputs, account subjects, cursors, private identifiers, and provider output remain inside authenticated local encryption.</p>
+          <p>A failed refresh or publication does not erase the last verified snapshot. Replacing or removing an auth locator rotates its local lifetime identity, so ciphertext from an earlier account incarnation cannot become current after recreation. Exact provider paging and completeness semantics are retained rather than being translated into invented certainty.</p>
+        </section>
+
+        <section aria-labelledby="risk">
+          <h2 id="risk">Risk levels keep reads and writes distinct</h2>
+          <dl class="invariants security-levels">
+            <div><dt>R1</dt><dd>A reviewed read with no intended remote mutation.</dd></div>
+            <div><dt>R2</dt><dd>One bounded, normally reversible change.</dd></div>
+            <div><dt>R3</dt><dd>An externally visible or consequential change.</dd></div>
+            <div><dt>R4</dt><dd>Blocked.</dd></div>
+          </dl>
+          <p>R2 and R3 operations create an exact, short-lived preview. The confirmation binds the adapter, transport, account realm, input, attachment hashes, side effect, contract hash, and dispatch schedule. If a request left the machine but its response was lost, Wrench retains the indeterminate result and does not retry or switch transport. A separate reconciliation needs exact external evidence.</p>
+        </section>
+
+        <section aria-labelledby="drift">
+          <h2 id="drift">Provider drift fails closed</h2>
+          <p>A changed origin, account proof, request, status, field, or response shape returns the affected operation to <code>capture-required</code>. That state is an inert reservation. It cannot plan or execute until authorized evidence establishes a newly reviewed contract.</p>
+          <p>This rule keeps capability gaps visible. For example, LinkedIn's official contact adapter does not grant authority to its separate consumer-web inbox adapter, and an Instagram inbox summary does not authorize an individual thread read. Review current state in the <a href="/provider-capabilities/">provider capability reference</a>.</p>
+        </section>
+
+        <section aria-labelledby="plugins-boundary">
+          <h2 id="plugins-boundary">Portable plugins are contained, not treated as hostile code</h2>
+          <p>Source plugins ship as trusted in-process code. A portable plugin requires an explicit trust decision for one verified, content-addressed bundle and runs through a denied-by-default child-process protocol. The protocol limits the services a well-behaved plugin can request and contains ordinary crashes.</p>
+          <p>It is not a hostile native-code sandbox. Plugin code still runs with the ambient operating-system authority of the current account. Review code before trusting it, keep Wrench state on a trusted local filesystem protected for that account, and follow the <a href="/plugins/">plugin verification workflow</a>.</p>
+        </section>
+
+        <section aria-labelledby="media-security">
+          <h2 id="media-security">Archive integrity is verifiable, but local same-user processes remain trusted</h2>
+          <p>Completed media archives use versioned manifests and SHA-256 records that <code>wrench verify</code> recomputes. Wrench invokes media tools without a shell and does not persist cookies, request headers, signed media URLs, raw yt-dlp metadata, or transport fragments.</p>
+          <p>Archive locks and atomic same-volume publication coordinate Wrench processes. They are not a boundary against another process running as the same user. Keep archive roots and transcription configuration on a trusted local filesystem, obtain selected native tools and models from trusted sources, and use verification to detect later changes.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="security-next">
+          <h2 id="security-next">Use only authorized material and accounts</h2>
+          <p>Start with a public URL in the <a href="/getting-started/">getting started guide</a>. The <a href="/capture-and-archives/">capture guide</a> documents media authorization and integrity limits in more detail.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>

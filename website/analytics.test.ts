@@ -122,6 +122,33 @@ describe("Wrench browser analytics", () => {
     }, evidence)).toBeNull();
   });
 
+  test("keeps each public content route distinct without retaining URL detail", () => {
+    const routes = [
+      ["/getting-started/", "getting_started"],
+      ["/capture-and-archives/", "capture_and_archives"],
+      ["/provider-capabilities/", "provider_capabilities"],
+      ["/security/", "security"],
+      ["/plugins/", "plugin_authoring"],
+    ] as const;
+
+    for (const [path, pageKind] of routes) {
+      const capture = sanitizeCapture({
+        event: "$pageview",
+        properties: {
+          $current_url: `https://wrench.rip${path}?utm_source=private#private-fragment`,
+          $pathname: `${path}?private=query`,
+          token: "phc_public_project_token",
+        },
+      }, evidence);
+      expect(capture?.properties).toMatchObject({
+        $current_url: `https://wrench.rip${path}`,
+        $pathname: path,
+        canonical_path: path,
+        page_kind: pageKind,
+      });
+    }
+  });
+
   test("allows only page lifecycle, web vitals, and the repository event", () => {
     for (const event of ["$pageview", "$pageleave", "$web_vitals"]) {
       expect(sanitizeCapture({

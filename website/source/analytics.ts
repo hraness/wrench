@@ -4,6 +4,20 @@ const CANONICAL_ORIGIN = `https://${CANONICAL_DOMAIN}` as const;
 const SCHEMA_VERSION = 1 as const;
 const NOT_FOUND_PATH = "/not-found" as const;
 const POSTHOG_SDK_VERSION = "1.412.1" as const;
+const CANONICAL_ROUTES = new Map<string, Readonly<{ canonicalPath: string; pageKind: string }>>([
+  ["/", { canonicalPath: "/", pageKind: "product_landing" }],
+  ["/capture-and-archives", {
+    canonicalPath: "/capture-and-archives/",
+    pageKind: "capture_and_archives",
+  }],
+  ["/getting-started", { canonicalPath: "/getting-started/", pageKind: "getting_started" }],
+  ["/plugins", { canonicalPath: "/plugins/", pageKind: "plugin_authoring" }],
+  ["/provider-capabilities", {
+    canonicalPath: "/provider-capabilities/",
+    pageKind: "provider_capabilities",
+  }],
+  ["/security", { canonicalPath: "/security/", pageKind: "security" }],
+]);
 
 const ALLOWED_EVENTS = new Set([
   "$pageleave",
@@ -114,16 +128,15 @@ function canonicalRoute(rawUrl: string): { canonicalPath: string; pageKind: stri
     const url = new URL(rawUrl, `${CANONICAL_ORIGIN}/`);
     if (url.hostname.toLowerCase().replace(/\.$/u, "") !== CANONICAL_DOMAIN) return null;
     const pathname = normalizePathname(url.pathname);
-    return pathname === "/"
-      ? { canonicalPath: "/", pageKind: "product_landing" }
-      : { canonicalPath: NOT_FOUND_PATH, pageKind: "not_found" };
+    return CANONICAL_ROUTES.get(pathname)
+      ?? { canonicalPath: NOT_FOUND_PATH, pageKind: "not_found" };
   } catch {
     return null;
   }
 }
 
 function canonicalUrl(pathname: string): string {
-  return `${CANONICAL_ORIGIN}${normalizePathname(pathname)}`;
+  return `${CANONICAL_ORIGIN}${pathname}`;
 }
 
 function normalizedPropertyName(key: string): string {
