@@ -302,6 +302,10 @@
     "test:standalone": "bun run scripts/standalone-smoke.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
     "check": "bun run typecheck && bun run website:check && bun run build && bun run test:package && bun run test && bun run test:standalone",
+    "kb:refresh": "bunx --bun github:hraness/kb#v0.15.1 refresh --root kb",
+    "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.1 check --root kb --no-catalog",
+    "kb:check": "bunx --bun github:hraness/kb#v0.15.1 check --root kb && bunx --bun github:hraness/kb#v0.15.1 agents check --root kb --repo .",
+    "kb:catalog": "bunx --bun github:hraness/kb#v0.15.1 catalog --root kb",
     "prepack": "bun run check"
   },
   "dependencies": {
