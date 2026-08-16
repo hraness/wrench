@@ -15,6 +15,7 @@ import {
   readLinkedInWebArticleDraftDesiredState,
   type LinkedInWebRuntimeDependencies,
 } from "./linkedin-web-runtime";
+import type { LinkedInArticleBrowserTransport } from "./linkedin-web-article-browser";
 
 const MEMBER_ID = "123456789";
 const MEMBER_URN = `urn:li:fsd_profile:${MEMBER_ID}`;
@@ -734,6 +735,71 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       "verified:articles.content",
     ]);
     expect(calls.some((call) => /(?:^|\/)(?:publish|share)(?:\/|$)/iu.test(call.url.pathname))).toBeFalse();
+  });
+
+  test("selects the contained Article browser transport in production and tracks its cleanup barrier", async () => {
+    const title = "Contained browser fixture";
+    const documentValue = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "paragraph", text: "Private browser body" }],
+    });
+    const document = parseArticleDraftDocument(documentValue, {
+      maximumBlocks: 5_000,
+      maximumCharacters: 125_000,
+    });
+    const expectedContent = buildLinkedInArticleContent(document);
+    let contentSaved = false;
+    let closed = false;
+    let browserCreates = 0;
+    const cleanupBarriers: Promise<void>[] = [];
+    const cleanupPublisher = () => undefined;
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      createDraft: () => Promise.resolve(`urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`),
+      readDraftResponse: () => Promise.resolve(articleResponse(
+        title,
+        contentSaved ? expectedContent : [],
+      )),
+      updateTitle: () => Promise.reject(new Error("create must not replace a title")),
+      updateContent: (_draftId, receivedDocument) => {
+        expect(receivedDocument).toEqual(document);
+        contentSaved = true;
+        return Promise.resolve();
+      },
+      close: () => {
+        closed = true;
+        return Promise.resolve();
+      },
+    };
+
+    const result = await executeLinkedInWebOperation(
+      articleRecipe(),
+      { title, document: documentValue },
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: (_auth, options) => {
+            browserCreates += 1;
+            expect(options.publishCleanupResource).toBe(cleanupPublisher);
+            return Promise.resolve(transport);
+          },
+        },
+        registerCleanupBarrier: (barrier) => {
+          cleanupBarriers.push(barrier);
+          return cleanupPublisher;
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      dispatch: { planned: 2, started: 2, verified: 2 },
+      output: { draftId: ARTICLE_ID, published: false, title },
+    });
+    expect(browserCreates).toBe(1);
+    expect(closed).toBeTrue();
+    expect(cleanupBarriers).toHaveLength(1);
+    await Promise.all(cleanupBarriers);
   });
 
   test("replaces one exact private draft in place and reconciles only from unpublished readback", async () => {

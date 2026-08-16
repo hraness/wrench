@@ -222,6 +222,7 @@ const identities = Object.freeze({
       "12a60095cd913fa590d82d4e8d82c4b573be6b3b76c7a1e5bece3cd452e21b24",
       "68935222cc0d21255f04556dd9ae62e004caab208afd81b0ef9dddf7992d3df8",
       "882da3f45302dfeb84f64c6a641f3901a208194660f6e80bbbe588fd1c536e6f",
+      "534d452f189cbece1d6303fb25e796e479cb1935d2b1cd354028ddb41d783ae4",
     ],
   },
   "meta-web": {

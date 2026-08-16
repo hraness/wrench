@@ -3,10 +3,15 @@ import {
 } from "@hraness/kb/clip/cookies";
 
 import type { WrenchAuth } from "../auth";
-import type { BrowserFileResolver } from "../browser";
+import {
+  browserCleanupBarrier,
+  type BrowserFileResolver,
+} from "../browser";
 import type { OperationInput, WebSessionRecipe } from "../model";
 import { canonicalJson, sha256 } from "../canonical-json";
-import { parseArticleDraftDocument } from "../article-draft-document";
+import {
+  parseArticleDraftDocument,
+} from "../article-draft-document";
 import {
   readSessionSecretSnapshot,
   writeSessionSecretIfUnchanged,
@@ -24,10 +29,13 @@ import {
   type WebSessionNetworkDependencies,
 } from "../web-session-client";
 import type {
+  WebSessionCleanupBarrierRegistrar,
+  WebSessionCleanupResourcePublisher,
   WebSessionDispatchEvent,
   WebSessionExecution,
   WebSessionOperationDeadline,
 } from "../web-session-execution";
+import { startWebSessionCleanupTrackedOperation } from "../web-session-execution";
 import {
   LINKEDIN_FIRST_PARTY_ARTICLES_PATH,
   LINKEDIN_MESSENGER_CONVERSATIONS_OBSERVED_QUERY_ID,
@@ -45,6 +53,10 @@ import {
   normalizeLinkedInMessagingList,
 } from "./linkedin-web";
 import { resolveLinkedInMessengerConversationsQueryId } from "./linkedin-web-bootstrap";
+import {
+  createLinkedInArticleBrowserTransport,
+  type LinkedInArticleBrowserTransport,
+} from "./linkedin-web-article-browser";
 
 const LINKEDIN_ORIGIN = "https://www.linkedin.com";
 const MAX_SUBJECT_BYTES = 2 * 1024 * 1024;
@@ -58,6 +70,7 @@ const MAX_LINKEDIN_ARTICLE_CHARACTERS = 125_000;
 type JsonRecord = Record<string, unknown>;
 
 export type LinkedInWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
+  readonly createArticleBrowserTransport?: typeof createLinkedInArticleBrowserTransport;
   readonly resolveMessengerConversationsQueryId?: typeof resolveLinkedInMessengerConversationsQueryId;
   /** Test seam for the auth-hash-bound encrypted LinkedIn rotation cache. */
   readonly loadCachedCookies?: (
@@ -78,6 +91,8 @@ export type LinkedInWebExecutionOptions = {
   readonly fileResolver?: BrowserFileResolver;
   readonly signal?: AbortSignal;
   readonly operationDeadline?: WebSessionOperationDeadline;
+  readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
+  readonly publishCleanupResource?: WebSessionCleanupResourcePublisher;
   readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
   readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
 };
@@ -677,6 +692,113 @@ function linkedInArticleHeaders(
   });
 }
 
+async function createDirectLinkedInArticleTransport(
+  auth: WrenchAuth,
+  timeoutMs: number,
+  options: LinkedInWebExecutionOptions,
+): Promise<LinkedInArticleBrowserTransport> {
+  const client = await createLinkedInClient(
+    auth,
+    timeoutMs,
+    options.dependencies,
+    options,
+  );
+  const csrf = linkedInCsrfTokenFromJSessionId(
+    webSessionCookie(client.cookies, "JSESSIONID"),
+  );
+  const transport: LinkedInArticleBrowserTransport = {
+    currentIdentityResponse: () => client.requestJson({
+      url: new URL("/voyager/api/me", LINKEDIN_ORIGIN),
+      method: "GET",
+      headers: headers(csrf, `${LINKEDIN_ORIGIN}/feed/`),
+      expectedContentTypes: [
+        "application/vnd.linkedin.normalized+json+2.1",
+        "application/json",
+      ],
+      maxBytes: MAX_SUBJECT_BYTES,
+    }),
+    createDraft: async (profileUrn, title) => {
+      const response = await client.requestStatus({
+        url: new URL(`${LINKEDIN_FIRST_PARTY_ARTICLES_PATH}/`, LINKEDIN_ORIGIN),
+        method: "POST",
+        headers: linkedInArticleHeaders(
+          csrf,
+          `${LINKEDIN_ORIGIN}/article/new/`,
+          false,
+        ),
+        body: canonicalJson(buildLinkedInArticleCreateBody(profileUrn, title)),
+        expectedStatuses: [201],
+        reviewedResponseIdHeader: "x-restli-id",
+      });
+      return response.responseId ?? null;
+    },
+    readDraftResponse: (draftId) => client.requestJson({
+      url: linkedInArticleDraftReadUrl(draftId),
+      method: "GET",
+      headers: headers(csrf, articleEditUrl(draftId)),
+      expectedContentTypes: [
+        "application/vnd.linkedin.normalized+json+2.1",
+        "application/json",
+      ],
+      maxBytes: MAX_SUBJECT_BYTES,
+    }),
+    updateTitle: async (draftId, title) => {
+      await client.requestStatus({
+        url: linkedInArticleDraftEntityUrl(draftId),
+        method: "POST",
+        headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId), true),
+        body: canonicalJson(buildLinkedInArticleTitlePatch(title)),
+        expectedStatuses: [200],
+      });
+    },
+    updateContent: async (draftId, document) => {
+      await client.requestStatus({
+        url: linkedInArticleDraftEntityUrl(draftId),
+        method: "POST",
+        headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId), true),
+        body: canonicalJson(buildLinkedInArticleContentPatch(document)),
+        expectedStatuses: [200],
+      });
+    },
+    close: () => Promise.resolve(),
+  };
+  return Object.freeze(transport);
+}
+
+async function createLinkedInArticleTransport(
+  auth: WrenchAuth,
+  timeoutMs: number,
+  options: LinkedInWebExecutionOptions,
+): Promise<LinkedInArticleBrowserTransport> {
+  const injected = options.dependencies?.createArticleBrowserTransport;
+  if (injected !== undefined) {
+    return injected(auth, {
+      timeoutMs,
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(options.publishCleanupResource === undefined
+        ? {}
+        : { publishCleanupResource: options.publishCleanupResource }),
+    });
+  }
+  // Secret-free runtime tests inject the exact network seam. Production never
+  // uses pinned HTTP for LinkedIn Articles because LinkedIn binds this editor
+  // family to its browser/device session after the first authenticated probe.
+  if (options.dependencies?.fetch !== undefined) {
+    return createDirectLinkedInArticleTransport(auth, timeoutMs, options);
+  }
+  return createLinkedInArticleBrowserTransport(auth, {
+    timeoutMs,
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.publishCleanupResource === undefined
+      ? {}
+      : { publishCleanupResource: options.publishCleanupResource }),
+  });
+}
+
 function linkedInArticleTitle(value: unknown): string {
   if (
     typeof value !== "string"
@@ -700,40 +822,20 @@ function linkedInCreatedArticleId(value: unknown): string {
 }
 
 async function readLinkedInArticleDraft(
-  client: WebSessionClient,
-  csrf: string,
+  transport: LinkedInArticleBrowserTransport,
   draftId: string,
   profileUrn: string,
 ): Promise<ReturnType<typeof normalizeLinkedInArticleDraft>> {
-  const response = await client.requestJson({
-    url: linkedInArticleDraftReadUrl(draftId),
-    method: "GET",
-    headers: headers(csrf, articleEditUrl(draftId)),
-    expectedContentTypes: [
-      "application/vnd.linkedin.normalized+json+2.1",
-      "application/json",
-    ],
-    maxBytes: MAX_SUBJECT_BYTES,
-  });
+  const response = await transport.readDraftResponse(draftId);
   return normalizeLinkedInArticleDraft(response, draftId, profileUrn);
 }
 
 async function readLinkedInArticleDraftMetadata(
-  client: WebSessionClient,
-  csrf: string,
+  transport: LinkedInArticleBrowserTransport,
   draftId: string,
   profileUrn: string,
 ): Promise<ReturnType<typeof normalizeLinkedInArticleDraftMetadata>> {
-  const response = await client.requestJson({
-    url: linkedInArticleDraftReadUrl(draftId),
-    method: "GET",
-    headers: headers(csrf, articleEditUrl(draftId)),
-    expectedContentTypes: [
-      "application/vnd.linkedin.normalized+json+2.1",
-      "application/json",
-    ],
-    maxBytes: MAX_SUBJECT_BYTES,
-  });
+  const response = await transport.readDraftResponse(draftId);
   return normalizeLinkedInArticleDraftMetadata(response, draftId, profileUrn);
 }
 
@@ -765,7 +867,11 @@ export async function readLinkedInWebArticleDraftDesiredState(
   recipe: WebSessionRecipe,
   input: OperationInput,
   auth: WrenchAuth,
-  options: { readonly dependencies?: LinkedInWebRuntimeDependencies } = {},
+  options: {
+    readonly dependencies?: LinkedInWebRuntimeDependencies;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly publishCleanupResource?: WebSessionCleanupResourcePublisher;
+  } = {},
 ): Promise<{ readonly matches: boolean; readonly draftId: string }> {
   if (
     recipe.site !== "linkedin"
@@ -780,15 +886,35 @@ export async function readLinkedInWebArticleDraftDesiredState(
   });
   // Validate the provider-owned subset before opening the authenticated realm.
   buildLinkedInArticleContentPatch(document);
-  const client = await createLinkedInClient(auth, recipe.timeoutMs, options.dependencies);
-  const csrf = linkedInCsrfTokenFromJSessionId(webSessionCookie(client.cookies, "JSESSIONID"));
-  const profileUrn = requireBoundLinkedInIdentity(await currentIdentity(client, csrf), auth);
-  const actual = await readLinkedInArticleDraft(client, csrf, draftId, profileUrn);
-  return Object.freeze({
-    draftId,
-    matches: actual.title === title
-      && canonicalJson(actual.document) === canonicalJson(document),
+  const transport = await createLinkedInArticleTransport(auth, recipe.timeoutMs, {
+    ...(options.dependencies === undefined
+      ? {}
+      : { dependencies: options.dependencies }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.publishCleanupResource === undefined
+      ? {}
+      : { publishCleanupResource: options.publishCleanupResource }),
   });
+  try {
+    const profileUrn = requireBoundLinkedInIdentity(
+      identityFromMeResponse(await transport.currentIdentityResponse()),
+      auth,
+    );
+    const actual = await readLinkedInArticleDraft(
+      transport,
+      draftId,
+      profileUrn,
+    );
+    return Object.freeze({
+      draftId,
+      matches: actual.title === title
+        && canonicalJson(actual.document) === canonicalJson(document),
+    });
+  } finally {
+    await transport.close();
+  }
 }
 
 async function executeLinkedInArticleDraftSave(
@@ -807,7 +933,9 @@ async function executeLinkedInArticleDraftSave(
     maximumBlocks: MAX_LINKEDIN_ARTICLE_BLOCKS,
     maximumCharacters: MAX_LINKEDIN_ARTICLE_CHARACTERS,
   });
-  const contentPatch = buildLinkedInArticleContentPatch(document);
+  // Validate the exact provider projection before opening any authenticated
+  // browser session or crossing the durable dispatch boundary.
+  buildLinkedInArticleContentPatch(document);
   const requestedDraftId = input.draft_id === undefined
     ? null
     : linkedInArticleDraftId(input.draft_id, "input.draft_id");
@@ -817,6 +945,7 @@ async function executeLinkedInArticleDraftSave(
   let nextIndex = 0;
   let draftId = requestedDraftId;
   let failureStage = "binding the current LinkedIn member";
+  let transport: LinkedInArticleBrowserTransport | null = null;
   const begin = async (id: string): Promise<number> => {
     const index = nextIndex + 1;
     await options.beforeDispatch?.(
@@ -834,31 +963,25 @@ async function executeLinkedInArticleDraftSave(
   };
 
   try {
-    const client = await createLinkedInClient(
+    transport = await createLinkedInArticleTransport(
       auth,
       recipe.timeoutMs,
-      options.dependencies,
       options,
     );
-    const csrf = linkedInCsrfTokenFromJSessionId(webSessionCookie(client.cookies, "JSESSIONID"));
-    const profileUrn = requireBoundLinkedInIdentity(await currentIdentity(client, csrf), auth);
+    const profileUrn = requireBoundLinkedInIdentity(
+      identityFromMeResponse(await transport.currentIdentityResponse()),
+      auth,
+    );
 
     if (draftId === null) {
       const dispatchId = "articles.create";
       failureStage = "creating the private Article title shell";
       const index = await begin(dispatchId);
-      const response = await client.requestStatus({
-        url: new URL(`${LINKEDIN_FIRST_PARTY_ARTICLES_PATH}/`, LINKEDIN_ORIGIN),
-        method: "POST",
-        headers: linkedInArticleHeaders(csrf, `${LINKEDIN_ORIGIN}/article/new/`, false),
-        body: canonicalJson(buildLinkedInArticleCreateBody(profileUrn, title)),
-        expectedStatuses: [201],
-        reviewedResponseIdHeader: "x-restli-id",
-      });
-      draftId = linkedInCreatedArticleId(response.responseId);
+      draftId = linkedInCreatedArticleId(
+        await transport.createDraft(profileUrn, title),
+      );
       const created = await readLinkedInArticleDraftMetadata(
-        client,
-        csrf,
+        transport,
         draftId,
         profileUrn,
       );
@@ -868,20 +991,13 @@ async function executeLinkedInArticleDraftSave(
       await complete(dispatchId, index);
     } else {
       failureStage = "reading the exact existing private Article";
-      await readLinkedInArticleDraftMetadata(client, csrf, draftId, profileUrn);
+      await readLinkedInArticleDraftMetadata(transport, draftId, profileUrn);
       const dispatchId = "articles.title";
       failureStage = "replacing the exact private Article title";
       const index = await begin(dispatchId);
-      await client.requestStatus({
-        url: linkedInArticleDraftEntityUrl(draftId),
-        method: "POST",
-        headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId), true),
-        body: canonicalJson(buildLinkedInArticleTitlePatch(title)),
-        expectedStatuses: [200],
-      });
+      await transport.updateTitle(draftId, title);
       const titled = await readLinkedInArticleDraftMetadata(
-        client,
-        csrf,
+        transport,
         draftId,
         profileUrn,
       );
@@ -894,14 +1010,12 @@ async function executeLinkedInArticleDraftSave(
     const contentId = "articles.content";
     failureStage = "replacing the exact private Article document";
     const contentIndex = await begin(contentId);
-    await client.requestStatus({
-      url: linkedInArticleDraftEntityUrl(draftId),
-      method: "POST",
-      headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId), true),
-      body: canonicalJson(contentPatch),
-      expectedStatuses: [200],
-    });
-    const final = await readLinkedInArticleDraft(client, csrf, draftId, profileUrn);
+    await transport.updateContent(draftId, document);
+    const final = await readLinkedInArticleDraft(
+      transport,
+      draftId,
+      profileUrn,
+    );
     if (
       final.title !== title
       || canonicalJson(final.document) !== canonicalJson(document)
@@ -944,6 +1058,8 @@ async function executeLinkedInArticleDraftSave(
           ? "LinkedIn verified only part of the confirmed private Article workflow; inspect the draft before retrying"
           : `LinkedIn Article draft failed before remote submission while ${failureStage}`,
     };
+  } finally {
+    await transport?.close();
   }
 }
 
@@ -957,7 +1073,23 @@ export async function executeLinkedInWebOperation(
     recipe.site === "linkedin"
     && recipe.contractVersion === 1
     && recipe.action === "articles.draft.save"
-  ) return executeLinkedInArticleDraftSave(recipe, input, auth, options);
+  ) {
+    return startWebSessionCleanupTrackedOperation(
+      options.registerCleanupBarrier,
+      (publishCleanupResource) => executeLinkedInArticleDraftSave(
+        recipe,
+        input,
+        auth,
+        {
+          ...options,
+          ...(publishCleanupResource === undefined
+            ? {}
+            : { publishCleanupResource }),
+        },
+      ),
+      browserCleanupBarrier,
+    );
+  }
   // Every ungraduated operation stays inert before cookies, browser state, or network.
   assertLinkedInWebExecutionAvailable();
   if (

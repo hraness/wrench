@@ -120,6 +120,7 @@ export const linkedinWebPlugin = defineProviderPlugin({
     ["kernel/session-secrets.ts", "../../session-secrets.ts"],
     ["providers/linkedin-web.ts", "../../providers/linkedin-web.ts"],
     ["providers/linkedin-web-bootstrap.ts", "../../providers/linkedin-web-bootstrap.ts"],
+    ["providers/linkedin-web-article-browser.ts", "../../providers/linkedin-web-article-browser.ts"],
     ["providers/linkedin-web-runtime.ts", "../../providers/linkedin-web-runtime.ts"],
   ]),
   bindings: [{

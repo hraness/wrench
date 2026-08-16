@@ -6,7 +6,14 @@ draft for the bound current member, supports paragraphs, H1/H2 headings, and
 native HTTPS links, and independently verifies the exact unpublished result.
 Every other consumer-web capability remains `capture-required` and inert.
 
-A browser may record a managed HAR, bootstrap the private session, or resolve current session material. Runtime draft saving uses only the reviewed first-party API contract; it never types into the Article editor. Wrench never lists an inbox, opens a conversation, sends a message, or performs another semantic action through LinkedIn's DOM.
+A browser may record a managed HAR, bootstrap the private session, or resolve
+current session material. Runtime draft saving executes only Wrench's fixed
+reviewed first-party API contract inside a contained headed Chrome session;
+LinkedIn rejects the same editor exchange from a standalone HTTP client after
+its initial authenticated probe. It never types into or reads the Article
+editor DOM. Callers cannot choose a URL, header, script, or selector. Wrench
+never lists an inbox, opens a conversation, sends a message, or performs
+another semantic action through LinkedIn's DOM.
 
 First-party traffic is not the same as a documented public API. Use this local client only with the user's account authority, comply with applicable provider rules, and keep bulk outreach and engagement outside wrench.
 
@@ -145,6 +152,14 @@ returned stable draft identity and exact current-author unpublished readback,
 then save and read back the exact document. Replacement reads the exact private
 draft first, then performs separately verified title and document autosaves.
 Neither schedule contains a publication or feed-share request.
+
+The contained browser is an authenticated transport, not a browser-operation
+fallback. Chrome supplies the bound device session, cookies, user agent, and
+TLS context; code-owned evaluation sends only the fixed current-member,
+create, exact-draft readback, title-autosave, and content-autosave requests.
+The headed window may be visible during the save. Cleanup is tracked as part
+of the durable operation and an unverified close preserves private artifacts
+for explicit recovery instead of silently deleting evidence.
 
 Authorized August 15, 2026 captures proved the current first-party Article
 route family, exact create and partial-update bodies, the returned Rest.li

@@ -78,7 +78,11 @@ wrench confirm <preview-digest> --json
 ```
 
 Use the same sequence with `linkedin-web` and its bound LinkedIn cookie realm;
-never switch the adapter or auth realm after preview.
+never switch the adapter or auth realm after preview. LinkedIn draft saving
+runs the fixed reviewed internal-API exchange inside a contained headed Chrome
+session. The browser window may appear, but Wrench does not type into or read
+the Article editor DOM and callers cannot supply a URL, header, script, or
+selector.
 
 Review the exact account, title, canonical document, optional draft ID, R2 side
 effect, contract version, and dispatch schedule. Require a successful result to
@@ -110,9 +114,11 @@ a recovery step.
   the unpublished result. `articles.publish` remains capture-required.
 - `linkedin-web`: `articles.draft.save` is observed for a bound signed-in
   LinkedIn member. It creates or replaces one private paragraphs/headings/link
-  draft through the reviewed first-party autosave contract, then verifies the
-  exact current-author unpublished readback. Styles, lists, blockquotes,
-  covers, inline media, and `articles.publish` remain capture-required.
+  draft through the reviewed first-party autosave contract inside contained
+  Chrome, then verifies the exact current-author unpublished readback. This
+  browser-network transport preserves LinkedIn's device session without using
+  DOM automation. Styles, lists, blockquotes, covers, inline media, and
+  `articles.publish` remain capture-required.
 
 Treat `wrench capabilities <adapter> --json` as authoritative for the installed
 version. Never switch between an official API and a signed-in web adapter after

@@ -447,8 +447,12 @@ be safely targeted and must remain unsettled.
 Signed-in LinkedIn now exposes the same private R2 seam through
 `linkedin-web articles.draft.save`. The observed contract supports paragraphs,
 H1/H2 headings, and native HTTPS links; it creates or replaces only one bound
-private draft and independently verifies the exact unpublished result. Covers,
-inline media, lists, blockquotes, styles, and publication remain unavailable.
+private draft and independently verifies the exact unpublished result. Its
+fixed first-party API requests run inside a contained, account-bound Chrome
+session because LinkedIn rejects the same editor traffic when replayed by a
+standalone HTTP client. Wrench does not type into or inspect the editor DOM,
+and the contained headed browser may be visible while the private save runs.
+Covers, inline media, lists, blockquotes, styles, and publication remain unavailable.
 See the packaged [native article draft workflow](skills/wrench/references/article-drafts.md)
 for the shared document grammar and safety sequence.
 
