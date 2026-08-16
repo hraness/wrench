@@ -1,14 +1,20 @@
 # LinkedIn authenticated web API adapter
 
-The current `linkedin-web` schema-v4 adapter has no observed operation. Every
-consumer-web capability is `capture-required`, including inbox listing and the
-explicit member-profile, organization-Page, recommended-connection, and
-connection-invitation reservations, plus private native Article draft saving.
-Its strict first-party implementation is retained as inert recapture material,
-but the execution boundary refuses before cookie acquisition, browser
-bootstrap, or network traffic.
+The current `linkedin-web` schema-v4 adapter has one observed operation:
+`articles.draft.save@2`. It creates or replaces one private native Article
+draft for the bound current member, supports paragraphs, H1/H2 headings, and
+native HTTPS links, and independently verifies the exact unpublished result
+from the authenticated editor-page server payload.
+Every other consumer-web capability remains `capture-required` and inert.
 
-A browser may record a managed HAR, bootstrap the private session, or resolve the current registered-query revision and CSRF material. It never lists an inbox, opens a conversation, sends a message, or performs another semantic action through LinkedIn's DOM.
+A browser may record a managed HAR, bootstrap the private session, or resolve
+current session material. Runtime draft saving executes only Wrench's fixed
+reviewed first-party API/write and editor-response readback contract inside a contained headed Chrome session;
+LinkedIn rejects the same editor exchange from a standalone HTTP client after
+its initial authenticated probe. It never types into or reads the Article
+editor DOM. Callers cannot choose a URL, header, script, or selector. Wrench
+never lists an inbox, opens a conversation, sends a message, or performs
+another semantic action through LinkedIn's DOM.
 
 First-party traffic is not the same as a documented public API. Use this local client only with the user's account authority, comply with applicable provider rules, and keep bulk outreach and engagement outside wrench.
 
@@ -17,7 +23,7 @@ First-party traffic is not the same as a documented public API. Use this local c
 - [Install and inspect](#install-and-inspect)
 - [Configure the signed-in realm](#configure-the-signed-in-realm)
 - [Recapture inbox listing](#recapture-inbox-listing)
-- [Recapture Article draft saving](#recapture-article-draft-saving)
+- [Native Article draft saving](#native-article-draft-saving)
 - [Resolve current LinkedIn material](#resolve-current-linkedin-material)
 - [Preserve capture-required operations](#preserve-capture-required-operations)
 - [Risk and confirmation](#risk-and-confirmation)
@@ -57,12 +63,12 @@ included entity binds that reference to the same numeric member subject. It
 does not scan other included profile entities as a fallback. Missing,
 unbound, conflicting, or ambiguous direct bindings fail.
 
-The retained client can strictly review a short-lived `__cf_bm` edge-cookie
+The client can strictly review a short-lived `__cf_bm` edge-cookie
 rotation: it accepts only that name, validates origin, attributes, expiry, and
 deletion semantics, and binds the encrypted cache to the auth-locator hash.
-Removing the auth locator removes that cache. Current execution refuses before
-this client is created, so rotation code cannot turn a login, checkpoint, or
-stale contract into an executable capability.
+Removing the auth locator removes that cache. Only the observed Article draft
+operation may cross the execution boundary; every capture-required operation
+still refuses before this client is created.
 
 Verification on July 23, 2026 produced a durable projection-drift failure and
 every available LinkedIn realm returned `401` at current-account preflight.
@@ -74,7 +80,7 @@ projection, and completeness semantics.
 
 `messaging.list` is a capture-required reservation. Version 1.1.0 remains
 archived as historical evidence of the formerly observed bundle; version
-1.2.0 first demoted it, and the current 1.4.0 bundle remains capture-required
+1.2.0 first demoted it, and the current 1.5.0 bundle remains capture-required
 and cannot execute. The intended folder input still reserves:
 
 - `focused` for the main inbox;
@@ -131,40 +137,43 @@ actor. `comments.create` targets an exact post URN; LinkedIn does not have a
 separate wrench operation for “commenting on a profile” or “commenting on a
 Page.” A member- or organization-authored post remains the comment target.
 
-## Recapture Article draft saving
+## Native Article draft saving
 
-`articles.draft.save` is an R2 capture-required reservation for one private
-native LinkedIn Article draft. Its input uses the same canonical,
-provider-neutral `ArticleDraftDocument` described in [native article
-drafts](article-drafts.md): text blocks, styles, and native HTTPS link ranges
-only, with an optional exact existing `draft_id`. Images, covers, embeds, HTML,
-Markdown, and editor payloads are outside this contract. The caller owns any
-editorial translation from source material.
+`articles.draft.save` is an observed R2 operation for one private native
+LinkedIn Article draft. Its input uses the canonical provider-neutral
+`ArticleDraftDocument` described in [native article drafts](article-drafts.md),
+with an optional exact existing `draft_id`. The current contract accepts only
+paragraph, `heading1`, and `heading2` blocks and native HTTPS link ranges.
+Styles, list items, blockquotes, images, covers, embeds, HTML, Markdown, and
+editor payloads are rejected. The caller owns editorial translation from
+source material.
 
-Keep the operation inert until one managed low-stakes capture proves:
+Create has two confirmed dispatches: create the private title shell, bind the
+returned stable draft identity and exact current-author unpublished server-response readback,
+then save and read back the exact document. Replacement reads the exact private
+draft first, then performs separately verified title and document autosaves.
+Neither schedule contains a publication or feed-share request.
 
-1. the exact current-member-bound editor autosave exchange;
-2. distinct create and existing-draft replacement shapes, if both are claimed;
-3. one stable returned private draft identity;
-4. exact title, text structure, styles, and native-link preservation;
-5. an independent unpublished readback bound to that member and draft; and
-6. exclusion of publish, feed-share, notification, and unrelated editor
-   traffic.
+The contained browser is an authenticated transport, not a browser-operation
+fallback. Chrome supplies the bound device session, cookies, user agent, and
+TLS context; code-owned evaluation sends only the fixed current-member,
+create, exact editor-page readback, title-autosave, and content-autosave requests.
+The headed window may be visible during the save. Cleanup is tracked as part
+of the durable operation and an unverified close preserves private artifacts
+for explicit recovery instead of silently deleting evidence.
 
-An authorized August 15, 2026 recapture proved the current first-party Article
-route family, a `201` create, same-identity `200` autosaves, a stable private
-edit identity, and editor-visible persistence of plain text, one native HTTPS
-link, and one heading after navigating away and reopening the draft. It did not
-retain mutation response fields or the Article API response body, so it could
-not prove a code-owned returned-ID parser, current-member ownership, private
-lifecycle projection, or exact API readback. Those missing response facts keep
-the operation `capture-required`; the observed request family is evidence for
-the next recapture, not an executable contract.
+Authorized August 15–16, 2026 captures proved the current first-party Article
+route family, exact create and partial-update bodies, the returned Rest.li
+draft identity, normalized current-member-to-Article-author binding, private
+`DRAFT` lifecycle, null publication/share fields, exact title/content/link
+projection, and persistence after reopening. The August 16 live recapture also
+proved that exact draft reads now come from one bounded hidden JSON payload in
+the authenticated editor HTML response rather than the retired Rest.li finder.
+Covers and inline media were deliberately excluded.
 
-The presence of a LinkedIn editor, a saved UI state, or an inferred Voyager
-operation name is not a contract. Do not type into the editor as a runtime
-fallback. `articles.publish` remains a separate capture-required R3 operation
-with its own publication and public-readback evidence.
+The presence of a LinkedIn editor or saved UI state alone is not a contract.
+Do not type into the editor as a runtime fallback. `articles.publish` remains a
+separate capture-required R3 operation with its own publication evidence.
 
 ## Resolve current LinkedIn material
 
@@ -184,7 +193,6 @@ The current registry keeps these unavailable until their exact first-party excha
 - `comments.create` and `replies.create` (`R3`);
 - `relationships.connect` (`R3`);
 - `reactions.set` (`R2`);
-- `articles.draft.save` (`R2`);
 - `articles.publish` (`R3`);
 
 Do not guess a Voyager/GraphQL mutation from a bundle, replay a captured payload, or use the composer as a fallback. To graduate one operation:
@@ -208,8 +216,8 @@ independent relationship readback. A disabled Connect button is not evidence.
 
 R1 reads run only after they graduate and pass account binding.
 `reactions.set` is R2 only as an exact desired-state create/delete pair. A
-private `articles.draft.save` is R2 only after the editor autosave and exact
-unpublished readback graduate. Messages, comments, replies, posts, reposts,
+private `articles.draft.save` is R2 because its exact autosave and unpublished
+readback contract has graduated. Messages, comments, replies, posts, reposts,
 quotes, connection requests, and article publication are R3.
 
 Every R2/R3 operation must preview the exact account realm, actor, target, text/media hashes, side effect, contract hash, and dispatch schedule. Confirm once. Require local duplicate refusal. Treat an uncertain response after request start as `indeterminate`; never retry by clicking LinkedIn or by changing message whitespace.

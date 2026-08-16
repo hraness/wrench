@@ -260,7 +260,7 @@ async function cloneProfileBound(source: string, directory: string, expected: Di
 
 export function derivationPolicyActions(allowRemoteActions: boolean): readonly string[] {
   const actions = [
-    "launch", "navigate", "snapshot", "scroll", "wait", "read", "get", "network", "state",
+    "launch", "navigate", "snapshot", "scroll", "wait", "get", "network", "state",
     "back", "forward", "reload", "scrollintoview", "url", "title", "text", "html", "value", "inputvalue", "attr",
     "getbyrole", "getbytext", "getbylabel", "getbyplaceholder", "getbyalttext", "getbytitle", "getbytestid",
     "waitfortext", "waitforurl", "har_start", "har_stop", "requests", "cookies_set", "close",
@@ -278,7 +278,6 @@ const allowedBrowserCommands = new Set([
   "reload",
   "snapshot",
   "get",
-  "read",
   "network",
   "wait",
   "scroll",
@@ -1957,7 +1956,7 @@ export function validateDerivationBrowserCommand(
     const target = validateTarget(command[1] ?? "");
     if (target.origin !== policy.targetOrigin) throw new Error("derive browser navigation must stay on the target origin");
   }
-  else if (action === "back" || action === "forward" || action === "reload" || action === "read") {
+  else if (action === "back" || action === "forward" || action === "reload") {
     if (command.length !== 1) throw new Error(`derive browser ${action} accepts no arguments`);
   }
   else if (action === "snapshot") {

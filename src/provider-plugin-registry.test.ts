@@ -3191,6 +3191,14 @@ describe("provider plugin definition and registry", () => {
     const root = join(import.meta.dir, "assets", "adapters");
     const retiredDiagnosticOnlyManifests = new Map([
       [
+        join(root, "linkedin", "wrench-web-adapter.v1.4.0.json"),
+        "authenticated web contract linkedin/articles.draft.save@1 is not installed",
+      ],
+      [
+        join(root, "linkedin", "wrench-web-adapter.v1.5.0.json"),
+        "authenticated web contract linkedin/articles.draft.save@1 is not installed",
+      ],
+      [
         join(root, "x", "wrench-web-adapter.v1.1.0.json"),
         "authenticated web contract x/articles.publish@1 is not installed",
       ],

@@ -1548,7 +1548,7 @@ describe("Wrench media routing", () => {
 });
 
 describe("doctor authenticated API readiness", () => {
-  test("reports LinkedIn capture-required independently from observed X readiness", async () => {
+  test("reports observed LinkedIn private Article readiness independently from X", async () => {
     const testState = state();
     try {
       installManifest(bundledWebManifest("linkedin"), { force: false, environment: testState.environment });
@@ -1560,7 +1560,7 @@ describe("doctor authenticated API readiness", () => {
       saveAuth(createAuth("x-unbound", { source: "arc", profile: "Profile 1" }), testState.environment);
 
       const linkedinReady = await runDoctor(testState);
-      expect(linkedinReady.code).toBe(3);
+      expect(linkedinReady.code).toBe(0);
       const linkedinReport = JSON.parse(linkedinReady.stdout) as {
         readonly wrench: {
           readonly webSessionSites: readonly {
@@ -1574,21 +1574,20 @@ describe("doctor authenticated API readiness", () => {
         };
       };
       expect(linkedinReport).toMatchObject({
-        ok: false,
+        ok: true,
         wrench: {
           browserCaptureBootstrapReady: false,
           browserActionReady: false,
           providerApiReady: false,
-          webSessionApiReady: false,
-          webSessionAdapters: ["x-web"],
+          webSessionApiReady: true,
+          webSessionAdapters: ["linkedin-web", "x-web"],
         },
       });
       expect(linkedinReport.wrench.webSessionSites.find((site) => site.site === "linkedin")).toEqual({
         site: "linkedin",
-        adapters: [],
-        observedOperations: [],
+        adapters: ["linkedin-web"],
+        observedOperations: ["articles.draft.save"],
         captureRequiredOperations: [
-          "articles.draft.save",
           "articles.publish",
           "articles.read",
           "comments.create",
@@ -1610,7 +1609,7 @@ describe("doctor authenticated API readiness", () => {
           "replies.create",
         ],
         accountBoundAuth: ["linkedin-bound"],
-        ready: false,
+        ready: true,
       });
       expect(linkedinReport.wrench.webSessionSites.find((site) => site.site === "x")).toMatchObject({
         site: "x",
@@ -1653,8 +1652,8 @@ describe("doctor authenticated API readiness", () => {
       const readyLinkedIn = readyReport.wrench.webSessionSites.find((site) => site.site === "linkedin");
       expect(readyLinkedIn).toMatchObject({
         accountBoundAuth: ["linkedin-bound"],
-        observedOperations: [],
-        ready: false,
+        observedOperations: ["articles.draft.save"],
+        ready: true,
       });
       expect(readyLinkedIn?.captureRequiredOperations).toContain("messaging.list");
       expect(readyReport.wrench.webSessionSites.find((site) => site.site === "x")).toMatchObject({

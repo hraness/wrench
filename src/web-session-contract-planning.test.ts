@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { canonicalJson } from "./canonical-json";
 import { xWebPlugin } from "./plugins/x-web/plugin";
+import { linkedinWebPlugin } from "./plugins/linkedin-web/plugin";
 import { webSessionContractDefinitions } from "./web-session-contract-definitions";
 import { planWebSessionContractDispatches } from "./web-session-contract-planning";
 
@@ -104,5 +105,53 @@ describe("authenticated web contract planning", () => {
       state: "capture-required",
     });
     expect(operation?.historicalContractVersions).toBeUndefined();
+  });
+
+  test("the LinkedIn plugin plans only reviewed private create/content and exact replacement autosaves", () => {
+    const contract = webSessionContractDefinitions.linkedin["articles.draft.save"];
+    expect(contract).toMatchObject({
+      contractVersion: 2,
+      dispatch: "bounded-items",
+      risk: "R2",
+      state: "observed",
+    });
+    const operation = linkedinWebPlugin.bindings[0]?.operations.find((candidate) =>
+      candidate.name === "articles.draft.save");
+    expect(operation).toBeDefined();
+    expect(operation!.planDispatches({
+      title: "New private draft",
+      document: "{}",
+    }).map((dispatch) => dispatch.id)).toEqual([
+      "articles.create",
+      "articles.content",
+    ]);
+    expect(operation!.planDispatches({
+      title: "Existing private draft",
+      document: "{}",
+      draft_id: "7000000000000000001",
+    }).map((dispatch) => dispatch.id)).toEqual([
+      "articles.replace",
+    ]);
+    const supported = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "paragraph", text: "Native link" }],
+    });
+    expect(operation!.validateInput({ title: "Private", document: supported })).toEqual([]);
+    const unsupported = canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "blockquote", text: "Not captured" }],
+    });
+    expect(operation!.validateInput({ title: "Private", document: unsupported })).toContain(
+      "LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks",
+    );
+    expect(() => operation!.reconciliation?.desiredState({
+      title: "New private draft",
+      document: supported,
+    })).toThrow("create has no safe reconciliation because input.draft_id is absent");
+    expect(operation!.reconciliation?.desiredState({
+      title: "Existing private draft",
+      document: supported,
+      draft_id: "7000000000000000001",
+    })).toBeTrue();
   });
 });

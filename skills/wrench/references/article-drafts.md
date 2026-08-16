@@ -20,8 +20,7 @@ to the mutation.
 
 ## Build the text document
 
-When the installed capability declares `input.document`—currently the
-authenticated `x-web` adapter—encode it as canonical JSON for
+When the installed capability declares `input.document`, encode it as canonical JSON for
 `ArticleDraftDocument` schemaVersion 1. Use only these text blocks:
 
 - `paragraph`
@@ -40,6 +39,12 @@ Do not pass Markdown links, HTML, embeds, image blocks, cover images, files, or
 provider editor payloads. This contract is text and native HTTPS links only.
 Inspect the installed capability for provider-specific title, block, character,
 and document bounds.
+
+The current `linkedin-web` contract accepts only `paragraph`, `heading1`, and
+`heading2` blocks plus native HTTPS links. It rejects list items, blockquotes,
+and every style range because those editor projections were not part of the
+reviewed capture. The current `x-web` contract accepts the complete block/style
+set above.
 
 This canonical document links the word `source`:
 
@@ -72,16 +77,29 @@ wrench x-web articles.draft.save \
 wrench confirm <preview-digest> --json
 ```
 
+Use the same sequence with `linkedin-web` and its bound LinkedIn cookie realm;
+never switch the adapter or auth realm after preview. LinkedIn draft saving
+runs the fixed reviewed API/write plus authenticated editor-response readback
+exchange inside a contained headed Chrome session. The browser window may
+appear, but Wrench does not type into or read
+the Article editor DOM and callers cannot supply a URL, header, script, or
+selector.
+
 Review the exact account, title, canonical document, optional draft ID, R2 side
 effect, contract version, and dispatch schedule. Require a successful result to
 identify `articles.draft.save`, report `published: false` and `mode: "draft"`,
 and return the private draft identity. Never continue into publication.
 
+LinkedIn create previews name separate title-shell and content dispatches.
+LinkedIn exact-replacement previews use one conservative replacement dispatch:
+the runtime first reads the bound private draft, skips fields that already match,
+and verifies the complete title/document state before success.
+
 Do not retry a partial or indeterminate save. Preserve the run evidence and use
 only the installed operation's exact recovery path for the same bound draft.
-An `x-web` replacement with an exact input
-`draft_id` has that read-only reconciliation path. An indeterminate `x-web`
-create does not: its immutable confirmed input contains no exact target ID, so
+An `x-web` or `linkedin-web` replacement with an exact input `draft_id` has
+that read-only reconciliation path. An indeterminate create does not: its
+immutable confirmed input contains no exact target ID, so
 leave the run unsettled rather than searching by title, guessing an ID, or
 retrying. Do not inspect an uncertain draft and then call `articles.publish` as
 a recovery step.
@@ -100,10 +118,14 @@ a recovery step.
 - `x-web`: `articles.draft.save` is observed for a bound signed-in X account.
   It creates or replaces one private text-and-links Article draft and verifies
   the unpublished result. `articles.publish` remains capture-required.
-- `linkedin-web`: `articles.draft.save` remains capture-required. Keep it inert
-  until a managed capture proves the exact editor autosave, stable draft
-  identity, current-member binding, and exact unpublished readback.
-  `articles.publish` remains a separate capture-required R3 operation.
+- `linkedin-web`: `articles.draft.save` is observed for a bound signed-in
+  LinkedIn member. It creates or replaces one private paragraphs/headings/link
+  draft through the reviewed first-party autosave contract inside contained
+  Chrome, then verifies the exact current-author unpublished state from one
+  bounded hidden JSON payload in the editor-page server response. This
+  browser-network transport preserves LinkedIn's device session without using
+  DOM automation. Styles, lists, blockquotes, covers, inline media, and
+  `articles.publish` remain capture-required.
 
 Treat `wrench capabilities <adapter> --json` as authoritative for the installed
 version. Never switch between an official API and a signed-in web adapter after

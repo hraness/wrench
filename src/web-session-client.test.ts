@@ -273,6 +273,31 @@ describe("reviewed authenticated status transport", () => {
     expect(observedBody).toEqual(Array.from(body));
     expect(observedCookie).toContain("auth_token=private-cookie");
   });
+
+  test("returns only an explicitly reviewed bounded Rest.li create identifier", async () => {
+    const client = await createWebSessionClient("https://x.com", auth, {
+      timeoutMs: 1_000,
+      dependencies: {
+        acquireCookies: () => Promise.resolve({ cookies, warnings: [] }),
+        fetch: () => Promise.resolve(new Response(null, {
+          status: 201,
+          headers: { "x-restli-id": "urn:li:fsd_firstPartyArticle:7000000000000000001" },
+        })),
+      },
+    });
+    expect(await client.requestStatus({
+      url: new URL("https://x.com/reviewed/restli/create"),
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      expectedStatuses: [201],
+      reviewedResponseIdHeader: "x-restli-id",
+    })).toEqual({
+      status: 201,
+      location: null,
+      responseId: "urn:li:fsd_firstPartyArticle:7000000000000000001",
+    });
+  });
 });
 
 describe("reviewed authenticated response-cookie rotation", () => {

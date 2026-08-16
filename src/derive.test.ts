@@ -121,7 +121,6 @@ describe("derive browser command grammar", () => {
     ["get", "html", "@e12"],
     ["get", "value", "@e999"],
     ["get", "attr", "@e2", "aria-label"],
-    ["read"],
     ["network", "requests"],
     ["network", "requests", "--filter", "ondemand.s"],
     ["wait", "1"],
@@ -208,6 +207,13 @@ describe("derive browser command grammar", () => {
     ["open", "https://example.com", "value\u0000suffix"],
   ].map((command) => [command] as const))("rejects escape-shaped command %#", (command) => {
     expect(() => validateAction(command)).toThrow();
+  });
+
+  test("rejects the browser-wide read command because it can expose raw authenticated page state", () => {
+    expect(derivationPolicyActions(false)).not.toContain("read");
+    expect(derivationPolicyActions(true)).not.toContain("read");
+    expect(() => validateReadOnly(["read"])).toThrow("does not allow read");
+    expect(() => validateAction(["read"])).toThrow("does not allow read");
   });
 
   test("enforces command and argument cardinality bounds", () => {

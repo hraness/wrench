@@ -94,7 +94,13 @@ export type WebSessionClient = {
     readonly headers: Readonly<Record<string, string>>;
     readonly body?: string | Uint8Array;
     readonly expectedStatuses: readonly number[];
-  }) => Promise<{ readonly status: number; readonly location: string | null }>;
+    /** One reviewed first-party create identifier; never projected to CLI output directly. */
+    readonly reviewedResponseIdHeader?: "x-restli-id";
+  }) => Promise<{
+    readonly status: number;
+    readonly location: string | null;
+    readonly responseId?: string | null;
+  }>;
 };
 
 function requestInputUrl(input: string | URL | Request): URL {
@@ -752,6 +758,20 @@ export async function createWebSessionClient(
             throw new Error(`authenticated web API request returned unreviewed status ${response.status}`);
           }
           await applyResponseCookies(response, request.url);
+          let responseId: string | null | undefined;
+          if (request.reviewedResponseIdHeader !== undefined) {
+            const rawResponseId = response.headers.get(request.reviewedResponseIdHeader);
+            if (
+              rawResponseId !== null
+              && (rawResponseId.length < 1
+                || rawResponseId.length > 512
+                || /[\0\r\n]/u.test(rawResponseId))
+            ) {
+              response.body?.cancel().catch(() => undefined);
+              throw new Error("authenticated web API response returned an invalid reviewed identifier");
+            }
+            responseId = rawResponseId;
+          }
           const rawLocation = response.headers.get("location");
           let location: string | null = null;
           if (rawLocation !== null) {
@@ -769,7 +789,11 @@ export async function createWebSessionClient(
           }
           void response.body?.cancel().catch(() => undefined);
           deadline.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
-          return { status: response.status, location };
+          return {
+            status: response.status,
+            location,
+            ...(request.reviewedResponseIdHeader === undefined ? {} : { responseId: responseId ?? null }),
+          };
         } finally {
           if (deadline.signal.aborted) {
             void response?.body?.cancel().catch(() => undefined);

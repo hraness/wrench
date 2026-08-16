@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.6.0",
+  "version": "1.5.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -713,7 +713,7 @@
       }
     },
     "articles.draft.save": {
-      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 1 using the reviewed current-member-bound title/content autosave and exact unpublished editor-response readback contract.",
+      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 1 using the reviewed current-member-bound title/content autosave and exact unpublished readback contract.",
       "risk": "R2",
       "sideEffect": "Creates one private native LinkedIn Article draft, or replaces the exact confirmed existing private draft; it never publishes the draft.",
       "idempotency": "local-at-most-once",
@@ -747,7 +747,7 @@
       "webSession": {
         "site": "linkedin",
         "action": "articles.draft.save",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 180000,
         "maxOutputBytes": 2097152
       }

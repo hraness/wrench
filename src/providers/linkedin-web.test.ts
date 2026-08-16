@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { canonicalJson } from "../canonical-json";
+import { parseArticleDraftDocument } from "../article-draft-document";
 
 import {
   LINKEDIN_MESSENGER_CONVERSATIONS_OBSERVED_QUERY_ID,
@@ -7,12 +9,21 @@ import {
   LINKEDIN_WEB_OPERATION_NAMES,
   RESTLI_V2_VALUE_LIMITS,
   assertLinkedInWebR1RequestAllowed,
+  buildLinkedInArticleContent,
+  buildLinkedInArticleContentHtml,
+  buildLinkedInArticleContentPatch,
+  buildLinkedInArticleCreateBody,
+  buildLinkedInArticleTitlePatch,
   encodeRestliV2Value,
   linkedInCsrfTokenFromJSessionId,
+  linkedInArticleDraftEditUrl,
+  linkedInArticleDraftEnvelopeFromHtml,
+  linkedInArticleDraftEntityUrl,
   linkedInMailboxUrnFromMiniProfile,
   linkedInMessengerConversationsUrl,
   linkedInWebFolderCategory,
   normalizeLinkedInGraphqlEnvelope,
+  normalizeLinkedInArticleDraft,
   normalizeLinkedInMessagingList,
   resolveLinkedInRegisteredQueryId,
 } from "./linkedin-web";
@@ -59,10 +70,10 @@ describe("LinkedIn internal-web operation registry", () => {
     }
   });
 
-  test("keeps every LinkedIn consumer-web operation capture-required", () => {
+  test("graduates only private native Article draft saving", () => {
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
-      expect(contract.state).toBe("capture-required");
+      expect(contract.state).toBe(operation === "articles.draft.save" ? "observed" : "capture-required");
       expect(contract.requests).toHaveLength(0);
     }
     expect(LINKEDIN_WEB_OPERATIONS["reactions.set"].risk).toBe("R2");
@@ -408,9 +419,9 @@ describe("LinkedIn R1 internal-request gate", () => {
   test("keeps every consumer-web read capture-required with no executable request rule", () => {
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
-      expect(contract.state).toBe("capture-required");
       expect(contract.requests).toHaveLength(0);
       if (contract.risk !== "R1" || contract.effect !== "read") continue;
+      expect(contract.state).toBe("capture-required");
       expect(() => assertLinkedInWebR1RequestAllowed(operation, {
         method: "GET",
         url: "https://www.linkedin.com/voyager/api/graphql?variables=private",
@@ -432,6 +443,182 @@ describe("LinkedIn R1 internal-request gate", () => {
     expect(() => assertLinkedInWebR1RequestAllowed("unknown.operation", {
       secret: "must-not-be-reflected",
     })).toThrow("LinkedIn web operation is unknown");
+  });
+});
+
+describe("LinkedIn native Article draft contract", () => {
+  const draftId = "7000000000000000001";
+  const profileUrn = "urn:li:fsd_profile:ACoAAExactCurrentProfile";
+  const title = "Exact private draft";
+  const document = parseArticleDraftDocument(canonicalJson({
+    schemaVersion: 1,
+    blocks: [
+      { type: "heading1", text: "Harnessing Puerto Rico" },
+      {
+        type: "paragraph",
+        text: "Read the source",
+        links: [{ offset: 9, length: 6, url: "https://example.com/source" }],
+      },
+    ],
+  }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+
+  function articleResponse(
+    content: readonly Readonly<Record<string, unknown>>[],
+    overrides: Readonly<Record<string, unknown>> = {},
+  ): unknown {
+    const urn = `urn:li:fsd_firstPartyArticle:${draftId}`;
+    return {
+      data: {
+        $type: "com.linkedin.restli.common.CollectionResponse",
+        "*elements": [urn],
+        entityUrn: "urn:li:collectionResponse:article-fixture",
+        paging: { count: 10, links: [], start: 0 },
+      },
+      included: [{
+        $type: "com.linkedin.voyager.dash.publishing.FirstPartyArticle",
+        activityUrn: null,
+        annotation: null,
+        annotationActionType: null,
+        articleActionUnions: [],
+        articleAnnotation: null,
+        articlePublishedTimeDescription: null,
+        articleType: "FIRST_PARTY_ARTICLE",
+        authors: [{ profileUrn }],
+        availableLocales: [],
+        content,
+        contentDescription: null,
+        contentHtml: "<p>bounded derived HTML</p>",
+        contentSegments: null,
+        coverMedia: null,
+        coverMediaV2Union: null,
+        createdAt: 1,
+        entityUrn: urn,
+        featured: null,
+        followingStateUrn: "urn:li:fsd_followingState:article-fixture",
+        gatedArticleMetadata: null,
+        initialUpdateUrn: null,
+        issueNumber: null,
+        linkedInArticleUrn: `urn:li:linkedInArticle:${draftId}`,
+        locale: null,
+        memberContributionInsight: null,
+        permalink: null,
+        publishedAt: null,
+        scheduledAt: null,
+        seoDescription: null,
+        seoTitle: null,
+        series: null,
+        servedLocale: null,
+        socialDetailUrn: null,
+        socialProofInsight: null,
+        sponsoredAccountUrn: null,
+        state: "DRAFT",
+        surveyComponent: null,
+        title,
+        trackingId: null,
+        ugcPostUrn: null,
+        updatedAt: 2,
+        version: 3,
+        viewerAllowedToEdit: null,
+        ...overrides,
+      }],
+    };
+  }
+
+  function articlePage(response: unknown): string {
+    const encoded = JSON.stringify(response).replace(/[&<>"=\\]/gu, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "=": "&#61;",
+      "\\": "&#92;",
+    })[character] ?? character);
+    return `<html><body><code style="display: none" id="bpr-guid-123456">${encoded}</code></body></html>`;
+  }
+
+  test("builds only the observed create, title, content, and exact-read routes", () => {
+    expect(buildLinkedInArticleCreateBody(profileUrn, title)).toEqual({
+      authors: [{ profileUrn }],
+      contentHtml: "",
+      state: "AUTOSAVED",
+      title,
+    });
+    expect(buildLinkedInArticleTitlePatch(title)).toEqual({
+      patch: { $set: { state: "AUTOSAVED", title } },
+    });
+    expect(buildLinkedInArticleContentPatch(document)).toEqual({
+      patch: {
+        $set: {
+          content: buildLinkedInArticleContent(document),
+          contentHtml: buildLinkedInArticleContentHtml(document),
+          state: "AUTOSAVED",
+        },
+      },
+    });
+    expect(buildLinkedInArticleContentHtml(document)).toBe(
+      "<h2>Harnessing Puerto Rico</h2>"
+      + "<p>Read the <a href=\"https://example.com/source\" target=\"_blank\">source</a></p>",
+    );
+    expect(linkedInArticleDraftEntityUrl(draftId).pathname).toBe(
+      `/voyager/api/voyagerPublishingDashFirstPartyArticles/urn:li:fsd_firstPartyArticle:${draftId}`,
+    );
+    const readUrl = linkedInArticleDraftEditUrl(draftId);
+    expect(readUrl.pathname).toBe(`/article/edit/${draftId}/`);
+    expect([...readUrl.searchParams.entries()]).toEqual([]);
+  });
+
+  test("extracts and normalizes one exact current-author private server readback with native links", () => {
+    const content = buildLinkedInArticleContent(document);
+    const response = articleResponse(content);
+    const extracted = linkedInArticleDraftEnvelopeFromHtml(
+      articlePage(response),
+      draftId,
+    );
+    expect(normalizeLinkedInArticleDraft(extracted, draftId, profileUrn)).toEqual({
+      draftId,
+      profileUrn,
+      title,
+      document,
+    });
+  });
+
+  test("rejects payload ambiguity, unsupported styles and blocks, author drift, and published state", () => {
+    const styleDocument = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: 1,
+      blocks: [{
+        type: "paragraph",
+        text: "bold",
+        styles: [{ offset: 0, length: 4, style: "bold" }],
+      }],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+    expect(() => buildLinkedInArticleContent(styleDocument)).toThrow("styles remain capture-required");
+    const listDocument = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: 1,
+      blocks: [{ type: "ordered-list-item", text: "one" }],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+    expect(() => buildLinkedInArticleContent(listDocument)).toThrow("currently support only");
+
+    const content = buildLinkedInArticleContent(document);
+    const response = articleResponse(content);
+    const page = articlePage(response);
+    expect(() => linkedInArticleDraftEnvelopeFromHtml(
+      `${page}${page}`,
+      draftId,
+    )).toThrow("did not isolate one exact hidden payload");
+    expect(() => linkedInArticleDraftEnvelopeFromHtml(
+      page.replace("display: none", "display: block"),
+      draftId,
+    )).toThrow("no longer hidden");
+    expect(() => normalizeLinkedInArticleDraft(
+      articleResponse(content, { authors: [{ profileUrn: "urn:li:fsd_profile:other" }] }),
+      draftId,
+      profileUrn,
+    )).toThrow("author no longer matches");
+    expect(() => normalizeLinkedInArticleDraft(
+      articleResponse(content, { state: "PUBLISHED", publishedAt: 3 }),
+      draftId,
+      profileUrn,
+    )).toThrow("not the exact private unpublished draft");
   });
 });
 

@@ -2,9 +2,10 @@ import { MAX_HAR_ENTRIES } from "./har";
 import {
   analyzeInternalHarValue,
   INTERNAL_HAR_REVIEW_BOUNDS,
+  isReviewedLinkedInArticleRoute,
   isReviewedInternalDynamicMapField,
   parseBoundedInternalHarUrl,
-  reviewedInternalFieldName,
+  reviewedInternalFieldNameForUrl,
   reviewedXGraphQlVariableFieldName,
   type BoundedInternalHarUrl,
   type InternalHarCandidate,
@@ -264,6 +265,8 @@ type MatchState = {
   readonly locations: Map<string, Set<string>>;
   readonly truncated: Set<string>;
   readonly xGraphQlRequest: boolean;
+  readonly url: URL;
+  readonly maximumDepth: number;
   visited: number;
 };
 
@@ -315,7 +318,7 @@ function walkJson(
   redactObjectKeys = false,
   keyReview: JsonObjectKeyReview = "structural",
 ): void {
-  if (depth >= MAX_WALK_DEPTH) {
+  if (depth >= state.maximumDepth) {
     if (hasSearchableContent(value)) truncateEveryFixture(state);
     return;
   }
@@ -373,7 +376,7 @@ function walkJson(
       ? ":dynamic"
       : keyReview === "x-graphql-variable"
         ? reviewedXGraphQlVariableFieldName(key)
-        : reviewedInternalFieldName(key);
+        : reviewedInternalFieldNameForUrl(state.url, key);
     const childLocation = `${location}.${renderedKey}`;
     const childKeyReview = state.xGraphQlRequest
       && location === "request.body"
@@ -463,10 +466,43 @@ function matchFormUrlEncodedText(state: MatchState, value: string): void {
       truncateEveryFixture(state);
       continue;
     }
-    const safeName = reviewedInternalFieldName(name);
+    const safeName = reviewedInternalFieldNameForUrl(state.url, name);
     const occurrence = occurrences.get(safeName) ?? 0;
     occurrences.set(safeName, occurrence + 1);
     matchPrimitive(state, decodedValue, `request.form.${safeName}[${occurrence}]`);
+  }
+}
+
+const reviewedRequestFixtureHeaders = new Set(["x-restli-method"] as const);
+const reviewedResponseFixtureHeaders = new Set(["x-restli-id"] as const);
+
+/**
+ * Match only reviewed non-secret contract facts. Header values never appear in
+ * review output; a match returns the fixed header-name location alone.
+ */
+function matchReviewedHeaderFixtures(
+  state: MatchState,
+  value: unknown,
+  location: "request.header" | "response.header",
+  reviewedNames: ReadonlySet<string>,
+): void {
+  if (!Array.isArray(value)) return;
+  if (value.length > INTERNAL_HAR_REVIEW_BOUNDS.maxHeaderItems) truncateEveryFixture(state);
+  const occurrences = new Map<string, number>();
+  for (const candidate of value.slice(0, INTERNAL_HAR_REVIEW_BOUNDS.maxHeaderItems)) {
+    if (!isRecord(candidate) || typeof candidate.name !== "string" || typeof candidate.value !== "string") continue;
+    const name = candidate.name.toLowerCase();
+    if (!reviewedNames.has(name)) continue;
+    if (
+      candidate.value.length > INTERNAL_HAR_REVIEW_BOUNDS.maxRawStringCharacters
+      || Buffer.byteLength(candidate.value, "utf8") > MAX_JSON_TEXT_BYTES
+    ) {
+      truncateEveryFixture(state);
+      continue;
+    }
+    const occurrence = occurrences.get(name) ?? 0;
+    occurrences.set(name, occurrence + 1);
+    matchPrimitive(state, candidate.value, `${location}.${name}[${occurrence}]`);
   }
 }
 
@@ -485,6 +521,10 @@ function matchEntryFixtures(
       && entry.request.method === "POST"
       && url.origin === "https://x.com"
       && /^\/i\/api\/graphql\/[A-Za-z0-9_-]{20,64}\/[A-Z][A-Za-z0-9_]{2,100}$/u.test(url.pathname),
+    url,
+    maximumDepth: isReviewedLinkedInArticleRoute(url)
+      ? INTERNAL_HAR_REVIEW_BOUNDS.maxLinkedInArticleTraversalDepth
+      : MAX_WALK_DEPTH,
     visited: 0,
   };
 
@@ -524,7 +564,7 @@ function matchEntryFixtures(
       continue;
     }
     if (isSensitiveCredentialKey(name)) continue;
-    const safeName = reviewedInternalFieldName(name);
+    const safeName = reviewedInternalFieldNameForUrl(state.url, name);
     const occurrence = queryOccurrences.get(safeName) ?? 0;
     queryOccurrences.set(safeName, occurrence + 1);
     const location = `request.query.${safeName}[${occurrence}]`;
@@ -538,6 +578,9 @@ function matchEntryFixtures(
   }
 
   const request = entry.request;
+  if (isRecord(request)) {
+    matchReviewedHeaderFixtures(state, request.headers, "request.header", reviewedRequestFixtureHeaders);
+  }
   if (isRecord(request) && isRecord(request.postData)) {
     const rawMimeType = request.postData.mimeType;
     const oversizedMimeType = typeof rawMimeType === "string"
@@ -585,7 +628,7 @@ function matchEntryFixtures(
       ) truncateEveryFixture(state);
       for (const parameter of searchedParameters) {
         if (!isRecord(parameter) || typeof parameter.name !== "string") continue;
-        const safeName = reviewedInternalFieldName(parameter.name);
+        const safeName = reviewedInternalFieldNameForUrl(state.url, parameter.name);
         const occurrence = occurrences.get(safeName) ?? 0;
         occurrences.set(safeName, occurrence + 1);
         if (typeof parameter.value === "string") {
@@ -615,6 +658,9 @@ function matchEntryFixtures(
     }
   }
 
+  if (isRecord(entry.response)) {
+    matchReviewedHeaderFixtures(state, entry.response.headers, "response.header", reviewedResponseFixtureHeaders);
+  }
   if (isRecord(entry.response) && isRecord(entry.response.content)) {
     const rawMimeType = entry.response.content.mimeType;
     const oversizedMimeType = typeof rawMimeType === "string"
@@ -647,7 +693,7 @@ function matchEntryFixtures(
 
 const warnings = [
   "Private review is structural only: it cannot authorize or execute a request.",
-  "Fixture values are matched only in first-party path/query/body and JSON response content; values, headers, cookies, and credentials are never returned.",
+  "Fixture values are matched only in first-party path/query/body, reviewed non-secret contract headers, and JSON response content; values, cookies, credentials, and unreviewed headers are never returned.",
 ] as const;
 
 export function reviewDerivationHarValue(

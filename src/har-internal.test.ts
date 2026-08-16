@@ -234,6 +234,98 @@ describe("private LinkedIn internal-API HAR evidence", () => {
       "x-user-alice",
     ]) expect(serialized).not.toContain(forbidden);
   });
+
+  test("retains reviewed native Article route and document field structure without retaining draft or member values", () => {
+    const draftId = "7000000000000000001";
+    const profileUrn = "urn:li:fsd_profile:fixture-private";
+    const title = "private fixture title";
+    const text = "private fixture text";
+    const hyperlink = "https://example.com/private-fixture";
+    const url = new URL(`https://www.linkedin.com/voyager/api/voyagerPublishingDashFirstPartyArticles/urn:li:fsd_firstPartyArticle:${draftId}`);
+    url.searchParams.set("author", profileUrn);
+    url.searchParams.set("q", "author");
+    url.searchParams.set("start", "0");
+    url.searchParams.set("state", "DRAFT");
+    const evidence = analyzeInternalHarValue(har([entry({
+      method: "POST",
+      url: url.href,
+      status: 200,
+      requestHeaders: [
+        { name: "Authorization", value: "Bearer private" },
+      ],
+      requestJson: {
+        patch: {
+          $set: {
+            title,
+            content: [{
+              textBlock: {
+                type: "PARAGRAPH",
+                content: {
+                  text,
+                  attributesV2: [{ start: 0, length: 7, detailDataUnion: { hyperlink } }],
+                },
+              },
+            }],
+          },
+        },
+      },
+      responseJson: {
+        data: { "*elements": [`urn:li:fsd_firstPartyArticle:${draftId}`] },
+        included: [{
+          entityUrn: `urn:li:fsd_firstPartyArticle:${draftId}`,
+          linkedInArticleUrn: `urn:li:linkedInArticle:${draftId}`,
+          authors: [{ profileUrn }],
+          title,
+          contentHtml: `<p>${text}</p>`,
+          content: [{ textBlock: { type: "PARAGRAPH", content: { text, attributesV2: [] } } }],
+          state: "DRAFT",
+          articleType: "FIRST_PARTY_ARTICLE",
+          publishedAt: null,
+          activityUrn: null,
+          ugcPostUrn: null,
+          permalink: null,
+          version: 2,
+          createdAt: 1,
+          updatedAt: 2,
+        }],
+      },
+    })]), "linkedin-web", "https://www.linkedin.com", new Date("2026-08-15T12:00:00.000Z"));
+
+    const candidate = oneCandidate(evidence);
+    expect(candidate.path).toBe("/voyager/api/voyagerPublishingDashFirstPartyArticles/:segment1");
+    expect(candidate.queryNames).toEqual(["author", "q", "start", "state"]);
+    expect(candidate.headerNames).toEqual(["authorization"]);
+    for (const path of [
+      "patch.$set.title",
+      "patch.$set.content[].textBlock.type",
+      "patch.$set.content[].textBlock.content.text",
+      "patch.$set.content[].textBlock.content.attributesV2[].start",
+      "patch.$set.content[].textBlock.content.attributesV2[].length",
+      "patch.$set.content[].textBlock.content.attributesV2[].detailDataUnion.hyperlink",
+    ]) expect(candidate.requestFieldPaths).toContain(path);
+    for (const path of [
+      "data.:dynamic",
+      "included[].entityUrn",
+      "included[].linkedInArticleUrn",
+      "included[].authors[].profileUrn",
+      "included[].title",
+      "included[].contentHtml",
+      "included[].content[].textBlock.content.attributesV2",
+      "included[].state",
+      "included[].articleType",
+      "included[].publishedAt",
+      "included[].activityUrn",
+      "included[].ugcPostUrn",
+      "included[].permalink",
+      "included[].version",
+      "included[].createdAt",
+      "included[].updatedAt",
+    ]) expect(candidate.responseFieldPaths).toContain(path);
+    const serialized = JSON.stringify(evidence);
+    for (const forbidden of [draftId, profileUrn, title, text, hyperlink, "fixture-private"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
 });
 
 describe("private Facebook internal-API HAR evidence", () => {
