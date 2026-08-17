@@ -19,6 +19,7 @@
 - Use Bun 1.3.14 and run `bun run check` before handing off a change.
 - Follow `WRITING.md` for internal prose and `STYLE.md` for public prose.
 - Apply unreasonably robust programming when agent work is cheap. Model invalid states out of existence and pair readable regression examples with property tests for general laws.
+- Deliver changes to `main` through a current-head pull request. Keep the stable `Required` CI job green, resolve every review thread, and serialize merges. Human approval stays optional while one regular maintainer would otherwise self-review. Never force-push or bypass the gate.
 - Pin Hraness dependencies to reviewed immutable releases or full commits. Never replace them with sibling paths, Git submodules, or coordinated `main` assumptions.
 - Extract a shared package only after two concrete consumers need the same stable interface. Keep shared packages product-neutral and keep consumer planning, policy, agent loops, and product UI outside Wrench.
 - For UI work, consume shared design-kit or `@hraness/ui` primitives only at immutable versions; keep product composition in the owning product and keep `website/` dependency-free.
