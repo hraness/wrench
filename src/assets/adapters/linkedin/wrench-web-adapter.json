@@ -1,14 +1,16 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.6.0",
+  "version": "1.9.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
-    "https://www.linkedin.com"
+    "https://www.linkedin.com",
+    "https://static.licdn.com"
   ],
   "browserDomains": [
-    "www.linkedin.com"
+    "www.linkedin.com",
+    "static.licdn.com"
   ],
   "operations": {
     "contacts.list": {
@@ -420,7 +422,7 @@
       }
     },
     "posts.publish": {
-      "description": "Capture-required contract reservation: publish one confirmed LinkedIn post with optional reviewed media or link after each sharebox and upload request shape is captured and response-bound.",
+      "description": "Publish one exact confirmed LinkedIn post with text and an optional single PNG through the current first-party image-registration/upload and post-create contracts, then independently read it back by the response-bound share URN.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible LinkedIn post with the exact confirmed audience and content.",
       "idempotency": "local-at-most-once",
@@ -443,41 +445,23 @@
           },
           "media": {
             "type": "array",
-            "description": "Optional reviewed images, or one reviewed video or document",
+            "description": "Optional single exact PNG image",
             "items": {
               "type": "file",
-              "description": "One exact post attachment",
-              "maxBytes": 536870912,
+              "description": "One exact PNG post image",
+              "maxBytes": 20971520,
               "mediaTypes": [
-                "image/jpeg",
-                "image/png",
-                "image/gif",
-                "video/mp4",
-                "application/pdf",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                "image/png"
               ]
             },
             "minItems": 1,
-            "maxItems": 20
-          },
-          "media_title": {
-            "type": "string",
-            "description": "Optional document or video title",
-            "minLength": 1,
-            "maxLength": 200
+            "maxItems": 1
           },
           "alt_text": {
             "type": "string",
             "description": "Optional image alternative text",
             "minLength": 1,
             "maxLength": 4000
-          },
-          "link_url": {
-            "type": "string",
-            "description": "Optional exact HTTPS link-card source",
-            "minLength": 1,
-            "maxLength": 8192
           }
         },
         "required": [
@@ -488,7 +472,7 @@
       "webSession": {
         "site": "linkedin",
         "action": "posts.publish",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }
@@ -713,9 +697,9 @@
       }
     },
     "articles.draft.save": {
-      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 1 using the reviewed current-member-bound title/content autosave and exact unpublished editor-response readback contract.",
+      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 2 with ordered local inline images, alt text, and captions using the reviewed current-member-bound autosave and exact unpublished readback contract.",
       "risk": "R2",
-      "sideEffect": "Creates one private native LinkedIn Article draft, or replaces the exact confirmed existing private draft; it never publishes the draft.",
+      "sideEffect": "Creates one private native LinkedIn Article draft, or replaces the exact confirmed existing private draft, including the confirmed inline image bytes, alt text, and captions; it never publishes the draft.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -728,7 +712,7 @@
           },
           "document": {
             "type": "string",
-            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 1; this reviewed LinkedIn contract supports bounded paragraphs, H1/H2 headings, and native HTTPS links",
+            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 2; this reviewed LinkedIn contract supports bounded paragraphs, H1/H2 headings, native HTTPS links, and ordered inline image blocks with required alt text and optional captions",
             "minLength": 1,
             "maxLength": 524288
           },
@@ -737,18 +721,35 @@
             "description": "Optional exact existing private LinkedIn Article draft to replace in place",
             "minLength": 1,
             "maxLength": 512
+          },
+          "inline_images": {
+            "type": "array",
+            "description": "Ordered plan-bound local image files referenced by document imageIndex",
+            "items": {
+              "type": "file",
+              "description": "One exact JPEG, PNG, or WebP inline image",
+              "maxBytes": 5242880,
+              "mediaTypes": [
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 20
           }
         },
         "required": [
           "title",
-          "document"
+          "document",
+          "inline_images"
         ]
       },
       "webSession": {
         "site": "linkedin",
         "action": "articles.draft.save",
-        "contractVersion": 2,
-        "timeoutMs": 180000,
+        "contractVersion": 3,
+        "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }
     },

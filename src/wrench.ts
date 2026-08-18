@@ -54,6 +54,7 @@ import {
   type DerivationReviewFixtures,
   type DerivationReviewSelection,
 } from "./derive-review";
+import { derivationFixtureSummaries } from "./derive-fixtures";
 import { analyzeHarFile, emptyManifest, writeDerivationScaffold } from "./har";
 import {
   canonicalJson,
@@ -2261,6 +2262,7 @@ async function runCommand(
         allowRemoteActions: arguments_.allowRemoteActions,
         contentMode: arguments_.contentMode,
         browserDomains: arguments_.browserDomains,
+        fixtureSources: arguments_.fixtureSources,
         headed: arguments_.headed,
         environment,
       },
@@ -2271,6 +2273,7 @@ async function runCommand(
       targetOrigin: session.targetOrigin,
       allowRemoteActions: session.allowRemoteActions,
       contentMode: session.contentMode,
+      fixtures: derivationFixtureSummaries(session.fixtures),
       domainContainment: session.profilePath === null,
       browserDomains: session.browserDomains,
       next: [

@@ -68,7 +68,7 @@ function postView(
 }
 
 describe("Bluesky authenticated API policy", () => {
-  test("ships a schema-v4 semantic manifest with live-proven reads and fail-closed writes", () => {
+  test("ships a schema-v4 semantic manifest with live-proven reads and publishing", () => {
     expect(blueskyManifest.schemaVersion).toBe(4);
     expect(blueskyManifest.surfaceId).toBe("bluesky");
     expect(blueskyManifest.origins).toEqual(["https://bsky.app"]);
@@ -80,6 +80,7 @@ describe("Bluesky authenticated API policy", () => {
       "comments.read",
       "feeds.read",
       "media.read",
+      "posts.publish",
       "posts.read",
     ]);
     for (const action of BLUESKY_WEB_OPERATION_NAMES) {

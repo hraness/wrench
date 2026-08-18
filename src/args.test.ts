@@ -777,6 +777,10 @@ describe("wrench CLI grammar", () => {
       "linkedin-live",
       "--content",
       "text",
+      "--fixture",
+      "grandpa.png",
+      "--fixture",
+      "second.jpg",
       "--allow-remote-actions",
       "--headed",
       "--json",
@@ -790,6 +794,7 @@ describe("wrench CLI grammar", () => {
         allowRemoteActions: true,
         contentMode: "text",
         browserDomains: ["www.linkedin.com"],
+        fixtureSources: ["grandpa.png", "second.jpg"],
         headed: true,
       },
     });
@@ -868,6 +873,7 @@ describe("wrench CLI grammar", () => {
   });
 
   test.each([
+    [["derive", "start", "example", "https://example.com", "--fixture", "image.png"], "requires --allow-remote-actions"],
     [["derive", "review", "derive-123", "--entry", "20000"], "0 to 19999"],
     [["derive", "review", "derive-123", "--limit", "0"], "1 to 100"],
     [["derive", "review", "derive-123", "--entry", "1", "--offset", "2"], "cannot be combined"],
@@ -1132,6 +1138,7 @@ describe("wrench CLI grammar", () => {
         allowRemoteActions: false,
         contentMode: "none",
         browserDomains: ["www.linkedin.com"],
+        fixtureSources: [],
         headed: false,
       },
     });

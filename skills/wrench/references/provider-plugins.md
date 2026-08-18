@@ -72,6 +72,15 @@ operation. They are not an atomic sandbox against a same-account writer racing
 the module loader: changed top-level module code could run before the
 post-import check rejects.
 
+Treat built-in durable contract identity as the final semantic review step,
+never an iteration mechanism. Finish provider code, manifests, deterministic
+tests, documentation, and formatting before changing a semantic-identity
+digest. Then run the focused contract test once to obtain the exact new digest,
+review and record it, and run registry startup once more. Wrench derives the
+current source/dependency closure automatically, snapshots it at registry
+startup, and revalidates it before and after lazy runtime load. It deliberately
+has no manual closure allowlist or source-hash approval step.
+
 Bare package imports are bound to their exact relocation-stable dependency
 graph, not the repository's whole lockfile. Wrench snapshots each installed package
 with bounded full-tree walks around its byte reads, hashes the exact paths and

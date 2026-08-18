@@ -111,10 +111,10 @@ export const BLUESKY_WEB_OPERATIONS = Object.freeze({
     "R3",
     "the code-owned repost exchange needs an authorized live fixture proving create/delete and independent readback",
   ),
-  "posts.publish": captureRequired(
+  "posts.publish": observed(
     "write",
     "R3",
-    "the code-owned plain-text and single-image record paths need authorized live fixtures proving upload, create, and independent readback",
+    "current code-owned plain-text and single-image uploadBlob/createRecord path with exact actor, text, attachment, record revision, and independent getPosts readback binding",
   ),
   "replies.create": captureRequired(
     "write",

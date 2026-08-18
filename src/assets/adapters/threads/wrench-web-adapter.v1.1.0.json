@@ -1,0 +1,623 @@
+{
+  "schemaVersion": 4,
+  "id": "threads-web",
+  "version": "1.1.0",
+  "displayName": "Threads (Authenticated Internal API)",
+  "surfaceId": "threads",
+  "origins": [
+    "https://www.threads.com"
+  ],
+  "browserDomains": [
+    "www.threads.com"
+  ],
+  "operations": {
+    "comments.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum comments",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "content.edit": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Replacement text",
+            "minLength": 1,
+            "maxLength": 450
+          },
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "content.edit",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
+      "risk": "R2",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired saved state"
+          }
+        },
+        "required": [
+          "post_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "content.share": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "destination": {
+            "type": "string",
+            "description": "Reviewed share destination",
+            "enum": [
+              "capture-required"
+            ]
+          },
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "post_id",
+          "destination"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "content.share",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "feeds.read": {
+      "description": "Observed contract: one bounded first page from live direct signed-in Threads Relay preload JSON with exact Barcelona viewer binding and no continuation cursor accepted or exposed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Reviewed feed",
+            "enum": [
+              "for-you"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum results",
+            "minimum": 1,
+            "maximum": 30
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "feeds.read",
+        "contractVersion": 2,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "likes.set": {
+      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
+      "risk": "R2",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "liked": {
+            "type": "boolean",
+            "description": "Exact desired like state"
+          },
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "post_id",
+          "liked"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "likes.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "media.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.list": {
+      "description": "Capture-required contract reservation: Threads inbox uses Lightspeed/Msys state and may acknowledge or update presence; Relay setup metadata is not message-list authority.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "folder": {
+            "type": "string",
+            "description": "Reviewed inbox folder",
+            "enum": [
+              "inbox"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum thread summaries",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.read": {
+      "description": "Capture-required contract reservation: Threads conversation reads require protocol-correct Lightspeed/Msys acknowledgement analysis.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact conversation ID",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum messages",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "conversation_id"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: Threads message send requires protocol-correct Lightspeed/Msys or E2EE implementation.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "attachment": {
+            "type": "file",
+            "description": "Optional exact message attachment",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "image/*",
+              "video/*"
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Message body",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact conversation ID",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "conversation_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.publish": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "attachment": {
+            "type": "file",
+            "description": "Optional exact post attachment",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "image/*",
+              "video/*",
+              "image/gif"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "description": "Explicit audience",
+            "enum": [
+              "default"
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Post body",
+            "minLength": 1,
+            "maxLength": 450
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "posts.publish",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.quote": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Quote text",
+            "minLength": 1,
+            "maxLength": 450
+          },
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "posts.quote",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.read": {
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.repost": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "reposted": {
+            "type": "boolean",
+            "description": "Exact desired repost state"
+          }
+        },
+        "required": [
+          "post_id",
+          "reposted"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "relationships.follow.set": {
+      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
+      "risk": "R2",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "following": {
+            "type": "boolean",
+            "description": "Exact desired following state"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Exact target account ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "user_id",
+          "following"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "relationships.follow.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "attachment": {
+            "type": "file",
+            "description": "Optional exact reply attachment",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "image/*",
+              "video/*",
+              "image/gif"
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Reply body",
+            "minLength": 1,
+            "maxLength": 450
+          },
+          "comment_id": {
+            "type": "string",
+            "description": "Exact parent comment ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "post_id",
+          "comment_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "threads.publish": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "Ordered root and self-replies",
+            "items": {
+              "type": "string",
+              "description": "One thread item",
+              "minLength": 1,
+              "maxLength": 450
+            },
+            "minItems": 1,
+            "maxItems": 25
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "threads.publish",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    }
+  }
+}

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
@@ -8,8 +11,12 @@ import { canonicalJson } from "../canonical-json";
 import {
   buildLinkedInArticleContent,
   buildLinkedInArticleContentHtml,
+  buildLinkedInArticleContentV2,
 } from "./linkedin-web";
-import { parseArticleDraftDocument } from "../article-draft-document";
+import {
+  parseArticleDraftDocument,
+  parseArticleDraftDocumentV2,
+} from "../article-draft-document";
 import {
   executeLinkedInWebOperation,
   probeLinkedInWebSubject,
@@ -17,6 +24,7 @@ import {
   type LinkedInWebRuntimeDependencies,
 } from "./linkedin-web-runtime";
 import type { LinkedInArticleBrowserTransport } from "./linkedin-web-article-browser";
+import type { LinkedInPostBrowserTransport } from "./linkedin-web-post-browser";
 
 const MEMBER_ID = "123456789";
 const MEMBER_URN = `urn:li:fsd_profile:${MEMBER_ID}`;
@@ -211,6 +219,16 @@ function articleRecipe(): WebSessionRecipe {
   };
 }
 
+function imageArticleRecipe(): WebSessionRecipe {
+  return {
+    site: "linkedin",
+    action: "articles.draft.save",
+    contractVersion: 3,
+    timeoutMs: 60_000,
+    maxOutputBytes: 2 * 1024 * 1024,
+  };
+}
+
 function messagingListRecipe(): WebSessionRecipe {
   return {
     site: "linkedin",
@@ -219,6 +237,26 @@ function messagingListRecipe(): WebSessionRecipe {
     timeoutMs: 1_000,
     maxOutputBytes: 2 * 1024 * 1024,
   };
+}
+
+function postRecipe(): WebSessionRecipe {
+  return {
+    site: "linkedin",
+    action: "posts.publish",
+    contractVersion: 2,
+    timeoutMs: 1_000,
+    maxOutputBytes: 2 * 1024 * 1024,
+  };
+}
+
+function pngFixture(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
 }
 
 async function rejectionMessage(action: Promise<unknown>): Promise<string> {
@@ -878,6 +916,139 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     await Promise.all(cleanupBarriers);
   });
 
+  test("uploads one plan-bound image and verifies exact LinkedIn image order, alt text, caption, and asset identity", async () => {
+    const title = "Image-capable private draft";
+    const documentValue = canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Before the image" },
+        {
+          type: "image",
+          imageIndex: 0,
+          altText: "Wrench logo on a dark background",
+          caption: "Wrench",
+        },
+        { type: "paragraph", text: "After the image" },
+      ],
+    });
+    const document = parseArticleDraftDocumentV2(documentValue, {
+      maximumBlocks: 5_000,
+      maximumCharacters: 125_000,
+      maximumImages: 20,
+    });
+    const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
+    let currentTitle = "Old title";
+    let content: readonly Readonly<Record<string, unknown>>[] = [{
+      editorOwnedImageBlock: { opaque: true },
+    }];
+    const calls: string[] = [];
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
+      createDraft: () => Promise.reject(new Error("replacement must not create")),
+      readDraftResponse: () => Promise.resolve(articleResponse(currentTitle, content)),
+      updateTitle: (_draftId, receivedTitle) => {
+        calls.push("title");
+        currentTitle = receivedTitle;
+        return Promise.resolve();
+      },
+      updateContent: () => Promise.reject(new Error("image contract must not use v1 content")),
+      uploadInlineImage: (_draftId, image) => {
+        calls.push("image");
+        expect(image).toMatchObject({
+          filename: "inline-image-1.png",
+          mediaType: "image/png",
+        });
+        expect(image.bytes.byteLength).toBe(869_311);
+        return Promise.resolve(assetUrn);
+      },
+      updateContentV2: (_draftId, receivedDocument, assets) => {
+        calls.push("content");
+        expect(receivedDocument).toEqual(document);
+        expect(assets).toEqual([assetUrn]);
+        const write = structuredClone(buildLinkedInArticleContentV2(document, assets));
+        const wrapper = write[1] as Record<string, unknown>;
+        const imageBlock = wrapper.imageBlock as Record<string, unknown>;
+        const caption = imageBlock.caption as Record<string, unknown>;
+        caption.attributesV2 = [];
+        const imageContent = imageBlock.content as Record<string, unknown>;
+        imageContent.accessibilityTextAttributes = [];
+        const attribute = (imageContent.attributes as Record<string, unknown>[])[0]!;
+        const detail = attribute.detailDataUnion as Record<string, unknown>;
+        const vector = detail.vectorImage as Record<string, unknown>;
+        vector.artifacts = [{
+          $type: "com.linkedin.common.VectorArtifact",
+          expiresAt: 1,
+          fileIdentifyingUrlPathSegment: "fixture",
+          height: 630,
+          width: 1200,
+        }];
+        vector.rootUrl = "https://media.licdn.com/fixture/";
+        content = write;
+        return Promise.resolve();
+      },
+      close: () => Promise.resolve(),
+    };
+    const dispatches: string[] = [];
+    const result = await executeLinkedInWebOperation(
+      imageArticleRecipe(),
+      {
+        title,
+        document: documentValue,
+        draft_id: ARTICLE_ID,
+        inline_images: [{ kind: "file", reference: "fixture-image" }],
+      },
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.resolve(transport),
+        },
+        fileResolver: (files) => {
+          expect(files).toEqual([{ kind: "file", reference: "fixture-image" }]);
+          return Promise.resolve([
+            join(import.meta.dir, "..", "..", "website", "public", "og.png"),
+          ]);
+        },
+        beforeDispatch: (event) => {
+          dispatches.push(`start:${event.id}`);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          dispatches.push(`verified:${event.id}`);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      dispatch: { planned: 2, started: 2, verified: 2 },
+      output: {
+        documentSchemaVersion: 2,
+        draftId: ARTICLE_ID,
+        inlineImageCount: 1,
+        published: false,
+        title,
+      },
+    });
+    expect(calls).toEqual(["image", "title", "content"]);
+    expect(dispatches).toEqual([
+      "start:articles.image[1]",
+      "verified:articles.image[1]",
+      "start:articles.replace",
+      "verified:articles.replace",
+    ]);
+    await expect(readLinkedInWebArticleDraftDesiredState(
+      imageArticleRecipe(),
+      {
+        title,
+        document: documentValue,
+        draft_id: ARTICLE_ID,
+        inline_images: [{ kind: "file", reference: "fixture-image" }],
+      },
+      linkedinAuth,
+    )).rejects.toThrow("supports only articles.draft.save@2");
+  });
+
   test("replaces one exact private draft in place and reconciles only from unpublished readback", async () => {
     let title = "Old private title";
     let document = parseArticleDraftDocument(canonicalJson({
@@ -1057,6 +1228,129 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     expect(JSON.stringify(result)).not.toContain(privateDiagnostic);
   });
 
+  test.each([
+    ["LinkedIn Article image registration request failed", "image-registration-request-failed"],
+    ["LinkedIn Article image registration response drifted", "image-registration-response-drift"],
+    ["LinkedIn Article image registration shape drifted", "image-registration-shape-drift"],
+    [
+      "LinkedIn Article image registration shape drifted:registration-fields-e3u1-d2u0-r7c4u2-h1u1-ts-pa",
+      "image-registration-shape-registration-fields-e3u1-d2u0-r7c4u2-h1u1-ts-pa",
+    ],
+    ["LinkedIn Article image staging failed", "image-staging-failed"],
+    ["LinkedIn Article image signed transfer failed", "image-transfer-failed"],
+    ["LinkedIn Article image signed transfer status drifted", "image-transfer-status-drift"],
+  ])("categorizes private Article image failures as %s", async (
+    privateDiagnostic,
+    publicCategory,
+  ) => {
+    const document = canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Private fixture body" },
+        {
+          type: "image",
+          imageIndex: 0,
+          altText: "A bounded fixture image",
+        },
+      ],
+    });
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
+      createDraft: () => Promise.reject(new Error("replacement must not create")),
+      readDraftResponse: () => Promise.resolve(articleResponse("Private fixture", [])),
+      updateTitle: () => Promise.reject(new Error("failed images must not update title")),
+      updateContent: () => Promise.reject(new Error("failed images must not update content")),
+      uploadInlineImage: () => Promise.reject(new Error(privateDiagnostic)),
+      updateContentV2: () => Promise.reject(new Error("failed images must not update content")),
+      close: () => Promise.resolve(),
+    };
+    const result = await executeLinkedInWebOperation(
+      imageArticleRecipe(),
+      {
+        title: "Private fixture",
+        document,
+        draft_id: ARTICLE_ID,
+        inline_images: [{ kind: "file", reference: "fixture-image" }],
+      },
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.resolve(transport),
+        },
+        fileResolver: () => Promise.resolve([
+          join(import.meta.dir, "..", "..", "website", "public", "og.png"),
+        ]),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 2, started: 1, verified: 0 },
+      error: expect.stringContaining(publicCategory),
+    });
+    expect(JSON.stringify(result)).not.toContain(privateDiagnostic);
+  });
+
+  test("distinguishes contained-browser startup from current-member read failures before dispatch", async () => {
+    const input = {
+      title: "Private fixture",
+      document: canonicalJson({
+        schemaVersion: 1,
+        blocks: [{ type: "paragraph", text: "Private body" }],
+      }),
+      draft_id: ARTICLE_ID,
+    };
+    const startup = await executeLinkedInWebOperation(
+      articleRecipe(),
+      input,
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.reject(
+            new Error("private contained-browser startup detail"),
+          ),
+        },
+      },
+    );
+    expect(startup).toMatchObject({
+      status: "failed",
+      dispatch: { planned: 1, started: 0, verified: 0 },
+      error: expect.stringContaining("starting the contained LinkedIn Article browser"),
+    });
+    expect(JSON.stringify(startup)).not.toContain("private contained-browser startup detail");
+
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.reject(
+        new Error("private current-member response detail"),
+      ),
+      prepareCreateDraft: () => Promise.reject(new Error("must not create")),
+      createDraft: () => Promise.reject(new Error("must not create")),
+      readDraftResponse: () => Promise.reject(new Error("must not read draft")),
+      updateTitle: () => Promise.reject(new Error("must not update title")),
+      updateContent: () => Promise.reject(new Error("must not update content")),
+      close: () => Promise.resolve(),
+    };
+    const identity = await executeLinkedInWebOperation(
+      articleRecipe(),
+      input,
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.resolve(transport),
+        },
+      },
+    );
+    expect(identity).toMatchObject({
+      status: "failed",
+      dispatch: { planned: 1, started: 0, verified: 0 },
+      error: expect.stringContaining(
+        "reading the current LinkedIn member in the contained browser",
+      ),
+    });
+    expect(JSON.stringify(identity)).not.toContain("private current-member response detail");
+  });
+
   test("keeps an accepted create without a stable response ID indeterminate and never retries", async () => {
     const document = canonicalJson({
       schemaVersion: 1,
@@ -1084,6 +1378,206 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       error: expect.stringContaining("do not retry"),
     });
     expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+  });
+
+  test("admits once, uploads one plan-bound PNG, creates one post, and verifies exact readback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-linkedin-post-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    const imageBytes = pngFixture(959, 1022);
+    writeFileSync(imagePath, imageBytes, { mode: 0o600 });
+    const body = "how your email finds me";
+    const altText = "Two people stand outside in warm sunlight.";
+    const mediaUrn = "urn:li:digitalmediaAsset:C4D22AQExactImage";
+    const entityUrn = "urn:li:fsd_share:7000000000000000000";
+    const finalUrl = "https://www.linkedin.com/feed/update/urn:li:activity:7000000000000000000/";
+    const events: string[] = [];
+    try {
+      const transport: LinkedInPostBrowserTransport = {
+        currentIdentityResponse: () => {
+          events.push("identity");
+          return Promise.resolve(currentIdentityResponse());
+        },
+        uploadImage: (subject, bytes) => {
+          events.push("upload");
+          expect(subject).toBe(MEMBER_URN);
+          expect(bytes).toEqual(new Uint8Array(imageBytes));
+          return Promise.resolve(mediaUrn);
+        },
+        createPost: (subject, profileUrn, variables, receivedMediaUrn) => {
+          events.push("create-readback");
+          expect(subject).toBe(MEMBER_URN);
+          expect(profileUrn).toBe(ARTICLE_PROFILE_URN);
+          expect(receivedMediaUrn).toBe(mediaUrn);
+          expect(variables).toMatchObject({
+            post: {
+              commentary: { text: body },
+              intendedShareLifeCycleState: "PUBLISHED",
+              media: { altText, category: "IMAGE", mediaUrn },
+              visibilityDataUnion: { visibilityType: "ANYONE" },
+            },
+          });
+          return Promise.resolve({
+            actorMatched: true,
+            entityMatched: true,
+            entityUrn,
+            lifecycle: "PUBLISHED",
+            mediaMatched: true,
+            mediaUrn,
+            textMatched: true,
+            url: finalUrl,
+          });
+        },
+        close: () => {
+          events.push("close");
+          return Promise.resolve();
+        },
+      };
+      const result = await executeLinkedInWebOperation(
+        postRecipe(),
+        {
+          alt_text: altText,
+          body,
+          media: [{ kind: "file", reference: "fixture" }],
+          visibility: "public",
+        },
+        linkedinAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          dependencies: {
+            createPostBrowserTransport: () => Promise.resolve(transport),
+          },
+          beforeDispatch: (event) => {
+            events.push(`before:${event.progress.started}`);
+            return Promise.resolve();
+          },
+          afterDispatchVerified: (event) => {
+            events.push(`after:${event.progress.verified}`);
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "succeeded",
+        output: {
+          provider: "linkedin",
+          operation: "posts.publish",
+          post: { entityUrn, url: finalUrl },
+          visibility: "public",
+          image: {
+            altText,
+            height: 1022,
+            mediaType: "image/png",
+            width: 959,
+          },
+        },
+        finalUrl,
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 1 },
+      });
+      expect(events).toEqual([
+        "identity",
+        "before:0",
+        "upload",
+        "create-readback",
+        "after:1",
+        "close",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps one admitted upload failure indeterminate and never creates or retries", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-linkedin-upload-failure-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    writeFileSync(imagePath, pngFixture(959, 1022), { mode: 0o600 });
+    let admissions = 0;
+    let uploads = 0;
+    let creates = 0;
+    try {
+      const transport: LinkedInPostBrowserTransport = {
+        currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+        uploadImage: () => {
+          uploads += 1;
+          return Promise.reject(new Error("uncertain upload result"));
+        },
+        createPost: () => {
+          creates += 1;
+          return Promise.reject(new Error("must not create after upload failure"));
+        },
+        close: () => Promise.resolve(),
+      };
+      const result = await executeLinkedInWebOperation(
+        postRecipe(),
+        {
+          body: "do not retry",
+          media: [{ kind: "file", reference: "fixture" }],
+          visibility: "public",
+        },
+        linkedinAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          dependencies: {
+            createPostBrowserTransport: () => Promise.resolve(transport),
+          },
+          beforeDispatch: () => {
+            admissions += 1;
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+        error: expect.stringContaining("reconcile before retrying"),
+      });
+      expect(admissions).toBe(1);
+      expect(uploads).toBe(1);
+      expect(creates).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a changed LinkedIn member before durable post admission", async () => {
+    let admissions = 0;
+    let uploads = 0;
+    const transport: LinkedInPostBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve({
+        data: { plainId: "987654321", "*miniProfile": MINI_PROFILE_URN },
+        included: [{ entityUrn: MINI_PROFILE_URN, objectUrn: "urn:li:member:987654321" }],
+      }),
+      uploadImage: () => {
+        uploads += 1;
+        return Promise.reject(new Error("must not upload"));
+      },
+      createPost: () => Promise.reject(new Error("must not create")),
+      close: () => Promise.resolve(),
+    };
+    const result = await executeLinkedInWebOperation(
+      postRecipe(),
+      { body: "account-bound", visibility: "public" },
+      linkedinAuth,
+      {
+        dependencies: {
+          createPostBrowserTransport: () => Promise.resolve(transport),
+        },
+        beforeDispatch: () => {
+          admissions += 1;
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+    });
+    expect(admissions).toBe(0);
+    expect(uploads).toBe(0);
   });
 
   test("keeps ungraduated direct execution boundaries inert before dependencies or callbacks", async () => {

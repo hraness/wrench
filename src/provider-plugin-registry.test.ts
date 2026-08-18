@@ -3189,26 +3189,106 @@ describe("provider plugin definition and registry", () => {
 
   test("resolves every installed bundled schema-v3/v4 operation at its durable route version", () => {
     const root = join(import.meta.dir, "assets", "adapters");
-    const retiredDiagnosticOnlyManifests = new Map([
+    const retiredDiagnosticOnlyManifests = new Map<string, readonly string[]>([
+      [
+        join(root, "bluesky", "wrench-web-adapter.v1.0.0.json"),
+        [
+          "authenticated web contract bluesky/posts.publish@1 is not installed",
+        ],
+      ],
+      ...["1.0.0", "1.1.0", "1.2.0", "1.3.0"].map((version) => [
+        join(root, "linkedin", `wrench-web-adapter.v${version}.json`),
+        [
+          "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
+          "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "authenticated web contract linkedin/posts.publish@1 is not installed",
+        ],
+      ] as const),
       [
         join(root, "linkedin", "wrench-web-adapter.v1.4.0.json"),
-        "authenticated web contract linkedin/articles.draft.save@1 is not installed",
+        [
+          "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
+          "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "authenticated web contract linkedin/posts.publish@1 is not installed",
+          "authenticated web contract linkedin/articles.draft.save@1 is not installed",
+        ],
       ],
       [
         join(root, "linkedin", "wrench-web-adapter.v1.5.0.json"),
-        "authenticated web contract linkedin/articles.draft.save@1 is not installed",
+        [
+          "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
+          "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "authenticated web contract linkedin/posts.publish@1 is not installed",
+          "authenticated web contract linkedin/articles.draft.save@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "linkedin", "wrench-web-adapter.v1.6.0.json"),
+        [
+          "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
+          "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "authenticated web contract linkedin/posts.publish@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "linkedin", "wrench-web-adapter.v1.7.0.json"),
+        [
+          "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
+          "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "authenticated web contract linkedin/posts.publish@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "substack", "wrench-web-adapter.v1.0.0.json"),
+        [
+          "authenticated web contract substack/posts.publish@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "threads", "wrench-web-adapter.v1.0.0.json"),
+        [
+          "manifest.operations.feeds.read.input must exactly match authenticated web contract threads/feeds.read@1",
+          "authenticated web contract threads/posts.publish@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "threads", "wrench-web-adapter.v1.1.0.json"),
+        [
+          "authenticated web contract threads/posts.publish@1 is not installed",
+        ],
       ],
       [
         join(root, "x", "wrench-web-adapter.v1.1.0.json"),
-        "authenticated web contract x/articles.publish@1 is not installed",
+        [
+          "authenticated web contract x/posts.publish@1 is not installed",
+          "authenticated web contract x/articles.publish@1 is not installed",
+        ],
       ],
       [
         join(root, "x", "wrench-web-adapter.v1.2.0.json"),
-        "authenticated web contract x/articles.publish@2 is not installed",
+        [
+          "authenticated web contract x/posts.publish@1 is not installed",
+          "authenticated web contract x/articles.publish@2 is not installed",
+        ],
       ],
       [
         join(root, "x", "wrench-web-adapter.v1.3.0.json"),
-        "authenticated web contract x/articles.publish@3 is not installed",
+        [
+          "authenticated web contract x/posts.publish@1 is not installed",
+          "authenticated web contract x/articles.publish@3 is not installed",
+        ],
+      ],
+      [
+        join(root, "x", "wrench-web-adapter.v1.4.0.json"),
+        [
+          "authenticated web contract x/posts.publish@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "x", "wrench-web-adapter.v1.5.0.json"),
+        [
+          "authenticated web contract x/posts.publish@1 is not installed",
+        ],
       ],
     ] as const);
     const checkedRetiredManifests = new Set<string>();
@@ -3230,7 +3310,7 @@ describe("provider plugin definition and registry", () => {
       if (retiredIssue !== undefined) {
         expect(parseRuntimeManifest(raw, providerPluginRegistry), path).toEqual({
           ok: false,
-          issues: [retiredIssue],
+          issues: retiredIssue,
         });
         checkedRetiredManifests.add(path);
         continue;

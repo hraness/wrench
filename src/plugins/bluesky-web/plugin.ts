@@ -22,7 +22,7 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(blueskyContracts),
-  "abc79ec47122e0f027f009ff03155f54ae3b73df20641f1024b85921195df550",
+  "5a038a2dea2dc580f1771c3e25ff53cf170f615e3b905847fdb85351d6ffe82b",
   {},
   {
     "messaging.list": {

@@ -81,9 +81,11 @@ export const wrenchUsage = `Usage:
   wrench adapter remove <id> --yes
 
   wrench derive start <id> <url> [--auth <id>] [--content none|text] [--domains <list>]
-                       [--allow-remote-actions] [--headed] [--json]
+                       [--fixture <image>...] [--allow-remote-actions] [--headed] [--json]
   wrench derive list [--json]
   wrench derive browser <derivation-id> -- <semantic agent-browser command>
+                       # bounded upload: upload @ref|@single-file-input|@single-image-input fixture:<n>...
+                       # terminal upload: upload-and-seal @ref|@single-file-input|@single-image-input fixture:<n>...
   wrench derive review <derivation-id> [--offset <n> --limit <1-100>] [--json]
   wrench derive review <derivation-id> --entry <zero-based> [--fixtures -] [--json]
   wrench derive finish <derivation-id> --output <directory> [--platform <surface-id>] [--force] [--json]

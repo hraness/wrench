@@ -1,0 +1,632 @@
+{
+  "schemaVersion": 4,
+  "id": "x-web",
+  "version": "1.6.0",
+  "displayName": "X (Authenticated Web API)",
+  "surfaceId": "x",
+  "origins": [
+    "https://x.com"
+  ],
+  "browserDomains": [
+    "x.com"
+  ],
+  "operations": {
+    "feeds.read": {
+      "description": "Observed contract: read one complete bounded X For You, Following, user, List, search, or bookmarks provider page through its current captured first-party GraphQL query; user/List responses must echo the requested identity and an over-limit page fails without exposing its end cursor.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Exact X timeline or discovery surface",
+            "enum": [
+              "for-you",
+              "following",
+              "user",
+              "list",
+              "search",
+              "bookmarks"
+            ]
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Exact X user ID for a user feed",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "list_id": {
+            "type": "string",
+            "description": "Exact X List ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "query": {
+            "type": "string",
+            "description": "Exact X search query",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum timeline entries to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.read": {
+      "description": "Observed contract: read one X post through the current captured TweetDetail first-party GraphQL query with a bounded normalized projection.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact X post ID",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.read": {
+      "description": "Observed contract: read one complete bounded X conversation page through the current captured TweetDetail query; an over-limit reply page fails without exposing its end cursor.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact root X post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque conversation cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum conversation entries to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.list": {
+      "description": "Capture-required contract reservation: current X DMs use encrypted X Chat events, so plaintext inbox listing remains disabled until verified key recovery is installed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Exact X direct-message folder",
+            "enum": [
+              "inbox",
+              "requests",
+              "additional"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum conversations to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.read": {
+      "description": "Capture-required contract reservation: current X Chat events are encrypted, so plaintext conversation reads remain disabled until verified key recovery and acknowledgement-free handling are installed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact opaque conversation identifier returned by messaging.list",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum messages to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "conversation_id"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "articles.read": {
+      "description": "Capture-required contract reservation: read one native X article only after its entitlement-specific first-party detail query and bounded projection are captured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "article_id": {
+            "type": "string",
+            "description": "Exact native X article identifier",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "article_id"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "articles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: send one confirmed X DM, optionally with one reviewed attachment, after the current mutation, target binding, and media path are captured and reviewed.",
+      "risk": "R3",
+      "sideEffect": "Sends one externally visible X direct message to the exact confirmed user or conversation.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_kind": {
+            "type": "string",
+            "description": "Send to an existing conversation or one exact X user",
+            "enum": [
+              "conversation",
+              "user"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Exact conversation or X user ID selected by target_kind",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact direct-message text; an optional reviewed attachment may accompany it",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional reviewed direct-message image, GIF, or video",
+            "maxBytes": 536870912,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "video/mp4"
+            ]
+          },
+          "media_alt_text": {
+            "type": "string",
+            "description": "Optional accessibility text for reviewed image media",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.publish": {
+      "description": "Observed contract: publish one confirmed X post with optional reviewed PNG through exact upload, CreateTweet response, and independent TweetResultByRestId readback binding.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible X post with the exact confirmed content and reply audience.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact post content",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional single plan-bound PNG",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/png"
+            ]
+          },
+          "media_type": {
+            "type": "string",
+            "description": "Exact media type when the PNG is attached",
+            "enum": [
+              "image/png"
+            ]
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "posts.publish",
+        "contractVersion": 2,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "threads.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed text-only X thread only after an authorized live fixture proves each current CreateTweet dispatch.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible ordered X thread containing every exact confirmed item.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "Exact ordered post texts, beginning with the thread root",
+            "items": {
+              "type": "string",
+              "description": "One exact X thread item",
+              "minLength": 1,
+              "maxLength": 280
+            },
+            "minItems": 1,
+            "maxItems": 25
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "threads.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: publish one confirmed text-only reply only after an authorized live fixture proves current transaction-header and parent binding behavior.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible X reply to the exact confirmed parent post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact parent X post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact text-only reply content",
+            "minLength": 1,
+            "maxLength": 280
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.repost": {
+      "description": "Capture-required contract reservation: set repost state only after an authorized live fixture proves current transaction-header and readback behavior.",
+      "risk": "R3",
+      "sideEffect": "Creates or removes the authenticated account's repost of the exact confirmed X post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact X post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "reposted": {
+            "type": "boolean",
+            "description": "Exact desired repost state"
+          }
+        },
+        "required": [
+          "post_id",
+          "reposted"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.quote": {
+      "description": "Capture-required contract reservation: publish one confirmed text-only quote only after an authorized live fixture proves current transaction-header and quote binding behavior.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible X quote post for the exact confirmed source post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact quoted X post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact text-only quote content",
+            "minLength": 1,
+            "maxLength": 280
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "posts.quote",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "likes.set": {
+      "description": "Observed contract: set or clear one exact X like through the current FavoriteTweet or UnfavoriteTweet mutation, then verify the desired state through an independent TweetResultByRestId readback.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated account's like on the exact confirmed X post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact X post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "liked": {
+            "type": "boolean",
+            "description": "Exact desired like state"
+          }
+        },
+        "required": [
+          "post_id",
+          "liked"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "likes.set",
+        "contractVersion": 2,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.save": {
+      "description": "Observed contract: set or clear one exact X bookmark through the current first-party mutation, then verify the desired state through an independent post readback.",
+      "risk": "R2",
+      "sideEffect": "Saves or removes the exact confirmed X post in the authenticated account's bookmarks.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact X post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired bookmark state"
+          }
+        },
+        "required": [
+          "post_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "articles.draft.save": {
+      "description": "Create or replace one private native X Article draft from the strict provider-neutral ArticleDraftDocument. This operation has no publish-capable branch.",
+      "risk": "R2",
+      "sideEffect": "Creates one private native X Article draft, or replaces the exact confirmed existing private draft, with the confirmed title, structure, styles, and native links; it never publishes the draft.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Exact native article title",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "document": {
+            "type": "string",
+            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 1; supports bounded paragraphs, headings, lists, blockquotes, native HTTPS links, and text styles",
+            "minLength": 1,
+            "maxLength": 524288
+          },
+          "draft_id": {
+            "type": "string",
+            "description": "Optional exact existing private X Article draft to replace in place",
+            "minLength": 1,
+            "maxLength": 19
+          }
+        },
+        "required": [
+          "title",
+          "document"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "articles.draft.save",
+        "contractVersion": 1,
+        "timeoutMs": 180000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "articles.publish": {
+      "description": "Capture-required reservation: publish one exact existing private X Article draft only after the distinct publish mutation and public readback are captured and response-bound.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible native X Article from the exact confirmed private draft.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Exact native article title used for confirmation",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact native article body used for confirmation",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "draft_id": {
+            "type": "string",
+            "description": "Exact private X Article draft to publish",
+            "minLength": 1,
+            "maxLength": 19
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "draft_id"
+        ]
+      },
+      "webSession": {
+        "site": "x",
+        "action": "articles.publish",
+        "contractVersion": 4,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}

@@ -31,6 +31,15 @@ capabilities, exact-origin HTTPS, opaque credential sinks, bounded files and
 state, serialized lifecycle transitions, and immutable run identity. Include a
 secret-free fixture for each executable operation.
 
+Built-in source plugins retain a separate exact source/dependency closure
+check. Wrench derives that identity from the current tree, snapshots it at
+registry startup, and revalidates it immediately before and after lazy runtime
+load. There is no manual closure allowlist or hash-approval step: durable
+contract identity remains the reviewed semantic boundary, while automatic
+closure revalidation catches ordinary source or dependency drift. Released and
+development commands must never ask an operator or maintainer to approve source
+hashes.
+
 Do not include cookies, tokens, authenticated HAR values, browser profiles,
 private messages, local state, real account identifiers, or unredacted provider
 responses in fixtures, issues, logs, or pull requests. Networked acceptance

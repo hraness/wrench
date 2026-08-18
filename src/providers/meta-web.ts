@@ -104,6 +104,19 @@ const observed = (reason: string, contractVersion = 1): MetaWebOperationContract
   reason,
 });
 
+const observedMutation = (
+  risk: "R2" | "R3",
+  reason: string,
+  contractVersion = 1,
+): MetaWebOperationContract => Object.freeze({
+  contractVersion,
+  effect: "write",
+  risk,
+  state: "observed",
+  evidence: "first-party-bundle",
+  reason,
+});
+
 function riskForOperation(operation: string): MetaWebRisk {
   if (
     operation.endsWith(".read")
@@ -188,6 +201,11 @@ export const META_WEB_OPERATIONS = Object.freeze({
   threads: contracts("threads", {
     "feeds.read": observed(
       "one bounded first page from live direct signed-in Threads Relay preload JSON with exact Barcelona viewer binding and no continuation cursor accepted or exposed",
+      2,
+    ),
+    "posts.publish": observedMutation(
+      "R3",
+      "reviewed live single-PNG upload plus first-party configure_text_post_app_feed contract, exact viewer binding, one durable dispatch, response-bound post identity, and independent permalink readback",
       2,
     ),
     "messaging.list": captureRequired(
@@ -1375,6 +1393,38 @@ export function normalizeThreadsFeedHtml(html: unknown, viewerId: string, limit:
     page_scope: "first-page-only",
     continuation_supported: false,
   });
+}
+
+export function normalizeThreadsPostHtml(
+  html: unknown,
+  viewerId: string,
+  expectedPostId: string,
+  expectedCaption: string,
+): Readonly<Record<string, unknown>> {
+  if (!/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(expectedPostId)) {
+    throw new Error("Threads readback expected post ID is invalid");
+  }
+  if (parseThreadsViewerId(html) !== viewerId) {
+    throw new Error("Threads post readback changed its bound viewer");
+  }
+  const matches: Readonly<Record<string, unknown>>[] = [];
+  walk(parseMetaJsonScripts(html), (value) => {
+    if (
+      !isRecord(value)
+      || (value.id !== expectedPostId && value.pk !== expectedPostId)
+      || value.caption === undefined
+      || value.user === undefined
+    ) return;
+    const projected = threadsPost(value, "Threads post readback");
+    const user = isRecord(projected.user) ? projected.user : null;
+    if (projected.caption === expectedCaption && user?.id === viewerId) {
+      matches.push(projected);
+    }
+  });
+  if (matches.length < 1) {
+    throw new Error("Threads post readback did not bind the confirmed actor, ID, and text");
+  }
+  return matches[0]!;
 }
 
 function facebookPost(value: unknown, label: string): Readonly<Record<string, unknown>> {

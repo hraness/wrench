@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
-import { parseArticleDraftDocument } from "../article-draft-document";
+import {
+  parseArticleDraftDocument,
+  parseArticleDraftDocumentV2,
+} from "../article-draft-document";
 import type { WrenchAuth } from "../auth";
 import type { BrowserSession } from "../browser";
 import { canonicalJson } from "../canonical-json";
@@ -14,6 +20,7 @@ import {
   readXWebArticleDraftDesiredState,
   readXWebDesiredState,
   resolveCurrentXWebChunkUrl,
+  xWebArticleImageFailureCategory,
   type XWebRuntimeDependencies,
 } from "./x-web-runtime";
 
@@ -26,6 +33,7 @@ const ARTICLE_TITLE_QUERY_ID = "z_xdvTUbZjSVjt232b4D4A";
 const ARTICLE_CONTENT_QUERY_ID = "P5Nc3DYs9D4XqVthNrig8w";
 const ARTICLE_ENTITIES_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory.d1314bba.js";
 const ARTICLE_CONVERTER_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/shared~bundle.Grok~bundle.GrokDrawer~bundle.ReaderMode~bundle.Birdwatch~bundle.TwitterArticles~bundle.Compose.02f6dc7a.js";
+const ARTICLE_UPLOADER_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/shared~bundle.LoggedInMain~ondemand.HoverCard~loader.AudioDock~loader.Dock~bundle.BookmarkFolders~bundle.Book.a9bac6ba.js";
 const VIEWER_ID = "123456789012345678";
 const FOCAL_POST_ID = "2078889282404569267";
 const CREATED_POST_ID = "2078889282404569266";
@@ -215,26 +223,53 @@ function createTweetResponse(options: {
   readonly authorId?: string;
   readonly replyTo?: string | null;
   readonly quote?: string | null;
+  readonly mediaId?: string | null;
 }): unknown {
+  const result = publishedTweetResult(options);
   return {
     data: {
       create_tweet: {
         tweet_results: {
-          result: {
-            rest_id: CREATED_POST_ID,
-            legacy: {
-              full_text: options.text,
-              user_id_str: options.authorId ?? VIEWER_ID,
-              ...(options.replyTo === undefined || options.replyTo === null
-                ? {}
-                : { in_reply_to_status_id_str: options.replyTo }),
-              ...(options.quote === undefined || options.quote === null
-                ? {}
-                : { quoted_status_id_str: options.quote }),
-            },
-          },
+          result,
         },
       },
+    },
+  };
+}
+
+function publishedTweetResult(options: {
+  readonly text: string;
+  readonly authorId?: string;
+  readonly replyTo?: string | null;
+  readonly quote?: string | null;
+  readonly mediaId?: string | null;
+}): unknown {
+  const media = options.mediaId === undefined || options.mediaId === null
+    ? {}
+    : {
+        entities: { media: [{ id_str: options.mediaId, type: "photo" }] },
+        extended_entities: { media: [{ id_str: options.mediaId, type: "photo" }] },
+      };
+  return {
+    rest_id: CREATED_POST_ID,
+    legacy: {
+      full_text: options.text,
+      user_id_str: options.authorId ?? VIEWER_ID,
+      ...(options.replyTo === undefined || options.replyTo === null
+        ? {}
+        : { in_reply_to_status_id_str: options.replyTo }),
+      ...(options.quote === undefined || options.quote === null
+        ? {}
+        : { quoted_status_id_str: options.quote }),
+      ...media,
+    },
+  };
+}
+
+function publishedTweetReadback(options: Parameters<typeof createTweetResponse>[0]): unknown {
+  return {
+    data: {
+      tweetResult: { result: publishedTweetResult(options) },
     },
   };
 }
@@ -443,6 +478,92 @@ describe("X authenticated internal-API runtime", () => {
         },
       ],
     });
+  });
+
+  test("projects ArticleDraftDocument v2 images to exact atomic MEDIA entities", () => {
+    const document = parseArticleDraftDocumentV2(canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        {
+          type: "paragraph",
+          text: "Visit Hraness",
+          links: [{ offset: 6, length: 7, url: "https://hraness.com/writing" }],
+        },
+        { type: "image", imageIndex: 0, caption: "Puerto Rico" },
+      ],
+    }), { maximumBlocks: 2_000, maximumCharacters: 20_000, maximumImages: 20 });
+    expect(buildXWebRichArticleContentState(document, ["700000000000000002"])).toEqual({
+      blocks: [
+        {
+          data: {},
+          key: "00000",
+          text: "Visit Hraness",
+          type: "unstyled",
+          entity_ranges: [{ key: 0, offset: 6, length: 7 }],
+          inline_style_ranges: [],
+        },
+        {
+          data: {},
+          key: "00001",
+          text: " ",
+          type: "atomic",
+          entity_ranges: [{ key: 1, offset: 0, length: 1 }],
+          inline_style_ranges: [],
+        },
+      ],
+      entity_map: [
+        {
+          key: "0",
+          value: {
+            data: { url: "https://hraness.com/writing" },
+            type: "LINK",
+            mutability: "Mutable",
+          },
+        },
+        {
+          key: "1",
+          value: {
+            data: {
+              caption: "Puerto Rico",
+              entity_key: "1",
+              media_items: [{
+                local_media_id: 1,
+                media_category: "DraftTweetImage",
+                media_id: "700000000000000002",
+              }],
+            },
+            type: "MEDIA",
+            mutability: "Immutable",
+          },
+        },
+      ],
+    });
+    expect(() => buildXWebRichArticleContentState(document, [])).toThrow(
+      "did not bind one uploaded inline image",
+    );
+    expect(() => buildXWebRichArticleContentState(document, ["1", "2"])).toThrow(
+      "referenced exactly once",
+    );
+  });
+
+  test("classifies Article image upload failures without exposing provider bodies", () => {
+    expect(xWebArticleImageFailureCategory(
+      new Error("authenticated web API returned unreviewed status/content type 415/application/json"),
+    )).toBe("request-rejected-415");
+    expect(xWebArticleImageFailureCategory(
+      new Error("authenticated web API returned unreviewed status/content type 200/text/plain"),
+    )).toBe("text-plain-response");
+    expect(xWebArticleImageFailureCategory(
+      new Error("authenticated web API returned unreviewed status/content type 202/application/json"),
+    )).toBe("media-status-drift");
+    expect(xWebArticleImageFailureCategory(
+      new Error("X media FINALIZE response omitted its media identifier"),
+    )).toBe("media-finalize-response-drift");
+    expect(xWebArticleImageFailureCategory(
+      new Error("X articleentity_create_draft response Article identifier must be a bounded string"),
+    )).toBe("article-create-id-shape-drift");
+    expect(xWebArticleImageFailureCategory(new Error("private response body")))
+      .toBe("media-contract-step-failed");
   });
 
   test("binds user-feed responses to the requested user before exposing a page", async () => {
@@ -1075,6 +1196,190 @@ describe("X authenticated internal-API runtime", () => {
     expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
   });
 
+  test("uploads one plan-bound image, writes native MEDIA, and verifies exact private readback", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Harnessing Puerto Rico";
+    const articleId = "700000000000000001";
+    const mediaId = "700000000000000002";
+    const documentValue = canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Before the image" },
+        { type: "image", imageIndex: 0, caption: "Puerto Rico" },
+        { type: "paragraph", text: "After the image" },
+      ],
+    });
+    const document = parseArticleDraftDocumentV2(documentValue, {
+      maximumBlocks: 2_000,
+      maximumCharacters: 20_000,
+      maximumImages: 20,
+    });
+    const expectedContentState = buildXWebRichArticleContentState(document, [mediaId]);
+    let readCount = 0;
+    let savedContentState: unknown = null;
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response([
+          descriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+          descriptor("ArticleEntityUpdateTitle", ARTICLE_TITLE_QUERY_ID, "mutation"),
+          descriptor("ArticleEntityUpdateContent", ARTICLE_CONTENT_QUERY_ID, "mutation"),
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_UPLOADER_BUNDLE_URL) {
+        return new Response([
+          '"upload.x.com"',
+          '"upload-a.x.com"',
+          '"upload-b.x.com"',
+          "/i/media/${l}",
+          '"INIT"',
+          '"APPEND"',
+          '"FINALIZE"',
+          "media_category=${p}",
+          'TweetImage:"tweet_image"',
+          'TwitterArticle:"twitter_article"',
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+        return new Response([
+          "createEntity(p.LA.MEDIA,p.Ei.IMMUTABLE",
+          "mediaCategory:E(e)",
+          "mediaId:e.uploadId",
+          'createEntity(w.Sg,"MUTABLE",{url:',
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+        return new Response([
+          "media_items:r.data?.mediaItems?.map",
+          "media_category:e.mediaCategory",
+          "mutability:s[r.mutability]",
+          "inline_style_ranges:",
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.hostname === "upload.x.com") {
+        const command = request.url.searchParams.get("command");
+        if (command === "INIT") {
+          expect(request.url.searchParams.get("media_category")).toBe("tweet_image");
+          expect(request.url.searchParams.get("media_type")).toBe("image/png");
+          expect(request.url.searchParams.get("total_bytes")).toBe("869311");
+          return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 202);
+        }
+        if (command === "APPEND") {
+          expect(request.url.searchParams.get("media_id")).toBe(mediaId);
+          expect(request.url.searchParams.get("segment_index")).toBe("0");
+          expect(request.headers.get("content-type")).toStartWith("multipart/form-data; boundary=");
+          return new Response(null, { status: 204 });
+        }
+        if (command === "FINALIZE") {
+          expect(request.url.searchParams.get("media_id")).toBe(mediaId);
+          return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 201);
+        }
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+        readCount += 1;
+        return jsonResponse({
+          data: {
+            article_result_by_rest_id: {
+              rest_id: articleId,
+              title: readCount === 1 ? "Old title" : title,
+              metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+              lifecycle_state: { lifecycle: "Draft" },
+              ...(readCount === 1 ? {} : { content_state: savedContentState }),
+            },
+          },
+        });
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityUpdateTitle")) {
+        return jsonResponse({
+          data: { articleentity_update_title: { rest_id: articleId, title } },
+        });
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityUpdateContent")) {
+        const payload = JSON.parse(request.body ?? "null") as {
+          variables: { article_entity: string; content_state: unknown };
+        };
+        expect(payload.variables).toEqual({
+          article_entity: articleId,
+          content_state: expectedContentState,
+        });
+        savedContentState = payload.variables.content_state;
+        return jsonResponse({
+          data: { articleentity_update_content_state: { rest_id: articleId } },
+        });
+      }
+      throw new Error(`unexpected image Article request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        draft_id: articleId,
+        inline_images: [{ kind: "file", reference: "fixture-image" }],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: (files) => {
+          expect(files).toEqual([{ kind: "file", reference: "fixture-image" }]);
+          return Promise.resolve([
+            join(import.meta.dir, "..", "..", "website", "public", "og.png"),
+          ]);
+        },
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        documentSchemaVersion: 2,
+        draftId: articleId,
+        inlineImageCount: 1,
+        published: false,
+        title,
+      },
+      dispatch: { planned: 3, started: 3, verified: 3 },
+    });
+    expect(before.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.title",
+      "articles.content",
+    ]);
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.title",
+      "articles.content",
+    ]);
+    await expect(readXWebArticleDraftDesiredState(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        draft_id: articleId,
+        inline_images: [{ kind: "file", reference: "fixture-image" }],
+      },
+      xAuth,
+    )).rejects.toThrow("supports only articles.draft.save@1");
+  });
+
   test("reconciles one exact existing text-and-links Article without a mutation path", async () => {
     const calls: CapturedRequest[] = [];
     const title = "Harnessing Puerto Rico";
@@ -1355,6 +1660,7 @@ describe("X authenticated internal-API runtime", () => {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
           descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+          descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
         ), { headers: { "content-type": "application/javascript" } });
       }
       if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -1373,6 +1679,13 @@ describe("X authenticated internal-API runtime", () => {
           queryId: "hIL9XdleMYEtVXOZVbr8Bg",
         });
         return jsonResponse(createTweetResponse({ text: body }));
+      }
+      if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+        expect(request.method).toBe("GET");
+        expect(JSON.parse(request.url.searchParams.get("variables") ?? "null")).toMatchObject({
+          tweetId: CREATED_POST_ID,
+        });
+        return jsonResponse(publishedTweetReadback({ text: body }));
       }
       throw new Error(`unexpected test request ${request.url.href}`);
     });
@@ -1411,6 +1724,163 @@ describe("X authenticated internal-API runtime", () => {
       index: 1,
       progress: { planned: 1, started: 1, verified: 1 },
     }]);
+  });
+
+  test("uploads one plan-bound PNG before CreateTweet and independently binds the returned photo", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-x-publish-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    writeFileSync(imagePath, imageBytes, { mode: 0o600 });
+    const body = "Exact X image post";
+    const mediaId = "12345";
+    const calls: CapturedRequest[] = [];
+    const events: string[] = [];
+    try {
+      const result = await executeXWebOperation(
+        xRecipe("posts.publish"),
+        {
+          body,
+          media: { kind: "file", reference: "fixture" },
+          media_type: "image/png",
+        },
+        xAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          beforeDispatch: (event) => {
+            events.push(`before ${event.progress.started}`);
+            return Promise.resolve();
+          },
+          afterDispatchVerified: (event) => {
+            events.push(`after ${event.progress.verified}`);
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            events.push(`${request.method} ${request.url.hostname}${request.url.pathname}`);
+            if (request.url.href === "https://x.com/home") {
+              return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+            }
+            if (request.url.href === MAIN_URL) {
+              return new Response(mainBundle(
+                descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+              ), { headers: { "content-type": "application/javascript" } });
+            }
+            if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+            if (request.url.hostname === "upload.x.com") {
+              expect(request.headers.get("x-csrf-token")).toBe("csrf_token_0123456789abcdef");
+              const command = request.url.searchParams.get("command");
+              if (command === "INIT") {
+                expect(request.url.searchParams.get("total_bytes")).toBe(String(imageBytes.byteLength));
+                expect(request.url.searchParams.get("media_type")).toBe("image/png");
+                expect(request.url.searchParams.get("media_category")).toBe("tweet_image");
+                return jsonResponse({
+                  expires_after_secs: 86_400,
+                  media_id: 12345,
+                  media_id_string: mediaId,
+                  media_key: `3_${mediaId}`,
+                });
+              }
+              if (command === "APPEND") {
+                expect(request.url.searchParams.get("media_id")).toBe(mediaId);
+                expect(request.url.searchParams.get("segment_index")).toBe("0");
+                expect(request.headers.get("content-type")).toMatch(
+                  /^multipart\/form-data; boundary=wrench-x-media-[a-f0-9]{32}$/u,
+                );
+                return new Response(null, { status: 204 });
+              }
+              if (command === "FINALIZE") {
+                return jsonResponse({
+                  expires_after_secs: 86_400,
+                  media_id: 12345,
+                  media_id_string: mediaId,
+                  media_key: `3_${mediaId}`,
+                  size: imageBytes.byteLength,
+                  image: { h: 1, image_type: "image/png", w: 1 },
+                });
+              }
+            }
+            if (request.url.pathname.endsWith("/CreateTweet")) {
+              const payload = JSON.parse(request.body ?? "null") as {
+                readonly variables: { readonly media: unknown };
+              };
+              expect(payload.variables.media).toEqual({
+                media_entities: [{ media_id: mediaId, tagged_users: [] }],
+                possibly_sensitive: false,
+              });
+              return jsonResponse(createTweetResponse({ text: body, mediaId }));
+            }
+            if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+              return jsonResponse(publishedTweetReadback({ text: body, mediaId }));
+            }
+            throw new Error(`unexpected X image publish request ${request.url.href}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "succeeded",
+        output: { posts: [{ id: CREATED_POST_ID }] },
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 1 },
+      });
+      expect(events).toContain("POST upload.x.com/i/media/upload.json");
+      expect(events.at(-1)).toBe("after 1");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("marks an admitted X image upload failure indeterminate without creating a post", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-x-upload-failure-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    writeFileSync(imagePath, new Uint8Array([137, 80, 78, 71]), { mode: 0o600 });
+    const calls: CapturedRequest[] = [];
+    let admissions = 0;
+    try {
+      const result = await executeXWebOperation(
+        xRecipe("posts.publish"),
+        {
+          body: "Do not retry",
+          media: { kind: "file", reference: "fixture" },
+          media_type: "image/png",
+        },
+        xAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          beforeDispatch: () => {
+            admissions += 1;
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            if (request.url.href === "https://x.com/home") {
+              return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+            }
+            if (request.url.href === MAIN_URL) {
+              return new Response(mainBundle(
+                descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+              ), { headers: { "content-type": "application/javascript" } });
+            }
+            if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+            if (request.url.hostname === "upload.x.com") {
+              return new Response("upload failed", { status: 503 });
+            }
+            throw new Error(`unexpected request after X upload failure ${request.url.href}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+      });
+      expect(admissions).toBe(1);
+      expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("returns failed with zero dispatches when the reviewed mutation descriptor cannot be resolved", async () => {

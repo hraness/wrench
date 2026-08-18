@@ -1,6 +1,7 @@
 import { canonicalJson } from "./canonical-json";
 
 export const ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION = 1;
+export const ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION = 2;
 export const MAX_ARTICLE_DRAFT_DOCUMENT_BYTES = 512 * 1024;
 export const MAX_ARTICLE_DRAFT_BLOCKS = 5_000;
 export const MAX_ARTICLE_DRAFT_CHARACTERS = 125_000;
@@ -43,9 +44,25 @@ export type ArticleDraftDocument = {
   readonly blocks: readonly ArticleDraftTextBlock[];
 };
 
+export type ArticleDraftImageBlock = {
+  readonly type: "image";
+  readonly imageIndex: number;
+  readonly altText?: string;
+  readonly caption?: string;
+};
+
+export type ArticleDraftDocumentV2 = {
+  readonly schemaVersion: typeof ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION;
+  readonly blocks: readonly (ArticleDraftTextBlock | ArticleDraftImageBlock)[];
+};
+
 export type ArticleDraftDocumentLimits = {
   readonly maximumBlocks: number;
   readonly maximumCharacters: number;
+};
+
+export type ArticleDraftDocumentV2Limits = ArticleDraftDocumentLimits & {
+  readonly maximumImages: number;
 };
 
 const textBlockTypes = new Set<ArticleDraftTextBlockType>([
@@ -259,6 +276,138 @@ export function articleDraftDocumentIssues(
 ): readonly string[] {
   try {
     parseArticleDraftDocument(value, limits);
+    return Object.freeze([]);
+  } catch (error) {
+    return Object.freeze([
+      error instanceof Error ? error.message : "input.document is invalid",
+    ]);
+  }
+}
+
+function checkedImageLimits(value: ArticleDraftDocumentV2Limits): ArticleDraftDocumentV2Limits {
+  const text = checkedLimits(value);
+  if (
+    !Number.isSafeInteger(value.maximumImages)
+    || value.maximumImages < 1
+    || value.maximumImages > 100
+  ) throw new Error("Article draft image limits are invalid");
+  return Object.freeze({ ...text, maximumImages: value.maximumImages });
+}
+
+function optionalImageText(
+  value: unknown,
+  label: string,
+  maximum: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > maximum
+    || /[\0\r]/u.test(value)
+  ) throw new Error(`${label} must be bounded text`);
+  return value;
+}
+
+/** Parse the canonical mixed text-and-inline-image ArticleDraftDocument v2. */
+export function parseArticleDraftDocumentV2(
+  value: unknown,
+  limitsValue: ArticleDraftDocumentV2Limits,
+): ArticleDraftDocumentV2 {
+  const limits = checkedImageLimits(limitsValue);
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || Buffer.byteLength(value, "utf8") > MAX_ARTICLE_DRAFT_DOCUMENT_BYTES
+    || value.includes("\0")
+  ) throw new Error("input.document must be bounded canonical ArticleDraftDocument JSON");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("input.document must be valid ArticleDraftDocument JSON");
+  }
+  if (canonicalJson(parsed) !== value) {
+    throw new Error("input.document must use canonical JSON encoding");
+  }
+  const root = record(parsed, "input.document");
+  exactKeys(root, ["schemaVersion", "blocks"], "input.document");
+  if (
+    root.schemaVersion !== ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION
+    || !Array.isArray(root.blocks)
+  ) {
+    throw new Error(
+      `input.document must use ArticleDraftDocument schemaVersion ${ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION}`,
+    );
+  }
+  if (root.blocks.length < 1 || root.blocks.length > limits.maximumBlocks) {
+    throw new Error(`input.document must contain 1-${limits.maximumBlocks} blocks`);
+  }
+
+  const blocks: (ArticleDraftTextBlock | ArticleDraftImageBlock)[] = [];
+  const imageIndexes = new Set<number>();
+  let totalCharacters = 0;
+  for (const [index, rawBlock] of root.blocks.entries()) {
+    const label = `input.document.blocks[${index}]`;
+    const block = record(rawBlock, label);
+    if (block.type === "image") {
+      exactKeys(block, [
+        "type",
+        "imageIndex",
+        ...(block.altText === undefined ? [] : ["altText"]),
+        ...(block.caption === undefined ? [] : ["caption"]),
+      ], label);
+      if (
+        !Number.isSafeInteger(block.imageIndex)
+        || (block.imageIndex as number) < 0
+        || (block.imageIndex as number) >= limits.maximumImages
+        || imageIndexes.has(block.imageIndex as number)
+      ) throw new Error(`${label}.imageIndex must be a unique bounded zero-based image index`);
+      const altText = optionalImageText(block.altText, `${label}.altText`, 1_000);
+      const caption = optionalImageText(block.caption, `${label}.caption`, 1_000);
+      imageIndexes.add(block.imageIndex as number);
+      blocks.push(Object.freeze({
+        type: "image",
+        imageIndex: block.imageIndex as number,
+        ...(altText === undefined ? {} : { altText }),
+        ...(caption === undefined ? {} : { caption }),
+      }));
+      continue;
+    }
+    const parsedText = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION,
+      blocks: [rawBlock],
+    }), {
+      maximumBlocks: 1,
+      maximumCharacters: limits.maximumCharacters,
+    }).blocks[0];
+    if (parsedText === undefined) throw new Error(`${label} was omitted after validation`);
+    totalCharacters += parsedText.text.length;
+    if (totalCharacters > limits.maximumCharacters) {
+      throw new Error(
+        `input.document text must contain at most ${limits.maximumCharacters} UTF-16 code units`,
+      );
+    }
+    blocks.push(parsedText);
+  }
+  if (totalCharacters < 1) throw new Error("input.document must contain article text");
+  const orderedIndexes = [...imageIndexes].sort((left, right) => left - right);
+  if (orderedIndexes.some((value, index) => value !== index)) {
+    throw new Error("input.document imageIndex values must be contiguous from zero");
+  }
+  return Object.freeze({
+    schemaVersion: ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION,
+    blocks: Object.freeze(blocks),
+  });
+}
+
+export function articleDraftDocumentV2Issues(
+  value: unknown,
+  limits: ArticleDraftDocumentV2Limits,
+): readonly string[] {
+  try {
+    parseArticleDraftDocumentV2(value, limits);
     return Object.freeze([]);
   } catch (error) {
     return Object.freeze([

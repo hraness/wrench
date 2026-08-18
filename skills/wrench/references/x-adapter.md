@@ -36,11 +36,12 @@ accepts a reviewed title, a canonical provider-neutral `ArticleDraftDocument`,
 and an optional exact existing private `draft_id`. Read [native article
 drafts](article-drafts.md) before constructing the document.
 
-Keep the current contract text-only. It supports paragraphs, headings, lists,
-blockquotes, native HTTPS links, and bold, italic, or strikethrough ranges. It
-does not accept images, a cover, embeds, HTML, Markdown, or editor payloads. The
-caller owns any editorial translation from source material into the final
-title, text blocks, styles, and links.
+The current contract uses `ArticleDraftDocument` schemaVersion 2. It supports
+paragraphs, headings, lists, blockquotes, native HTTPS links, bold, italic, or
+strikethrough ranges, and 1–20 ordered plan-bound JPEG, PNG, or WebP inline
+images up to 5 MiB each. Image captions are supported. Native alt-text writing,
+covers, embeds, HTML, Markdown, and editor payloads remain outside this
+contract. The caller owns every editorial and image-placement choice.
 
 ```sh
 wrench adapter sync-bundled --json
@@ -55,17 +56,18 @@ wrench x-web articles.draft.save \
 wrench confirm <preview-digest> --json
 ```
 
-Review the bound numeric account, exact title, canonical document, optional
-draft ID, contract version 1, and one-step create or two-step replacement
-schedule. A successful result must identify `articles.draft.save`, report
+Review the bound numeric account, exact title, canonical document, ordered
+attachment hashes, optional draft ID, contract version 2, and the image-upload
+plus create or title/content replacement schedule. A successful result must identify `articles.draft.save`, report
 `published: false` and `mode: "draft"`, and return the private draft ID and edit
 URL. The runtime independently reads the result and binds its unpublished
-state, owner, title, and content.
+state, owner, title, content, captions, image order, and uploaded media IDs.
 
-Only replacement input containing an exact `draft_id` can use the installed
-read-only reconciliation path. If a create becomes indeterminate, the
-confirmed input has no exact draft target: preserve that run and do not retry,
-search by title, or guess an ID.
+The active image contract has no automatic reconciliation path because an
+uncertain upload may have created a provider media ID that is absent from the
+confirmed input. Preserve every partial or indeterminate run and do not retry,
+search by title, guess an ID, or repeat uploads. Exact read-only replacement
+reconciliation remains only for already-durable historical text-only runs.
 
 `articles.publish` is a distinct capture-required R3 operation. Its mutation
 and public readback are outside the observed private-draft contract. Never use
@@ -156,7 +158,6 @@ Return `capture-required` on a missing or ambiguous operation revision, feature 
 
 The current registry keeps these text/desired-state exchanges capture-required:
 
-- `posts.publish` (`R3`): one text post;
 - `threads.publish` (`R3`): one confirmed ordered root/self-reply schedule;
 - `replies.create` (`R3`): one text reply bound to an exact parent;
 - `posts.repost` (`R3`): exact desired repost state;
@@ -164,15 +165,21 @@ The current registry keeps these text/desired-state exchanges capture-required:
 
 Current `x-client-transaction-id` generation is code-owned: wrench resolves the unique wrapper module, exported helper, and lazy-module evidence from the current first-party main bundle, calls that cached helper through one contained private agent-browser session, closes and cleans the session, then places the ephemeral value only on the already-reviewed in-origin mutation request. Drift or bootstrap failure occurs before the durable dispatch boundary and is never retried. This prerequisite does not by itself graduate the contract states listed above.
 
-`likes.set` and `content.save` (`R2`) bind the exact account and post, select only the matching create/delete mutation for the confirmed desired state, validate the operation-specific `Done` response, and independently read the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. `articles.draft.save` is the separate observed private text-and-links contract above. Text posts, threads, replies, reposts, quotes, DMs, and Article publishing did not graduate from those fixtures.
+`likes.set` and `content.save` (`R2`) bind the exact account and post, select only the matching create/delete mutation for the confirmed desired state, validate the operation-specific `Done` response, and independently read the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. `articles.draft.save` is the separate observed private structured-text-and-inline-image contract above.
+
+`posts.publish@2` is the separate observed R3 post contract. It accepts exact
+text and at most one plan-bound PNG, binds the account and uploaded media ID,
+admits one CreateTweet dispatch, and independently verifies the returned post
+through TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
+Article publishing remain capture-required.
 
 Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.
 
 Treat repost, like, and bookmark as desired state only when both create and delete mutations are reviewed and response-bound. A state mismatch is not permission to issue another mutation blindly.
 
-Article images, covers, embeds, and other media are outside
-`articles.draft.save`. Do not ignore a supplied file or fall back to DOM
-upload.
+Article covers, embeds, video, and native image alt text are outside
+`articles.draft.save`. Inline images use only the exact plan-bound file array;
+do not ignore a supplied file or fall back to DOM upload.
 
 ## Other capture-required operations
 

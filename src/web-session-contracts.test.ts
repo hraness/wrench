@@ -152,6 +152,40 @@ describe("authenticated web-session contract identity", () => {
         contractVersion,
       })).toThrow("is not installed");
     }
+
+    const historicalXArticleDraft = contract({
+      site: "x",
+      action: "articles.draft.save",
+      contractVersion: 1,
+    });
+    const activeXArticleDraft = contract({
+      site: "x",
+      action: "articles.draft.save",
+      contractVersion: 2,
+    });
+    expect(historicalXArticleDraft.input.required).toEqual(["title", "document"]);
+    expect(historicalXArticleDraft.input.properties.inline_images).toBeUndefined();
+    expect(activeXArticleDraft.input.required).toEqual(["title", "document", "inline_images"]);
+    expect(webSessionContractHash(historicalXArticleDraft)).not.toBe(
+      webSessionContractHash(activeXArticleDraft),
+    );
+
+    const historicalLinkedInArticleDraft = contract({
+      site: "linkedin",
+      action: "articles.draft.save",
+      contractVersion: 2,
+    });
+    const activeLinkedInArticleDraft = contract({
+      site: "linkedin",
+      action: "articles.draft.save",
+      contractVersion: 3,
+    });
+    expect(historicalLinkedInArticleDraft.input.required).toEqual(["title", "document"]);
+    expect(historicalLinkedInArticleDraft.input.properties.inline_images).toBeUndefined();
+    expect(activeLinkedInArticleDraft.input.required).toEqual(["title", "document", "inline_images"]);
+    expect(webSessionContractHash(historicalLinkedInArticleDraft)).not.toBe(
+      webSessionContractHash(activeLinkedInArticleDraft),
+    );
   });
 
   test("keeps retired X Article manifests diagnostic-only instead of projecting v4 semantics", () => {
@@ -164,10 +198,13 @@ describe("authenticated web-session contract identity", () => {
         `wrench-web-adapter.v${adapterVersion}.json`,
       ), "utf8")) as unknown;
       expect(parseDiagnosticManifest(archived, providerPluginRegistry).ok).toBeTrue();
-      expect(parseRuntimeManifest(archived, providerPluginRegistry)).toMatchObject({
-        ok: false,
-        issues: [expect.stringContaining("articles.publish")],
-      });
+      const runtime = parseRuntimeManifest(archived, providerPluginRegistry);
+      expect(runtime.ok).toBeFalse();
+      if (runtime.ok) continue;
+      expect(runtime.issues.some((issue) => issue.includes("posts.publish@1")))
+        .toBeTrue();
+      expect(runtime.issues.some((issue) => issue.includes("articles.publish")))
+        .toBeTrue();
     }
   });
 

@@ -113,8 +113,8 @@ export type ProviderPluginRegistry = {
   readonly legacyContractImplementationHashes: (
     binding: ProviderPluginBindingV1,
   ) => readonly Buffer[];
-  /** Environment-independent reviewed source/dependency closure attestation. */
-  readonly reviewedImplementationClosureHash: (
+  /** Environment-independent exact current source/dependency closure identity. */
+  readonly implementationClosureHash: (
     binding: ProviderPluginBindingV1,
   ) => string;
   readonly artifactSha256: (binding: ProviderPluginBindingV1) => string | null;
@@ -408,7 +408,7 @@ function computeProviderPluginImplementationHash(
   return hash.digest();
 }
 
-function computeProviderPluginReviewedClosureHash(
+function computeProviderPluginClosureHash(
   plugin: ProviderPluginV1,
   snapshots: ProviderPluginImplementationSourceSnapshot,
   packageDependencies: ProviderPluginPackageDependencySnapshot,
@@ -2803,16 +2803,16 @@ function createProviderPluginRegistryInternal(
   }
 
   const implementationHashes = new Map<ProviderPluginV1, Buffer>();
-  const reviewedClosureHashes = new Map<ProviderPluginV1, string>();
+  const implementationClosureHashes = new Map<ProviderPluginV1, string>();
   for (const plugin of plugins) {
     if (plugin.sourceKind === "portable") {
       implementationHashes.set(
         plugin,
         computeProviderPluginImplementationHash(plugin, new Map(), []),
       );
-      reviewedClosureHashes.set(
+      implementationClosureHashes.set(
         plugin,
-        computeProviderPluginReviewedClosureHash(plugin, new Map(), []),
+        computeProviderPluginClosureHash(plugin, new Map(), []),
       );
       continue;
     }
@@ -2829,23 +2829,12 @@ function createProviderPluginRegistryInternal(
       dependencySnapshots,
     );
     implementationHashes.set(plugin, expected);
-    const reviewedClosureHash = computeProviderPluginReviewedClosureHash(
+    const implementationClosureHash = computeProviderPluginClosureHash(
       plugin,
       sourceSnapshots,
       dependencySnapshots,
     );
-    reviewedClosureHashes.set(plugin, reviewedClosureHash);
-    if (plugin.sourceKind === "built-in") {
-      const identity = reviewedBuiltInContractIdentity(
-        plugin.id,
-        plugin.version,
-      );
-      if (!identity.reviewedClosureSha256.includes(reviewedClosureHash)) {
-        throw new Error(
-          `built-in provider plugin ${plugin.id}@${plugin.version} closure ${reviewedClosureHash} has no reviewed durable-contract attestation`,
-        );
-      }
-    }
+    implementationClosureHashes.set(plugin, implementationClosureHash);
     const verifyRuntimeIdentity = async (
       phase: ProviderPluginRuntimeLoadIdentityPhase,
     ): Promise<void> => {
@@ -2953,14 +2942,14 @@ function createProviderPluginRegistryInternal(
       Buffer.from(e71Legacy.development, "hex"),
     ]);
   };
-  const reviewedImplementationClosureHash = (
+  const implementationClosureHash = (
     binding: ProviderPluginBindingV1,
   ): string => {
     const plugin = ownerByBinding.get(binding);
     if (plugin === undefined) {
       throw new Error("provider plugin binding is not registered");
     }
-    const hash = reviewedClosureHashes.get(plugin);
+    const hash = implementationClosureHashes.get(plugin);
     if (hash === undefined) {
       throw new Error(
         `provider plugin ${plugin.id} reviewed implementation closure is unavailable`,
@@ -3076,7 +3065,7 @@ function createProviderPluginRegistryInternal(
     implementationHash,
     contractImplementationHash,
     legacyContractImplementationHashes,
-    reviewedImplementationClosureHash,
+    implementationClosureHash,
     artifactSha256,
     listOwnedManifests: () => frozenOwnedManifests,
     resolveOwnedManifest: (adapterId) => ownedManifests.get(adapterId),

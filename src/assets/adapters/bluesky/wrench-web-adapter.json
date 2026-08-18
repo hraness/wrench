@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "bluesky-web",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "displayName": "Bluesky (Authenticated AT Protocol API)",
   "surfaceId": "bluesky",
   "origins": [
@@ -339,7 +339,7 @@
       }
     },
     "posts.publish": {
-      "description": "Capture-required contract reservation: publish one plain-text or single-image post only after authorized live fixtures prove upload, create, actor binding, and independent readback.",
+      "description": "Publish one plain-text or single-image post through the observed uploadBlob/createRecord contract with exact actor, text, attachment, record revision, and independent getPosts readback binding.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible Bluesky post with the exact confirmed text and optional image.",
       "idempotency": "local-at-most-once",
@@ -385,7 +385,7 @@
       "webSession": {
         "site": "bluesky",
         "action": "posts.publish",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 600000,
         "maxOutputBytes": 8388608
       }

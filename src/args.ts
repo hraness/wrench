@@ -145,6 +145,7 @@ export type WrenchArguments =
       readonly allowRemoteActions: boolean;
       readonly contentMode: HarContentMode;
       readonly browserDomains: readonly string[];
+      readonly fixtureSources: readonly string[];
       readonly headed: boolean;
     }
   | { readonly command: "derive-browser"; readonly id: string; readonly browserArguments: readonly string[]; readonly json: boolean }
@@ -1148,6 +1149,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         raw.slice(4),
         ["--auth", "--content", "--domains"],
         ["--allow-remote-actions", "--headed", "--json"],
+        ["--fixture"],
       );
       if (isFailure(parsed)) return parsed;
       const content = parsed.values["--content"] ?? "none";
@@ -1162,6 +1164,13 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       if (browserDomains.length < 1 || browserDomains.length > 100 || browserDomains.some((value) => !/^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u.test(value))) {
         return { ok: false, message: "--domains must be a comma-separated list of exact or wildcard hostnames" };
       }
+      const fixtureSources = parsed.repeatedValues["--fixture"] ?? [];
+      if (fixtureSources.length > 20 || fixtureSources.some((value) => value.length > 4_096 || value.includes("\u0000"))) {
+        return { ok: false, message: "derive start accepts at most 20 bounded --fixture image paths" };
+      }
+      if (fixtureSources.length > 0 && !parsed.booleans.has("--allow-remote-actions")) {
+        return { ok: false, message: "derive start --fixture requires --allow-remote-actions" };
+      }
       return {
         ok: true,
         value: {
@@ -1172,6 +1181,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
           allowRemoteActions: parsed.booleans.has("--allow-remote-actions"),
           contentMode: content,
           browserDomains,
+          fixtureSources,
           headed: parsed.booleans.has("--headed"),
         },
       };

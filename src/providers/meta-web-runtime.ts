@@ -1,6 +1,12 @@
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+
+import { acquireCookieRecords } from "@hraness/kb/clip/acquire";
+
 import type { WrenchAuth } from "../auth";
+import type { BrowserFileResolver } from "../browser";
 import { canonicalJson, sha256 } from "../canonical-json";
-import type { OperationInput, WebSessionRecipe } from "../model";
+import type { FileInputValue, OperationInput, WebSessionRecipe } from "../model";
 import { openCursorToken, sealCursorToken } from "../cursor-token";
 import {
   createWebSessionClient,
@@ -10,6 +16,7 @@ import {
   type WebSessionClient,
   type WebSessionNetworkDependencies,
 } from "../web-session-client";
+import { acquireWebSessionCookieRecords } from "../web-session-cookies";
 import type {
   WebSessionDispatchEvent,
   WebSessionExecution,
@@ -30,6 +37,7 @@ import {
   normalizeInstagramInbox,
   normalizeInstagramPost,
   normalizeThreadsFeedHtml,
+  normalizeThreadsPostHtml,
   parseFacebookViewerId,
   parseMetaJsonDocuments,
   parseMetaJsonScripts,
@@ -77,9 +85,32 @@ const MAX_BOOTSTRAP_BYTES = 12 * 1024 * 1024;
 const MAX_API_BYTES = 8 * 1024 * 1024;
 const MAX_META_RELAY_ASSETS = 16;
 const MAX_META_RELAY_ASSET_BYTES = 3 * 1024 * 1024;
+const MAX_THREADS_IMAGE_BYTES = 20 * 1024 * 1024;
 const MARKETPLACE_CURSOR_SCOPE = "facebook-marketplace-feed";
+const THREADS_WEB_APP_ID = "238260118697367";
+const THREADS_ASBD_ID = "359341";
 
-export type MetaWebRuntimeDependencies = Partial<WebSessionNetworkDependencies>;
+export type MetaWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
+  readonly now?: () => number;
+};
+
+function metaWebSessionDependencies(
+  site: MetaWebSite,
+  auth: WrenchAuth,
+  dependencies: MetaWebRuntimeDependencies | undefined,
+): Partial<WebSessionNetworkDependencies> | undefined {
+  if (site !== "threads") return dependencies;
+  const fallback = dependencies?.acquireCookies ?? acquireCookieRecords;
+  return {
+    ...(dependencies?.fetch === undefined ? {} : { fetch: dependencies.fetch }),
+    acquireCookies: (selection, target) => acquireWebSessionCookieRecords(
+      auth,
+      target,
+      selection.timeoutMs,
+      fallback,
+    ),
+  };
+}
 
 function isMetaSite(value: string): value is MetaWebSite {
   return (META_WEB_SITES as readonly string[]).includes(value);
@@ -168,6 +199,190 @@ function instagramHeaders(referer: string): Readonly<Record<string, string>> {
     "x-ig-app-id": "936619743392459",
     "x-requested-with": "XMLHttpRequest",
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function bootstrapConfig(
+  html: string,
+  moduleName: string,
+): Readonly<Record<string, unknown>> {
+  const stack: unknown[] = [...parseMetaJsonScripts(html)];
+  const matches: Record<string, unknown>[] = [];
+  let visited = 0;
+  while (stack.length > 0) {
+    const value = stack.pop();
+    visited += 1;
+    if (visited > 250_000) throw new Error("Threads bootstrap configuration exceeded its reviewed bound");
+    if (Array.isArray(value)) {
+      if (value[0] === moduleName && isRecord(value[2])) matches.push(value[2]);
+      for (const item of value) stack.push(item);
+    } else if (isRecord(value)) {
+      for (const item of Object.values(value)) stack.push(item);
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error(`Threads bootstrap must contain one exact ${moduleName} configuration`);
+  }
+  return matches[0]!;
+}
+
+type ThreadsRequestConfig = {
+  readonly bloksVersionId: string;
+  readonly sprinkleParameter: "jazoest";
+  readonly sprinkleVersion: number;
+};
+
+function threadsRequestConfig(html: string): ThreadsRequestConfig {
+  const bloks = bootstrapConfig(html, "WebBloksVersioningID");
+  const sprinkle = bootstrapConfig(html, "SprinkleConfig");
+  if (
+    typeof bloks.versioningID !== "string"
+    || !/^[a-f0-9]{64}$/u.test(bloks.versioningID)
+  ) throw new Error("Threads bootstrap Web Bloks version is invalid");
+  if (
+    sprinkle.param_name !== "jazoest"
+    || !Number.isSafeInteger(sprinkle.version)
+    || (sprinkle.version as number) < 1
+    || (sprinkle.version as number) > 9
+    || sprinkle.should_randomize !== false
+  ) throw new Error("Threads bootstrap request-sprinkle configuration is invalid");
+  return Object.freeze({
+    bloksVersionId: bloks.versioningID,
+    sprinkleParameter: "jazoest",
+    sprinkleVersion: sprinkle.version as number,
+  });
+}
+
+function threadsSprinkleValue(csrfToken: string, version: number): string {
+  if (csrfToken.length < 1 || csrfToken.length > 512 || /[\0\r\n]/u.test(csrfToken)) {
+    throw new Error("Threads CSRF cookie is invalid");
+  }
+  let total = 0;
+  for (const character of csrfToken) total += character.charCodeAt(0);
+  return `${version}${total}`;
+}
+
+function threadsWebSessionId(seed: string): string {
+  const numeric = Number(seed);
+  if (!Number.isSafeInteger(numeric)) throw new Error("Threads upload ID is invalid");
+  const pageId = (numeric % (36 ** 6)).toString(36).padStart(6, "0");
+  return `::${pageId}`;
+}
+
+function threadsApiHeaders(
+  client: WebSessionClient,
+  config: ThreadsRequestConfig,
+  webSessionId: string,
+  contentType: "application/json" | "application/x-www-form-urlencoded;charset=UTF-8",
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    accept: "*/*",
+    "content-type": contentType,
+    origin: ORIGINS.threads,
+    referer: `${ORIGINS.threads}/`,
+    "x-asbd-id": THREADS_ASBD_ID,
+    "x-bloks-version-id": config.bloksVersionId,
+    "x-csrftoken": webSessionCookie(client.cookies, "csrftoken"),
+    "x-ig-app-id": THREADS_WEB_APP_ID,
+    "x-instagram-ajax": "0",
+    "x-web-session-id": webSessionId,
+  });
+}
+
+function fileInput(value: OperationInput[string]): FileInputValue {
+  if (
+    !isRecord(value)
+    || value.kind !== "file"
+    || typeof value.reference !== "string"
+    || Object.keys(value).sort().join(",") !== "kind,reference"
+  ) throw new Error("input.attachment must be one plan-bound file");
+  return Object.freeze({ kind: "file", reference: value.reference });
+}
+
+type ThreadsImage = {
+  readonly bytes: Uint8Array;
+  readonly height: number;
+  readonly mediaType: "image/png";
+  readonly width: number;
+};
+
+async function materializeThreadsImage(
+  attachment: FileInputValue,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline: WebSessionOperationDeadline | undefined,
+): Promise<ThreadsImage> {
+  if (fileResolver === undefined) {
+    throw new Error("Threads image upload requires the plan-bound file resolver");
+  }
+  const paths = operationDeadline === undefined
+    ? await fileResolver([attachment])
+    : await operationDeadline.run(
+        () => fileResolver([attachment]),
+        "authenticated web operation deadline",
+      );
+  operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
+  if (paths.length !== 1 || typeof paths[0] !== "string") {
+    throw new Error("Threads file resolver did not return one exact path");
+  }
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = operationDeadline === undefined
+    ? await open(paths[0], constants.O_RDONLY | noFollow)
+    : await operationDeadline.run(
+        () => open(paths[0]!, constants.O_RDONLY | noFollow),
+        "authenticated web operation deadline",
+      );
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (!before.isFile() || before.size < 24 || before.size > MAX_THREADS_IMAGE_BYTES) {
+      throw new Error("Threads image must be a regular PNG no larger than 20 MiB");
+    }
+    const bytes = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(
+          () => handle.readFile(),
+          "authenticated web operation deadline",
+        );
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || bytes.byteLength !== before.size
+    ) throw new Error("Threads image changed while it was materialized");
+    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    if (
+      signature.some((value, index) => bytes[index] !== value)
+      || bytes.subarray(12, 16).toString("ascii") !== "IHDR"
+    ) throw new Error("Threads image must be a PNG fixture");
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    if (width < 1 || height < 1 || width > 20_000 || height > 20_000) {
+      throw new Error("Threads PNG dimensions are outside the reviewed bound");
+    }
+    return Object.freeze({
+      bytes: new Uint8Array(bytes),
+      height,
+      mediaType: "image/png",
+      width,
+    });
+  } finally {
+    await handle.close();
+  }
 }
 
 async function rootHtml(client: WebSessionClient, origin: string): Promise<string> {
@@ -340,6 +555,215 @@ async function executeFacebookMarketplaceContinuation(
   );
 }
 
+function threadsUploadId(now: () => number): string {
+  const value = Math.trunc(now());
+  const uploadId = String(value);
+  if (!/^[1-9][0-9]{12}$/u.test(uploadId)) {
+    throw new Error("Threads upload clock did not produce one canonical 13-digit ID");
+  }
+  return uploadId;
+}
+
+async function uploadThreadsImage(
+  client: WebSessionClient,
+  image: ThreadsImage,
+  uploadId: string,
+): Promise<void> {
+  const entityName = `fb_uploader_${uploadId}`;
+  await client.requestStatus({
+    url: new URL(`/rupload_igphoto/${entityName}`, ORIGINS.threads),
+    method: "POST",
+    headers: {
+      accept: "*/*",
+      "content-type": image.mediaType,
+      offset: "0",
+      origin: ORIGINS.threads,
+      referer: `${ORIGINS.threads}/`,
+      "x-entity-length": String(image.bytes.byteLength),
+      "x-entity-name": entityName,
+      "x-entity-type": image.mediaType,
+      "x-ig-app-id": THREADS_WEB_APP_ID,
+      "x-instagram-rupload-params": JSON.stringify({
+        is_sidecar: "0",
+        is_threads: "1",
+        media_type: 1,
+        upload_id: uploadId,
+        upload_media_height: image.height,
+        upload_media_width: image.width,
+      }),
+    },
+    body: image.bytes,
+    expectedStatuses: [200, 201, 202],
+  });
+}
+
+type ThreadsCreatedPost = {
+  readonly code: string;
+  readonly id: string;
+  readonly url: string;
+};
+
+function threadsCreatedPost(value: unknown, viewerId: string): ThreadsCreatedPost {
+  if (!isRecord(value) || value.status !== "ok" || !isRecord(value.media)) {
+    throw new Error("Threads create response did not match the reviewed success shape");
+  }
+  const { code, permalink, pk } = value.media;
+  if (
+    typeof code !== "string"
+    || !/^[A-Za-z0-9_-]{1,64}$/u.test(code)
+    || typeof permalink !== "string"
+    || typeof pk !== "string"
+    || !/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(pk)
+  ) throw new Error("Threads create response returned invalid post identifiers");
+  const url = new URL(permalink, ORIGINS.threads);
+  if (
+    url.origin !== ORIGINS.threads
+    || url.username !== ""
+    || url.password !== ""
+    || url.search !== ""
+    || url.hash !== ""
+    || !url.pathname.endsWith(`/post/${code}`)
+  ) throw new Error("Threads create response returned an unreviewed permalink");
+  if (pk.includes("_") && !pk.endsWith(`_${viewerId}`)) {
+    throw new Error("Threads create response changed the confirmed actor");
+  }
+  return Object.freeze({ code, id: pk, url: url.href });
+}
+
+function threadsTextPostAppInfo(body: string): string {
+  return JSON.stringify({
+    excluded_inline_media_ids: "[]",
+    is_genai_invocation_post: false,
+    is_reply_approval_enabled: false,
+    is_spoiler_media: false,
+    text_with_entities: {
+      entities: [],
+      text: body,
+    },
+  });
+}
+
+async function createThreadsPost(
+  client: WebSessionClient,
+  viewer: BoundMetaViewer,
+  prepared: Extract<PreparedMetaRead, { readonly kind: "threads-post" }>,
+  uploadId: string,
+  config: ThreadsRequestConfig,
+): Promise<ThreadsCreatedPost> {
+  const csrfToken = webSessionCookie(client.cookies, "csrftoken");
+  const webSessionId = threadsWebSessionId(uploadId);
+  const form = new URLSearchParams();
+  form.set("audience", prepared.audience);
+  form.set("caption", prepared.body);
+  form.set("creator_geo_gating_info", JSON.stringify({ whitelist_country_codes: [] }));
+  form.set("is_threads", "true");
+  form.set("should_include_permalink", "true");
+  form.set("text_post_app_info", threadsTextPostAppInfo(prepared.body));
+  form.set("upload_id", uploadId);
+  form.set("web_session_id", webSessionId);
+  form.set(
+    config.sprinkleParameter,
+    threadsSprinkleValue(csrfToken, config.sprinkleVersion),
+  );
+  const response = await client.requestJson({
+    url: new URL("/api/v1/media/configure_text_post_app_feed/", ORIGINS.threads),
+    method: "POST",
+    headers: threadsApiHeaders(
+      client,
+      config,
+      webSessionId,
+      "application/x-www-form-urlencoded;charset=UTF-8",
+    ),
+    body: form.toString(),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json", "text/plain"],
+    maxBytes: 256 * 1024,
+  });
+  return threadsCreatedPost(response, viewer.id);
+}
+
+function metaDispatchEvent(
+  id: string,
+  started: number,
+  verified: number,
+): WebSessionDispatchEvent {
+  return { id, index: 1, progress: { planned: 1, started, verified } };
+}
+
+async function executeThreadsPost(
+  client: WebSessionClient,
+  viewer: BoundMetaViewer,
+  prepared: Extract<PreparedMetaRead, { readonly kind: "threads-post" }>,
+  options: {
+    readonly fileResolver?: BrowserFileResolver;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly now: () => number;
+  },
+): Promise<WebSessionExecution> {
+  const image = await materializeThreadsImage(
+    prepared.attachment,
+    options.fileResolver,
+    options.operationDeadline,
+  );
+  const reboundViewer = await currentViewer("threads", client);
+  if (reboundViewer.subject !== viewer.subject) {
+    throw new Error("Threads current viewer changed before the post dispatch");
+  }
+  const config = threadsRequestConfig(reboundViewer.rootHtml);
+  const uploadId = threadsUploadId(options.now);
+  let started = 0;
+  let verified = 0;
+  let created: ThreadsCreatedPost | null = null;
+  try {
+    await options.beforeDispatch?.(metaDispatchEvent("posts.publish", started, verified));
+    started = 1;
+    await uploadThreadsImage(client, image, uploadId);
+    created = await createThreadsPost(client, reboundViewer, prepared, uploadId, config);
+    const readbackHtml = await client.requestText({
+      url: new URL(created.url),
+      method: "GET",
+      headers: htmlHeaders(ORIGINS.threads),
+      expectedContentTypes: ["text/html"],
+      maxBytes: MAX_BOOTSTRAP_BYTES,
+    });
+    const post = normalizeThreadsPostHtml(
+      readbackHtml,
+      reboundViewer.id,
+      created.id,
+      prepared.body,
+    );
+    verified = 1;
+    await options.afterDispatchVerified?.(metaDispatchEvent("posts.publish", started, verified));
+    return {
+      status: "succeeded",
+      output: Object.freeze({
+        post,
+        attachment: Object.freeze({
+          height: image.height,
+          mediaType: image.mediaType,
+          width: image.width,
+        }),
+      }),
+      finalUrl: created.url,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: created?.url ?? `${ORIGINS.threads}/`,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? "Threads may have accepted the image upload or post but exact actor, ID, text, and permalink readback was not verified; reconcile before retrying"
+        : "Threads post dispatch failed before submission",
+    };
+  }
+}
+
 function facebookMarketplaceAuthHash(auth: WrenchAuth): string {
   return sha256(canonicalJson(auth));
 }
@@ -472,10 +896,11 @@ export async function probeMetaWebSubject(
     readonly signal?: AbortSignal;
   } = {},
 ): Promise<string> {
+  const dependencies = metaWebSessionDependencies(site, auth, options.dependencies);
   const client = await createWebSessionClient(ORIGINS[site], auth, {
     timeoutMs: options.timeoutMs ?? 60_000,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
-    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+    ...(dependencies === undefined ? {} : { dependencies }),
   });
   return (await currentViewer(site, client)).subject;
 }
@@ -541,6 +966,12 @@ type PreparedMetaRead =
   | {
     readonly kind: "threads-feed";
     readonly limit: number;
+  }
+  | {
+    readonly kind: "threads-post";
+    readonly attachment: FileInputValue;
+    readonly audience: "default";
+    readonly body: string;
   }
   | {
     readonly kind: "facebook-feed";
@@ -615,6 +1046,28 @@ function prepareMetaRead(
     return Object.freeze({
       kind: "threads-feed",
       limit: integerInput(input, "limit", 20, 1, 30),
+    });
+  }
+  if (recipe.site === "threads" && recipe.action === "posts.publish") {
+    requireExactInputKeys(input, ["attachment", "audience", "body"]);
+    const body = input.body;
+    if (
+      typeof body !== "string"
+      || body.length < 1
+      || body.length > 450
+      || /[\0\r]/u.test(body)
+    ) throw new Error("input.body must be 1 to 450 bounded UTF-16 code units");
+    if (input.attachment === undefined) {
+      throw new Error("reviewed Threads posts.publish currently requires one PNG attachment");
+    }
+    const audience = input.audience === undefined
+      ? "default"
+      : exactEnumInput(input, "audience", ["default"]);
+    return Object.freeze({
+      kind: "threads-post",
+      attachment: fileInput(input.attachment),
+      audience: audience as "default",
+      body,
     });
   }
   if (recipe.site === "facebook" && recipe.action === "feeds.read") {
@@ -760,6 +1213,7 @@ export async function executeMetaWebOperation(
   input: OperationInput,
   auth: WrenchAuth,
   options: {
+    readonly fileResolver?: BrowserFileResolver;
     readonly signal?: AbortSignal;
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
@@ -781,28 +1235,52 @@ export async function executeMetaWebOperation(
   if (contract.state !== "observed") {
     throw new Error(`${recipe.site} authenticated web operation ${recipe.action} is capture-required: ${contract.reason}`);
   }
-  if (contract.risk !== "R1" || contract.effect !== "read") {
+  const isThreadsPost = recipe.site === "threads" && recipe.action === "posts.publish";
+  if (
+    !isThreadsPost
+    && (contract.risk !== "R1" || contract.effect !== "read")
+  ) {
     throw new Error(`${recipe.site} reviewed Meta runtime refuses non-read execution`);
   }
-  // No observed operation in this module is a dispatch. Mutation callbacks are
-  // intentionally unreachable until a separately reviewed mutation exists.
-  void options.beforeDispatch;
-  void options.afterDispatchVerified;
+  if (!isThreadsPost) {
+    void options.beforeDispatch;
+    void options.afterDispatchVerified;
+  }
 
   const environment = options.environment ?? process.env;
   const expectedSubject = expectedMetaAuthSubject(recipe.site, auth);
   const prepared = prepareMetaRead(recipe, input, auth, environment);
 
   const origin = ORIGINS[recipe.site];
+  const dependencies = metaWebSessionDependencies(
+    recipe.site,
+    auth,
+    options.dependencies,
+  );
   const client = await createWebSessionClient(origin, auth, {
     timeoutMs: recipe.timeoutMs,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.operationDeadline === undefined
       ? {}
       : { operationDeadline: options.operationDeadline }),
-    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+    ...(dependencies === undefined ? {} : { dependencies }),
   });
   const viewer = await requireBoundViewer(recipe.site, client, expectedSubject);
+  if (prepared.kind === "threads-post") {
+    return executeThreadsPost(client, viewer, prepared, {
+      ...(options.fileResolver === undefined ? {} : { fileResolver: options.fileResolver }),
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(options.beforeDispatch === undefined
+        ? {}
+        : { beforeDispatch: options.beforeDispatch }),
+      ...(options.afterDispatchVerified === undefined
+        ? {}
+        : { afterDispatchVerified: options.afterDispatchVerified }),
+      now: options.dependencies?.now ?? Date.now,
+    });
+  }
   let output: unknown;
   let finalUrl = `${origin}/`;
   if (

@@ -1,5 +1,10 @@
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+
 import type { WrenchAuth } from "../auth";
-import type { OperationInput, WebSessionRecipe } from "../model";
+import type { BrowserFileResolver } from "../browser";
+import { canonicalJson } from "../canonical-json";
+import type { FileInputValue, OperationInput, WebSessionRecipe } from "../model";
 import {
   createWebSessionClient,
   webSessionAuthSubject,
@@ -32,6 +37,7 @@ const SUBSTACK_ORIGIN = "https://substack.com";
 const MAX_BOOTSTRAP_BYTES = 8 * 1024 * 1024;
 const MAX_LOGIN_BYTES = 256 * 1024;
 const MAX_READ_BYTES = 8 * 1024 * 1024;
+const MAX_SUBSTACK_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_LIMIT = 20;
 
 export type SubstackWebRuntimeDependencies = Partial<WebSessionNetworkDependencies>;
@@ -74,9 +80,143 @@ function optionalStringInput(
   return value;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireExactKeys(
+  value: Readonly<Record<string, unknown>>,
+  expected: readonly string[],
+  label: string,
+): void {
+  if (Object.keys(value).sort().join(",") !== [...expected].sort().join(",")) {
+    throw new Error(`${label} keys did not match the reviewed contract`);
+  }
+}
+
+function requireAllowedKeys(
+  value: Readonly<Record<string, unknown>>,
+  allowed: readonly string[],
+  label: string,
+): void {
+  const permitted = new Set(allowed);
+  if (Object.keys(value).some((key) => !permitted.has(key))) {
+    throw new Error(`${label} contained fields outside the reviewed contract`);
+  }
+}
+
+function requireExactInputKeys(input: OperationInput, allowed: readonly string[]): void {
+  const permitted = new Set(allowed);
+  const unexpected = Object.keys(input).filter((key) => !permitted.has(key));
+  if (unexpected.length > 0) {
+    throw new Error(`input contains unsupported keys: ${unexpected.join(", ")}`);
+  }
+}
+
+function fileInput(value: OperationInput[string]): FileInputValue {
+  if (
+    !isRecord(value)
+    || value.kind !== "file"
+    || typeof value.reference !== "string"
+    || Object.keys(value).sort().join(",") !== "kind,reference"
+  ) throw new Error("input.media must be one plan-bound file");
+  return Object.freeze({ kind: "file", reference: value.reference });
+}
+
+type SubstackImage = {
+  readonly bytes: Uint8Array;
+  readonly height: number;
+  readonly mediaType: "image/png";
+  readonly width: number;
+};
+
+async function materializeSubstackImage(
+  media: FileInputValue,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline: WebSessionOperationDeadline | undefined,
+): Promise<SubstackImage> {
+  if (fileResolver === undefined) {
+    throw new Error("Substack image upload requires the plan-bound file resolver");
+  }
+  const paths = operationDeadline === undefined
+    ? await fileResolver([media])
+    : await operationDeadline.run(
+        () => fileResolver([media]),
+        "authenticated web operation deadline",
+      );
+  operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
+  if (paths.length !== 1 || typeof paths[0] !== "string") {
+    throw new Error("Substack file resolver did not return one exact path");
+  }
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = operationDeadline === undefined
+    ? await open(paths[0], constants.O_RDONLY | noFollow)
+    : await operationDeadline.run(
+        () => open(paths[0]!, constants.O_RDONLY | noFollow),
+        "authenticated web operation deadline",
+      );
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (!before.isFile() || before.size < 24 || before.size > MAX_SUBSTACK_IMAGE_BYTES) {
+      throw new Error("Substack image must be a regular PNG no larger than 20 MiB");
+    }
+    const bytes = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(
+          () => handle.readFile(),
+          "authenticated web operation deadline",
+        );
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || bytes.byteLength !== before.size
+    ) throw new Error("Substack image changed while it was materialized");
+    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    if (
+      signature.some((value, index) => bytes[index] !== value)
+      || bytes.subarray(12, 16).toString("ascii") !== "IHDR"
+    ) throw new Error("Substack image must be a PNG fixture");
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    if (width < 1 || height < 1 || width > 20_000 || height > 20_000) {
+      throw new Error("Substack PNG dimensions are outside the reviewed bound");
+    }
+    return Object.freeze({
+      bytes: new Uint8Array(bytes),
+      height,
+      mediaType: "image/png",
+      width,
+    });
+  } finally {
+    await handle.close();
+  }
+}
+
 function jsonHeaders(): Readonly<Record<string, string>> {
   return Object.freeze({
     accept: "application/json",
+    referer: `${SUBSTACK_ORIGIN}/`,
+  });
+}
+
+function jsonPostHeaders(): Readonly<Record<string, string>> {
+  return Object.freeze({
+    accept: "application/json",
+    "content-type": "application/json",
     referer: `${SUBSTACK_ORIGIN}/`,
   });
 }
@@ -345,11 +485,429 @@ async function listMessages(
   return normalizeSubstackMessageInbox(response, folder, limit);
 }
 
+type UploadedSubstackImage = {
+  readonly id: number;
+  readonly url: string;
+};
+
+type SubstackImageAttachment = {
+  readonly id: string;
+  readonly url: string;
+};
+
+function positiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`${label} must be a positive safe integer`);
+  }
+  return value as number;
+}
+
+function exactSubstackImageUrl(
+  value: unknown,
+  width: number,
+  height: number,
+  label: string,
+): string {
+  if (typeof value !== "string" || value.length > 8_192) {
+    throw new Error(`${label} must be a bounded URL`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be an absolute URL`);
+  }
+  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+  const path = new RegExp(`^/public/images/${uuid}_${width}x${height}\\.png$`, "iu");
+  if (
+    parsed.protocol !== "https:"
+    || parsed.hostname !== "substack-post-media.s3.amazonaws.com"
+    || parsed.port !== ""
+    || parsed.username !== ""
+    || parsed.password !== ""
+    || parsed.search !== ""
+    || parsed.hash !== ""
+    || !path.test(parsed.pathname)
+  ) throw new Error(`${label} did not match the reviewed Substack image asset URL`);
+  return parsed.href;
+}
+
+function parseUploadedSubstackImage(
+  value: unknown,
+  image: SubstackImage,
+): UploadedSubstackImage {
+  if (!isRecord(value)) throw new Error("Substack image upload response must be an object");
+  requireExactKeys(value, [
+    "bytes",
+    "contentType",
+    "id",
+    "imageHeight",
+    "imageWidth",
+    "url",
+  ], "Substack image upload response");
+  if (
+    value.bytes !== image.bytes.byteLength
+    || value.contentType !== image.mediaType
+    || value.imageHeight !== image.height
+    || value.imageWidth !== image.width
+  ) throw new Error("Substack image upload response did not bind the reviewed PNG");
+  return Object.freeze({
+    id: positiveInteger(value.id, "Substack image upload response.id"),
+    url: exactSubstackImageUrl(
+      value.url,
+      image.width,
+      image.height,
+      "Substack image upload response.url",
+    ),
+  });
+}
+
+function attachmentUuid(value: unknown, label: string): string {
+  if (
+    typeof value !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
+  ) throw new Error(`${label} must be an exact UUID`);
+  return value;
+}
+
+function parseSubstackImageAttachment(
+  value: unknown,
+  image: SubstackImage,
+  expectedUrl: string,
+): SubstackImageAttachment {
+  if (!isRecord(value)) throw new Error("Substack image attachment response must be an object");
+  requireExactKeys(value, [
+    "explicit",
+    "id",
+    "imageHeight",
+    "imageUrl",
+    "imageWidth",
+    "type",
+  ], "Substack image attachment response");
+  if (
+    value.explicit !== false
+    || value.type !== "image"
+    || value.imageHeight !== image.height
+    || value.imageWidth !== image.width
+    || value.imageUrl !== expectedUrl
+  ) throw new Error("Substack image attachment response did not bind the reviewed PNG");
+  return Object.freeze({
+    id: attachmentUuid(value.id, "Substack image attachment response.id"),
+    url: expectedUrl,
+  });
+}
+
+async function uploadSubstackImage(
+  client: WebSessionClient,
+  image: SubstackImage,
+): Promise<SubstackImageAttachment> {
+  const encoded = `data:${image.mediaType};base64,${Buffer.from(image.bytes).toString("base64")}`;
+  const uploaded = parseUploadedSubstackImage(await client.requestJson({
+    url: new URL("/api/v1/image", SUBSTACK_ORIGIN),
+    method: "POST",
+    headers: jsonPostHeaders(),
+    body: JSON.stringify({ image: encoded }),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: 256 * 1024,
+  }), image);
+  void uploaded.id;
+  return parseSubstackImageAttachment(await client.requestJson({
+    url: new URL("/api/v1/comment/attachment", SUBSTACK_ORIGIN),
+    method: "POST",
+    headers: jsonPostHeaders(),
+    body: JSON.stringify({ type: "image", url: uploaded.url }),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: 256 * 1024,
+  }), image, uploaded.url);
+}
+
+type SubstackBodyJson = Readonly<{
+  type: "doc";
+  attrs: Readonly<{ schemaVersion: "v1"; title: null }>;
+  content: readonly Readonly<{
+    type: "paragraph";
+    content?: readonly Readonly<{ type: "text"; text: string }>[];
+  }>[];
+}>;
+
+function substackBodyJson(body: string): SubstackBodyJson {
+  const content = body.split("\n").map((line) => Object.freeze({
+    type: "paragraph" as const,
+    ...(line.length === 0
+      ? {}
+      : { content: Object.freeze([Object.freeze({ type: "text" as const, text: line })]) }),
+  }));
+  return Object.freeze({
+    type: "doc",
+    attrs: Object.freeze({ schemaVersion: "v1", title: null }),
+    content: Object.freeze(content),
+  });
+}
+
+function noteBodyInput(input: OperationInput): string {
+  const body = input.body;
+  if (
+    typeof body !== "string"
+    || body.length < 1
+    || body.length > 500
+    || /[\0\r]/u.test(body)
+  ) throw new Error("input.body must be bounded Substack Note text");
+  return body;
+}
+
+const CREATED_NOTE_KEYS = Object.freeze([
+  "ancestor_path",
+  "attachments",
+  "autotranslate_to",
+  "body",
+  "body_json",
+  "children",
+  "children_count",
+  "date",
+  "deleted",
+  "edited_at",
+  "handle",
+  "id",
+  "is_ai_generated_text",
+  "language",
+  "media_clip_id",
+  "name",
+  "photo_url",
+  "post_id",
+  "publication_id",
+  "reaction_count",
+  "reactions",
+  "reply_minimum_role",
+  "restacked",
+  "restacks",
+  "status",
+  "type",
+  "userStatus",
+  "user_bestseller_tier",
+  "user_id",
+  "user_primary_publication",
+]);
+
+function parseCreatedSubstackNote(
+  value: unknown,
+  viewer: SubstackWebViewer,
+  body: string,
+  bodyJson: SubstackBodyJson,
+  attachment: SubstackImageAttachment | null,
+): number {
+  if (!isRecord(value)) throw new Error("Substack Note create response must be an object");
+  requireAllowedKeys(value, CREATED_NOTE_KEYS, "Substack Note create response");
+  if (
+    value.user_id !== viewer.id
+    || value.body !== body
+    || value.type !== "feed"
+    || (value.deleted !== undefined && value.deleted !== false)
+    || value.post_id !== null
+    || value.publication_id !== null
+    || value.reply_minimum_role !== "everyone"
+    || canonicalJson(value.body_json) !== canonicalJson(bodyJson)
+    || (value.status !== undefined && value.status !== "published")
+  ) throw new Error("Substack Note create response did not bind the confirmed Note");
+  const attachments = value.attachments;
+  if (!Array.isArray(attachments) || attachments.length !== (attachment === null ? 0 : 1)) {
+    throw new Error("Substack Note create response did not bind the confirmed attachments");
+  }
+  if (attachment !== null) {
+    const item = attachments[0];
+    if (!isRecord(item)) throw new Error("Substack Note create attachment must be an object");
+    requireExactKeys(item, [
+      "explicit",
+      "id",
+      "imageHeight",
+      "imageUrl",
+      "imageWidth",
+      "type",
+    ], "Substack Note create attachment");
+    if (item.id !== attachment.id || item.imageUrl !== attachment.url || item.type !== "image") {
+      throw new Error("Substack Note create response attachment did not bind the uploaded image");
+    }
+  }
+  return positiveInteger(value.id, "Substack Note create response.id");
+}
+
+type ProjectedSubstackNote = Readonly<{
+  entityKey: string | null;
+  comment: Readonly<{
+    id: number;
+    userId: number;
+    publicationId: number | null;
+    postId: number | null;
+    body: string;
+    type: string | null;
+    attachments: readonly Readonly<{
+      id: string | null;
+      type: string | null;
+      imageUrl: string | null;
+      width: number | null;
+      height: number | null;
+    }>[];
+  }>;
+  post: unknown | null;
+}>;
+
+function assertSubstackNoteReadback(
+  note: ProjectedSubstackNote,
+  noteId: number,
+  viewer: SubstackWebViewer,
+  body: string,
+  image: SubstackImage | null,
+  attachment: SubstackImageAttachment | null,
+): void {
+  if (
+    note.entityKey !== `c-${noteId}`
+    || note.comment.id !== noteId
+    || note.comment.userId !== viewer.id
+    || note.comment.publicationId !== null
+    || note.comment.postId !== null
+    || note.comment.body !== body
+    || note.comment.type !== "feed"
+    || note.post !== null
+  ) throw new Error("Substack Note readback did not bind the confirmed Note");
+  if (image === null || attachment === null) {
+    if (note.comment.attachments.length !== 0) {
+      throw new Error("Substack Note readback contained an unexpected attachment");
+    }
+    return;
+  }
+  if (
+    note.comment.attachments.length !== 1
+    || note.comment.attachments[0]?.id !== attachment.id
+    || note.comment.attachments[0]?.type !== "image"
+    || note.comment.attachments[0]?.imageUrl !== attachment.url
+    || note.comment.attachments[0]?.width !== image.width
+    || note.comment.attachments[0]?.height !== image.height
+  ) throw new Error("Substack Note readback did not bind the confirmed image");
+}
+
+function substackDispatchEvent(
+  started: number,
+  verified: number,
+): WebSessionDispatchEvent {
+  return {
+    id: "posts.publish",
+    index: 1,
+    progress: { planned: 1, started, verified },
+  };
+}
+
+function substackNoteUrl(handle: string, noteId: number): string {
+  return new URL(`/@${encodeURIComponent(handle)}/note/c-${noteId}`, SUBSTACK_ORIGIN).href;
+}
+
+async function executeSubstackPost(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  viewer: SubstackWebViewer,
+  input: OperationInput,
+  options: {
+    readonly fileResolver?: BrowserFileResolver;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+  },
+): Promise<WebSessionExecution> {
+  requireExactInputKeys(input, ["body", "media"]);
+  const body = noteBodyInput(input);
+  const bodyJson = substackBodyJson(body);
+  if (viewer.handle === null) {
+    throw new Error("Substack Note publication requires the bound viewer's public handle");
+  }
+  const image = input.media === undefined
+    ? null
+    : await materializeSubstackImage(
+        fileInput(input.media),
+        options.fileResolver,
+        options.operationDeadline,
+      );
+  const reboundViewer = await currentViewer(client, boundedMaximum(recipe));
+  if (viewerSubject(reboundViewer) !== viewerSubject(viewer)) {
+    throw new Error("Substack current viewer changed before the Note dispatch");
+  }
+  if (reboundViewer.handle === null) {
+    throw new Error("Substack Note publication requires the bound viewer's public handle");
+  }
+  let started = 0;
+  let verified = 0;
+  let noteId: number | null = null;
+  let attachment: SubstackImageAttachment | null = null;
+  try {
+    await options.beforeDispatch?.(substackDispatchEvent(started, verified));
+    started = 1;
+    attachment = image === null ? null : await uploadSubstackImage(client, image);
+    noteId = parseCreatedSubstackNote(await client.requestJson({
+      url: new URL("/api/v1/comment/feed", SUBSTACK_ORIGIN),
+      method: "POST",
+      headers: jsonPostHeaders(),
+      body: JSON.stringify({
+        bodyJson,
+        ...(attachment === null ? {} : { attachmentIds: [attachment.id] }),
+        tabId: "for-you",
+        surface: "feed",
+        replyMinimumRole: "everyone",
+      }),
+      expectedStatuses: [200],
+      expectedContentTypes: ["application/json"],
+      maxBytes: boundedMaximum(recipe),
+    }), reboundViewer, body, bodyJson, attachment);
+    const readbackUrl = new URL(`/api/v1/reader/comment/${noteId}`, SUBSTACK_ORIGIN);
+    authorizeSubstackWebReadRequest({
+      operation: "posts.note",
+      url: readbackUrl,
+      method: "GET",
+      targetId: noteId,
+    });
+    const note = normalizeSubstackNoteResponse(await client.requestJson({
+      url: readbackUrl,
+      method: "GET",
+      headers: jsonHeaders(),
+      maxBytes: boundedMaximum(recipe),
+    }), noteId) as ProjectedSubstackNote;
+    assertSubstackNoteReadback(note, noteId, reboundViewer, body, image, attachment);
+    verified = 1;
+    await options.afterDispatchVerified?.(substackDispatchEvent(started, verified));
+    return {
+      status: "succeeded",
+      output: Object.freeze({
+        note,
+        attachment: image === null
+          ? null
+          : Object.freeze({
+              height: image.height,
+              mediaType: image.mediaType,
+              width: image.width,
+            }),
+      }),
+      finalUrl: substackNoteUrl(reboundViewer.handle, noteId),
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: noteId === null ? SUBSTACK_ORIGIN : substackNoteUrl(reboundViewer.handle, noteId),
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? "Substack may have accepted the image upload or Note but exact actor, text, attachment, and permalink readback was not verified; reconcile before retrying"
+        : "Substack Note dispatch failed before submission",
+    };
+  }
+}
+
 export async function executeSubstackWebOperation(
   recipe: WebSessionRecipe,
   input: OperationInput,
   auth: WrenchAuth,
   options: {
+    readonly fileResolver?: BrowserFileResolver;
     readonly signal?: AbortSignal;
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
@@ -359,9 +917,14 @@ export async function executeSubstackWebOperation(
 ): Promise<WebSessionExecution> {
   if (
     recipe.site !== "substack"
-    || recipe.contractVersion !== 1
     || !isSubstackOperation(recipe.action)
   ) throw new Error("Substack authenticated web recipe is not installed");
+  const expectedContractVersion = recipe.action === "posts.publish" ? 2 : 1;
+  if (recipe.contractVersion !== expectedContractVersion) {
+    throw new Error(
+      `Substack authenticated web operation ${recipe.action} contract version ${recipe.contractVersion} is not installed`,
+    );
+  }
   const contract = SUBSTACK_WEB_OPERATIONS[recipe.action];
   if (contract.state !== "observed") {
     throw new Error(
@@ -375,6 +938,7 @@ export async function executeSubstackWebOperation(
     && recipe.action !== "comments.read"
     && recipe.action !== "media.read"
     && recipe.action !== "messaging.list"
+    && recipe.action !== "posts.publish"
   ) throw new Error(`Substack authenticated web operation ${recipe.action} has no executable reviewed contract`);
 
   const client = await createWebSessionClient(SUBSTACK_ORIGIN, auth, {
@@ -385,9 +949,12 @@ export async function executeSubstackWebOperation(
       : { operationDeadline: options.operationDeadline }),
     ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
   });
-  await requireBoundViewer(client, auth, recipe.maxOutputBytes);
-  // All executable Substack contracts are R1 reads and never enter the
-  // mutation dispatch ledger.
+  const viewer = await requireBoundViewer(client, auth, recipe.maxOutputBytes);
+  if (recipe.action === "posts.publish") {
+    return executeSubstackPost(client, recipe, viewer, input, options);
+  }
+  // Executable Substack reads never enter the mutation dispatch ledger.
+  void options.fileResolver;
   void options.beforeDispatch;
   void options.afterDispatchVerified;
 

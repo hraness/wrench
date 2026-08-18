@@ -23,6 +23,7 @@ type Request = {
   readonly socketDirectory: string;
   readonly expectedSocketDirectory: Identity;
   readonly allowRemoteActions: boolean;
+  readonly allowFixtureUpload: boolean;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   readonly arguments: readonly string[];
@@ -61,6 +62,7 @@ function parseRequest(value: unknown): Request {
       "socketDirectory",
       "expectedSocketDirectory",
       "allowRemoteActions",
+      "allowFixtureUpload",
       "timeoutMs",
       "maxOutputBytes",
       "arguments",
@@ -74,6 +76,8 @@ function parseRequest(value: unknown): Request {
     || value.socketDirectory.length > 4_096
     || value.socketDirectory.includes("\u0000")
     || typeof value.allowRemoteActions !== "boolean"
+    || typeof value.allowFixtureUpload !== "boolean"
+    || (value.allowFixtureUpload && !value.allowRemoteActions)
     || typeof value.timeoutMs !== "number"
     || !Number.isSafeInteger(value.timeoutMs)
     || value.timeoutMs < 1
@@ -103,6 +107,7 @@ function parseRequest(value: unknown): Request {
     socketDirectory: value.socketDirectory,
     expectedSocketDirectory: parseIdentity(value.expectedSocketDirectory),
     allowRemoteActions: value.allowRemoteActions,
+    allowFixtureUpload: value.allowFixtureUpload,
     timeoutMs: value.timeoutMs,
     maxOutputBytes: value.maxOutputBytes,
     arguments: value.arguments.map((argument) => String(argument)),
@@ -200,7 +205,7 @@ async function main(): Promise<void> {
   const policy = "action-policy.json";
   assertPrivateFile(config, "{}\n");
   assertPrivateFile(policy, `${JSON.stringify({
-    allow: derivationPolicyActions(request.allowRemoteActions),
+    allow: derivationPolicyActions(request.allowRemoteActions, request.allowFixtureUpload),
     default: "deny",
   })}\n`);
   assertBoundDirectory(request.expectedDirectory);

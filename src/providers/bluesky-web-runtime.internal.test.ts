@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { WrenchAuth } from "../auth";
 import type {
@@ -7,6 +10,7 @@ import type {
 } from "../browser";
 import { canonicalJson, type OperationInput, type WebSessionRecipe } from "../model";
 import { OperationDeadline } from "../operation-deadline";
+import { BLUESKY_APPVIEW_PROXY } from "./bluesky-web";
 import {
   executeBlueskyWebOperation,
   probeBlueskyWebSubject,
@@ -168,7 +172,7 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "bluesky",
     action,
-    contractVersion: 1,
+    contractVersion: action === "posts.publish" ? 2 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 8 * 1024 * 1024,
   };
@@ -733,6 +737,205 @@ describe("Bluesky authenticated XRPC runtime", () => {
     ]);
   });
 
+  test("uploads one plan-bound PNG, creates one post, and independently binds its exact readback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-publish-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    writeFileSync(imagePath, imageBytes, { mode: 0o600 });
+    const text = "Exact published text";
+    const alt = "Exact factual alt text";
+    const createdAt = new Date(2_000_000_000_000).toISOString();
+    const createdUri = `at://${VIEWER_DID}/app.bsky.feed.post/3lpublishedfixture`;
+    const createdCid = `b${"c".repeat(40)}`;
+    const blobCid = `b${"d".repeat(40)}`;
+    const calls: CapturedRequest[] = [];
+    const events: string[] = [];
+    try {
+      const result = await executeBlueskyWebOperation(
+        recipe("posts.publish"),
+        {
+          body: text,
+          media: { kind: "file", reference: "fixture" },
+          media_type: "image/png",
+          alt,
+        },
+        blueskyAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          beforeDispatch: (event) => {
+            events.push(`before ${event.progress.started}`);
+            return Promise.resolve();
+          },
+          afterDispatchVerified: (event) => {
+            events.push(`after ${event.progress.verified}`);
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, async (request) => {
+            events.push(`${request.method} ${nsid(request)}`);
+            switch (nsid(request)) {
+              case "com.atproto.server.getSession":
+                return jsonResponse(sessionResponse());
+              case "com.atproto.repo.uploadBlob": {
+                expect(request.method).toBe("POST");
+                expect(request.headers.get("content-type")).toBe("image/png");
+                expect(request.body).toBeInstanceOf(Blob);
+                const bytes = new Uint8Array(await (request.body as Blob).arrayBuffer());
+                expect(bytes).toEqual(imageBytes);
+                return jsonResponse({
+                  blob: {
+                    $type: "blob",
+                    ref: { $link: blobCid },
+                    mimeType: "image/png",
+                    size: imageBytes.byteLength,
+                  },
+                });
+              }
+              case "com.atproto.repo.createRecord":
+                expect(request.method).toBe("POST");
+                expect(JSON.parse(String(request.body))).toEqual({
+                  repo: VIEWER_DID,
+                  collection: "app.bsky.feed.post",
+                  record: {
+                    $type: "app.bsky.feed.post",
+                    text,
+                    createdAt,
+                    embed: {
+                      $type: "app.bsky.embed.images",
+                      images: [{
+                        image: {
+                          $type: "blob",
+                          ref: { $link: blobCid },
+                          mimeType: "image/png",
+                          size: imageBytes.byteLength,
+                        },
+                        alt,
+                      }],
+                    },
+                  },
+                });
+                return jsonResponse({ uri: createdUri, cid: createdCid });
+              case "app.bsky.feed.getPosts":
+                expect(request.method).toBe("GET");
+                expect(request.url.searchParams.getAll("uris")).toEqual([createdUri]);
+                expect(request.headers.get("atproto-proxy")).toBe(BLUESKY_APPVIEW_PROXY);
+                return jsonResponse({
+                  posts: [{
+                    uri: createdUri,
+                    cid: createdCid,
+                    author: {
+                      did: VIEWER_DID,
+                      handle: "viewer.test",
+                      displayName: "Synthetic viewer",
+                    },
+                    record: {
+                      $type: "app.bsky.feed.post",
+                      text,
+                      createdAt,
+                      embed: {
+                        $type: "app.bsky.embed.images",
+                        images: [{
+                          image: {
+                            $type: "blob",
+                            ref: { $link: blobCid },
+                            mimeType: "image/png",
+                            size: imageBytes.byteLength,
+                          },
+                          alt,
+                        }],
+                      },
+                    },
+                    embed: {
+                      $type: "app.bsky.embed.images#view",
+                      images: [{ alt }],
+                    },
+                    indexedAt: createdAt,
+                    replyCount: 0,
+                    repostCount: 0,
+                    likeCount: 0,
+                    quoteCount: 0,
+                    viewer: {},
+                  }],
+                });
+              default:
+                throw new Error(`unexpected Bluesky publish request ${nsid(request)}`);
+            }
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "succeeded",
+        output: {
+          posts: [{ uri: createdUri, cid: createdCid }],
+        },
+        finalUrl: `https://bsky.app/profile/${VIEWER_DID}/post/3lpublishedfixture`,
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 1 },
+      });
+      expect(events).toEqual([
+        "GET com.atproto.server.getSession",
+        "GET com.atproto.server.getSession",
+        "before 0",
+        "POST com.atproto.repo.uploadBlob",
+        "POST com.atproto.repo.createRecord",
+        "GET app.bsky.feed.getPosts",
+        "after 1",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("marks a post indeterminate when the image upload fails after durable dispatch admission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-upload-failure-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    writeFileSync(imagePath, new Uint8Array([137, 80, 78, 71]), { mode: 0o600 });
+    const calls: CapturedRequest[] = [];
+    let beforeDispatch = 0;
+    try {
+      const result = await executeBlueskyWebOperation(
+        recipe("posts.publish"),
+        {
+          body: "No retry after upload admission",
+          media: { kind: "file", reference: "fixture" },
+          media_type: "image/png",
+          alt: "Exact alt",
+        },
+        blueskyAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          beforeDispatch: () => {
+            beforeDispatch += 1;
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            if (nsid(request) === "com.atproto.server.getSession") {
+              return jsonResponse(sessionResponse());
+            }
+            if (nsid(request) === "com.atproto.repo.uploadBlob") {
+              return new Response("upload failed", { status: 503 });
+            }
+            throw new Error(`unexpected request after failed upload: ${nsid(request)}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+      });
+      expect(beforeDispatch).toBe(1);
+      expect(calls.map(nsid)).toEqual([
+        "com.atproto.server.getSession",
+        "com.atproto.server.getSession",
+        "com.atproto.repo.uploadBlob",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("all unproven operations acquire no session and dispatch nothing", () => {
     const inputs: Readonly<
       Partial<Record<WebSessionRecipe["action"], OperationInput>>
@@ -743,7 +946,6 @@ describe("Bluesky authenticated XRPC runtime", () => {
       "content.save": { post_uri: POST_URI, saved: true },
       "relationships.follow.set": { actor_did: AUTHOR_DID, followed: true },
       "posts.repost": { post_uri: POST_URI, reposted: true },
-      "posts.publish": { body: "No dispatch" },
       "replies.create": { post_uri: POST_URI, body: "No dispatch" },
       "posts.quote": { post_uri: POST_URI, body: "No dispatch" },
       "threads.publish": { items: ["No dispatch"] },
