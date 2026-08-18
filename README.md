@@ -61,10 +61,10 @@ owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
-Pin the public repository to the immutable `v0.10.0` tag:
+Pin the public repository to the immutable `v0.10.1` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.10.0
+bun add --global github:hraness/wrench#v0.10.1
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -88,7 +88,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.10.0
+bun add github:hraness/wrench#v0.10.1
 ```
 
 ```ts
@@ -559,7 +559,7 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.10.0/skills/wrench/SKILL.md)
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.10.1/skills/wrench/SKILL.md)
 gives coding agents the same workflow and safety boundary. The packaged
 [cross-post skill](skills/cross-post-with-wrench/SKILL.md) orchestrates exact,
 previewed posts across X, LinkedIn, Bluesky, Substack Notes, and Threads while

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -22,13 +22,14 @@ type InstalledClosurePackage = {
 };
 
 const expectedClosureRuntimeDependencies = Object.freeze({
-  "@hraness/kb":
-    "github:hraness/kb#66e873179386614e8048a47977e78dd44502b9d6",
+  "@hraness/kb": "github:hraness/kb#v0.15.2",
   "buffer-from": "1.1.2",
   "source-map": "0.6.1",
   "source-map-support": "0.5.21",
   typescript: "6.0.3",
 });
+const reviewedKbDynamicModuleSha256 =
+  "90dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b";
 
 const packageRoot = resolve(import.meta.dir, "..");
 const cli = join(packageRoot, "src", "cli.ts");
@@ -126,6 +127,56 @@ function requireJsonObject(label: string, value: unknown): Record<string, unknow
     throw new Error(`${label} is not a JSON object`);
   }
   return value as Record<string, unknown>;
+}
+
+async function resolveReviewedKbDynamicKeyFile(root: string): Promise<string> {
+  const manifest = requireJsonObject(
+    "clean consumer @hraness/kb manifest",
+    await Bun.file(join(root, "package.json")).json(),
+  );
+  if (manifest.version !== "0.15.2") {
+    throw new Error(
+      `clean consumer resolved @hraness/kb@${String(manifest.version)}, expected 0.15.2`,
+    );
+  }
+  const candidates: Readonly<{ keyFile: string; sha256: string }>[] = [];
+  const dist = join(root, "dist");
+  for (
+    const entry of (await readdir(dist, { withFileTypes: true }))
+      .toSorted((left, right) => left.name.localeCompare(right.name, "en"))
+  ) {
+    if (!entry.isFile() || !entry.name.endsWith(".js")) continue;
+    const keyFile = `dist/${entry.name}`;
+    const bytes = Buffer.from(await Bun.file(join(root, keyFile)).arrayBuffer());
+    let source: string;
+    try {
+      source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      continue;
+    }
+    if (
+      source.match(
+        /createRequire\(parentUrl\)\.resolve\(`\$\{packageName\}\/package\.json`\)/gu,
+      )?.length !== 1
+      || source.match(/resolvePackageDirectory\("agent-browser"\)/gu)?.length !== 1
+    ) continue;
+    candidates.push({
+      keyFile,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+  }
+  if (candidates.length !== 1) {
+    throw new Error(
+      `clean consumer @hraness/kb@0.15.2 exposes ${String(candidates.length)} dynamic-resolution modules, expected exactly one`,
+    );
+  }
+  const candidate = candidates[0];
+  if (candidate === undefined || candidate.sha256 !== reviewedKbDynamicModuleSha256) {
+    throw new Error(
+      `clean consumer @hraness/kb@0.15.2 dynamic-resolution module has sha256 ${candidate?.sha256 ?? "missing"}, expected ${reviewedKbDynamicModuleSha256}`,
+    );
+  }
+  return candidate.keyFile;
 }
 
 function requireKeys(
@@ -402,14 +453,16 @@ try {
       "typescript",
       installedPackageRoot,
     );
+    const installedKbDynamicKeyFile = await resolveReviewedKbDynamicKeyFile(
+      installedKbRoot,
+    );
     await Promise.all([
       assertInstalledClosurePackage({
-        keyFile: "dist/index-bt118a7q.js",
+        keyFile: installedKbDynamicKeyFile,
         name: "@hraness/kb",
         root: installedKbRoot,
-        sha256:
-          "90dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b",
-        version: "0.14.0",
+        sha256: reviewedKbDynamicModuleSha256,
+        version: "0.15.2",
       }),
       assertInstalledClosurePackage({
         keyFile: "index.js",

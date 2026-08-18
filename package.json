@@ -1,6 +1,6 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations.",
   "license": "MIT",
   "type": "module",
@@ -315,21 +315,21 @@
     "test:standalone": "bun run scripts/standalone-smoke.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
     "check": "bun run typecheck && bun run website:check && bun run build && bun run test:package && bun run test && bun run test:standalone",
-    "kb:refresh": "bunx --bun github:hraness/kb#v0.15.1 refresh --root kb",
-    "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.1 check --root kb --no-catalog",
-    "kb:check": "bunx --bun github:hraness/kb#v0.15.1 check --root kb && bunx --bun github:hraness/kb#v0.15.1 agents check --root kb --repo .",
-    "kb:catalog": "bunx --bun github:hraness/kb#v0.15.1 catalog --root kb",
+    "kb:refresh": "bunx --bun github:hraness/kb#v0.15.2 refresh --root kb",
+    "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",
+    "kb:check": "bunx --bun github:hraness/kb#v0.15.2 check --root kb && bunx --bun github:hraness/kb#v0.15.2 agents check --root kb --repo .",
+    "kb:catalog": "bunx --bun github:hraness/kb#v0.15.2 catalog --root kb",
     "prepack": "bun run check"
   },
   "dependencies": {
-    "@hraness/kb": "github:hraness/kb#66e873179386614e8048a47977e78dd44502b9d6",
+    "@hraness/kb": "github:hraness/kb#v0.15.2",
     "buffer-from": "1.1.2",
     "source-map": "0.6.1",
     "source-map-support": "0.5.21",
     "typescript": "6.0.3"
   },
   "devDependencies": {
-    "@steipete/sweet-cookie": "https://codeload.github.com/hraness/sweet-cookie/tar.gz/112dce1a3c3dd165310616ca63dd2f6cc652b212",
+    "@steipete/sweet-cookie": "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2",
     "@types/bun": "^1.3.14",
     "fast-check": "^4.8.0"
   },
