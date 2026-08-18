@@ -452,7 +452,7 @@ function prepareSource(
       `provider plugin ${resolution.plugin.id} ${resolution.binding.surfaceId}/${request.operationId} is missing its required omni declaration`,
     );
   }
-  const closureHash = registry.reviewedImplementationClosureHash(resolution.binding);
+  const closureHash = registry.implementationClosureHash(resolution.binding);
   const sourceIdentity: OmniSourceIdentityV1 = Object.freeze({
     schemaVersion: 1,
     adapter: exactQuery.identity.adapter,

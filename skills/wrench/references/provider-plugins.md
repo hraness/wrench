@@ -72,16 +72,14 @@ operation. They are not an atomic sandbox against a same-account writer racing
 the module loader: changed top-level module code could run before the
 post-import check rejects.
 
-Treat built-in contract identity as the final review step, never an iteration
-mechanism. Finish provider code, manifests, deterministic tests, documentation,
-and formatting before changing a semantic-identity digest or reviewed closure
-attestation. Then run the focused contract test once to obtain the exact new
-semantic digest, review and record it, and run registry startup once more. The
-registry reports every still-unreviewed built-in closure in one failure so the
-reviewer can approve one complete final set. Append those reviewed closures in
-one patch and rerun the gates. If any executable source changes afterward,
-discard the candidates and repeat from the frozen tree; never attest an
-intermediate closure merely to make the next test start.
+Treat built-in durable contract identity as the final semantic review step,
+never an iteration mechanism. Finish provider code, manifests, deterministic
+tests, documentation, and formatting before changing a semantic-identity
+digest. Then run the focused contract test once to obtain the exact new digest,
+review and record it, and run registry startup once more. Wrench derives the
+current source/dependency closure automatically, snapshots it at registry
+startup, and revalidates it before and after lazy runtime load. It deliberately
+has no manual closure allowlist or source-hash approval step.
 
 Bare package imports are bound to their exact relocation-stable dependency
 graph, not the repository's whole lockfile. Wrench snapshots each installed package

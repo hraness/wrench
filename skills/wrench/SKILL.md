@@ -144,10 +144,10 @@ Use a managed derivation to capture the minimum authorized first-party exchange.
 
 ## Finish with evidence
 
-- Freeze built-in provider source and tests before updating contract semantic
-  identities or closure attestations. Follow [provider plugins](references/provider-plugins.md)
-  to review the final semantic digest once and the registry's complete closure
-  set once; never attest intermediate source.
+- Freeze built-in provider source and tests before updating durable contract
+  semantic identities. Follow [provider plugins](references/provider-plugins.md)
+  to review the semantic digest once; Wrench derives and revalidates the exact
+  source/dependency closure automatically and has no manual hash-approval step.
 - Re-run `wrench plugin check` and secret-free fixtures.
 - Prove exact origin, method, path, input bounds, response variants, identity binding, redirects, drift, and redaction.
 - Exercise only authorized observed operations.
