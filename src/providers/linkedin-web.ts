@@ -759,6 +759,128 @@ function exactObjectKeys(
   }
 }
 
+function linkedInArticleImageKnownFieldMask(
+  value: unknown,
+  knownFields: readonly string[],
+): string {
+  if (!isRecord(value)) return "n";
+  let mask = 0;
+  let unknown = 0;
+  for (const key of Object.keys(value)) {
+    const index = knownFields.indexOf(key);
+    if (index === -1) unknown += 1;
+    else mask |= 1 << index;
+  }
+  return `${mask.toString(16)}u${Math.min(unknown, 99)}`;
+}
+
+function linkedInArticleImagePollingUrlClass(
+  registration: Readonly<Record<string, unknown>> | null,
+): string {
+  if (registration === null || !Object.hasOwn(registration, "pollingUrl")) return "a";
+  const value = registration.pollingUrl;
+  if (value === null) return "n";
+  if (typeof value !== "string") return "o";
+  if (value.length > 64 * 1_024) return "b";
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return "m";
+  }
+  if (
+    url.username !== ""
+    || url.password !== ""
+    || url.hash !== ""
+    || url.href !== value
+  ) return "m";
+  if (
+    url.origin === "https://www.linkedin.com"
+    && url.pathname.startsWith("/voyager/api/")
+  ) return "v";
+  if (url.origin === "https://www.linkedin.com") return "l";
+  if (url.protocol === "https:") return "h";
+  return "x";
+}
+
+/**
+ * Produce a value-free bounded structural discriminator for reviewed live
+ * contract work. It exposes no response values, URLs, IDs, or unknown names.
+ */
+export function linkedInArticleImageRegistrationDriftCategory(
+  value: unknown,
+  error: unknown,
+): string {
+  const envelope = isRecord(value) ? value : null;
+  const data = envelope !== null && isRecord(envelope.data)
+    ? envelope.data
+    : envelope;
+  const registration = data !== null && isRecord(data.value)
+    ? data.value
+    : null;
+  const headers = registration !== null && isRecord(registration.singleUploadHeaders)
+    ? registration.singleUploadHeaders
+    : null;
+  const message = error instanceof Error ? error.message : "";
+  const step = message.includes("response.data.value has unsupported fields")
+    ? "registration-fields"
+    : message.includes("response.data has unsupported fields")
+      ? "data-fields"
+      : message.includes("response has unsupported fields")
+        ? "envelope-fields"
+        : message.includes("included entities")
+          ? "included"
+          : message.includes("response type")
+            ? "response-type"
+            : message.includes("media type")
+              ? "media-type"
+              : message.includes("assetRealtimeTopic")
+                ? "realtime-topic"
+                : message.includes("mediaArtifactUrn")
+                  ? "artifact-urn"
+                  : message.includes(" registration urn")
+                    ? "asset-urn"
+                    : message.includes("recipes")
+                      ? "recipes"
+                      : message.includes("upload headers")
+                        ? "upload-headers"
+                        : message.includes("polling URL")
+                          ? "polling-url"
+                          : message.includes("upload URL")
+                            ? "upload-url"
+                            : "other";
+  const mediaType = registration?.type === "VECTOR"
+    ? "v"
+    : registration?.type === "SINGLE"
+      ? "s"
+      : registration?.type === "MULTIPART_FORMDATA"
+        ? "f"
+        : registration?.type === "MULTIPART"
+          ? "m"
+          : "o";
+  return [
+    step,
+    `e${linkedInArticleImageKnownFieldMask(envelope, ["data", "included", "value"])}`,
+    `d${linkedInArticleImageKnownFieldMask(data, ["$type", "value"])}`,
+    `r${linkedInArticleImageKnownFieldMask(registration, [
+      "$type",
+      "assetRealtimeTopic",
+      "mediaArtifactUrn",
+      "multipartMetadata",
+      "partUploadRequests",
+      "pollingUrl",
+      "recipes",
+      "singleUploadHeaders",
+      "singleUploadUrl",
+      "type",
+      "urn",
+    ])}`,
+    `h${linkedInArticleImageKnownFieldMask(headers, ["media-type-family"])}`,
+    `t${mediaType}`,
+    `p${linkedInArticleImagePollingUrlClass(registration)}`,
+  ].join("-");
+}
+
 export function linkedInArticleDraftId(value: unknown, label = "LinkedIn Article draft ID"): string {
   if (typeof value !== "string" || !/^[0-9]{1,32}$/u.test(value)) {
     throw new Error(`${label} must be one exact 1-32 digit private LinkedIn Article ID`);
@@ -805,7 +927,7 @@ export const LINKEDIN_ARTICLE_INLINE_IMAGE_UPLOAD_PATH =
 
 export type LinkedInArticleImageUploadBinding = {
   readonly assetUrn: string;
-  readonly pollingUrl: string;
+  readonly pollingUrl: string | null;
   readonly recipes: readonly string[];
   readonly uploadHeaders: Readonly<Record<string, string>>;
   readonly uploadUrl: string;
@@ -839,24 +961,32 @@ export function normalizeLinkedInArticleImageUploadRegistration(
   value: unknown,
 ): LinkedInArticleImageUploadBinding {
   const envelope = graphqlRecord(value, "LinkedIn Article image registration response");
-  exactObjectKeys(
-    envelope,
-    ["data", "included"],
-    "LinkedIn Article image registration response",
-  );
-  if (!Array.isArray(envelope.included) || envelope.included.length !== 0) {
-    throw new Error("LinkedIn Article image registration returned unexpected included entities");
-  }
-  const data = graphqlRecord(envelope.data, "LinkedIn Article image registration response.data");
-  exactObjectKeys(data, ["$type", "value"], "LinkedIn Article image registration response.data");
-  if (data.$type !== "com.linkedin.restli.common.ActionResponse") {
-    throw new Error("LinkedIn Article image registration changed its response type");
+  const envelopeFields = Object.keys(envelope).sort().join(",");
+  let dataValue: unknown;
+  if (envelopeFields === "data,included") {
+    if (!Array.isArray(envelope.included) || envelope.included.length !== 0) {
+      throw new Error("LinkedIn Article image registration returned unexpected included entities");
+    }
+    const data = graphqlRecord(envelope.data, "LinkedIn Article image registration response.data");
+    const dataFields = Object.keys(data).sort().join(",");
+    if (dataFields === "$type,value") {
+      if (data.$type !== "com.linkedin.restli.common.ActionResponse") {
+        throw new Error("LinkedIn Article image registration changed its response type");
+      }
+    } else if (dataFields !== "value") {
+      throw new Error("LinkedIn Article image registration response.data has unsupported fields");
+    }
+    dataValue = data.value;
+  } else if (envelopeFields === "value") {
+    dataValue = envelope.value;
+  } else {
+    throw new Error("LinkedIn Article image registration response has unsupported fields");
   }
   const registration = graphqlRecord(
-    data.value,
+    dataValue,
     "LinkedIn Article image registration response.data.value",
   );
-  exactObjectKeys(registration, [
+  const fullRegistrationFields = [
     "$type",
     "assetRealtimeTopic",
     "mediaArtifactUrn",
@@ -866,16 +996,36 @@ export function normalizeLinkedInArticleImageUploadRegistration(
     "singleUploadUrl",
     "type",
     "urn",
-  ], "LinkedIn Article image registration response.data.value");
+  ] as const;
+  const singleRegistrationFields = [
+    "mediaArtifactUrn",
+    "recipes",
+    "singleUploadHeaders",
+    "singleUploadUrl",
+    "type",
+    "urn",
+  ] as const;
+  const registrationFields = Object.keys(registration).sort().join(",");
+  const fullFields = [...fullRegistrationFields].sort().join(",");
+  const singleFields = [...singleRegistrationFields].sort().join(",");
+  if (registrationFields !== fullFields && registrationFields !== singleFields) {
+    throw new Error("LinkedIn Article image registration response.data.value has unsupported fields");
+  }
+  const fullRegistration = registrationFields === fullFields;
+  if (fullRegistration) {
+    if (registration.$type !== "com.linkedin.mediauploader.MediaUploadMetadata") {
+      throw new Error("LinkedIn Article image registration changed its response type");
+    }
+    boundedText(
+      registration.assetRealtimeTopic,
+      "LinkedIn Article image registration assetRealtimeTopic",
+      4_096,
+    );
+  }
   if (
-    registration.$type !== "com.linkedin.mediauploader.MediaUploadMetadata"
-    || registration.type !== "VECTOR"
+    registration.type !== "VECTOR"
+    && registration.type !== "SINGLE"
   ) throw new Error("LinkedIn Article image registration changed its media type");
-  boundedText(
-    registration.assetRealtimeTopic,
-    "LinkedIn Article image registration assetRealtimeTopic",
-    4_096,
-  );
   linkedInUrn(
     registration.mediaArtifactUrn,
     "LinkedIn Article image registration mediaArtifactUrn",
@@ -900,13 +1050,31 @@ export function normalizeLinkedInArticleImageUploadRegistration(
   if (headers["media-type-family"] !== "STILLIMAGE") {
     throw new Error("LinkedIn Article image registration changed its upload headers");
   }
-  return Object.freeze({
-    assetUrn,
-    pollingUrl: linkedInArticleBoundUrl(
+  let pollingUrl: string | null = null;
+  if (fullRegistration && registration.type === "VECTOR") {
+    pollingUrl = linkedInArticleBoundUrl(
       registration.pollingUrl,
       "LinkedIn Article image polling URL",
       "/voyager/api/",
-    ),
+    );
+  } else if (
+    fullRegistration
+    && registration.type === "SINGLE"
+    && registration.pollingUrl !== null
+  ) {
+    // The current SINGLE editor registration retains same-origin processing
+    // metadata but never requests it. Validate that inert value strictly and
+    // omit it from the executable binding; exact Article readback remains the
+    // acceptance gate after the signed transfer.
+    linkedInArticleBoundUrl(
+      registration.pollingUrl,
+      "LinkedIn Article image polling URL",
+      "/",
+    );
+  }
+  return Object.freeze({
+    assetUrn,
+    pollingUrl,
     recipes: Object.freeze(recipes),
     uploadHeaders: Object.freeze({ "media-type-family": "STILLIMAGE" }),
     uploadUrl: linkedInArticleBoundUrl(
@@ -922,6 +1090,9 @@ export function normalizeLinkedInArticleImageUploadStatus(
   value: unknown,
   binding: LinkedInArticleImageUploadBinding,
 ): void {
+  if (binding.pollingUrl === null) {
+    throw new Error("LinkedIn Article image registration did not expose a polling contract");
+  }
   const status = graphqlRecord(value, "LinkedIn Article image status response");
   exactObjectKeys(status, ["asset", "assetStatus", "status"], "LinkedIn Article image status response");
   if (status.asset !== binding.assetUrn || status.assetStatus !== "ALLOWED") {
@@ -1555,6 +1726,7 @@ function normalizeLinkedInArticleDraftValue(
   profileUrnValue: unknown,
   allowEmptyContent: boolean,
   schemaVersion: 1 | 2 = 1,
+  metadataOnly = false,
 ): LinkedInArticleNormalizedSnapshot {
   const draftId = linkedInArticleDraftId(draftIdValue);
   const profileUrn = linkedInArticleProfileUrn(profileUrnValue);
@@ -1710,20 +1882,22 @@ function normalizeLinkedInArticleDraftValue(
   nonnegativeInteger(article.updatedAt, "LinkedIn Article readback updatedAt");
   nonnegativeInteger(article.version, "LinkedIn Article readback version");
   const imageAssetUrns: string[] = [];
-  const blocks = article.content.map((block, index) => {
-    if (schemaVersion === 1) return normalizeLinkedInArticleBlock(block, index);
-    const wrapper = graphqlRecord(block, `LinkedIn Article content[${index}]`);
-    if (Object.hasOwn(wrapper, "imageBlock")) {
-      const normalized = normalizeLinkedInArticleImageBlock(
-        block,
-        index,
-        imageAssetUrns.length,
-      );
-      imageAssetUrns.push(normalized.assetUrn);
-      return normalized.block;
-    }
-    return normalizeLinkedInArticleBlock(block, index);
-  });
+  const blocks = metadataOnly
+    ? []
+    : article.content.map((block, index) => {
+        if (schemaVersion === 1) return normalizeLinkedInArticleBlock(block, index);
+        const wrapper = graphqlRecord(block, `LinkedIn Article content[${index}]`);
+        if (Object.hasOwn(wrapper, "imageBlock")) {
+          const normalized = normalizeLinkedInArticleImageBlock(
+            block,
+            index,
+            imageAssetUrns.length,
+          );
+          imageAssetUrns.push(normalized.assetUrn);
+          return normalized.block;
+        }
+        return normalizeLinkedInArticleBlock(block, index);
+      });
   if (
     schemaVersion === 2
     && blocks.length >= 2
@@ -1737,7 +1911,7 @@ function normalizeLinkedInArticleDraftValue(
     draftId,
     title,
     profileUrn,
-    document: blocks.length === 0
+    document: metadataOnly || blocks.length === 0
       ? null
       : Object.freeze({ schemaVersion, blocks: Object.freeze(blocks) }) as LinkedInArticleNormalizedDocument,
     imageAssetUrns: Object.freeze(imageAssetUrns),
@@ -1767,16 +1941,19 @@ export function normalizeLinkedInArticleDraftSnapshot(
   });
 }
 
-/** Normalize the exact owner/private/title binding of a newly created empty draft. */
+/** Normalize only the exact owner/private/title binding before create verification or replacement. */
 export function normalizeLinkedInArticleDraftMetadata(
   value: unknown,
   draftIdValue: unknown,
   profileUrnValue: unknown,
 ): Readonly<Omit<LinkedInArticleDraftReadback, "document">> {
-  const normalized = normalizeLinkedInArticleDraftSnapshot(
+  const normalized = normalizeLinkedInArticleDraftValue(
     value,
     draftIdValue,
     profileUrnValue,
+    true,
+    1,
+    true,
   );
   return Object.freeze({
     draftId: normalized.draftId,

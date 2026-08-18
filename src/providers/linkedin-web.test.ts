@@ -23,6 +23,7 @@ import {
   buildLinkedInPostCreateVariables,
   encodeRestliV2Value,
   linkedInCsrfTokenFromJSessionId,
+  linkedInArticleImageRegistrationDriftCategory,
   linkedInArticleDraftEditUrl,
   linkedInArticleDraftEnvelopeFromHtml,
   linkedInArticleDraftEntityUrl,
@@ -848,6 +849,145 @@ describe("LinkedIn native Article draft contract", () => {
       assetStatus: "ALLOWED",
       status: { [recipe]: "AVAILABLE" },
     }, binding)).toBeUndefined();
+
+    const fullSingle = normalizeLinkedInArticleImageUploadRegistration({
+      data: {
+        $type: "com.linkedin.restli.common.ActionResponse",
+        value: {
+          $type: "com.linkedin.mediauploader.MediaUploadMetadata",
+          assetRealtimeTopic: "bounded-realtime-topic",
+          mediaArtifactUrn: "urn:li:mediaArtifact:fixture-full-single",
+          pollingUrl: "https://www.linkedin.com/current-single-processing/fixture",
+          recipes: [recipe],
+          singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+          singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture-full-single?ca=single",
+          type: "SINGLE",
+          urn: assetUrn,
+        },
+      },
+      included: [],
+    });
+    expect(fullSingle).toMatchObject({
+      assetUrn,
+      pollingUrl: null,
+      recipes: [recipe],
+    });
+    expect(() => normalizeLinkedInArticleImageUploadRegistration({
+      data: {
+        $type: "com.linkedin.restli.common.ActionResponse",
+        value: {
+          $type: "com.linkedin.mediauploader.MediaUploadMetadata",
+          assetRealtimeTopic: "bounded-realtime-topic",
+          mediaArtifactUrn: "urn:li:mediaArtifact:fixture-full-single",
+          pollingUrl: "https://example.com/unbound-processing",
+          recipes: [recipe],
+          singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+          singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture-full-single?ca=single",
+          type: "SINGLE",
+          urn: assetUrn,
+        },
+      },
+      included: [],
+    })).toThrow("escaped its reviewed LinkedIn origin");
+
+    const single = normalizeLinkedInArticleImageUploadRegistration({
+      value: {
+        mediaArtifactUrn: "urn:li:mediaArtifact:fixture-single",
+        recipes: [recipe],
+        singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+        singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture-single?ca=single",
+        type: "SINGLE",
+        urn: assetUrn,
+      },
+    });
+    expect(single).toMatchObject({
+      assetUrn,
+      pollingUrl: null,
+      recipes: [recipe],
+    });
+    expect(() => normalizeLinkedInArticleImageUploadStatus({
+      asset: assetUrn,
+      assetStatus: "ALLOWED",
+      status: { [recipe]: "AVAILABLE" },
+    }, single)).toThrow("did not expose a polling contract");
+    expect(() => normalizeLinkedInArticleImageUploadRegistration({
+      value: {
+        mediaArtifactUrn: "urn:li:mediaArtifact:fixture-single",
+        recipes: [recipe],
+        singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+        singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture-single?ca=single",
+        type: "SINGLE",
+        unexpected: true,
+        urn: assetUrn,
+      },
+    })).toThrow("unsupported fields");
+  });
+
+  test("classifies image-registration drift with bounded value-free structure only", () => {
+    const vector = {
+      data: {
+        $type: "com.linkedin.restli.common.ActionResponse",
+        value: {
+          $type: "com.linkedin.mediauploader.MediaUploadMetadata",
+          assetRealtimeTopic: "private-topic",
+          mediaArtifactUrn: "urn:li:mediaArtifact:private-vector",
+          pollingUrl: "https://www.linkedin.com/private-polling-url",
+          recipes: ["urn:li:digitalmediaRecipe:private"],
+          singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+          singleUploadUrl: "https://www.linkedin.com/private-upload-url",
+          type: "VECTOR",
+          urn: "urn:li:digitalmediaAsset:private-vector",
+        },
+      },
+      included: [],
+    };
+    expect(linkedInArticleImageRegistrationDriftCategory(
+      vector,
+      new Error("LinkedIn image registration response.data.value has unsupported fields"),
+    )).toBe("registration-fields-e3u0-d3u0-r7e7u0-h1u0-tv-pl");
+
+    const single = {
+      value: {
+        mediaArtifactUrn: "urn:li:mediaArtifact:private-single",
+        recipes: ["urn:li:digitalmediaRecipe:private"],
+        singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+        singleUploadUrl: "https://www.linkedin.com/private-upload-url",
+        type: "SINGLE",
+        urn: "urn:li:digitalmediaAsset:private-single",
+      },
+    };
+    expect(linkedInArticleImageRegistrationDriftCategory(
+      single,
+      new Error("LinkedIn image upload URL is invalid"),
+    )).toBe("upload-url-e4u0-d2u0-r7c4u0-h1u0-ts-pa");
+
+    const privateValue = "must-not-appear-private-value";
+    const drift = linkedInArticleImageRegistrationDriftCategory({
+      data: {
+        value: {
+          mediaArtifactUrn: "urn:li:mediaArtifact:private-current",
+          recipes: ["urn:li:digitalmediaRecipe:private"],
+          singleUploadHeaders: {
+            "media-type-family": "STILLIMAGE",
+            authorization: privateValue,
+          },
+          singleUploadUrl: "https://www.linkedin.com/private-upload-url",
+          type: "SINGLE",
+          unexpectedField: privateValue,
+          uploadMechanism: { privateValue },
+          urn: "urn:li:digitalmediaAsset:private-current",
+        },
+      },
+      included: [],
+      privateEnvelopeField: privateValue,
+    }, new Error("LinkedIn image registration response.data.value has unsupported fields"));
+    expect(drift).toBe("registration-fields-e3u1-d2u0-r7c4u2-h1u1-ts-pa");
+    expect(drift).toMatch(/^[a-z0-9-]{1,192}$/u);
+    expect(drift).not.toContain(privateValue);
+    expect(drift).not.toContain("authorization");
+    expect(drift).not.toContain("unexpectedField");
+    expect(drift).not.toContain("uploadMechanism");
+    expect(drift).not.toContain("privateEnvelopeField");
   });
 
 

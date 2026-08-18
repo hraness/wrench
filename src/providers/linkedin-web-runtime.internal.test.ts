@@ -938,7 +938,9 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     });
     const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
     let currentTitle = "Old title";
-    let content: readonly Readonly<Record<string, unknown>>[] = [];
+    let content: readonly Readonly<Record<string, unknown>>[] = [{
+      editorOwnedImageBlock: { opaque: true },
+    }];
     const calls: string[] = [];
     const transport: LinkedInArticleBrowserTransport = {
       currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
@@ -1221,6 +1223,70 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       status: "failed",
       dispatchStarted: false,
       dispatch: { planned: 1, started: 0, verified: 0 },
+      error: expect.stringContaining(publicCategory),
+    });
+    expect(JSON.stringify(result)).not.toContain(privateDiagnostic);
+  });
+
+  test.each([
+    ["LinkedIn Article image registration request failed", "image-registration-request-failed"],
+    ["LinkedIn Article image registration response drifted", "image-registration-response-drift"],
+    ["LinkedIn Article image registration shape drifted", "image-registration-shape-drift"],
+    [
+      "LinkedIn Article image registration shape drifted:registration-fields-e3u1-d2u0-r7c4u2-h1u1-ts-pa",
+      "image-registration-shape-registration-fields-e3u1-d2u0-r7c4u2-h1u1-ts-pa",
+    ],
+    ["LinkedIn Article image staging failed", "image-staging-failed"],
+    ["LinkedIn Article image signed transfer failed", "image-transfer-failed"],
+    ["LinkedIn Article image signed transfer status drifted", "image-transfer-status-drift"],
+  ])("categorizes private Article image failures as %s", async (
+    privateDiagnostic,
+    publicCategory,
+  ) => {
+    const document = canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Private fixture body" },
+        {
+          type: "image",
+          imageIndex: 0,
+          altText: "A bounded fixture image",
+        },
+      ],
+    });
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
+      createDraft: () => Promise.reject(new Error("replacement must not create")),
+      readDraftResponse: () => Promise.resolve(articleResponse("Private fixture", [])),
+      updateTitle: () => Promise.reject(new Error("failed images must not update title")),
+      updateContent: () => Promise.reject(new Error("failed images must not update content")),
+      uploadInlineImage: () => Promise.reject(new Error(privateDiagnostic)),
+      updateContentV2: () => Promise.reject(new Error("failed images must not update content")),
+      close: () => Promise.resolve(),
+    };
+    const result = await executeLinkedInWebOperation(
+      imageArticleRecipe(),
+      {
+        title: "Private fixture",
+        document,
+        draft_id: ARTICLE_ID,
+        inline_images: [{ kind: "file", reference: "fixture-image" }],
+      },
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.resolve(transport),
+        },
+        fileResolver: () => Promise.resolve([
+          join(import.meta.dir, "..", "..", "website", "public", "og.png"),
+        ]),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 2, started: 1, verified: 0 },
       error: expect.stringContaining(publicCategory),
     });
     expect(JSON.stringify(result)).not.toContain(privateDiagnostic);

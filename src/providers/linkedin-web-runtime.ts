@@ -67,7 +67,6 @@ import {
   normalizeLinkedInArticleDraftMetadata,
   normalizeLinkedInArticleDraftSnapshot,
   normalizeLinkedInArticleDraftV2,
-  normalizeLinkedInArticleDraftV2Snapshot,
   normalizeLinkedInMessagingList,
 } from "./linkedin-web";
 import { resolveLinkedInMessengerConversationsQueryId } from "./linkedin-web-bootstrap";
@@ -997,6 +996,17 @@ function linkedInArticleFailureCategory(error: unknown): string {
   }
   if (message.includes("bootstrap")) return "bootstrap-response-drift";
   if (message.includes("readback")) return "readback-rejected";
+  if (message.includes("image registration request")) return "image-registration-request-failed";
+  if (message.includes("image registration response")) return "image-registration-response-drift";
+  const imageRegistrationShape = /image registration shape drifted:([a-z0-9-]{1,192})/u
+    .exec(message)?.[1];
+  if (imageRegistrationShape !== undefined) {
+    return `image-registration-shape-${imageRegistrationShape}`;
+  }
+  if (message.includes("image registration shape")) return "image-registration-shape-drift";
+  if (message.includes("image staging")) return "image-staging-failed";
+  if (message.includes("image signed transfer status")) return "image-transfer-status-drift";
+  if (message.includes("image signed transfer")) return "image-transfer-failed";
   return "contract-step-failed";
 }
 
@@ -1034,15 +1044,6 @@ async function readLinkedInArticleDraftV2(
 ): Promise<ReturnType<typeof normalizeLinkedInArticleDraftV2>> {
   const response = await transport.readDraftResponse(draftId);
   return normalizeLinkedInArticleDraftV2(response, draftId, profileUrn);
-}
-
-async function readLinkedInArticleDraftV2Snapshot(
-  transport: LinkedInArticleBrowserTransport,
-  draftId: string,
-  profileUrn: string,
-): Promise<ReturnType<typeof normalizeLinkedInArticleDraftV2Snapshot>> {
-  const response = await transport.readDraftResponse(draftId);
-  return normalizeLinkedInArticleDraftV2Snapshot(response, draftId, profileUrn);
 }
 
 function requireBoundLinkedInIdentity(
@@ -1523,7 +1524,7 @@ async function executeLinkedInArticleDraftSaveV3(
       await complete(dispatchId, index);
     } else {
       failureStage = "reading the exact existing private Article";
-      await readLinkedInArticleDraftV2Snapshot(
+      await readLinkedInArticleDraftMetadata(
         transport,
         draftId,
         profileUrn,

@@ -35,6 +35,7 @@ type BrowserRequestBinding = {
   readonly referrer: string;
   readonly body: string | null;
   readonly pageInstance: string | null;
+  readonly pemMetadata: "article-autosave" | null;
   readonly track: string | null;
   readonly response: "json" | "status" | "created" | "page";
 };
@@ -297,6 +298,7 @@ describe("LinkedIn native Article contained-browser transport", () => {
       referrer: "https://www.linkedin.com/feed/",
       body: null,
       pageInstance: null,
+      pemMetadata: null,
       track: null,
       response: "json",
     });
@@ -315,19 +317,23 @@ describe("LinkedIn native Article contained-browser transport", () => {
       referrer: `https://www.linkedin.com/article/edit/${ARTICLE_ID}/`,
       body: null,
       pageInstance: null,
+      pemMetadata: null,
       track: null,
       response: "page",
     });
     expect(requests[1]).toMatchObject({
       pageInstance: NEW_PAGE_INSTANCE,
+      pemMetadata: "article-autosave",
       track: TRACK,
     });
     expect(requests[3]).toMatchObject({
       pageInstance: EDIT_PAGE_INSTANCE,
+      pemMetadata: "article-autosave",
       track: TRACK,
     });
     expect(requests[4]).toMatchObject({
       pageInstance: EDIT_PAGE_INSTANCE,
+      pemMetadata: "article-autosave",
       track: TRACK,
     });
     expect(requests.slice(3).every((request) =>
@@ -340,6 +346,8 @@ describe("LinkedIn native Article contained-browser transport", () => {
   test("registers, stages, uploads, and writes one bounded inline image", async () => {
     const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
     const recipe = "urn:li:digitalmediaRecipe:feedshare-image_1280";
+    const imageBytes = new Uint8Array(1_300_000);
+    imageBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const document = parseArticleDraftDocumentV2(canonicalJson({
       schemaVersion: 2,
       blocks: [
@@ -349,6 +357,7 @@ describe("LinkedIn native Article contained-browser transport", () => {
     }), { maximumBlocks: 5_000, maximumCharacters: 125_000, maximumImages: 20 });
     const requests: BrowserRequestBinding[] = [];
     let stagedCommands = 0;
+    const stagedBatchSizes: number[] = [];
     let transferCommands = 0;
     const session: BrowserSession = {
       runBatch: (commands) => {
@@ -390,8 +399,11 @@ describe("LinkedIn native Article contained-browser transport", () => {
           })]);
         }
         if (source.includes("globalThis[key]") || source.includes("globalThis[")) {
-          stagedCommands += 1;
-          return Promise.resolve([browserRecord({ staged: true })]);
+          stagedCommands += commands.length;
+          stagedBatchSizes.push(commands.length);
+          expect(commands.every((entry) => entry[0] === "eval" && entry[1] !== undefined))
+            .toBeTrue();
+          return Promise.resolve(commands.map(() => browserRecord({ staged: true })));
         }
         const request = requestBinding(source);
         requests.push(request);
@@ -406,16 +418,12 @@ describe("LinkedIn native Article contained-browser transport", () => {
           return Promise.resolve([browserRecord({
             body: {
               data: {
-                $type: "com.linkedin.restli.common.ActionResponse",
                 value: {
-                  $type: "com.linkedin.mediauploader.MediaUploadMetadata",
-                  assetRealtimeTopic: "bounded-realtime-topic",
                   mediaArtifactUrn: "urn:li:mediaArtifact:fixture",
-                  pollingUrl: "https://www.linkedin.com/voyager/api/voyagerVideoDashMediaUploadMetadata/fixture",
                   recipes: [recipe],
                   singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
                   singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture?ca=vector",
-                  type: "VECTOR",
+                  type: "SINGLE",
                   urn: assetUrn,
                 },
               },
@@ -436,7 +444,7 @@ describe("LinkedIn native Article contained-browser transport", () => {
     });
     await transport.readDraftResponse(ARTICLE_ID);
     expect(await transport.uploadInlineImage?.(ARTICLE_ID, {
-      bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      bytes: imageBytes,
       filename: "inline-image-1.png",
       mediaType: "image/png",
     })).toBe(assetUrn);
@@ -444,15 +452,18 @@ describe("LinkedIn native Article contained-browser transport", () => {
     await transport.close();
 
     expect(stagedCommands).toBeGreaterThanOrEqual(2);
+    expect(stagedBatchSizes).toEqual([1, 16, 16, 4]);
     expect(transferCommands).toBe(1);
     const registration = requests.find((request) =>
       request.path === "/voyager/api/voyagerVideoDashMediaUploadMetadata?action=upload");
     expect(JSON.parse(registration?.body ?? "null")).toEqual({
-      fileSize: 8,
+      fileSize: imageBytes.byteLength,
       filename: "inline-image-1.png",
       mediaUploadType: "PUBLISHING_INLINE_IMAGE",
     });
+    expect(registration?.pemMetadata).toBeNull();
     const content = requests.at(-1);
+    expect(content?.pemMetadata).toBe("article-autosave");
     expect(JSON.parse(content?.body ?? "null")).toEqual(
       buildLinkedInArticleContentPatchV2(document, [assetUrn]),
     );
