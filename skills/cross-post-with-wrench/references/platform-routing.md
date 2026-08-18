@@ -30,14 +30,16 @@ Write exact input JSON to a private task file when shell quoting would be fragil
 wrench invoke <adapter> posts.publish \
   --input @/absolute/private/post-input.json \
   --auth <bound-auth-id> \
-  --preview --json
+  --preview --json [--headed]
 ```
 
 Review the returned digest and confirm it within five minutes:
 
 ```sh
-wrench confirm <plan-digest> --json
+wrench confirm <plan-digest> --json [--headed]
 ```
+
+Use headed execution when the installed signed-in web adapter or bound realm requires it and the user authorized it. Follow the preview's returned `confirmCommand` exactly so headed mode is preserved.
 
 Do not place credentials in the input file. Delete task input files after planning; Wrench's plan owns encrypted confirmed input and attachment bundles for its lifecycle.
 
