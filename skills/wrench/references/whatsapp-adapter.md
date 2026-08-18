@@ -78,8 +78,9 @@ protocol acknowledgements. It is therefore an explicit operational action,
 never an implicit prelude to an R1 read.
 
 The local projection has no provider completeness guarantee. Results describe
-only the currently stored bounded projection; no cursor is exposed because a
-timestamp-only cursor can skip messages sharing the same timestamp.
+only the currently stored projection. Chat and per-conversation reads remain
+bounded current windows. The v2 `contacts.list` interaction collection instead
+uses the pinned store's monotonic message `rowid`, never a timestamp cursor.
 
 ## R1 read design
 
@@ -97,6 +98,10 @@ messages read, send delivery/read receipts, or emit transport acknowledgements.
 
 The code-owned semantic mapping is:
 
+- `contacts.list {"collection":"contacts"}` (or the default collection) → one
+  bounded page from the exact account-owned Whatsmeow contact table;
+- `contacts.list {"collection":"interactions"}` → one content-free page of
+  locally stored message-insert evidence ordered by exact SQLite `rowid`;
 - `messaging.list` → bounded `chats list` with exact all/active/archived/unread
   filters;
 - `messaging.read` → bounded `messages list --chat <exact-JID>`;
@@ -107,7 +112,29 @@ Every private read probes `auth status` from `session.db` in read-only mode and
 requires its stable phone/LID subject to equal the auth realm binding. Every
 returned message must equal the exact requested canonical conversation JID.
 
-All three operations are `observed`. An authorized paired account passed
+The interaction collection is implemented by a fixed read-only helper rather
+than caller-selected SQL. It validates the exact pinned v0.13.0 `messages` and
+`chats` schema, indexes, foreign key, database owner, file identity, private
+mode, integrity, and absence of SQLite sidecars. Each item contains only
+`rowid`, chat JID, message ID, sender JID, UTC timestamp, direction, and chat
+kind. Bodies, names, media, keys, hashes, and paths are never selected.
+
+Start with cursor `0` and no anchor. Every returned `checkpoint` contains the
+last processed rowid and a SHA-256 anchor over that row's exact rowid, chat JID,
+and message ID. A resumed nonzero cursor must supply that anchor as
+`cursor_anchor`; the helper rereads and validates the cursor row before
+advancing. `projectionGeneration` also binds the page to the exact `wacli.db`
+device/inode and pinned schema fingerprint, so consumers must reject generation
+drift or explicitly reset and rescan from zero. Page size is at most 1,000.
+
+`localInsertPageComplete` means only that no later rowid existed in the same
+quiescent local database snapshot. `remoteHistoryComplete` is always false.
+The cursor discovers inserts only; deletions are not inferred, and linked-device
+history coverage remains unknown. Consumers should deduplicate durable evidence
+by exact account, rowid, chat JID, and message ID and checkpoint only after their
+own transaction commits.
+
+All four read operations are `observed`. An authorized paired account passed
 nonempty chat, exact-conversation, and exact-attachment fixtures through the
 public wrench CLI with stable account binding and the pinned read-only local
 projection. They retain the local-store completeness label and fail closed on
