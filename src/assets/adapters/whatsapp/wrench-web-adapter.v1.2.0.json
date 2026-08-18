@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "whatsapp-web",
-  "version": "1.3.0",
+  "version": "1.2.0",
   "displayName": "WhatsApp (Linked-Device Protocol)",
   "surfaceId": "whatsapp",
   "origins": [
@@ -12,38 +12,24 @@
   ],
   "operations": {
     "contacts.list": {
-      "description": "List one bounded page from the private account-bound contact table, or incrementally scan content-free relationship evidence from the pinned local message store by exact rowid, without opening a WhatsApp connection.",
+      "description": "List one bounded page from the private account-bound Whatsmeow session.db contact table without opening a WhatsApp connection; message statistics remain explicitly unavailable because the separate message store has no account-owner column.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "collection": {
-            "type": "string",
-            "description": "Exact local projection: contacts (default) or interactions",
-            "enum": [
-              "contacts",
-              "interactions"
-            ]
-          },
           "cursor": {
             "type": "string",
-            "description": "Exact contact JID cursor, or decimal message rowid cursor for interactions",
-            "minLength": 1,
+            "description": "Exact contact JID after which the next local page begins",
+            "minLength": 9,
             "maxLength": 96
-          },
-          "cursor_anchor": {
-            "type": "string",
-            "description": "SHA-256 anchor returned with a nonzero interaction checkpoint",
-            "minLength": 64,
-            "maxLength": 64
           },
           "limit": {
             "type": "number",
             "description": "Maximum projected contacts",
             "minimum": 1,
-            "maximum": 1000
+            "maximum": 100
           }
         },
         "required": []
@@ -51,7 +37,7 @@
       "webSession": {
         "site": "whatsapp",
         "action": "contacts.list",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 30000,
         "maxOutputBytes": 8388608
       }

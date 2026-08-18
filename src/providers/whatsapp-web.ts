@@ -65,7 +65,7 @@ export const WHATSAPP_WEB_OPERATIONS = Object.freeze({
   "contacts.list": observed(
     "read",
     "R1",
-    "the account-bound Whatsmeow session.db contact table is projected by a fixed killable read-only helper after exact schema, owner, quiescence, and file-identity validation; message statistics remain explicitly unavailable because wacli.db message rows have no account owner",
+    "the account-bound Whatsmeow session.db contact table and content-free wacli.db insert evidence are projected by fixed killable read-only helpers after exact pinned-schema, owner, quiescence, and file-identity validation; rowid pages expose their exact database generation and never claim remote-history completeness",
   ),
   "messaging.list": observed(
     "read",

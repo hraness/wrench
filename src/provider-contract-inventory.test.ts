@@ -4,15 +4,15 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "55c99ca00edf306b4da2177d593cf8cea23d849d5afaafa2e5d149a363fb8db3";
+  "db6e084ed7d8adc8ce831a82471af16c063819a62be9b821def3d44d86df257a";
 const predecessorLegacyInventorySha256 = [
-  "a1275cf9ad58faff4d8dc9d57eff7e26c49a70383b98a330187704c58daf1121",
-  "833174139a6dfd8f683ec71983ca045143609392385d559516e51a3ee314b23b",
-  "c029ab33f3757af01dd6f0e986d60e78b63fa71bfa0f71fd43935d6b36ebd83e",
-  "ba7bc20eeb3c20c3605bf48aa823c24b5b3df653b1e2370ebecf5ea1c43cbf20",
-  "08274243d62ac97d133d3cce031e9aa542034ee0340af70451d87d6337fb40a7",
-  "8b6aeaaebb6308f67ba173a367d75920c6755403f39b402ca9ee4ec242936578",
-  "3a37ce06920fd24c007ca0342609bb0eacfc5245e59fe2eb88547c274fb438f6",
+  "142736b93a0382a0ae16da25458c104c6683d58aeeaf93f5a204888220506d10",
+  "a320edf63c8506bfc5fccff4ad9f782ac2b9855f3fbdc903912fc2eea1a7bd73",
+  "af1afd4292459917757ab87a8e9b4b10b3013554571647cefb88d24cb7f3fd35",
+  "487aa3df2e10e5bf33662475eb062388e882dcc2ee7b00fc7cf5e7725360569b",
+  "ff4069344476e7102b9af10fd263ae5b4d20ed44d447c90f809a6fb8405a5f88",
+  "4d421214d0b5bfd64b9a86f80e8d553b433f002e9afc60a0f45fc2b868d9b16f",
+  "78233c2da73c0e8e967145a603fac604ed83d269582bd4f2eb4cc1e27a24834d",
 ];
 
 const moduleUrl = (name: string) => pathToFileURL(
@@ -200,11 +200,11 @@ describe("durable provider contract inventory", () => {
       "staging",
     ] as const) {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
-        rows: 265,
+        rows: 266,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 3,
         currentOnlySha256: "4f8870e2e46ea268c6a6062d6fcf06393b9aed4b7670e96bd051d5626adc852a",
-        legacyRows: [265, 265, 265, 265, 265, 265, 265],
+        legacyRows: [266, 266, 266, 266, 266, 266, 266],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,
         rejectedUnknown: true,

@@ -31,6 +31,8 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
     ["providers/contact-projection.ts", "../../providers/contact-projection.ts"],
     ["providers/whatsapp-contact-projection-helper.ts", "../../providers/whatsapp-contact-projection-helper.ts"],
     ["providers/whatsapp-contact-projection-protocol.ts", "../../providers/whatsapp-contact-projection-protocol.ts"],
+    ["providers/whatsapp-interaction-projection-helper.ts", "../../providers/whatsapp-interaction-projection-helper.ts"],
+    ["providers/whatsapp-interaction-projection-protocol.ts", "../../providers/whatsapp-interaction-projection-protocol.ts"],
     ["providers/whatsapp-web.ts", "../../providers/whatsapp-web.ts"],
     ["providers/whatsapp-web-runtime.ts", "../../providers/whatsapp-web-runtime.ts"],
     ["providers/whatsapp-omni.ts", "../../providers/whatsapp-omni.ts"],
@@ -43,8 +45,8 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
     authKinds: linkedDeviceAuthKinds,
     operations: webSessionContractOperations(
       Object.values(whatsappContracts),
-      "e8c49c66847eabdb7319b3e1a11fe95513415451e1c9731a7fc62f4fca95d80b",
-      {},
+      "a5c32c0b7c210fd98aee086455b2fde1151c7cf1806fd2e0f6c3e269d10ac13f",
+      { "contacts.list": [1] },
       {
         "messaging.list": {
           state: "supported",

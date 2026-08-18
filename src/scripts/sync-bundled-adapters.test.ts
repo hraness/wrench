@@ -161,6 +161,7 @@ describe("single-process bundled adapter generation sync", () => {
       "threads-web@1.0.0",
       "whatsapp-web@1.0.0",
       "whatsapp-web@1.1.0",
+      "whatsapp-web@1.2.0",
     ]);
     expect(Object.fromEntries(discovered.flatMap((adapter) =>
       adapter.upgradeFrom.map((baseline) => [
@@ -170,6 +171,7 @@ describe("single-process bundled adapter generation sync", () => {
     ))).toMatchObject({
       "instagram-web@1.0.0": "bc3e17911739cc496105aac3bec522ef64b5e3b55183a2a0541850bb0f0ad18b",
       "threads-web@1.0.0": "750a6db23ea6e3e3c96f3a9086ce17d73c3c5c90066e576525e848fe4583ec41",
+      "whatsapp-web@1.2.0": "9a57b556f1f3443c4f7f9942d03401f42873f34f8974b326b231af24ab0ab0cb",
     });
     expect(discovered.map((adapter) => adapter.id)).toEqual([
       "bluesky-web",
@@ -192,6 +194,47 @@ describe("single-process bundled adapter generation sync", () => {
       "youtube-web",
     ]);
     expect(new Set(discovered.map((adapter) => adapter.routeKey)).size).toBe(18);
+  });
+
+  test("upgrades the exact WhatsApp 1.2 baseline to the active v2 contract", async () => {
+    const state = temporaryState();
+    const whatsapp = discoverBundledAdapters().find((adapter) =>
+      adapter.id === "whatsapp-web"
+    )!;
+    const prior = whatsapp.upgradeFrom.find((baseline) =>
+      baseline.manifest.version === "1.2.0"
+    )!;
+    installBundledAdapterGeneration([{
+      id: whatsapp.id,
+      state: "present",
+      manifest: prior.manifest,
+      sourceContentSha256: prior.sourceContentSha256,
+      expectedCurrentContentSha256: null,
+    }], state.environment, { registry: providerPluginRegistry });
+
+    await syncBundledAdapters({
+      environment: state.environment,
+      output: { stdout: () => undefined, stderr: () => undefined },
+      wrenchMain: (arguments_, _environment, output, overrides) => {
+        writeSuccessfulValidation(
+          arguments_,
+          output,
+          overrides?.providerPluginRegistry,
+        );
+        return Promise.resolve(0);
+      },
+    });
+
+    const installed = loadInstalledManifest(
+      whatsapp.id,
+      state.environment,
+      providerPluginRegistry,
+    );
+    expect(installed.ok).toBeTrue();
+    if (!installed.ok) throw new Error(installed.issues.join("; "));
+    expect(installed.value.version).toBe("1.3.0");
+    expect(installed.value.operations["contacts.list"]?.webSession)
+      .toMatchObject({ contractVersion: 2 });
   });
 
   test("validates every immutable source snapshot before one generation commit", async () => {

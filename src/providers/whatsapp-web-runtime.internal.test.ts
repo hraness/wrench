@@ -225,7 +225,7 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "whatsapp",
     action,
-    contractVersion: 1,
+    contractVersion: action === "contacts.list" ? 2 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 1024 * 1024,
   };
@@ -973,6 +973,117 @@ describe("WhatsApp zero-network read plans", () => {
     }
   });
 
+  test("projects interaction pages with an exact durable message-store generation", async () => {
+    const path = createContactStore();
+    try {
+      writeFileSync(join(path, "wacli.db"), "fixed-test-message-store");
+      chmodSync(join(path, "wacli.db"), 0o600);
+      let helperStarts = 0;
+      const projected = await executeWhatsAppWebOperation(
+        recipe("contacts.list"),
+        { collection: "interactions", cursor: "41", cursor_anchor: "c".repeat(64), limit: 1 },
+        auth(path, "whatsapp:pn:15551234567"),
+        {
+          dependencies: {
+            runInteractionProjectionHelper: (invocation) => {
+              helperStarts += 1;
+              const request = JSON.parse(invocation.stdin) as {
+                readonly messageStoreIdentity: { readonly dev: string; readonly ino: string };
+              };
+              return Promise.resolve({
+                exitCode: 0,
+                stderr: "",
+                stdout: `${JSON.stringify({
+                  schemaVersion: 1,
+                  status: "succeeded",
+                  projectionGeneration: {
+                    messageStoreIdentity: request.messageStoreIdentity,
+                    schemaFingerprint:
+                      "sha256:994c43a93c88aea9775e9cae94a31f190b158ae0a423a1b0ee0fda83107b4d6c",
+                  },
+                  interactions: [{
+                    rowid: "42",
+                    chatJid: CHAT_JID,
+                    messageId: MESSAGE_ID,
+                    senderJid: "15557654321:2@s.whatsapp.net",
+                    timestamp: "2026-08-18T12:00:00.000Z",
+                    fromMe: false,
+                    chatKind: "dm",
+                  }],
+                  nextCursor: null,
+                  localInsertPageComplete: true,
+                  checkpoint: {
+                    cursor: "42",
+                    anchor: "fe7e30e794b222aa753855e9aed905e6fbc53b6b2bd5f09b75caeb2747950d12",
+                  },
+                })}\n`,
+              });
+            },
+          },
+        },
+      );
+      const messageStore = lstatSync(join(path, "wacli.db"), { bigint: true });
+      expect(helperStarts).toBe(1);
+      expect(projected.output).toEqual({
+        provider: "whatsapp",
+        operation: "contacts.list",
+        accountSubject: "whatsapp:pn:15551234567",
+        contactCollection: "interactions",
+        projection: "quiescent-account-bound-local-message-inserts",
+        projectionGeneration: {
+          messageStoreIdentity: {
+            dev: messageStore.dev.toString(),
+            ino: messageStore.ino.toString(),
+          },
+          schemaFingerprint:
+            "sha256:994c43a93c88aea9775e9cae94a31f190b158ae0a423a1b0ee0fda83107b4d6c",
+        },
+        interactions: [{
+          rowid: "42",
+          chatJid: CHAT_JID,
+          messageId: MESSAGE_ID,
+          senderJid: "15557654321:2@s.whatsapp.net",
+          timestamp: "2026-08-18T12:00:00.000Z",
+          fromMe: false,
+          chatKind: "dm",
+        }],
+        nextCursor: null,
+        localInsertPageComplete: true,
+        checkpoint: {
+          cursor: "42",
+          anchor: "fe7e30e794b222aa753855e9aed905e6fbc53b6b2bd5f09b75caeb2747950d12",
+        },
+        remoteHistoryComplete: false,
+        incompleteReasons: [
+          "linked-device-history-coverage-unknown",
+          "rowid-cursor-discovers-inserts-only",
+        ],
+      });
+
+      for (const input of [
+        { collection: "interactions", cursor: "041", limit: 1 },
+        { collection: "interactions", cursor: "41", limit: 1 },
+        { collection: "interactions", cursor: "0", limit: 1_001 },
+        { collection: "messages", cursor: "0", limit: 1 },
+      ]) {
+        await expectRejected(
+          executeWhatsAppWebOperation(
+            recipe("contacts.list"), input,
+            auth(path, "whatsapp:pn:15551234567"),
+            { dependencies: { runInteractionProjectionHelper: () => {
+              helperStarts += 1;
+              return Promise.resolve(emptyContactHelperResult());
+            } } },
+          ),
+          "input.",
+        );
+      }
+      expect(helperStarts).toBe(1);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("binds contact projection to exactly one session database owner", async () => {
     const path = createContactStore();
     try {
@@ -1044,6 +1155,7 @@ describe("WhatsApp zero-network read plans", () => {
       for (const input of [
         { limit: 0 },
         { cursor: GROUP_CONTACT_JID },
+        { cursor_anchor: "c".repeat(64), limit: 1 },
         { limit: 1, unreviewed: true },
       ]) {
         await expectRejected(
