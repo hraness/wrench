@@ -37,14 +37,24 @@ describe("Bluesky provider plugin", () => {
     expect(binding.operations
       .filter((operation) => operation.reconciliation !== undefined)
       .map((operation) => operation.name)
-      .sort()).toEqual(Object.keys(expected).sort());
+      .sort()).toEqual([...Object.keys(expected), "posts.publish"].sort());
     for (const [name, [key, value]] of Object.entries(expected)) {
       const operation = binding.operations.find((candidate) => candidate.name === name);
       expect(operation?.state).toBe("capture-required");
-      expect(operation?.reconciliation?.desiredState({ [key]: value })).toBe(value);
-      expect(() => operation?.reconciliation?.desiredState({ [key]: "invalid" }))
+      const reconciliation = operation?.reconciliation;
+      if (reconciliation?.kind !== "boolean-desired-state") {
+        throw new Error("expected boolean Bluesky reconciliation");
+      }
+      expect(reconciliation.desiredState({ [key]: value })).toBe(value);
+      expect(() => reconciliation.desiredState({ [key]: "invalid" }))
         .toThrow(`requires boolean input.${key}`);
     }
+    const publish = binding.operations.find((operation) =>
+      operation.name === "posts.publish");
+    expect(publish?.historicalContractVersions).toEqual([2]);
+    expect(publish?.reconciliation).toEqual({
+      kind: "provider-accepted-target-presence",
+    });
     const runtime = await binding.loadRuntime();
     expect(runtime.reconcile).toBeFunction();
     expect(runtime.reconcile!("feeds.read", {}, auth)).rejects.toThrow(

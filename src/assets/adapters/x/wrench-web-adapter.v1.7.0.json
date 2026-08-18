@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.8.0",
+  "version": "1.7.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -345,7 +345,7 @@
       "webSession": {
         "site": "x",
         "action": "posts.publish",
-        "contractVersion": 3,
+        "contractVersion": 2,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }

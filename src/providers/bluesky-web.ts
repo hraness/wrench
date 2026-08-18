@@ -1,3 +1,5 @@
+import { canonicalJson } from "../canonical-json";
+
 /**
  * Bluesky authenticated first-party API policy and bounded projections.
  *
@@ -114,7 +116,7 @@ export const BLUESKY_WEB_OPERATIONS = Object.freeze({
   "posts.publish": observed(
     "write",
     "R3",
-    "current code-owned plain-text and single-image uploadBlob/createRecord path with exact actor, text, attachment, record revision, and independent getPosts readback binding",
+    "current code-owned plain-text and single-image uploadBlob/createRecord path with durable accepted-target evidence, authoritative getRecord binding, and bounded independent getPosts projection readback",
   ),
   "replies.create": captureRequired(
     "write",
@@ -479,6 +481,7 @@ export const BLUESKY_XRPC_METHODS = Object.freeze({
   "chat.bsky.convo.listConvos": "GET",
   "chat.bsky.convo.getConvo": "GET",
   "chat.bsky.convo.getMessages": "GET",
+  "com.atproto.repo.getRecord": "GET",
   "com.atproto.repo.createRecord": "POST",
   "com.atproto.repo.deleteRecord": "POST",
   "com.atproto.repo.uploadBlob": "POST",
@@ -513,6 +516,7 @@ const BLUESKY_XRPC_PROXIES = Object.freeze({
   "chat.bsky.convo.listConvos": BLUESKY_CHAT_PROXY,
   "chat.bsky.convo.getConvo": BLUESKY_CHAT_PROXY,
   "chat.bsky.convo.getMessages": BLUESKY_CHAT_PROXY,
+  "com.atproto.repo.getRecord": null,
   "com.atproto.repo.createRecord": null,
   "com.atproto.repo.deleteRecord": null,
   "com.atproto.repo.uploadBlob": null,
@@ -1112,6 +1116,40 @@ export function parseBlueskyCreateRecordResponse(
     uri: parsed.uri,
     cid: blueskyCid(response.cid, "Bluesky created record CID"),
   });
+}
+
+/**
+ * Bind one authoritative PDS record read to the exact response-bound record
+ * reference and the exact value submitted by the confirmed publish plan.
+ */
+export function parseBlueskyGetRecordResponse(
+  value: unknown,
+  expected: BlueskyStrongRef,
+  expectedValue: Readonly<Record<string, unknown>>,
+): BlueskyStrongRef {
+  const response = record(value, "Bluesky getRecord response");
+  exactKeys(
+    response,
+    ["uri", "cid", "value"],
+    [],
+    "Bluesky getRecord response",
+  );
+  const actual = blueskyStrongRef(
+    response,
+    "Bluesky getRecord response",
+    expected.uri,
+  );
+  if (actual.cid !== expected.cid) {
+    throw new Error("Bluesky getRecord response changed the created record CID");
+  }
+  const recordValue = record(
+    response.value,
+    "Bluesky getRecord response.value",
+  );
+  if (canonicalJson(recordValue) !== canonicalJson(expectedValue)) {
+    throw new Error("Bluesky getRecord response did not bind the confirmed record value");
+  }
+  return actual;
 }
 
 export type BlueskyBlobRef = {

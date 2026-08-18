@@ -112,7 +112,7 @@ const historicalVersions = Object.freeze({
 
 const contractSemanticIdentities = Object.freeze({
   instagram: "7f0acb6d0e978d6579a744f724bea39dd629614a04ca9e24f2c8c6ad4fe53c9f",
-  threads: "67f2b0078cb645ac6b0085660eb8b37b4d9de782c6eb4b5c368e63061795f773",
+  threads: "11afc65a3aa9b8cf32b736a0e671889883e588c1fe9b9d138485b228f58b2c66",
   facebook: "f4724c9619794070da784d03fdaef5889cc4f3d237f9f402e9d5a53f7c156184",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
   "facebook-group": "30717a546b60658ecc2e199a14babb4fa2b46afd1e8d9113044a1b7afda3d376",
@@ -152,7 +152,14 @@ export const metaWebPlugin = defineProviderPlugin({
       contractSemanticIdentities[site],
       historicalVersions[site],
       metaOmniDefinitions(site),
-    ),
+    ).map((operation) => site === "threads" && operation.name === "posts.publish"
+      ? Object.freeze({
+          ...operation,
+          reconciliation: Object.freeze({
+            kind: "provider-accepted-target-presence" as const,
+          }),
+        })
+      : operation),
     subject: {
       format: subjectFormats[site],
       matches: (value: string) => subjectMatches(site, value),
@@ -164,6 +171,26 @@ export const metaWebPlugin = defineProviderPlugin({
           runtime.probeMetaWebSubject(site, auth, options),
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeMetaWebOperation(recipe, input, auth, options),
+        reconcile: async (operation, input, auth, context) => {
+          if (
+            site !== "threads"
+            || operation !== "posts.publish"
+            || context?.kind !== "provider-accepted-target-presence"
+          ) {
+            throw new Error(`${site} ${operation} has no reconciliation hook`);
+          }
+          const readback = await runtime.readThreadsWebPublishedMutationTarget({
+            site: "threads",
+            action: operation,
+            contractVersion: 3,
+            timeoutMs: 60_000,
+            maxOutputBytes: 2 * 1024 * 1024,
+          }, input, auth, context.target.identifier);
+          return {
+            actualState: readback.present,
+            reason: "exact-target-readback",
+          };
+        },
       };
     }),
   })),

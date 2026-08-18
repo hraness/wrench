@@ -213,6 +213,9 @@ const currentOperations = webSessionContractOperations(
     return Object.freeze({
       ...operation,
       validateInput: linkedinPostIssues,
+      reconciliation: Object.freeze({
+        kind: "provider-accepted-target-presence" as const,
+      }),
     });
   }
   return operation.name === "articles.draft.save"
@@ -322,7 +325,23 @@ export const linkedinWebPlugin = defineProviderPlugin({
         probe: runtime.probeLinkedInWebSubject,
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeLinkedInWebOperation(recipe, input, auth, options),
-        reconcile: async (operation, input, auth) => {
+        reconcile: async (operation, input, auth, context) => {
+          if (operation === "posts.publish") {
+            if (context?.kind !== "provider-accepted-target-presence") {
+              throw new Error("LinkedIn posts.publish reconciliation requires one exact accepted target");
+            }
+            const readback = await runtime.readLinkedInWebAcceptedPostTargetPresence({
+              site: "linkedin",
+              action: operation,
+              contractVersion: 3,
+              timeoutMs: 60_000,
+              maxOutputBytes: 2 * 1024 * 1024,
+            }, input, auth, context.target.identifier);
+            return {
+              actualState: readback.present,
+              reason: "exact-target-readback",
+            };
+          }
           if (operation !== "articles.draft.save") {
             throw new Error(`LinkedIn authenticated web operation ${operation} has no desired-state reconciler`);
           }

@@ -146,6 +146,7 @@ describe("single-process bundled adapter generation sync", () => {
       )
     )).toEqual([
       "bluesky-web@1.0.0",
+      "bluesky-web@1.1.0",
       "facebook-group-web@1.0.0",
       "facebook-marketplace-web@1.0.0",
       "facebook-marketplace-web@1.1.0",
@@ -172,6 +173,7 @@ describe("single-process bundled adapter generation sync", () => {
       "linkedin-web@1.8.0",
       "linkedin-web@1.9.0",
       "substack-web@1.0.0",
+      "substack-web@1.1.0",
       "threads-web@1.0.0",
       "threads-web@1.1.0",
       "threads-web@1.2.0",
@@ -186,6 +188,7 @@ describe("single-process bundled adapter generation sync", () => {
       "x-web@1.4.0",
       "x-web@1.5.0",
       "x-web@1.6.0",
+      "x-web@1.7.0",
     ]);
     expect(Object.fromEntries(discovered.flatMap((adapter) =>
       adapter.upgradeFrom.map((baseline) => [

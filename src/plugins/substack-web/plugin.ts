@@ -35,7 +35,9 @@ export const substackWebPlugin = defineProviderPlugin({
     operations: webSessionContractOperations(
       Object.values(substackContracts),
       "b30524d322bbc94045d8763711e6e61a934bdfc0e0b821349ac86328c90c3444",
-      {},
+      {
+        "posts.publish": [2],
+      },
       {
         "messaging.list": {
           state: "supported",
@@ -49,7 +51,14 @@ export const substackWebPlugin = defineProviderPlugin({
           reason: "Substack message reads remain capture-required",
         },
       },
-    ),
+    ).map((operation) => operation.name === "posts.publish"
+      ? Object.freeze({
+          ...operation,
+          reconciliation: Object.freeze({
+            kind: "provider-accepted-target-presence" as const,
+          }),
+        })
+      : operation),
     subject: {
       format: "substack:<numeric-id>",
       matches: (value) => /^substack:[0-9]{1,32}$/u.test(value),
@@ -60,6 +69,25 @@ export const substackWebPlugin = defineProviderPlugin({
         probe: runtime.probeSubstackWebSubject,
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeSubstackWebOperation(recipe, input, auth, options),
+        reconcile: async (operation, input, auth, context) => {
+          if (
+            operation !== "posts.publish"
+            || context?.kind !== "provider-accepted-target-presence"
+          ) {
+            throw new Error(`Substack ${operation} has no reconciliation hook`);
+          }
+          const readback = await runtime.readSubstackWebAcceptedNoteTargetPresence({
+            site: "substack",
+            action: operation,
+            contractVersion: 3,
+            timeoutMs: 60_000,
+            maxOutputBytes: 8 * 1024 * 1024,
+          }, input, auth, context.target.identifier);
+          return {
+            actualState: readback.present,
+            reason: "exact-target-readback",
+          };
+        },
       };
     }),
   }],

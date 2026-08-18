@@ -3294,13 +3294,15 @@ describe("provider plugin definition and registry", () => {
         join(root, "threads", "wrench-web-adapter.v1.0.0.json"),
         [
           "manifest.operations.feeds.read.input must exactly match authenticated web contract threads/feeds.read@1",
-          "authenticated web contract threads/posts.publish@1 is not installed",
+          "manifest.operations.posts.publish.input must exactly match authenticated web contract threads/posts.publish@1",
+          "manifest.operations.posts.publish.sideEffect must exactly match authenticated web contract threads/posts.publish@1",
         ],
       ],
       [
         join(root, "threads", "wrench-web-adapter.v1.1.0.json"),
         [
-          "authenticated web contract threads/posts.publish@1 is not installed",
+          "manifest.operations.posts.publish.input must exactly match authenticated web contract threads/posts.publish@1",
+          "manifest.operations.posts.publish.sideEffect must exactly match authenticated web contract threads/posts.publish@1",
         ],
       ],
       [

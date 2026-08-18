@@ -35,6 +35,7 @@ import {
   type WebSessionDispatchEvent,
   type WebSessionExecution,
   type WebSessionOperationDeadline,
+  type WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
 import {
   BLUESKY_APPVIEW_PROXY,
@@ -51,6 +52,7 @@ import {
   parseBlueskyAtUri,
   parseBlueskyBootstrapAccount,
   parseBlueskyCreateRecordResponse,
+  parseBlueskyGetRecordResponse,
   parseBlueskyRefreshSessionResponse,
   parseBlueskySessionResponse,
   parseBlueskyUploadBlobResponse,
@@ -77,6 +79,7 @@ const MAX_READ_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 2_000_000;
 const DEFAULT_LIMIT = 25;
 const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
+const PUBLISH_READBACK_DELAYS_MS = Object.freeze([0, 250, 750, 1_500]);
 
 type JsonRecord = Record<string, unknown>;
 type BlueskyFetch = (
@@ -88,6 +91,7 @@ export type BlueskyWebRuntimeDependencies = {
   readonly fetch?: BlueskyFetch;
   readonly createBrowserSession?: typeof createBrowserSession;
   readonly now?: () => number;
+  readonly sleep?: (milliseconds: number) => Promise<void>;
   /**
    * Test-only seam. The result is still parsed by the sealed account parser
    * before it can reach an authorization header.
@@ -928,6 +932,220 @@ async function getPost(
   );
 }
 
+async function getAuthoritativeRecord(
+  client: BlueskyClient,
+  expected: BlueskyStrongRef,
+  expectedValue: Readonly<Record<string, unknown>>,
+): Promise<BlueskyStrongRef> {
+  const parsed = parseBlueskyAtUri(
+    expected.uri,
+    "Bluesky created post URI",
+    "app.bsky.feed.post",
+  );
+  if (parsed.actor !== client.session.did) {
+    throw new Error("Bluesky created post actor did not match the bound viewer");
+  }
+  return parseBlueskyGetRecordResponse(
+    await xrpc(client, "com.atproto.repo.getRecord", {
+      query: {
+        repo: [client.session.did],
+        collection: ["app.bsky.feed.post"],
+        rkey: [parsed.rkey],
+      },
+    }),
+    expected,
+    expectedValue,
+  );
+}
+
+type BlueskyPublishedMutationTarget = {
+  readonly uri: string;
+  readonly cid: string;
+  readonly createdAt: string;
+  readonly media: null | {
+    readonly cid: string;
+    readonly mediaType: "image/jpeg" | "image/png" | "image/webp";
+    readonly size: number;
+  };
+};
+
+function parseBlueskyPublishedMutationTarget(
+  identifier: string,
+): BlueskyPublishedMutationTarget {
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier);
+  } catch {
+    throw new Error("Bluesky provider-accepted post target is not canonical JSON");
+  }
+  const target = record(value, "Bluesky provider-accepted post target");
+  if (Object.keys(target).sort().join(",") !== "cid,createdAt,media,uri") {
+    throw new Error("Bluesky provider-accepted post target contained unsupported fields");
+  }
+  const parsedUri = parseBlueskyAtUri(
+    target.uri,
+    "Bluesky provider-accepted post target URI",
+    "app.bsky.feed.post",
+  );
+  const strongRef = parseBlueskyCreateRecordResponse(
+    { uri: parsedUri.uri, cid: target.cid },
+    parsedUri.actor,
+    "app.bsky.feed.post",
+  );
+  if (
+    typeof target.createdAt !== "string"
+    || target.createdAt.length > 64
+    || Number.isNaN(Date.parse(target.createdAt))
+    || new Date(target.createdAt).toISOString() !== target.createdAt
+  ) {
+    throw new Error("Bluesky provider-accepted post target createdAt is malformed");
+  }
+  let media: BlueskyPublishedMutationTarget["media"] = null;
+  if (target.media !== null) {
+    const rawMedia = record(
+      target.media,
+      "Bluesky provider-accepted post target media",
+    );
+    if (Object.keys(rawMedia).sort().join(",") !== "cid,mediaType,size") {
+      throw new Error("Bluesky provider-accepted post target media contained unsupported fields");
+    }
+    if (
+      typeof rawMedia.cid !== "string"
+      || !/^b[a-z2-7]{10,200}$/u.test(rawMedia.cid)
+      || (
+        rawMedia.mediaType !== "image/jpeg"
+        && rawMedia.mediaType !== "image/png"
+        && rawMedia.mediaType !== "image/webp"
+      )
+      || !Number.isSafeInteger(rawMedia.size)
+      || (rawMedia.size as number) < 1
+      || (rawMedia.size as number) > MAX_IMAGE_BYTES
+    ) {
+      throw new Error("Bluesky provider-accepted post target media is malformed");
+    }
+    media = Object.freeze({
+      cid: rawMedia.cid,
+      mediaType: rawMedia.mediaType,
+      size: rawMedia.size as number,
+    });
+  }
+  const parsed = Object.freeze({
+    uri: strongRef.uri,
+    cid: strongRef.cid,
+    createdAt: target.createdAt,
+    media,
+  });
+  if (canonicalJson(parsed) !== identifier) {
+    throw new Error("Bluesky provider-accepted post target is not canonical");
+  }
+  return parsed;
+}
+
+/**
+ * Reconcile one exact response-bound Bluesky publish target using only the
+ * authoritative PDS record and its public AppView projection.
+ */
+export async function readBlueskyWebPublishedMutationTarget(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  identifier: string,
+  options: {
+    readonly dependencies?: BlueskyWebRuntimeDependencies;
+  } = {},
+): Promise<{ readonly present: true; readonly uri: string; readonly cid: string }> {
+  if (
+    recipe.site !== "bluesky"
+    || recipe.action !== "posts.publish"
+    || recipe.contractVersion !== 3
+  ) {
+    throw new Error("Bluesky publish recovery supports only posts.publish@3");
+  }
+  const target = parseBlueskyPublishedMutationTarget(identifier);
+  const body = assertBlueskyText(input.body, "input.body", 280, 3_000);
+  const rawAlt = input.alt;
+  const alt = rawAlt === undefined
+    ? ""
+    : typeof rawAlt === "string" && rawAlt.length <= 10_000 && !/[\0\r]/u.test(rawAlt)
+      ? rawAlt
+      : (() => {
+          throw new Error("input.alt must be bounded text");
+        })();
+  if (
+    (input.media === undefined) !== (target.media === null)
+    || (target.media === null
+      ? input.media_type !== undefined || input.alt !== undefined
+      : input.media_type !== target.media.mediaType)
+  ) {
+    throw new Error("Bluesky provider-accepted post target did not bind the confirmed attachment shape");
+  }
+  const recordValue = Object.freeze({
+    $type: "app.bsky.feed.post",
+    text: body,
+    createdAt: target.createdAt,
+    ...(target.media === null
+      ? {}
+      : {
+          embed: {
+            $type: "app.bsky.embed.images",
+            images: [{
+              image: {
+                $type: "blob",
+                ref: { $link: target.media.cid },
+                mimeType: target.media.mediaType,
+                size: target.media.size,
+              },
+              alt,
+            }],
+          },
+        }),
+  });
+  const client = await bootstrapClient(
+    auth,
+    recipe.timeoutMs,
+    recipe.maxOutputBytes,
+    options.dependencies,
+  );
+  requireBoundSubject(auth, client.session);
+  const strongRef = Object.freeze({ uri: target.uri, cid: target.cid });
+  await getAuthoritativeRecord(client, strongRef, recordValue);
+  const projected = await getPost(client, target.uri);
+  if (projected.cid !== target.cid || projected.createdAt !== target.createdAt) {
+    throw new Error("Bluesky publish recovery readback changed the accepted record revision");
+  }
+  assertPublishedPost(projected, {
+    actorDid: client.session.did,
+    text: body,
+    reply: null,
+    quote: null,
+    mediaAlt: target.media === null ? null : alt,
+  });
+  return Object.freeze({ present: true, uri: target.uri, cid: target.cid });
+}
+
+async function waitForPublishReadback(
+  client: BlueskyClient,
+  uri: string,
+  sleep: (milliseconds: number) => Promise<void>,
+): Promise<BlueskyProjectedPost> {
+  let lastError: unknown;
+  for (const delay of PUBLISH_READBACK_DELAYS_MS) {
+    if (delay > 0) {
+      const pause = () => sleep(delay);
+      if (client.operationDeadline === undefined) await pause();
+      else await client.operationDeadline.run(pause, WEB_SESSION_OPERATION_LABEL);
+    }
+    try {
+      return await getPost(client, uri);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error("Bluesky public post readback did not settle within the reviewed bound", {
+    cause: lastError,
+  });
+}
+
 async function getProfile(
   client: BlueskyClient,
   did: string,
@@ -1607,8 +1825,12 @@ async function executePublish(
   options: {
     readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly now: () => number;
+    readonly sleep: (milliseconds: number) => Promise<void>;
   },
 ): Promise<WebSessionExecution> {
   let started = 0;
@@ -1663,7 +1885,7 @@ async function executePublish(
       started = index;
       const blob = media === null || offset > 0 ? null : await uploadImage(client, media);
       const createdAt = new Date(options.now()).toISOString();
-      const created = await createRecord(client, "app.bsky.feed.post", {
+      const record = Object.freeze({
         $type: "app.bsky.feed.post",
         text,
         createdAt,
@@ -1685,7 +1907,32 @@ async function executePublish(
               },
             }),
       });
-      const readback = await getPost(client, created.uri);
+      const created = await createRecord(client, "app.bsky.feed.post", record);
+      await options.afterProviderAcceptedMutationTarget?.({
+        id,
+        index,
+        target: {
+          schemaVersion: 1,
+          identifier: canonicalJson({
+            uri: created.uri,
+            cid: created.cid,
+            createdAt,
+            media: blob === null
+              ? null
+              : {
+                  cid: blob.ref.$link,
+                  mediaType: blob.mimeType,
+                  size: blob.size,
+                },
+          }),
+        },
+      });
+      await getAuthoritativeRecord(client, created, record);
+      const readback = await waitForPublishReadback(
+        client,
+        created.uri,
+        options.sleep,
+      );
       if (readback.cid !== created.cid || readback.createdAt !== createdAt) {
         throw new Error("Bluesky post readback did not bind the created record revision");
       }
@@ -1809,6 +2056,9 @@ export async function executeBlueskyWebOperation(
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: BlueskyWebRuntimeDependencies;
   } = {},
@@ -1817,7 +2067,7 @@ export async function executeBlueskyWebOperation(
     recipe.site !== "bluesky"
     || !isBlueskyOperation(recipe.action)
   ) throw new Error("Bluesky authenticated web recipe is not installed");
-  const expectedContractVersion = recipe.action === "posts.publish" ? 2 : 1;
+  const expectedContractVersion = recipe.action === "posts.publish" ? 3 : 1;
   if (recipe.contractVersion !== expectedContractVersion) {
     throw new Error(
       `Bluesky authenticated web operation ${recipe.action} contract version ${recipe.contractVersion} is not installed`,
@@ -1849,7 +2099,15 @@ export async function executeBlueskyWebOperation(
     ...(options.afterDispatchVerified === undefined
       ? {}
       : { afterDispatchVerified: options.afterDispatchVerified }),
+    ...(options.afterProviderAcceptedMutationTarget === undefined
+      ? {}
+      : {
+          afterProviderAcceptedMutationTarget:
+            options.afterProviderAcceptedMutationTarget,
+        }),
     now: options.dependencies?.now ?? Date.now,
+    sleep: options.dependencies?.sleep
+      ?? ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))),
   };
   if (
     recipe.action === "likes.set"

@@ -37,6 +37,7 @@ import {
   type WebSessionDispatchEvent,
   type WebSessionExecution,
   type WebSessionOperationDeadline,
+  type WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
 import {
   generateXClientTransactionId,
@@ -78,11 +79,13 @@ const MAX_ARTICLE_MEDIA_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_X_IMAGE_BYTES = 20 * 1024 * 1024;
 const X_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const MAX_X_UPLOAD_RESPONSE_BYTES = 512 * 1024;
+const PUBLISH_READBACK_DELAYS_MS = Object.freeze([0, 250, 750, 1_500]);
 
 type JsonRecord = Record<string, unknown>;
 
 export type XWebRuntimeDependencies = Partial<WebSessionNetworkDependencies>
-  & Pick<XTransactionBrowserDependencies, "createBrowserSession">;
+  & Pick<XTransactionBrowserDependencies, "createBrowserSession">
+  & { readonly sleep?: (milliseconds: number) => Promise<void> };
 
 type XBootstrap = {
   readonly auth: WrenchAuth;
@@ -1016,6 +1019,115 @@ async function tweetReadback(bootstrap: XBootstrap, id: string): Promise<JsonRec
     throw new Error("X desired-state readback did not bind the requested post");
   }
   return result;
+}
+
+async function waitForTweetPublishReadback(
+  bootstrap: XBootstrap,
+  id: string,
+  sleep: (milliseconds: number) => Promise<void>,
+): Promise<JsonRecord> {
+  let lastError: unknown;
+  for (const delay of PUBLISH_READBACK_DELAYS_MS) {
+    if (delay > 0) {
+      const pause = () => sleep(delay);
+      if (bootstrap.operationDeadline === undefined) await pause();
+      else await bootstrap.operationDeadline.run(
+        pause,
+        "authenticated web operation deadline",
+      );
+    }
+    try {
+      return await tweetReadback(bootstrap, id);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error("X independent post readback did not settle within the reviewed bound", {
+    cause: lastError,
+  });
+}
+
+type XWebPublishedMutationTarget = {
+  readonly postId: string;
+  readonly mediaId: string | null;
+};
+
+function parseXWebPublishedMutationTarget(
+  identifier: string,
+): XWebPublishedMutationTarget {
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier);
+  } catch {
+    throw new Error("X provider-accepted post target is not canonical JSON");
+  }
+  const target = record(value, "X provider-accepted post target");
+  if (Object.keys(target).sort().join(",") !== "mediaId,postId") {
+    throw new Error("X provider-accepted post target contained unsupported fields");
+  }
+  const postIdValue = postId(
+    target.postId,
+    "X provider-accepted post target post ID",
+  );
+  const mediaId = target.mediaId === null
+    ? null
+    : xMediaId(
+        target.mediaId,
+        "X provider-accepted post target media ID",
+      );
+  const parsed = Object.freeze({ postId: postIdValue, mediaId });
+  if (canonicalJson(parsed) !== identifier) {
+    throw new Error("X provider-accepted post target is not canonical");
+  }
+  return parsed;
+}
+
+/**
+ * Reconcile one exact response-bound X publish target with reviewed reads
+ * only. Absence or drift throws so the kernel retains the unsettled ledger.
+ */
+export async function readXWebPublishedMutationTarget(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  identifier: string,
+  options: {
+    readonly dependencies?: XWebRuntimeDependencies;
+  } = {},
+): Promise<{ readonly present: true; readonly postId: string }> {
+  if (
+    recipe.site !== "x"
+    || recipe.action !== "posts.publish"
+    || recipe.contractVersion !== 3
+  ) {
+    throw new Error("X publish recovery supports only posts.publish@3");
+  }
+  const target = parseXWebPublishedMutationTarget(identifier);
+  const hasMedia = input.media !== undefined;
+  if (
+    hasMedia !== (target.mediaId !== null)
+    || (hasMedia && input.media_type !== "image/png")
+    || (!hasMedia && input.media_type !== undefined)
+  ) {
+    throw new Error("X provider-accepted post target did not bind the confirmed attachment shape");
+  }
+  const text = requiredString(input.body, "input.body", 280);
+  const bootstrap = await bootstrapX(auth, recipe, options.dependencies);
+  const viewer = await requireBoundViewer(bootstrap, auth);
+  const readback = await tweetReadback(bootstrap, target.postId);
+  const rebound = assertTweetBinding(
+    readback,
+    text,
+    null,
+    null,
+    viewer.id,
+    target.mediaId,
+    "X publish recovery readback",
+  );
+  if (rebound.id !== target.postId) {
+    throw new Error("X publish recovery readback changed the accepted post ID");
+  }
+  return Object.freeze({ present: true, postId: target.postId });
 }
 
 async function desiredStateReadback(
@@ -2221,6 +2333,14 @@ async function publishOne(
   media: XUploadedMedia | null,
   authorId: string,
   mutationOperation: XWebMutationOperationId,
+  sleep: (milliseconds: number) => Promise<void>,
+  afterProviderAcceptedMutationTarget?: (
+    post: {
+      readonly id: string;
+      readonly url: string;
+      readonly mediaId: string | null;
+    },
+  ) => Promise<void>,
   beforeRequest?: () => Promise<void>,
 ): Promise<{ readonly id: string; readonly url: string }> {
   const descriptor = await resolveDescriptor(bootstrap, "CreateTweet", "mutation");
@@ -2241,8 +2361,16 @@ async function publishOne(
     authorId,
     media?.id ?? null,
   );
+  await afterProviderAcceptedMutationTarget?.({
+    ...created,
+    mediaId: media?.id ?? null,
+  });
   if (mutationOperation !== "posts.publish") return created;
-  const readback = await tweetReadback(bootstrap, created.id);
+  const readback = await waitForTweetPublishReadback(
+    bootstrap,
+    created.id,
+    sleep,
+  );
   const rebound = assertTweetBinding(
     readback,
     text,
@@ -2279,6 +2407,9 @@ async function executePublish(
     readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
     readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
   },
 ): Promise<WebSessionExecution> {
@@ -2333,6 +2464,21 @@ async function executePublish(
         media,
         currentViewer.id,
         action === "threads.publish" && offset > 0 ? "threads.reply" : action as XWebMutationOperationId,
+        bootstrap.dependencies?.sleep
+          ?? ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))),
+        options.afterProviderAcceptedMutationTarget === undefined
+          ? undefined
+          : (accepted) => options.afterProviderAcceptedMutationTarget!({
+              id,
+              index,
+              target: {
+                schemaVersion: 1,
+                identifier: canonicalJson({
+                  postId: accepted.id,
+                  mediaId: accepted.mediaId,
+                }),
+              },
+            }),
         beforeRequest,
       );
       posts.push(post);
@@ -2682,6 +2828,9 @@ export async function executeXWebOperation(
     readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
     readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: XWebRuntimeDependencies;
   } = {},

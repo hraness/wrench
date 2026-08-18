@@ -176,10 +176,11 @@ Current `x-client-transaction-id` generation is code-owned: wrench resolves the 
 
 `likes.set` and `content.save` (`R2`) bind the exact account and post, select only the matching create/delete mutation for the confirmed desired state, validate the operation-specific `Done` response, and independently read the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. `articles.draft.save` is the separate observed private structured-text-and-inline-image contract above.
 
-`posts.publish@2` is the separate observed R3 post contract. It accepts exact
+`posts.publish@3` is the separate observed R3 post contract. It accepts exact
 text and at most one plan-bound PNG, binds the account and uploaded media ID,
-admits one CreateTweet dispatch, and independently verifies the returned post
-through TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
+admits one CreateTweet dispatch, durably retains the response-bound post/media
+target before readback, and polls only that exact post through
+TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
 Article publishing remain capture-required.
 
 Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.

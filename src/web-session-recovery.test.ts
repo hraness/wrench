@@ -425,7 +425,7 @@ function installPresenceRun(
     action: "posts.publish",
     contractVersion: 1,
     timeoutMs: 60_000,
-    maxOutputBytes: 1_048_576,
+    maxOutputBytes: 2 * 1024 * 1024,
   };
   const contractHash = webSessionContractHash(
     getWebSessionContract(selectedRecipe, registry),

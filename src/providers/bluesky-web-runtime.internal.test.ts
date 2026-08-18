@@ -15,6 +15,7 @@ import {
   executeBlueskyWebOperation,
   probeBlueskyWebSubject,
   readBlueskyWebDesiredState,
+  readBlueskyWebPublishedMutationTarget,
   type BlueskyWebRuntimeDependencies,
 } from "./bluesky-web-runtime";
 
@@ -165,6 +166,7 @@ function dependencies(
     bootstrapAccount: () => Promise.resolve(bootstrapAccount()),
     fetch,
     now: () => 2_000_000_000_000,
+    sleep: () => Promise.resolve(),
   };
 }
 
@@ -172,7 +174,7 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "bluesky",
     action,
-    contractVersion: action === "posts.publish" ? 2 : 1,
+    contractVersion: action === "posts.publish" ? 3 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 8 * 1024 * 1024,
   };
@@ -749,8 +751,26 @@ describe("Bluesky authenticated XRPC runtime", () => {
     const createdUri = `at://${VIEWER_DID}/app.bsky.feed.post/3lpublishedfixture`;
     const createdCid = `b${"c".repeat(40)}`;
     const blobCid = `b${"d".repeat(40)}`;
+    const expectedRecord = {
+      $type: "app.bsky.feed.post",
+      text,
+      createdAt,
+      embed: {
+        $type: "app.bsky.embed.images",
+        images: [{
+          image: {
+            $type: "blob",
+            ref: { $link: blobCid },
+            mimeType: "image/png",
+            size: imageBytes.byteLength,
+          },
+          alt,
+        }],
+      },
+    };
     const calls: CapturedRequest[] = [];
     const events: string[] = [];
+    const accepted: unknown[] = [];
     try {
       const result = await executeBlueskyWebOperation(
         recipe("posts.publish"),
@@ -765,6 +785,10 @@ describe("Bluesky authenticated XRPC runtime", () => {
           fileResolver: () => Promise.resolve([imagePath]),
           beforeDispatch: (event) => {
             events.push(`before ${event.progress.started}`);
+            return Promise.resolve();
+          },
+          afterProviderAcceptedMutationTarget: (event) => {
+            accepted.push(event);
             return Promise.resolve();
           },
           afterDispatchVerified: (event) => {
@@ -796,25 +820,21 @@ describe("Bluesky authenticated XRPC runtime", () => {
                 expect(JSON.parse(String(request.body))).toEqual({
                   repo: VIEWER_DID,
                   collection: "app.bsky.feed.post",
-                  record: {
-                    $type: "app.bsky.feed.post",
-                    text,
-                    createdAt,
-                    embed: {
-                      $type: "app.bsky.embed.images",
-                      images: [{
-                        image: {
-                          $type: "blob",
-                          ref: { $link: blobCid },
-                          mimeType: "image/png",
-                          size: imageBytes.byteLength,
-                        },
-                        alt,
-                      }],
-                    },
-                  },
+                  record: expectedRecord,
                 });
                 return jsonResponse({ uri: createdUri, cid: createdCid });
+              case "com.atproto.repo.getRecord":
+                expect(request.method).toBe("GET");
+                expect(Object.fromEntries(request.url.searchParams)).toEqual({
+                  repo: VIEWER_DID,
+                  collection: "app.bsky.feed.post",
+                  rkey: "3lpublishedfixture",
+                });
+                return jsonResponse({
+                  uri: createdUri,
+                  cid: createdCid,
+                  value: expectedRecord,
+                });
               case "app.bsky.feed.getPosts":
                 expect(request.method).toBe("GET");
                 expect(request.url.searchParams.getAll("uris")).toEqual([createdUri]);
@@ -878,12 +898,156 @@ describe("Bluesky authenticated XRPC runtime", () => {
         "before 0",
         "POST com.atproto.repo.uploadBlob",
         "POST com.atproto.repo.createRecord",
+        "GET com.atproto.repo.getRecord",
         "GET app.bsky.feed.getPosts",
         "after 1",
       ]);
+      expect(accepted).toEqual([{
+        id: "posts.publish",
+        index: 1,
+        target: {
+          schemaVersion: 1,
+          identifier: canonicalJson({
+            uri: createdUri,
+            cid: createdCid,
+            createdAt,
+            media: {
+              cid: blobCid,
+              mediaType: "image/png",
+              size: imageBytes.byteLength,
+            },
+          }),
+        },
+      }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("polls the exact response-bound URI when the public Bluesky projection settles late", async () => {
+    const text = "Late Bluesky projection";
+    const createdAt = new Date(2_000_000_000_000).toISOString();
+    const createdUri = `at://${VIEWER_DID}/app.bsky.feed.post/3llatefixture`;
+    const createdCid = `b${"e".repeat(40)}`;
+    const expectedRecord = {
+      $type: "app.bsky.feed.post",
+      text,
+      createdAt,
+    };
+    const calls: CapturedRequest[] = [];
+    const pauses: number[] = [];
+    let appViewReads = 0;
+    const baseDependencies = dependencies(calls, (request) => {
+      switch (nsid(request)) {
+        case "com.atproto.server.getSession":
+          return jsonResponse(sessionResponse());
+        case "com.atproto.repo.createRecord":
+          return jsonResponse({ uri: createdUri, cid: createdCid });
+        case "com.atproto.repo.getRecord":
+          return jsonResponse({
+            uri: createdUri,
+            cid: createdCid,
+            value: expectedRecord,
+          });
+        case "app.bsky.feed.getPosts":
+          appViewReads += 1;
+          return appViewReads === 1
+            ? jsonResponse({ posts: [] })
+            : jsonResponse({
+                posts: [{
+                  uri: createdUri,
+                  cid: createdCid,
+                  author: {
+                    did: VIEWER_DID,
+                    handle: "viewer.test",
+                    displayName: "Synthetic viewer",
+                  },
+                  record: expectedRecord,
+                  indexedAt: createdAt,
+                  replyCount: 0,
+                  repostCount: 0,
+                  likeCount: 0,
+                  quoteCount: 0,
+                  viewer: {},
+                }],
+              });
+        default:
+          throw new Error(`unexpected delayed Bluesky readback request ${nsid(request)}`);
+      }
+    });
+    const runtimeDependencies: CompleteDependencies = {
+      ...baseDependencies,
+      sleep: (milliseconds) => {
+        pauses.push(milliseconds);
+        return Promise.resolve();
+      },
+    };
+
+    const result = await executeBlueskyWebOperation(
+      recipe("posts.publish"),
+      { body: text },
+      blueskyAuth,
+      { dependencies: runtimeDependencies },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: { posts: [{ uri: createdUri, cid: createdCid }] },
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(appViewReads).toBe(2);
+    expect(pauses).toEqual([250]);
+  });
+
+  test("reconciles one exact accepted Bluesky record without a provider write", async () => {
+    const text = "Reconciled Bluesky post";
+    const createdAt = "2026-08-18T12:00:00.000Z";
+    const uri = `at://${VIEWER_DID}/app.bsky.feed.post/3lreconcilefixture`;
+    const cid = `b${"f".repeat(40)}`;
+    const record = { $type: "app.bsky.feed.post", text, createdAt };
+    const identifier = canonicalJson({ uri, cid, createdAt, media: null });
+    const calls: CapturedRequest[] = [];
+    const result = await readBlueskyWebPublishedMutationTarget(
+      recipe("posts.publish"),
+      { body: text },
+      blueskyAuth,
+      identifier,
+      {
+        dependencies: dependencies(calls, (request) => {
+          switch (nsid(request)) {
+            case "com.atproto.server.getSession":
+              return jsonResponse(sessionResponse());
+            case "com.atproto.repo.getRecord":
+              return jsonResponse({ uri, cid, value: record });
+            case "app.bsky.feed.getPosts":
+              return jsonResponse({
+                posts: [{
+                  uri,
+                  cid,
+                  author: { did: VIEWER_DID, handle: "viewer.test" },
+                  record,
+                  indexedAt: createdAt,
+                  replyCount: 0,
+                  repostCount: 0,
+                  likeCount: 0,
+                  quoteCount: 0,
+                  viewer: {},
+                }],
+              });
+            default:
+              throw new Error(`unexpected Bluesky reconciliation request ${nsid(request)}`);
+          }
+        }),
+      },
+    );
+    expect(result).toEqual({ present: true, uri, cid });
+    expect(calls.every((request) => request.method === "GET")).toBeTrue();
+    await expect(readBlueskyWebPublishedMutationTarget(
+      recipe("posts.publish"),
+      { body: text },
+      blueskyAuth,
+      `${identifier} `,
+    )).rejects.toThrow("not canonical");
   });
 
   test("marks a post indeterminate when the image upload fails after durable dispatch admission", async () => {

@@ -11,6 +11,7 @@ import {
   authorizeBlueskyXrpcRequest,
   parseBlueskyAtUri,
   parseBlueskyBootstrapAccount,
+  parseBlueskyGetRecordResponse,
   parseBlueskyRefreshSessionResponse,
   projectBlueskyConvoList,
   projectBlueskyFeed,
@@ -275,6 +276,34 @@ describe("Bluesky authenticated API policy", () => {
         "post",
       )
     ).toThrow("exact record AT URI");
+  });
+
+  test("binds authoritative records to the exact created revision and submitted value", () => {
+    const value = {
+      $type: "app.bsky.feed.post",
+      text: "Exact record",
+      createdAt: "2026-08-18T12:00:00.000Z",
+    };
+    expect(parseBlueskyGetRecordResponse(
+      { uri: POST_URI, cid: CID, value },
+      { uri: POST_URI, cid: CID },
+      value,
+    )).toEqual({ uri: POST_URI, cid: CID });
+    expect(() => parseBlueskyGetRecordResponse(
+      { uri: POST_URI, cid: `b${"c".repeat(40)}`, value },
+      { uri: POST_URI, cid: CID },
+      value,
+    )).toThrow("changed the created record CID");
+    expect(() => parseBlueskyGetRecordResponse(
+      { uri: POST_URI, cid: CID, value: { ...value, text: "Different" } },
+      { uri: POST_URI, cid: CID },
+      value,
+    )).toThrow("confirmed record value");
+    expect(() => parseBlueskyGetRecordResponse(
+      { uri: POST_URI, cid: CID, value, extra: true },
+      { uri: POST_URI, cid: CID },
+      value,
+    )).toThrow("unsupported fields");
   });
 
   test("projects posts, feeds, notifications, and threads without raw response fields or media URLs", () => {

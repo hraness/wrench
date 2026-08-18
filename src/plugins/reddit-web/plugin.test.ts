@@ -22,8 +22,12 @@ describe("Reddit provider plugin", () => {
     const save = binding.operations.find((operation) => operation.name === "content.save");
     const reaction = binding.operations.find((operation) => operation.name === "reactions.set");
     expect(save?.state).toBe("capture-required");
-    expect(save?.reconciliation?.desiredState({ saved: true })).toBeTrue();
-    expect(() => save?.reconciliation?.desiredState({ saved: 1 }))
+    const reconciliation = save?.reconciliation;
+    if (reconciliation?.kind !== "boolean-desired-state") {
+      throw new Error("expected boolean Reddit reconciliation");
+    }
+    expect(reconciliation.desiredState({ saved: true })).toBeTrue();
+    expect(() => reconciliation.desiredState({ saved: 1 }))
       .toThrow("requires boolean input.saved");
     expect(reaction?.state).toBe("capture-required");
     expect(reaction?.reconciliation).toBeUndefined();

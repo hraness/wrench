@@ -22,8 +22,10 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(blueskyContracts),
-  "5a038a2dea2dc580f1771c3e25ff53cf170f615e3b905847fdb85351d6ffe82b",
-  {},
+  "05bfb2469a3c515fd0a16032b8532288a21d3ef027e15636e1a4dc01ff2d08c8",
+  {
+    "posts.publish": [2],
+  },
   {
     "messaging.list": {
       state: "unsupported",
@@ -35,6 +37,14 @@ const operations = webSessionContractOperations(
     },
   },
 ).map((operation) => {
+  if (operation.name === "posts.publish") {
+    return Object.freeze({
+      ...operation,
+      reconciliation: Object.freeze({
+        kind: "provider-accepted-target-presence" as const,
+      }),
+    });
+  }
   if (!Object.hasOwn(desiredStateKeys, operation.name)) return operation;
   const stateKey = desiredStateKeys[
     operation.name as keyof typeof desiredStateKeys
@@ -85,7 +95,23 @@ export const blueskyWebPlugin = defineProviderPlugin({
         probe: runtime.probeBlueskyWebSubject,
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeBlueskyWebOperation(recipe, input, auth, options),
-        reconcile: async (operation, input, auth) => {
+        reconcile: async (operation, input, auth, context) => {
+          if (operation === "posts.publish") {
+            if (context?.kind !== "provider-accepted-target-presence") {
+              throw new Error("Bluesky posts.publish reconciliation requires one exact accepted target");
+            }
+            const readback = await runtime.readBlueskyWebPublishedMutationTarget({
+              site: "bluesky",
+              action: operation,
+              contractVersion: 3,
+              timeoutMs: 60_000,
+              maxOutputBytes: 8 * 1024 * 1024,
+            }, input, auth, context.target.identifier);
+            return {
+              actualState: readback.present,
+              reason: "exact-target-readback",
+            };
+          }
           if (!Object.hasOwn(desiredStateKeys, operation)) {
             throw new Error(`Bluesky ${operation} has no reconciliation hook`);
           }
