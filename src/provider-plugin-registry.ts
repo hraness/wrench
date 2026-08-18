@@ -539,39 +539,83 @@ const reviewedMetaDynamicInstalledModuleIdentities = Object.freeze([
   "source-map-support@0.5.21\u0000source-map-support.js\u0000da6f90928140ff29ca0b72f4bf8299deb986ba45f055fc5eb51d50dea2e5364d",
   "typescript@6.0.3\u0000lib/typescript.js\u0000569177652966bd528c319171c7dd22860dbf72bde116cbc4f644f1d02bb12e39",
 ]);
-const reviewedKbDynamicInstalledModuleIdentity =
-  "@hraness/kb@0.14.0\u0000dist/index-bt118a7q.js\u000090dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b";
+const reviewedKbDynamicInstalledPackage = Object.freeze({
+  name: "@hraness/kb",
+  version: "0.15.2",
+  sha256:
+    "90dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b",
+});
 const reviewedKbDynamicResolutionPolicy =
   "createRequire(parentUrl).resolve(`$" +
   "{packageName}/package.json`) is reached only by resolvePackageDirectory(\"agent-browser\") at module initialization";
 const reviewedDormantDynamicLoaderPolicy =
   "reviewed dependency parser API is not called by the owning Wrench composition";
-const reviewedDynamicInstalledModuleIdentities = Object.freeze([
-  ...reviewedMetaDynamicInstalledModuleIdentities,
-  reviewedKbDynamicInstalledModuleIdentity,
+const reviewedDynamicInstalledModuleIdentities =
+  reviewedMetaDynamicInstalledModuleIdentities;
+const reviewedKbDynamicInstalledPluginIds = new Set([
+  "bluesky-web",
+  "hacker-news-web",
+  "linkedin-web",
+  "meta-web",
+  "reddit-web",
+  "substack-web",
+  "tiktok-web",
+  "whatsapp-linked-device",
+  "x-web",
+  "youtube-web",
 ]);
 const reviewedBuiltInDynamicInstalledModules = new Set(
-  [
-    ...["meta-web"].flatMap((pluginId) =>
-      reviewedMetaDynamicInstalledModuleIdentities.map(
-        (identity) => `${pluginId}\u0000${identity}`,
-      )),
-    ...[
-      "bluesky-web",
-      "hacker-news-web",
-      "linkedin-web",
-      "meta-web",
-      "reddit-web",
-      "substack-web",
-      "tiktok-web",
-      "whatsapp-linked-device",
-      "x-web",
-      "youtube-web",
-    ].map(
-      (pluginId) => `${pluginId}\u0000${reviewedKbDynamicInstalledModuleIdentity}`,
-    ),
-  ],
+  ["meta-web"].flatMap((pluginId) =>
+    reviewedMetaDynamicInstalledModuleIdentities.map(
+      (identity) => `${pluginId}\u0000${identity}`,
+    )),
 );
+
+function discoverReviewedKbDynamicInstalledModuleIdentity(
+  snapshot: InstalledPackageSnapshot,
+): string {
+  if (
+    snapshot.name !== reviewedKbDynamicInstalledPackage.name
+    || snapshot.version !== reviewedKbDynamicInstalledPackage.version
+  ) {
+    throw new Error(
+      `installed KB dynamic-resolution review requires ${reviewedKbDynamicInstalledPackage.name}@${reviewedKbDynamicInstalledPackage.version}, got ${snapshot.id}`,
+    );
+  }
+  const candidates: InstalledPackageFileSnapshot[] = [];
+  for (const file of snapshot.files) {
+    if (extname(file.path) !== ".js") continue;
+    let source: string;
+    try {
+      source = new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
+    } catch {
+      continue;
+    }
+    if (
+      source.match(
+        /createRequire\(parentUrl\)\.resolve\(`\$\{packageName\}\/package\.json`\)/gu,
+      )?.length !== 1
+      || source.match(/resolvePackageDirectory\("agent-browser"\)/gu)?.length !== 1
+    ) continue;
+    candidates.push(file);
+  }
+  if (candidates.length !== 1) {
+    throw new Error(
+      `installed ${snapshot.id} exposes ${String(candidates.length)} dynamic-resolution modules, expected exactly one`,
+    );
+  }
+  const candidate = candidates[0];
+  if (candidate === undefined) {
+    throw new Error(`installed ${snapshot.id} dynamic-resolution module disappeared`);
+  }
+  const sha256 = createHash("sha256").update(candidate.bytes).digest("hex");
+  if (sha256 !== reviewedKbDynamicInstalledPackage.sha256) {
+    throw new Error(
+      `installed ${snapshot.id} dynamic-resolution module ${candidate.path} has sha256 ${sha256}, expected ${reviewedKbDynamicInstalledPackage.sha256}`,
+    );
+  }
+  return `${snapshot.id}\u0000${candidate.path}\u0000${sha256}`;
+}
 const reviewedBuiltInDynamicRepositoryModules = new Set(
   [
     "bluesky-web",
@@ -1794,6 +1838,7 @@ function providerPluginPackageDependencyIdentity(
   const installedPackageFiles =
     new Map<string, ReadonlyMap<string, InstalledPackageFileSnapshot>>();
   const installedOccurrences = new Map<string, InstalledPackageOccurrence>();
+  const reviewedKbDynamicInstalledModuleIdentities = new Map<string, string>();
   const usedInstalledPackageRoots = new Set<string>();
   const visitedInstalledModules = new Set<string>();
   let installedFiles = 0;
@@ -2212,6 +2257,26 @@ function providerPluginPackageDependencyIdentity(
       .digest("hex");
     const dynamicModuleIdentity =
       `${pendingModule.occurrence.snapshot.id}\0${pendingModule.path}\0${moduleSha256}`;
+    let reviewedKbDynamicInstalledModuleIdentity: string | undefined;
+    if (
+      pendingModule.occurrence.snapshot.name
+        === reviewedKbDynamicInstalledPackage.name
+    ) {
+      reviewedKbDynamicInstalledModuleIdentity =
+        reviewedKbDynamicInstalledModuleIdentities.get(
+          pendingModule.occurrence.snapshot.root,
+        );
+      if (reviewedKbDynamicInstalledModuleIdentity === undefined) {
+        reviewedKbDynamicInstalledModuleIdentity =
+          discoverReviewedKbDynamicInstalledModuleIdentity(
+            pendingModule.occurrence.snapshot,
+          );
+        reviewedKbDynamicInstalledModuleIdentities.set(
+          pendingModule.occurrence.snapshot.root,
+          reviewedKbDynamicInstalledModuleIdentity,
+        );
+      }
+    }
     const analysis = analyzeProviderModule(
       file.bytes,
       pendingModule.path,
@@ -2227,9 +2292,15 @@ function providerPluginPackageDependencyIdentity(
     if (analysis.nonLiteralModuleLoad) {
       const reviewedDynamicModule =
         `${plugin.id}\0${dynamicModuleIdentity}`;
+      const reviewedKbDynamicModule =
+        dynamicModuleIdentity === reviewedKbDynamicInstalledModuleIdentity
+        && reviewedKbDynamicInstalledPluginIds.has(plugin.id);
       if (
         plugin.sourceKind !== "built-in"
-        || !reviewedBuiltInDynamicInstalledModules.has(reviewedDynamicModule)
+        || (
+          !reviewedBuiltInDynamicInstalledModules.has(reviewedDynamicModule)
+          && !reviewedKbDynamicModule
+        )
       ) {
         throw new Error(
           `provider plugin ${plugin.id} installed executable ${pendingModule.path} contains a non-literal module load`,
@@ -2243,7 +2314,7 @@ function providerPluginPackageDependencyIdentity(
       addRecord(
         `dependency-package-dynamic-load-policy/${pendingModule.occurrence.nodeId}/${pendingModule.path}`,
         `${reviewedDynamicModule}\0${
-          dynamicModuleIdentity === reviewedKbDynamicInstalledModuleIdentity
+          reviewedKbDynamicModule
             ? reviewedKbDynamicResolutionPolicy
             : reviewedDormantDynamicLoaderPolicy
         }`,

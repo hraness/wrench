@@ -15,7 +15,7 @@ export const SITE_DESCRIPTION =
   "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations." as const;
 export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.10.0" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.10.1" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 
 export const PUBLIC_PAGES = [

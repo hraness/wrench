@@ -73,6 +73,26 @@ afterAll(() => {
   });
 });
 
+function resolveInstalledKbDynamicModulePath(): string {
+  const dist = dirname(fileURLToPath(import.meta.resolve("@hraness/kb")));
+  const candidates = readdirSync(dist, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+    .map((entry) => join(dist, entry.name))
+    .filter((path) => {
+      const source = readFileSync(path, "utf8");
+      return source.match(
+        /createRequire\(parentUrl\)\.resolve\(`\$\{packageName\}\/package\.json`\)/gu,
+      )?.length === 1
+        && source.match(/resolvePackageDirectory\("agent-browser"\)/gu)?.length === 1;
+    });
+  if (candidates.length !== 1 || candidates[0] === undefined) {
+    throw new Error(
+      `installed @hraness/kb exposes ${String(candidates.length)} dynamic-resolution modules, expected exactly one`,
+    );
+  }
+  return candidates[0];
+}
+
 function operation(
   name = "custom.read",
   options: {
@@ -2079,17 +2099,16 @@ describe("provider plugin definition and registry", () => {
       providerPluginRepositoryRoot,
       "packages/kb/src/clip/acquire.ts",
     );
-    const installedKbDynamicModulePath = join(
-      dirname(fileURLToPath(import.meta.resolve("@hraness/kb"))),
-      "index-bt118a7q.js",
-    );
     const repositoryLayout = existsSync(repositoryPackageRootPath);
+    const installedKbDynamicModulePath = repositoryLayout
+      ? undefined
+      : resolveInstalledKbDynamicModulePath();
     const packageRootPath = repositoryLayout
       ? repositoryPackageRootPath
-      : installedKbDynamicModulePath;
+      : installedKbDynamicModulePath as string;
     const acquisitionPath = repositoryLayout
       ? repositoryAcquisitionPath
-      : installedKbDynamicModulePath;
+      : installedKbDynamicModulePath as string;
     const packageRootSource = readFileSync(packageRootPath, "utf8");
     const acquisitionSource = readFileSync(acquisitionPath, "utf8");
     expect(packageRootSource.match(
@@ -2124,7 +2143,7 @@ describe("provider plugin definition and registry", () => {
         kbResolutionMutated = true;
         return Buffer.from(changed, "utf8");
       },
-    })).toThrow("non-literal module load");
+    })).toThrow("dynamic-resolution module");
     expect(kbResolutionMutated).toBeTrue();
 
     let kbCallSiteMutated = false;

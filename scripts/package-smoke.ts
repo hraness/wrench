@@ -5,7 +5,18 @@ import { join } from "node:path";
 const packageName = "@hraness/wrench";
 const importSpecifiers = ["@hraness/wrench","@hraness/wrench/client","@hraness/wrench/omni"];
 const binNames = ["wrench"];
-const verificationPackages = ["@steipete/sweet-cookie@https://codeload.github.com/hraness/sweet-cookie/tar.gz/112dce1a3c3dd165310616ca63dd2f6cc652b212","@types/bun@^1.3.14","fast-check@^4.8.0"];
+const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";
+const sweetCookieVerificationIntegrity = "sha512-HddZketABRWbHiLYqMbGlYuqEaWdtqAjES28eKHr2cPDdPvrXiF4JQxD4pl9WzSOre6p/B3zA4Z3uIsCHo/+uQ==";
+const verificationPackages = [`@steipete/sweet-cookie@${sweetCookieVerificationUrl}`,"@types/bun@^1.3.14","fast-check@^4.8.0"];
+
+async function assertSweetCookieLock(lockPath: string, label: string): Promise<void> {
+  const record = (await Bun.file(lockPath).text())
+    .split(/\r?\n/u)
+    .find((line) => line.includes(`@steipete/sweet-cookie@${sweetCookieVerificationUrl}`));
+  if (record === undefined || !record.includes(sweetCookieVerificationIntegrity)) {
+    throw new Error(`${label} does not bind the immutable Sweet Cookie v0.4.2 codeload integrity`);
+  }
+}
 
 async function run(command: string[], cwd: string): Promise<void> {
   const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
@@ -16,6 +27,7 @@ async function run(command: string[], cwd: string): Promise<void> {
 const repository = process.cwd();
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
+  await assertSweetCookieLock(join(repository, "bun.lock"), "repository lock");
   const archive = join(work, "package.tgz");
   const consumer = join(work, "consumer");
   await mkdir(consumer);
@@ -37,6 +49,7 @@ try {
   if (verificationPackages.length > 0) {
     await run([process.execPath, "add", ...verificationPackages, "--ignore-scripts"], consumer);
   }
+  await assertSweetCookieLock(join(consumer, "bun.lock"), "clean consumer lock");
   await run([
     "node",
     "--input-type=module",
