@@ -29,6 +29,7 @@ import {
   createRunJournal,
   parseRunJournal,
   readRunJournal,
+  updateRunJournal,
   type RunJournal,
 } from "./run-journal";
 import { planAssetBundlePath } from "./plan-assets";
@@ -285,11 +286,15 @@ function terminalJournalFor(
       token: "40000000-0000-4000-8000-000000000004",
       bootId: "a".repeat(64),
       processStartId: "b".repeat(64),
-      leaseUntil: "2026-07-23T12:01:30.000Z",
+      leaseUntil: new Date(
+        Date.parse(selectedReceipt.startedAt) + 90_000,
+      ).toISOString(),
     },
     startedAt: selectedReceipt.startedAt,
     updatedAt: selectedReceipt.finishedAt,
-    dedupeExpiresAt: "2026-07-24T12:00:00.000Z",
+    dedupeExpiresAt: new Date(
+      Date.parse(selectedReceipt.startedAt) + 86_400_000,
+    ).toISOString(),
     finalOrigin: selectedReceipt.finalOrigin,
     error: options.error ?? selectedReceipt.error,
   });
@@ -569,6 +574,109 @@ describe("web-session run reconciliation", () => {
         "provider-accepted-targets",
         PRESENCE_RUN_ID,
       ))).toBeFalse();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("retains exact source evidence when successor election wins reconciliation CAS", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(testState, true);
+      const journal = terminalJournalFor(installed.receipt, {
+        hasPlanAssets: false,
+      });
+      createRunJournal(journal, testState.environment);
+      if (journal.ledgerRelativePath === null) {
+        throw new Error("expected duplicate-risk source ledger coordinate");
+      }
+      const ledgerPath = join(
+        testState.directory,
+        ...journal.ledgerRelativePath.split("/"),
+      );
+      writePrivateJson(ledgerPath, ledgerFor(journal), {
+        privateParent: true,
+      });
+      const capsulePath = join(
+        testState.directory,
+        "recovery",
+        "capsules",
+        `${PRESENCE_RUN_ID}.json`,
+      );
+      const targetPath = join(
+        testState.directory,
+        "recovery",
+        "provider-accepted-targets",
+        PRESENCE_RUN_ID,
+        "1.json",
+      );
+      const receiptBefore = readFileSync(
+        join(testState.directory, "runs", `${PRESENCE_RUN_ID}.json`),
+        "utf8",
+      );
+      const ledgerBefore = readFileSync(ledgerPath, "utf8");
+      const capsuleBefore = readFileSync(capsulePath, "utf8");
+      const targetBefore = readFileSync(targetPath, "utf8");
+
+      const result = await reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          now: new Date("2026-08-18T12:00:03.000Z"),
+          dependencies: {
+            observeActualState: () => {
+              const source = readRunJournal(
+                PRESENCE_RUN_ID,
+                testState.environment,
+              );
+              if (source === null) throw new Error("source journal missing");
+              updateRunJournal(source, {
+                type: "duplicate-successor-claimed",
+                intentHash: "9".repeat(64),
+                runId: "90000000-0000-4000-8000-000000000009",
+                at: "2026-08-18T12:00:02.000Z",
+              }, testState.environment);
+              return Promise.resolve({
+                actualState: true,
+                reason: "exact target readback",
+              });
+            },
+          },
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        status: "reconciliation-observed",
+        receiptUnchanged: true,
+        providerWriteDispatched: false,
+        recoveryArtifactsReleased: false,
+      });
+      expect(readRunJournal(
+        PRESENCE_RUN_ID,
+        testState.environment,
+      )?.journal).toMatchObject({
+        status: "indeterminate",
+        ledgerState: "indeterminate",
+        recoveryState: "retained",
+        duplicateSuccessor: {
+          intentHash: "9".repeat(64),
+          runId: "90000000-0000-4000-8000-000000000009",
+        },
+      });
+      expect(listReconciliationObservations(
+        PRESENCE_RUN_ID,
+        testState.environment,
+      )).toHaveLength(1);
+      expect(readFileSync(
+        join(testState.directory, "runs", `${PRESENCE_RUN_ID}.json`),
+        "utf8",
+      )).toBe(receiptBefore);
+      expect(readFileSync(ledgerPath, "utf8")).toBe(ledgerBefore);
+      expect(readFileSync(capsulePath, "utf8")).toBe(capsuleBefore);
+      expect(readFileSync(targetPath, "utf8")).toBe(targetBefore);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

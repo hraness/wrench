@@ -94,6 +94,7 @@ export const wrenchUsage = `Usage:
 
   wrench invoke <adapter> <operation> [--input <json|@file|->] [--auth <id>]
                 [--preview | --cache-only | --projection-identity-only]
+                [--duplicate-risk-of <run-id>]
                 [--headed] [--json]
   wrench omni read --input <json|@file|->
                 [--cache-only | --identity-only | --from-exact-cache]

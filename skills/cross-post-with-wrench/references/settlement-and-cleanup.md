@@ -30,7 +30,21 @@ Do not put credentials, cookie values, response bodies, post text, or original l
 
 ## Create a fresh duplicate-tolerant intent
 
-Only proceed when the user freshly authorizes the exact platform, exact package, and possibility that each named unresolved run already created the post. Before previewing, append `duplicate-risk-of` links to those runs. Then perform the ordinary capability check, new preview, review, and one confirmation.
+Only proceed when the user freshly authorizes the exact platform, exact package, and possibility that the unresolved source run already created the post. Append the source link to the private task ledger, then create a fresh preview:
+
+```sh
+wrench invoke <adapter> posts.publish \
+  --input @/absolute/private/post-input.json \
+  --auth <bound-auth-id> \
+  --duplicate-risk-of <indeterminate-run-id> \
+  --preview --json
+```
+
+Version 1 accepts exactly one source run and only a one-dispatch R3 `web-session-api` `posts.publish` operation. An official OAuth or other `provider-api` attempt is ineligible. Wrench must prove that the source is an unclaimed, retained, terminal `indeterminate` run with the exact same adapter, auth realm, operation, risk, input, contract, receipt, journal, ledger, recovery capsule, and retained attachment bytes. A historical attempt under another contract or adapter remains in the task ledger but is not a valid source. Review the warning and successor fingerprint in the new preview, then confirm its digest once; never put `--duplicate-risk-of` on `wrench confirm`.
+
+Wrench permanently elects only one successor for the source and keeps successful successor idempotency evidence from expiring. If the source changes, reconciles, lacks exact retained evidence, already elected a successor, or fails any binding check, stop and report the refusal. Do not select a looser source, add a nonce, clear state, or bypass the check.
+
+If a duplicate-intent child fails before successor election, its dispatch remains at zero and the source can remain eligible; re-check both runs, then re-preview that same source to derive the same successor intent. If the source was elected but a later local journal step failed, the lineage is intentionally stranded and must not be retried. If a child becomes `indeterminate` after dispatch and another possible duplicate is freshly authorized, cite that eligible child—not any ancestor—to extend one linear chain. Never branch or reuse an already claimed source.
 
 This does not settle or replace an older run. Keep its Wrench ledger and recovery material intact, and reconcile it separately when exact evidence becomes available.
 

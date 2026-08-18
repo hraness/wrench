@@ -589,6 +589,25 @@ After a partial or indeterminate dispatch, Wrench does not retry or switch
 transport. The run remains unsettled until exact external evidence supports a
 separate reconciliation.
 
+An operator who explicitly accepts the risk of a duplicate may create one new
+intent from one terminal indeterminate `posts.publish` run:
+
+```sh
+wrench invoke <adapter> posts.publish --input @post.json --auth <id> \
+  --preview --duplicate-risk-of <source-run-id>
+wrench confirm <new-plan-digest>
+```
+
+This v1 path is limited to one started dispatch over the same reviewed R3 web
+session contract. Wrench revalidates the exact adapter, account realm,
+operation, normalized input (including attachment hashes), contract, source
+receipt, journal, ledger, and recovery capsule at preview and confirmation.
+The source run remains indeterminate and its evidence is never cleared or
+rewritten. Re-previewing the unchanged source produces the same successor
+intent; that successor has its own permanent at-most-once ledger. If the
+process exits after electing the successor but before starting its dispatch,
+the election remains fail-closed and must be inspected rather than retried.
+
 New previews use one environment-neutral durable contract identity. Readers
 also accept the exact predecessor identities produced by the standard `test`,
 `production`, and `development` modes. They do not accept a wildcard identity

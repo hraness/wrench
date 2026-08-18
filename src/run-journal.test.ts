@@ -283,6 +283,150 @@ describe("run journal reducer", () => {
     })).toThrow("verified dispatch");
   });
 
+  test("elects one immutable duplicate successor without releasing source evidence", () => {
+    const sourceInitial = parseRunJournal({
+      ...initial({ plannedDispatches: 1 }),
+      operation: "posts.publish",
+      risk: "R3",
+    });
+    const started = transitionRunJournal(ready(sourceInitial), {
+      type: "dispatch-started",
+      index: 1,
+      at: "2026-07-25T12:00:03.000Z",
+    });
+    const source = transitionRunJournal(started, {
+      type: "finished",
+      status: "indeterminate",
+      finalOrigin: null,
+      error: "provider outcome is uncertain",
+      at: "2026-07-25T12:00:04.000Z",
+    });
+    const claimed = transitionRunJournal(source, {
+      type: "duplicate-successor-claimed",
+      intentHash: "9".repeat(64),
+      runId: "33333333-3333-4333-8333-333333333333",
+      at: "2026-07-25T12:00:05.000Z",
+    });
+
+    expect(claimed).toMatchObject({
+      revision: source.revision + 1,
+      updatedAt: source.updatedAt,
+      status: "indeterminate",
+      ledgerState: "indeterminate",
+      recoveryState: "retained",
+      assetState: "retained",
+      duplicateSuccessor: {
+        schemaVersion: 1,
+        intentHash: "9".repeat(64),
+        sourceRunId: source.runId,
+        runId: "33333333-3333-4333-8333-333333333333",
+        claimedAt: "2026-07-25T12:00:05.000Z",
+      },
+    });
+    expect(parseRunJournal(JSON.parse(JSON.stringify(claimed)) as unknown))
+      .toEqual(claimed);
+    expect(() => parseRunJournal({
+      ...claimed,
+      duplicateSuccessor: {
+        ...claimed.duplicateSuccessor!,
+        runId: claimed.runId,
+      },
+    })).toThrow("contradictory source state");
+    expect(() => parseRunJournal({
+      ...claimed,
+      duplicateSuccessor: {
+        ...claimed.duplicateSuccessor!,
+        claimedAt: "2026-07-25T12:00:03.000Z",
+      },
+    })).toThrow("contradictory source state");
+    expect(() => transitionRunJournal(claimed, {
+      type: "recovery-released",
+      outcome: "applied",
+      at: "2026-07-25T12:00:06.000Z",
+    })).toThrow("duplicate successor intent was claimed");
+    const reconciledFirst = transitionRunJournal(source, {
+      type: "recovery-released",
+      outcome: "not-applied",
+      at: "2026-07-25T12:00:06.000Z",
+    });
+    expect(() => transitionRunJournal(reconciledFirst, {
+      type: "duplicate-successor-claimed",
+      intentHash: "9".repeat(64),
+      runId: "33333333-3333-4333-8333-333333333333",
+      at: "2026-07-25T12:00:07.000Z",
+    })).toThrow("retained terminal indeterminate");
+    expect(() => transitionRunJournal(claimed, {
+      type: "duplicate-successor-claimed",
+      intentHash: "8".repeat(64),
+      runId: "44444444-4444-4444-8444-444444444444",
+      at: "2026-07-25T12:00:06.000Z",
+    })).toThrow("different duplicate successor");
+
+    const childPrepared = initialRunJournal({
+      runId: claimed.duplicateSuccessor!.runId,
+      planDigest: "7".repeat(64),
+      adapter: claimed.adapter,
+      operation: "posts.publish",
+      risk: "R3",
+      inputHash: claimed.inputHash,
+      auth: claimed.auth,
+      contract: claimed.contract,
+      duplicateIntent: {
+        schemaVersion: 1,
+        intentHash: claimed.duplicateSuccessor!.intentHash,
+        sourceRunId: claimed.runId,
+      },
+      plannedDispatches: 1,
+      hasPlanAssets: true,
+      owner: claimed.owner,
+      startedAt,
+      dedupeExpiresAt: "2026-07-26T12:00:00.000Z",
+    });
+    const childReadyAtClaimCrash = ready(childPrepared);
+    const repairedChild = transitionRunJournal(childReadyAtClaimCrash, {
+      type: "finished",
+      status: "failed",
+      finalOrigin: null,
+      error: "process exited after source claim and before dispatch start",
+      at: "2026-07-25T12:00:06.000Z",
+    });
+    expect(repairedChild).toMatchObject({
+      phase: "terminal",
+      status: "failed",
+      dispatch: { planned: 1, started: 0, verified: 0 },
+      ledgerState: "released",
+      recoveryState: "released",
+      assetState: "released",
+      duplicateIntent: childPrepared.duplicateIntent,
+    });
+    // The source election is intentionally fail-closed even if the child exits
+    // in the tiny claim-to-dispatch-start window.
+    expect(claimed).toEqual(parseRunJournal(JSON.parse(JSON.stringify(claimed)) as unknown));
+
+    expect(() => initialRunJournal({
+      ...{
+        runId: "55555555-5555-4555-8555-555555555555",
+        planDigest: "7".repeat(64),
+        adapter: claimed.adapter,
+        operation: "posts.publish" as const,
+        risk: "R3" as const,
+        inputHash: claimed.inputHash,
+        auth: claimed.auth,
+        contract: claimed.contract,
+        plannedDispatches: 1,
+        hasPlanAssets: false,
+        owner: claimed.owner,
+        startedAt,
+        dedupeExpiresAt: "2026-07-26T12:00:00.000Z",
+      },
+      duplicateIntent: {
+        schemaVersion: 1,
+        intentHash: "9".repeat(64),
+        sourceRunId: "55555555-5555-4555-8555-555555555555",
+      },
+    })).toThrow("contradictory successor state");
+  });
+
   test("rejects skipped, duplicate, and contradictory progress", () => {
     const journal = ready();
     expect(() => transitionRunJournal(journal, {

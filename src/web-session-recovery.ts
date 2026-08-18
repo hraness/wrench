@@ -651,9 +651,8 @@ export async function reconcileWebSessionRun(
   }
   appendReconciliationObservation(observation, environment);
 
-  const recoveryArtifactsReleased =
-    observation.outcome === "desired-state-observed";
-  if (recoveryArtifactsReleased) {
+  let recoveryArtifactsReleased = false;
+  if (observation.outcome === "desired-state-observed") {
     try {
       const releaseKind = releaseReconciledRunRecovery(
         receipt.runId,
@@ -667,6 +666,8 @@ export async function reconcileWebSessionRun(
           ?? defaultReleaseRecoveryArtifacts
         )(receipt.runId, selected.planDigest, environment);
       }
+      recoveryArtifactsReleased =
+        releaseKind !== "journal-retained-for-duplicate-successor";
     } catch (error) {
       throw new Error(
         "the desired-state observation was stored, but its recovery artifacts could not be fully released; rerun reconciliation",

@@ -67,7 +67,7 @@ An unsettled target does not create authority to delete or repost on other platf
 
 Read [settlement and duplicate cleanup](references/settlement-and-cleanup.md) after confirmation. Give every attempt its own immutable ledger entry. Use exact returned locators and exact provider readback; never infer delivery from a cleared composer, a profile search, or matching text.
 
-A duplicate-tolerant action is a materially new intent, not a retry. Permit it only after explicit fresh authorization of the exact platform/package and duplicate risk, then create and confirm a new preview and link it to every prior uncertain attempt in the task ledger. Never clear, overwrite, or weaken an old Wrench ledger, receipt, recovery capsule, or attachment bundle.
+A duplicate-tolerant action is a materially new intent, not a retry. Permit it only after explicit fresh authorization of the exact platform/package and duplicate risk. In the current v1 workflow, create the new preview with one exact eligible source run via `--duplicate-risk-of <run-id>`; Wrench binds that run to one deterministic successor intent. Keep every other prior uncertain attempt linked separately in the task ledger. Never clear, overwrite, or weaken an old Wrench ledger, receipt, recovery capsule, or attachment bundle.
 
 Assess cleanup only through the installed canonical `content.delete` capability. If it is absent, `capture-required`, or blocked as R4, report cleanup as unavailable. Never use a semantic alias, raw HTTP, composer automation, or a capture session to perform deletion.
 

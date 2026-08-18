@@ -165,6 +165,112 @@ test("arbitrary JSON never bypasses strict journal parsing", () => {
   }));
 });
 
+test("duplicate intent lineage round-trips only in its exact bounded scope", () => {
+  assertProperty(fc.property(
+    fc.record({
+      assets: fc.boolean(),
+      intentNibble: fc.integer({ min: 0, max: 15 }),
+      claimStep: fc.integer({ min: 5, max: 3_600 }),
+    }),
+    ({ assets, intentNibble, claimStep }) => {
+      const intentHash = intentNibble.toString(16).repeat(64);
+      const sourceInitial = initialRunJournal({
+        runId: "11111111-1111-4111-8111-111111111111",
+        planDigest: "a".repeat(64),
+        adapter: {
+          id: "property-web",
+          version: "1.0.0",
+          hash: "b".repeat(64),
+        },
+        operation: "posts.publish",
+        risk: "R3",
+        inputHash: "c".repeat(64),
+        auth: {
+          id: "property-main",
+          hash: "d".repeat(64),
+          kind: "cookies-file",
+        },
+        contract: {
+          transport: "web-session-api",
+          hash: "e".repeat(64),
+        },
+        plannedDispatches: 1,
+        hasPlanAssets: assets,
+        owner: initial(1, assets).owner,
+        startedAt: timestamp(0),
+        dedupeExpiresAt: "2026-07-26T12:00:00.000Z",
+      });
+      let source = transitionRunJournal(sourceInitial, {
+        type: "confirmation-consumed",
+        at: timestamp(0),
+      });
+      source = transitionRunJournal(source, {
+        type: "ledger-claimed",
+        ledgerRelativePath: `idempotency/ff/${"f".repeat(64)}.json`,
+        at: timestamp(1),
+      });
+      source = transitionRunJournal(source, {
+        type: "recovery-stored",
+        at: timestamp(2),
+      });
+      source = transitionRunJournal(source, {
+        type: "dispatch-started",
+        index: 1,
+        at: timestamp(3),
+      });
+      source = transitionRunJournal(source, {
+        type: "finished",
+        status: "indeterminate",
+        finalOrigin: null,
+        error: "property fixture",
+        at: timestamp(4),
+      });
+      const claimed = transitionRunJournal(source, {
+        type: "duplicate-successor-claimed",
+        intentHash,
+        runId: "33333333-3333-4333-8333-333333333333",
+        at: timestamp(claimStep),
+      });
+      const child = initialRunJournal({
+        runId: claimed.duplicateSuccessor!.runId,
+        planDigest: "7".repeat(64),
+        adapter: claimed.adapter,
+        operation: claimed.operation,
+        risk: claimed.risk,
+        inputHash: claimed.inputHash,
+        auth: claimed.auth,
+        contract: claimed.contract,
+        duplicateIntent: {
+          schemaVersion: 1,
+          intentHash,
+          sourceRunId: claimed.runId,
+        },
+        plannedDispatches: 1,
+        hasPlanAssets: assets,
+        owner: claimed.owner,
+        startedAt: timestamp(0),
+        dedupeExpiresAt: "2026-07-26T12:00:00.000Z",
+      });
+
+      expect(parseRunJournal(JSON.parse(JSON.stringify(claimed)) as unknown))
+        .toEqual(claimed);
+      expect(parseRunJournal(JSON.parse(JSON.stringify(child)) as unknown))
+        .toEqual(child);
+      expect(() => parseRunJournal({
+        ...child,
+        dispatch: { ...child.dispatch, planned: 2 },
+      })).toThrow("contradictory successor state");
+      expect(() => parseRunJournal({
+        ...claimed,
+        duplicateSuccessor: {
+          ...claimed.duplicateSuccessor!,
+          claimedAt: timestamp(3),
+        },
+      })).toThrow("contradictory source state");
+    },
+  ));
+});
+
 test("portable identities round-trip exactly and nested extensions are always inert", () => {
   assertProperty(fc.property(
     fc.record({

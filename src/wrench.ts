@@ -1400,6 +1400,17 @@ function previewView(
     identityBinding: identityBindingView(operation, stored.plan.input, invocation.auth),
     transport: stored.plan.transport,
     contract: confirmationContractView(stored.plan),
+    ...(stored.plan.duplicateRisk === undefined
+      ? {}
+      : {
+          duplicateRisk: {
+            sourceRunId: stored.plan.duplicateRisk.sourceRunId,
+            successorIntentFingerprint:
+              stored.plan.duplicateRisk.intentHash.slice(0, 16),
+            warning:
+              "The source post may already exist. Confirming creates one distinct at-most-once successor intent and can publish a duplicate; the source evidence remains preserved.",
+          },
+        }),
     confirmCommand: `wrench confirm ${stored.digest}${headed ? " --headed" : ""}`,
   };
 }
@@ -2380,6 +2391,9 @@ async function runCommand(
     return 0;
   }
   if (arguments_.command === "invoke") {
+    if (arguments_.duplicateRiskOf.length > 0 && !arguments_.preview) {
+      throw new Error("--duplicate-risk-of requires an explicit --preview");
+    }
     const invocation = prepareInvocation(
       arguments_.adapterId,
       arguments_.operationId,
@@ -2400,6 +2414,11 @@ async function runCommand(
       throw new Error("invoke --projection-identity-only is available only for R1 capabilities");
     }
     if (operation.risk === "R1") {
+      if (arguments_.duplicateRiskOf.length > 0) {
+        throw new Error(
+          "--duplicate-risk-of is available only for one-dispatch R3 web-session posts.publish mutations",
+        );
+      }
       if (arguments_.projectionIdentityOnly) {
         const inputHash = sha256(canonicalJson(invocation.input));
         const authIdentity = invocation.readProjectionAuthIdentityHash;
@@ -2476,6 +2495,7 @@ async function runCommand(
       environment,
       new Date(),
       dependencies.providerPluginRegistry,
+      { duplicateRiskOf: arguments_.duplicateRiskOf },
     );
     printPreview(
       output,

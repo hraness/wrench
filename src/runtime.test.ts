@@ -60,6 +60,7 @@ import {
   prepareInvocation,
   purgeExpiredPlans,
   readRunReceipt,
+  releaseReconciledRunRecovery,
   repairInterruptedRunJournals,
   saveInvocationPlan,
   type StoredPlan,
@@ -2423,6 +2424,228 @@ describe("local at-most-once dispatch ledger", () => {
         },
       }))).toContain("reconcile it before retrying");
       expect(calls).toBe(1);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("binds one exact indeterminate web post to one permanent successor intent", async () => {
+    const testState = state();
+    try {
+      installManifest(xWebManifest(), {
+        force: false,
+        environment: testState.environment,
+      });
+      const selectedAuth = createAuth("x-web-test", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "123",
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const mediaPath = join(testState.directory, "duplicate-risk.png");
+      writeFileSync(mediaPath, Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      ]), { mode: 0o600 });
+      const invocation = prepareInvocation(
+        "x-web",
+        "posts.publish",
+        {
+          body: "one explicit duplicate-risk fixture",
+          media: mediaPath,
+          media_type: "image/png",
+        },
+        selectedAuth.id,
+        testState.environment,
+      );
+      const sourcePlan = createAndSaveInvocationPlan(
+        invocation,
+        testState.environment,
+      );
+      const sourceDispatch = sourcePlan.plan.dispatches[0];
+      if (sourceDispatch === undefined) throw new Error("source dispatch missing");
+      const source = await confirmInvocation(sourcePlan.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: async (_manifest, _recipe, _input, _auth, options) => {
+          await options?.beforeDispatch?.({
+            id: sourceDispatch.id,
+            index: 1,
+            progress: { planned: 1, started: 0, verified: 0 },
+          });
+          return {
+            status: "indeterminate",
+            output: null,
+            finalUrl: "https://x.com/i/status/123",
+            dispatchStarted: true,
+            dispatch: { planned: 1, started: 1, verified: 0 },
+            error: "synthetic response loss",
+          };
+        },
+      });
+      expect(source.receipt.status).toBe("indeterminate");
+      const sourceJournalBefore = readRunJournal(
+        source.receipt.runId,
+        testState.environment,
+      );
+      if (sourceJournalBefore === null || sourceJournalBefore.journal.ledgerRelativePath === null) {
+        throw new Error("source recovery journal missing");
+      }
+      const sourceReceiptPath = join(
+        testState.directory,
+        "runs",
+        `${source.receipt.runId}.json`,
+      );
+      const sourceLedgerPath = join(
+        testState.directory,
+        ...sourceJournalBefore.journal.ledgerRelativePath.split("/"),
+      );
+      const sourceCapsulePath = join(
+        testState.directory,
+        "recovery",
+        "capsules",
+        `${source.receipt.runId}.json`,
+      );
+      const sourceReceiptBytes = readFileSync(sourceReceiptPath, "utf8");
+      const sourceLedgerBytes = readFileSync(sourceLedgerPath, "utf8");
+      const sourceCapsuleBytes = readFileSync(sourceCapsulePath, "utf8");
+
+      const preflight = createAndSaveInvocationPlan(
+        invocation,
+        testState.environment,
+        new Date(),
+        providerPluginRegistry,
+        { duplicateRiskOf: [source.receipt.runId] },
+      );
+      const preflightResult = await confirmInvocation(preflight.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: () => Promise.resolve({
+          status: "failed",
+          output: null,
+          finalUrl: "https://x.com/home",
+          dispatchStarted: false,
+          dispatch: { planned: 1, started: 0, verified: 0 },
+          error: "synthetic pre-dispatch preflight failure",
+        }),
+      });
+      expect(preflightResult.receipt).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+      });
+      expect(readRunJournal(
+        source.receipt.runId,
+        testState.environment,
+      )?.journal.duplicateSuccessor).toBeUndefined();
+      expect(readFileSync(sourceReceiptPath, "utf8")).toBe(sourceReceiptBytes);
+      expect(readFileSync(sourceLedgerPath, "utf8")).toBe(sourceLedgerBytes);
+      expect(readFileSync(sourceCapsulePath, "utf8")).toBe(sourceCapsuleBytes);
+
+      const first = createAndSaveInvocationPlan(
+        invocation,
+        testState.environment,
+        new Date(),
+        providerPluginRegistry,
+        { duplicateRiskOf: [source.receipt.runId] },
+      );
+      const contender = createAndSaveInvocationPlan(
+        invocation,
+        testState.environment,
+        new Date(),
+        providerPluginRegistry,
+        { duplicateRiskOf: [source.receipt.runId] },
+      );
+      const intentHash = first.plan.duplicateRisk?.intentHash;
+      if (intentHash === undefined) throw new Error("duplicate intent hash missing");
+      expect(contender.plan.duplicateRisk?.intentHash).toBe(intentHash);
+      expect(preflight.plan.duplicateRisk?.intentHash).toBe(intentHash);
+      expect(first.plan.duplicateRisk).toMatchObject({
+        kind: "duplicate-risk",
+        sourceRunId: source.receipt.runId,
+        successorRunId: null,
+      });
+
+      let successorCalls = 0;
+      const successorDispatch = first.plan.dispatches[0];
+      if (successorDispatch === undefined) throw new Error("successor dispatch missing");
+      const successor = await confirmInvocation(first.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: async (_manifest, _recipe, _input, _auth, options) => {
+          successorCalls += 1;
+          await options?.beforeDispatch?.({
+            id: successorDispatch.id,
+            index: 1,
+            progress: { planned: 1, started: 0, verified: 0 },
+          });
+          await options?.afterDispatchVerified?.({
+            id: successorDispatch.id,
+            index: 1,
+            progress: { planned: 1, started: 1, verified: 1 },
+          });
+          return {
+            status: "succeeded",
+            output: { postId: "successor-123" },
+            finalUrl: "https://x.com/i/status/successor-123",
+            dispatchStarted: true,
+            dispatch: { planned: 1, started: 1, verified: 1 },
+          };
+        },
+      });
+      expect(successor.receipt.status).toBe("submitted");
+      expect(successorCalls).toBe(1);
+
+      const sourceJournalAfter = readRunJournal(
+        source.receipt.runId,
+        testState.environment,
+      );
+      expect(sourceJournalAfter?.journal.duplicateSuccessor).toMatchObject({
+        intentHash,
+        runId: successor.receipt.runId,
+      });
+      expect(readFileSync(sourceReceiptPath, "utf8")).toBe(sourceReceiptBytes);
+      expect(readFileSync(sourceLedgerPath, "utf8")).toBe(sourceLedgerBytes);
+      expect(readFileSync(sourceCapsulePath, "utf8")).toBe(sourceCapsuleBytes);
+
+      const successorJournal = readRunJournal(
+        successor.receipt.runId,
+        testState.environment,
+      );
+      if (successorJournal?.journal.ledgerRelativePath === null) {
+        throw new Error("successor ledger missing");
+      }
+      expect(successorJournal?.journal.duplicateIntent).toEqual({
+        schemaVersion: 1,
+        intentHash,
+        sourceRunId: source.receipt.runId,
+      });
+      const successorLedger = JSON.parse(readFileSync(join(
+        testState.directory,
+        ...(successorJournal?.journal.ledgerRelativePath ?? "").split("/"),
+      ), "utf8")) as Record<string, unknown>;
+      expect(successorLedger).toMatchObject({
+        schemaVersion: 3,
+        keyHash: intentHash,
+        duplicateIntentHash: intentHash,
+        status: "succeeded",
+      });
+
+      expect(await rejectionMessage(confirmInvocation(contender.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: () => {
+          successorCalls += 1;
+          return Promise.resolve(execution());
+        },
+      }))).toContain("unclaimed retained terminal indeterminate");
+      expect(successorCalls).toBe(1);
+      expect(releaseReconciledRunRecovery(
+        source.receipt.runId,
+        sha256(canonicalJson(source.receipt)),
+        testState.environment,
+      )).toBe("journal-retained-for-duplicate-successor");
+      expect(readFileSync(sourceLedgerPath, "utf8")).toBe(sourceLedgerBytes);
+      expect(readFileSync(sourceCapsulePath, "utf8")).toBe(sourceCapsuleBytes);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

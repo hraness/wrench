@@ -114,6 +114,7 @@ import {
   stagePlanAssets,
 } from "./plan-assets";
 import {
+  readRecoveryCapsule,
   removeProviderAcceptedMutationTargetEvidence,
   removeRecoveryCapsule,
   writeProviderAcceptedMutationTargetEvidence,
@@ -192,6 +193,31 @@ type InvocationPlanCommon = {
     readonly hash: string;
     readonly kind: WrenchAuth["kind"];
   };
+  readonly duplicateRisk?: InvocationDuplicateRiskV1;
+};
+
+export type InvocationDuplicateRiskV1 = {
+  readonly schemaVersion: 1;
+  readonly kind: "duplicate-risk";
+  readonly sourceRunId: string;
+  readonly sourcePlanDigest: string;
+  readonly sourceReceiptHash: string;
+  readonly sourceJournalHash: string;
+  readonly sourceJournalRevision: number;
+  readonly sourceLedgerHash: string;
+  readonly sourceCapsuleHash: string;
+  readonly scopeHash: string;
+  readonly intentHash: string;
+  readonly successorRunId: string | null;
+};
+
+export type CreateInvocationPlanOptions = {
+  /**
+   * Explicit prior uncertain runs accepted as duplicate risks. Version 1 is
+   * deliberately limited to exactly one retained indeterminate posts.publish
+   * dispatch.
+   */
+  readonly duplicateRiskOf?: readonly string[];
 };
 
 export type InvocationPlan = InvocationPlanCommon & (
@@ -1213,6 +1239,263 @@ export function createInvocationPlan(
   return { digest: sha256(canonicalJson(plan)), plan };
 }
 
+const DUPLICATE_RISK_SCOPE_DOMAIN = "wrench-duplicate-risk-scope-v1\0";
+const DUPLICATE_RISK_INTENT_DOMAIN = "wrench-duplicate-risk-intent-v1\0";
+
+function planRecoveryContract(plan: InvocationPlan): RecoveryContractIdentity {
+  if (plan.transport === "portable-provider-plugin") {
+    return {
+      transport: "portable-provider-plugin",
+      identity: plan.portablePluginContract,
+    };
+  }
+  if (plan.transport === "provider-api") {
+    return {
+      transport: "provider-api",
+      provider: plan.providerContract.provider,
+      action: plan.providerContract.action,
+      version: plan.providerContract.version,
+      hash: plan.providerContract.hash,
+    };
+  }
+  if (plan.transport === "web-session-api") {
+    return {
+      transport: "web-session-api",
+      site: plan.webSessionContract.site,
+      action: plan.webSessionContract.action,
+      version: plan.webSessionContract.version,
+      hash: plan.webSessionContract.hash,
+    };
+  }
+  if (plan.transport === "reviewed-template-api") {
+    return {
+      transport: "reviewed-template-api",
+      version: 1,
+      hash: plan.reviewedTemplateContract.hash,
+    };
+  }
+  throw new Error(
+    "duplicate-tolerant fresh intents require a code-owned provider transport",
+  );
+}
+
+function planRunJournalContract(plan: InvocationPlan): RunJournal["contract"] {
+  const contract = planRecoveryContract(plan);
+  return contract.transport === "portable-provider-plugin"
+    ? contract
+    : { transport: contract.transport, hash: contract.hash };
+}
+
+function planFileInputs(input: OperationInput): readonly FileInputValue[] {
+  const files: FileInputValue[] = [];
+  for (const value of Object.values(input)) {
+    if (isInputArray(value)) {
+      for (const item of value) if (isFileInputValue(item)) files.push(item);
+    } else if (isFileInputValue(value)) files.push(value);
+  }
+  return Object.freeze(files);
+}
+
+function duplicateRiskScopeHash(plan: InvocationPlan): string {
+  return sha256(`${DUPLICATE_RISK_SCOPE_DOMAIN}${canonicalJson({
+    adapter: plan.adapter,
+    operation: plan.operation,
+    risk: plan.risk,
+    input: plan.input,
+    inputHash: plan.inputHash,
+    dispatches: plan.dispatches,
+    auth: plan.auth,
+    contract: planRecoveryContract(plan),
+  })}`);
+}
+
+function resolveInvocationDuplicateRisk(
+  plan: InvocationPlan,
+  requestedRunIds: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>,
+): InvocationDuplicateRiskV1 | undefined {
+  if (requestedRunIds.length === 0) return undefined;
+  if (
+    requestedRunIds.length !== 1
+    || new Set(requestedRunIds).size !== 1
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+      requestedRunIds[0] ?? "",
+    )
+  ) {
+    throw new Error(
+      "duplicate-tolerant intent v1 requires exactly one lowercase UUID source run",
+    );
+  }
+  if (
+    plan.operation !== "posts.publish"
+    || plan.risk !== "R3"
+    || plan.dispatches.length !== 1
+    || plan.transport !== "web-session-api"
+  ) {
+    throw new Error(
+      "duplicate-tolerant intent v1 supports only one-dispatch authenticated-session posts.publish writes",
+    );
+  }
+  const sourceRunId = requestedRunIds[0] as string;
+  const source = readRunJournal(sourceRunId, environment);
+  if (source === null) {
+    throw new Error(`duplicate-risk source run ${sourceRunId} has no durable journal`);
+  }
+  const journal = source.journal;
+  if (
+    journal.operation !== "posts.publish"
+    || journal.phase !== "terminal"
+    || journal.status !== "indeterminate"
+    || journal.dispatch.planned !== 1
+    || journal.dispatch.started !== 1
+    || journal.ledgerState !== "indeterminate"
+    || journal.recoveryState !== "retained"
+    || journal.duplicateSuccessor !== undefined
+  ) {
+    throw new Error(
+      `duplicate-risk source run ${sourceRunId} is not an unclaimed retained terminal indeterminate posts.publish dispatch`,
+    );
+  }
+  if (
+    canonicalJson(journal.adapter) !== canonicalJson(plan.adapter)
+    || journal.operation !== plan.operation
+    || journal.risk !== plan.risk
+    || journal.inputHash !== plan.inputHash
+    || canonicalJson(journal.auth) !== canonicalJson(plan.auth)
+    || canonicalJson(journal.contract)
+      !== canonicalJson(planRunJournalContract(plan))
+  ) {
+    throw new Error(
+      `duplicate-risk source run ${sourceRunId} does not match the exact adapter, auth, operation, risk, and input scope`,
+    );
+  }
+  const receipt = readRunReceipt(sourceRunId, environment);
+  if (
+    canonicalJson(receipt) !== canonicalJson(runJournalReceipt(journal))
+    || receipt.status !== "indeterminate"
+    || receipt.planDigest !== journal.planDigest
+  ) {
+    throw new Error(
+      `duplicate-risk source run ${sourceRunId} receipt does not match its durable journal`,
+    );
+  }
+  const capsule = readRecoveryCapsule(
+    sourceRunId,
+    journal.auth.id,
+    journal.auth.hash,
+    environment,
+  );
+  if (
+    capsule === null
+    || capsule.runId !== sourceRunId
+    || capsule.planDigest !== journal.planDigest
+    || canonicalJson(capsule.adapter) !== canonicalJson(plan.adapter)
+    || capsule.operation !== plan.operation
+    || capsule.risk !== plan.risk
+    || capsule.inputHash !== plan.inputHash
+    || canonicalJson(capsule.input) !== canonicalJson(plan.input)
+    || canonicalJson(capsule.auth) !== canonicalJson(plan.auth)
+    || canonicalJson(capsule.contract) !== canonicalJson(planRecoveryContract(plan))
+  ) {
+    throw new Error(
+      `duplicate-risk source run ${sourceRunId} capsule does not match the exact new intent scope`,
+    );
+  }
+  const ledgers = matchingJournalLedgers(journal, environment);
+  const ledger = ledgers[0];
+  if (
+    ledgers.length !== 1
+    || ledger === undefined
+    || ledger.entry.status !== "indeterminate"
+    || canonicalJson(ledger.entry.dispatch) !== canonicalJson(journal.dispatch)
+  ) {
+    throw new Error(
+      `duplicate-risk source run ${sourceRunId} does not retain one exact indeterminate ledger`,
+    );
+  }
+  const sourceFiles = planFileInputs(capsule.input);
+  if (
+    journal.planHasAssets !== (sourceFiles.length > 0)
+    || (
+      sourceFiles.length > 0
+      && journal.assetState !== "retained"
+    )
+  ) {
+    throw new Error(
+      `duplicate-risk source run ${sourceRunId} retained attachment state is inconsistent`,
+    );
+  }
+  if (sourceFiles.length > 0) {
+    resolvePlanAssetFiles(sourceFiles, journal.planDigest, environment);
+  }
+  const scopeHash = duplicateRiskScopeHash(plan);
+  const intentHash = sha256(
+    `${DUPLICATE_RISK_INTENT_DOMAIN}${scopeHash}\0${sourceRunId}\0${journal.planDigest}`,
+  );
+  return Object.freeze({
+    schemaVersion: 1,
+    kind: "duplicate-risk",
+    sourceRunId,
+    sourcePlanDigest: journal.planDigest,
+    sourceReceiptHash: sha256(canonicalJson(receipt)),
+    sourceJournalHash: source.contentSha256,
+    sourceJournalRevision: journal.revision,
+    sourceLedgerHash: ledger.contentSha256,
+    sourceCapsuleHash: sha256(canonicalJson(capsule)),
+    scopeHash,
+    intentHash,
+    successorRunId: null,
+  });
+}
+
+function claimDuplicateRiskSource(
+  binding: InvocationDuplicateRiskV1,
+  successorRunId: string,
+  environment: Readonly<Record<string, string | undefined>>,
+  now: Date,
+): void {
+  const source = readRunJournal(binding.sourceRunId, environment);
+  if (
+    source === null
+    || source.contentSha256 !== binding.sourceJournalHash
+    || source.journal.revision !== binding.sourceJournalRevision
+    || source.journal.planDigest !== binding.sourcePlanDigest
+    || source.journal.duplicateSuccessor !== undefined
+  ) {
+    throw new Error(
+      "duplicate-risk source journal changed before successor election",
+    );
+  }
+  const receipt = readRunReceipt(binding.sourceRunId, environment);
+  const capsule = readRecoveryCapsule(
+    binding.sourceRunId,
+    source.journal.auth.id,
+    source.journal.auth.hash,
+    environment,
+  );
+  const ledgers = matchingJournalLedgers(source.journal, environment);
+  if (
+    sha256(canonicalJson(receipt)) !== binding.sourceReceiptHash
+    || capsule === null
+    || sha256(canonicalJson(capsule)) !== binding.sourceCapsuleHash
+    || ledgers.length !== 1
+    || ledgers[0]?.contentSha256 !== binding.sourceLedgerHash
+  ) {
+    throw new Error(
+      "duplicate-risk source receipt, capsule, or ledger changed before successor election",
+    );
+  }
+  updateRunJournal(source, {
+    type: "duplicate-successor-claimed",
+    intentHash: binding.intentHash,
+    runId: successorRunId,
+    at: new Date(Math.max(
+      now.getTime(),
+      Date.parse(source.journal.updatedAt),
+    )).toISOString(),
+  }, environment);
+}
+
 /**
  * Atomically bind mutable attachment paths into a private, content-addressed
  * preview bundle and persist the encrypted plan that references that bundle.
@@ -1222,6 +1505,7 @@ export function createAndSaveInvocationPlan(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   now = new Date(),
   registry: ProviderPluginRegistry = providerPluginRegistry,
+  options: CreateInvocationPlanOptions = {},
 ): StoredPlan {
   const checked = revalidatePreparedInvocation(invocation, registry);
   const portableIdentity = checked.invocation.portablePluginContract ?? null;
@@ -1239,6 +1523,7 @@ export function createAndSaveInvocationPlan(
           environment,
           now,
           registry,
+          options,
         );
       },
     );
@@ -1248,6 +1533,7 @@ export function createAndSaveInvocationPlan(
     environment,
     now,
     registry,
+    options,
   );
 }
 
@@ -1256,6 +1542,7 @@ function createAndSaveInvocationPlanUnlocked(
   environment: Readonly<Record<string, string | undefined>>,
   now: Date,
   registry: ProviderPluginRegistry,
+  options: CreateInvocationPlanOptions,
 ): StoredPlan {
   const checked = revalidatePreparedInvocation(invocation, registry);
   invocation = checked.invocation;
@@ -1263,11 +1550,22 @@ function createAndSaveInvocationPlanUnlocked(
   purgeExpiredPlans(environment);
   const staged = stagePlanAssets(invocation.input, operation.input, environment);
   try {
-    const stored = createInvocationPlan(
+    const base = createInvocationPlan(
       { ...invocation, input: staged.input },
       now,
       registry,
     );
+    const duplicateRisk = resolveInvocationDuplicateRisk(
+      base.plan,
+      options.duplicateRiskOf ?? [],
+      environment,
+    );
+    const plan: InvocationPlan = duplicateRisk === undefined
+      ? base.plan
+      : { ...base.plan, duplicateRisk };
+    const stored: StoredPlan = duplicateRisk === undefined
+      ? base
+      : { digest: sha256(canonicalJson(plan)), plan };
     const claim = acquireConfirmationClaim(
       stored.digest,
       crypto.randomUUID(),
@@ -1399,6 +1697,64 @@ function parsePlanInput(value: Record<string, unknown>): OperationInput {
   return output;
 }
 
+function parseInvocationDuplicateRisk(
+  value: unknown,
+): InvocationDuplicateRiskV1 {
+  if (
+    !isRecord(value)
+    || !hasExactKeys(value, [
+      "schemaVersion",
+      "kind",
+      "sourceRunId",
+      "sourcePlanDigest",
+      "sourceReceiptHash",
+      "sourceJournalHash",
+      "sourceJournalRevision",
+      "sourceLedgerHash",
+      "sourceCapsuleHash",
+      "scopeHash",
+      "intentHash",
+      "successorRunId",
+    ])
+    || value.schemaVersion !== 1
+    || value.kind !== "duplicate-risk"
+    || typeof value.sourceRunId !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.sourceRunId)
+    || value.successorRunId !== null
+    || !Number.isSafeInteger(value.sourceJournalRevision)
+    || typeof value.sourceJournalRevision !== "number"
+    || value.sourceJournalRevision < 0
+  ) {
+    throw new Error("stored duplicate-risk binding is malformed");
+  }
+  const hashes = [
+    value.sourcePlanDigest,
+    value.sourceReceiptHash,
+    value.sourceJournalHash,
+    value.sourceLedgerHash,
+    value.sourceCapsuleHash,
+    value.scopeHash,
+    value.intentHash,
+  ];
+  if (hashes.some((hash) => typeof hash !== "string" || !/^[a-f0-9]{64}$/u.test(hash))) {
+    throw new Error("stored duplicate-risk binding hashes are malformed");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    kind: "duplicate-risk",
+    sourceRunId: value.sourceRunId,
+    sourcePlanDigest: value.sourcePlanDigest as string,
+    sourceReceiptHash: value.sourceReceiptHash as string,
+    sourceJournalHash: value.sourceJournalHash as string,
+    sourceJournalRevision: value.sourceJournalRevision,
+    sourceLedgerHash: value.sourceLedgerHash as string,
+    sourceCapsuleHash: value.sourceCapsuleHash as string,
+    scopeHash: value.scopeHash as string,
+    intentHash: value.intentHash as string,
+    successorRunId: null,
+  });
+}
+
 function parseStoredPlan(value: unknown): StoredPlan {
   if (!isRecord(value) || !hasExactKeys(value, ["digest", "plan"]) || typeof value.digest !== "string" || !/^[a-f0-9]{64}$/u.test(value.digest) || !isRecord(value.plan)) {
     throw new Error("stored plan is malformed");
@@ -1413,6 +1769,7 @@ function parseStoredPlan(value: unknown): StoredPlan {
   if (webSessionPlan) planKeys.push("webSessionContract");
   if (reviewedTemplatePlan) planKeys.push("reviewedTemplateContract");
   if (portablePluginPlan) planKeys.push("portablePluginContract");
+  if (Object.hasOwn(raw, "duplicateRisk")) planKeys.push("duplicateRisk");
   if (!hasExactKeys(raw, planKeys)) {
     throw new Error("stored plan is malformed");
   }
@@ -1575,7 +1932,21 @@ function parseStoredPlan(value: unknown): StoredPlan {
     inputHash,
     dispatches,
     auth: { id: auth.id, hash: auth.hash, kind: auth.kind },
+    ...(Object.hasOwn(raw, "duplicateRisk")
+      ? { duplicateRisk: parseInvocationDuplicateRisk(raw.duplicateRisk) }
+      : {}),
   };
+  if (
+    common.duplicateRisk !== undefined
+    && (
+      operation !== "posts.publish"
+      || risk !== "R3"
+      || dispatches.length !== 1
+      || transport !== "web-session-api"
+    )
+  ) {
+    throw new Error("stored duplicate-risk plan is outside the supported v1 scope");
+  }
   const plan: InvocationPlan =
     portablePluginPlan && portablePluginContract !== null
       ? {
@@ -1940,7 +2311,7 @@ function validateFreshPlan(
 }
 
 type LedgerEntry = {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 2 | 3;
   readonly keyHash: string;
   readonly adapterHash: string;
   readonly authHash: string;
@@ -1951,6 +2322,7 @@ type LedgerEntry = {
   readonly runId: string;
   readonly updatedAt: string;
   readonly expiresAt: string;
+  readonly duplicateIntentHash?: string;
 };
 
 type LedgerSnapshot = {
@@ -1984,8 +2356,13 @@ function ledgerPath(
   operationId: string,
   inputHash: string,
   environment: Readonly<Record<string, string | undefined>>,
+  duplicateIntentHash?: string,
 ): string {
-  const bucket = sha256(`${adapterHash}\0${authHashValue}\0${operationId}\0${inputHash}`);
+  const bucket = sha256(
+    duplicateIntentHash === undefined
+      ? `${adapterHash}\0${authHashValue}\0${operationId}\0${inputHash}`
+      : `${adapterHash}\0${authHashValue}\0${operationId}\0${inputHash}\0duplicate-intent-v1\0${duplicateIntentHash}`,
+  );
   return join(wrenchStateHome(environment), "idempotency", bucket.slice(0, 2), `${bucket}.json`);
 }
 
@@ -1995,9 +2372,13 @@ function parseLedger(value: unknown): LedgerEntry {
   }
   const record = value;
   const legacy = record.schemaVersion === 1;
+  const duplicateIntent = record.schemaVersion === 3;
   const keys = legacy
     ? ["schemaVersion", "keyHash", "adapterHash", "authHash", "inputHash", "planDigest", "status", "runId", "updatedAt", "expiresAt"]
-    : ["schemaVersion", "keyHash", "adapterHash", "authHash", "inputHash", "planDigest", "status", "dispatch", "runId", "updatedAt", "expiresAt"];
+    : [
+        "schemaVersion", "keyHash", "adapterHash", "authHash", "inputHash", "planDigest", "status", "dispatch", "runId", "updatedAt", "expiresAt",
+        ...(duplicateIntent ? ["duplicateIntentHash"] : []),
+      ];
   if (!hasExactKeys(record, keys)) throw new Error("idempotency ledger is malformed");
   const legacyStatus = record.status === "pending" || record.status === "succeeded" || record.status === "indeterminate";
   const currentStatus = legacyStatus || record.status === "partial";
@@ -2007,7 +2388,7 @@ function parseLedger(value: unknown): LedgerEntry {
       : { planned: 1, started: 1, verified: 0 }
     : isDispatchProgress(record.dispatch) ? record.dispatch : { planned: -1, started: -1, verified: -1 };
   if (
-    (!legacy && record.schemaVersion !== 2)
+    (!legacy && record.schemaVersion !== 2 && record.schemaVersion !== 3)
     || typeof record.keyHash !== "string"
     || typeof record.adapterHash !== "string"
     || typeof record.authHash !== "string"
@@ -2019,6 +2400,14 @@ function parseLedger(value: unknown): LedgerEntry {
     || typeof record.updatedAt !== "string"
     || typeof record.expiresAt !== "string"
   ) throw new Error("idempotency ledger is malformed");
+  if (
+    duplicateIntent
+    && (
+      typeof record.duplicateIntentHash !== "string"
+      || !/^[a-f0-9]{64}$/u.test(record.duplicateIntentHash)
+      || record.keyHash !== record.duplicateIntentHash
+    )
+  ) throw new Error("duplicate-intent ledger is malformed");
   if (![record.keyHash, record.adapterHash, record.authHash, record.inputHash, record.planDigest].every((candidate) => /^[a-f0-9]{64}$/u.test(candidate))) {
     throw new Error("idempotency ledger hashes are malformed");
   }
@@ -2026,7 +2415,7 @@ function parseLedger(value: unknown): LedgerEntry {
     throw new Error("idempotency ledger metadata is malformed");
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: duplicateIntent ? 3 : 2,
     keyHash: record.keyHash,
     adapterHash: record.adapterHash,
     authHash: record.authHash,
@@ -2037,6 +2426,9 @@ function parseLedger(value: unknown): LedgerEntry {
     runId: record.runId,
     updatedAt: record.updatedAt,
     expiresAt: record.expiresAt,
+    ...(duplicateIntent
+      ? { duplicateIntentHash: record.duplicateIntentHash as string }
+      : {}),
   };
 }
 
@@ -2076,7 +2468,11 @@ function acquireLedger(
       throw new Error("idempotency ledger is malformed");
     }
     const existing = parseLedger(existingValue);
-    if (existing.status !== "succeeded" || Date.parse(existing.expiresAt) >= now.getTime()) {
+    if (
+      existing.schemaVersion === 3
+      || existing.status !== "succeeded"
+      || Date.parse(existing.expiresAt) >= now.getTime()
+    ) {
       return { acquired: false, existing };
     }
     // Successful generations are immutable once their window expires. Every contender
@@ -2093,6 +2489,9 @@ function updateLedger(
 ): LedgerSnapshot {
   if (
     current.entry.runId !== entry.runId
+    || current.entry.schemaVersion !== entry.schemaVersion
+    || current.entry.keyHash !== entry.keyHash
+    || current.entry.duplicateIntentHash !== entry.duplicateIntentHash
     || current.entry.adapterHash !== entry.adapterHash
     || current.entry.authHash !== entry.authHash
     || current.entry.inputHash !== entry.inputHash
@@ -2190,8 +2589,8 @@ function runJournalLedgerEntry(journal: RunJournal): LedgerEntry {
     throw new Error("released run journals have no ledger projection");
   }
   return {
-    schemaVersion: 2,
-    keyHash: journal.inputHash,
+    schemaVersion: journal.duplicateIntent === undefined ? 2 : 3,
+    keyHash: journal.duplicateIntent?.intentHash ?? journal.inputHash,
     adapterHash: journal.adapter.hash,
     authHash: journal.auth.hash,
     inputHash: journal.inputHash,
@@ -2201,6 +2600,9 @@ function runJournalLedgerEntry(journal: RunJournal): LedgerEntry {
     runId: journal.runId,
     updatedAt: journal.updatedAt,
     expiresAt: journal.dedupeExpiresAt,
+    ...(journal.duplicateIntent === undefined
+      ? {}
+      : { duplicateIntentHash: journal.duplicateIntent.intentHash }),
   };
 }
 
@@ -2259,7 +2661,8 @@ function ledgerBelongsToJournal(
     && ledger.adapterHash === journal.adapter.hash
     && ledger.authHash === journal.auth.hash
     && ledger.inputHash === journal.inputHash
-    && ledger.keyHash === journal.inputHash
+    && ledger.keyHash === (journal.duplicateIntent?.intentHash ?? journal.inputHash)
+    && ledger.duplicateIntentHash === journal.duplicateIntent?.intentHash
     && ledger.planDigest === journal.planDigest;
 }
 
@@ -2282,6 +2685,7 @@ function matchingJournalLedgers(
     journal.operation,
     journal.inputHash,
     environment,
+    journal.duplicateIntent?.intentHash,
   );
   const directory = dirname(base);
   const stem = basename(base, ".json");
@@ -2635,7 +3039,10 @@ export function releaseReconciledRunRecovery(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   now = new Date(),
   outcome: "applied" | "not-applied" = "applied",
-): "journal-released" | "legacy-no-journal" {
+):
+  | "journal-released"
+  | "journal-retained-for-duplicate-successor"
+  | "legacy-no-journal" {
   if (!/^[a-f0-9]{64}$/u.test(expectedReceiptHash)) {
     throw new Error("reconciliation receipt hash is malformed");
   }
@@ -2660,15 +3067,26 @@ export function releaseReconciledRunRecovery(
       "run journal no longer matches the reconciled receipt",
     );
   }
+  if (snapshot.journal.duplicateSuccessor !== undefined) {
+    return "journal-retained-for-duplicate-successor";
+  }
   if (snapshot.journal.recoveryState !== "released") {
-    snapshot = updateRunJournal(snapshot, {
-      type: "recovery-released",
-      outcome,
-      at: new Date(Math.max(
-        now.getTime(),
-        Date.parse(snapshot.journal.updatedAt),
-      )).toISOString(),
-    }, environment);
+    try {
+      snapshot = updateRunJournal(snapshot, {
+        type: "recovery-released",
+        outcome,
+        at: new Date(Math.max(
+          now.getTime(),
+          Date.parse(snapshot.journal.updatedAt),
+        )).toISOString(),
+      }, environment);
+    } catch (error) {
+      const raced = readRunJournal(runId, environment);
+      if (raced?.journal.duplicateSuccessor !== undefined) {
+        return "journal-retained-for-duplicate-successor";
+      }
+      throw error;
+    }
   } else {
     // Re-enter the pure transition to verify an idempotent retry carries the
     // same reconciliation outcome as the durable journal.
@@ -2946,6 +3364,7 @@ type RunPreparedOptions = {
   readonly hasPlanAssets?: boolean;
   readonly runId?: string;
   readonly confirmationClaim?: ConfirmationClaimSnapshot;
+  readonly duplicateRisk?: InvocationDuplicateRiskV1;
   readonly signal?: AbortSignal;
   readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
   readonly persistReceipt?: (
@@ -3169,6 +3588,15 @@ async function runPreparedCore(
               transport: contract.transport,
               hash: contract.hash,
             },
+        ...(options.duplicateRisk === undefined
+          ? {}
+          : {
+              duplicateIntent: {
+                schemaVersion: 1 as const,
+                intentHash: options.duplicateRisk.intentHash,
+                sourceRunId: options.duplicateRisk.sourceRunId,
+              },
+            }),
         plannedDispatches: planned,
         hasPlanAssets: options.hasPlanAssets === true,
         owner: {
@@ -3289,10 +3717,17 @@ async function runPreparedCore(
   }
   if (isWrite) {
     if (planDigest === null) throw new Error("remote writes require a confirmation plan");
-    const path = ledgerPath(adapter.hash, auth.hash, invocation.operationId, inputHash, options.environment);
+    const path = ledgerPath(
+      adapter.hash,
+      auth.hash,
+      invocation.operationId,
+      inputHash,
+      options.environment,
+      options.duplicateRisk?.intentHash,
+    );
     const entry: LedgerEntry = {
-      schemaVersion: 2,
-      keyHash: inputHash,
+      schemaVersion: options.duplicateRisk === undefined ? 2 : 3,
+      keyHash: options.duplicateRisk?.intentHash ?? inputHash,
       adapterHash: adapter.hash,
       authHash: auth.hash,
       inputHash,
@@ -3302,6 +3737,9 @@ async function runPreparedCore(
       runId,
       updatedAt: startedAt,
       expiresAt: new Date(Date.parse(startedAt) + operation.dedupeWindowMs).toISOString(),
+      ...(options.duplicateRisk === undefined
+        ? {}
+        : { duplicateIntentHash: options.duplicateRisk.intentHash }),
     };
     let acquired: ReturnType<typeof acquireLedger>;
     try {
@@ -3387,6 +3825,7 @@ async function runPreparedCore(
       });
     }
   }
+  let duplicateSourceClaimed = false;
   const persistDispatchProgress = (
     event: BrowserDispatchEvent | ProviderDispatchEvent | WebSessionDispatchEvent | ReviewedTemplateDispatchEvent,
     phase: "starting" | "verified",
@@ -3428,6 +3867,20 @@ async function runPreparedCore(
         : "verified dispatch progress was stored; execution has not reached a durable final outcome",
     };
     try {
+      if (
+        phase === "starting"
+        && event.index === 1
+        && options.duplicateRisk !== undefined
+        && !duplicateSourceClaimed
+      ) {
+        claimDuplicateRiskSource(
+          options.duplicateRisk,
+          runId,
+          options.environment,
+          options.now ?? new Date(),
+        );
+        duplicateSourceClaimed = true;
+      }
       if (journal !== null) {
         journal = updateRunJournal(journal, {
           type: phase === "starting" ? "dispatch-started" : "dispatch-verified",
@@ -3966,6 +4419,21 @@ export async function confirmInvocation(
       registry,
       loadManifest,
     );
+    if (stored.plan.duplicateRisk !== undefined) {
+      const current = resolveInvocationDuplicateRisk(
+        stored.plan,
+        [stored.plan.duplicateRisk.sourceRunId],
+        environment,
+      );
+      if (
+        current === undefined
+        || canonicalJson(current) !== canonicalJson(stored.plan.duplicateRisk)
+      ) {
+        throw new Error(
+          "duplicate-risk source evidence changed after preview; inspect the source run and preview again",
+        );
+      }
+    }
   } finally {
     if (invocation === null && stored !== null) {
       if (removePrivateStateFile(planPath(digest, environment), environment)) {
@@ -4008,6 +4476,9 @@ export async function confirmInvocation(
       runId,
       confirmationClaim: claim,
       confirmedDispatches: stored.plan.dispatches,
+      ...(stored.plan.duplicateRisk === undefined
+        ? {}
+        : { duplicateRisk: stored.plan.duplicateRisk }),
       ...(options.now === undefined ? {} : { now: options.now }),
       ...(options.executeRecipe === undefined ? {} : { executeRecipe: options.executeRecipe }),
       ...(options.executeProvider === undefined ? {} : { executeProvider: options.executeProvider }),

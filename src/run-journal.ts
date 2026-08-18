@@ -58,6 +58,17 @@ export type RunJournalDispatch = {
   readonly verified: number;
 };
 
+export type DuplicateIntentV1 = {
+  readonly schemaVersion: 1;
+  readonly intentHash: string;
+  readonly sourceRunId: string;
+};
+
+export type DuplicateSuccessorV1 = DuplicateIntentV1 & {
+  readonly runId: string;
+  readonly claimedAt: string;
+};
+
 export type RunJournal = {
   readonly schemaVersion: 1;
   readonly revision: number;
@@ -77,6 +88,8 @@ export type RunJournal = {
     readonly kind: WrenchAuth["kind"];
   };
   readonly contract: RunJournalContract;
+  readonly duplicateIntent?: DuplicateIntentV1;
+  readonly duplicateSuccessor?: DuplicateSuccessorV1;
   readonly planHasAssets: boolean;
   /** Whether the encrypted confirmation plan is still independently usable. */
   readonly planState: "available" | "consumed";
@@ -115,6 +128,7 @@ export type StartRunJournal = {
   readonly inputHash: string;
   readonly auth: RunJournal["auth"];
   readonly contract: RunJournalContract;
+  readonly duplicateIntent?: DuplicateIntentV1;
   readonly plannedDispatches: number;
   readonly hasPlanAssets: boolean;
   readonly owner: RunJournal["owner"];
@@ -168,6 +182,13 @@ export type RunJournalEvent =
   | {
       readonly type: "lease-renewed";
       readonly leaseUntil: string;
+      readonly at: string;
+    }
+  | {
+      /** Permanently elect the sole duplicate-tolerant successor intent. */
+      readonly type: "duplicate-successor-claimed";
+      readonly intentHash: string;
+      readonly runId: string;
       readonly at: string;
     };
 
@@ -229,6 +250,48 @@ function digest(value: unknown, label: string): string {
     throw new Error(`${label} is malformed`);
   }
   return value;
+}
+
+function runId(value: unknown, label: string): string {
+  if (
+    typeof value !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
+  ) throw new Error(`${label} is malformed`);
+  return value;
+}
+
+function parseDuplicateIntent(
+  value: unknown,
+  label: string,
+): DuplicateIntentV1 {
+  const record = dataRecord(value, label);
+  exactKeys(record, ["schemaVersion", "intentHash", "sourceRunId"], label);
+  if (record.schemaVersion !== 1) throw new Error(`${label} is malformed`);
+  return Object.freeze({
+    schemaVersion: 1,
+    intentHash: digest(record.intentHash, `${label} intent hash`),
+    sourceRunId: runId(record.sourceRunId, `${label} source run ID`),
+  });
+}
+
+function parseDuplicateSuccessor(
+  value: unknown,
+): DuplicateSuccessorV1 {
+  const label = "run journal duplicate successor";
+  const record = dataRecord(value, label);
+  exactKeys(
+    record,
+    ["schemaVersion", "intentHash", "sourceRunId", "runId", "claimedAt"],
+    label,
+  );
+  if (record.schemaVersion !== 1) throw new Error(`${label} is malformed`);
+  return Object.freeze({
+    schemaVersion: 1,
+    intentHash: digest(record.intentHash, `${label} intent hash`),
+    sourceRunId: runId(record.sourceRunId, `${label} source run ID`),
+    runId: runId(record.runId, `${label} run ID`),
+    claimedAt: timestamp(record.claimedAt, `${label} claim time`),
+  });
 }
 
 function boundedString(
@@ -396,6 +459,37 @@ function ledgerRelativePath(value: unknown): string | null {
 
 function assertJournalInvariants(value: RunJournal): void {
   const { dispatch } = value;
+  if (
+    value.duplicateIntent !== undefined
+    && (
+      value.duplicateIntent.sourceRunId === value.runId
+      || value.operation !== "posts.publish"
+      || value.risk !== "R3"
+      || value.contract.transport !== "web-session-api"
+      || dispatch.planned !== 1
+    )
+  ) {
+    throw new Error("duplicate intent has contradictory successor state");
+  }
+  if (
+    value.duplicateSuccessor !== undefined
+    && (
+      value.duplicateSuccessor.sourceRunId !== value.runId
+      || value.duplicateSuccessor.runId === value.runId
+      || Date.parse(value.duplicateSuccessor.claimedAt) < Date.parse(value.updatedAt)
+      || value.operation !== "posts.publish"
+      || value.risk !== "R3"
+      || value.contract.transport !== "web-session-api"
+      || value.phase !== "terminal"
+      || value.status !== "indeterminate"
+      || dispatch.planned !== 1
+      || dispatch.started !== 1
+      || value.ledgerState !== "indeterminate"
+      || value.recoveryState !== "retained"
+    )
+  ) {
+    throw new Error("duplicate successor claim has contradictory source state");
+  }
   if (Date.parse(value.updatedAt) < Date.parse(value.startedAt)) {
     throw new Error("run journal update precedes its start");
   }
@@ -575,7 +669,7 @@ function assertJournalInvariants(value: RunJournal): void {
 
 export function parseRunJournal(value: unknown): RunJournal {
   const record = dataRecord(value, "run journal");
-  exactKeys(record, [
+  const keys = [
     "schemaVersion",
     "revision",
     "runId",
@@ -601,7 +695,10 @@ export function parseRunJournal(value: unknown): RunJournal {
     "dedupeExpiresAt",
     "finalOrigin",
     "error",
-  ], "run journal");
+  ];
+  if (Object.hasOwn(record, "duplicateIntent")) keys.push("duplicateIntent");
+  if (Object.hasOwn(record, "duplicateSuccessor")) keys.push("duplicateSuccessor");
+  exactKeys(record, keys, "run journal");
   if (
     record.schemaVersion !== 1
     || !Number.isSafeInteger(record.revision)
@@ -662,6 +759,17 @@ export function parseRunJournal(value: unknown): RunJournal {
     inputHash: digest(record.inputHash, "run journal input hash"),
     auth: parseAuth(record.auth),
     contract: parseContract(record.contract),
+    ...(Object.hasOwn(record, "duplicateIntent")
+      ? {
+          duplicateIntent: parseDuplicateIntent(
+            record.duplicateIntent,
+            "run journal duplicate intent",
+          ),
+        }
+      : {}),
+    ...(Object.hasOwn(record, "duplicateSuccessor")
+      ? { duplicateSuccessor: parseDuplicateSuccessor(record.duplicateSuccessor) }
+      : {}),
     planHasAssets: record.planHasAssets,
     planState: record.planState,
     phase: record.phase,
@@ -706,6 +814,12 @@ export function parseRunJournal(value: unknown): RunJournal {
           identity: journal.contract.identity,
         })
       : Object.freeze({ ...journal.contract }),
+    ...(journal.duplicateIntent === undefined
+      ? {}
+      : { duplicateIntent: Object.freeze({ ...journal.duplicateIntent }) }),
+    ...(journal.duplicateSuccessor === undefined
+      ? {}
+      : { duplicateSuccessor: Object.freeze({ ...journal.duplicateSuccessor }) }),
     dispatch: Object.freeze({ ...journal.dispatch }),
     owner: Object.freeze({ ...journal.owner }),
   });
@@ -723,6 +837,9 @@ export function initialRunJournal(value: StartRunJournal): RunJournal {
     inputHash: value.inputHash,
     auth: value.auth,
     contract: value.contract,
+    ...(value.duplicateIntent === undefined
+      ? {}
+      : { duplicateIntent: value.duplicateIntent }),
     planHasAssets: value.hasPlanAssets,
     planState: "available",
     phase: "prepared",
@@ -819,7 +936,58 @@ export function transitionRunJournal(
     throw new Error("run journal transition time moved backward");
   }
   if (event.type === "finished") return terminalTransition(current, event);
+  if (event.type === "duplicate-successor-claimed") {
+    const intentHash = digest(
+      event.intentHash,
+      "run journal duplicate successor intent hash",
+    );
+    const successorRunId = runId(
+      event.runId,
+      "run journal duplicate successor run ID",
+    );
+    const existing = current.duplicateSuccessor;
+    if (existing !== undefined) {
+      if (
+        existing.intentHash === intentHash
+        && existing.runId === successorRunId
+      ) return current;
+      throw new Error("run journal already elected a different duplicate successor");
+    }
+    if (
+      current.operation !== "posts.publish"
+      || current.risk !== "R3"
+      || current.contract.transport !== "web-session-api"
+      || current.phase !== "terminal"
+      || current.status !== "indeterminate"
+      || current.dispatch.planned !== 1
+      || current.dispatch.started !== 1
+      || current.ledgerState !== "indeterminate"
+      || current.recoveryState !== "retained"
+    ) {
+      throw new Error(
+        "only one retained terminal indeterminate posts.publish dispatch can elect a duplicate successor",
+      );
+    }
+    return parseRunJournal({
+      ...current,
+      revision: current.revision + 1,
+      duplicateSuccessor: {
+        schemaVersion: 1,
+        intentHash,
+        sourceRunId: current.runId,
+        runId: successorRunId,
+        claimedAt: at,
+      },
+      // Claiming lineage must not rewrite the immutable receipt's finish time.
+      updatedAt: current.updatedAt,
+    });
+  }
   if (event.type === "recovery-released") {
+    if (current.duplicateSuccessor !== undefined) {
+      throw new Error(
+        "run recovery is retained because a duplicate successor intent was claimed",
+      );
+    }
     if (
       current.phase !== "terminal"
       || (current.status !== "partial" && current.status !== "indeterminate")
