@@ -136,7 +136,7 @@ export const SUBSTACK_WEB_OPERATIONS = Object.freeze({
     "DM start/send and optional media URL upload need exact recipient, thread, response, and attachment bindings",
   ),
   "posts.publish": observedWrite(
-    "authorized Note composer capture proving one optional PNG upload, exact public create payload, actor and attachment response binding, and independent Note readback",
+    "authorized Note composer capture proving one optional PNG upload, exact public create payload, durable accepted-Note targeting, actor and attachment response binding, and four bounded exact readbacks over a six-second visibility window",
   ),
   "posts.quote": captureRequired(
     "R3",

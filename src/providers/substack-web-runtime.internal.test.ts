@@ -11,10 +11,12 @@ import { join } from "node:path";
 import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
 import type { WrenchAuth } from "../auth";
+import { canonicalJson } from "../canonical-json";
 import type { OperationInput, WebSessionRecipe } from "../model";
 import {
   executeSubstackWebOperation,
   probeSubstackWebSubject,
+  readSubstackWebAcceptedNoteTargetPresence,
   type SubstackWebRuntimeDependencies,
 } from "./substack-web-runtime";
 
@@ -199,6 +201,23 @@ function noteReadback(imageUrl: string, body = NOTE_BODY): unknown {
   };
 }
 
+function noteReadbackWithoutImage(body = NOTE_BODY): unknown {
+  const value = noteReadback("unused", body) as {
+    readonly item: Readonly<Record<string, unknown>> & {
+      readonly comment: Readonly<Record<string, unknown>>;
+    };
+  };
+  return {
+    item: {
+      ...value.item,
+      comment: {
+        ...value.item.comment,
+        attachments: [],
+      },
+    },
+  };
+}
+
 function post(overrides: Readonly<Record<string, unknown>> = {}): unknown {
   return {
     id: ARTICLE_ID,
@@ -238,7 +257,7 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "substack",
     action,
-    contractVersion: action === "posts.publish" ? 2 : 1,
+    contractVersion: action === "posts.publish" ? 3 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 8 * 1024 * 1024,
   };
@@ -428,6 +447,27 @@ describe("Substack authenticated internal API runtime", () => {
             events.push(`before ${event.progress.started}`);
             return Promise.resolve();
           },
+          afterProviderAcceptedMutationTarget: (event) => {
+            expect(event).toEqual({
+              id: "posts.publish",
+              index: 1,
+              target: {
+                schemaVersion: 1,
+                identifier: canonicalJson({
+                  noteId: CREATED_NOTE_ID,
+                  attachment: {
+                    id: ATTACHMENT_UUID,
+                    url: imageUrl,
+                    height: 1022,
+                    width: 959,
+                    mediaType: "image/png",
+                  },
+                }),
+              },
+            });
+            events.push(`accepted ${event.target.identifier}`);
+            return Promise.resolve();
+          },
           afterDispatchVerified: (event) => {
             events.push(`after ${event.progress.verified}`);
             return Promise.resolve();
@@ -510,6 +550,16 @@ describe("Substack authenticated internal API runtime", () => {
         "POST /api/v1/image",
         "POST /api/v1/comment/attachment",
         "POST /api/v1/comment/feed",
+        `accepted ${canonicalJson({
+          noteId: CREATED_NOTE_ID,
+          attachment: {
+            id: ATTACHMENT_UUID,
+            url: imageUrl,
+            height: 1022,
+            width: 959,
+            mediaType: "image/png",
+          },
+        })}`,
         `GET /api/v1/reader/comment/${CREATED_NOTE_ID}`,
         "after 1",
       ]);
@@ -558,7 +608,9 @@ describe("Substack authenticated internal API runtime", () => {
         status: "indeterminate",
         dispatchStarted: true,
         dispatch: { planned: 1, started: 1, verified: 0 },
+        error: expect.stringContaining("stage: image-upload"),
       });
+      expect(String(result.error)).not.toContain("upload failed");
       expect(beforeDispatch).toBe(1);
       expect(creates).toBe(0);
       expect(calls.filter((call) => call.url.pathname === "/api/v1/image")).toHaveLength(1);
@@ -568,52 +620,165 @@ describe("Substack authenticated internal API runtime", () => {
     }
   });
 
-  test("returns indeterminate and never retries after a created Note fails exact readback", async () => {
+  test("delays and retries only the exact readback until the created Note becomes visible", async () => {
     const calls: CapturedRequest[] = [];
     let dispatches = 0;
+    let readbacks = 0;
+    let verified = 0;
+    const delays: number[] = [];
     const result = await executeSubstackWebOperation(
       recipe("posts.publish"),
       { body: NOTE_BODY },
       boundAuth,
       {
         beforeDispatch: () => Promise.resolve(),
-        dependencies: dependencies(calls, (request) => {
-          const bootstrap = bootstrapResponse(request);
-          if (bootstrap !== null) return bootstrap;
-          if (request.method === "POST" && request.url.pathname === "/api/v1/comment/feed") {
-            dispatches += 1;
-            return jsonResponse({
-              ...createdNote("https://substack-post-media.s3.amazonaws.com/public/images/11111111-1111-4111-8111-111111111111_959x1022.png") as object,
-              attachments: [],
-            });
-          }
-          if (
-            request.method === "GET"
-            && request.url.pathname === `/api/v1/reader/comment/${CREATED_NOTE_ID}`
-          ) {
-            return jsonResponse({
-              ...noteReadback("unused") as object,
-              item: {
-                ...(noteReadback("unused") as { item: object }).item,
-                comment: {
-                  ...((noteReadback("unused") as { item: { comment: object } }).item.comment),
-                  attachments: [],
-                  body: "provider drift",
-                },
-              },
-            });
-          }
-          throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
-        }),
+        afterDispatchVerified: () => {
+          verified += 1;
+          return Promise.resolve();
+        },
+        dependencies: {
+          ...dependencies(calls, (request) => {
+            const bootstrap = bootstrapResponse(request);
+            if (bootstrap !== null) return bootstrap;
+            if (request.method === "POST" && request.url.pathname === "/api/v1/comment/feed") {
+              dispatches += 1;
+              return jsonResponse({
+                ...createdNote("https://substack-post-media.s3.amazonaws.com/public/images/11111111-1111-4111-8111-111111111111_959x1022.png") as object,
+                attachments: [],
+              });
+            }
+            if (
+              request.method === "GET"
+              && request.url.pathname === `/api/v1/reader/comment/${CREATED_NOTE_ID}`
+            ) {
+              readbacks += 1;
+              expect(request.body).toBeNull();
+              if (readbacks === 1) return jsonResponse({ error: "not visible" }, 404);
+              if (readbacks === 2) return jsonResponse(noteReadbackWithoutImage("provider drift"));
+              return jsonResponse(noteReadbackWithoutImage());
+            }
+            throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+          }),
+          sleep: (milliseconds) => {
+            delays.push(milliseconds);
+            return Promise.resolve();
+          },
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(dispatches).toBe(1);
+    expect(readbacks).toBe(3);
+    expect(delays).toEqual([500, 1_500]);
+    expect(verified).toBe(1);
+    expect(calls.filter((call) => call.url.pathname === "/api/v1/comment/feed")).toHaveLength(1);
+  });
+
+  test("returns a safe readback-stage diagnostic after the bounded exact-read window", async () => {
+    const calls: CapturedRequest[] = [];
+    const delays: number[] = [];
+    let dispatches = 0;
+    let readbacks = 0;
+    const result = await executeSubstackWebOperation(
+      recipe("posts.publish"),
+      { body: NOTE_BODY },
+      boundAuth,
+      {
+        beforeDispatch: () => Promise.resolve(),
+        dependencies: {
+          ...dependencies(calls, (request) => {
+            const bootstrap = bootstrapResponse(request);
+            if (bootstrap !== null) return bootstrap;
+            if (request.method === "POST" && request.url.pathname === "/api/v1/comment/feed") {
+              dispatches += 1;
+              return jsonResponse({
+                ...createdNote("https://substack-post-media.s3.amazonaws.com/public/images/11111111-1111-4111-8111-111111111111_959x1022.png") as object,
+                attachments: [],
+              });
+            }
+            if (
+              request.method === "GET"
+              && request.url.pathname === `/api/v1/reader/comment/${CREATED_NOTE_ID}`
+            ) {
+              readbacks += 1;
+              return jsonResponse(noteReadbackWithoutImage("private provider diagnostic"));
+            }
+            throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+          }),
+          sleep: (milliseconds) => {
+            delays.push(milliseconds);
+            return Promise.resolve();
+          },
+        },
       },
     );
     expect(result).toMatchObject({
       status: "indeterminate",
       dispatchStarted: true,
       dispatch: { planned: 1, started: 1, verified: 0 },
+      error: expect.stringContaining("stage: note-readback"),
     });
+    expect(String(result.error)).not.toContain("private provider diagnostic");
     expect(dispatches).toBe(1);
+    expect(readbacks).toBe(4);
+    expect(delays).toEqual([500, 1_500, 4_000]);
     expect(calls.filter((call) => call.url.pathname === "/api/v1/comment/feed")).toHaveLength(1);
+  });
+
+  test("reads only the exact accepted Substack Note target for later presence reconciliation", async () => {
+    const calls: CapturedRequest[] = [];
+    const imageUrl = `https://substack-post-media.s3.amazonaws.com/public/images/${IMAGE_UUID}_959x1022.png`;
+    const acceptedIdentifier = canonicalJson({
+      noteId: CREATED_NOTE_ID,
+      attachment: {
+        id: ATTACHMENT_UUID,
+        url: imageUrl,
+        height: 1022,
+        width: 959,
+        mediaType: "image/png",
+      },
+    });
+    expect(await readSubstackWebAcceptedNoteTargetPresence(
+      recipe("posts.publish"),
+      {
+        body: NOTE_BODY,
+        media: { kind: "file", reference: "fixture" },
+      },
+      boundAuth,
+      acceptedIdentifier,
+      {
+        dependencies: dependencies(calls, (request) => {
+          const bootstrap = bootstrapResponse(request);
+          if (bootstrap !== null) return bootstrap;
+          if (
+            request.method === "GET"
+            && request.url.pathname === `/api/v1/reader/comment/${CREATED_NOTE_ID}`
+          ) return jsonResponse(noteReadback(imageUrl));
+          throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+        }),
+      },
+    )).toEqual({ present: true, noteId: CREATED_NOTE_ID });
+    expect(calls.map((call) => [call.method, call.url.pathname])).toEqual([
+      ["GET", "/api/v1/am_i_logged_in"],
+      ["GET", "/"],
+      ["GET", `/api/v1/reader/comment/${CREATED_NOTE_ID}`],
+    ]);
+    await expect(readSubstackWebAcceptedNoteTargetPresence(
+      recipe("posts.publish"),
+      {
+        body: NOTE_BODY,
+        media: { kind: "file", reference: "fixture" },
+      },
+      boundAuth,
+      JSON.stringify({ noteId: CREATED_NOTE_ID, attachment: null }),
+      { dependencies: dependencies([], () => {
+        throw new Error("noncanonical target must not touch the network");
+      }) },
+    )).rejects.toThrow("canonical JSON");
   });
 
   test("rejects capture-required operations before cookies or network are touched", () => {

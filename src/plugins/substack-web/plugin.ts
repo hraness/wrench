@@ -34,7 +34,7 @@ export const substackWebPlugin = defineProviderPlugin({
     authKinds: browserSessionAuthKinds,
     operations: webSessionContractOperations(
       Object.values(substackContracts),
-      "eec32e0d92a5560840fa679e698913eac744b2ed59cc1deb6ad25be3001c5b5a",
+      "b30524d322bbc94045d8763711e6e61a934bdfc0e0b821349ac86328c90c3444",
       {},
       {
         "messaging.list": {

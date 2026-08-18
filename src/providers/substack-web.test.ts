@@ -117,6 +117,7 @@ describe("Substack internal-web operation registry", () => {
   test("ships one schema-v4 semantic manifest entry for every provider operation", () => {
     expect(substackWebManifest.schemaVersion).toBe(4);
     expect(substackWebManifest.id).toBe("substack-web");
+    expect(substackWebManifest.version).toBe("1.2.0");
     expect(substackWebManifest.surfaceId).toBe("substack");
     expect(substackWebManifest.origins).toEqual(["https://substack.com"]);
     expect(Object.keys(substackWebManifest.operations).sort()).toEqual(
@@ -132,7 +133,7 @@ describe("Substack internal-web operation registry", () => {
       expect(operation.webSession).toMatchObject({
         site: "substack",
         action,
-        contractVersion: action === "posts.publish" ? 2 : 1,
+        contractVersion: action === "posts.publish" ? 3 : 1,
       });
       expect("browser" in operation).toBe(false);
       expect("provider" in operation).toBe(false);
