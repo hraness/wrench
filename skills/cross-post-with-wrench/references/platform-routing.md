@@ -10,7 +10,7 @@ Use this as routing guidance only. Always inspect `wrench capabilities <adapter>
 | LinkedIn | `linkedin` | Official OAuth | Inspect installed schema | Documented API post |
 | Bluesky | `bluesky-web` | Profile-backed Bluesky web session | `body`, optional image field, media type, and alt text | AT Protocol feed post |
 | Substack | `substack-web` | Browser cookies/profile | `body`, optional Note media | Public Substack Note, not an article/newsletter |
-| Threads | `threads-web` | Browser cookies/profile | `body`, explicit audience when required, optional attachment | Threads post |
+| Threads | `threads-web` | Browser cookies/profile | `body`, explicit audience when required, one required PNG attachment in the current reviewed schema | Threads post |
 
 ## Selection rules
 
@@ -46,4 +46,5 @@ Do not place credentials in the input file. Delete task input files after planni
 - If the ordered image set exceeds one platform's bound, request a smaller shared set or an explicit per-platform set. Do not manufacture a collage.
 - If LinkedIn requires visibility and the user requested a public cross-post, use `public`; otherwise obtain the user's audience choice.
 - If Threads requires `audience` and the user requested ordinary posting, use the installed schema's ordinary/default audience only when that meaning is explicit in the capability description.
+- The current reviewed Threads contract requires exactly one PNG. Treat text-only Threads publication as unavailable until a separate live capture proves that transport and readback contract.
 - If image alt text is supported on only some targets, preserve the same factual description on every target that accepts it; unsupported alt text is not a reason to alter the visible post.

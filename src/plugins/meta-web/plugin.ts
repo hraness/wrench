@@ -92,6 +92,7 @@ const historicalVersions = Object.freeze({
   }),
   threads: Object.freeze({
     "feeds.read": Object.freeze([1]),
+    "posts.publish": Object.freeze([1, 2]),
   }),
   facebook: Object.freeze({
     "feeds.read": Object.freeze([1]),

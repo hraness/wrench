@@ -21,6 +21,7 @@ import type {
   WebSessionDispatchEvent,
   WebSessionExecution,
   WebSessionOperationDeadline,
+  WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
 import {
   META_WEB_OPERATIONS,
@@ -38,6 +39,7 @@ import {
   normalizeInstagramPost,
   normalizeThreadsFeedHtml,
   normalizeThreadsPostHtml,
+  projectThreadsPublishPost,
   parseFacebookViewerId,
   parseMetaJsonDocuments,
   parseMetaJsonScripts,
@@ -46,6 +48,8 @@ import {
   type FacebookMarketplaceFeed,
   type MetaWebOperationContract,
   type MetaWebSite,
+  type ThreadsImageProjection,
+  type ThreadsPostProjection,
 } from "./meta-web";
 import {
   bootstrapMetaComet,
@@ -564,11 +568,18 @@ function threadsUploadId(now: () => number): string {
   return uploadId;
 }
 
+type ThreadsUploadedImage = Readonly<{
+  height: number;
+  id: string;
+  mediaType: "image/png";
+  width: number;
+}>;
+
 async function uploadThreadsImage(
   client: WebSessionClient,
   image: ThreadsImage,
   uploadId: string,
-): Promise<void> {
+): Promise<ThreadsUploadedImage> {
   const entityName = `fb_uploader_${uploadId}`;
   await client.requestStatus({
     url: new URL(`/rupload_igphoto/${entityName}`, ORIGINS.threads),
@@ -593,18 +604,39 @@ async function uploadThreadsImage(
       }),
     },
     body: image.bytes,
-    expectedStatuses: [200, 201, 202],
+    expectedStatuses: [200],
+  });
+  return Object.freeze({
+    height: image.height,
+    id: uploadId,
+    mediaType: image.mediaType,
+    width: image.width,
   });
 }
 
-type ThreadsCreatedPost = {
+export type ThreadsPostLocator = Readonly<{
   readonly code: string;
   readonly id: string;
   readonly url: string;
-};
+}>;
 
-function threadsCreatedPost(value: unknown, viewerId: string): ThreadsCreatedPost {
-  if (!isRecord(value) || value.status !== "ok" || !isRecord(value.media)) {
+type ThreadsCreatedPost = Readonly<{
+  readonly locator: ThreadsPostLocator;
+  readonly post: ThreadsPostProjection;
+}>;
+
+function threadsCreatedPost(
+  value: unknown,
+  viewerId: string,
+  body: string,
+  uploaded: ThreadsUploadedImage,
+): ThreadsCreatedPost {
+  if (
+    !isRecord(value)
+    || Object.keys(value).sort().join(",") !== "media,status"
+    || value.status !== "ok"
+    || !isRecord(value.media)
+  ) {
     throw new Error("Threads create response did not match the reviewed success shape");
   }
   const { code, permalink, pk } = value.media;
@@ -612,22 +644,45 @@ function threadsCreatedPost(value: unknown, viewerId: string): ThreadsCreatedPos
     typeof code !== "string"
     || !/^[A-Za-z0-9_-]{1,64}$/u.test(code)
     || typeof permalink !== "string"
+    || permalink.length > 2_048
     || typeof pk !== "string"
     || !/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(pk)
   ) throw new Error("Threads create response returned invalid post identifiers");
   const url = new URL(permalink, ORIGINS.threads);
+  const path = url.pathname.split("/");
   if (
     url.origin !== ORIGINS.threads
     || url.username !== ""
     || url.password !== ""
     || url.search !== ""
     || url.hash !== ""
-    || !url.pathname.endsWith(`/post/${code}`)
+    || path.length !== 4
+    || !/^@[A-Za-z0-9._]{1,64}$/u.test(path[1] ?? "")
+    || path[2] !== "post"
+    || path[3] !== code
   ) throw new Error("Threads create response returned an unreviewed permalink");
   if (pk.includes("_") && !pk.endsWith(`_${viewerId}`)) {
     throw new Error("Threads create response changed the confirmed actor");
   }
-  return Object.freeze({ code, id: pk, url: url.href });
+  const post = projectThreadsPublishPost(value.media, "Threads create response.media");
+  const user = isRecord(post.user) ? post.user : null;
+  if (
+    post.id !== pk
+    || post.code !== code
+    || post.caption !== body
+    || user?.id !== viewerId
+    || post.image === null
+    || post.image.mediaId !== pk
+    || post.image.width !== uploaded.width
+    || post.image.height !== uploaded.height
+  ) throw new Error("Threads create response did not bind the confirmed actor, text, and uploaded image");
+  if (post.canonical_url !== null && post.canonical_url !== url.href) {
+    throw new Error("Threads create response canonical URL changed the returned permalink");
+  }
+  return Object.freeze({
+    locator: Object.freeze({ code, id: pk, url: url.href }),
+    post,
+  });
 }
 
 function threadsTextPostAppInfo(body: string): string {
@@ -647,10 +702,11 @@ async function createThreadsPost(
   client: WebSessionClient,
   viewer: BoundMetaViewer,
   prepared: Extract<PreparedMetaRead, { readonly kind: "threads-post" }>,
-  uploadId: string,
+  uploaded: ThreadsUploadedImage,
   config: ThreadsRequestConfig,
 ): Promise<ThreadsCreatedPost> {
   const csrfToken = webSessionCookie(client.cookies, "csrftoken");
+  const uploadId = uploaded.id;
   const webSessionId = threadsWebSessionId(uploadId);
   const form = new URLSearchParams();
   form.set("audience", prepared.audience);
@@ -679,7 +735,7 @@ async function createThreadsPost(
     expectedContentTypes: ["application/json", "text/plain"],
     maxBytes: 256 * 1024,
   });
-  return threadsCreatedPost(response, viewer.id);
+  return threadsCreatedPost(response, viewer.id, prepared.body, uploaded);
 }
 
 function metaDispatchEvent(
@@ -698,6 +754,9 @@ async function executeThreadsPost(
     readonly fileResolver?: BrowserFileResolver;
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly now: () => number;
   },
@@ -719,10 +778,27 @@ async function executeThreadsPost(
   try {
     await options.beforeDispatch?.(metaDispatchEvent("posts.publish", started, verified));
     started = 1;
-    await uploadThreadsImage(client, image, uploadId);
-    created = await createThreadsPost(client, reboundViewer, prepared, uploadId, config);
+    const uploaded = await uploadThreadsImage(client, image, uploadId);
+    created = await createThreadsPost(client, reboundViewer, prepared, uploaded, config);
+    const createdImage = created.post.image as ThreadsImageProjection;
+    await options.afterProviderAcceptedMutationTarget?.({
+      id: "posts.publish",
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: canonicalJson({
+          code: created.locator.code,
+          height: createdImage.height,
+          id: created.locator.id,
+          mediaType: createdImage.mediaType,
+          remoteMediaId: createdImage.mediaId,
+          url: created.locator.url,
+          width: createdImage.width,
+        }),
+      },
+    });
     const readbackHtml = await client.requestText({
-      url: new URL(created.url),
+      url: new URL(created.locator.url),
       method: "GET",
       headers: htmlHeaders(ORIGINS.threads),
       expectedContentTypes: ["text/html"],
@@ -731,9 +807,19 @@ async function executeThreadsPost(
     const post = normalizeThreadsPostHtml(
       readbackHtml,
       reboundViewer.id,
-      created.id,
+      created.locator.id,
+      created.locator.code,
+      created.locator.url,
       prepared.body,
+      image,
     );
+    const remoteImage = post.image as ThreadsImageProjection;
+    if (
+      remoteImage.mediaId !== createdImage.mediaId
+      || remoteImage.mediaType !== createdImage.mediaType
+      || remoteImage.width !== createdImage.width
+      || remoteImage.height !== createdImage.height
+    ) throw new Error("Threads permalink readback changed the response-bound image");
     verified = 1;
     await options.afterDispatchVerified?.(metaDispatchEvent("posts.publish", started, verified));
     return {
@@ -741,12 +827,14 @@ async function executeThreadsPost(
       output: Object.freeze({
         post,
         attachment: Object.freeze({
-          height: image.height,
+          height: remoteImage.height,
           mediaType: image.mediaType,
-          width: image.width,
+          remoteMediaId: remoteImage.mediaId,
+          verifiedBy: "permalink-readback",
+          width: remoteImage.width,
         }),
       }),
-      finalUrl: created.url,
+      finalUrl: created.locator.url,
       dispatchStarted: true,
       dispatch: { planned: 1, started, verified },
     };
@@ -754,14 +842,162 @@ async function executeThreadsPost(
     return {
       status: started > 0 ? "indeterminate" : "failed",
       output: null,
-      finalUrl: created?.url ?? `${ORIGINS.threads}/`,
+      finalUrl: created?.locator.url ?? `${ORIGINS.threads}/`,
       dispatchStarted: started > 0,
       dispatch: { planned: 1, started, verified },
       error: started > 0
-        ? "Threads may have accepted the image upload or post but exact actor, ID, text, and permalink readback was not verified; reconcile before retrying"
+        ? "Threads may have accepted the image upload or post but exact actor, ID, code, text, image, and permalink readback was not verified; reconcile before retrying"
         : "Threads post dispatch failed before submission",
     };
   }
+}
+
+type ThreadsPublishedMutationTarget = Readonly<{
+  code: string;
+  height: number;
+  id: string;
+  mediaType: 1;
+  remoteMediaId: string;
+  url: string;
+  width: number;
+}>;
+
+function threadsPublishedMutationTargetDimension(
+  value: unknown,
+  label: string,
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 20_000) {
+    throw new Error(`${label} must be an integer between 1 and 20000`);
+  }
+  return value as number;
+}
+
+function parseThreadsPublishedMutationTarget(
+  identifier: string,
+): ThreadsPublishedMutationTarget {
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier);
+  } catch {
+    throw new Error("Threads provider-accepted post target is not canonical JSON");
+  }
+  if (
+    !isRecord(value)
+    || Object.keys(value).sort().join(",")
+      !== "code,height,id,mediaType,remoteMediaId,url,width"
+  ) throw new Error("Threads provider-accepted post target contained unsupported fields");
+  if (
+    typeof value.id !== "string"
+    || !/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(value.id)
+    || typeof value.remoteMediaId !== "string"
+    || value.remoteMediaId !== value.id
+  ) throw new Error("Threads provider-accepted post target returned invalid media identifiers");
+  if (typeof value.code !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.code)) {
+    throw new Error("Threads provider-accepted post target returned an invalid post code");
+  }
+  if (value.mediaType !== 1) {
+    throw new Error("Threads provider-accepted post target did not identify one reviewed image");
+  }
+  if (typeof value.url !== "string" || value.url.length < 1 || value.url.length > 2_048) {
+    throw new Error("Threads provider-accepted post target returned an invalid permalink");
+  }
+  let url: URL;
+  try {
+    url = new URL(value.url);
+  } catch {
+    throw new Error("Threads provider-accepted post target returned an invalid permalink");
+  }
+  const path = url.pathname.split("/");
+  if (
+    url.origin !== ORIGINS.threads
+    || url.username !== ""
+    || url.password !== ""
+    || url.search !== ""
+    || url.hash !== ""
+    || path.length !== 4
+    || !/^@[A-Za-z0-9._]{1,64}$/u.test(path[1] ?? "")
+    || path[2] !== "post"
+    || path[3] !== value.code
+  ) throw new Error("Threads provider-accepted post target returned an invalid permalink");
+  const parsed = Object.freeze({
+    code: value.code,
+    height: threadsPublishedMutationTargetDimension(
+      value.height,
+      "Threads provider-accepted post target height",
+    ),
+    id: value.id,
+    mediaType: 1 as const,
+    remoteMediaId: value.remoteMediaId,
+    url: url.href,
+    width: threadsPublishedMutationTargetDimension(
+      value.width,
+      "Threads provider-accepted post target width",
+    ),
+  });
+  if (canonicalJson(parsed) !== identifier) {
+    throw new Error("Threads provider-accepted post target is not canonical");
+  }
+  return parsed;
+}
+
+/**
+ * Reconcile one exact response-bound Threads post with one read of its exact
+ * permalink. This never resolves or uploads the confirmed attachment.
+ */
+export async function readThreadsWebPublishedMutationTarget(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  identifier: string,
+  options: {
+    readonly dependencies?: MetaWebRuntimeDependencies;
+  } = {},
+): Promise<{ readonly present: true; readonly postId: string }> {
+  if (
+    recipe.site !== "threads"
+    || recipe.action !== "posts.publish"
+    || recipe.contractVersion !== 3
+  ) throw new Error("Threads publish recovery supports only posts.publish@3");
+  const target = parseThreadsPublishedMutationTarget(identifier);
+  const prepared = prepareMetaRead(recipe, input, auth, Object.freeze({}));
+  if (prepared.kind !== "threads-post") {
+    throw new Error("Threads publish recovery input did not match posts.publish");
+  }
+  const expectedSubject = expectedMetaAuthSubject("threads", auth);
+  const viewerId = expectedSubject.slice("threads:".length);
+  const dependencies = metaWebSessionDependencies("threads", auth, options.dependencies);
+  const client = await createWebSessionClient(ORIGINS.threads, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(dependencies === undefined ? {} : { dependencies }),
+  });
+  if (webSessionCookie(client.cookies, "ds_user_id") !== viewerId) {
+    throw new Error("Threads account cookie did not match the confirmed auth subject");
+  }
+  const html = await client.requestText({
+    url: new URL(target.url),
+    method: "GET",
+    headers: htmlHeaders(ORIGINS.threads),
+    expectedContentTypes: ["text/html"],
+    maxBytes: Math.min(recipe.maxOutputBytes, MAX_BOOTSTRAP_BYTES),
+  });
+  const post = normalizeThreadsPostHtml(
+    html,
+    viewerId,
+    target.id,
+    target.code,
+    target.url,
+    prepared.body,
+    { height: target.height, width: target.width },
+  );
+  const image = post.image;
+  if (
+    image === null
+    || image.mediaId !== target.remoteMediaId
+    || image.mediaType !== target.mediaType
+    || image.width !== target.width
+    || image.height !== target.height
+  ) throw new Error("Threads publish recovery readback changed the accepted image");
+  return Object.freeze({ present: true, postId: target.id });
 }
 
 function facebookMarketplaceAuthHash(auth: WrenchAuth): string {
@@ -1217,6 +1453,9 @@ export async function executeMetaWebOperation(
     readonly signal?: AbortSignal;
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: MetaWebRuntimeDependencies;
     readonly environment?: Readonly<Record<string, string | undefined>>;
@@ -1275,6 +1514,12 @@ export async function executeMetaWebOperation(
       ...(options.beforeDispatch === undefined
         ? {}
         : { beforeDispatch: options.beforeDispatch }),
+      ...(options.afterProviderAcceptedMutationTarget === undefined
+        ? {}
+        : {
+            afterProviderAcceptedMutationTarget:
+              options.afterProviderAcceptedMutationTarget,
+          }),
       ...(options.afterDispatchVerified === undefined
         ? {}
         : { afterDispatchVerified: options.afterDispatchVerified }),

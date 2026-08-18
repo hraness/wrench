@@ -1,6 +1,6 @@
 ---
 name: cross-post-with-wrench
-description: Preview and publish one exact text post, with optional local images and accessibility text, across any selected combination of X, LinkedIn, Bluesky, Substack Notes, and Threads through Wrench's bounded provider operations. Use when Codex must cross-post social content, check signed-in Wrench realms, adapt one post package to provider-specific schemas without silently changing it, confirm R3 plans, or report per-platform receipts and partial delivery safely.
+description: Preview and publish one exact text post, with local images and accessibility text when the selected provider permits or requires them, across any selected combination of X, LinkedIn, Bluesky, Substack Notes, and Threads through Wrench's bounded provider operations. Use when Codex must cross-post social content, check signed-in Wrench realms, adapt one post package to provider-specific schemas without silently changing it, confirm R3 plans, or report per-platform receipts and partial delivery safely.
 ---
 
 # Cross-post with Wrench
