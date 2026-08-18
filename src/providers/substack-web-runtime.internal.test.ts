@@ -508,7 +508,10 @@ describe("Substack authenticated internal API runtime", () => {
                 surface: "feed",
                 replyMinimumRole: "everyone",
               });
-              return jsonResponse(createdNote(imageUrl));
+              return jsonResponse({
+                ...createdNote(imageUrl) as object,
+                attachments: [],
+              });
             }
             if (
               request.method === "GET"

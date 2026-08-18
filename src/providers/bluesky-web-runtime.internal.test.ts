@@ -803,9 +803,8 @@ describe("Bluesky authenticated XRPC runtime", () => {
               case "com.atproto.repo.uploadBlob": {
                 expect(request.method).toBe("POST");
                 expect(request.headers.get("content-type")).toBe("image/png");
-                expect(request.body).toBeInstanceOf(Blob);
-                const bytes = new Uint8Array(await (request.body as Blob).arrayBuffer());
-                expect(bytes).toEqual(imageBytes);
+                expect(request.body).toBeInstanceOf(Uint8Array);
+                expect(request.body).toEqual(imageBytes);
                 return jsonResponse({
                   blob: {
                     $type: "blob",

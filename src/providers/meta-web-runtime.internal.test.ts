@@ -820,8 +820,8 @@ describe("Meta authenticated internal-data runtime", () => {
     expect(events).toEqual([
       "GET /",
       "GET /",
-      "before 0",
       `POST /rupload_igphoto/fb_uploader_${uploadId}`,
+      "before 0",
       "POST /api/v1/media/configure_text_post_app_feed/",
       `accepted ${acceptedTargetIdentifier}`,
       `GET /@viewer/post/${postCode}`,
@@ -829,7 +829,7 @@ describe("Meta authenticated internal-data runtime", () => {
     ]);
   });
 
-  test("strictly binds a completed Threads upload before it can create a post", async () => {
+  test("keeps a rejected Threads upload before the durable post-dispatch boundary", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-threads-upload-failure-"));
     chmodSync(root, 0o700);
     stateRoots.push(root);
@@ -848,7 +848,7 @@ describe("Meta authenticated internal-data runtime", () => {
         }, 2],
       ],
     });
-    for (const status of [201, 202] as const) {
+    for (const outcome of ["transport", 201, 202] as const) {
       const calls: Call[] = [];
       let beforeDispatch = 0;
       let creates = 0;
@@ -880,8 +880,11 @@ describe("Meta authenticated internal-data runtime", () => {
                 });
               }
               if (call.url.pathname === `/rupload_igphoto/fb_uploader_${uploadId}`) {
+                if (outcome === "transport") {
+                  throw new Error("fixture upload transport failed before a response");
+                }
                 return new Response(JSON.stringify({ status: "ok", upload_id: uploadId }), {
-                  status,
+                  status: outcome,
                   headers: { "content-type": "application/json" },
                 });
               }
@@ -895,11 +898,12 @@ describe("Meta authenticated internal-data runtime", () => {
         },
       );
       expect(result).toMatchObject({
-        status: "indeterminate",
-        dispatchStarted: true,
-        dispatch: { planned: 1, started: 1, verified: 0 },
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "Threads image upload failed before post submission; retry with a fresh confirmed plan",
       });
-      expect(beforeDispatch).toBe(1);
+      expect(beforeDispatch).toBe(0);
       expect(creates).toBe(0);
       expect(acceptedTargets).toBe(0);
       expect(calls.filter((call) => call.url.pathname.includes("/rupload_igphoto/"))).toHaveLength(1);

@@ -742,10 +742,15 @@ function parseCreatedSubstackNote(
     || (value.status !== undefined && value.status !== "published")
   ) throw new Error("Substack Note create response did not bind the confirmed Note");
   const attachments = value.attachments;
-  if (!Array.isArray(attachments) || attachments.length !== (attachment === null ? 0 : 1)) {
-    throw new Error("Substack Note create response did not bind the confirmed attachments");
+  if (attachments !== undefined && !Array.isArray(attachments)) {
+    throw new Error("Substack Note create response attachments changed shape");
   }
-  if (attachment !== null) {
+  // The create response may omit the attachment echo or return an empty echo.
+  // The exact target readback below remains authoritative for image binding.
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    if (attachment === null || attachments.length !== 1) {
+      throw new Error("Substack Note create response did not bind the confirmed attachments");
+    }
     const item = attachments[0];
     if (!isRecord(item)) throw new Error("Substack Note create attachment must be an object");
     requireExactKeys(item, [

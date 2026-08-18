@@ -775,12 +775,20 @@ async function executeThreadsPost(
   let started = 0;
   let verified = 0;
   let created: ThreadsCreatedPost | null = null;
+  let failureStage = "image upload confirmation";
   try {
+    // Rupload can accept an orphaned provider blob, but it cannot publish a
+    // Threads post. Keep the durable post-dispatch boundary immediately in
+    // front of configure_text_post_app_feed so an upload transport failure is
+    // safely retryable instead of being misclassified as an indeterminate
+    // public post.
+    const uploaded = await uploadThreadsImage(client, image, uploadId);
     await options.beforeDispatch?.(metaDispatchEvent("posts.publish", started, verified));
     started = 1;
-    const uploaded = await uploadThreadsImage(client, image, uploadId);
+    failureStage = "post create response";
     created = await createThreadsPost(client, reboundViewer, prepared, uploaded, config);
     const createdImage = created.post.image as ThreadsImageProjection;
+    failureStage = "accepted target retention";
     await options.afterProviderAcceptedMutationTarget?.({
       id: "posts.publish",
       index: 1,
@@ -797,6 +805,7 @@ async function executeThreadsPost(
         }),
       },
     });
+    failureStage = "permalink readback";
     const readbackHtml = await client.requestText({
       url: new URL(created.locator.url),
       method: "GET",
@@ -846,8 +855,8 @@ async function executeThreadsPost(
       dispatchStarted: started > 0,
       dispatch: { planned: 1, started, verified },
       error: started > 0
-        ? "Threads may have accepted the image upload or post but exact actor, ID, code, text, image, and permalink readback was not verified; reconcile before retrying"
-        : "Threads post dispatch failed before submission",
+        ? `Threads may have accepted the image upload or post but exact actor, ID, code, text, image, and permalink readback was not verified; failure stage: ${failureStage}; reconcile before retrying`
+        : "Threads image upload failed before post submission; retry with a fresh confirmed plan",
     };
   }
 }

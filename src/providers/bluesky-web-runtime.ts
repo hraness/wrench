@@ -737,10 +737,11 @@ async function xrpc(
     body = JSON.stringify(options.jsonBody);
   } else if (options.blobBody !== undefined) {
     headers.set("content-type", options.blobBody.mediaType);
-    body = new Blob(
-      [new Uint8Array(options.blobBody.bytes)],
-      { type: options.blobBody.mediaType },
-    );
+    // Keep the upload body in the owned-byte form accepted by Wrench's
+    // DNS-pinned HTTPS transport. A Web Blob reaches custom fetch fixtures,
+    // but the production transport deliberately rejects that body shape
+    // before opening a socket.
+    body = new Uint8Array(options.blobBody.bytes);
   }
   const operationDeadline = client.operationDeadline;
   const controller = operationDeadline === undefined
