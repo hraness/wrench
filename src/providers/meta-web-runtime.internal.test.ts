@@ -3,6 +3,7 @@ import {
   chmodSync,
   mkdtempSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -369,6 +370,16 @@ function stateEnvironment(): Readonly<Record<string, string | undefined>> {
   return { ...process.env, WRENCH_STATE_HOME: root };
 }
 
+function pngFixture(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
 const facebookMarketplaceBundle =
   "__d(\"MarketplaceCometBrowseFeedLightPaginationQuery_facebookRelayOperation\",[],"
   + "(function(a,b,c,d,e,f){\"use strict\";e.exports=\"27448592924790037\"}),null);";
@@ -428,7 +439,7 @@ type Call = {
   readonly url: URL;
   readonly method: string;
   readonly headers: Headers;
-  readonly body: string | null;
+  readonly body: string | Uint8Array | null;
 };
 
 function dependencies(
@@ -456,7 +467,11 @@ function dependencies(
       url,
       method: init?.method ?? "GET",
       headers: new Headers(init?.headers),
-      body: typeof init?.body === "string" ? init.body : null,
+      body: typeof init?.body === "string"
+        ? init.body
+        : init?.body instanceof Uint8Array
+          ? init.body
+          : null,
     };
     calls.push(call);
     if (handler !== undefined) return Promise.resolve(handler(call));
@@ -491,7 +506,9 @@ function recipe(
       || action === "messaging.list"
     )
   ) || (
-    site === "threads" && action === "feeds.read"
+    site === "threads" && (
+      action === "feeds.read" || action === "posts.publish"
+    )
   ) || (
     site === "facebook" && (action === "feeds.read" || action === "messaging.list")
   ) || (
@@ -595,6 +612,223 @@ describe("Meta authenticated internal-data runtime", () => {
       expect(calls[0]?.method).toBe("GET");
       expect(calls[0]?.headers.get("cookie")).toContain(site === "facebook" ? "c_user=" : "ds_user_id=");
     }
+  });
+
+  test("uploads one plan-bound Threads PNG, dispatches once, and verifies the exact permalink readback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-threads-post-"));
+    chmodSync(root, 0o700);
+    stateRoots.push(root);
+    const imagePath = join(root, "fixture.png");
+    writeFileSync(imagePath, pngFixture(959, 1022), { mode: 0o600 });
+    const uploadId = "1786923725481";
+    const postId = "987654321_12345";
+    const postCode = "CodeABC";
+    const text = "how your email finds me";
+    const bootstrap = threadsHtml + script({
+      require: [
+        ["SprinkleConfig", [], {
+          param_name: "jazoest",
+          version: 2,
+          should_randomize: false,
+        }, 1],
+        ["WebBloksVersioningID", [], {
+          versioningID: "a".repeat(64),
+        }, 2],
+      ],
+    });
+    const readback = threadsHtml + script({
+      post: {
+        pk: postId,
+        code: postCode,
+        canonical_url: `https://www.threads.com/@viewer/post/${postCode}`,
+        caption: { text },
+        user: { pk: "12345", username: "viewer" },
+      },
+    });
+    const calls: Call[] = [];
+    const events: string[] = [];
+    const network = dependencies(
+      "threads",
+      calls,
+      (call) => {
+        events.push(`${call.method} ${call.url.pathname}`);
+        if (call.method === "GET" && call.url.pathname === "/") {
+          return new Response(bootstrap, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        if (call.url.pathname === `/rupload_igphoto/fb_uploader_${uploadId}`) {
+          expect(call.body).toBeInstanceOf(Uint8Array);
+          expect((call.body as Uint8Array).byteLength).toBe(24);
+          expect(call.headers.get("x-entity-length")).toBe("24");
+          expect(call.headers.get("x-instagram-rupload-params")).toBe(JSON.stringify({
+            is_sidecar: "0",
+            is_threads: "1",
+            media_type: 1,
+            upload_id: uploadId,
+            upload_media_height: 1022,
+            upload_media_width: 959,
+          }));
+          return new Response(JSON.stringify({ status: "ok", upload_id: uploadId }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
+          expect(call.headers.get("x-csrftoken")).toBe("csrf-fixture");
+          expect(call.headers.get("x-bloks-version-id")).toBe("a".repeat(64));
+          const form = new URLSearchParams(typeof call.body === "string" ? call.body : "");
+          expect(Object.fromEntries(form)).toEqual({
+            audience: "default",
+            caption: text,
+            creator_geo_gating_info: JSON.stringify({ whitelist_country_codes: [] }),
+            is_threads: "true",
+            should_include_permalink: "true",
+            text_post_app_info: JSON.stringify({
+              excluded_inline_media_ids: "[]",
+              is_genai_invocation_post: false,
+              is_reply_approval_enabled: false,
+              is_spoiler_media: false,
+              text_with_entities: { entities: [], text },
+            }),
+            upload_id: uploadId,
+            web_session_id: "::wg8yw9",
+            jazoest: "21250",
+          });
+          return new Response(JSON.stringify({
+            status: "ok",
+            media: {
+              code: postCode,
+              permalink: `https://www.threads.com/@viewer/post/${postCode}`,
+              pk: postId,
+            },
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (call.url.pathname === `/@viewer/post/${postCode}`) {
+          return new Response(readback, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        throw new Error(`unexpected Threads test request ${call.method} ${call.url.pathname}`);
+      },
+      undefined,
+      [
+        strictCookie("www.threads.com", "csrftoken", "csrf-fixture"),
+        strictCookie("www.threads.com", "ds_user_id", "12345"),
+        strictCookie("www.threads.com", "sessionid", "private"),
+      ],
+    );
+    const result = await executeMetaWebOperation(
+      recipe("threads", "posts.publish"),
+      {
+        attachment: { kind: "file", reference: "fixture" },
+        audience: "default",
+        body: text,
+      },
+      auth("threads"),
+      {
+        fileResolver: () => Promise.resolve([imagePath]),
+        beforeDispatch: (event) => {
+          events.push(`before ${event.progress.started}`);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          events.push(`after ${event.progress.verified}`);
+          return Promise.resolve();
+        },
+        dependencies: { ...network, now: () => Number(uploadId) },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        post: { id: postId, caption: text, user: { id: "12345" } },
+        attachment: { height: 1022, mediaType: "image/png", width: 959 },
+      },
+      finalUrl: `https://www.threads.com/@viewer/post/${postCode}`,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(events).toEqual([
+      "GET /",
+      "GET /",
+      "before 0",
+      `POST /rupload_igphoto/fb_uploader_${uploadId}`,
+      "POST /api/v1/media/configure_text_post_app_feed/",
+      `GET /@viewer/post/${postCode}`,
+      "after 1",
+    ]);
+  });
+
+  test("marks a Threads image-upload failure indeterminate after durable dispatch and never creates a post", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-threads-upload-failure-"));
+    chmodSync(root, 0o700);
+    stateRoots.push(root);
+    const imagePath = join(root, "fixture.png");
+    writeFileSync(imagePath, pngFixture(959, 1022), { mode: 0o600 });
+    const uploadId = "1786923725481";
+    const bootstrap = threadsHtml + script({
+      require: [
+        ["SprinkleConfig", [], {
+          param_name: "jazoest",
+          version: 2,
+          should_randomize: false,
+        }, 1],
+        ["WebBloksVersioningID", [], {
+          versioningID: "a".repeat(64),
+        }, 2],
+      ],
+    });
+    const calls: Call[] = [];
+    let beforeDispatch = 0;
+    let creates = 0;
+    const result = await executeMetaWebOperation(
+      recipe("threads", "posts.publish"),
+      {
+        attachment: { kind: "file", reference: "fixture" },
+        audience: "default",
+        body: "how your email finds me",
+      },
+      auth("threads"),
+      {
+        fileResolver: () => Promise.resolve([imagePath]),
+        beforeDispatch: () => {
+          beforeDispatch += 1;
+          return Promise.resolve();
+        },
+        dependencies: {
+          ...dependencies("threads", calls, (call) => {
+            if (call.method === "GET" && call.url.pathname === "/") {
+              return new Response(bootstrap, {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              });
+            }
+            if (call.url.pathname === `/rupload_igphoto/fb_uploader_${uploadId}`) {
+              return new Response("upload failed", { status: 500 });
+            }
+            if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
+              creates += 1;
+            }
+            throw new Error(`unexpected Threads test request ${call.method} ${call.url.pathname}`);
+          }),
+          now: () => Number(uploadId),
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+    });
+    expect(beforeDispatch).toBe(1);
+    expect(creates).toBe(0);
+    expect(calls.filter((call) => call.url.pathname.includes("/rupload_igphoto/"))).toHaveLength(1);
   });
 
   test("executes Instagram timeline through the exact JSON endpoint with no dispatch", async () => {
@@ -1008,7 +1242,7 @@ describe("Meta authenticated internal-data runtime", () => {
           }
           expect(call.url.pathname).toBe("/api/graphql/");
           expect(call.method).toBe("POST");
-          const form = new URLSearchParams(call.body ?? "");
+          const form = new URLSearchParams(typeof call.body === "string" ? call.body : "");
           expect(form.get("fb_api_req_friendly_name"))
             .toBe("MarketplaceCometBrowseFeedLightPaginationQuery");
           expect(form.get("doc_id")).toBe("27448592924790037");

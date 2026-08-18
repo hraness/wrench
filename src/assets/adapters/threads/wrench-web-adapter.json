@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "threads-web",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "displayName": "Threads (Authenticated Internal API)",
   "surfaceId": "threads",
   "origins": [
@@ -367,9 +367,9 @@
       }
     },
     "posts.publish": {
-      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "description": "Observed contract: publish one confirmed Threads post with one reviewed PNG after exact viewer, upload, response, and independent permalink readback binding.",
       "risk": "R3",
-      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Publishes one externally visible Threads post with the exact confirmed text and one reviewed PNG.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -382,12 +382,10 @@
           },
           "attachment": {
             "type": "file",
-            "description": "Optional exact post attachment",
-            "maxBytes": 1073741824,
+            "description": "One exact reviewed PNG attachment",
+            "maxBytes": 20971520,
             "mediaTypes": [
-              "image/*",
-              "video/*",
-              "image/gif"
+              "image/png"
             ]
           },
           "audience": {
@@ -399,13 +397,14 @@
           }
         },
         "required": [
+          "attachment",
           "body"
         ]
       },
       "webSession": {
         "site": "threads",
         "action": "posts.publish",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }

@@ -88,17 +88,23 @@ export type {
 } from "./provider-plugin-protocol";
 
 export {
+  ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION,
   ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION,
   MAX_ARTICLE_DRAFT_BLOCKS,
   MAX_ARTICLE_DRAFT_CHARACTERS,
   MAX_ARTICLE_DRAFT_DOCUMENT_BYTES,
   articleDraftDocumentIssues,
+  articleDraftDocumentV2Issues,
   parseArticleDraftDocument,
+  parseArticleDraftDocumentV2,
 } from "./article-draft-document";
 
 export type {
   ArticleDraftDocument,
   ArticleDraftDocumentLimits,
+  ArticleDraftDocumentV2,
+  ArticleDraftDocumentV2Limits,
+  ArticleDraftImageBlock,
   ArticleDraftLinkRange,
   ArticleDraftStyleRange,
   ArticleDraftTextBlock,

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.4.0",
+  "version": "1.7.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -309,7 +309,7 @@
       }
     },
     "posts.publish": {
-      "description": "Capture-required contract reservation: publish one confirmed text-only X post only after an authorized live fixture proves current transaction-header and response behavior.",
+      "description": "Observed contract: publish one confirmed X post with optional reviewed PNG through exact upload, CreateTweet response, and independent TweetResultByRestId readback binding.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible X post with the exact confirmed content and reply audience.",
       "idempotency": "local-at-most-once",
@@ -318,9 +318,24 @@
         "properties": {
           "body": {
             "type": "string",
-            "description": "Exact text-only post content",
+            "description": "Exact post content",
             "minLength": 1,
             "maxLength": 280
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional single plan-bound PNG",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/png"
+            ]
+          },
+          "media_type": {
+            "type": "string",
+            "description": "Exact media type when the PNG is attached",
+            "enum": [
+              "image/png"
+            ]
           }
         },
         "required": [
@@ -330,7 +345,7 @@
       "webSession": {
         "site": "x",
         "action": "posts.publish",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }
@@ -533,9 +548,9 @@
       }
     },
     "articles.draft.save": {
-      "description": "Create or replace one private native X Article draft from the strict provider-neutral ArticleDraftDocument. This operation has no publish-capable branch.",
+      "description": "Create or replace one private native X Article draft from ArticleDraftDocument schemaVersion 2 with ordered local inline images. This operation has no publish-capable branch.",
       "risk": "R2",
-      "sideEffect": "Creates one private native X Article draft, or replaces the exact confirmed existing private draft, with the confirmed title, structure, styles, and native links; it never publishes the draft.",
+      "sideEffect": "Creates one private native X Article draft, or replaces the exact confirmed existing private draft, with the confirmed title, structure, styles, native links, inline image bytes, and captions; it never publishes the draft.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -548,7 +563,7 @@
           },
           "document": {
             "type": "string",
-            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 1; supports bounded paragraphs, headings, lists, blockquotes, native HTTPS links, and text styles",
+            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 2; supports bounded paragraphs, headings, lists, blockquotes, native HTTPS links, text styles, and ordered inline image blocks with optional captions; X Article image alt text remains capture-required",
             "minLength": 1,
             "maxLength": 524288
           },
@@ -557,18 +572,35 @@
             "description": "Optional exact existing private X Article draft to replace in place",
             "minLength": 1,
             "maxLength": 19
+          },
+          "inline_images": {
+            "type": "array",
+            "description": "Ordered plan-bound local image files referenced by document imageIndex",
+            "items": {
+              "type": "file",
+              "description": "One exact JPEG, PNG, or WebP inline image",
+              "maxBytes": 5242880,
+              "mediaTypes": [
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 20
           }
         },
         "required": [
           "title",
-          "document"
+          "document",
+          "inline_images"
         ]
       },
       "webSession": {
         "site": "x",
         "action": "articles.draft.save",
-        "contractVersion": 1,
-        "timeoutMs": 180000,
+        "contractVersion": 2,
+        "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }
     },

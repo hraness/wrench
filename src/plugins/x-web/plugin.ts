@@ -4,22 +4,26 @@ import {
 } from "../../provider-plugin";
 import {
   articleDraftDocumentIssues,
+  articleDraftDocumentV2Issues,
   parseArticleDraftDocument,
+  parseArticleDraftDocumentV2,
 } from "../../article-draft-document";
+import { articleDraftImageFileInputs } from "../../article-draft-images";
+import archivedXWebManifest from "../../assets/adapters/x/wrench-web-adapter.v1.4.0.json";
 import {
   browserSessionAuthKinds,
   webSessionContractOperations,
   webImplementationSources,
 } from "../../provider-plugin-builtins";
-import { webSessionContractDefinitions } from "../../web-session-contract-definitions";
+import {
+  reviewedArchivedWebSessionContract,
+  webSessionContractDefinitions,
+} from "../../web-session-contract-definitions";
 
-function xArticleDraftIssues(
+function xArticleDraftIdentityIssues(
   input: Readonly<Record<string, unknown>>,
 ): readonly string[] {
-  const issues = [...articleDraftDocumentIssues(input.document, {
-    maximumBlocks: 2_000,
-    maximumCharacters: 20_000,
-  })];
+  const issues: string[] = [];
   if (
     typeof input.title !== "string"
     || input.title.length < 1
@@ -34,6 +38,19 @@ function xArticleDraftIssues(
   ) {
     issues.push("input.draft_id must be one exact 1-19 digit private X Article ID");
   }
+  return issues;
+}
+
+function xArticleDraftV1Issues(
+  input: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const issues = [
+    ...articleDraftDocumentIssues(input.document, {
+      maximumBlocks: 2_000,
+      maximumCharacters: 20_000,
+    }),
+    ...xArticleDraftIdentityIssues(input),
+  ];
   if (issues.length === 0) {
     const document = parseArticleDraftDocument(input.document, {
       maximumBlocks: 2_000,
@@ -54,9 +71,83 @@ function xArticleDraftIssues(
   return Object.freeze(issues);
 }
 
-const operations = webSessionContractOperations(
+function xArticleDraftV2Issues(
+  input: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const issues = [
+    ...articleDraftDocumentV2Issues(input.document, {
+      maximumBlocks: 2_000,
+      maximumCharacters: 20_000,
+      maximumImages: 20,
+    }),
+    ...xArticleDraftIdentityIssues(input),
+  ];
+  try {
+    articleDraftImageFileInputs(input.inline_images, 20);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : "input.inline_images is invalid");
+  }
+  if (issues.length === 0) {
+    const document = parseArticleDraftDocumentV2(input.document, {
+      maximumBlocks: 2_000,
+      maximumCharacters: 20_000,
+      maximumImages: 20,
+    });
+    const textBlocks = document.blocks.filter((block) => block.type !== "image");
+    const linkCount = textBlocks.reduce(
+      (total, block) => total + block.links.length,
+      0,
+    );
+    if (textBlocks.some((block) =>
+      block.links.some((link) => link.url.length > 2_048))) {
+      issues.push("input.document native link URLs must contain at most 2048 UTF-16 code units for X");
+    }
+    if (linkCount > 2_000) {
+      issues.push("input.document must contain at most 2000 native link ranges for X");
+    }
+    const images = document.blocks.filter((block) => block.type === "image");
+    if (images.length !== (input.inline_images as readonly unknown[]).length) {
+      issues.push("input.inline_images must match every document imageIndex exactly");
+    }
+    if (images.some((block) => block.altText !== undefined)) {
+      issues.push("X Article inline-image alternative text remains capture-required");
+    }
+  }
+  return Object.freeze(issues);
+}
+
+function xArticleDraftV2Dispatches(
+  input: Readonly<Record<string, unknown>>,
+): readonly { readonly id: string; readonly description: string }[] {
+  const count = Array.isArray(input.inline_images) ? input.inline_images.length : 0;
+  const images = Array.from({ length: count }, (_, index) => Object.freeze({
+    id: `articles.media.inline[${index + 1}]`,
+    description: `Upload exact inline image ${index + 1}`,
+  }));
+  return input.draft_id === undefined
+    ? Object.freeze([
+        ...images,
+        Object.freeze({
+          id: "articles.create",
+          description: "Create one exact private structured X Article draft",
+        }),
+      ])
+    : Object.freeze([
+        ...images,
+        Object.freeze({
+          id: "articles.title",
+          description: "Update the exact private X Article draft title",
+        }),
+        Object.freeze({
+          id: "articles.content",
+          description: "Replace the exact private X Article draft content and images",
+        }),
+      ]);
+}
+
+const currentOperations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "fb1bbf6b21ad0de15dca8ff5c4cd50e81c66a2602b131cb299c15721dbac7ae7",
+  "b7b3d2533e5726d39a40e2f750f026ad5e723c497f8de071c2dcec8a478f8472",
   {
     "likes.set": [1],
   },
@@ -71,21 +162,7 @@ const operations = webSessionContractOperations(
     },
   },
   {
-    "articles.draft.save": (input) => input.draft_id === undefined
-      ? Object.freeze([Object.freeze({
-          id: "articles.create",
-          description: "Create one exact private structured X Article draft",
-        })])
-      : Object.freeze([
-          Object.freeze({
-            id: "articles.title",
-            description: "Update the exact private X Article draft title",
-          }),
-          Object.freeze({
-            id: "articles.content",
-            description: "Replace the exact private X Article draft content",
-          }),
-        ]),
+    "articles.draft.save": xArticleDraftV2Dispatches,
   },
 ).map((operation) => {
   if (
@@ -98,20 +175,7 @@ const operations = webSessionContractOperations(
   if (operation.name === "articles.draft.save") {
     return Object.freeze({
       ...operation,
-      validateInput: xArticleDraftIssues,
-      reconciliation: Object.freeze({
-        kind: "boolean-desired-state" as const,
-        desiredState: (input: Readonly<Record<string, unknown>>): boolean => {
-          if (
-            typeof input.draft_id !== "string"
-          ) {
-            throw new Error(
-              "X articles.draft.save create has no safe reconciliation because input.draft_id is absent; preserve the indeterminate run and do not retry",
-            );
-          }
-          return true;
-        },
-      }),
+      validateInput: xArticleDraftV2Issues,
     });
   }
   const stateKey = operation.name === "content.save" ? "saved" : "liked";
@@ -132,6 +196,65 @@ const operations = webSessionContractOperations(
   });
 });
 
+const archivedArticleDraftContract = reviewedArchivedWebSessionContract(
+  archivedXWebManifest,
+  {
+    adapterId: "x-web",
+    adapterVersion: "1.4.0",
+    site: "x",
+    operation: "articles.draft.save",
+    contractVersion: 1,
+    risk: "R2",
+    state: "observed",
+    implementation: "current Article entity create/title/content mutations save one response-bound private rich-text draft and never call ArticleEntityPublish",
+  },
+);
+
+const archivedArticleDraftOperation = Object.freeze({
+  name: archivedArticleDraftContract.operation,
+  contractVersion: archivedArticleDraftContract.contractVersion,
+  risk: archivedArticleDraftContract.risk,
+  input: archivedArticleDraftContract.input,
+  sideEffect: archivedArticleDraftContract.sideEffect,
+  idempotency: archivedArticleDraftContract.idempotency,
+  dedupeWindowMs: archivedArticleDraftContract.dedupeWindowMs,
+  state: archivedArticleDraftContract.state,
+  dispatch: archivedArticleDraftContract.dispatch,
+  implementation: archivedArticleDraftContract.implementation,
+  planDispatches: (input: Readonly<Record<string, unknown>>) => input.draft_id === undefined
+    ? Object.freeze([Object.freeze({
+        id: "articles.create",
+        description: "Create one exact private structured X Article draft",
+      })])
+    : Object.freeze([
+        Object.freeze({
+          id: "articles.title",
+          description: "Update the exact private X Article draft title",
+        }),
+        Object.freeze({
+          id: "articles.content",
+          description: "Replace the exact private X Article draft content",
+        }),
+      ]),
+  validateInput: xArticleDraftV1Issues,
+  reconciliation: Object.freeze({
+    kind: "boolean-desired-state" as const,
+    desiredState: (input: Readonly<Record<string, unknown>>): boolean => {
+      if (typeof input.draft_id !== "string") {
+        throw new Error(
+          "X articles.draft.save create has no safe reconciliation because input.draft_id is absent; preserve the indeterminate run and do not retry",
+        );
+      }
+      return true;
+    },
+  }),
+});
+
+const operations = Object.freeze([
+  ...currentOperations,
+  archivedArticleDraftOperation,
+]);
+
 export const xWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "x-web",
@@ -141,6 +264,7 @@ export const xWebPlugin = defineProviderPlugin({
   implementationSources: webImplementationSources(import.meta.url, [
     ["kernel/browser.ts", "../../browser.ts"],
     ["kernel/article-draft-document.ts", "../../article-draft-document.ts"],
+    ["kernel/article-draft-images.ts", "../../article-draft-images.ts"],
     ["providers/x-web.ts", "../../providers/x-web.ts"],
     ["providers/x-web-runtime.ts", "../../providers/x-web-runtime.ts"],
     ["providers/x-transaction-id.ts", "../../providers/x-transaction-id.ts"],

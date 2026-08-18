@@ -132,14 +132,14 @@ describe("Substack internal-web operation registry", () => {
       expect(operation.webSession).toMatchObject({
         site: "substack",
         action,
-        contractVersion: 1,
+        contractVersion: action === "posts.publish" ? 2 : 1,
       });
       expect("browser" in operation).toBe(false);
       expect("provider" in operation).toBe(false);
     }
   });
 
-  test("graduates only the direct reads proved against the current site", () => {
+  test("graduates only the direct reads and authorized Note publication proved against the current site", () => {
     expect(
       Object.entries(SUBSTACK_WEB_OPERATIONS)
         .filter(([, contract]) => contract.state === "observed")
@@ -151,6 +151,7 @@ describe("Substack internal-web operation registry", () => {
       "feeds.read",
       "media.read",
       "messaging.list",
+      "posts.publish",
       "posts.read",
     ]);
     expect(SUBSTACK_WEB_OPERATIONS["messaging.read"].state).toBe("capture-required");
@@ -164,7 +165,6 @@ describe("Substack internal-web operation registry", () => {
     }
     for (const operation of [
       "messaging.send",
-      "posts.publish",
       "articles.publish",
       "content.schedule",
     ] as const) {
@@ -257,6 +257,35 @@ describe("Substack account and response projection", () => {
     )).toThrow("strict preload JSON");
     expect(() => parseSubstackLoggedInResponse({ loggedIn: false })).toThrow("not signed in");
     expect(parseSubstackLoggedInResponse({ loggedIn: true })).toBeUndefined();
+  });
+
+  test("accepts an absent primary user only for secondary dashboard publication metadata", () => {
+    expect(parseSubstackPreloadsHtml(preloadsHtml({
+      dashboard_pubs: [
+        {
+          id: PUBLICATION_ID,
+          subdomain: "wrench-secondary",
+          primary_user_id: null,
+          can_post_notes_as_primary_user: false,
+          is_publication_primary_user: false,
+        },
+      ],
+    })).publications).toEqual([
+      {
+        id: PUBLICATION_ID,
+        origin: "https://wrench-secondary.substack.com",
+        primaryUserId: null,
+        canPostNotesAsPrimaryUser: false,
+        isPublicationPrimaryUser: false,
+      },
+    ]);
+    expect(() => parseSubstackPreloadsHtml(preloadsHtml({
+      dashboard_pubs: [{
+        id: PUBLICATION_ID,
+        subdomain: "wrench-secondary",
+        primary_user_id: "42",
+      }],
+    }))).toThrow("positive safe integer");
   });
 
   test("projects reader feeds, exact Notes, articles, comments, media, and inbox threads", () => {

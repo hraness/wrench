@@ -46,10 +46,13 @@ describe("provider operation contract parity", () => {
         readonly risk: string;
         readonly state: string;
       }>>;
-      expect(binding.operations.map(({ name }) => name).sort()).toEqual(
+      const activeOperations = binding.operations.filter((operation) =>
+        operation.contractVersion === contracts[operation.name]?.contractVersion
+      );
+      expect(activeOperations.map(({ name }) => name).sort()).toEqual(
         Object.keys(contracts).sort(),
       );
-      for (const operation of binding.operations) {
+      for (const operation of activeOperations) {
         expect(operation).toMatchObject({
           contractVersion: contracts[operation.name]?.contractVersion,
           risk: contracts[operation.name]?.risk,

@@ -207,12 +207,12 @@ function parseOwnedInputSchema(value: unknown, path: string): InputSchema {
   });
 }
 
-function bundledOperationSemantics(
+function manifestOperationSemantics(
+  manifest: unknown,
   site: WebSessionSiteId,
   operation: SemanticOperationName,
   expectedRisk: OperationRisk,
 ): Pick<WebSessionContract, "input" | "sideEffect" | "idempotency" | "dedupeWindowMs"> {
-  const manifest = bundledManifests[site];
   if (!isRecord(manifest) || !isRecord(manifest.operations)) {
     throw new Error(`bundled authenticated web manifest ${site} is malformed`);
   }
@@ -235,6 +235,78 @@ function bundledOperationSemantics(
     sideEffect,
     idempotency,
     dedupeWindowMs,
+  });
+}
+
+function bundledOperationSemantics(
+  site: WebSessionSiteId,
+  operation: SemanticOperationName,
+  expectedRisk: OperationRisk,
+): Pick<WebSessionContract, "input" | "sideEffect" | "idempotency" | "dedupeWindowMs"> {
+  return manifestOperationSemantics(
+    bundledManifests[site],
+    site,
+    operation,
+    expectedRisk,
+  );
+}
+
+/**
+ * Rehydrate one exact immutable bundled adapter contract for durable recovery.
+ * The returned route keeps its historical schema and confirmation text; it is
+ * never an alias to a semantically different active contract.
+ */
+export function reviewedArchivedWebSessionContract(
+  manifestValue: unknown,
+  expected: {
+    readonly adapterId: string;
+    readonly adapterVersion: string;
+    readonly site: WebSessionSiteId;
+    readonly operation: SemanticOperationName;
+    readonly contractVersion: number;
+    readonly risk: OperationRisk;
+    readonly state: WebSessionContractState;
+    readonly implementation: string;
+  },
+): WebSessionContract {
+  if (!isRecord(manifestValue)) {
+    throw new Error(`archived authenticated web manifest ${expected.adapterId} is malformed`);
+  }
+  if (
+    manifestValue.schemaVersion !== 4
+    || manifestValue.id !== expected.adapterId
+    || manifestValue.version !== expected.adapterVersion
+    || !isRecord(manifestValue.operations)
+  ) throw new Error(`archived authenticated web manifest ${expected.adapterId}@${expected.adapterVersion} changed identity`);
+  const definition = manifestValue.operations[expected.operation];
+  if (!isRecord(definition) || !isRecord(definition.webSession)) {
+    throw new Error(`archived authenticated web operation ${expected.site}/${expected.operation} is missing`);
+  }
+  if (
+    definition.webSession.site !== expected.site
+    || definition.webSession.action !== expected.operation
+    || definition.webSession.contractVersion !== expected.contractVersion
+  ) throw new Error(`archived authenticated web operation ${expected.site}/${expected.operation} changed route identity`);
+  return Object.freeze({
+    site: expected.site,
+    operation: expected.operation,
+    contractVersion: expected.contractVersion,
+    risk: expected.risk,
+    ...manifestOperationSemantics(
+      manifestValue,
+      expected.site,
+      expected.operation,
+      expected.risk,
+    ),
+    state: expected.state,
+    dispatch: expected.risk === "R1"
+      ? "none"
+      : expected.operation === "articles.draft.save"
+        ? "bounded-items"
+        : expected.operation === "threads.publish"
+          ? "thread-items"
+          : "single",
+    implementation: expected.implementation,
   });
 }
 
@@ -284,8 +356,18 @@ const BLUESKY_WEB_OPERATIONS = operationPolicies("bluesky", [
   "comments.read",
   "feeds.read",
   "media.read",
+  "posts.publish",
   "posts.read",
-]);
+], {
+  "posts.publish": 2,
+});
+const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
+  "articles.draft.save",
+  "posts.publish",
+], {
+  "articles.draft.save": 2,
+  "posts.publish": 2,
+});
 const HACKER_NEWS_WEB_OPERATIONS = operationPolicies("hacker-news", [
   "comments.read",
   "feeds.read",
@@ -304,8 +386,11 @@ const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
   "feeds.read",
   "media.read",
   "messaging.list",
+  "posts.publish",
   "posts.read",
-]);
+], {
+  "posts.publish": 2,
+});
 const TIKTOK_WEB_OPERATIONS = operationPolicies("tiktok", [
   "comments.read",
   "feeds.read",
@@ -338,8 +423,9 @@ const META_WEB_OPERATIONS = Object.freeze({
     "feeds.read": 2,
     "messaging.list": 2,
   }),
-  threads: operationPolicies("threads", ["feeds.read"], {
+  threads: operationPolicies("threads", ["feeds.read", "posts.publish"], {
     "feeds.read": 2,
+    "posts.publish": 2,
   }),
   facebook: operationPolicies("facebook", ["feeds.read"], {
     "feeds.read": 2,
@@ -419,7 +505,7 @@ const bluesky = {
   "messaging.list": contract("bluesky", "messaging.list", BLUESKY_WEB_OPERATIONS["messaging.list"].risk, BLUESKY_WEB_OPERATIONS["messaging.list"].state, BLUESKY_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("bluesky", "messaging.read", BLUESKY_WEB_OPERATIONS["messaging.read"].risk, BLUESKY_WEB_OPERATIONS["messaging.read"].state, BLUESKY_WEB_OPERATIONS["messaging.read"].reason),
   "messaging.send": contract("bluesky", "messaging.send", BLUESKY_WEB_OPERATIONS["messaging.send"].risk, BLUESKY_WEB_OPERATIONS["messaging.send"].state, BLUESKY_WEB_OPERATIONS["messaging.send"].reason),
-  "posts.publish": contract("bluesky", "posts.publish", BLUESKY_WEB_OPERATIONS["posts.publish"].risk, BLUESKY_WEB_OPERATIONS["posts.publish"].state, BLUESKY_WEB_OPERATIONS["posts.publish"].reason),
+  "posts.publish": contract("bluesky", "posts.publish", BLUESKY_WEB_OPERATIONS["posts.publish"].risk, BLUESKY_WEB_OPERATIONS["posts.publish"].state, BLUESKY_WEB_OPERATIONS["posts.publish"].reason, BLUESKY_WEB_OPERATIONS["posts.publish"].contractVersion),
   "posts.quote": contract("bluesky", "posts.quote", BLUESKY_WEB_OPERATIONS["posts.quote"].risk, BLUESKY_WEB_OPERATIONS["posts.quote"].state, BLUESKY_WEB_OPERATIONS["posts.quote"].reason),
   "posts.read": contract("bluesky", "posts.read", BLUESKY_WEB_OPERATIONS["posts.read"].risk, BLUESKY_WEB_OPERATIONS["posts.read"].state, BLUESKY_WEB_OPERATIONS["posts.read"].reason),
   "posts.repost": contract("bluesky", "posts.repost", BLUESKY_WEB_OPERATIONS["posts.repost"].risk, BLUESKY_WEB_OPERATIONS["posts.repost"].state, BLUESKY_WEB_OPERATIONS["posts.repost"].reason),
@@ -442,13 +528,20 @@ const linkedin = {
     "articles.draft.save",
     "R2",
     "observed",
-    "reviewed current-member-bound native Article title/content autosave with stable draft identity and exact unpublished server-response readback",
-    2,
+    "reviewed current-member-bound native Article title/content autosave plus bounded inline image registration, signed transfer, asset-URN projection, and exact unpublished server-response readback",
+    3,
   ),
   "posts.read": contract("linkedin", "posts.read", "R1", "capture-required", "exact consumer-web post read requires a reviewed capture"),
   "comments.read": contract("linkedin", "comments.read", "R1", "capture-required", "exact comment collection requires a reviewed capture"),
   "messaging.send": contract("linkedin", "messaging.send", "R3", "capture-required", "createMessage mutation requires a reviewed capture and response binding"),
-  "posts.publish": contract("linkedin", "posts.publish", "R3", "capture-required", "sharebox publish requires per-media reviewed captures"),
+  "posts.publish": contract(
+    "linkedin",
+    "posts.publish",
+    LINKEDIN_WEB_OPERATIONS["posts.publish"].risk,
+    LINKEDIN_WEB_OPERATIONS["posts.publish"].state,
+    "reviewed member-bound IMAGE_SHARING registration/upload, registered post-create mutation, and independent exact-share readback",
+    LINKEDIN_WEB_OPERATIONS["posts.publish"].contractVersion,
+  ),
   "posts.repost": contract("linkedin", "posts.repost", "R3", "capture-required", "repost requires an exact reviewed mutation"),
   "posts.quote": contract("linkedin", "posts.quote", "R3", "capture-required", "quote repost requires an exact reviewed mutation"),
   "comments.create": contract("linkedin", "comments.create", "R3", "capture-required", "createComment requires exact actor/root/parent response binding"),
@@ -477,9 +570,9 @@ const x = {
   "messaging.list": contract("x", "messaging.list", "R1", "capture-required", "current X Chat inbox events are encrypted and require the reviewed key-recovery runtime before plaintext listing"),
   "messaging.read": contract("x", "messaging.read", "R1", "capture-required", "current X Chat conversation events are encrypted and require verified key recovery before plaintext projection"),
   "articles.read": contract("x", "articles.read", "R1", "capture-required", "native article detail requires entitlement-specific reviewed capture"),
-  "articles.draft.save": contract("x", "articles.draft.save", "R2", "observed", "current Article entity create/title/content mutations save one response-bound private rich-text draft and never call ArticleEntityPublish"),
+  "articles.draft.save": contract("x", "articles.draft.save", "R2", "observed", "current bounded media INIT/APPEND/FINALIZE plus Article entity create/title/content mutations save one response-bound private rich-text-and-image draft and never call ArticleEntityPublish", 2),
   "messaging.send": contract("x", "messaging.send", "R3", "capture-required", "DM send requires exact current mutation and target binding"),
-  "posts.publish": contract("x", "posts.publish", "R3", "capture-required", "CreateTweet requires an authorized live fixture and reviewed transaction-header behavior"),
+  "posts.publish": contract("x", "posts.publish", "R3", "observed", "current optional single-PNG upload plus CreateTweet response and independent TweetResultByRestId readback binding", 2),
   "threads.publish": contract("x", "threads.publish", "R3", "capture-required", "ordered CreateTweet root/self-reply dispatch needs an authorized live fixture and reviewed transaction-header behavior"),
   "replies.create": contract("x", "replies.create", "R3", "capture-required", "CreateTweet reply needs an authorized live fixture and reviewed transaction-header behavior"),
   "posts.repost": contract("x", "posts.repost", "R3", "capture-required", "repost desired-state mutation needs an authorized live fixture and reviewed transaction-header behavior"),
@@ -535,7 +628,7 @@ const substack = {
   "messaging.list": contract("substack", "messaging.list", SUBSTACK_WEB_OPERATIONS["messaging.list"].risk, SUBSTACK_WEB_OPERATIONS["messaging.list"].state, SUBSTACK_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("substack", "messaging.read", SUBSTACK_WEB_OPERATIONS["messaging.read"].risk, SUBSTACK_WEB_OPERATIONS["messaging.read"].state, SUBSTACK_WEB_OPERATIONS["messaging.read"].reason),
   "messaging.send": contract("substack", "messaging.send", SUBSTACK_WEB_OPERATIONS["messaging.send"].risk, SUBSTACK_WEB_OPERATIONS["messaging.send"].state, SUBSTACK_WEB_OPERATIONS["messaging.send"].reason),
-  "posts.publish": contract("substack", "posts.publish", SUBSTACK_WEB_OPERATIONS["posts.publish"].risk, SUBSTACK_WEB_OPERATIONS["posts.publish"].state, SUBSTACK_WEB_OPERATIONS["posts.publish"].reason),
+  "posts.publish": contract("substack", "posts.publish", SUBSTACK_WEB_OPERATIONS["posts.publish"].risk, SUBSTACK_WEB_OPERATIONS["posts.publish"].state, SUBSTACK_WEB_OPERATIONS["posts.publish"].reason, SUBSTACK_WEB_OPERATIONS["posts.publish"].contractVersion),
   "posts.quote": contract("substack", "posts.quote", SUBSTACK_WEB_OPERATIONS["posts.quote"].risk, SUBSTACK_WEB_OPERATIONS["posts.quote"].state, SUBSTACK_WEB_OPERATIONS["posts.quote"].reason),
   "posts.read": contract("substack", "posts.read", SUBSTACK_WEB_OPERATIONS["posts.read"].risk, SUBSTACK_WEB_OPERATIONS["posts.read"].state, SUBSTACK_WEB_OPERATIONS["posts.read"].reason),
   "posts.repost": contract("substack", "posts.repost", SUBSTACK_WEB_OPERATIONS["posts.repost"].risk, SUBSTACK_WEB_OPERATIONS["posts.repost"].state, SUBSTACK_WEB_OPERATIONS["posts.repost"].reason),

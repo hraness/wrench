@@ -61,10 +61,10 @@ owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
-Pin the public repository to the immutable `v0.9.0` tag:
+Pin the public repository to the immutable `v0.10.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.9.0
+bun add --global github:hraness/wrench#v0.10.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -88,7 +88,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.9.0
+bun add github:hraness/wrench#v0.10.0
 ```
 
 ```ts
@@ -395,15 +395,16 @@ The current provider state is explicit:
 | Adapter | `articles.draft.save` | `articles.publish` |
 | --- | --- | --- |
 | `x` | Observed R2 response-bound private draft create through the documented OAuth API | Observed R3 response-bound publication through the documented OAuth API |
-| `x-web` | Observed R2 private draft save | Capture-required R3 |
-| `linkedin-web` | Observed R2 paragraphs/headings/native-link private draft save with exact unpublished editor-response readback | Capture-required R3 |
+| `x-web` | Observed R2 structured private draft with ordered inline images and exact unpublished readback | Capture-required R3 |
+| `linkedin-web` | Observed R2 paragraphs/headings/native-link private draft with ordered inline images, alt text, captions, and exact unpublished readback | Capture-required R3 |
 
 The `x-web` draft operation accepts a title, a canonical provider-neutral
-`ArticleDraftDocument` schemaVersion 1 string, and an optional exact existing
+`ArticleDraftDocument` schemaVersion 2 string, 1–20 ordered plan-bound JPEG,
+PNG, or WebP files up to 5 MiB each, and an optional exact existing
 private `draft_id`. The document supports paragraphs, headings, blockquotes,
 list items, bold/italic/strikethrough ranges, and native canonical HTTPS link
-ranges. It does not accept Markdown, HTML, embeds, image blocks, covers, or
-files. The separate official `x` OAuth operation exposes only its reviewed
+ranges. Image blocks support captions; native image alt text, covers, embeds,
+Markdown, and HTML remain unavailable. The separate official `x` OAuth operation exposes only its reviewed
 plain-text `body` contract plus an optional cover. Inspect the exact installed
 capability instead of translating inputs or switching transports implicitly.
 
@@ -412,12 +413,14 @@ choice involved in translating, abridging, retitling, attributing, and linking
 it for the destination. Wrench sends only the final reviewed title and
 document; it does not turn a source URL into provider copy.
 
-For X, put the exact inner canonical JSON document in a private input file:
+For X, put the exact inner canonical JSON document and local image path in a
+private input file:
 
 ```json
 {
   "title": "Reviewed title",
-  "document": "{\"blocks\":[{\"links\":[{\"length\":6,\"offset\":9,\"url\":\"https://example.com/source\"}],\"text\":\"Read the source\",\"type\":\"paragraph\"}],\"schemaVersion\":1}"
+  "document": "{\"blocks\":[{\"links\":[{\"length\":6,\"offset\":9,\"url\":\"https://example.com/source\"}],\"text\":\"Read the source\",\"type\":\"paragraph\"},{\"caption\":\"Puerto Rico\",\"imageIndex\":0,\"type\":\"image\"}],\"schemaVersion\":2}",
+  "inline_images": ["/absolute/private/puerto-rico.png"]
 }
 ```
 
@@ -436,24 +439,27 @@ wrench x-web articles.draft.save \
 wrench confirm <preview-digest> --json
 ```
 
-Review the exact account, title, canonical document, optional draft ID,
-contract, and dispatch schedule. Require a successful result to identify
+Review the exact account, title, canonical document, ordered attachment
+hashes, optional draft ID, contract, and dispatch schedule. Require a successful result to identify
 `articles.draft.save`, report `published: false` and `mode: "draft"`, and return
 the private draft identity. Do not retry a partial or indeterminate save and do
-not call `articles.publish` as recovery. Signed-in X replacements with an exact
-input draft ID can use read-only reconciliation; an indeterminate create cannot
-be safely targeted and must remain unsettled.
+not call `articles.publish` as recovery. The current image-capable contracts do
+not reconcile automatically because an uncertain upload may have created a
+provider asset absent from the confirmed input; preserve the run and do not
+repeat uploads.
 
 Signed-in LinkedIn now exposes the same private R2 seam through
-`linkedin-web articles.draft.save`. The observed contract supports paragraphs,
-H1/H2 headings, and native HTTPS links; it creates or replaces only one bound
-private draft and independently verifies the exact unpublished result from one
-bounded hidden server payload in the authenticated editor HTML. Its fixed
-first-party writes and server-response read run inside a contained, account-bound Chrome
+`linkedin-web articles.draft.save`. Its schemaVersion 2 document supports
+paragraphs, H1/H2 headings, native HTTPS links, and ordered inline images with
+required descriptive alt text and optional captions. It creates or replaces
+only one bound private draft and independently verifies the exact unpublished
+text/image/asset result from one bounded hidden server payload in the
+authenticated editor HTML. Its fixed first-party registration, signed byte
+transfer, writes, and server-response read run inside a contained, account-bound Chrome
 session because LinkedIn rejects the same editor traffic when replayed by a
 standalone HTTP client. Wrench does not type into or inspect the editor DOM,
 and the contained headed browser may be visible while the private save runs.
-Covers, inline media, lists, blockquotes, styles, and publication remain unavailable.
+Covers, lists, blockquotes, styles, and publication remain unavailable.
 See the packaged [native article draft workflow](skills/wrench/references/article-drafts.md)
 for the shared document grammar and safety sequence.
 
@@ -553,8 +559,11 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.9.0/skills/wrench/SKILL.md)
-gives coding agents the same workflow and safety boundary.
+with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.10.0/skills/wrench/SKILL.md)
+gives coding agents the same workflow and safety boundary. The packaged
+[cross-post skill](skills/cross-post-with-wrench/SKILL.md) orchestrates exact,
+previewed posts across X, LinkedIn, Bluesky, Substack Notes, and Threads while
+preserving per-provider attachment limits and at-most-once dispatch evidence.
 
 ## Risk and confirmation
 

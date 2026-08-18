@@ -1,4 +1,10 @@
-import type { ArticleDraftDocument } from "../article-draft-document";
+import { randomUUID } from "node:crypto";
+
+import type {
+  ArticleDraftDocument,
+  ArticleDraftDocumentV2,
+} from "../article-draft-document";
+import type { BoundArticleDraftImage } from "../article-draft-images";
 import type { WrenchAuth } from "../auth";
 import {
   PreservedBrowserArtifactsError,
@@ -15,13 +21,16 @@ import type {
 } from "../web-session-execution";
 import {
   LINKEDIN_ARTICLE_PAGE_MAX_CHARACTERS,
+  LINKEDIN_ARTICLE_INLINE_IMAGE_UPLOAD_PATH,
   LINKEDIN_FIRST_PARTY_ARTICLES_PATH,
   buildLinkedInArticleContentPatch,
+  buildLinkedInArticleContentPatchV2,
   buildLinkedInArticleCreateBody,
   buildLinkedInArticleTitlePatch,
   linkedInArticleDraftEditUrl,
   linkedInArticleDraftEnvelopeFromCodePayloads,
   linkedInArticleDraftEntityUrl,
+  normalizeLinkedInArticleImageUploadRegistration,
 } from "./linkedin-web";
 
 const LINKEDIN_ORIGIN = "https://www.linkedin.com";
@@ -50,6 +59,15 @@ export type LinkedInArticleBrowserTransport = {
   readonly updateContent: (
     draftId: string,
     document: ArticleDraftDocument,
+  ) => Promise<void>;
+  readonly uploadInlineImage?: (
+    draftId: string,
+    image: BoundArticleDraftImage,
+  ) => Promise<string>;
+  readonly updateContentV2?: (
+    draftId: string,
+    document: ArticleDraftDocumentV2,
+    imageAssetUrns: readonly string[],
   ) => Promise<void>;
   readonly close: () => Promise<void>;
 };
@@ -204,10 +222,11 @@ function linkedInArticlePageBindings(
       pageInstance: linkedInPageInstance(pageInstanceValue),
       track: linkedInArticleTrack(item.headers["x-li-track"]),
     });
-    if (
-      selected !== null
-      && (selected.pageInstance !== candidate.pageInstance || selected.track !== candidate.track)
-    ) throw new Error("LinkedIn Article page binding was ambiguous");
+    // Agent-browser's bounded request inventory is chronological and may
+    // retain an earlier instance of this same editor after a navigation retry.
+    // The final matching request is the binding for the currently visible
+    // editor; older matching instances must not make an otherwise exact
+    // current-page binding ambiguous.
     selected = candidate;
   }
   if (selected === null) {
@@ -281,6 +300,46 @@ function evaluationResult(
     || origin.password !== ""
   ) throw new Error("LinkedIn Article browser returned a malformed evaluation envelope");
   return data.result;
+}
+
+function linkedInArticleImageUploadEvaluationSource(input: {
+  readonly key: string;
+  readonly mediaType: string;
+  readonly referrer: string;
+  readonly uploadHeaders: Readonly<Record<string, string>>;
+  readonly uploadUrl: string;
+}): string {
+  const bound = JSON.stringify(input);
+  return `(async()=>{const input=${bound};if(location.origin!=="${LINKEDIN_ORIGIN}")throw new Error("unexpected LinkedIn origin");const chunks=globalThis[input.key];delete globalThis[input.key];if(!Array.isArray(chunks)||chunks.length<1||chunks.length>256)throw new Error("missing bounded LinkedIn image bytes");const encoded=chunks.join("");if(!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded))throw new Error("invalid LinkedIn image bytes");const binary=atob(encoded);const bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index+=1)bytes[index]=binary.charCodeAt(index);const raw=document.cookie.split("; ").find((part)=>part.startsWith("JSESSIONID="));if(typeof raw!=="string")throw new Error("missing LinkedIn browser CSRF cookie");const csrf=decodeURIComponent(raw.slice("JSESSIONID=".length)).replace(/^"|"$/g,"");if(!/^ajax:[A-Za-z0-9_-]{1,512}$/.test(csrf))throw new Error("invalid LinkedIn browser CSRF cookie");const upload=await fetch(input.uploadUrl,{body:bytes,credentials:"include",headers:{...input.uploadHeaders,"content-type":input.mediaType,"csrf-token":csrf},method:"PUT",redirect:"error",referrer:input.referrer});return{uploadStatus:upload.status}})()`;
+}
+
+async function stageLinkedInArticleImageBytes(
+  session: BrowserSession,
+  key: string,
+  image: BoundArticleDraftImage,
+  timeoutMs: number,
+): Promise<void> {
+  const init = `(async()=>{const key=${JSON.stringify(key)};if(Object.hasOwn(globalThis,key))throw new Error("LinkedIn image staging key collision");globalThis[key]=[];return true})()`;
+  await session.runBatch([["eval", init]], timeoutMs, MAX_BROWSER_OUTPUT_BYTES);
+  const encoded = Buffer.from(image.bytes).toString("base64");
+  try {
+    for (let offset = 0; offset < encoded.length; offset += 48 * 1_024) {
+      const chunk = encoded.slice(offset, offset + 48 * 1_024);
+      const source = `(async()=>{const key=${JSON.stringify(key)};const chunks=globalThis[key];if(!Array.isArray(chunks)||chunks.length>=256)throw new Error("LinkedIn image staging changed shape");chunks.push(${JSON.stringify(chunk)});return true})()`;
+      await session.runBatch([["eval", source]], timeoutMs, MAX_BROWSER_OUTPUT_BYTES);
+    }
+  } catch (error) {
+    try {
+      await session.runBatch(
+        [["eval", `(async()=>{delete globalThis[${JSON.stringify(key)}];return true})()`]],
+        timeoutMs,
+        MAX_BROWSER_OUTPUT_BYTES,
+      );
+    } catch {
+      // Browser finalization remains the authoritative private-artifact cleanup.
+    }
+    throw error;
+  }
 }
 
 async function finalizeBrowserSession(session: BrowserSession): Promise<void> {
@@ -411,6 +470,15 @@ export async function createLinkedInArticleBrowserTransport(
       options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs,
       MAX_BROWSER_OUTPUT_BYTES,
     );
+    // A freshly cloned browser profile can return from navigation before the
+    // signed-in feed has installed its CSRF cookie in the page context. Wait
+    // once before the exact current-member probe; this remains wholly before
+    // the durable dispatch boundary and never retries a mutation.
+    await session.runBatch(
+      [["wait", "2000"]],
+      Math.min(options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs, 10_000),
+      MAX_BROWSER_OUTPUT_BYTES,
+    );
   } catch (error) {
     try {
       await finalizeBrowserSession(session);
@@ -532,6 +600,105 @@ export async function createLinkedInArticleBrowserTransport(
         path: exactRequestPath(linkedInArticleDraftEntityUrl(draftId)),
         referrer: articleEditUrl(draftId),
         body: canonicalJson(buildLinkedInArticleContentPatch(document)),
+        pageInstance: articleBindings.pageInstance,
+        track: articleBindings.track,
+        response: "status",
+      });
+      exactKeys(result, ["contentType", "status"], "LinkedIn Article content browser request");
+      if (result.status !== 200) {
+        throw new Error(
+          `LinkedIn Article content browser request returned an unreviewed response (${articleReadbackResponseCategory(result.status, result.contentType, null)})`,
+        );
+      }
+    },
+    uploadInlineImage: async (draftId, image) => {
+      if (
+        activeEditor?.kind !== "edit"
+        || activeEditor.draftId !== draftId
+        || articleBindings === null
+      ) throw new Error("LinkedIn Article image upload omitted its exact editor binding");
+      const registrationResult = await run({
+        method: "POST",
+        path: LINKEDIN_ARTICLE_INLINE_IMAGE_UPLOAD_PATH,
+        referrer: articleEditUrl(draftId),
+        body: canonicalJson({
+          fileSize: image.bytes.byteLength,
+          filename: image.filename,
+          mediaUploadType: "PUBLISHING_INLINE_IMAGE",
+        }),
+        pageInstance: articleBindings.pageInstance,
+        track: articleBindings.track,
+        response: "json",
+      });
+      exactKeys(
+        registrationResult,
+        ["body", "contentType", "status"],
+        "LinkedIn Article image registration request",
+      );
+      if (
+        registrationResult.status !== 200
+        || (registrationResult.contentType !== "application/vnd.linkedin.normalized+json+2.1"
+          && registrationResult.contentType !== "application/json")
+      ) throw new Error("LinkedIn Article image registration returned an unreviewed response");
+      const registration = normalizeLinkedInArticleImageUploadRegistration(
+        registrationResult.body,
+      );
+      const key = `__wrenchLinkedInArticleImage_${randomUUID().replaceAll("-", "")}`;
+      const timeoutMs = options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs;
+      await stageLinkedInArticleImageBytes(session, key, image, timeoutMs);
+      let transfer: Readonly<Record<string, unknown>>;
+      try {
+        const records = await session.runBatch(
+          [["eval", linkedInArticleImageUploadEvaluationSource({
+            key,
+            mediaType: image.mediaType,
+            referrer: articleEditUrl(draftId),
+            uploadHeaders: registration.uploadHeaders,
+            uploadUrl: registration.uploadUrl,
+          })]],
+          options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs,
+          MAX_BROWSER_OUTPUT_BYTES,
+        );
+        const first = records[0];
+        if (first === undefined) throw new Error("LinkedIn Article image upload omitted its response");
+        transfer = evaluationResult(first);
+      } catch (error) {
+        try {
+          await session.runBatch(
+            [["eval", `(async()=>{delete globalThis[${JSON.stringify(key)}];return true})()`]],
+            options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs,
+            MAX_BROWSER_OUTPUT_BYTES,
+          );
+        } catch {
+          // Browser finalization remains the authoritative private-artifact cleanup.
+        }
+        throw error;
+      }
+      exactKeys(
+        transfer,
+        ["uploadStatus"],
+        "LinkedIn Article image upload",
+      );
+      // LinkedIn's reviewed editor flow proceeds directly from the signed
+      // transfer's 201 response to the Article autosave. It does not poll the
+      // metadata URL exposed by registration. Exact image acceptance remains
+      // gated by the later private Article response and independent readback.
+      if (transfer.uploadStatus !== 201) {
+        throw new Error("LinkedIn Article image upload returned an unreviewed response");
+      }
+      return registration.assetUrn;
+    },
+    updateContentV2: async (draftId, document, imageAssetUrns) => {
+      if (
+        activeEditor?.kind !== "edit"
+        || activeEditor.draftId !== draftId
+        || articleBindings === null
+      ) throw new Error("LinkedIn Article content update omitted its exact editor binding");
+      const result = await run({
+        method: "POST",
+        path: exactRequestPath(linkedInArticleDraftEntityUrl(draftId)),
+        referrer: articleEditUrl(draftId),
+        body: canonicalJson(buildLinkedInArticleContentPatchV2(document, imageAssetUrns)),
         pageInstance: articleBindings.pageInstance,
         track: articleBindings.track,
         response: "status",

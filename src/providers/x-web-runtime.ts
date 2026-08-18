@@ -1,12 +1,24 @@
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+
 import {
   parseArticleDraftDocument,
+  parseArticleDraftDocumentV2,
   type ArticleDraftDocument,
+  type ArticleDraftDocumentV2,
 } from "../article-draft-document";
+import {
+  materializeArticleDraftImages,
+  type BoundArticleDraftImage,
+} from "../article-draft-images";
 import type { WrenchAuth } from "../auth";
 import {
   browserCleanupBarrier,
+  type BrowserFileResolver,
 } from "../browser";
 import type {
+  FileInputValue,
   OperationInput,
   WebSessionRecipe,
 } from "../model";
@@ -50,13 +62,22 @@ import {
 } from "./x-web";
 
 const X_ORIGIN = "https://x.com";
+const X_UPLOAD_ORIGIN = "https://upload.x.com";
 const X_ASSET_ORIGIN = "https://abs.twimg.com";
+const X_DEFAULT_ARTICLE_UPLOAD_ORIGIN = "https://upload.x.com";
+const X_ARTICLE_UPLOAD_HOSTS = new Set(["upload.x.com", "upload-a.x.com", "upload-b.x.com"]);
 const MAX_HOME_BYTES = 2 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_LIMIT = 20;
 const MAX_ARTICLE_TITLE_CHARACTERS = 100;
 const MAX_ARTICLE_BODY_CHARACTERS = 20_000;
 const MAX_ARTICLE_BLOCKS = 2_000;
+const MAX_ARTICLE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_ARTICLE_INLINE_IMAGES = 20;
+const MAX_ARTICLE_MEDIA_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_X_IMAGE_BYTES = 20 * 1024 * 1024;
+const X_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
+const MAX_X_UPLOAD_RESPONSE_BYTES = 512 * 1024;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -160,10 +181,16 @@ export type XWebRichArticleContentState = {
 
 /** Build X's current API content-state shape from the provider-neutral document. */
 export function buildXWebRichArticleContentState(
-  document: ArticleDraftDocument,
+  document: ArticleDraftDocument | ArticleDraftDocumentV2,
+  uploadedImageIds: readonly string[] = Object.freeze([]),
 ): XWebRichArticleContentState {
+  if (
+    uploadedImageIds.length > MAX_ARTICLE_INLINE_IMAGES
+    || uploadedImageIds.some((id) => !/^[0-9]{1,19}$/u.test(id))
+  ) throw new Error("X rich Article image uploads must be exact media IDs");
   const entities: Readonly<Record<string, unknown>>[] = [];
   const blocks: Readonly<Record<string, unknown>>[] = [];
+  const usedImages = new Set<number>();
   const blockType = Object.freeze({
     paragraph: "unstyled",
     heading1: "header-one",
@@ -175,6 +202,43 @@ export function buildXWebRichArticleContentState(
   const styleName = Object.freeze({ bold: "Bold", italic: "Italic", strikethrough: "Strikethrough" } as const);
   for (const [blockIndex, block] of document.blocks.entries()) {
     const key = blockIndex.toString(36).padStart(5, "0");
+    if (block.type === "image") {
+      const mediaId = uploadedImageIds[block.imageIndex];
+      if (mediaId === undefined || usedImages.has(block.imageIndex)) {
+        throw new Error("input.document imageIndex did not bind one uploaded inline image");
+      }
+      usedImages.add(block.imageIndex);
+      const entityKey = `${entities.length}`;
+      entities.push(Object.freeze({
+        key: entityKey,
+        value: Object.freeze({
+          data: Object.freeze({
+            ...(block.caption === undefined ? {} : { caption: block.caption }),
+            entity_key: entityKey,
+            media_items: Object.freeze([Object.freeze({
+              local_media_id: block.imageIndex + 1,
+              media_category: "DraftTweetImage",
+              media_id: mediaId,
+            })]),
+          }),
+          type: "MEDIA",
+          mutability: "Immutable",
+        }),
+      }));
+      blocks.push(Object.freeze({
+        data: Object.freeze({}),
+        key,
+        text: " ",
+        type: "atomic",
+        entity_ranges: Object.freeze([Object.freeze({
+          key: Number(entityKey),
+          offset: 0,
+          length: 1,
+        })]),
+        inline_style_ranges: Object.freeze([]),
+      }));
+      continue;
+    }
     const entityRanges = block.links.map((link) => {
       const key = entities.length;
       entities.push(Object.freeze({
@@ -199,6 +263,9 @@ export function buildXWebRichArticleContentState(
         style: styleName[style.style],
       }))),
     }));
+  }
+  if (usedImages.size !== uploadedImageIds.length) {
+    throw new Error("every input.inline_images item must be referenced exactly once by input.document");
   }
   const contentState = Object.freeze({ blocks: Object.freeze(blocks), entity_map: Object.freeze(entities) });
   validateXWebRichArticleContentState(contentState);
@@ -454,6 +521,7 @@ async function currentChunkText(bootstrap: XBootstrap, sourceChunk: string): Pro
 }
 
 const articleRichContractEvidence = Object.freeze({
+  uploader: "shared~bundle.LoggedInMain~ondemand.HoverCard~loader.AudioDock~loader.Dock~bundle.BookmarkFolders~bundle.Book.a9bac6ba.js",
   entities: "shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory.d1314bba.js",
   converter: "shared~bundle.Grok~bundle.GrokDrawer~bundle.ReaderMode~bundle.Birdwatch~bundle.TwitterArticles~bundle.Compose.02f6dc7a.js",
   observedOn: "2026-08-14",
@@ -465,7 +533,10 @@ function requireCurrentBundleTokens(text: string, tokens: readonly string[], lab
   }
 }
 
-async function assertCurrentArticleRichContract(bootstrap: XBootstrap): Promise<void> {
+async function assertCurrentArticleRichContract(
+  bootstrap: XBootstrap,
+  includeImages: boolean,
+): Promise<void> {
   const [entities, converter] = await Promise.all([
     currentChunkText(bootstrap, articleRichContractEvidence.entities),
     currentChunkText(bootstrap, articleRichContractEvidence.converter),
@@ -476,6 +547,32 @@ async function assertCurrentArticleRichContract(bootstrap: XBootstrap): Promise<
   requireCurrentBundleTokens(converter, [
     'mutability:s[r.mutability]',
     'inline_style_ranges:',
+  ], "Article content converter");
+  if (!includeImages) return;
+  const uploader = await currentChunkText(
+    bootstrap,
+    articleRichContractEvidence.uploader,
+  );
+  requireCurrentBundleTokens(uploader, [
+    '"upload.x.com"',
+    '"upload-a.x.com"',
+    '"upload-b.x.com"',
+    '/i/media/${l}',
+    '"INIT"',
+    '"APPEND"',
+    '"FINALIZE"',
+    'media_category=${p}',
+    'TweetImage:"tweet_image"',
+    'TwitterArticle:"twitter_article"',
+  ], "media uploader");
+  requireCurrentBundleTokens(entities, [
+    'createEntity(p.LA.MEDIA,p.Ei.IMMUTABLE',
+    'mediaCategory:E(e)',
+    'mediaId:e.uploadId',
+  ], "Article entity");
+  requireCurrentBundleTokens(converter, [
+    'media_items:r.data?.mediaItems?.map',
+    'media_category:e.mediaCategory',
   ], "Article content converter");
 }
 
@@ -504,6 +601,24 @@ function featureValue(bootstrap: XBootstrap, name: string): boolean {
     throw new Error(`X user feature configuration changed type for feature ${name}`);
   }
   return entry.value;
+}
+
+function featureStringValue(bootstrap: XBootstrap, name: string): string | undefined {
+  const entry = bootstrap.features.get(name);
+  if (entry === undefined) return undefined;
+  if (!isRecord(entry) || (entry.value !== undefined && typeof entry.value !== "string")) {
+    throw new Error(`X user feature configuration changed type for feature ${name}`);
+  }
+  return entry.value as string | undefined;
+}
+
+function articleUploadOrigin(bootstrap: XBootstrap): string {
+  const configured = featureStringValue(bootstrap, "responsive_web_media_upload_host");
+  if (configured === undefined) return X_DEFAULT_ARTICLE_UPLOAD_ORIGIN;
+  if (!X_ARTICLE_UPLOAD_HOSTS.has(configured)) {
+    throw new Error("X selected an unreviewed media upload host");
+  }
+  return new URL(`https://${configured}`).origin;
 }
 
 function fieldToggleValue(bootstrap: XBootstrap, name: string): boolean {
@@ -981,25 +1096,593 @@ export async function readXWebArticleDraftDesiredState(
   requirePrivateDraftArticle(article, draftId, currentViewer.id);
   const actualContent = normalizeArticleContentReadback(article.content_state);
   return {
-    matches: article.title === title
+    matches: articleTitle(article, "X Article recovery readback") === title
       && canonicalJson(actualContent) === canonicalJson(expectedContent),
     draftId,
   };
 }
 
-function createdTweet(
-  response: unknown,
+type XBoundImage = {
+  readonly bytes: Uint8Array;
+  readonly mediaType: "image/png";
+};
+
+async function readBoundXImage(
+  input: OperationInput,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<XBoundImage | null> {
+  if (input.media === undefined) {
+    if (input.media_type !== undefined) {
+      throw new Error("X media_type requires one plan-bound image");
+    }
+    return null;
+  }
+  if (!isRecord(input.media)) throw new Error("X media must be one plan-bound file");
+  const descriptor = input.media;
+  if (
+    Object.keys(descriptor).sort().join(",") !== "kind,reference"
+    || descriptor.kind !== "file"
+    || typeof descriptor.reference !== "string"
+    || descriptor.reference.length < 1
+    || descriptor.reference.length > 1_024
+  ) throw new Error("X media must be one plan-bound file");
+  if (input.media_type !== "image/png") {
+    throw new Error("X reviewed media upload currently supports one PNG image");
+  }
+  if (fileResolver === undefined) {
+    throw new Error("X image upload requires the plan-bound file resolver");
+  }
+  const resolveFile = () => fileResolver([descriptor as FileInputValue]);
+  const paths = operationDeadline === undefined
+    ? await resolveFile()
+    : await operationDeadline.run(resolveFile, "authenticated web operation deadline");
+  if (paths.length !== 1 || typeof paths[0] !== "string") {
+    throw new Error("X image resolver did not return exactly one file");
+  }
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = await open(paths[0], constants.O_RDONLY | noFollow);
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (!before.isFile() || before.size < 1 || before.size > MAX_X_IMAGE_BYTES) {
+      throw new Error("X image must be a regular PNG no larger than 20 MiB");
+    }
+    const bytes = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(
+          () => handle.readFile(),
+          "authenticated web operation deadline",
+        );
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (
+      after.dev !== before.dev
+      || after.ino !== before.ino
+      || after.size !== before.size
+      || bytes.byteLength !== before.size
+    ) throw new Error("X image changed while it was materialized");
+    return Object.freeze({
+      bytes: new Uint8Array(bytes),
+      mediaType: "image/png",
+    });
+  } finally {
+    await handle.close();
+  }
+}
+
+type XUploadedMedia = {
+  readonly id: string;
+  readonly key: string;
+};
+
+function xMediaId(value: unknown, label: string): string {
+  const id = requiredString(value, label, 20);
+  if (!/^[1-9][0-9]{0,19}$/u.test(id)) {
+    throw new Error(`${label} must be an exact X media ID`);
+  }
+  return id;
+}
+
+function exactResponseKeys(
+  value: JsonRecord,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): void {
+  const keys = new Set(Object.keys(value));
+  for (const name of required) {
+    if (!keys.delete(name)) throw new Error(`${label} omitted ${name}`);
+  }
+  for (const name of optional) keys.delete(name);
+  if (keys.size > 0) throw new Error(`${label} contained unsupported fields`);
+}
+
+function xMediaKey(value: unknown, id: string, label: string): string {
+  const key = requiredString(value, label, 64);
+  if (!/^[1-9][0-9]{0,2}_[1-9][0-9]{0,19}$/u.test(key) || !key.endsWith(`_${id}`)) {
+    throw new Error(`${label} did not bind the initialized media ID`);
+  }
+  return key;
+}
+
+function parseXMediaInit(value: unknown, expectedSize: number): XUploadedMedia {
+  const response = record(value, "X media INIT response");
+  exactResponseKeys(
+    response,
+    ["expires_after_secs", "media_id", "media_id_string", "media_key"],
+    [],
+    "X media INIT response",
+  );
+  if (typeof response.media_id !== "number" || !Number.isFinite(response.media_id) || response.media_id < 1) {
+    throw new Error("X media INIT response media_id was invalid");
+  }
+  if (
+    !Number.isSafeInteger(response.expires_after_secs)
+    || (response.expires_after_secs as number) < 1
+    || (response.expires_after_secs as number) > 7 * 24 * 60 * 60
+  ) throw new Error("X media INIT response expiry was invalid");
+  const id = xMediaId(response.media_id_string, "X media INIT response media_id_string");
+  const key = xMediaKey(response.media_key, id, "X media INIT response media_key");
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 || expectedSize > MAX_X_IMAGE_BYTES) {
+    throw new Error("X media INIT expected size was invalid");
+  }
+  return Object.freeze({ id, key });
+}
+
+function parseXMediaFinalize(
+  value: unknown,
+  expected: XUploadedMedia,
+  expectedSize: number,
+  expectedMediaType: string,
+): void {
+  const response = record(value, "X media FINALIZE response");
+  exactResponseKeys(
+    response,
+    ["expires_after_secs", "media_id", "media_id_string", "size"],
+    ["image", "media_key"],
+    "X media FINALIZE response",
+  );
+  if (xMediaId(response.media_id_string, "X media FINALIZE response media_id_string") !== expected.id) {
+    throw new Error("X media FINALIZE response did not bind the initialized media ID");
+  }
+  if (response.media_key !== undefined) {
+    if (xMediaKey(response.media_key, expected.id, "X media FINALIZE response media_key") !== expected.key) {
+      throw new Error("X media FINALIZE response changed the initialized media key");
+    }
+  }
+  if (response.size !== expectedSize) {
+    throw new Error("X media FINALIZE response did not bind the confirmed file size");
+  }
+  if (
+    !Number.isSafeInteger(response.expires_after_secs)
+    || (response.expires_after_secs as number) < 1
+    || (response.expires_after_secs as number) > 7 * 24 * 60 * 60
+  ) throw new Error("X media FINALIZE response expiry was invalid");
+  if (response.image !== undefined) {
+    const image = record(response.image, "X media FINALIZE response image");
+    exactResponseKeys(image, ["h", "image_type", "w"], [], "X media FINALIZE response image");
+    if (
+      image.image_type !== expectedMediaType
+      || !Number.isSafeInteger(image.w)
+      || !Number.isSafeInteger(image.h)
+      || (image.w as number) < 1
+      || (image.h as number) < 1
+      || (image.w as number) > 100_000
+      || (image.h as number) > 100_000
+    ) throw new Error("X media FINALIZE response image metadata was invalid");
+  }
+}
+
+function xMediaUploadUrl(
+  command: "INIT" | "APPEND" | "FINALIZE",
+  values: {
+    readonly id?: string;
+    readonly segmentIndex?: number;
+    readonly totalBytes?: number;
+    readonly mediaType?: string;
+  },
+): URL {
+  const url = new URL("/i/media/upload.json", X_UPLOAD_ORIGIN);
+  url.searchParams.set("command", command);
+  if (command === "INIT") {
+    if (
+      !Number.isSafeInteger(values.totalBytes)
+      || values.totalBytes! < 1
+      || values.totalBytes! > MAX_X_IMAGE_BYTES
+      || values.mediaType !== "image/png"
+      || values.id !== undefined
+      || values.segmentIndex !== undefined
+    ) throw new Error("X media INIT request escaped its reviewed contract");
+    url.searchParams.set("total_bytes", String(values.totalBytes));
+    url.searchParams.set("media_type", values.mediaType);
+    url.searchParams.set("media_category", "tweet_image");
+  } else {
+    const id = xMediaId(values.id, `X media ${command} media ID`);
+    url.searchParams.set("media_id", id);
+    if (command === "APPEND") {
+      if (
+        !Number.isSafeInteger(values.segmentIndex)
+        || values.segmentIndex! < 0
+        || values.segmentIndex! > 3
+        || values.totalBytes !== undefined
+        || values.mediaType !== undefined
+      ) throw new Error("X media APPEND request escaped its reviewed contract");
+      url.searchParams.set("segment_index", String(values.segmentIndex));
+    } else if (
+      values.segmentIndex !== undefined
+      || values.totalBytes !== undefined
+      || values.mediaType !== undefined
+    ) throw new Error("X media FINALIZE request escaped its reviewed contract");
+  }
+  return url;
+}
+
+function multipartImageChunk(
+  chunk: Uint8Array,
+  segmentIndex: number,
+): { readonly body: Uint8Array; readonly contentType: string } {
+  const digest = createHash("sha256")
+    .update(chunk)
+    .update(`:${segmentIndex}`)
+    .digest("hex")
+    .slice(0, 32);
+  const boundary = `wrench-x-media-${digest}`;
+  const boundaryBytes = Buffer.from(boundary, "ascii");
+  if (Buffer.from(chunk).includes(boundaryBytes)) {
+    throw new Error("X media chunk collided with its deterministic multipart boundary");
+  }
+  const prefix = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="media.png"\r\nContent-Type: image/png\r\n\r\n`,
+    "utf8",
+  );
+  const suffix = Buffer.from(`\r\n--${boundary}--\r\n`, "ascii");
+  return Object.freeze({
+    body: new Uint8Array(Buffer.concat([prefix, Buffer.from(chunk), suffix])),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  });
+}
+
+function xUploadHeaders(
+  bootstrap: XBootstrap,
+  contentType?: string,
+): Readonly<Record<string, string>> {
+  if (contentType === undefined) return xHeaders(bootstrap, false);
+  const fixed = enforceXWebHeaderSinkPolicy({
+    source: "code",
+    sink: "network-request",
+    headers: { "content-type": contentType },
+  }).values;
+  return { ...xHeaders(bootstrap, false), ...fixed };
+}
+
+async function uploadXImage(
+  bootstrap: XBootstrap,
+  image: XBoundImage,
+): Promise<XUploadedMedia> {
+  const uploadClient = await createWebSessionClient(X_UPLOAD_ORIGIN, bootstrap.auth, {
+    timeoutMs: bootstrap.timeoutMs,
+    ...(bootstrap.signal === undefined ? {} : { signal: bootstrap.signal }),
+    ...(bootstrap.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: bootstrap.operationDeadline }),
+    ...(bootstrap.dependencies === undefined
+      ? {}
+      : { dependencies: bootstrap.dependencies }),
+  });
+  if (webSessionCookie(uploadClient.cookies, "ct0") !== bootstrap.csrf) {
+    throw new Error("X upload origin no longer matched the confirmed session");
+  }
+  const initialized = parseXMediaInit(
+    await uploadClient.requestJson({
+      url: xMediaUploadUrl("INIT", {
+        totalBytes: image.bytes.byteLength,
+        mediaType: image.mediaType,
+      }),
+      method: "POST",
+      headers: xUploadHeaders(bootstrap),
+      expectedStatuses: [200, 202],
+      maxBytes: MAX_X_UPLOAD_RESPONSE_BYTES,
+    }),
+    image.bytes.byteLength,
+  );
+  const chunks = Math.ceil(image.bytes.byteLength / X_UPLOAD_CHUNK_BYTES);
+  if (chunks < 1 || chunks > 4) throw new Error("X image exceeded the reviewed upload chunk count");
+  for (let segmentIndex = 0; segmentIndex < chunks; segmentIndex += 1) {
+    const start = segmentIndex * X_UPLOAD_CHUNK_BYTES;
+    const chunk = image.bytes.subarray(
+      start,
+      Math.min(image.bytes.byteLength, start + X_UPLOAD_CHUNK_BYTES),
+    );
+    const multipart = multipartImageChunk(chunk, segmentIndex);
+    const appended = await uploadClient.requestStatus({
+      url: xMediaUploadUrl("APPEND", { id: initialized.id, segmentIndex }),
+      method: "POST",
+      headers: xUploadHeaders(bootstrap, multipart.contentType),
+      body: multipart.body,
+      expectedStatuses: [204],
+    });
+    if (appended.location !== null) {
+      throw new Error("X media APPEND response added an unsupported location");
+    }
+  }
+  parseXMediaFinalize(
+    await uploadClient.requestJson({
+      url: xMediaUploadUrl("FINALIZE", { id: initialized.id }),
+      method: "POST",
+      headers: xUploadHeaders(bootstrap),
+      expectedStatuses: [200, 201],
+      maxBytes: MAX_X_UPLOAD_RESPONSE_BYTES,
+    }),
+    initialized,
+    image.bytes.byteLength,
+    image.mediaType,
+  );
+  return initialized;
+}
+
+function xArticleUploadHeaders(bootstrap: XBootstrap): Readonly<Record<string, string>> {
+  const fixed = enforceXWebHeaderSinkPolicy({
+    source: "code",
+    sink: "network-request",
+    headers: {
+      accept: "application/json",
+      "x-twitter-auth-type": "OAuth2Session",
+      "x-twitter-active-user": "yes",
+    },
+  }).values;
+  const session = enforceXWebHeaderSinkPolicy({
+    source: "in-origin-session",
+    sink: "network-request",
+    headers: {
+      authorization: `Bearer ${bootstrap.bearer}`,
+      "x-csrf-token": bootstrap.csrf,
+    },
+  }).values;
+  return { ...fixed, ...session, origin: X_ORIGIN, referer: `${X_ORIGIN}/compose/articles` };
+}
+
+function articleMediaUploadUrl(
+  origin: string,
+  command: "INIT" | "APPEND" | "FINALIZE",
+  values: Readonly<Record<string, string>>,
+): URL {
+  const url = new URL("/i/media/upload.json", origin);
+  url.searchParams.set("command", command);
+  for (const [name, value] of Object.entries(values)) url.searchParams.set(name, value);
+  const expected = command === "INIT"
+    ? ["command", "media_category", "media_type", "total_bytes"]
+    : command === "APPEND"
+      ? ["command", "media_id", "segment_index"]
+      : ["command", "media_id"];
+  if (Object.keys(Object.fromEntries(url.searchParams)).sort().join(",") !== expected.sort().join(",")) {
+    throw new Error("X Article media upload request left its reviewed query shape");
+  }
+  return url;
+}
+
+function articleUploadMediaId(value: unknown, label: string): string {
+  const response = record(value, label);
+  const id = response.media_id_string;
+  if (typeof id !== "string" || !/^[0-9]{1,19}$/u.test(id)) {
+    throw new Error(`${label} did not return one exact media ID`);
+  }
+  if (
+    response.expires_after_secs !== undefined
+    && (!Number.isSafeInteger(response.expires_after_secs)
+      || (response.expires_after_secs as number) < 1)
+  ) throw new Error(`${label} returned an invalid expiry`);
+  return id;
+}
+
+function containsBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  outer: for (let index = 0; index <= haystack.length - needle.length; index += 1) {
+    for (let offset = 0; offset < needle.length; offset += 1) {
+      if (haystack[index + offset] !== needle[offset]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+function articleMediaMultipart(image: BoundArticleDraftImage): {
+  readonly body: Uint8Array;
+  readonly contentType: string;
+} {
+  const digest = createHash("sha256").update(image.bytes).digest("hex");
+  let boundary = `----wrench-x-article-${digest}`;
+  const encoder = new TextEncoder();
+  for (let suffix = 0; containsBytes(image.bytes, encoder.encode(boundary)); suffix += 1) {
+    if (suffix >= 16) throw new Error("X Article media could not bind a safe multipart boundary");
+    boundary = `----wrench-x-article-${digest}-${suffix + 1}`;
+  }
+  const prefix = encoder.encode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="blob"\r\nContent-Type: ${image.mediaType}\r\n\r\n`,
+  );
+  const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
+  const body = new Uint8Array(prefix.length + image.bytes.length + suffix.length);
+  body.set(prefix, 0);
+  body.set(image.bytes, prefix.length);
+  body.set(suffix, prefix.length + image.bytes.length);
+  return Object.freeze({ body, contentType: `multipart/form-data; boundary=${boundary}` });
+}
+
+async function uploadArticleImage(
+  bootstrap: XBootstrap,
+  client: WebSessionClient,
+  image: BoundArticleDraftImage,
+  beforeInit: () => Promise<void>,
+): Promise<string> {
+  const headers = xArticleUploadHeaders(bootstrap);
+  const initUrl = articleMediaUploadUrl(client.origin, "INIT", {
+    total_bytes: `${image.bytes.byteLength}`,
+    media_type: image.mediaType,
+    media_category: "tweet_image",
+  });
+  await beforeInit();
+  const mediaId = await xArticleImageUploadStep("init", async () => {
+    const init = await client.requestJson({
+      url: initUrl,
+      method: "POST",
+      headers,
+      maxBytes: MAX_ARTICLE_MEDIA_RESPONSE_BYTES,
+      expectedStatuses: [200, 201, 202],
+    });
+    return articleUploadMediaId(init, "X media INIT response");
+  });
+  const multipart = articleMediaMultipart(image);
+  await xArticleImageUploadStep("append", () => client.requestStatus({
+      url: articleMediaUploadUrl(client.origin, "APPEND", {
+        media_id: mediaId,
+        segment_index: "0",
+      }),
+      method: "POST",
+      headers: { ...headers, "content-type": multipart.contentType },
+      body: multipart.body,
+      expectedStatuses: [200, 204],
+    }).then(() => undefined),
+  );
+  await xArticleImageUploadStep("finalize", async () => {
+    const finalized = await client.requestJson({
+      url: articleMediaUploadUrl(client.origin, "FINALIZE", { media_id: mediaId }),
+      method: "POST",
+      headers,
+      maxBytes: MAX_ARTICLE_MEDIA_RESPONSE_BYTES,
+      expectedStatuses: [200, 201, 202],
+    });
+    if (articleUploadMediaId(finalized, "X media FINALIZE response") !== mediaId) {
+      throw new Error("X media FINALIZE response changed the uploaded media ID");
+    }
+    if (record(finalized, "X media FINALIZE response").processing_info !== undefined) {
+      throw new Error("X image upload unexpectedly entered an unreviewed processing branch");
+    }
+  });
+  return mediaId;
+}
+
+type XArticleImageUploadStep = "append" | "finalize" | "init";
+
+class XArticleImageUploadStepError extends Error {
+  readonly category: string;
+  readonly step: XArticleImageUploadStep;
+
+  constructor(step: XArticleImageUploadStep, category: string, cause: unknown) {
+    super(`X Article image ${step} step failed (${category})`, { cause });
+    this.name = "XArticleImageUploadStepError";
+    this.step = step;
+    this.category = category;
+  }
+}
+
+async function xArticleImageUploadStep<T>(
+  step: XArticleImageUploadStep,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw new XArticleImageUploadStepError(
+      step,
+      xWebArticleImageFailureCategory(error),
+      error,
+    );
+  }
+}
+
+export function xWebArticleImageFailureCategory(error: unknown): string {
+  if (error instanceof XArticleImageUploadStepError) {
+    return `media-${error.step}-${error.category}`;
+  }
+  const message = error instanceof Error ? error.message : "";
+  const response = /authenticated web (?:API|API request|request) returned unreviewed status(?:\/content type)? ([0-9]{3})(?:\/([A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+|missing))?/u.exec(message);
+  if (response !== null) {
+    const status = Number.parseInt(response[1]!, 10);
+    if (status === 401 || status === 403) return "session-rejected";
+    if (status === 400 || status === 413 || status === 415 || status === 422) {
+      return `request-rejected-${status}`;
+    }
+    if (status === 429) return "provider-throttled";
+    if (status >= 500) return "provider-unavailable";
+    if (status !== 200) return "media-status-drift";
+    if (response[2] === "text/plain") return "text-plain-response";
+    if (response[2] === "text/html") return "html-response";
+    if (response[2] === "application/octet-stream") return "binary-response";
+    if (response[2] === "missing") return "missing-content-type";
+    return "media-content-type-drift";
+  }
+  if (message.includes("X media INIT response")) return "media-init-response-drift";
+  if (message.includes("X media FINALIZE response")) return "media-finalize-response-drift";
+  if (message.includes("X articleentity_create_draft response contained provider errors")) {
+    return "article-create-provider-errors";
+  }
+  if (message.includes("X articleentity_create_draft response.data must be an object")) {
+    return "article-create-data-shape-drift";
+  }
+  if (message.includes("X articleentity_create_draft response.articleentity_create_draft must be an object")) {
+    return "article-create-root-shape-drift";
+  }
+  if (message.includes("X articleentity_create_draft response.articleentity_create_draft.article_entity_results.result must be an object")) {
+    return "article-create-result-shape-drift";
+  }
+  if (message.includes("X articleentity_create_draft response Article identifier")) {
+    return "article-create-id-shape-drift";
+  }
+  if (message.includes("processing branch")) return "media-processing-required";
+  if (message.includes("media upload session")) return "media-session-binding-drift";
+  if (message.includes("failed before a reviewed response")) return "transport-failed";
+  if (message.includes("deadline") || message.includes("cancel")) return "operation-interrupted";
+  return "media-contract-step-failed";
+}
+
+function tweetMediaIds(legacy: JsonRecord): readonly string[] {
+  const ids: string[][] = [];
+  for (const [name, value] of [
+    ["entities", legacy.entities],
+    ["extended_entities", legacy.extended_entities],
+  ] as const) {
+    if (value === undefined) continue;
+    const container = record(value, `X post ${name}`);
+    if (container.media === undefined) continue;
+    if (!Array.isArray(container.media) || container.media.length > 4) {
+      throw new Error(`X post ${name}.media exceeded the reviewed attachment bound`);
+    }
+    ids.push(container.media.map((item, index) => {
+      const media = record(item, `X post ${name}.media[${index}]`);
+      if (media.type !== "photo") {
+        throw new Error("X post readback contained an unsupported media type");
+      }
+      return xMediaId(media.id_str, `X post ${name}.media[${index}].id_str`);
+    }));
+  }
+  if (ids.length === 0) return Object.freeze([]);
+  const first = ids[0]!;
+  if (ids.some((candidate) => canonicalJson(candidate) !== canonicalJson(first))) {
+    throw new Error("X post media projections disagreed");
+  }
+  return Object.freeze(first);
+}
+
+function assertTweetBinding(
+  value: unknown,
   expectedText: string,
   replyTo: string | null,
   quote: string | null,
   expectedAuthorId: string,
+  expectedMediaId: string | null,
+  label: string,
 ): { readonly id: string; readonly url: string } {
-  const data = graphQlData(response, "X CreateTweet response");
-  const create = record(data.create_tweet, "X CreateTweet response.create_tweet");
-  const results = record(create.tweet_results, "X CreateTweet response.tweet_results");
-  const result = unwrapTweet(results.result, "X CreateTweet response.result");
+  const result = unwrapTweet(value, `${label}.result`);
   const id = postId(result.rest_id, "X created post rest_id");
-  const legacy = record(result.legacy, "X created post legacy");
+  const legacy = record(result.legacy, `${label}.legacy`);
   const returnedText = typeof legacy.full_text === "string"
     ? legacy.full_text
     : isRecord(result.note_tweet) && isRecord(result.note_tweet.note_tweet_results)
@@ -1013,14 +1696,51 @@ function createdTweet(
   if (returnedReply !== replyTo) throw new Error("X created post response did not bind the confirmed reply target");
   const returnedQuote = typeof legacy.quoted_status_id_str === "string" ? legacy.quoted_status_id_str : null;
   if (returnedQuote !== quote) throw new Error("X created post response did not bind the confirmed quote target");
+  const mediaIds = tweetMediaIds(legacy);
+  if (
+    (expectedMediaId === null && mediaIds.length !== 0)
+    || (expectedMediaId !== null && (mediaIds.length !== 1 || mediaIds[0] !== expectedMediaId))
+  ) throw new Error("X created post response did not bind the confirmed media upload");
   return { id, url: `${X_ORIGIN}/i/status/${id}` };
 }
 
-function createTweetVariables(text: string, replyTo: string | null, quote: string | null): Readonly<Record<string, unknown>> {
+function createdTweet(
+  response: unknown,
+  expectedText: string,
+  replyTo: string | null,
+  quote: string | null,
+  expectedAuthorId: string,
+  expectedMediaId: string | null,
+): { readonly id: string; readonly url: string } {
+  const data = graphQlData(response, "X CreateTweet response");
+  const create = record(data.create_tweet, "X CreateTweet response.create_tweet");
+  const results = record(create.tweet_results, "X CreateTweet response.tweet_results");
+  return assertTweetBinding(
+    results.result,
+    expectedText,
+    replyTo,
+    quote,
+    expectedAuthorId,
+    expectedMediaId,
+    "X CreateTweet response",
+  );
+}
+
+function createTweetVariables(
+  text: string,
+  replyTo: string | null,
+  quote: string | null,
+  mediaId: string | null,
+): Readonly<Record<string, unknown>> {
   return {
     tweet_text: text,
     dark_request: false,
-    media: { media_entities: [], possibly_sensitive: false },
+    media: {
+      media_entities: mediaId === null
+        ? []
+        : [{ media_id: mediaId, tagged_users: [] }],
+      possibly_sensitive: false,
+    },
     semantic_annotation_ids: [],
     ...(replyTo === null ? {} : { reply: { in_reply_to_tweet_id: replyTo, exclude_reply_user_ids: [] } }),
     ...(quote === null ? {} : { attachment_url: `${X_ORIGIN}/i/status/${quote}` }),
@@ -1038,6 +1758,28 @@ function articleEntityResult(response: unknown, rootName: string, label: string)
   return root;
 }
 
+function articleId(article: JsonRecord, label: string): string {
+  const restId = article.rest_id;
+  const entityId = article.id;
+  return postId(
+    typeof restId === "string" ? restId : entityId,
+    `${label} Article identifier`,
+  );
+}
+
+function articleTitle(article: JsonRecord, label: string): string {
+  const directTitle = typeof article.title === "string" ? article.title : null;
+  const metadataTitle = isRecord(article.metadata) && typeof article.metadata.title === "string"
+    ? article.metadata.title
+    : null;
+  if (directTitle !== null && metadataTitle !== null && directTitle !== metadataTitle) {
+    throw new Error(`${label} returned conflicting Article titles`);
+  }
+  const title = directTitle ?? metadataTitle;
+  if (title === null) throw new Error(`${label} omitted the Article title`);
+  return title;
+}
+
 function responseBoundArticle(
   response: unknown,
   rootName: string,
@@ -1045,11 +1787,11 @@ function responseBoundArticle(
   expectedTitle?: string,
 ): JsonRecord {
   const article = articleEntityResult(response, rootName, `X ${rootName} response`);
-  const id = postId(article.rest_id, `X ${rootName} response rest_id`);
+  const id = articleId(article, `X ${rootName} response`);
   if (expectedId !== null && id !== expectedId) {
     throw new Error(`X ${rootName} response changed the confirmed Article draft`);
   }
-  if (expectedTitle !== undefined && article.title !== expectedTitle) {
+  if (expectedTitle !== undefined && articleTitle(article, `X ${rootName} response`) !== expectedTitle) {
     throw new Error(`X ${rootName} response did not bind the confirmed title`);
   }
   return article;
@@ -1067,7 +1809,7 @@ function requirePrivateDraftArticle(
   expectedId: string,
   expectedViewerId: string,
 ): void {
-  if (postId(article.rest_id, "X Article rest_id") !== expectedId) {
+  if (articleId(article, "X Article readback") !== expectedId) {
     throw new Error("X Article readback changed the confirmed draft ID");
   }
   if (articleAuthorId(article) !== expectedViewerId) {
@@ -1296,7 +2038,7 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
       entityKeys,
     ).map((value, index) => {
       const entity = record(value, `X Article readback entity ${index}`);
-      normalizedArticleEntityKey(
+      const sourceEntityKey = normalizedArticleEntityKey(
         entity.key,
         `X Article readback entity ${index}.key`,
       );
@@ -1308,10 +2050,28 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
         entry.data,
         `X Article readback entity ${index}.data`,
       );
+      const normalizedData = entry.type === "MEDIA"
+        ? Object.freeze({
+            ...(data.caption === undefined || data.caption === null || data.caption === ""
+              ? {}
+              : { caption: data.caption }),
+            entity_key: (() => {
+              const sourceDataKey = normalizedArticleEntityKey(
+                data.entity_key,
+                `X Article readback entity ${index}.data.entity_key`,
+              );
+              if (sourceDataKey !== sourceEntityKey) {
+                throw new Error(`X Article readback entity ${index} changed its media entity key`);
+              }
+              return `${index}`;
+            })(),
+            media_items: data.media_items,
+          })
+        : Object.freeze({ url: data.url });
       return Object.freeze({
         key: `${index}`,
         value: Object.freeze({
-          data: Object.freeze({ url: data.url }),
+          data: normalizedData,
           type: entry.type,
           mutability: entry.mutability,
         }),
@@ -1374,16 +2134,43 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
     entityKeys,
   ).map((value, index) => {
     const entity = record(value, `X Article readback entity ${index}`);
-    normalizedArticleEntityKey(
+    const sourceEntityKey = normalizedArticleEntityKey(
       entity.key,
       `X Article readback entity ${index}.key`,
     );
     const entry = record(entity.value, `X Article readback entity ${index}.value`);
     const data = record(entry.data, `X Article readback entity ${index}.data`);
+    const normalizedData = entry.type === "MEDIA"
+      ? Object.freeze({
+          ...(data.caption === undefined || data.caption === null || data.caption === ""
+            ? {}
+            : { caption: data.caption }),
+          entity_key: (() => {
+            const sourceDataKey = normalizedArticleEntityKey(
+              data.entityKey,
+              `X Article readback entity ${index}.data.entityKey`,
+            );
+            if (sourceDataKey !== sourceEntityKey) {
+              throw new Error(`X Article readback entity ${index} changed its media entity key`);
+            }
+            return `${index}`;
+          })(),
+          media_items: Array.isArray(data.mediaItems)
+            ? Object.freeze(data.mediaItems.map((value) => {
+                const item = record(value, "X Article readback media item");
+                return Object.freeze({
+                  local_media_id: item.localMediaId,
+                  media_category: item.mediaCategory,
+                  media_id: item.mediaId,
+                });
+              }))
+            : data.mediaItems,
+        })
+      : Object.freeze({ url: data.url });
     return Object.freeze({
       key: `${index}`,
       value: Object.freeze({
-        data: Object.freeze({ url: data.url }),
+        data: normalizedData,
         type: entry.type,
         mutability: entry.mutability,
       }),
@@ -1413,7 +2200,9 @@ function verifyFinalRichArticle(
   },
 ): void {
   requirePrivateDraftArticle(article, expected.id, expected.viewerId);
-  if (article.title !== expected.title) throw new Error("X Article readback did not bind the confirmed title");
+  if (articleTitle(article, "X Article readback") !== expected.title) {
+    throw new Error("X Article readback did not bind the confirmed title");
+  }
   const content = normalizeArticleContentReadback(article.content_state);
   if (canonicalJson(content) !== canonicalJson(expected.contentState)) {
     throw new Error("X Article readback did not bind the confirmed rich content state");
@@ -1429,26 +2218,49 @@ async function publishOne(
   text: string,
   replyTo: string | null,
   quote: string | null,
+  media: XUploadedMedia | null,
   authorId: string,
   mutationOperation: XWebMutationOperationId,
-  beforeRequest: () => Promise<void>,
+  beforeRequest?: () => Promise<void>,
 ): Promise<{ readonly id: string; readonly url: string }> {
   const descriptor = await resolveDescriptor(bootstrap, "CreateTweet", "mutation");
   const response = await graphQl(
     bootstrap,
     descriptor,
-    createTweetVariables(text, replyTo, quote),
+    createTweetVariables(text, replyTo, quote, media?.id ?? null),
     "POST",
     undefined,
     mutationOperation,
     beforeRequest,
   );
-  return createdTweet(response, text, replyTo, quote, authorId);
+  const created = createdTweet(
+    response,
+    text,
+    replyTo,
+    quote,
+    authorId,
+    media?.id ?? null,
+  );
+  if (mutationOperation !== "posts.publish") return created;
+  const readback = await tweetReadback(bootstrap, created.id);
+  const rebound = assertTweetBinding(
+    readback,
+    text,
+    replyTo,
+    quote,
+    authorId,
+    media?.id ?? null,
+    "X independent post readback",
+  );
+  if (rebound.id !== created.id) {
+    throw new Error("X independent post readback changed the created post ID");
+  }
+  return created;
 }
 
 function rejectUnsupportedPostBranches(input: OperationInput): void {
-  for (const name of ["media", "root_media"] as const) {
-    if (input[name] !== undefined) throw new Error(`X internal ${name} upload requires a separately reviewed media contract`);
+  if (input.root_media !== undefined) {
+    throw new Error("X internal root_media upload requires a separately reviewed thread contract");
   }
   const replySettings = optionalStringInput(input, "reply_settings");
   if (replySettings !== undefined && replySettings !== "everyone") {
@@ -1465,6 +2277,7 @@ async function executePublish(
     readonly signal?: AbortSignal;
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
+    readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
   },
@@ -1472,6 +2285,13 @@ async function executePublish(
   rejectUnsupportedPostBranches(input);
   const currentViewer = await requireBoundViewer(bootstrap, auth);
   const action = recipe.action;
+  if (
+    action !== "posts.publish"
+    && (input.media !== undefined || input.media_type !== undefined)
+  ) throw new Error("X image upload is reviewed only for posts.publish");
+  const image = action === "posts.publish"
+    ? await readBoundXImage(input, options.fileResolver, bootstrap.operationDeadline)
+    : null;
   const texts = action === "threads.publish"
     ? threadTexts(input)
     : [stringInput(input, "body")];
@@ -1485,17 +2305,35 @@ async function executePublish(
     for (const [offset, text] of texts.entries()) {
       const index = offset + 1;
       const id = action === "threads.publish" ? `${action}[${index}]` : action;
+      let media: XUploadedMedia | null = null;
+      let beforeRequest: (() => Promise<void>) | undefined;
+      if (image !== null) {
+        const rebound = await requireBoundViewer(bootstrap, auth);
+        if (rebound.id !== currentViewer.id) {
+          throw new Error("X viewer changed during media dispatch preparation");
+        }
+        await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
+        started = index;
+        media = await uploadXImage(bootstrap, image);
+        const afterUpload = await requireBoundViewer(bootstrap, auth);
+        if (afterUpload.id !== currentViewer.id) {
+          throw new Error("X viewer changed after media upload");
+        }
+      } else {
+        beforeRequest = async () => {
+          await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
+          started = index;
+        };
+      }
       const post = await publishOne(
         bootstrap,
         text,
         previous,
         quote,
+        media,
         currentViewer.id,
         action === "threads.publish" && offset > 0 ? "threads.reply" : action as XWebMutationOperationId,
-        async () => {
-          await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
-          started = index;
-        },
+        beforeRequest,
       );
       posts.push(post);
       previous = post.id;
@@ -1531,29 +2369,59 @@ async function executeArticleDraftSave(
   options: {
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly fileResolver?: BrowserFileResolver;
   },
 ): Promise<WebSessionExecution> {
-  if (recipe.contractVersion !== 1 || recipe.action !== "articles.draft.save") {
-    throw new Error("X Article draft saving supports only articles.draft.save@1");
+  if (
+    (recipe.contractVersion !== 1 && recipe.contractVersion !== 2)
+    || recipe.action !== "articles.draft.save"
+  ) {
+    throw new Error("X Article draft saving supports only articles.draft.save@1 or @2");
   }
   const title = requiredString(input.title, "input.title", MAX_ARTICLE_TITLE_CHARACTERS);
   if (/[\0\r\n]/u.test(title)) throw new Error("input.title must be one plain-text line");
-  const document = parseArticleDraftDocument(input.document, {
-    maximumBlocks: MAX_ARTICLE_BLOCKS,
-    maximumCharacters: MAX_ARTICLE_BODY_CHARACTERS,
-  });
-  const contentState = buildXWebRichArticleContentState(document);
-  await assertCurrentArticleRichContract(bootstrap);
+  const document = recipe.contractVersion === 1
+    ? parseArticleDraftDocument(input.document, {
+        maximumBlocks: MAX_ARTICLE_BLOCKS,
+        maximumCharacters: MAX_ARTICLE_BODY_CHARACTERS,
+      })
+    : parseArticleDraftDocumentV2(input.document, {
+        maximumBlocks: MAX_ARTICLE_BLOCKS,
+        maximumCharacters: MAX_ARTICLE_BODY_CHARACTERS,
+        maximumImages: MAX_ARTICLE_INLINE_IMAGES,
+      });
+  if (
+    recipe.contractVersion === 2
+    && document.blocks.some((block) => block.type === "image" && block.altText !== undefined)
+  ) throw new Error("X Article inline-image alternative text remains capture-required");
+  const images = recipe.contractVersion === 1
+    ? Object.freeze([])
+    : await materializeArticleDraftImages(input.inline_images, options.fileResolver, {
+        maximumBytes: MAX_ARTICLE_IMAGE_BYTES,
+        maximumImages: MAX_ARTICLE_INLINE_IMAGES,
+        ...(bootstrap.operationDeadline === undefined
+          ? {}
+          : { operationDeadline: bootstrap.operationDeadline }),
+      });
+  if (
+    recipe.contractVersion === 2
+    && document.blocks.filter((block) => block.type === "image").length !== images.length
+  ) throw new Error("input.inline_images must align one-to-one with input.document image blocks");
+  await assertCurrentArticleRichContract(bootstrap, recipe.contractVersion === 2);
   const currentViewer = await requireBoundViewer(bootstrap, auth);
   const requestedDraftId = input.draft_id === undefined ? null : postId(input.draft_id, "input.draft_id");
   if (requestedDraftId !== null) {
     requirePrivateDraftArticle(await readArticleDraft(bootstrap, requestedDraftId), requestedDraftId, currentViewer.id);
   }
 
-  const planned = requestedDraftId === null ? 1 : 2;
+  const planned = images.length + (requestedDraftId === null ? 1 : 2);
   let started = 0;
   let verified = 0;
   let draftId = requestedDraftId;
+  let contentState: XWebRichArticleContentState | null = recipe.contractVersion === 1
+    ? buildXWebRichArticleContentState(document)
+    : null;
+  const uploadedImageIds: string[] = [];
   let nextIndex = 0;
   let failureStage = "binding the Article mutation session";
   const begin = async (id: string): Promise<number> => {
@@ -1569,6 +2437,34 @@ async function executeArticleDraftSave(
   };
 
   try {
+    if (images.length > 0) {
+      failureStage = "binding the media upload session";
+      const uploadClient = await createWebSessionClient(articleUploadOrigin(bootstrap), auth, {
+        timeoutMs: bootstrap.timeoutMs,
+        ...(bootstrap.signal === undefined ? {} : { signal: bootstrap.signal }),
+        ...(bootstrap.operationDeadline === undefined
+          ? {}
+          : { operationDeadline: bootstrap.operationDeadline }),
+        ...(bootstrap.dependencies === undefined ? {} : { dependencies: bootstrap.dependencies }),
+      });
+      if (webSessionCookie(uploadClient.cookies, "ct0") !== bootstrap.csrf) {
+        throw new Error("X media upload session did not bind the Article session CSRF realm");
+      }
+      for (const [offset, image] of images.entries()) {
+        const id = `articles.media.inline[${offset + 1}]`;
+        failureStage = `uploading inline image ${offset + 1}`;
+        let index = 0;
+        const mediaId = await uploadArticleImage(bootstrap, uploadClient, image, async () => {
+          index = await begin(id);
+        });
+        uploadedImageIds.push(mediaId);
+        await complete(id, index);
+      }
+      contentState = buildXWebRichArticleContentState(document, uploadedImageIds);
+    }
+    if (contentState === null) {
+      throw new Error("X Article inline images did not produce a verified content state");
+    }
     if (draftId === null) {
       const id = "articles.create";
       failureStage = "resolving the Article create mutation";
@@ -1586,9 +2482,12 @@ async function executeArticleDraftSave(
           index = await begin(id);
         },
       );
-      const article = responseBoundArticle(response, "articleentity_create_draft", null, title);
-      draftId = postId(article.rest_id, "X created Article draft rest_id");
+      failureStage = "binding the Article create response";
+      const article = responseBoundArticle(response, "articleentity_create_draft", null);
+      draftId = articleId(article, "X created Article draft response");
+      failureStage = "reading back the created Article";
       const finalArticle = await readArticleDraft(bootstrap, draftId);
+      failureStage = "verifying the created Article readback";
       verifyFinalRichArticle(finalArticle, {
         id: draftId,
         viewerId: currentViewer.id,
@@ -1656,14 +2555,17 @@ async function executeArticleDraftSave(
         mode: "draft",
         draftId,
         title,
-        documentSchemaVersion: 1,
+        documentSchemaVersion: recipe.contractVersion,
+        ...(recipe.contractVersion === 1
+          ? {}
+          : { inlineImageCount: uploadedImageIds.length }),
         url,
       },
       finalUrl: url,
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
     };
-  } catch {
+  } catch (error) {
     const url = draftId === null ? null : `${X_ORIGIN}/compose/articles/edit/${draftId}`;
     return {
       status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
@@ -1672,7 +2574,9 @@ async function executeArticleDraftSave(
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
       error: started > verified
-        ? requestedDraftId === null
+        ? images.length > 0
+          ? `X may have accepted an inline-image upload or private Article dispatch while ${failureStage}; ${xWebArticleImageFailureCategory(error)}; its provider media IDs are not present in the confirmed input, so preserve the indeterminate run and do not retry`
+          : requestedDraftId === null
           ? "X may have accepted the private Article create, but the confirmed input has no exact draft ID for safe reconciliation; preserve the indeterminate run and do not retry"
           : "X may have accepted the current private Article replacement dispatch; reconcile the exact existing draft before retrying"
         : verified > 0
@@ -1776,6 +2680,7 @@ export async function executeXWebOperation(
     readonly signal?: AbortSignal;
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
+    readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: XWebRuntimeDependencies;

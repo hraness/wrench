@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalJson } from "../canonical-json";
-import { parseArticleDraftDocument } from "../article-draft-document";
+import {
+  parseArticleDraftDocument,
+  parseArticleDraftDocumentV2,
+} from "../article-draft-document";
 
 import {
   LINKEDIN_MESSENGER_CONVERSATIONS_OBSERVED_QUERY_ID,
@@ -11,9 +14,13 @@ import {
   assertLinkedInWebR1RequestAllowed,
   buildLinkedInArticleContent,
   buildLinkedInArticleContentHtml,
+  buildLinkedInArticleContentHtmlV2,
   buildLinkedInArticleContentPatch,
+  buildLinkedInArticleContentPatchV2,
+  buildLinkedInArticleContentV2,
   buildLinkedInArticleCreateBody,
   buildLinkedInArticleTitlePatch,
+  buildLinkedInPostCreateVariables,
   encodeRestliV2Value,
   linkedInCsrfTokenFromJSessionId,
   linkedInArticleDraftEditUrl,
@@ -21,10 +28,15 @@ import {
   linkedInArticleDraftEntityUrl,
   linkedInMailboxUrnFromMiniProfile,
   linkedInMessengerConversationsUrl,
+  linkedInPostReadbackUrl,
   linkedInWebFolderCategory,
   normalizeLinkedInGraphqlEnvelope,
   normalizeLinkedInArticleDraft,
+  normalizeLinkedInArticleDraftV2,
+  normalizeLinkedInArticleImageUploadRegistration,
+  normalizeLinkedInArticleImageUploadStatus,
   normalizeLinkedInMessagingList,
+  normalizeLinkedInPostProjection,
   resolveLinkedInRegisteredQueryId,
 } from "./linkedin-web";
 
@@ -70,15 +82,17 @@ describe("LinkedIn internal-web operation registry", () => {
     }
   });
 
-  test("graduates only private native Article draft saving", () => {
+  test("graduates only private native Article saving and exact post publishing", () => {
+    const observed = new Set(["articles.draft.save", "posts.publish"]);
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
-      expect(contract.state).toBe(operation === "articles.draft.save" ? "observed" : "capture-required");
-      expect(contract.requests).toHaveLength(0);
+      expect(contract.state).toBe(observed.has(operation) ? "observed" : "capture-required");
+      expect(contract.requests).toHaveLength(operation === "posts.publish" ? 5 : 0);
     }
     expect(LINKEDIN_WEB_OPERATIONS["reactions.set"].risk).toBe("R2");
     expect(LINKEDIN_WEB_OPERATIONS["articles.draft.save"].risk).toBe("R2");
     expect(LINKEDIN_WEB_OPERATIONS["articles.draft.save"].evidence).toBe("live-har");
+    expect(LINKEDIN_WEB_OPERATIONS["posts.publish"].evidence).toBe("first-party-bundle");
     for (const operation of [
       "messaging.send",
       "posts.publish",
@@ -91,6 +105,85 @@ describe("LinkedIn internal-web operation registry", () => {
     ] as const) {
       expect(LINKEDIN_WEB_OPERATIONS[operation].risk).toBe("R3");
     }
+  });
+});
+
+describe("LinkedIn native post contract", () => {
+  const profileUrn = "urn:li:fsd_profile:ACoAAExactCurrentProfile";
+  const mediaUrn = "urn:li:digitalmediaAsset:C4D22AQExactImage";
+  const entityUrn = "urn:li:fsd_share:7000000000000000000";
+  const body = "how your email finds me";
+
+  test("builds the exact published-feed variables and omits absent image alt text", () => {
+    expect(buildLinkedInPostCreateVariables({
+      body,
+      visibility: "public",
+      mediaUrn,
+      altText: "Two people stand outside in warm sunlight.",
+    })).toEqual({
+      post: {
+        allowedCommentersScope: "ALL",
+        commentary: {
+          $type: "com.linkedin.voyager.dash.deco.common.text.TextViewModelV2",
+          attributesV2: [],
+          text: body,
+        },
+        intendedShareLifeCycleState: "PUBLISHED",
+        origin: "FEED",
+        paidEndorsement: false,
+        visibilityDataUnion: { visibilityType: "ANYONE" },
+        media: {
+          altText: "Two people stand outside in warm sunlight.",
+          category: "IMAGE",
+          mediaUrn,
+          tapTargets: [],
+        },
+      },
+    });
+    const withoutAlt = buildLinkedInPostCreateVariables({
+      body,
+      visibility: "connections",
+      mediaUrn,
+      altText: null,
+    });
+    expect(withoutAlt).toMatchObject({
+      post: {
+        visibilityDataUnion: { visibilityType: "CONNECTIONS_ONLY" },
+        media: { category: "IMAGE", mediaUrn, tapTargets: [] },
+      },
+    });
+    expect("altText" in ((withoutAlt.post as { media: object }).media)).toBeFalse();
+  });
+
+  test("builds an exact registered readback and rejects projection drift", () => {
+    const url = linkedInPostReadbackUrl(entityUrn);
+    expect(url.pathname).toBe("/voyager/api/graphql");
+    expect(url.searchParams.get("includeWebMetadata")).toBe("true");
+    expect(url.searchParams.get("queryId")).toBe(
+      "voyagerFeedDashUpdates.00f9ed72d35c2a949114759b829f9886",
+    );
+    expect(url.searchParams.get("variables")).toBe(
+      `(moduleKey:feed-item:desktop,urnOrNss:${entityUrn})`,
+    );
+    const projection = {
+      actorMatched: true,
+      entityMatched: true,
+      entityUrn,
+      lifecycle: "PUBLISHED",
+      mediaMatched: true,
+      mediaUrn,
+      textMatched: true,
+      url: "https://www.linkedin.com/feed/update/urn:li:activity:7000000000000000000/",
+    };
+    expect(normalizeLinkedInPostProjection(projection, {
+      body,
+      profileUrn,
+      mediaUrn,
+    })).toEqual({ entityUrn, mediaUrn, url: projection.url });
+    expect(() => normalizeLinkedInPostProjection(
+      { ...projection, textMatched: false },
+      { body, profileUrn, mediaUrn },
+    )).toThrow("did not bind the confirmed post");
   });
 });
 
@@ -419,8 +512,8 @@ describe("LinkedIn R1 internal-request gate", () => {
   test("keeps every consumer-web read capture-required with no executable request rule", () => {
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
-      expect(contract.requests).toHaveLength(0);
       if (contract.risk !== "R1" || contract.effect !== "read") continue;
+      expect(contract.requests).toHaveLength(0);
       expect(contract.state).toBe("capture-required");
       expect(() => assertLinkedInWebR1RequestAllowed(operation, {
         method: "GET",
@@ -581,6 +674,182 @@ describe("LinkedIn native Article draft contract", () => {
       document,
     });
   });
+
+  test("projects and verifies ordered inline images without persisting transient CDN URLs", () => {
+    const imageDocument = parseArticleDraftDocumentV2(canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "heading1", text: "Harnessing Puerto Rico" },
+        {
+          type: "image",
+          imageIndex: 0,
+          altText: "A lagoon under a bright sky",
+          caption: "Puerto Rico",
+        },
+        { type: "paragraph", text: "After the swim." },
+      ],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000, maximumImages: 20 });
+    const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
+    expect(buildLinkedInArticleContentHtmlV2(imageDocument, [assetUrn])).toBe(
+      "<h2>Harnessing Puerto Rico</h2>"
+      + `<figure><img data-media-urn="${assetUrn}"><figcaption>Puerto Rico</figcaption></figure>`
+      + "<p>After the swim.</p>",
+    );
+    const content = buildLinkedInArticleContentV2(imageDocument, [assetUrn]);
+    expect(content[1]).toEqual({
+      imageBlock: {
+        $type: "com.linkedin.voyager.dash.publishing.ImageBlock",
+        alignment: "FULL_WIDTH",
+        caption: {
+          $type: "com.linkedin.voyager.dash.common.text.TextViewModel",
+          text: "Puerto Rico",
+        },
+        content: {
+          $type: "com.linkedin.voyager.dash.common.image.ImageViewModel",
+          accessibilityText: "A lagoon under a bright sky",
+          attributes: [{
+            $type: "com.linkedin.voyager.dash.common.image.ImageAttribute",
+            detailDataUnion: {
+              vectorImage: {
+                $type: "com.linkedin.common.VectorImage",
+                artifacts: [],
+                digitalmediaAsset: assetUrn,
+              },
+            },
+          }],
+        },
+      },
+    });
+    expect(buildLinkedInArticleContentPatchV2(imageDocument, [assetUrn])).toEqual({
+      patch: {
+        $set: {
+          content,
+          contentHtml: buildLinkedInArticleContentHtmlV2(imageDocument, [assetUrn]),
+          state: "AUTOSAVED",
+        },
+      },
+    });
+
+    const responseContent = [
+      content[0]!,
+      {
+        imageBlock: {
+          $type: "com.linkedin.voyager.dash.publishing.ImageBlock",
+          alignment: "FULL_WIDTH",
+          caption: {
+            $type: "com.linkedin.voyager.dash.common.text.TextViewModel",
+            attributesV2: [],
+            text: "Puerto Rico",
+          },
+          content: {
+            $type: "com.linkedin.voyager.dash.common.image.ImageViewModel",
+            accessibilityText: "A lagoon under a bright sky",
+            accessibilityTextAttributes: [],
+            attributes: [{
+              $type: "com.linkedin.voyager.dash.common.image.ImageAttribute",
+              detailDataUnion: {
+                vectorImage: {
+                  $type: "com.linkedin.common.VectorImage",
+                  artifacts: [{
+                    $type: "com.linkedin.common.VectorArtifact",
+                    expiresAt: 1_900_000_000_000,
+                    fileIdentifyingUrlPathSegment: "image/fixture/1200x630",
+                    height: 630,
+                    width: 1200,
+                  }],
+                  digitalmediaAsset: assetUrn,
+                  rootUrl: "https://media.licdn.com/dms/image/fixture/",
+                },
+              },
+            }],
+          },
+        },
+      },
+      content[2]!,
+    ] as const;
+    expect(normalizeLinkedInArticleDraftV2(
+      articleResponse(responseContent, {
+        contentHtml: `<h2>Harnessing Puerto Rico</h2><figure><img data-media-urn="${assetUrn}" src="https://media.licdn.com/dms/image/fixture/1200x630"><figcaption>Puerto Rico</figcaption></figure><p>After the swim.</p>`,
+      }),
+      draftId,
+      profileUrn,
+    )).toEqual({
+      draftId,
+      profileUrn,
+      title,
+      document: imageDocument,
+      imageAssetUrns: [assetUrn],
+    });
+  });
+
+  test("strips only LinkedIn's editor-owned paragraph after a final image", () => {
+    const imageDocument = parseArticleDraftDocumentV2(canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Before" },
+        { type: "image", imageIndex: 0, altText: "A fixture image" },
+      ],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000, maximumImages: 20 });
+    const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
+    const write = buildLinkedInArticleContentV2(imageDocument, [assetUrn]);
+    const image = structuredClone(write[1]) as Record<string, unknown>;
+    const imageBlock = (image.imageBlock as Record<string, unknown>);
+    const caption = imageBlock.caption as Record<string, unknown>;
+    caption.attributesV2 = [];
+    const contentModel = imageBlock.content as Record<string, unknown>;
+    contentModel.accessibilityTextAttributes = [];
+    const vector = ((((contentModel.attributes as Record<string, unknown>[])[0]?.detailDataUnion as Record<string, unknown>).vectorImage) as Record<string, unknown>);
+    vector.artifacts = [{
+      $type: "com.linkedin.common.VectorArtifact",
+      expiresAt: 1,
+      fileIdentifyingUrlPathSegment: "fixture",
+      height: 1,
+      width: 1,
+    }];
+    vector.rootUrl = "https://media.licdn.com/fixture/";
+    const trailing = structuredClone(write[0]) as Record<string, unknown>;
+    const trailingTextBlock = trailing.textBlock as Record<string, unknown>;
+    (trailingTextBlock.content as Record<string, unknown>).text = "";
+    expect(normalizeLinkedInArticleDraftV2(
+      articleResponse([write[0]!, image, trailing]),
+      draftId,
+      profileUrn,
+    ).document).toEqual(imageDocument);
+  });
+
+  test("binds exact registration, signed-upload, and completed recipe status", () => {
+    const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
+    const recipe = "urn:li:digitalmediaRecipe:feedshare-image_1280";
+    const binding = normalizeLinkedInArticleImageUploadRegistration({
+      data: {
+        $type: "com.linkedin.restli.common.ActionResponse",
+        value: {
+          $type: "com.linkedin.mediauploader.MediaUploadMetadata",
+          assetRealtimeTopic: "bounded-realtime-topic",
+          mediaArtifactUrn: "urn:li:mediaArtifact:fixture",
+          pollingUrl: "https://www.linkedin.com/voyager/api/voyagerVideoDashMediaUploadMetadata/fixture",
+          recipes: [recipe],
+          singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+          singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture?ca=vector",
+          type: "VECTOR",
+          urn: assetUrn,
+        },
+      },
+      included: [],
+    });
+    expect(binding).toMatchObject({ assetUrn, recipes: [recipe] });
+    expect(() => normalizeLinkedInArticleImageUploadStatus({
+      asset: assetUrn,
+      assetStatus: "ALLOWED",
+      status: { [recipe]: "PROCESSING" },
+    }, binding)).toThrow("did not finish every recipe");
+    expect(normalizeLinkedInArticleImageUploadStatus({
+      asset: assetUrn,
+      assetStatus: "ALLOWED",
+      status: { [recipe]: "AVAILABLE" },
+    }, binding)).toBeUndefined();
+  });
+
 
   test("rejects payload ambiguity, unsupported styles and blocks, author drift, and published state", () => {
     const styleDocument = parseArticleDraftDocument(canonicalJson({

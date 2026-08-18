@@ -809,8 +809,8 @@ describe("encrypted confirmation plans", () => {
     try {
       const direct = {
         manifest: xWebManifest(),
-        operationId: "posts.publish",
-        input: { body: "This capture-required write must remain inert" },
+        operationId: "threads.publish",
+        input: { items: ["This capture-required write must remain inert"] },
         auth: createAuth("x-web-test", {
           source: "arc",
           profile: "Profile 1",

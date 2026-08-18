@@ -1,27 +1,35 @@
 # Native article drafts
 
-Use `articles.draft.save` to create or replace one private native long-form
-draft. Treat it as an R2 mutation with its own exact preview, confirmation,
-dispatch record, and installed result or readback contract. It has no
-publish-capable branch.
+## Contents
 
-Keep `articles.publish` separate. Publication is R3 and requires a distinct
+- [Own the editorial translation](#own-the-editorial-translation)
+- [Build the mixed document](#build-the-mixed-document)
+- [Save without publishing](#save-without-publishing)
+- [Handle uncertainty](#handle-uncertainty)
+- [Check provider state](#check-provider-state)
+
+Use `articles.draft.save` to create or replace one private native long-form
+draft. Treat it as an R2 mutation with its own preview, confirmation, dispatch
+record, and provider-bound unpublished result. It has no publish-capable
+branch.
+
+Keep `articles.publish` separate. Publication is R3 and requires a different
 installed observed contract, input, preview, and confirmation. A saved draft
-ID is not permission to publish, and a draft preview cannot be reused for the
-publish operation.
+ID is not permission to publish, and a draft preview cannot be reused for
+publication.
 
 ## Own the editorial translation
 
-Capture or read source material separately. Let the caller decide how to
-translate, abridge, retitle, attribute, or link it for the destination. Wrench
-does not turn source HTML, Markdown, or a URL into provider copy and does not
-infer attribution. Pass only the final reviewed title and canonical document
-to the mutation.
+Capture or read source material separately. The caller decides how to
+translate, abridge, retitle, attribute, link, and place images. Wrench does not
+turn source HTML, Markdown, or a URL into provider copy and does not infer
+attribution or alternative text. Pass only the final reviewed title, canonical
+document, and exact local image files to the mutation.
 
-## Build the text document
+## Build the mixed document
 
-When the installed capability declares `input.document`, encode it as canonical JSON for
-`ArticleDraftDocument` schemaVersion 1. Use only these text blocks:
+The current `x-web` and `linkedin-web` capabilities require canonical JSON for
+`ArticleDraftDocument` schemaVersion 2. Text blocks are:
 
 - `paragraph`
 - `heading1`
@@ -32,37 +40,56 @@ When the installed capability declares `input.document`, encode it as canonical 
 
 Represent a native link with an ordered, non-overlapping range over the
 block's UTF-16 text and one canonical absolute HTTPS URL. Represent bold,
-italic, or strikethrough with style ranges. Put each paragraph or list item in
-its own block; block text cannot contain a newline.
+italic, or strikethrough with ordered style ranges. Put each paragraph or list
+item in its own block; block text cannot contain a newline.
 
-Do not pass Markdown links, HTML, embeds, image blocks, cover images, files, or
-provider editor payloads. This contract is text and native HTTPS links only.
-Inspect the installed capability for provider-specific title, block, character,
-and document bounds.
+Place an inline image with an `image` block. Its `imageIndex` is the zero-based
+position of the matching file in outer `input.inline_images`. Image indexes
+must be unique, contiguous from zero, and referenced exactly once. A caption
+is optional. Platform metadata differs:
 
-The current `linkedin-web` contract accepts only `paragraph`, `heading1`, and
-`heading2` blocks plus native HTTPS links. It rejects list items, blockquotes,
-and every style range because those editor projections were not part of the
-reviewed capture. The current `x-web` contract accepts the complete block/style
-set above.
+- `x-web` supports captions but its native alt-text write remains
+  capture-required, so omit `altText`.
+- `linkedin-web` requires a non-empty descriptive `altText`; captions are
+  optional.
 
-This canonical document links the word `source`:
+Both current web adapters accept 1–20 ordered JPEG, PNG, or WebP files, at most
+5 MiB each. Wrench sniffs the bytes, copies them into the encrypted preview's
+plan-asset bundle, hashes them, removes source paths and filenames from the
+preview, and reverifies the exact bytes before dispatch. Do not pass a URL,
+provider asset ID, expiring CDN source, cover, video, embed, HTML, Markdown, or
+editor payload as an inline image.
+
+Provider text support remains narrower where capture evidence is narrower:
+`linkedin-web` accepts only `paragraph`, `heading1`, and `heading2`, native
+HTTPS links, and no text styles. `x-web` accepts all listed text block types,
+native links, and bold, italic, or strikethrough.
+
+This is canonical X document JSON with one native link and one image:
 
 ```json
-{"blocks":[{"links":[{"length":6,"offset":9,"url":"https://example.com/source"}],"text":"Read the source","type":"paragraph"}],"schemaVersion":1}
+{"blocks":[{"links":[{"length":6,"offset":9,"url":"https://example.com/source"}],"text":"Read the source","type":"paragraph"},{"caption":"Puerto Rico","imageIndex":0,"type":"image"}],"schemaVersion":2}
 ```
 
-Place that exact JSON string inside a private invocation input file:
+Put that exact inner JSON string and an absolute local image path in a private
+invocation input file:
 
 ```json
 {
   "title": "Reviewed title",
-  "document": "{\"blocks\":[{\"links\":[{\"length\":6,\"offset\":9,\"url\":\"https://example.com/source\"}],\"text\":\"Read the source\",\"type\":\"paragraph\"}],\"schemaVersion\":1}"
+  "document": "{\"blocks\":[{\"links\":[{\"length\":6,\"offset\":9,\"url\":\"https://example.com/source\"}],\"text\":\"Read the source\",\"type\":\"paragraph\"},{\"caption\":\"Puerto Rico\",\"imageIndex\":0,\"type\":\"image\"}],\"schemaVersion\":2}",
+  "inline_images": ["/absolute/private/puerto-rico.png"]
 }
 ```
 
+For LinkedIn, add `"altText":"A descriptive account of the image"` before
+`caption` in the canonical image block. If the final block is an image, do not
+add an empty paragraph after it; LinkedIn owns that editor-only trailing block
+and Wrench removes exactly that provider-added value during readback.
+
 Add `draft_id` only to replace the exact existing private draft owned by the
-bound account.
+bound account. Treat `wrench capabilities <adapter> --json` as authoritative
+for all installed bounds and contract versions.
 
 ## Save without publishing
 
@@ -78,55 +105,55 @@ wrench confirm <preview-digest> --json
 ```
 
 Use the same sequence with `linkedin-web` and its bound LinkedIn cookie realm;
-never switch the adapter or auth realm after preview. LinkedIn draft saving
-runs the fixed reviewed API/write plus authenticated editor-response readback
-exchange inside a contained headed Chrome session. The browser window may
-appear, but Wrench does not type into or read
-the Article editor DOM and callers cannot supply a URL, header, script, or
-selector.
+never switch adapter or auth realm after preview. LinkedIn executes its fixed
+reviewed registration, signed byte-transfer, autosave, and editor-response
+readback contract inside contained headed Chrome. The reviewed editor proceeds
+from the transfer's `201` response directly to autosave; Wrench does not invent
+a processing poll that the editor does not perform. The window may appear, but
+Wrench does not type into or read the editor DOM, and callers cannot supply a
+URL, header, script, or selector.
 
-Review the exact account, title, canonical document, optional draft ID, R2 side
-effect, contract version, and dispatch schedule. Require a successful result to
-identify `articles.draft.save`, report `published: false` and `mode: "draft"`,
-and return the private draft identity. Never continue into publication.
+Review the account, title, canonical document, ordered attachment hashes,
+optional draft ID, R2 side effect, contract version, and every planned
+dispatch. X plans one dispatch per image followed by create, or image uploads
+then title and content replacement. LinkedIn create plans the title shell,
+each image, then content; replacement plans each image followed by one
+conservative title/content replacement.
 
-LinkedIn create previews name separate title-shell and content dispatches.
-LinkedIn exact-replacement previews use one conservative replacement dispatch:
-the runtime first reads the bound private draft, skips fields that already match,
-and verifies the complete title/document state before success.
+Require a successful result to identify `articles.draft.save`, report
+`published: false` and `mode: "draft"`, return the private draft identity, and
+report the exact image count. X verifies the owner, private Draft lifecycle,
+title, text/link/style structure, captions, image order, and uploaded media
+IDs. LinkedIn verifies the current author, private `DRAFT` lifecycle, title,
+text/link structure, image order, alt text, captions, and stable asset URNs.
+Never continue into publication.
 
-Do not retry a partial or indeterminate save. Preserve the run evidence and use
-only the installed operation's exact recovery path for the same bound draft.
-An `x-web` or `linkedin-web` replacement with an exact input `draft_id` has
-that read-only reconciliation path. An indeterminate create does not: its
-immutable confirmed input contains no exact target ID, so
-leave the run unsettled rather than searching by title, guessing an ID, or
-retrying. Do not inspect an uncertain draft and then call `articles.publish` as
-a recovery step.
+## Handle uncertainty
+
+Do not retry a partial or indeterminate image save. An upload may have produced
+a provider asset even when its stable identity never entered the confirmed
+result. Preserve the run, inspect the exact private draft, and do not search by
+title, guess an ID, repeat uploads, switch transports, or publish as recovery.
+
+Current image-capable X and LinkedIn draft contracts deliberately have no
+automated reconciliation path. Only already-durable historical text-only
+contracts retain read-only replacement reconciliation for an exact confirmed
+`draft_id`; that historical route is never selected for a new preview.
 
 ## Check provider state
 
-- `x`: the documented OAuth API exposes separate observed contracts. Its R2
-  `articles.draft.save` creates one private plain-text draft with an optional
-  cover and stops after binding the create response's draft ID and title. It
-  does not make a separate unpublished read. Its R3 `articles.publish` creates
-  and publishes through its own response-bound contract; it does not claim a
-  separate public readback. Neither accepts
-  `draft_only` for a new preview; inspect the official capability for its exact
-  input schema. The retained `articles.publish@2` route exists only to recover
-  already durable v2 evidence with its exact historical semantics.
-- `x-web`: `articles.draft.save` is observed for a bound signed-in X account.
-  It creates or replaces one private text-and-links Article draft and verifies
-  the unpublished result. `articles.publish` remains capture-required.
-- `linkedin-web`: `articles.draft.save` is observed for a bound signed-in
-  LinkedIn member. It creates or replaces one private paragraphs/headings/link
-  draft through the reviewed first-party autosave contract inside contained
-  Chrome, then verifies the exact current-author unpublished state from one
-  bounded hidden JSON payload in the editor-page server response. This
-  browser-network transport preserves LinkedIn's device session without using
-  DOM automation. Styles, lists, blockquotes, covers, inline media, and
+- `x`: the documented OAuth adapter has separate response-bound private-draft
+  and publish operations with its own plain-text/optional-cover schema. It is
+  not a substitute for `x-web` and does not accept this mixed document.
+- `x-web`: `articles.draft.save@2` creates or replaces one private structured
+  Article with native links, styles, ordered inline images, and captions, then
+  verifies the unpublished result. Alt text and covers remain
+  capture-required; `articles.publish` remains capture-required.
+- `linkedin-web`: `articles.draft.save@3` creates or replaces one private
+  paragraphs/headings/links Article with ordered inline images, required alt
+  text, and optional captions, then verifies the exact current-author
+  unpublished result. Styles, lists, blockquotes, covers, and
   `articles.publish` remain capture-required.
 
-Treat `wrench capabilities <adapter> --json` as authoritative for the installed
-version. Never switch between an official API and a signed-in web adapter after
-preview because one lacks draft or publish coverage.
+Never switch between an official API and a signed-in web adapter because one
+lacks a field or publishing capability.

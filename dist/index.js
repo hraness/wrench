@@ -34,6 +34,7 @@ function isProviderPluginOperationName(value) {
 
 // src/article-draft-document.ts
 var ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION = 1;
+var ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION = 2;
 var MAX_ARTICLE_DRAFT_DOCUMENT_BYTES = 512 * 1024;
 var MAX_ARTICLE_DRAFT_BLOCKS = 5000;
 var MAX_ARTICLE_DRAFT_CHARACTERS = 125000;
@@ -209,6 +210,102 @@ function articleDraftDocumentIssues(value, limits) {
     ]);
   }
 }
+function checkedImageLimits(value) {
+  const text = checkedLimits(value);
+  if (!Number.isSafeInteger(value.maximumImages) || value.maximumImages < 1 || value.maximumImages > 100)
+    throw new Error("Article draft image limits are invalid");
+  return Object.freeze({ ...text, maximumImages: value.maximumImages });
+}
+function optionalImageText(value, label, maximum) {
+  if (value === undefined)
+    return;
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || /[\0\r]/u.test(value))
+    throw new Error(`${label} must be bounded text`);
+  return value;
+}
+function parseArticleDraftDocumentV2(value, limitsValue) {
+  const limits = checkedImageLimits(limitsValue);
+  if (typeof value !== "string" || value.length < 1 || Buffer.byteLength(value, "utf8") > MAX_ARTICLE_DRAFT_DOCUMENT_BYTES || value.includes("\x00"))
+    throw new Error("input.document must be bounded canonical ArticleDraftDocument JSON");
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("input.document must be valid ArticleDraftDocument JSON");
+  }
+  if (canonicalJson(parsed) !== value) {
+    throw new Error("input.document must use canonical JSON encoding");
+  }
+  const root = record(parsed, "input.document");
+  exactKeys(root, ["schemaVersion", "blocks"], "input.document");
+  if (root.schemaVersion !== ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION || !Array.isArray(root.blocks)) {
+    throw new Error(`input.document must use ArticleDraftDocument schemaVersion ${ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION}`);
+  }
+  if (root.blocks.length < 1 || root.blocks.length > limits.maximumBlocks) {
+    throw new Error(`input.document must contain 1-${limits.maximumBlocks} blocks`);
+  }
+  const blocks = [];
+  const imageIndexes = new Set;
+  let totalCharacters = 0;
+  for (const [index, rawBlock] of root.blocks.entries()) {
+    const label = `input.document.blocks[${index}]`;
+    const block = record(rawBlock, label);
+    if (block.type === "image") {
+      exactKeys(block, [
+        "type",
+        "imageIndex",
+        ...block.altText === undefined ? [] : ["altText"],
+        ...block.caption === undefined ? [] : ["caption"]
+      ], label);
+      if (!Number.isSafeInteger(block.imageIndex) || block.imageIndex < 0 || block.imageIndex >= limits.maximumImages || imageIndexes.has(block.imageIndex))
+        throw new Error(`${label}.imageIndex must be a unique bounded zero-based image index`);
+      const altText = optionalImageText(block.altText, `${label}.altText`, 1000);
+      const caption = optionalImageText(block.caption, `${label}.caption`, 1000);
+      imageIndexes.add(block.imageIndex);
+      blocks.push(Object.freeze({
+        type: "image",
+        imageIndex: block.imageIndex,
+        ...altText === undefined ? {} : { altText },
+        ...caption === undefined ? {} : { caption }
+      }));
+      continue;
+    }
+    const parsedText = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION,
+      blocks: [rawBlock]
+    }), {
+      maximumBlocks: 1,
+      maximumCharacters: limits.maximumCharacters
+    }).blocks[0];
+    if (parsedText === undefined)
+      throw new Error(`${label} was omitted after validation`);
+    totalCharacters += parsedText.text.length;
+    if (totalCharacters > limits.maximumCharacters) {
+      throw new Error(`input.document text must contain at most ${limits.maximumCharacters} UTF-16 code units`);
+    }
+    blocks.push(parsedText);
+  }
+  if (totalCharacters < 1)
+    throw new Error("input.document must contain article text");
+  const orderedIndexes = [...imageIndexes].sort((left, right) => left - right);
+  if (orderedIndexes.some((value2, index) => value2 !== index)) {
+    throw new Error("input.document imageIndex values must be contiguous from zero");
+  }
+  return Object.freeze({
+    schemaVersion: ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION,
+    blocks: Object.freeze(blocks)
+  });
+}
+function articleDraftDocumentV2Issues(value, limits) {
+  try {
+    parseArticleDraftDocumentV2(value, limits);
+    return Object.freeze([]);
+  } catch (error) {
+    return Object.freeze([
+      error instanceof Error ? error.message : "input.document is invalid"
+    ]);
+  }
+}
 
 // src/index.ts
 var PROVIDER_PLUGIN_ID_MAX_LENGTH2 = PROVIDER_PLUGIN_ID_MAX_LENGTH;
@@ -218,16 +315,19 @@ var isProviderPluginId2 = isProviderPluginId;
 var isProviderPluginOperationName2 = isProviderPluginOperationName;
 var isProviderPluginSurfaceId2 = isProviderPluginSurfaceId;
 export {
+  parseArticleDraftDocumentV2,
   parseArticleDraftDocument,
   isProviderPluginSurfaceId2 as isProviderPluginSurfaceId,
   isProviderPluginOperationName2 as isProviderPluginOperationName,
   isProviderPluginId2 as isProviderPluginId,
   isPortableProviderPluginVersion2 as isPortableProviderPluginVersion,
+  articleDraftDocumentV2Issues,
   articleDraftDocumentIssues,
   PROVIDER_PLUGIN_OPERATION_NAME_MAX_LENGTH2 as PROVIDER_PLUGIN_OPERATION_NAME_MAX_LENGTH,
   PROVIDER_PLUGIN_ID_MAX_LENGTH2 as PROVIDER_PLUGIN_ID_MAX_LENGTH,
   MAX_ARTICLE_DRAFT_DOCUMENT_BYTES,
   MAX_ARTICLE_DRAFT_CHARACTERS,
   MAX_ARTICLE_DRAFT_BLOCKS,
-  ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION
+  ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION,
+  ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION
 };

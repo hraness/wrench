@@ -933,20 +933,31 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.4.0");
+    expect(current.value.version).toBe("1.7.0");
     const article = current.value.operations["articles.draft.save"];
     expect(article !== undefined && isWebSessionOperation(article)).toBeTrue();
     if (article === undefined || !isWebSessionOperation(article)) return;
     expect(article.risk).toBe("R2");
-    expect(article.webSession.contractVersion).toBe(1);
-    expect(article.input.required).toEqual(["title", "document"]);
+    expect(article.webSession.contractVersion).toBe(2);
+    expect(article.input.required).toEqual(["title", "document", "inline_images"]);
     expect(article.input.properties.draft_only).toBeUndefined();
-    expect(article.input.properties.inline_images).toBeUndefined();
+    expect(article.input.properties.inline_images).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+    });
     expect(article.input.properties.cover_image).toBeUndefined();
     expect(article.input.properties.draft_id).toMatchObject({ type: "string", maxLength: 19 });
     const richInput = validateOperationInput(article.input, {
       title: "Harnessing Puerto Rico",
-      document: canonicalJson({ schemaVersion: 1, blocks: [{ type: "paragraph", text: "Body" }] }),
+      document: canonicalJson({
+        schemaVersion: 2,
+        blocks: [
+          { type: "paragraph", text: "Body" },
+          { type: "image", imageIndex: 0, caption: "Puerto Rico" },
+        ],
+      }),
+      inline_images: ["fixture-image"],
     }, current.value.origins);
     expect(richInput.ok).toBeTrue();
     if (richInput.ok) {
@@ -955,6 +966,33 @@ describe("wrench manifest parsing", () => {
         value: richInput.value,
       });
     }
+
+    const textOnlyValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "x", "wrench-web-adapter.v1.4.0.json"),
+      "utf8",
+    )) as unknown;
+    const textOnly = parseDiagnosticManifest(textOnlyValue);
+    expect(textOnly.ok).toBeTrue();
+    if (textOnly.ok) {
+      expect(textOnly.value.version).toBe("1.4.0");
+      const textOnlyDraft = textOnly.value.operations["articles.draft.save"];
+      expect(textOnlyDraft !== undefined && isWebSessionOperation(textOnlyDraft)).toBeTrue();
+      if (textOnlyDraft !== undefined && isWebSessionOperation(textOnlyDraft)) {
+        expect(textOnlyDraft.webSession.contractVersion).toBe(1);
+        expect(textOnlyDraft.input.required).toEqual(["title", "document"]);
+        expect(textOnlyDraft.input.properties.inline_images).toBeUndefined();
+      }
+    }
+    expect(parseRuntimeManifest(textOnlyValue)).toEqual({
+      ok: false,
+      issues: ["authenticated web contract x/posts.publish@1 is not installed"],
+    });
+    expect(providerPluginRegistry.resolveOperationDefinition(
+      "web-session-api",
+      "x",
+      "articles.draft.save",
+      1,
+    )).toBeDefined();
     const publish = current.value.operations["articles.publish"];
     expect(publish !== undefined && isWebSessionOperation(publish)).toBeTrue();
     if (publish !== undefined && isWebSessionOperation(publish)) {
@@ -981,7 +1019,7 @@ describe("wrench manifest parsing", () => {
     expect(priorArticle.input.properties.cover_image).toMatchObject({ type: "file", maxBytes: 5 * 1024 * 1024 });
   });
 
-  test("reserves LinkedIn native Article drafts separately from publication", () => {
+  test("ships LinkedIn native Article drafts separately from publication", () => {
     const currentValue = JSON.parse(readFileSync(
       join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.json"),
       "utf8",
@@ -989,17 +1027,63 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.6.0");
+    expect(current.value.version).toBe("1.9.0");
     const draft = current.value.operations["articles.draft.save"];
     expect(draft !== undefined && isWebSessionOperation(draft)).toBeTrue();
     if (draft === undefined || !isWebSessionOperation(draft)) return;
     expect(draft.risk).toBe("R2");
     expect(draft.webSession).toMatchObject({
       action: "articles.draft.save",
-      contractVersion: 2,
+      contractVersion: 3,
     });
-    expect(draft.input.required).toEqual(["title", "document"]);
+    expect(draft.input.required).toEqual(["title", "document", "inline_images"]);
+    expect(draft.input.properties.inline_images).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+    });
     expect(draft.input.properties.cover_image).toBeUndefined();
+    const richInput = validateOperationInput(draft.input, {
+      title: "Harnessing Puerto Rico",
+      document: canonicalJson({
+        schemaVersion: 2,
+        blocks: [
+          { type: "paragraph", text: "Body" },
+          {
+            type: "image",
+            imageIndex: 0,
+            altText: "Palm trees beside the Puerto Rican coast.",
+            caption: "Puerto Rico",
+          },
+        ],
+      }),
+      inline_images: ["fixture-image"],
+    }, current.value.origins);
+    expect(richInput.ok).toBeTrue();
+    if (richInput.ok) {
+      expect(validatePlatformOperationInput(
+        current.value,
+        "articles.draft.save",
+        richInput.value,
+      )).toEqual({ ok: true, value: richInput.value });
+    }
+
+    const textOnlyValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.8.0.json"),
+      "utf8",
+    )) as unknown;
+    const textOnly = parseDiagnosticManifest(textOnlyValue);
+    expect(textOnly.ok).toBeTrue();
+    if (textOnly.ok) {
+      expect(textOnly.value.version).toBe("1.8.0");
+      const textOnlyDraft = textOnly.value.operations["articles.draft.save"];
+      expect(textOnlyDraft !== undefined && isWebSessionOperation(textOnlyDraft)).toBeTrue();
+      if (textOnlyDraft !== undefined && isWebSessionOperation(textOnlyDraft)) {
+        expect(textOnlyDraft.webSession.contractVersion).toBe(2);
+        expect(textOnlyDraft.input.required).toEqual(["title", "document"]);
+        expect(textOnlyDraft.input.properties.inline_images).toBeUndefined();
+      }
+    }
 
     const priorObservedValue = JSON.parse(readFileSync(
       join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.5.0.json"),
@@ -1334,7 +1418,7 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
     properties.body = { ...properties.body, maxLength: 100_000 };
 
     expect(issues(candidate).some((issue) =>
-      issue.includes("input must exactly match authenticated web contract x/posts.publish@1"))).toBeTrue();
+      issue.includes("input must exactly match authenticated web contract x/posts.publish@2"))).toBeTrue();
   });
 
   test("rejects forged confirmation and replay semantics for a real X mutation", () => {
@@ -1348,7 +1432,7 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
       if (operation !== undefined) operation[field] = value;
 
       expect(issues(candidate).some((issue) =>
-        issue.includes(`${field} must exactly match authenticated web contract x/posts.publish@1`))).toBeTrue();
+        issue.includes(`${field} must exactly match authenticated web contract x/posts.publish@2`))).toBeTrue();
     }
   });
 

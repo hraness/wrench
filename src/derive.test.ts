@@ -19,6 +19,7 @@ import { join } from "node:path";
 import {
   acquireDerivationLifecycleGate,
   assertDerivationAuthCompatibility,
+  assertDerivationRecorderCommandAllowed,
   DERIVATION_LIFECYCLE_ORPHAN_GRACE_MS,
   derivationGlobalArguments,
   derivationBootstrapUrl,
@@ -51,6 +52,16 @@ import {
 const targetOrigin = "https://example.com";
 const readOnlyPolicy = { allowRemoteActions: false, targetOrigin } as const;
 const actionPolicy = { allowRemoteActions: true, targetOrigin } as const;
+const stagedFixture = {
+  reference: "fixture:1",
+  fileName: "fixture-01.png",
+  bytes: 8,
+  mediaType: "image/png",
+  sha256: "a".repeat(64),
+  device: "1",
+  inode: "2",
+} as const;
+const fixtureActionPolicy = { ...actionPolicy, fixtures: [stagedFixture] } as const;
 
 const finishDerivation = (
   id: Parameters<typeof finishDerivationWithRegistry>[0],
@@ -97,11 +108,57 @@ async function expectRejectedWith(promise: Promise<unknown>, message: string): P
 
 describe("derive browser command grammar", () => {
   test("authorizes pinned concrete observation actions and gates mutation actions", () => {
-    for (const action of ["getbyrole", "inputvalue", "waitfortext", "waitforurl", "har_start", "har_stop", "requests", "close"]) {
+    for (const action of ["getbyrole", "inputvalue", "getattribute", "textcontent", "innerhtml", "waitfortext", "waitforurl", "har_start", "har_stop", "requests", "close"]) {
       expect(derivationPolicyActions(false).includes(action)).toBeTrue();
     }
     expect(derivationPolicyActions(false)).not.toContain("fill");
     for (const action of ["fill", "press", "click"]) expect(derivationPolicyActions(true).includes(action)).toBeTrue();
+    expect(derivationPolicyActions(true)).not.toContain("upload");
+    expect(derivationPolicyActions(true, true)).toContain("upload");
+    expect(derivationPolicyActions(true, true)).toContain("count");
+  });
+
+  test("permits only start-bound fixture references for upload", () => {
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["upload", "@e5", "fixture:1"],
+    )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["upload", "@single-file-input", "fixture:1"],
+    )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["upload", "@single-image-input", "fixture:1"],
+    )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["upload-and-seal", "@single-file-input", "fixture:1"],
+    )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
+      actionPolicy,
+      ["upload", "@e5", "fixture:1"],
+    )).toThrow("staged fixture");
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["upload", "@e5", "/tmp/private.png"],
+    )).toThrow("staged fixture");
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["upload", "@e5", "fixture:1", "fixture:1"],
+    )).toThrow("unique");
+    expect(() => validateDerivationBrowserCommand(
+      { ...fixtureActionPolicy, allowRemoteActions: false },
+      ["upload", "@e5", "fixture:1"],
+    )).toThrow("read-only");
+  });
+
+  test("allows an exact browser close after the derivation recorder is sealed", () => {
+    expect(() => assertDerivationRecorderCommandAllowed(["close"], true)).not.toThrow();
+    expect(() => assertDerivationRecorderCommandAllowed(["reload"], true)).toThrow(
+      "sealed for private review",
+    );
+    expect(() => assertDerivationRecorderCommandAllowed(["reload"], false)).not.toThrow();
   });
 
   test.each([
@@ -110,6 +167,7 @@ describe("derive browser command grammar", () => {
     ["back"],
     ["forward"],
     ["reload"],
+    ["close"],
     ["snapshot"],
     ["snapshot", "-i"],
     ["snapshot", "-c"],
@@ -567,6 +625,7 @@ describe("derivation session path defenses", () => {
       socketDirectory: directory,
       expectedSocketDirectory: { device: stats.dev.toString(), inode: stats.ino.toString() },
       allowRemoteActions: false,
+      allowFixtureUpload: false,
       timeoutMs: 10_000,
       maxOutputBytes: 1024 * 1024,
       arguments: ["close", "--json"],

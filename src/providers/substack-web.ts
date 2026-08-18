@@ -51,6 +51,14 @@ const observedRead = (reason: string): SubstackWebOperationContract => Object.fr
   reason,
 });
 
+const observedWrite = (reason: string): SubstackWebOperationContract => Object.freeze({
+  effect: "write",
+  risk: "R3",
+  state: "observed",
+  evidence: "live-direct",
+  reason,
+});
+
 const captureRequired = (
   risk: SubstackWebRisk,
   evidence: SubstackWebEvidence,
@@ -127,10 +135,8 @@ export const SUBSTACK_WEB_OPERATIONS = Object.freeze({
     "first-party-bundle",
     "DM start/send and optional media URL upload need exact recipient, thread, response, and attachment bindings",
   ),
-  "posts.publish": captureRequired(
-    "R3",
-    "first-party-bundle",
-    "Note creation, optional asset upload, audience, and returned entity binding need an authorized fixture",
+  "posts.publish": observedWrite(
+    "authorized Note composer capture proving one optional PNG upload, exact public create payload, actor and attachment response binding, and independent Note readback",
   ),
   "posts.quote": captureRequired(
     "R3",
@@ -451,7 +457,7 @@ export type SubstackWebViewer = Readonly<{
   publications: readonly Readonly<{
     id: number;
     origin: string;
-    primaryUserId: number;
+    primaryUserId: number | null;
     canPostNotesAsPrimaryUser: boolean;
     isPublicationPrimaryUser: boolean;
   }>[];
@@ -507,7 +513,7 @@ function publicationBinding(value: unknown, label: string): SubstackWebViewer["p
   return Object.freeze({
     id: integerId(source.id, `${label}.id`),
     origin,
-    primaryUserId: integerId(source.primary_user_id, `${label}.primary_user_id`),
+    primaryUserId: optionalIntegerId(source.primary_user_id, `${label}.primary_user_id`),
     canPostNotesAsPrimaryUser: source.can_post_notes_as_primary_user === true,
     isPublicationPrimaryUser: source.is_publication_primary_user === true,
   });
@@ -634,8 +640,8 @@ function projectedAttachment(value: unknown, label: string): unknown {
     videoUrl: exactHttpsUrl(source.videoUrl ?? source.video_url, `${label}.videoUrl`),
     audioUrl: exactHttpsUrl(source.audioUrl ?? source.audio_url, `${label}.audioUrl`),
     altText: optionalString(source.altText ?? source.alt_text, `${label}.altText`, 4_096),
-    width: optionalFiniteNumber(source.width, `${label}.width`),
-    height: optionalFiniteNumber(source.height, `${label}.height`),
+    width: optionalFiniteNumber(source.width ?? source.imageWidth, `${label}.width`),
+    height: optionalFiniteNumber(source.height ?? source.imageHeight, `${label}.height`),
   });
 }
 

@@ -38,6 +38,66 @@ wrench derive start linkedin-web https://www.linkedin.com/feed/ \
   --headed
 ```
 
+For an authorized image-bearing mutation, bind each image before browser
+startup with a repeated `--fixture` option and enable remote actions:
+
+```sh
+wrench derive start example-web https://example.com/feed/ \
+  --auth example-main \
+  --content text \
+  --fixture /absolute/private/image.png \
+  --allow-remote-actions \
+  --headed
+```
+
+Wrench copies at most 20 PNG, JPEG, GIF, or WebP images into the mode-private
+derivation directory, records only their byte counts, detected media types,
+SHA-256 hashes, and `fixture:<n>` references, and never retains their original
+paths. Upload only a start-bound reference to a current snapshot file input:
+
+```sh
+wrench derive browser <id> -- upload @e5 fixture:1
+```
+
+If the accessible attach control is a button backed by a hidden input, use the
+fixed `@single-file-input` reference. Wrench first proves that the current page
+contains exactly one HTML file input; it never accepts a caller-selected CSS
+selector:
+
+```sh
+wrench derive browser <id> -- upload @single-file-input fixture:1
+```
+
+If the composer contains multiple file inputs but exactly one advertises an
+image accept type, use the fixed `@single-image-input` reference. Wrench proves
+that the current page contains exactly one matching image input before upload:
+
+```sh
+wrench derive browser <id> -- upload @single-image-input fixture:1
+```
+
+Raw paths, arbitrary selectors, and unstaged references are rejected. Wrench
+re-verifies the private copy immediately before and after upload and resolves
+only that Wrench-owned copy for the persistent browser daemon; finish/discard
+removes it with the rest of the private derivation state. The ordinary
+`upload` form also keeps its browser batch alive for one fixed five-second
+settling interval so page code can consume the selected file before the short
+helper invocation exits; the derivation remains open for later commands.
+
+When the file upload itself is the final evidence target, prefer the terminal
+form below. It uploads, allows one fixed five-second network-settling interval,
+and stops HAR recording in one browser batch, then disables further browser
+commands for that derivation. This preserves the raw capture even when a
+provider leaves the pinned browser unable to accept a second IPC request after
+file selection:
+
+```sh
+wrench derive browser <id> -- upload-and-seal @single-file-input fixture:1
+```
+
+Continue with `derive review` and `derive finish`; do not expect to type or
+submit through a derivation after `upload-and-seal`.
+
 Save the derivation ID. Use `wrench derive list` to recover it after an interruption. wrench serializes every lifecycle command for that ID from preflight through cleanup. A session becomes executable only after its create-only readiness marker binds the final session metadata; interrupted initialization remains visible as `ready: false`, `recoverable: true`. `socketAvailable` distinguishes a live helper from state left after a reboot.
 
 Agent-browser may navigate, snapshot, and exercise the chosen fixture while recording. Those actions exist only to generate evidence. Do not translate snapshot references, accessible labels, element order, or click sequences into the installed capability.

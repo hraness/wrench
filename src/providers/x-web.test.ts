@@ -303,6 +303,27 @@ describe("X browser-session header sink policy", () => {
     expect(authorized.values.authorization).toBeUndefined();
   });
 
+  test("allows only Wrench-owned deterministic multipart boundaries for image upload", () => {
+    expect(enforceXWebHeaderSinkPolicy({
+      source: "code",
+      sink: "network-request",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=wrench-x-media-${"a".repeat(32)}`,
+      },
+    }).names).toEqual(["content-type"]);
+    for (const value of [
+      "multipart/form-data",
+      "multipart/form-data; boundary=user-selected",
+      `multipart/form-data; boundary=wrench-x-media-${"A".repeat(32)}`,
+    ]) {
+      expect(() => enforceXWebHeaderSinkPolicy({
+        source: "code",
+        sink: "network-request",
+        headers: { "Content-Type": value },
+      })).toThrow("unsupported value");
+    }
+  });
+
   test("allows ephemeral authorization, CSRF, and transaction values only in origin", () => {
     const authorized = enforceXWebHeaderSinkPolicy({
       source: "in-origin-session",
@@ -460,24 +481,90 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
     })).toThrow("mutations require POST");
   });
 
-  test("authorizes only exact text-only native Article create and update payloads", () => {
+  test("authorizes one exact posts.publish media entity and rejects media on other CreateTweet routes", () => {
+    const resolved = descriptor("CreateTweet");
+    const features = Object.fromEntries(resolved.metadata.featureSwitches.map((name) => [name, false]));
+    const fieldToggles = Object.fromEntries(resolved.metadata.fieldToggles.map((name) => [name, false]));
+    const body = (mediaEntities: readonly unknown[]) => ({
+      variables: {
+        tweet_text: "Exact post",
+        dark_request: false,
+        media: { media_entities: mediaEntities, possibly_sensitive: false },
+        semantic_annotation_ids: [],
+      },
+      features,
+      ...(resolved.metadata.fieldToggles.length === 0 ? {} : { fieldToggles }),
+      queryId: resolved.queryId,
+    });
+    expect(authorizeXWebMutationRequest("posts.publish", {
+      method: "POST",
+      url: graphqlUrl(resolved),
+      descriptor: resolved,
+      body: body([{ media_id: "12345", tagged_users: [] }]),
+    })).toMatchObject({ operationName: "CreateTweet" });
+    expect(() => authorizeXWebMutationRequest("posts.publish", {
+      method: "POST",
+      url: graphqlUrl(resolved),
+      descriptor: resolved,
+      body: body([
+        { media_id: "12345", tagged_users: [] },
+        { media_id: "67890", tagged_users: [] },
+      ]),
+    })).toThrow("at most one");
+    expect(() => authorizeXWebMutationRequest("threads.publish", {
+      method: "POST",
+      url: graphqlUrl(resolved),
+      descriptor: resolved,
+      body: body([{ media_id: "12345", tagged_users: [] }]),
+    })).toThrow("text-only");
+  });
+
+  test("authorizes exact native Article links, styles, and inline MEDIA entities", () => {
     const contentState = {
-      blocks: [{
-        data: {},
-        text: "Hraness",
-        key: "00000",
-        type: "unstyled",
-        entity_ranges: [{ key: 0, offset: 0, length: 7 }],
-        inline_style_ranges: [{ length: 7, offset: 0, style: "Bold" }],
-      }],
-      entity_map: [{
-        key: "0",
-        value: {
-          data: { url: "https://hraness.com/" },
-          type: "LINK",
-          mutability: "Mutable",
+      blocks: [
+        {
+          data: {},
+          text: "Hraness",
+          key: "00000",
+          type: "unstyled",
+          entity_ranges: [{ key: 0, offset: 0, length: 7 }],
+          inline_style_ranges: [{ length: 7, offset: 0, style: "Bold" }],
         },
-      }],
+        {
+          data: {},
+          text: " ",
+          key: "00001",
+          type: "atomic",
+          entity_ranges: [{ key: 1, offset: 0, length: 1 }],
+          inline_style_ranges: [],
+        },
+      ],
+      entity_map: [
+        {
+          key: "0",
+          value: {
+            data: { url: "https://hraness.com/" },
+            type: "LINK",
+            mutability: "Mutable",
+          },
+        },
+        {
+          key: "1",
+          value: {
+            data: {
+              caption: "Puerto Rico",
+              entity_key: "1",
+              media_items: [{
+                local_media_id: 1,
+                media_category: "DraftTweetImage",
+                media_id: "700000000000000002",
+              }],
+            },
+            type: "MEDIA",
+            mutability: "Immutable",
+          },
+        },
+      ],
     };
     const cases = [
       ["articles.create", "ArticleEntityDraftCreate", { content_state: contentState, title: "Private draft" }],
@@ -509,10 +596,6 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
       { ...contentState, entity_map: [{ ...contentState.entity_map[0], key: "1" }] },
       {
         ...contentState,
-        blocks: [{ ...contentState.blocks[0], type: "atomic" }],
-      },
-      {
-        ...contentState,
         entity_map: [{
           key: "0",
           value: {
@@ -523,6 +606,13 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
             type: "MEDIA",
             mutability: "Immutable",
           },
+        }],
+      },
+      {
+        ...contentState,
+        blocks: [contentState.blocks[0], {
+          ...contentState.blocks[1],
+          text: "not-atomic",
         }],
       },
     ]) {

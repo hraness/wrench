@@ -2804,6 +2804,7 @@ function createProviderPluginRegistryInternal(
 
   const implementationHashes = new Map<ProviderPluginV1, Buffer>();
   const reviewedClosureHashes = new Map<ProviderPluginV1, string>();
+  const unreviewedBuiltInClosures: string[] = [];
   for (const plugin of plugins) {
     if (plugin.sourceKind === "portable") {
       implementationHashes.set(
@@ -2841,7 +2842,7 @@ function createProviderPluginRegistryInternal(
         plugin.version,
       );
       if (!identity.reviewedClosureSha256.includes(reviewedClosureHash)) {
-        throw new Error(
+        unreviewedBuiltInClosures.push(
           `built-in provider plugin ${plugin.id}@${plugin.version} closure ${reviewedClosureHash} has no reviewed durable-contract attestation`,
         );
       }
@@ -2897,6 +2898,13 @@ function createProviderPluginRegistryInternal(
         }),
       );
     }
+  }
+
+  if (unreviewedBuiltInClosures.length > 0) {
+    throw new Error([
+      "built-in provider plugin closures require reviewed durable-contract attestations:",
+      ...unreviewedBuiltInClosures.map((entry) => `- ${entry}`),
+    ].join("\n"));
   }
 
   const frozenPlugins = Object.freeze(plugins);

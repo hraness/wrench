@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cross-post with Wrench"
+  short_description: "Publish one post safely across social platforms"
+  default_prompt: "Use $cross-post-with-wrench to preview and publish this text and image set across my selected social platforms."

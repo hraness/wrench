@@ -41,6 +41,12 @@ import {
   type DerivationReviewResult,
   type DerivationReviewSelection,
 } from "./derive-review";
+import {
+  assertDerivationFixtureFile,
+  parseDerivationFixtures,
+  stageDerivationFixtures,
+  type DerivationFixture,
+} from "./derive-fixtures";
 import { sha256 } from "./canonical-json";
 import type { PlatformSurfaceId } from "./platform-catalog";
 import type { ProviderPluginRegistry } from "./provider-plugin-registry";
@@ -133,6 +139,11 @@ const deriveCommandHelperPath = join(dirname(fileURLToPath(import.meta.url)), "d
 const profileCloneHelperPath = join(dirname(fileURLToPath(import.meta.url)), "profile-clone-helper.ts");
 const trustedBunConfigPath = join(dirname(fileURLToPath(import.meta.url)), "state-helper.bunfig.toml");
 const derivationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const singleFileInputReference = "@single-file-input";
+const singleFileInputSelector = "input[type=file]";
+const singleImageInputReference = "@single-image-input";
+const singleImageInputSelector = "input[type=file][accept*='image']";
+const uploadSettlingDelayMs = 5_000;
 
 export type HarContentMode = "none" | "text";
 
@@ -146,6 +157,7 @@ export type DerivationSession = {
   readonly allowRemoteActions: boolean;
   readonly contentMode: HarContentMode;
   readonly browserDomains: readonly string[];
+  readonly fixtures: readonly DerivationFixture[];
   readonly headed: boolean;
   readonly sessionName: string;
   readonly directory: string;
@@ -258,15 +270,19 @@ async function cloneProfileBound(source: string, directory: string, expected: Di
   };
 }
 
-export function derivationPolicyActions(allowRemoteActions: boolean): readonly string[] {
+export function derivationPolicyActions(
+  allowRemoteActions: boolean,
+  allowFixtureUpload = false,
+): readonly string[] {
   const actions = [
     "launch", "navigate", "snapshot", "scroll", "wait", "get", "network", "state",
-    "back", "forward", "reload", "scrollintoview", "url", "title", "text", "html", "value", "inputvalue", "attr",
+    "back", "forward", "reload", "scrollintoview", "url", "title", "text", "textcontent", "html", "innerhtml", "value", "inputvalue", "attr", "getattribute",
     "getbyrole", "getbytext", "getbylabel", "getbyplaceholder", "getbyalttext", "getbytitle", "getbytestid",
     "waitfortext", "waitforurl", "har_start", "har_stop", "requests", "cookies_set", "close",
   ];
   if (allowRemoteActions) {
     actions.push("click", "dblclick", "fill", "type", "hover", "focus", "press", "check", "uncheck", "select", "interact");
+    if (allowFixtureUpload) actions.push("upload", "count");
   }
   return actions;
 }
@@ -293,9 +309,12 @@ const allowedBrowserCommands = new Set([
   "check",
   "uncheck",
   "select",
+  "close",
+  "upload",
+  "upload-and-seal",
 ]);
 
-const mutatingBrowserTokens = new Set(["click", "dblclick", "fill", "type", "press", "hover", "focus", "check", "uncheck", "select"]);
+const mutatingBrowserTokens = new Set(["click", "dblclick", "fill", "type", "press", "hover", "focus", "check", "uncheck", "select", "upload", "upload-and-seal"]);
 
 function commandCanMutate(command: readonly string[]): boolean {
   const action = command[0] ?? "";
@@ -730,9 +749,11 @@ function parseSession(value: unknown): DerivationSession {
   const socketIdentity = parseDirectoryIdentity(record.socketIdentity);
   const configPath = record.configPath;
   const policyPath = record.policyPath;
+  const fixtures = parseDerivationFixtures(record.fixtures);
   const expectedKeys = [
     "schemaVersion", "id", "adapterId", "targetUrl", "targetOrigin", "createdAt", "allowRemoteActions", "contentMode",
     "browserDomains", "headed", "sessionName", "directory", "directoryIdentity", "socketDirectory", "socketIdentity", "configPath", "policyPath", "profilePath",
+    ...(record.fixtures === undefined ? [] : ["fixtures"]),
     ...(record.browserExecutable === undefined ? [] : ["browserExecutable"]),
   ].sort();
   const actualKeys = Object.keys(record).sort();
@@ -788,6 +809,7 @@ function parseSession(value: unknown): DerivationSession {
     allowRemoteActions: record.allowRemoteActions,
     contentMode: record.contentMode,
     browserDomains,
+    fixtures,
     headed: record.headed,
     sessionName,
     directory,
@@ -1453,6 +1475,7 @@ async function runBoundAgentBrowser(
         socketDirectory: session.socketDirectory,
         expectedSocketDirectory: session.socketIdentity,
         allowRemoteActions: session.allowRemoteActions,
+        allowFixtureUpload: session.fixtures.length > 0,
         timeoutMs: options.timeoutMs,
         maxOutputBytes: options.maxOutputBytes,
         arguments: arguments_,
@@ -1724,6 +1747,7 @@ export async function startDerivation(
     readonly allowRemoteActions: boolean;
     readonly contentMode: HarContentMode;
     readonly browserDomains: readonly string[];
+    readonly fixtureSources?: readonly string[];
     readonly headed: boolean;
     readonly environment?: Readonly<Record<string, string | undefined>>;
   },
@@ -1734,6 +1758,10 @@ export async function startDerivation(
   assertBrowserDerivationTargetAllowed(target);
   assertDerivationAuthCompatibility(target, auth);
   const browserDomains = validateBrowserDomains(options.browserDomains, target.hostname.toLowerCase());
+  const fixtureSources = options.fixtureSources ?? [];
+  if (fixtureSources.length > 0 && !options.allowRemoteActions) {
+    throw new Error("derivation fixtures require --allow-remote-actions because upload changes remote draft state");
+  }
   const id = crypto.randomUUID();
   const gate = acquireDerivationLifecycleGate(id, environment);
   try {
@@ -1785,10 +1813,11 @@ export async function startDerivation(
       if (!initializationPublication.created) {
         throw new Error("derivation initialization marker already exists");
       }
+      const fixtures = stageDerivationFixtures(fixtureSources, directory);
       writePrivateJson(configPath, {});
       // Pinned agent-browser 0.32.3 checks both documented categories and
       // concrete commands such as getbyrole, inputvalue, and har_start.
-      const allowedActions = derivationPolicyActions(options.allowRemoteActions);
+      const allowedActions = derivationPolicyActions(options.allowRemoteActions, fixtures.length > 0);
       writePrivateJson(policyPath, { default: "deny", allow: allowedActions });
       let clonedProfile: string | null = null;
       if (auth.kind === "browser-profile") {
@@ -1810,6 +1839,7 @@ export async function startDerivation(
         allowRemoteActions: options.allowRemoteActions,
         contentMode: options.contentMode,
         browserDomains,
+        fixtures,
         headed: options.headed,
         sessionName: `io-derive-${id.replaceAll("-", "").slice(0, 12)}`,
         directory,
@@ -1940,7 +1970,11 @@ function validateFindCommand(command: readonly string[]): void {
 }
 
 export function validateDerivationBrowserCommand(
-  policy: { readonly allowRemoteActions: boolean; readonly targetOrigin: string },
+  policy: {
+    readonly allowRemoteActions: boolean;
+    readonly targetOrigin: string;
+    readonly fixtures?: readonly DerivationFixture[];
+  },
   command: readonly string[],
 ): void {
   if (command.length < 1 || command.length > 100 || command.some((part) => part.length > 64 * 1024 || part.includes("\u0000"))) {
@@ -1956,7 +1990,7 @@ export function validateDerivationBrowserCommand(
     const target = validateTarget(command[1] ?? "");
     if (target.origin !== policy.targetOrigin) throw new Error("derive browser navigation must stay on the target origin");
   }
-  else if (action === "back" || action === "forward" || action === "reload") {
+  else if (action === "back" || action === "forward" || action === "reload" || action === "close") {
     if (command.length !== 1) throw new Error(`derive browser ${action} accepts no arguments`);
   }
   else if (action === "snapshot") {
@@ -2015,6 +2049,23 @@ export function validateDerivationBrowserCommand(
   else if (action === "select") {
     if (command.length < 3 || command.length > 20 || !isReference(command[1]) || command.slice(2).some((value) => !safePlainArgument(value, 2_000))) {
       throw new Error("derive browser select requires a reference and bounded values");
+    }
+  }
+  else if (action === "upload" || action === "upload-and-seal") {
+    const references = command.slice(2);
+    const available = new Set((policy.fixtures ?? []).map((fixture) => fixture.reference));
+    if (
+      command.length < 3
+      || command.length > 22
+      || (
+        !isReference(command[1])
+        && command[1] !== singleFileInputReference
+        && command[1] !== singleImageInputReference
+      )
+      || references.length !== new Set(references).size
+      || references.some((reference) => !/^fixture:(?:[1-9]|1[0-9]|20)$/u.test(reference) || !available.has(reference))
+    ) {
+      throw new Error(`derive browser ${action} requires a snapshot, @single-file-input, or @single-image-input reference and unique staged fixture:<n> references`);
     }
   }
   else if (action === "find") validateFindCommand(command);
@@ -2082,14 +2133,136 @@ export async function runDerivationBrowserCommand(
 ): Promise<unknown> {
   return withDerivationLifecycleGate(id, environment, async () => {
     const session = loadSession(id, environment);
-    if (readReviewSeal(session, environment) !== null || hasCapturedHar(session, environment)) {
-      throw new Error("derivation recorder is sealed for private review; only review, finish, or discard is allowed");
-    }
+    assertDerivationRecorderCommandAllowed(
+      command,
+      readReviewSeal(session, environment) !== null || hasCapturedHar(session, environment),
+    );
     assertBrowserDerivationTargetAllowed(new URL(session.targetOrigin));
     validateDerivationBrowserCommand(session, command);
+    if (command[0] === "close") {
+      await batch(session, [["close"]]);
+      return { closed: true };
+    }
+    if (command[0] === "wait" && command.length === 2 && /^\d{1,5}$/u.test(command[1] ?? "")) {
+      const waitedMs = Number(command[1]);
+      await assertDerivationOrigin(session);
+      await Bun.sleep(waitedMs);
+      await assertDerivationOrigin(session);
+      return { waitedMs };
+    }
+    const uploadAction = command[0] === "upload" || command[0] === "upload-and-seal";
+    const requestedFixtures = uploadAction
+      ? command.slice(2).map((reference) => {
+          const fixture = session.fixtures.find((candidate) => candidate.reference === reference);
+          if (fixture === undefined) throw new Error("derivation fixture reference is unavailable");
+          return fixture;
+        })
+      : [];
+    const fixturePaths = requestedFixtures.map((fixture) => {
+      assertDerivationFixtureFile(session.directory, fixture);
+      // The persistent browser daemon may outlive the short helper process
+      // that launched it and therefore need not retain that helper's cwd.
+      // Resolve only Wrench-owned, identity-verified staged files here; raw
+      // caller paths remain outside the browser command grammar and errors
+      // redact the private derivation directory below.
+      return join(session.directory, fixture.fileName);
+    });
     try {
       if (commandCanMutate(command)) await assertDerivationOrigin(session);
-      const [record] = await batch(session, [command]);
+      let uploadTarget = command[1] ?? "";
+      const fixedInputSelector = uploadTarget === singleFileInputReference
+        ? singleFileInputSelector
+        : uploadTarget === singleImageInputReference
+          ? singleImageInputSelector
+          : null;
+      if (uploadAction && fixedInputSelector !== null) {
+        const [countRecord] = await batch(session, [["get", "count", fixedInputSelector]]);
+        const countData = countRecord === undefined ? null : browserResultData(countRecord);
+        const count = typeof countData === "number"
+          ? countData
+          : typeof countData === "object"
+              && countData !== null
+              && !Array.isArray(countData)
+              && Object.keys(countData).sort().join(",") === "count,lifecycle,selector"
+              && typeof (countData as Record<string, unknown>).count === "number"
+              && (countData as Record<string, unknown>).selector === fixedInputSelector
+              && typeof (countData as Record<string, unknown>).lifecycle === "object"
+              && (countData as Record<string, unknown>).lifecycle !== null
+              && !Array.isArray((countData as Record<string, unknown>).lifecycle)
+            ? (countData as Record<string, number>).count
+            : null;
+        if (!Number.isSafeInteger(count) || count !== 1) {
+          const shape = Array.isArray(countData)
+            ? "array"
+            : typeof countData === "object" && countData !== null
+              ? `object(${Object.keys(countData).sort().slice(0, 20).join(",")})`
+              : typeof countData;
+          throw new Error(`derive browser ${uploadTarget} requires exactly one matching file input on the current page${Number.isSafeInteger(count) ? `; found ${count}` : `; browser returned ${shape}`}`);
+        }
+        uploadTarget = fixedInputSelector;
+      }
+      const browserCommand = uploadAction
+        ? ["upload", uploadTarget, ...fixturePaths]
+        : command;
+      if (command[0] === "upload-and-seal") {
+        let records: readonly Record<string, unknown>[];
+        try {
+          records = await batch(session, [
+            browserCommand,
+            ["wait", String(uploadSettlingDelayMs)],
+            ["network", "har", "stop", "capture.har"],
+          ]);
+        } catch {
+          for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
+          throw new Error("managed browser could not upload and seal the staged derivation fixture");
+        }
+        for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
+        if (!hasCapturedHar(session, environment)) {
+          throw new Error("managed browser upload completed without a sealed derivation recorder");
+        }
+        const uploadRecord = records[0];
+        return {
+          upload: uploadRecord === undefined ? null : browserResultData(uploadRecord),
+          recorder: "sealed",
+        };
+      }
+      let record: Record<string, unknown> | undefined;
+      try {
+        // Keep the pinned browser batch alive while page code consumes the
+        // selected File and settles its first-party upload. Ending the batch
+        // immediately after setInputFiles can abort a deferred request even
+        // though the page already rendered a local blob preview.
+        const records = await batch(
+          session,
+          uploadAction
+            ? [browserCommand, ["wait", String(uploadSettlingDelayMs)]]
+            : [browserCommand],
+        );
+        [record] = records;
+      } catch (error) {
+        for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
+        if (uploadAction) {
+          let detail = error instanceof Error ? error.message : "";
+          detail = detail.replaceAll(session.directory, "<private-derivation>");
+          for (const fixture of requestedFixtures) {
+            detail = detail
+              .replaceAll(`./${fixture.fileName}`, fixture.reference)
+              .replaceAll(fixture.fileName, fixture.reference);
+          }
+          if (
+            detail.length < 1
+            || detail.length > 1_000
+            || /[\u0000-\u001f\u007f]/u.test(detail)
+            || detail.includes("/Users/")
+            || detail.includes("/private/")
+            || detail.includes("/tmp/")
+            || detail.includes("\\")
+          ) detail = "";
+          throw new Error(`managed browser could not upload the staged derivation fixture${detail === "" ? "" : `: ${detail}`}`);
+        }
+        throw error;
+      }
+      for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
       await assertDerivationOrigin(session);
       const data = record === undefined ? null : browserResultData(record);
       return command[0] === "network" ? sanitizeDerivationNetworkResult(data) : data;
@@ -2103,6 +2276,15 @@ export async function runDerivationBrowserCommand(
       throw error;
     }
   });
+}
+
+export function assertDerivationRecorderCommandAllowed(
+  command: readonly string[],
+  sealed: boolean,
+): void {
+  if (sealed && command[0] !== "close") {
+    throw new Error("derivation recorder is sealed for private review; only review, finish, discard, or close is allowed");
+  }
 }
 
 async function sealDerivationReview(

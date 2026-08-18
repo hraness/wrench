@@ -1815,9 +1815,14 @@ export async function executeBlueskyWebOperation(
 ): Promise<WebSessionExecution> {
   if (
     recipe.site !== "bluesky"
-    || recipe.contractVersion !== 1
     || !isBlueskyOperation(recipe.action)
   ) throw new Error("Bluesky authenticated web recipe is not installed");
+  const expectedContractVersion = recipe.action === "posts.publish" ? 2 : 1;
+  if (recipe.contractVersion !== expectedContractVersion) {
+    throw new Error(
+      `Bluesky authenticated web operation ${recipe.action} contract version ${recipe.contractVersion} is not installed`,
+    );
+  }
   const contract = BLUESKY_WEB_OPERATIONS[recipe.action];
   if (contract.state !== "observed") {
     throw new Error(

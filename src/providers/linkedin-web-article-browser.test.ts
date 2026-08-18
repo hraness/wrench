@@ -3,9 +3,13 @@ import { describe, expect, test } from "bun:test";
 import type { WrenchAuth } from "../auth";
 import type { BrowserSession } from "../browser";
 import { canonicalJson } from "../canonical-json";
-import { parseArticleDraftDocument } from "../article-draft-document";
+import {
+  parseArticleDraftDocument,
+  parseArticleDraftDocumentV2,
+} from "../article-draft-document";
 import {
   buildLinkedInArticleContentPatch,
+  buildLinkedInArticleContentPatchV2,
   buildLinkedInArticleCreateBody,
   buildLinkedInArticleTitlePatch,
 } from "./linkedin-web";
@@ -39,6 +43,8 @@ const NEW_PAGE_INSTANCE =
   "urn:li:page:d_flagship3_publishing_post_new;fixture==";
 const EDIT_PAGE_INSTANCE =
   "urn:li:page:d_flagship3_publishing_post_edit;fixture==";
+const STALE_EDIT_PAGE_INSTANCE =
+  "urn:li:page:d_flagship3_publishing_post_edit;stale-fixture==";
 const TRACK = JSON.stringify({
   clientVersion: "1.2.3.4.5",
   mpVersion: "1.2.3.4.5",
@@ -181,7 +187,15 @@ describe("LinkedIn native Article contained-browser transport", () => {
           return Promise.resolve([{
             success: true,
             result: {
-              requests: [{
+              requests: [...(pageInstance === EDIT_PAGE_INSTANCE ? [{
+                method: "GET",
+                status: 200,
+                url: "https://www.linkedin.com/voyager/api/graphql?fixture=stale",
+                headers: {
+                  "x-li-page-instance": STALE_EDIT_PAGE_INSTANCE,
+                  "x-li-track": TRACK,
+                },
+              }] : []), {
                 method: "GET",
                 status: 200,
                 url: "https://www.linkedin.com/voyager/api/graphql?fixture=1",
@@ -275,7 +289,7 @@ describe("LinkedIn native Article contained-browser transport", () => {
       "https://www.linkedin.com/article/new/",
       `https://www.linkedin.com/article/edit/${ARTICLE_ID}/`,
     ]);
-    expect(waits).toBe(2);
+    expect(waits).toBe(3);
     expect(requests).toHaveLength(5);
     expect(requests[0]).toEqual({
       method: "GET",
@@ -319,6 +333,129 @@ describe("LinkedIn native Article contained-browser transport", () => {
     expect(requests.slice(3).every((request) =>
       request.path === `/voyager/api/voyagerPublishingDashFirstPartyArticles/urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`))
       .toBeTrue();
+    expect(requests.every((request) => !/(?:^|\/)(?:publish|share)(?:\/|$)/iu.test(request.path)))
+      .toBeTrue();
+  });
+
+  test("registers, stages, uploads, and writes one bounded inline image", async () => {
+    const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
+    const recipe = "urn:li:digitalmediaRecipe:feedshare-image_1280";
+    const document = parseArticleDraftDocumentV2(canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Before" },
+        { type: "image", imageIndex: 0, altText: "A fixture image", caption: "Fixture" },
+      ],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000, maximumImages: 20 });
+    const requests: BrowserRequestBinding[] = [];
+    let stagedCommands = 0;
+    let transferCommands = 0;
+    const session: BrowserSession = {
+      runBatch: (commands) => {
+        const command = commands[0];
+        if (command?.[0] === "open") {
+          return Promise.resolve([{ success: true, result: { url: command[1] } }]);
+        }
+        if (command?.[0] === "wait") {
+          return Promise.resolve([{ success: true, result: { waited: true } }]);
+        }
+        if (command?.[0] === "network") {
+          return Promise.resolve([{
+            success: true,
+            result: {
+              requests: [{
+                method: "GET",
+                status: 200,
+                url: "https://www.linkedin.com/voyager/api/graphql?fixture=1",
+                headers: {
+                  "x-li-page-instance": EDIT_PAGE_INSTANCE,
+                  "x-li-track": TRACK,
+                },
+              }],
+            },
+          }]);
+        }
+        if (command?.[0] !== "eval" || command[1] === undefined) {
+          throw new Error("unexpected LinkedIn Article image browser command");
+        }
+        const source = command[1];
+        expect(() => evaluatorSyntax.transformSync(source)).not.toThrow();
+        if (source.includes('method:"PUT"')) {
+          transferCommands += 1;
+          expect(source).toContain("delete globalThis[input.key]");
+          expect(source).not.toContain("pollingUrl");
+          expect(source).not.toContain("Object.values");
+          return Promise.resolve([browserRecord({
+            uploadStatus: 201,
+          })]);
+        }
+        if (source.includes("globalThis[key]") || source.includes("globalThis[")) {
+          stagedCommands += 1;
+          return Promise.resolve([browserRecord({ staged: true })]);
+        }
+        const request = requestBinding(source);
+        requests.push(request);
+        if (request.response === "page") {
+          return Promise.resolve([browserRecord({
+            contentType: "text/html",
+            payloads: articlePayloads("Private fixture"),
+            status: 200,
+          })]);
+        }
+        if (request.path === "/voyager/api/voyagerVideoDashMediaUploadMetadata?action=upload") {
+          return Promise.resolve([browserRecord({
+            body: {
+              data: {
+                $type: "com.linkedin.restli.common.ActionResponse",
+                value: {
+                  $type: "com.linkedin.mediauploader.MediaUploadMetadata",
+                  assetRealtimeTopic: "bounded-realtime-topic",
+                  mediaArtifactUrn: "urn:li:mediaArtifact:fixture",
+                  pollingUrl: "https://www.linkedin.com/voyager/api/voyagerVideoDashMediaUploadMetadata/fixture",
+                  recipes: [recipe],
+                  singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+                  singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture?ca=vector",
+                  type: "VECTOR",
+                  urn: assetUrn,
+                },
+              },
+              included: [],
+            },
+            contentType: "application/json",
+            status: 200,
+          })]);
+        }
+        return Promise.resolve([browserRecord({ contentType: "", status: 200 })]);
+      },
+      close: () => Promise.resolve(),
+      cleanup: () => Promise.resolve(),
+    };
+    const transport = await createLinkedInArticleBrowserTransport(auth, {
+      timeoutMs: 60_000,
+      dependencies: { createBrowserSession: () => Promise.resolve(session) },
+    });
+    await transport.readDraftResponse(ARTICLE_ID);
+    expect(await transport.uploadInlineImage?.(ARTICLE_ID, {
+      bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      filename: "inline-image-1.png",
+      mediaType: "image/png",
+    })).toBe(assetUrn);
+    await transport.updateContentV2?.(ARTICLE_ID, document, [assetUrn]);
+    await transport.close();
+
+    expect(stagedCommands).toBeGreaterThanOrEqual(2);
+    expect(transferCommands).toBe(1);
+    const registration = requests.find((request) =>
+      request.path === "/voyager/api/voyagerVideoDashMediaUploadMetadata?action=upload");
+    expect(JSON.parse(registration?.body ?? "null")).toEqual({
+      fileSize: 8,
+      filename: "inline-image-1.png",
+      mediaUploadType: "PUBLISHING_INLINE_IMAGE",
+    });
+    const content = requests.at(-1);
+    expect(JSON.parse(content?.body ?? "null")).toEqual(
+      buildLinkedInArticleContentPatchV2(document, [assetUrn]),
+    );
     expect(requests.every((request) => !/(?:^|\/)(?:publish|share)(?:\/|$)/iu.test(request.path)))
       .toBeTrue();
   });

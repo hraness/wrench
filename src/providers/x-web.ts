@@ -385,7 +385,11 @@ function assertFixedHeaderValue(name: string, value: string): void {
   if (name === "accept" && value !== "application/json") {
     throw new Error("X fixed request header accept had an unsupported value");
   }
-  if (name === "content-type" && value !== "application/json") {
+  if (
+    name === "content-type"
+    && value !== "application/json"
+    && !/^multipart\/form-data; boundary=wrench-x-media-[a-f0-9]{32}$/u.test(value)
+  ) {
     throw new Error("X fixed request header content-type had an unsupported value");
   }
   if (name === "x-twitter-auth-type" && value !== "OAuth2Session") {
@@ -665,7 +669,22 @@ function validateCreateTweetVariables(operationId: XWebMutationOperationId, vari
   if (variables.dark_request !== false) throw new Error(`X ${operationId} dark_request must be false`);
   const media = record(variables.media, `X ${operationId} media`);
   exactMutationKeys(media, ["media_entities", "possibly_sensitive"], `X ${operationId} media`);
-  if (!Array.isArray(media.media_entities) || media.media_entities.length !== 0 || media.possibly_sensitive !== false) {
+  if (!Array.isArray(media.media_entities) || media.possibly_sensitive !== false) {
+    throw new Error(`X ${operationId} media left the reviewed shape`);
+  }
+  if (operationId === "posts.publish") {
+    if (media.media_entities.length > 1) {
+      throw new Error("X posts.publish supports at most one reviewed image");
+    }
+    if (media.media_entities.length === 1) {
+      const entity = record(media.media_entities[0], "X posts.publish media entity");
+      exactMutationKeys(entity, ["media_id", "tagged_users"], "X posts.publish media entity");
+      exactMutationPostId(entity.media_id, "X posts.publish media entity ID");
+      if (!Array.isArray(entity.tagged_users) || entity.tagged_users.length !== 0) {
+        throw new Error("X posts.publish media tagged_users must be empty");
+      }
+    }
+  } else if (media.media_entities.length !== 0) {
     throw new Error(`X ${operationId} supports only the reviewed text-only media shape`);
   }
   if (!Array.isArray(variables.semantic_annotation_ids) || variables.semantic_annotation_ids.length !== 0) {
@@ -705,6 +724,7 @@ const richArticleBlockTypes = new Set([
   "blockquote",
   "unordered-list-item",
   "ordered-list-item",
+  "atomic",
 ]);
 const richArticleInlineStyles = new Set(["Bold", "Italic", "Strikethrough"]);
 
@@ -764,7 +784,8 @@ export function validateXWebRichArticleContentState(value: unknown): void {
   if (!Array.isArray(contentState.entity_map) || contentState.entity_map.length > 2_000) {
     throw new Error("X rich Article content_state.entity_map exceeded its reviewed bound");
   }
-  const entityKinds: "LINK"[] = [];
+  const entityKinds: ("LINK" | "MEDIA")[] = [];
+  let mediaCount = 0;
   for (const [index, value] of contentState.entity_map.entries()) {
     const entity = record(value, `X rich Article entity ${index}`);
     exactMutationKeys(entity, ["key", "value"], `X rich Article entity ${index}`);
@@ -772,12 +793,41 @@ export function validateXWebRichArticleContentState(value: unknown): void {
     const entry = record(entity.value, `X rich Article entity ${index}.value`);
     exactMutationKeys(entry, ["data", "type", "mutability"], `X rich Article entity ${index}.value`);
     const data = record(entry.data, `X rich Article entity ${index}.data`);
-    if (entry.type !== "LINK" || entry.mutability !== "Mutable") {
-      throw new Error("X Article draft entities support only reviewed mutable LINK values");
+    if (entry.type === "LINK") {
+      if (entry.mutability !== "Mutable") throw new Error("X rich Article links must be mutable");
+      exactMutationKeys(data, ["url"], `X rich Article entity ${index}.data`);
+      exactArticleUrl(data.url, `X rich Article entity ${index}.data.url`);
+      entityKinds.push("LINK");
+      continue;
     }
-    exactMutationKeys(data, ["url"], `X rich Article entity ${index}.data`);
-    exactArticleUrl(data.url, `X rich Article entity ${index}.data.url`);
-    entityKinds.push("LINK");
+    if (entry.type !== "MEDIA" || entry.mutability !== "Immutable") {
+      throw new Error("X rich Article entities support only reviewed LINK and MEDIA values");
+    }
+    const mediaKeys = Object.keys(data).sort().join(",");
+    if (mediaKeys !== "entity_key,media_items" && mediaKeys !== "caption,entity_key,media_items") {
+      throw new Error(`X rich Article entity ${index}.data contained unsupported media fields`);
+    }
+    if (data.entity_key !== `${index}`) throw new Error("X rich Article media entity_key must bind its entity");
+    if (data.caption !== undefined && (
+      typeof data.caption !== "string"
+      || data.caption.length > 1_000
+      || /[\0\r]/u.test(data.caption)
+    )) throw new Error("X rich Article media caption must be bounded text");
+    if (!Array.isArray(data.media_items) || data.media_items.length !== 1) {
+      throw new Error("X rich Article media entities must contain one image");
+    }
+    const media = record(data.media_items[0], `X rich Article entity ${index}.media_items[0]`);
+    exactMutationKeys(media, ["local_media_id", "media_category", "media_id"], `X rich Article entity ${index}.media_items[0]`);
+    if (!Number.isSafeInteger(media.local_media_id) || (media.local_media_id as number) < 1) {
+      throw new Error("X rich Article local media IDs must be positive integers");
+    }
+    if (media.media_category !== "DraftTweetImage") {
+      throw new Error("X rich Article inline media must use DraftTweetImage");
+    }
+    exactMutationPostId(media.media_id, "X rich Article media ID");
+    mediaCount += 1;
+    if (mediaCount > 20) throw new Error("X rich Article supports at most 20 inline images");
+    entityKinds.push("MEDIA");
   }
 
   const references = Array.from({ length: entityKinds.length }, () => 0);
@@ -820,9 +870,18 @@ export function validateXWebRichArticleContentState(value: unknown): void {
       const kind = entityKinds[key];
       if (kind === undefined) throw new Error("X rich Article entity range referenced an unknown entity");
       references[key] = (references[key] ?? 0) + 1;
-      if (kind !== "LINK") {
+      if (block.type === "atomic" ? kind !== "MEDIA" : kind !== "LINK") {
         throw new Error("X rich Article entity range used the wrong block kind");
       }
+    }
+    if (block.type === "atomic") {
+      if (
+        blockText !== " "
+        || entityRanges.length !== 1
+        || entityRanges[0]?.offset !== 0
+        || entityRanges[0]?.length !== 1
+        || block.inline_style_ranges.length !== 0
+      ) throw new Error("X rich Article atomic image blocks must bind one media entity");
     }
   }
   if (references.some((count) => count !== 1)) {

@@ -1,10 +1,13 @@
 # LinkedIn authenticated web API adapter
 
-The current `linkedin-web` schema-v4 adapter has one observed operation:
-`articles.draft.save@2`. It creates or replaces one private native Article
-draft for the bound current member, supports paragraphs, H1/H2 headings, and
-native HTTPS links, and independently verifies the exact unpublished result
-from the authenticated editor-page server payload.
+The current `linkedin-web` schema-v4 adapter has two observed operations:
+`articles.draft.save@3` and `posts.publish@2`. The draft operation creates or replaces one private native Article
+draft for the bound current member, supports paragraphs, H1/H2 headings,
+native HTTPS links, and ordered inline images with required alt text and
+optional captions, and independently verifies the exact unpublished result
+from the authenticated editor-page server payload. The post operation publishes
+one confirmed text post with an optional single plan-bound PNG, binds the exact
+member and returned share, and verifies an independent exact-share readback.
 Every other consumer-web capability remains `capture-required` and inert.
 
 A browser may record a managed HAR, bootstrap the private session, or resolve
@@ -80,7 +83,7 @@ projection, and completeness semantics.
 
 `messaging.list` is a capture-required reservation. Version 1.1.0 remains
 archived as historical evidence of the formerly observed bundle; version
-1.2.0 first demoted it, and the current 1.5.0 bundle remains capture-required
+1.2.0 first demoted it, and the current 1.7.0 bundle remains capture-required
 and cannot execute. The intended folder input still reserves:
 
 - `focused` for the main inbox;
@@ -143,21 +146,25 @@ Page.” A member- or organization-authored post remains the comment target.
 LinkedIn Article draft. Its input uses the canonical provider-neutral
 `ArticleDraftDocument` described in [native article drafts](article-drafts.md),
 with an optional exact existing `draft_id`. The current contract accepts only
-paragraph, `heading1`, and `heading2` blocks and native HTTPS link ranges.
-Styles, list items, blockquotes, images, covers, embeds, HTML, Markdown, and
-editor payloads are rejected. The caller owns editorial translation from
-source material.
+paragraph, `heading1`, and `heading2` blocks, native HTTPS link ranges, and
+1–20 ordered plan-bound JPEG, PNG, or WebP inline images up to 5 MiB each.
+Every image requires descriptive alt text and may have a caption. Styles, list
+items, blockquotes, covers, embeds, HTML, Markdown, and editor payloads are
+rejected. The caller owns editorial translation, image placement, captions,
+and alt text.
 
-Create has two confirmed dispatches: create the private title shell, bind the
-returned stable draft identity and exact current-author unpublished server-response readback,
-then save and read back the exact document. Replacement reads the exact private
-draft first, then performs separately verified title and document autosaves.
-Neither schedule contains a publication or feed-share request.
+Create first binds a private title shell and its exact current-author
+unpublished readback, then registers and transfers each image, then saves and
+reads back the complete document. Replacement reads the exact private draft,
+registers and transfers each confirmed image, then performs one conservative
+title/document replacement. Neither schedule contains a publication or
+feed-share request.
 
 The contained browser is an authenticated transport, not a browser-operation
 fallback. Chrome supplies the bound device session, cookies, user agent, and
 TLS context; code-owned evaluation sends only the fixed current-member,
-create, exact editor-page readback, title-autosave, and content-autosave requests.
+create, image registration, signed byte transfer, exact
+editor-page readback, title-autosave, and content-autosave requests.
 The headed window may be visible during the save. Cleanup is tracked as part
 of the durable operation and an unverified close preserves private artifacts
 for explicit recovery instead of silently deleting evidence.
@@ -169,7 +176,20 @@ draft identity, normalized current-member-to-Article-author binding, private
 projection, and persistence after reopening. The August 16 live recapture also
 proved that exact draft reads now come from one bounded hidden JSON payload in
 the authenticated editor HTML response rather than the retired Rest.li finder.
-Covers and inline media were deliberately excluded.
+The August 16 inline-image capture additionally proved bounded still-image
+registration, a signed transfer returning `201`, stable asset-URN projection,
+ordered image blocks, required accessibility text, optional captions,
+provider-restored CDN sources, and persistence after reopening. The editor
+proceeded directly from transfer to Article autosave and made no processing
+status poll, so Wrench follows that exact sequence and gates success on the
+later private Article response and independent readback. Covers remain
+deliberately excluded.
+
+The active image contract has no automated reconciliation path because an
+uncertain upload may have created a provider asset absent from the confirmed
+input. Preserve partial or indeterminate runs and do not retry or repeat
+uploads. Exact read-only replacement reconciliation remains only for
+already-durable historical text-only contract evidence.
 
 The presence of a LinkedIn editor or saved UI state alone is not a contract.
 Do not type into the editor as a runtime fallback. `articles.publish` remains a
@@ -189,7 +209,7 @@ The current registry keeps these unavailable until their exact first-party excha
 
 - `feeds.read`, `profiles.read`, `organizations.read`, `relationships.recommendations.read`, `messaging.list`, `messaging.read`, `posts.read`, `comments.read`, and `articles.read` (`R1`);
 - `messaging.send` (`R3`);
-- `posts.publish`, `posts.repost`, and `posts.quote` (`R3`);
+- `posts.repost` and `posts.quote` (`R3`);
 - `comments.create` and `replies.create` (`R3`);
 - `relationships.connect` (`R3`);
 - `reactions.set` (`R2`);
@@ -207,6 +227,12 @@ Do not guess a Voyager/GraphQL mutation from a bundle, replay a captured payload
 
 For `messaging.send`, use an already-read, user-approved, low-stakes conversation. Keep recruiting and employment threads out of fixtures. A successful pressure test requires the internal `createMessage` response contract and an independent R1 read of the exact returned message; a visibly cleared textbox is irrelevant. Text-only and each attachment family are separate fixtures: the current manifest accepts one reviewed image, GIF, MP4 video, PDF, presentation, or word-processing document, but that input schema remains inert until upload initialization, byte transfer, asset ownership, message association, and independent readback are all captured and response-bound.
 
+`posts.publish@2` is the separate observed R3 post contract. It accepts exact
+text and at most one plan-bound PNG with descriptive alt text, admits the
+image transfer and post create once, and verifies the response-bound share
+URN through an independent current-member readback. It does not authorize an
+Article publication, repost, quote, comment, message, or additional media.
+
 For `relationships.connect`, use a user-approved profile that is not already
 connected or invitation-pending. Prove the preflight relationship state, exact
 target profile URN, optional note, returned invitation identity/state, and
@@ -218,7 +244,8 @@ R1 reads run only after they graduate and pass account binding.
 `reactions.set` is R2 only as an exact desired-state create/delete pair. A
 private `articles.draft.save` is R2 because its exact autosave and unpublished
 readback contract has graduated. Messages, comments, replies, posts, reposts,
-quotes, connection requests, and article publication are R3.
+quotes, connection requests, and article publication are R3; only the exact
+observed `posts.publish@2` post shape is executable among those R3 families.
 
 Every R2/R3 operation must preview the exact account realm, actor, target, text/media hashes, side effect, contract hash, and dispatch schedule. Confirm once. Require local duplicate refusal. Treat an uncertain response after request start as `indeterminate`; never retry by clicking LinkedIn or by changing message whitespace.
 

@@ -17,7 +17,7 @@ Wrench supplies bounded CLI and SDK capabilities, not an agent runtime or applic
 - Invoke a supported semantic operation: `wrench invoke <adapter> <operation>` or its printed shorthand.
 - Read a previously validated exact query without a provider roundtrip: repeat the subject-bound R1 invocation with `--cache-only`; omit that flag to revalidate it explicitly.
 - Read a normalized cross-provider inbox without a provider roundtrip: `wrench omni read --input <json|@file|-> --cache-only --json`; use `--from-exact-cache` to rebuild from exact ciphertext or omit the mode to revalidate supported sources.
-- Save one private native article draft: inspect `articles.draft.save`, then follow [native article drafts](references/article-drafts.md). Never substitute `articles.publish`.
+- Save one private native article draft, including supported plan-bound inline images: inspect `articles.draft.save`, then follow [native article drafts](references/article-drafts.md). Never substitute `articles.publish`.
 - Add a provider without changing Wrench source: author a portable plugin.
 - Derive a reviewed first-party contract from authorized HAR evidence: follow [the derivation guide](references/derivation.md).
 
@@ -136,7 +136,7 @@ Omni v1 has no write-tag invalidation surface. Auth-incarnation, materializer,
 and plugin implementation identity changes strand prior derivatives. Exact
 query freshness advances only through explicit R1 revalidation.
 
-R2/R3 produce an exact five-minute preview. Review adapter, operation, transport, account, scalar input, attachment hashes, side effect, contract hash, and dispatch schedule, then run the printed `wrench confirm <digest>`. Never retry `pending`, `partial`, or `indeterminate` work. Reconcile from independently observed, secret-free evidence with `wrench runs reconcile`; reconciliation never repeats the original mutation.
+R2/R3 produce an exact five-minute preview. Review adapter, operation, transport, account, scalar input, attachment hashes and order, side effect, contract hash, and dispatch schedule, then run the printed `wrench confirm <digest>`. Never retry `pending`, `partial`, or `indeterminate` work. Reconcile from independently observed, secret-free evidence only when the installed exact contract advertises reconciliation; image-upload draft contracts deliberately do not. Reconciliation never repeats the original mutation.
 
 ## Derive only when a contract is missing
 
@@ -144,6 +144,10 @@ Use a managed derivation to capture the minimum authorized first-party exchange.
 
 ## Finish with evidence
 
+- Freeze built-in provider source and tests before updating contract semantic
+  identities or closure attestations. Follow [provider plugins](references/provider-plugins.md)
+  to review the final semantic digest once and the registry's complete closure
+  set once; never attest intermediate source.
 - Re-run `wrench plugin check` and secret-free fixtures.
 - Prove exact origin, method, path, input bounds, response variants, identity binding, redirects, drift, and redaction.
 - Exercise only authorized observed operations.
