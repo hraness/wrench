@@ -125,7 +125,11 @@ describe("authenticated web contract planning", () => {
       schemaVersion: 1,
       blocks: [{ type: "paragraph", text: "Text-only recovery" }],
     });
-    expect(historical!.reconciliation?.desiredState({
+    const historicalReconciliation = historical!.reconciliation;
+    if (historicalReconciliation?.kind !== "boolean-desired-state") {
+      throw new Error("expected boolean historical X reconciliation");
+    }
+    expect(historicalReconciliation.desiredState({
       title: "Existing draft",
       document: historicalDocument,
       draft_id: "700000000000000001",
@@ -245,7 +249,11 @@ describe("authenticated web contract planning", () => {
       schemaVersion: 1,
       blocks: [{ type: "paragraph", text: "Text-only recovery" }],
     });
-    expect(historical!.reconciliation?.desiredState({
+    const historicalReconciliation = historical!.reconciliation;
+    if (historicalReconciliation?.kind !== "boolean-desired-state") {
+      throw new Error("expected boolean historical LinkedIn reconciliation");
+    }
+    expect(historicalReconciliation.desiredState({
       title: "Existing private draft",
       document: historicalDocument,
       draft_id: "7000000000000000001",

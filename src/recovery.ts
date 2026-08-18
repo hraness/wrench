@@ -427,6 +427,20 @@ function parseCapsule(value: unknown): RecoveryCapsule {
   };
 }
 
+function providerAcceptedTargetHasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!Number.isFinite(next) || next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function parseProviderAcceptedMutationTarget(
   value: unknown,
 ): ProviderAcceptedMutationTarget {
@@ -444,6 +458,7 @@ function parseProviderAcceptedMutationTarget(
     || record.identifier.length < 1
     || Buffer.byteLength(record.identifier, "utf8")
       > MAX_PROVIDER_ACCEPTED_TARGET_BYTES
+    || providerAcceptedTargetHasUnpairedSurrogate(record.identifier)
     || [...record.identifier].some((character) => {
       const codePoint = character.codePointAt(0);
       return codePoint === undefined

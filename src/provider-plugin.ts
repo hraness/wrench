@@ -113,10 +113,15 @@ type ProviderPluginOperationDefinitionBaseV1 = {
   readonly omni?: ProviderPluginOmniDefinitionV1;
 };
 
-export type ProviderPluginReconciliationDefinitionV1 = {
-  readonly kind: "boolean-desired-state";
-  readonly desiredState: (input: OperationInput) => boolean;
-};
+export type ProviderPluginReconciliationDefinitionV1 =
+  | {
+      readonly kind: "boolean-desired-state";
+      readonly desiredState: (input: OperationInput) => boolean;
+    }
+  | {
+      /** Reconcile a create from its encrypted response-derived exact target. */
+      readonly kind: "provider-accepted-target-presence";
+    };
 
 export type ProviderPluginOmniDefinitionV1 =
   | {
@@ -552,6 +557,23 @@ export type ProviderPluginReconciliationReadbackV1 = {
   readonly reason: string;
 };
 
+export type ProviderPluginAcceptedTargetReconciliationContextV1 = {
+  readonly schemaVersion: 1;
+  readonly kind: "provider-accepted-target-presence";
+  readonly dispatch: {
+    readonly id: string;
+    readonly index: number;
+    readonly planned: number;
+  };
+  readonly target: {
+    readonly schemaVersion: 1;
+    readonly identifier: string;
+  };
+};
+
+export type ProviderPluginReconciliationContextV1 =
+  ProviderPluginAcceptedTargetReconciliationContextV1;
+
 export type ProviderPluginLinkedDeviceRuntimeStatusV1 = {
   readonly ready: boolean;
   readonly implementation: string;
@@ -608,6 +630,7 @@ export type WebSessionPluginRuntimeV1 = {
     operation: string,
     input: OperationInput,
     auth: WrenchAuth,
+    context?: ProviderPluginReconciliationContextV1,
   ) => Promise<ProviderPluginReconciliationReadbackV1>;
   readonly linkedDeviceLifecycle?: ProviderPluginLinkedDeviceLifecycleRuntimeV1;
 };
@@ -1812,6 +1835,79 @@ function snapshotExactEnumerableDataProperties(
     ownDataProperty(value, key, `${label}.${key}`)));
 }
 
+export function parseProviderPluginReconciliationContextV1(
+  value: unknown,
+): ProviderPluginReconciliationContextV1 {
+  const [schemaVersion, kind, dispatchValue, targetValue] =
+    snapshotExactEnumerableDataProperties(
+      value,
+      ["schemaVersion", "kind", "dispatch", "target"],
+      "provider plugin reconciliation context",
+    );
+  if (
+    schemaVersion !== 1
+    || kind !== "provider-accepted-target-presence"
+  ) {
+    throw new Error("provider plugin reconciliation context is malformed");
+  }
+  const [dispatchId, dispatchIndex, dispatchPlanned] =
+    snapshotExactEnumerableDataProperties(
+      dispatchValue,
+      ["id", "index", "planned"],
+      "provider plugin reconciliation context dispatch",
+    );
+  if (
+    typeof dispatchId !== "string"
+    || dispatchId.length > 256
+    || !providerPluginDispatchIdPattern.test(dispatchId)
+    || !Number.isSafeInteger(dispatchIndex)
+    || !Number.isSafeInteger(dispatchPlanned)
+    || (dispatchIndex as number) < 1
+    || (dispatchPlanned as number) !== 1
+    || dispatchIndex !== dispatchPlanned
+  ) {
+    throw new Error(
+      "provider plugin reconciliation context dispatch is malformed",
+    );
+  }
+  const [targetSchemaVersion, targetIdentifier] =
+    snapshotExactEnumerableDataProperties(
+      targetValue,
+      ["schemaVersion", "identifier"],
+      "provider plugin reconciliation context target",
+    );
+  if (
+    targetSchemaVersion !== 1
+    || typeof targetIdentifier !== "string"
+    || targetIdentifier.length < 1
+    || Buffer.byteLength(targetIdentifier, "utf8") > 8 * 1024
+    || hasUnpairedSurrogate(targetIdentifier)
+    || [...targetIdentifier].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint === undefined
+        || codePoint === 0x7f
+        || codePoint < 0x20;
+    })
+  ) {
+    throw new Error(
+      "provider plugin reconciliation context target is malformed",
+    );
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    kind: "provider-accepted-target-presence",
+    dispatch: Object.freeze({
+      id: dispatchId,
+      index: dispatchIndex as number,
+      planned: dispatchPlanned as number,
+    }),
+    target: Object.freeze({
+      schemaVersion: 1,
+      identifier: targetIdentifier,
+    }),
+  });
+}
+
 function snapshotBoundedDenseArray(
   value: unknown,
   label: string,
@@ -2342,15 +2438,33 @@ function freezeOperation(
         `provider plugin operation ${operation.name} has an invalid reconciliation contract`,
       );
     }
-    requireExactKeys(
-      operation.reconciliation,
-      ["kind", "desiredState"],
-      `provider plugin operation ${operation.name} reconciliation`,
-    );
-    if (
-      operation.reconciliation.kind !== "boolean-desired-state"
-      || typeof operation.reconciliation.desiredState !== "function"
+    const reconciliationLabel =
+      `provider plugin operation ${operation.name} reconciliation`;
+    if (operation.reconciliation.kind === "boolean-desired-state") {
+      requireExactKeys(
+        operation.reconciliation,
+        ["kind", "desiredState"],
+        reconciliationLabel,
+      );
+      if (typeof operation.reconciliation.desiredState !== "function") {
+        throw new Error(
+          `provider plugin operation ${operation.name} has an invalid reconciliation contract`,
+        );
+      }
+    } else if (
+      operation.reconciliation.kind === "provider-accepted-target-presence"
     ) {
+      requireExactKeys(
+        operation.reconciliation,
+        ["kind"],
+        reconciliationLabel,
+      );
+      if (operation.dispatch !== "single") {
+        throw new Error(
+          `provider plugin operation ${operation.name} provider-accepted target reconciliation requires one exact dispatch`,
+        );
+      }
+    } else {
       throw new Error(
         `provider plugin operation ${operation.name} has an invalid reconciliation contract`,
       );
@@ -2452,12 +2566,18 @@ function freezeOperation(
     planDispatches: conformingProviderPluginPlanDispatches(operation),
     ...(operation.reconciliation === undefined
       ? {}
-      : {
-        reconciliation: Object.freeze({
-          kind: operation.reconciliation.kind,
-          desiredState: operation.reconciliation.desiredState,
+      : operation.reconciliation.kind === "boolean-desired-state"
+        ? {
+          reconciliation: Object.freeze({
+            kind: operation.reconciliation.kind,
+            desiredState: operation.reconciliation.desiredState,
+          }),
+        }
+        : {
+          reconciliation: Object.freeze({
+            kind: operation.reconciliation.kind,
+          }),
         }),
-      }),
     ...(omni === undefined ? {} : { omni }),
   };
   if (!official) return Object.freeze(common);
@@ -2911,23 +3031,40 @@ function freezeBinding(
     operationName,
     input,
     auth,
+    context,
   ) => {
-    if (
-      !operations.some((operation) =>
-        operation.name === operationName
-        && operation.reconciliation !== undefined)
-    ) {
+    const selectedOperation = operations.find((operation) =>
+      operation.name === operationName
+      && operation.reconciliation !== undefined);
+    if (selectedOperation === undefined) {
       throw new Error(
         `provider plugin surface ${binding.surfaceId} has no reconciliation contract for ${operationName}`,
       );
     }
+    const reconciliationContext =
+      selectedOperation.reconciliation?.kind
+        === "provider-accepted-target-presence"
+        ? parseProviderPluginReconciliationContextV1(context)
+        : (() => {
+            if (context !== undefined) {
+              throw new Error(
+                `provider plugin surface ${binding.surfaceId} boolean reconciliation does not accept target context`,
+              );
+            }
+            return undefined;
+          })();
     const hook = (await loadRuntime()).reconcile;
     if (hook === undefined) {
       throw new Error(
         `provider plugin surface ${binding.surfaceId} declared reconciliation without a runtime hook`,
       );
     }
-    const value = await hook(operationName, input, auth);
+    const value = await hook(
+      operationName,
+      input,
+      auth,
+      reconciliationContext,
+    );
     if (
       typeof value !== "object"
       || value === null
