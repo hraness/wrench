@@ -1,6 +1,6 @@
 ---
 name: cross-post-with-wrench
-description: Preview and publish one exact text post, with local images and accessibility text when the selected provider permits or requires them, across any selected combination of X, LinkedIn, Bluesky, Substack Notes, and Threads through Wrench's bounded provider operations. Use when Codex must cross-post social content, check signed-in Wrench realms, adapt one post package to provider-specific schemas without silently changing it, confirm R3 plans, or report per-platform receipts and partial delivery safely.
+description: Preview, publish, settle, and safely account for one exact text post with an optional ordered local-image package across any selected combination of X, LinkedIn, Bluesky, Substack Notes, and Threads through Wrench's bounded provider operations. Use when Codex must cross-post social content, inspect signed-in Wrench realms, adapt images and accessibility text to installed provider schemas without silent loss, reconcile uncertain runs, intentionally create a freshly authorized possible duplicate, or assess canonical duplicate cleanup.
 ---
 
 # Cross-post with Wrench
@@ -12,7 +12,7 @@ Use the installed `wrench` CLI as the only posting transport. Orchestrate provid
 Record these values before planning:
 
 - exact text, preserving whitespace and punctuation;
-- ordered absolute image paths and, when supplied, one alt description per image;
+- an ordered optional image package, with one absolute path and optional alt description per image;
 - selected platforms;
 - explicit provider choices such as LinkedIn visibility or a platform-specific text variant.
 
@@ -20,14 +20,18 @@ Do not truncate text, omit or reorder images, make a collage, split a thread, or
 
 If alt text is absent, draft a short factual description from visible image content and include it in the preview summary. Never infer identity, health, ethnicity, relationships, or other sensitive traits from an image.
 
+Give the package a task-local identity. Preserve image order through planning, settlement, duplicate accounting, and any cleanup assessment.
+
 ## Preflight every target
 
 1. Run `wrench --help`; if it is unavailable, report that Wrench must be installed.
 2. Read [platform routing](references/platform-routing.md).
-3. Run `wrench capabilities <adapter> --json` for every candidate adapter. Treat that installed output as authoritative over the reference.
+3. Run `wrench capabilities <adapter> --json` for every candidate adapter. Treat its current operation state and input schema as authoritative over the reference and over remembered platform behavior.
 4. Select one exact transport and auth realm per platform. Never switch between a browser-session and official OAuth adapter after planning.
 5. Require `posts.publish` to be `observed`, the adapter to be valid, and the auth realm to be bound to its current provider subject. `capture-required` is unavailable, not degraded support.
-6. Validate the exact text, image count, bytes, detected media type, and required scalar fields against each installed input schema before creating any plan.
+6. Validate the exact text, ordered image count, bytes, detected media types, alt-field shape, and required scalar fields against each installed input schema before creating any plan.
+
+Map the package only as the installed schema permits: a scalar file gets one path, a file array gets an ordered path array, and aligned accessibility fields retain the same image order. If a provider accepts fewer images, requires an image, or lacks an alt field, report that exact constraint. Obtain an explicit per-provider package choice when parity is impossible; never silently drop, duplicate, merge, convert, or reorder images.
 
 Prefer a target-filtered cookie locator for a signed-in web adapter. Use a profile-backed realm only when the provider contract requires browser storage and the user has accepted that exact broader egress boundary. Bind a new realm with `wrench auth bind <id> --site <surface> --json` before any preview.
 
@@ -37,7 +41,7 @@ If support is missing and the user asked to develop it, use the packaged Wrench 
 
 Construct each input only from its current installed schema. In CLI input JSON, represent a scalar file field as one absolute path string and a file-array field as an ordered array of absolute path strings. Wrench replaces those paths with plan-bound opaque file references and binds immutable attachment bytes, sizes, media types, and hashes into the plan.
 
-Run every target with `--preview --json` before confirming any target. Review and summarize:
+Run every target with `--preview --json` before confirming any target. Capability availability is evaluated at preview time and the resulting contract identity is bound into the digest; a later adapter change must not be used to reinterpret that plan or an existing run. Review and summarize:
 
 - adapter, transport, operation, and risk;
 - bound account realm and provider subject;
@@ -53,14 +57,22 @@ Cross-posting is not atomic. Confirm each reviewed digest once with `wrench conf
 
 Classify each result independently:
 
-- `submitted`: record the run and provider-created object evidence;
+- `submitted`: record the run and provider-created object evidence, then settle availability through exact readback;
 - pre-dispatch `failed`: diagnose safely and create a fresh preview only if the original action remains authorized;
-- `pending`, `partial`, or `indeterminate`: preserve the run, never retry or alter copy to evade deduplication, and use only the provider's separately reviewed exact readback through `wrench runs reconcile`.
+- `pending`, `partial`, or `indeterminate`: preserve the run and use only an advertised, separately reviewed exact readback through `wrench runs reconcile`.
 
 An unsettled target does not create authority to delete or repost on other platforms. Continue with another already-reviewed platform only when its dispatch is independent and still matches the user's requested batch.
 
+## Settle and account for every attempt
+
+Read [settlement and duplicate cleanup](references/settlement-and-cleanup.md) after confirmation. Give every attempt its own immutable ledger entry. Use exact returned locators and exact provider readback; never infer delivery from a cleared composer, a profile search, or matching text.
+
+A duplicate-tolerant action is a materially new intent, not a retry. Permit it only after explicit fresh authorization of the exact platform/package and duplicate risk, then create and confirm a new preview and link it to every prior uncertain attempt in the task ledger. Never clear, overwrite, or weaken an old Wrench ledger, receipt, recovery capsule, or attachment bundle.
+
+Assess cleanup only through the installed canonical `content.delete` capability. If it is absent, `capture-required`, or blocked as R4, report cleanup as unavailable. Never use a semantic alias, raw HTTP, composer automation, or a capture session to perform deletion.
+
 ## Finish with a platform ledger
 
-Return one row per requested platform with adapter, auth realm label, plan or run ID, attachment hash summary, terminal state, and provider post identifier or public URL when the bounded response exposes one. Do not claim success from a cleared composer or HTTP status alone.
+Return one row per requested platform and attempt with adapter, auth realm label, plan or run ID, attachment hash summary, terminal state, exact provider locator or public URL when exposed, readback state, and availability timing. Label provider creation time and first independent observation time separately; observation means the post was available no later than that check, not that it became available at that instant. If exact readback never observes it, report availability as unverified even when the provider accepted the mutation.
 
 Keep post text, credentials, cookies, private response bodies, and original local paths out of receipts and diagnostics. Remove task-owned derivations and temporary profile snapshots after verified cleanup; retain evidence needed for unsettled runs.

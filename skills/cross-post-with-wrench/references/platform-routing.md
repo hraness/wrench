@@ -2,13 +2,13 @@
 
 Use this as routing guidance only. Always inspect `wrench capabilities <adapter> --json`; installed adapter state and schemas are authoritative and may change.
 
-| Surface | Candidate adapter | Signed-in realm | Typical post fields | Meaning |
+| Surface | Candidate adapter | Signed-in realm | Reference post shape | Meaning |
 | --- | --- | --- | --- | --- |
-| X | `x-web` | Browser cookies/profile | `body`; media only when the installed schema exposes it | Consumer X post |
+| X | `x-web` | Browser cookies/profile | `body`; optional image fields when exposed | Consumer X post |
 | X | `x` | Official OAuth | `body`, optional `media` and aligned alt-text fields | Documented API post |
-| LinkedIn | `linkedin-web` | Browser cookies/profile | `body`, `visibility`, optional `media` and accessibility fields | Member or explicitly bound organization post |
+| LinkedIn | `linkedin-web` | Browser cookies/profile | `body`, `visibility`, optional image and accessibility fields | Member or explicitly bound organization post |
 | LinkedIn | `linkedin` | Official OAuth | Inspect installed schema | Documented API post |
-| Bluesky | `bluesky-web` | Profile-backed Bluesky web session | `body`, optional image field, media type, and alt text | AT Protocol feed post |
+| Bluesky | `bluesky-web` | Profile-backed Bluesky web session | `body`, optional image, media type, and alt text | AT Protocol feed post |
 | Substack | `substack-web` | Browser cookies/profile | `body`, optional Note media | Public Substack Note, not an article/newsletter |
 | Threads | `threads-web` | Browser cookies/profile | `body`, explicit audience when required, one required PNG attachment in the current reviewed schema | Threads post |
 
@@ -17,8 +17,9 @@ Use this as routing guidance only. Always inspect `wrench capabilities <adapter>
 - Use exactly one adapter and one stable bound account realm per surface.
 - Prefer the transport the user named or already configured. Do not fall back from browser-session to OAuth, or vice versa, because one operation is unavailable.
 - Require `posts.publish.state == "observed"`. An invalid adapter or `capture-required` operation must produce no request.
-- Treat each schema's declared file cardinality literally. Never drop extra images or duplicate one image into another field.
+- Treat each current schema's required fields, file cardinality, byte/media bounds, and accessibility-field shape literally. The table is not a capability promise.
 - Preserve input image order. Require alt-text arrays to align one-to-one when the schema exposes them.
+- Re-check capabilities before every new preview. A plan or run remains governed by its bound contract identity when installed support later changes.
 - A provider may reject an otherwise valid image for dimensions, animation, color profile, or account entitlement. Report that provider-owned failure without converting the file unless the user asks for a derivative.
 
 ## Common invocation shape
@@ -46,5 +47,5 @@ Do not place credentials in the input file. Delete task input files after planni
 - If the ordered image set exceeds one platform's bound, request a smaller shared set or an explicit per-platform set. Do not manufacture a collage.
 - If LinkedIn requires visibility and the user requested a public cross-post, use `public`; otherwise obtain the user's audience choice.
 - If Threads requires `audience` and the user requested ordinary posting, use the installed schema's ordinary/default audience only when that meaning is explicit in the capability description.
-- The current reviewed Threads contract requires exactly one PNG. Treat text-only Threads publication as unavailable until a separate live capture proves that transport and readback contract.
+- At this reference revision, the reviewed Threads contract requires exactly one PNG. Treat text-only Threads publication as unavailable unless the installed schema says otherwise.
 - If image alt text is supported on only some targets, preserve the same factual description on every target that accepts it; unsupported alt text is not a reason to alter the visible post.
