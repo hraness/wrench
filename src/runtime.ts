@@ -93,6 +93,7 @@ import {
   type WebSessionExecutionOptions,
   type WebSessionDispatchEvent,
   type WebSessionOperationExecutor,
+  type WebSessionProviderAcceptedMutationTargetEvent,
 } from "./web-session-execution";
 import {
   withWebSessionCleanupAdmission,
@@ -113,7 +114,9 @@ import {
   stagePlanAssets,
 } from "./plan-assets";
 import {
+  removeProviderAcceptedMutationTargetEvidence,
   removeRecoveryCapsule,
+  writeProviderAcceptedMutationTargetEvidence,
   writeRecoveryCapsule,
   type RecoveryContractIdentity,
 } from "./recovery";
@@ -2450,6 +2453,7 @@ function projectRunJournal(
     }
   }
   if (journal.recoveryState === "released") {
+    removeProviderAcceptedMutationTargetEvidence(journal.runId, environment);
     removeRecoveryCapsule(journal.runId, environment);
   }
   if (journal.assetState === "released") {
@@ -3441,6 +3445,71 @@ async function runPreparedCore(
       return Promise.reject(new Error("refusing provider dispatch because durable progress could not be stored", { cause: error }));
     }
   };
+  const persistProviderAcceptedMutationTarget = (
+    eventValue: WebSessionProviderAcceptedMutationTargetEvent,
+  ): Promise<void> => {
+    const event = foreignDataRecord(eventValue);
+    if (
+      event === null
+      || !hasExactKeys(event, ["id", "index", "target"])
+      || typeof event.id !== "string"
+      || !Number.isSafeInteger(event.index)
+    ) {
+      return Promise.reject(new Error(
+        "provider-accepted mutation target event is malformed",
+      ));
+    }
+    const index = event.index as number;
+    const expectedDispatch = plannedDispatches[index - 1];
+    const current = durableReceipt.dispatch;
+    if (
+      !isWrite
+      || !webSessionOperation
+      || journal === null
+      || expectedDispatch === undefined
+      || event.id !== expectedDispatch.id
+      || index < 1
+      || index > planned
+      || current.planned !== planned
+      || current.started !== index
+      || current.verified !== index - 1
+    ) {
+      return Promise.reject(new Error(
+        "provider-accepted mutation target diverged from the active dispatch",
+      ));
+    }
+    const contract = recoveryContract();
+    if (contract.transport !== "web-session-api") {
+      return Promise.reject(new Error(
+        "provider-accepted mutation target requires a web-session contract",
+      ));
+    }
+    try {
+      writeProviderAcceptedMutationTargetEvidence({
+        schemaVersion: 1,
+        runId,
+        acceptedAt: (options.now ?? new Date()).toISOString(),
+        planDigest,
+        adapter,
+        operation: invocation.operationId,
+        inputHash,
+        auth,
+        contract,
+        dispatch: {
+          id: event.id,
+          index,
+          planned,
+        },
+        target: event.target,
+      }, options.environment);
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(new Error(
+        "provider-accepted mutation target could not be stored",
+        { cause: error },
+      ));
+    }
+  };
   const executionKind = providerOperation
     ? "provider"
     : webSessionOperation
@@ -3478,6 +3547,12 @@ async function runPreparedCore(
                   registerCleanupBarrier: options.registerCleanupBarrier,
                 }),
               beforeDispatch: (event) => persistDispatchProgress(event, "starting"),
+              ...(isWrite
+                ? {
+                  afterProviderAcceptedMutationTarget:
+                    persistProviderAcceptedMutationTarget,
+                }
+                : {}),
               afterDispatchVerified: (event) => persistDispatchProgress(event, "verified"),
             },
             (executionOptions: WebSessionExecutionOptions) =>

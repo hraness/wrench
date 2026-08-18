@@ -34,6 +34,7 @@ import {
   type WrenchManifest,
 } from "./model";
 import {
+  readProviderAcceptedMutationTargetEvidence,
   readRecoveryCapsule,
   writeRecoveryCapsule,
   type RecoveryCapsule,
@@ -1948,6 +1949,7 @@ describe("local at-most-once dispatch ledger", () => {
       );
       const stored = createAndSaveInvocationPlan(invocation, testState.environment);
       let observedRunId: string | null = null;
+      const acceptedTarget = "x:post:provider-accepted-123";
       let calls = 0;
       const result = await confirmInvocation(stored.digest, {
         headed: false,
@@ -1987,6 +1989,19 @@ describe("local at-most-once dispatch ledger", () => {
             index: 1,
             progress: { planned: 1, started: 0, verified: 0 },
           });
+          await options.afterProviderAcceptedMutationTarget?.({
+            id: "content.save",
+            index: 1,
+            target: {
+              schemaVersion: 1,
+              identifier: acceptedTarget,
+            },
+          });
+          expect(readProviderAcceptedMutationTargetEvidence(
+            recovered as RecoveryCapsule,
+            { id: "content.save", index: 1, planned: 1 },
+            testState.environment,
+          )?.target.identifier).toBe(acceptedTarget);
           return {
             status: "indeterminate",
             output: null,
@@ -2004,6 +2019,7 @@ describe("local at-most-once dispatch ledger", () => {
         dispatch: { planned: 1, started: 1, verified: 0 },
       });
       expect(result.receipt.error).toContain("indeterminate after the dispatch boundary");
+      expect(JSON.stringify(result.receipt)).not.toContain(acceptedTarget);
       expect<string | null>(observedRunId).toBe(result.receipt.runId);
       expect(readRecoveryCapsule(
         result.receipt.runId,
@@ -2011,6 +2027,17 @@ describe("local at-most-once dispatch ledger", () => {
         sha256(canonicalJson(selectedAuth)),
         testState.environment,
       )?.input).toEqual(input);
+      const recovered = readRecoveryCapsule(
+        result.receipt.runId,
+        selectedAuth.id,
+        sha256(canonicalJson(selectedAuth)),
+        testState.environment,
+      );
+      expect(readProviderAcceptedMutationTargetEvidence(
+        recovered as RecoveryCapsule,
+        { id: "content.save", index: 1, planned: 1 },
+        testState.environment,
+      )?.target.identifier).toBe(acceptedTarget);
 
       const duplicate = createAndSaveInvocationPlan(invocation, testState.environment);
       expect(await rejectionMessage(confirmInvocation(duplicate.digest, {
@@ -2022,6 +2049,119 @@ describe("local at-most-once dispatch ledger", () => {
         },
       }))).toContain("reconcile it before retrying");
       expect(calls).toBe(1);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("removes provider-accepted target evidence after verified web completion", async () => {
+    const testState = state();
+    try {
+      installManifest(xWebManifest(), {
+        force: false,
+        environment: testState.environment,
+      });
+      const selectedAuth = createAuth("x-web-test", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "123",
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const invocation = prepareInvocation(
+        "x-web",
+        "content.save",
+        { post_id: "2078889282404569267", saved: true },
+        selectedAuth.id,
+        testState.environment,
+      );
+      const stored = createAndSaveInvocationPlan(
+        invocation,
+        testState.environment,
+      );
+      let observedRunId: string | null = null;
+      const result = await confirmInvocation(stored.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: async (
+          _manifest,
+          _recipe,
+          _input,
+          _auth,
+          options,
+        ) => {
+          const [runFile] = readdirSync(join(testState.directory, "runs"));
+          if (typeof runFile !== "string") {
+            throw new Error("expected a provisional run receipt");
+          }
+          observedRunId = runFile.slice(0, -5);
+          const recovered = readRecoveryCapsule(
+            observedRunId,
+            selectedAuth.id,
+            sha256(canonicalJson(selectedAuth)),
+            testState.environment,
+          );
+          if (recovered === null) {
+            throw new Error("expected encrypted recovery input");
+          }
+          const targetEvent = {
+            id: "content.save",
+            index: 1,
+            target: {
+              schemaVersion: 1 as const,
+              identifier: "x:post:verified-target-456",
+            },
+          };
+          expect(await rejectionMessage(
+            options.afterProviderAcceptedMutationTarget?.(targetEvent)
+              ?? Promise.reject(new Error("accepted-target callback missing")),
+          )).toContain("diverged from the active dispatch");
+          await options.beforeDispatch?.({
+            id: "content.save",
+            index: 1,
+            progress: { planned: 1, started: 0, verified: 0 },
+          });
+          await options.afterProviderAcceptedMutationTarget?.(targetEvent);
+          expect(readProviderAcceptedMutationTargetEvidence(
+            recovered,
+            { id: "content.save", index: 1, planned: 1 },
+            testState.environment,
+          )).not.toBeNull();
+          await options.afterDispatchVerified?.({
+            id: "content.save",
+            index: 1,
+            progress: { planned: 1, started: 1, verified: 1 },
+          });
+          expect(await rejectionMessage(
+            options.afterProviderAcceptedMutationTarget?.(targetEvent)
+              ?? Promise.reject(new Error("accepted-target callback missing")),
+          )).toContain("diverged from the active dispatch");
+          return {
+            status: "succeeded",
+            output: { saved: true },
+            finalUrl: "https://x.com/i/status/2078889282404569267",
+            dispatchStarted: true,
+            dispatch: { planned: 1, started: 1, verified: 1 },
+          };
+        },
+      });
+
+      expect(result.receipt).toMatchObject({
+        status: "submitted",
+        dispatch: { planned: 1, started: 1, verified: 1 },
+      });
+      expect<string | null>(observedRunId).toBe(result.receipt.runId);
+      expect(existsSync(join(
+        testState.directory,
+        "recovery",
+        "provider-accepted-targets",
+        result.receipt.runId,
+      ))).toBeFalse();
+      expect(readRecoveryCapsule(
+        result.receipt.runId,
+        selectedAuth.id,
+        sha256(canonicalJson(selectedAuth)),
+        testState.environment,
+      )).toBeNull();
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

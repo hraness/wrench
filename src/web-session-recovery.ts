@@ -16,6 +16,7 @@ import { providerPluginRegistry } from "./provider-plugins";
 import {
   appendReconciliationObservation,
   readRecoveryCapsule,
+  removeProviderAcceptedMutationTargetEvidence,
   removeRecoveryCapsule,
   type ReconciliationObservation,
   type RecoveryCapsule,
@@ -82,6 +83,7 @@ const defaultReleaseRecoveryArtifacts:
     // Remove the digest-bound media first so a cleanup failure leaves the
     // encrypted capsule available for another inspection.
     cleanupPlanAssets(planDigest, environment);
+    removeProviderAcceptedMutationTargetEvidence(runId, environment);
     removeRecoveryCapsule(runId, environment);
   };
 
