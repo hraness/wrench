@@ -79,6 +79,7 @@ describe("LinkedIn native post contained-browser transport", () => {
     let initializedKey = "";
     let uploadInput: Readonly<Record<string, unknown>> | null = null;
     let uploads = 0;
+    let uploadSource = "";
     let creates = 0;
     let readbacks = 0;
     let closed = false;
@@ -118,6 +119,7 @@ describe("LinkedIn native post contained-browser transport", () => {
         if (sources[0]?.includes("const registrationBody=")) {
           expect(sources).toHaveLength(1);
           uploads += 1;
+          uploadSource = sources[0];
           uploadInput = sourceInput(sources[0]);
           return Promise.resolve([browserRecord({
             mediaUrn: "urn:li:digitalmediaAsset:C4D22AQExactImage",
@@ -191,6 +193,9 @@ describe("LinkedIn native post contained-browser transport", () => {
     expect(uploadInput).not.toHaveProperty("imageBase64");
     expect(cleanupKeys).toEqual([initializedKey]);
     expect(uploads).toBe(1);
+    expect(uploadSource).toContain('registration.type==="VECTOR"');
+    expect(uploadSource).toContain('registration.$type!=="com.linkedin.mediauploader.MediaUploadMetadata"');
+    expect(uploadSource).toContain('registration.singleUploadHeaders["media-type-family"]!=="STILLIMAGE"');
     expect(creates).toBe(1);
     expect(readbacks).toBe(1);
     expect(closed).toBeTrue();
@@ -255,7 +260,7 @@ describe("LinkedIn native post contained-browser transport", () => {
     expect(uploads).toBe(0);
   });
 
-  test("categorizes registration or upload failure without exposing browser detail", async () => {
+  test("categorizes a registration failure without exposing browser detail", async () => {
     const image = new Uint8Array(24);
     const session: BrowserSession = {
       runBatch: (commands) => {
@@ -272,7 +277,9 @@ describe("LinkedIn native post contained-browser transport", () => {
           return Promise.resolve([browserRecord({ staged: 1 })]);
         }
         if (source.includes("const registrationBody=")) {
-          return Promise.reject(new Error("private signed-upload response detail"));
+          return Promise.reject(new Error(
+            "LinkedIn image registration returned an unreviewed field: private-detail",
+          ));
         }
         if (source.includes("return{removed}")) {
           return Promise.resolve([browserRecord({ removed: true })]);
@@ -295,10 +302,10 @@ describe("LinkedIn native post contained-browser transport", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(LinkedInPostImagePreparationError);
       expect(error).toMatchObject({
-        stage: "image registration or upload response",
+        stage: "image registration response",
       });
       expect((error as Error).message).not.toContain(
-        "private signed-upload response detail",
+        "private-detail",
       );
     }
     await transport.close();

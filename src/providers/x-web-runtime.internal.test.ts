@@ -1988,7 +1988,7 @@ describe("X authenticated internal-API runtime", () => {
         status: "failed",
         dispatchStarted: false,
         dispatch: { planned: 1, started: 0, verified: 0 },
-        error: "X post preparation failed before public post submission; failure stage: media-upload; retry with a fresh confirmed plan",
+        error: "X post preparation failed before public post submission; failure stage: media-upload-init; retry with a fresh confirmed plan",
       });
       expect(admissions).toBe(0);
       expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeFalse();

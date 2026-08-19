@@ -25,7 +25,10 @@ import {
   type LinkedInWebRuntimeDependencies,
 } from "./linkedin-web-runtime";
 import type { LinkedInArticleBrowserTransport } from "./linkedin-web-article-browser";
-import type { LinkedInPostBrowserTransport } from "./linkedin-web-post-browser";
+import {
+  LinkedInPostCreateResponseError,
+  type LinkedInPostBrowserTransport,
+} from "./linkedin-web-post-browser";
 
 const MEMBER_ID = "123456789";
 const MEMBER_URN = `urn:li:fsd_profile:${MEMBER_ID}`;
@@ -1868,7 +1871,9 @@ describe("LinkedIn authenticated internal-API runtime", () => {
         },
         createPost: () => {
           creates += 1;
-          return Promise.reject(new Error("private create response detail"));
+          return Promise.reject(new LinkedInPostCreateResponseError(
+            new Error("LinkedIn post create omitted its entity: private create response detail"),
+          ));
         },
         readPost: () => Promise.reject(new Error("must not read after create failure")),
         close: () => Promise.resolve(),
@@ -1898,7 +1903,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
         dispatchStarted: true,
         dispatch: { planned: 1, started: 1, verified: 0 },
         error: expect.stringMatching(
-          /failure stage: post create response; reconcile before retrying/u,
+          /failure stage: post create entity absent; reconcile before retrying/u,
         ),
       });
       expect(admissions).toBe(1);

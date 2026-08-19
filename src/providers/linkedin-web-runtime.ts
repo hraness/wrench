@@ -82,6 +82,7 @@ import {
 } from "./linkedin-web-article-browser";
 import {
   createLinkedInPostBrowserTransport,
+  LinkedInPostCreateResponseError,
   LinkedInPostImagePreparationError,
   type LinkedInPostBrowserTransport,
 } from "./linkedin-web-post-browser";
@@ -1409,7 +1410,9 @@ async function executeLinkedInPostPublish(
   } catch (error) {
     const publicFailureStage = error instanceof LinkedInPostImagePreparationError
       ? error.stage
-      : failureStage;
+      : error instanceof LinkedInPostCreateResponseError
+        ? error.stage
+        : failureStage;
     return {
       status: started > verified ? "indeterminate" : "failed",
       output: null,

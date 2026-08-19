@@ -1350,36 +1350,60 @@ function parseXMediaInit(value: unknown, expectedSize: number): XUploadedMedia {
   return Object.freeze({ id, key });
 }
 
+type XMediaFinalizeBindingFailureStage =
+  | "media-upload-finalize-response-object"
+  | "media-upload-finalize-response-fields"
+  | "media-upload-finalize-media-id"
+  | "media-upload-finalize-media-key"
+  | "media-upload-finalize-size-type"
+  | "media-upload-finalize-size-value"
+  | "media-upload-finalize-expiry"
+  | "media-upload-finalize-image";
+
 function parseXMediaFinalize(
   value: unknown,
   expected: XUploadedMedia,
   expectedSize: number,
   expectedMediaType: string,
+  onFailureStage?: (stage: XMediaFinalizeBindingFailureStage) => void,
 ): void {
+  onFailureStage?.("media-upload-finalize-response-object");
   const response = record(value, "X media FINALIZE response");
+  onFailureStage?.("media-upload-finalize-response-fields");
   exactResponseKeys(
     response,
     ["expires_after_secs", "media_id", "media_id_string", "size"],
     ["image", "media_key"],
     "X media FINALIZE response",
   );
+  onFailureStage?.("media-upload-finalize-media-id");
   if (xMediaId(response.media_id_string, "X media FINALIZE response media_id_string") !== expected.id) {
     throw new Error("X media FINALIZE response did not bind the initialized media ID");
   }
   if (response.media_key !== undefined) {
+    onFailureStage?.("media-upload-finalize-media-key");
     if (xMediaKey(response.media_key, expected.id, "X media FINALIZE response media_key") !== expected.key) {
       throw new Error("X media FINALIZE response changed the initialized media key");
     }
   }
+  onFailureStage?.("media-upload-finalize-size-type");
+  if (
+    !Number.isSafeInteger(response.size)
+    || (response.size as number) < 1
+    || (response.size as number) > MAX_X_IMAGE_BYTES
+  ) throw new Error("X media FINALIZE response size was invalid");
+  onFailureStage?.("media-upload-finalize-size-value");
   if (response.size !== expectedSize) {
     throw new Error("X media FINALIZE response did not bind the confirmed file size");
   }
+  onFailureStage?.("media-upload-finalize-expiry");
   if (
     !Number.isSafeInteger(response.expires_after_secs)
     || (response.expires_after_secs as number) < 1
     || (response.expires_after_secs as number) > 7 * 24 * 60 * 60
   ) throw new Error("X media FINALIZE response expiry was invalid");
   if (response.image !== undefined) {
+    onFailureStage?.("media-upload-finalize-image");
     const image = record(response.image, "X media FINALIZE response image");
     exactResponseKeys(image, ["h", "image_type", "w"], [], "X media FINALIZE response image");
     if (
@@ -1476,10 +1500,19 @@ function xUploadHeaders(
   return { ...xHeaders(bootstrap, false), ...fixed };
 }
 
+type XMediaUploadFailureStage =
+  | "media-upload-session"
+  | "media-upload-init"
+  | "media-upload-append"
+  | "media-upload-finalize-request"
+  | XMediaFinalizeBindingFailureStage;
+
 async function uploadXImage(
   bootstrap: XBootstrap,
   image: XBoundImage,
+  onFailureStage?: (stage: XMediaUploadFailureStage) => void,
 ): Promise<XUploadedMedia> {
+  onFailureStage?.("media-upload-session");
   const uploadClient = await createWebSessionClient(X_UPLOAD_ORIGIN, bootstrap.auth, {
     timeoutMs: bootstrap.timeoutMs,
     ...(bootstrap.signal === undefined ? {} : { signal: bootstrap.signal }),
@@ -1493,6 +1526,7 @@ async function uploadXImage(
   if (webSessionCookie(uploadClient.cookies, "ct0") !== bootstrap.csrf) {
     throw new Error("X upload origin no longer matched the confirmed session");
   }
+  onFailureStage?.("media-upload-init");
   const initialized = parseXMediaInit(
     await uploadClient.requestJson({
       url: xMediaUploadUrl("INIT", {
@@ -1508,6 +1542,7 @@ async function uploadXImage(
   );
   const chunks = Math.ceil(image.bytes.byteLength / X_UPLOAD_CHUNK_BYTES);
   if (chunks < 1 || chunks > 4) throw new Error("X image exceeded the reviewed upload chunk count");
+  onFailureStage?.("media-upload-append");
   for (let segmentIndex = 0; segmentIndex < chunks; segmentIndex += 1) {
     const start = segmentIndex * X_UPLOAD_CHUNK_BYTES;
     const chunk = image.bytes.subarray(
@@ -1526,17 +1561,20 @@ async function uploadXImage(
       throw new Error("X media APPEND response added an unsupported location");
     }
   }
-  parseXMediaFinalize(
-    await uploadClient.requestJson({
+  onFailureStage?.("media-upload-finalize-request");
+  const finalized = await uploadClient.requestJson({
       url: xMediaUploadUrl("FINALIZE", { id: initialized.id }),
       method: "POST",
       headers: xUploadHeaders(bootstrap),
       expectedStatuses: [200, 201],
       maxBytes: MAX_X_UPLOAD_RESPONSE_BYTES,
-    }),
+    });
+  parseXMediaFinalize(
+    finalized,
     initialized,
     image.bytes.byteLength,
     image.mediaType,
+    onFailureStage,
   );
   return initialized;
 }
@@ -2327,7 +2365,7 @@ function dispatchEvent(id: string, index: number, planned: number, started: numb
 
 type XPostFailureStage =
   | "viewer-binding-before-media-upload"
-  | "media-upload"
+  | XMediaUploadFailureStage
   | "viewer-binding-after-media-upload"
   | "post-request-preparation"
   | "dispatch-admission"
@@ -2471,8 +2509,10 @@ async function executePublish(
         // it before the durable CreateTweet dispatch boundary so a transport or
         // upload-response failure cannot strand the public-post intent as
         // indeterminate when no CreateTweet request was admitted.
-        failureStage = "media-upload";
-        media = await uploadXImage(bootstrap, image);
+        failureStage = "media-upload-session";
+        media = await uploadXImage(bootstrap, image, (stage) => {
+          failureStage = stage;
+        });
         failureStage = "viewer-binding-after-media-upload";
         const afterUpload = await requireBoundViewer(bootstrap, auth);
         if (afterUpload.id !== currentViewer.id) {
