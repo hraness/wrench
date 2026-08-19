@@ -1027,14 +1027,14 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.13.0");
+    expect(current.value.version).toBe("1.14.0");
     const draft = current.value.operations["articles.draft.save"];
     expect(draft !== undefined && isWebSessionOperation(draft)).toBeTrue();
     if (draft === undefined || !isWebSessionOperation(draft)) return;
     expect(draft.risk).toBe("R2");
     expect(draft.webSession).toMatchObject({
       action: "articles.draft.save",
-      contractVersion: 6,
+      contractVersion: 7,
     });
     expect(draft.input.required).toEqual(["title", "document", "inline_images"]);
     expect(draft.input.properties.cover_image).toMatchObject({
@@ -1070,6 +1070,22 @@ describe("wrench manifest parsing", () => {
         "articles.draft.save",
         richInput.value,
       )).toEqual({ ok: true, value: richInput.value });
+    }
+
+    const priorQuoteValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.13.0.json"),
+      "utf8",
+    )) as unknown;
+    const priorQuote = parseDiagnosticManifest(priorQuoteValue);
+    expect(priorQuote.ok).toBeTrue();
+    if (priorQuote.ok) {
+      expect(priorQuote.value.version).toBe("1.13.0");
+      const priorQuoteDraft = priorQuote.value.operations["articles.draft.save"];
+      expect(priorQuoteDraft !== undefined && isWebSessionOperation(priorQuoteDraft)).toBeTrue();
+      if (priorQuoteDraft !== undefined && isWebSessionOperation(priorQuoteDraft)) {
+        expect(priorQuoteDraft.webSession.contractVersion).toBe(6);
+        expect(priorQuoteDraft.input.properties.document?.description).not.toContain("blockquotes");
+      }
     }
 
     const requiredCoverValue = JSON.parse(readFileSync(

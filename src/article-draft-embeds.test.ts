@@ -32,13 +32,13 @@ describe("X status Article embed projection", () => {
     ]);
   });
 
-  test("uses supported paragraphs for LinkedIn and preserves non-empty post lines", () => {
+  test("uses native LinkedIn blockquotes and preserves non-empty post lines", () => {
     expect(projectXStatusArticleEmbed({
       text: "First line\n\nSecond line",
       url: "https://twitter.com/hraness/status/1935927175074734098",
     }, "linkedin-web").map(({ type, text }) => ({ type, text }))).toEqual([
-      { type: "paragraph", text: "First line" },
-      { type: "paragraph", text: "Second line" },
+      { type: "blockquote", text: "First line" },
+      { type: "blockquote", text: "Second line" },
       { type: "paragraph", text: "https://x.com/hraness/status/1935927175074734098" },
     ]);
   });

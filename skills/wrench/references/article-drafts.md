@@ -77,7 +77,7 @@ contract writes an empty cover caption. `x-web` cover saving remains
 capture-required.
 
 Provider text support remains narrower where capture evidence is narrower:
-`linkedin-web` accepts only `paragraph`, `heading1`, and `heading2`, native
+`linkedin-web` accepts `paragraph`, `heading1`, `heading2`, and `blockquote`, native
 HTTPS links, and no text styles. `x-web` accepts all listed text block types,
 native links, and bold, italic, or strikethrough.
 
@@ -93,9 +93,8 @@ canonical source URL, and destination adapter. It removes share-tracking query
 parameters and emits the status URL as one native linked paragraph immediately
 after the content:
 
-- `x-web`: emit each non-empty source line as a `blockquote`.
-- `linkedin-web`: emit each non-empty source line as a `paragraph`, because the
-  reviewed LinkedIn Article contract does not support blockquotes.
+- `x-web` and `linkedin-web`: emit each non-empty source line as a native
+  `blockquote`.
 
 Preserve media attached to the source status only when the user explicitly
 wants that media as independent Article images. Otherwise keep the quote and
@@ -201,10 +200,10 @@ contracts retain read-only replacement reconciliation for an exact confirmed
   Article with native links, styles, ordered inline images, and captions, then
   verifies the unpublished result. Alt text and covers remain
   capture-required; `articles.publish` remains capture-required.
-- `linkedin-web`: `articles.draft.save@6` creates or replaces one private
-  paragraphs/headings/links Article with one separate new or preserved banner plus
+- `linkedin-web`: `articles.draft.save@7` creates or replaces one private
+  paragraphs/headings/blockquotes/links Article with one separate new or preserved banner plus
   ordered inline images, required alt text, and optional captions, then
-  verifies the exact current-author unpublished result. Styles, lists, blockquotes, and
+  verifies the exact current-author unpublished result. Styles, lists, and
   `articles.publish` remain capture-required.
 
 Never switch between an official API and a signed-in web adapter because one

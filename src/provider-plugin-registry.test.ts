@@ -3277,6 +3277,12 @@ describe("provider plugin definition and registry", () => {
         ],
       ],
       [
+        join(root, "linkedin", "wrench-web-adapter.v1.13.0.json"),
+        [
+          "authenticated web contract linkedin/articles.draft.save@6 is not installed",
+        ],
+      ],
+      [
         join(root, "substack", "wrench-web-adapter.v1.0.0.json"),
         [
           "authenticated web contract substack/posts.publish@1 is not installed",

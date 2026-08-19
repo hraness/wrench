@@ -1273,8 +1273,9 @@ function linkedInArticleBlockType(type: ArticleDraftTextBlock["type"]): string {
   if (type === "paragraph") return "PARAGRAPH";
   if (type === "heading1") return "HEADING_1";
   if (type === "heading2") return "HEADING_2";
+  if (type === "blockquote") return "QUOTE";
   throw new Error(
-    "LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks",
+    "LinkedIn Article drafts currently support only paragraph, heading1, heading2, and blockquote blocks",
   );
 }
 
@@ -1282,6 +1283,7 @@ function linkedInArticleDocumentBlockType(value: unknown, label: string): Articl
   if (value === "PARAGRAPH") return "paragraph";
   if (value === "HEADING_1") return "heading1";
   if (value === "HEADING_2") return "heading2";
+  if (value === "QUOTE") return "blockquote";
   throw new Error(`${label} has an unsupported LinkedIn Article text-block type`);
 }
 
@@ -1402,12 +1404,15 @@ function escapeLinkedInArticleHtmlAttribute(value: string): string {
   });
 }
 
-function linkedInArticleHtmlTag(type: ArticleDraftTextBlock["type"]): "p" | "h2" | "h3" {
+function linkedInArticleHtmlTag(
+  type: ArticleDraftTextBlock["type"],
+): "p" | "h2" | "h3" | "blockquote" {
   if (type === "paragraph") return "p";
   if (type === "heading1") return "h2";
   if (type === "heading2") return "h3";
+  if (type === "blockquote") return "blockquote";
   throw new Error(
-    "LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks",
+    "LinkedIn Article drafts currently support only paragraph, heading1, heading2, and blockquote blocks",
   );
 }
 

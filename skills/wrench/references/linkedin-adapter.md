@@ -1,8 +1,8 @@
 # LinkedIn authenticated web API adapter
 
 The current `linkedin-web` schema-v4 adapter has two observed operations:
-`articles.draft.save@6` and `posts.publish@3`. The draft operation creates or replaces one private native Article
-draft for the bound current member, supports paragraphs, H1/H2 headings,
+`articles.draft.save@7` and `posts.publish@3`. The draft operation creates or replaces one private native Article
+draft for the bound current member, supports paragraphs, H1/H2 headings, native blockquotes,
 native HTTPS links, one distinct banner cover, and ordered inline images with
 required alt text and optional captions, and independently verifies the exact unpublished result
 from the authenticated editor-page server payload. The post operation publishes
@@ -145,21 +145,25 @@ Page.” A member- or organization-authored post remains the comment target.
 `articles.draft.save` is an observed R2 operation for one private native
 LinkedIn Article draft. Its input uses the canonical provider-neutral
 `ArticleDraftDocument` described in [native article drafts](article-drafts.md),
-with an optional exact existing `draft_id`. The current contract accepts only
-paragraph, `heading1`, and `heading2` blocks, native HTTPS link ranges, and
+with an optional exact existing `draft_id`. The current contract accepts
+paragraph, `heading1`, `heading2`, and `blockquote` blocks, native HTTPS link ranges, and
 one separate plan-bound JPEG, PNG, or WebP cover on create, or preserves the
 independently read existing banner on an exact replacement when `cover_image`
 is omitted, plus 1–20 ordered inline images up to 5 MiB each. Every inline image requires descriptive alt text and
 may have a caption. The cover is outer input rendered only in the banner slot;
-it is never a document body block. Styles, list items, blockquotes, embeds,
+it is never a document body block. Styles, list items, proprietary embeds,
 HTML, Markdown, and editor payloads are rejected. The caller owns editorial
 translation, image placement, captions, and alt text.
 
 When the source Article contains an X status, use
 `projectXStatusArticleEmbed` with the `linkedin-web` target. The reviewed
-LinkedIn contract cannot express blockquotes, so the helper emits the exact
-status text as paragraphs followed immediately by one canonical linked X URL.
+LinkedIn contract emits the exact status text as native blockquotes followed
+immediately by one canonical linked X URL.
 Omit source-post chrome, metrics, and card screenshots by default.
+
+On August 18, 2026, an authorized private draft create and editor reload
+independently returned the same text block as provider type `QUOTE`; this
+reviewed shape is the evidence for `blockquote` write and readback support.
 
 Create first binds a private title shell and its exact current-author
 unpublished readback, registers, transfers, binds, and verifies the cover,

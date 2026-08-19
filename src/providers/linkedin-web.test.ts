@@ -736,6 +736,38 @@ describe("LinkedIn native Article draft contract", () => {
     });
   });
 
+  test("projects and independently reads LinkedIn's native QUOTE block", () => {
+    const quoteDocument = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: 1,
+      blocks: [{
+        type: "blockquote",
+        text: "A quoted X post",
+      }],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+    const content = buildLinkedInArticleContent(quoteDocument);
+    expect(content).toEqual([{
+      textBlock: {
+        $type: "com.linkedin.voyager.dash.publishing.TextBlock",
+        content: {
+          $type: "com.linkedin.voyager.dash.common.text.TextViewModel",
+          attributesV2: [],
+          text: "A quoted X post",
+        },
+        type: "QUOTE",
+      },
+    }]);
+    expect(buildLinkedInArticleContentHtml(quoteDocument)).toBe(
+      "<blockquote>A quoted X post</blockquote>",
+    );
+    expect(normalizeLinkedInArticleDraft(
+      articleResponse(content, {
+        contentHtml: "<blockquote>A quoted X post</blockquote>",
+      }),
+      draftId,
+      profileUrn,
+    ).document).toEqual(quoteDocument);
+  });
+
   test("projects and verifies ordered inline images without persisting transient CDN URLs", () => {
     const imageDocument = parseArticleDraftDocumentV2(canonicalJson({
       schemaVersion: 2,

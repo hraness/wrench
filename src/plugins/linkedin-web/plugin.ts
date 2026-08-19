@@ -110,8 +110,9 @@ function linkedinArticleDraftV2Issues(
     if (textBlocks.some((block) =>
       block.type !== "paragraph"
       && block.type !== "heading1"
-      && block.type !== "heading2")) {
-      issues.push("LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks");
+      && block.type !== "heading2"
+      && block.type !== "blockquote")) {
+      issues.push("LinkedIn Article drafts currently support only paragraph, heading1, heading2, and blockquote blocks");
     }
     if (textBlocks.some((block) => block.styles.length !== 0)) {
       issues.push("LinkedIn Article text styles remain capture-required");
@@ -186,7 +187,7 @@ function linkedinArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(linkedinContracts),
-  "2be125d917e94a7041d526ed320747b63c3ad1acb9989466cae46412101b2b6d",
+  "cd17cb5fd80a9188c92da6cbaa15323a52e65643d19aeffec8b4f70523e61270",
   {
     "posts.publish": [2],
   },

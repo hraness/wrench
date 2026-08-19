@@ -360,12 +360,11 @@ function projectXStatusArticleEmbed(value, target) {
     throw new Error("X status Article embed target must be x-web or linkedin-web");
   }
   const canonicalUrl = canonicalXStatusUrl(embed.url);
-  const quoteType = target === "x-web" ? "blockquote" : "paragraph";
   const quoteBlocks = embed.text.replaceAll(`\r
 `, `
 `).replaceAll("\r", `
 `).split(`
-`).filter((line) => line.length > 0).map((line) => textBlock(quoteType, line));
+`).filter((line) => line.length > 0).map((line) => textBlock("blockquote", line));
   return Object.freeze([
     ...quoteBlocks,
     Object.freeze({

@@ -1441,7 +1441,7 @@ async function executeLinkedInArticleDraftSave(
   }
 }
 
-async function executeLinkedInArticleDraftSaveV6(
+async function executeLinkedInArticleDraftSaveV7(
   recipe: WebSessionRecipe,
   input: OperationInput,
   auth: WrenchAuth,
@@ -1450,8 +1450,8 @@ async function executeLinkedInArticleDraftSaveV6(
   if (
     recipe.site !== "linkedin"
     || recipe.action !== "articles.draft.save"
-    || recipe.contractVersion !== 6
-  ) throw new Error("LinkedIn image Article draft saving supports only articles.draft.save@6");
+    || recipe.contractVersion !== 7
+  ) throw new Error("LinkedIn image Article draft saving supports only articles.draft.save@7");
   const title = linkedInArticleTitle(input.title);
   const document = parseArticleDraftDocumentV2(input.document, {
     maximumBlocks: MAX_LINKEDIN_ARTICLE_BLOCKS,
@@ -1702,12 +1702,12 @@ export async function executeLinkedInWebOperation(
 ): Promise<WebSessionExecution> {
   if (
     recipe.site === "linkedin"
-    && recipe.contractVersion === 6
+    && recipe.contractVersion === 7
     && recipe.action === "articles.draft.save"
   ) {
     return startWebSessionCleanupTrackedOperation(
       options.registerCleanupBarrier,
-      (publishCleanupResource) => executeLinkedInArticleDraftSaveV6(
+      (publishCleanupResource) => executeLinkedInArticleDraftSaveV7(
         recipe,
         input,
         auth,

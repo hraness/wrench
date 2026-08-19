@@ -396,7 +396,7 @@ The current provider state is explicit:
 | --- | --- | --- |
 | `x` | Observed R2 response-bound private draft create through the documented OAuth API | Observed R3 response-bound publication through the documented OAuth API |
 | `x-web` | Observed R2 structured private draft with ordered inline images and exact unpublished readback | Capture-required R3 |
-| `linkedin-web` | Observed R2 paragraphs/headings/native-link private draft with a separate banner cover, ordered inline images, alt text, captions, and exact unpublished readback | Capture-required R3 |
+| `linkedin-web` | Observed R2 paragraphs/headings/native-blockquote/native-link private draft with a separate banner cover, ordered inline images, alt text, captions, and exact unpublished readback | Capture-required R3 |
 
 The `x-web` draft operation accepts a title, a canonical provider-neutral
 `ArticleDraftDocument` schemaVersion 2 string, 1–20 ordered plan-bound JPEG,
@@ -414,7 +414,7 @@ it for the destination. Wrench sends only the final reviewed title and
 document; it does not turn a source URL into provider copy. The exported
 `projectXStatusArticleEmbed` helper provides one deterministic destination
 projection for already-reviewed X status text: blockquote plus canonical X
-link for `x-web`, or paragraphs plus canonical X link for `linkedin-web`.
+link for both `x-web` and `linkedin-web`.
 
 For `linkedin-web`, pass `cover_image` outside the canonical document when
 creating a draft or intentionally replacing its banner. On an exact
@@ -460,7 +460,7 @@ repeat uploads.
 
 Signed-in LinkedIn now exposes the same private R2 seam through
 `linkedin-web articles.draft.save`. Its schemaVersion 2 document supports
-paragraphs, H1/H2 headings, native HTTPS links, and ordered inline images with
+paragraphs, H1/H2 headings, native blockquotes, native HTTPS links, and ordered inline images with
 required descriptive alt text and optional captions. It creates or replaces
 only one bound private draft and independently verifies the exact unpublished
 text/image/asset result from one bounded hidden server payload in the
@@ -469,7 +469,7 @@ transfer, writes, and server-response read run inside a contained, account-bound
 session because LinkedIn rejects the same editor traffic when replayed by a
 standalone HTTP client. Wrench does not type into or inspect the editor DOM,
 and the contained headed browser may be visible while the private save runs.
-Covers, lists, blockquotes, styles, and publication remain unavailable.
+Lists, styles, proprietary embeds, and publication remain unavailable.
 See the packaged [native article draft workflow](skills/wrench/references/article-drafts.md)
 for the shared document grammar and safety sequence.
 

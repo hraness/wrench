@@ -178,7 +178,7 @@ describe("authenticated web-session contract identity", () => {
     const activeLinkedInArticleDraft = contract({
       site: "linkedin",
       action: "articles.draft.save",
-      contractVersion: 6,
+      contractVersion: 7,
     });
     expect(historicalLinkedInArticleDraft.input.required).toEqual(["title", "document"]);
     expect(historicalLinkedInArticleDraft.input.properties.inline_images).toBeUndefined();

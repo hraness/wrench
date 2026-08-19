@@ -268,7 +268,7 @@ function imageArticleRecipe(): WebSessionRecipe {
   return {
     site: "linkedin",
     action: "articles.draft.save",
-    contractVersion: 6,
+    contractVersion: 7,
     timeoutMs: 60_000,
     maxOutputBytes: 2 * 1024 * 1024,
   };

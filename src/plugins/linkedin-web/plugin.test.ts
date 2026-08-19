@@ -13,12 +13,12 @@ describe("LinkedIn web provider plugin", () => {
     const operation = binding.operations.find((candidate) =>
       candidate.name === "posts.publish");
     expect(operation).toMatchObject({
-      contractVersion: 2,
+      contractVersion: 3,
       risk: "R3",
       state: "observed",
       dispatch: "single",
     });
-    expect(operation?.historicalContractVersions).toBeUndefined();
+    expect(operation?.historicalContractVersions).toEqual([2]);
     expect(operation?.planDispatches({
       body: "how your email finds me",
       visibility: "public",
@@ -49,13 +49,14 @@ describe("LinkedIn web provider plugin", () => {
   test("keeps current covered Article saving distinct from exact text-only recovery", () => {
     const articleOperations = binding.operations.filter((candidate) =>
       candidate.name === "articles.draft.save");
-    expect(articleOperations.map((operation) => operation.contractVersion)).toEqual([2, 6]);
-    const current = articleOperations.find((operation) => operation.contractVersion === 6);
+    expect(articleOperations.map((operation) => operation.contractVersion)).toEqual([2, 7]);
+    const current = articleOperations.find((operation) => operation.contractVersion === 7);
     const archived = articleOperations.find((operation) => operation.contractVersion === 2);
     const document = canonicalJson({
       schemaVersion: 2,
       blocks: [
         { type: "paragraph", text: "Before" },
+        { type: "blockquote", text: "A quoted X post" },
         {
           type: "image",
           imageIndex: 0,
@@ -72,7 +73,7 @@ describe("LinkedIn web provider plugin", () => {
       inline_images: [{ kind: "file" as const, reference: "fixture" }],
     };
     expect(current).toMatchObject({
-      contractVersion: 6,
+      contractVersion: 7,
       risk: "R2",
       state: "observed",
       dispatch: "bounded-items",
@@ -109,6 +110,16 @@ describe("LinkedIn web provider plugin", () => {
       dispatch: "bounded-items",
     });
     expect(archived?.input.properties.inline_images).toBeUndefined();
+    expect(archived?.validateInput({
+      title: "Historical text-only draft",
+      draft_id: "7000000000000000001",
+      document: canonicalJson({
+        schemaVersion: 1,
+        blocks: [{ type: "blockquote", text: "Not in the historical contract" }],
+      }),
+    })).toContain(
+      "LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks",
+    );
     expect(linkedinWebPlugin.implementationSources.map((source) => source.label))
       .toContain("kernel/article-draft-images.ts");
   });

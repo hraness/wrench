@@ -147,13 +147,13 @@ describe("authenticated web contract planning", () => {
   test("the LinkedIn plugin plans one cover plus bounded inline images while retaining text-only recovery", () => {
     const contract = webSessionContractDefinitions.linkedin["articles.draft.save"];
     expect(contract).toMatchObject({
-      contractVersion: 6,
+      contractVersion: 7,
       dispatch: "bounded-items",
       risk: "R2",
       state: "observed",
     });
     const operation = linkedinWebPlugin.bindings[0]?.operations.find((candidate) =>
-      candidate.name === "articles.draft.save" && candidate.contractVersion === 6);
+      candidate.name === "articles.draft.save" && candidate.contractVersion === 7);
     expect(operation).toBeDefined();
     const cover_image = { kind: "file" as const, reference: "cover" };
     expect(operation!.planDispatches({
@@ -212,7 +212,7 @@ describe("authenticated web contract planning", () => {
     const unsupported = canonicalJson({
       schemaVersion: 2,
       blocks: [
-        { type: "blockquote", text: "Not captured" },
+        { type: "ordered-list-item", text: "Not captured" },
         { type: "image", imageIndex: 0, altText: "A descriptive fixture" },
       ],
     });
@@ -222,7 +222,7 @@ describe("authenticated web contract planning", () => {
       cover_image,
       inline_images,
     })).toContain(
-      "LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks",
+      "LinkedIn Article drafts currently support only paragraph, heading1, heading2, and blockquote blocks",
     );
     expect(operation!.reconciliation).toBeUndefined();
     expect(operation!.validateInput({
