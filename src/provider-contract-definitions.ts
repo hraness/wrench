@@ -500,7 +500,7 @@ const gmailDefinitions = {
   "contacts.list": {
     provider: "gmail",
     operation: "contacts.list",
-    contractVersion: 4,
+    contractVersion: 5,
     risk: "R1",
     input: {
       properties: {
@@ -508,6 +508,7 @@ const gmailDefinitions = {
         after: string("Optional inclusive whole-second UTC lower bound for incremental interactions", { minLength: 24, maxLength: 24 }),
         before: string("Fixed whole-second UTC cutoff required only for the interactions projection", { minLength: 24, maxLength: 24 }),
         cursor: string("Opaque Google People or Gmail API next-page token", { minLength: 1, maxLength: 4_096 }),
+        include_dates: boolean("Include full saved-contact name components, birthdays, and contact events; defaults to false and is unavailable for Other contacts"),
         include_stats: boolean("Compute bounded sent and received Gmail statistics; defaults to true"),
         limit: number("Bounded page count; defaults to 20 for contacts and 100 for interactions", 1, 100),
         stats_scan_limit: number("Maximum messages scanned per contact and direction when include_stats is true; defaults to 100; limit multiplied by this value cannot exceed 2000", 1, 2_000),
@@ -552,6 +553,9 @@ const gmailDefinitions = {
       "other-contacts",
       "contact-metadata",
       "contact-email-addresses",
+      "optional-saved-contact-name-components",
+      "optional-saved-contact-birthdays",
+      "optional-saved-contact-events",
       "optional-sent-counts",
       "optional-received-counts",
       "optional-last-sent-at",
@@ -567,7 +571,7 @@ const gmailDefinitions = {
       "opaque-pagination-evidence",
       "send-as-alias-exclusion",
     ],
-    implementation: "subject-bound People contacts plus Gmail interactions; saved contacts expand by batchGet; Other contacts retain their limited projection; interactions use one fixed half-open epoch window, list send-as aliases on page one, disable spam/trash, read metadata only, skip drafts/chats and lower-bound overlap, derive direction from SENT, dedupe addresses per message, expose rolling counts and undated lower bounds, emit opaque ID evidence, and never read bodies",
+    implementation: "subject-bound People contacts plus Gmail interactions; saved contacts expand by batchGet with optional strict names, birthdays, and events; Other contacts remain limited; interactions use one fixed half-open epoch window, list send-as aliases on page one, exclude spam/trash/drafts/chats, read metadata only, derive direction from SENT, dedupe addresses per message, expose rolling counts and explicit lower bounds, emit opaque ID evidence, and never read bodies",
   },
   "messaging.list": {
     provider: "gmail",

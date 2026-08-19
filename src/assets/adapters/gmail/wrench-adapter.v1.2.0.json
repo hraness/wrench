@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "id": "gmail",
-  "version": "1.3.0",
+  "version": "1.2.0",
   "displayName": "Gmail (Official API)",
   "surfaceId": "gmail",
   "origins": [
@@ -48,10 +48,6 @@
             "minLength": 1,
             "maxLength": 4096
           },
-          "include_dates": {
-            "type": "boolean",
-            "description": "Include full saved-contact name components, birthdays, and contact events; defaults to false and is unavailable for Other contacts"
-          },
           "include_stats": {
             "type": "boolean",
             "description": "Compute bounded sent and received Gmail statistics; defaults to true"
@@ -74,7 +70,7 @@
       "provider": {
         "provider": "gmail",
         "action": "contacts.list",
-        "contractVersion": 5,
+        "contractVersion": 4,
         "timeoutMs": 600000,
         "maxOutputBytes": 10485760
       }

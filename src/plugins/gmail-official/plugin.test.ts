@@ -44,7 +44,8 @@ describe("Gmail official provider plugin", () => {
 
     const contacts = binding.operations.find((operation) =>
       operation.name === "contacts.list");
-    expect(contacts?.contractVersion).toBe(4);
+    expect(contacts?.contractVersion).toBe(5);
+    expect(contacts?.historicalContractVersions).toEqual([4]);
     expect(contacts?.requiredScopeSets).toEqual([
       [
         "https://www.googleapis.com/auth/contacts.readonly",
@@ -91,11 +92,17 @@ describe("Gmail official provider plugin", () => {
     expect(contacts?.input.properties.include_stats).toMatchObject({
       type: "boolean",
     });
+    expect(contacts?.input.properties.include_dates).toMatchObject({
+      type: "boolean",
+    });
     expect(contacts?.coverage).toEqual([
       "contacts",
       "other-contacts",
       "contact-metadata",
       "contact-email-addresses",
+      "optional-saved-contact-name-components",
+      "optional-saved-contact-birthdays",
+      "optional-saved-contact-events",
       "optional-sent-counts",
       "optional-received-counts",
       "optional-last-sent-at",

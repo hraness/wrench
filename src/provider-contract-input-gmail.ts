@@ -64,6 +64,9 @@ export function gmailProviderConditionalInputIssues(
     const limitIssue = safeIntegerIssue("limit", input.limit);
     if (limitIssue !== null) issues.push(limitIssue);
     if (input.collection === "interactions") {
+      if (input.include_dates !== undefined) {
+        issues.push("input.include_dates is not accepted for the interactions collection");
+      }
       if (input.include_stats !== undefined) {
         issues.push("input.include_stats is not accepted for the interactions collection");
       }
@@ -108,6 +111,9 @@ export function gmailProviderConditionalInputIssues(
       if (statsScanLimitIssue !== null) issues.push(statsScanLimitIssue);
       if (input.include_stats === false && input.stats_scan_limit !== undefined) {
         issues.push("input.stats_scan_limit is accepted only when include_stats is true");
+      }
+      if (input.collection === "other-contacts" && input.include_dates === true) {
+        issues.push("input.include_dates is supported only for saved contacts");
       }
       const limit = input.limit ?? 20;
       const statsScanLimit = input.stats_scan_limit ?? 100;

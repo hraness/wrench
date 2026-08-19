@@ -604,6 +604,8 @@ describe("official Gmail provider reads", () => {
               emailAddresses: [{ value: "Friend+Tag|Ops*{x}@Example.com", type: "work" }, {
                 value: "friend+tag|ops*{x}@example.com", type: "other",
               }],
+              names: [{ displayName: "Friend", givenName: "Ada", middleName: "M" }],
+              birthdays: [{ date: { month: 2, day: 3 } }],
               photos: [{
                 url: "https://lh3.googleusercontent.com/photo?signed=secret",
                 default: false,
@@ -660,6 +662,7 @@ describe("official Gmail provider reads", () => {
       throw new Error(`unexpected request ${url.href}`);
     };
     const run = harness("contacts.list", {
+      include_dates: true,
       limit: 1,
       stats_scan_limit: 2,
     }, fetch);
@@ -675,6 +678,8 @@ describe("official Gmail provider reads", () => {
           type: "work",
         }],
         photoUrl: null,
+        name: { displayName: "Friend", givenName: "Ada", middleName: "M" },
+        birthdays: [{ date: { year: 0, month: 2, day: 3 } }],
         sentCount: 2,
         sentCountComplete: false,
         sentCountLowerBound: true,
@@ -798,6 +803,22 @@ describe("official Gmail provider reads", () => {
       executeGmailProvider(run.context),
       "stats_scan_limit is accepted only when include_stats is true",
     );
+  });
+
+  test("rejects saved-contact dates for Other contacts before account preflight", async () => {
+    let requests = 0;
+    const run = harness("contacts.list", {
+      collection: "other-contacts",
+      include_dates: true,
+    }, () => {
+      requests += 1;
+      return Promise.resolve(json(profile()));
+    });
+    await expectRejected(
+      executeGmailProvider(run.context),
+      "include_dates is supported only for saved contacts",
+    );
+    expect(requests).toBe(0);
   });
 
   test("rejects an unreviewed contact collection before account preflight", async () => {

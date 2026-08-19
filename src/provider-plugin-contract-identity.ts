@@ -71,11 +71,13 @@ const identities = Object.freeze({
   },
   "gmail-official": {
     schemaVersion: 1,
-    pluginVersion: "1.2.0",
-    implementationSha256: "821e81dcd0d09756253ace93bece4b906c9fca3f1ab27adcbf0108a3fb0f6702",
+    pluginVersion: "1.3.0",
+    implementationSha256: "ff44ca5a51055c2fe2a98c6767761ffbb6e9c5b0a98002594ba415cf2be0f77d",
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
     reviewedClosureSha256: [
+      "c0b0e5be40264cd8a00acea6b03d5115ed5d4c2b13a1929ec4b55cf84a0b385c",
+      "e41ea85044468d1305b51cd87f9d320779ed22e102ecddf27494d5e1f6912bf8",
       "ccd0519003d6f06a7c105833c7b3cc615afdf14483fe7520a8a3f35351127a77",
       "821e81dcd0d09756253ace93bece4b906c9fca3f1ab27adcbf0108a3fb0f6702",
       "cc24eaddbf5232d59d10faf1215355c194f5a42b71326d2eb609e7ea73ab4958",
@@ -138,6 +140,7 @@ const identities = Object.freeze({
       development: "6fd3705ab96ac48ae3f2ef014ef6ea3fc7ec2452d255cd27ae1b0347c2e4975e",
     },
     reviewedClosureSha256: [
+      "1c924582d06048c617f79f7a527ee08e74f44ada230945cfdec131a1782f375b",
       "0461e9a18317f7b5e6159758ac3ee2c4b9d63e5fb4c9acf345c17089562c9517",
       "13c847b3c9d5df4fa09403a1053ad475994949bd1c79abb06521eb1bdaf9e382",
       "0ea187f9fd77fc72b688f6d3740eec2312ccb23497a3bedfa4cd764660aa7cee",
@@ -417,6 +420,7 @@ const identities = Object.freeze({
       development: "e5f5982e62b415ca7b4cfe314996377295d6bbc65574ab3e1b10639649418490",
     },
     reviewedClosureSha256: [
+      "708f42932ae7e5eecdc2e6fb0796e62d2ec7df19c595530707886c48dbb822bb",
       "c83ec487bf1e4ec6215fb1aeea37917e67e1a25d5dc6780a9ff492e1a482f40c",
       "25ba1e7e9641816bd55d4fba0457fbfac586acbce360d8d179f2fe596e552399",
       "662d861e8d6446626593cf10620624a3b10d187f403029c5ef9e3c2aee2642ee",

@@ -923,7 +923,7 @@ describe("official Gmail API helpers", () => {
     expect(checkpoints).toBe(8);
   });
 
-  test("retains People metadata and exact field values while dropping signed photo URLs", async () => {
+  test("retains strict People date and name metadata while dropping signed photo URLs", async () => {
     const requests: URL[] = [];
     const api = client((input) => {
       const url = urlOf(input);
@@ -953,6 +953,11 @@ describe("official Gmail API helpers", () => {
             },
             names: [{
               displayName: "Friend",
+              givenName: "Ada",
+              middleName: "M",
+              familyName: "Lovelace",
+              honorificPrefix: "Countess",
+              honorificSuffix: "PhD",
               metadata: {
                 primary: true,
                 sourcePrimary: true,
@@ -980,6 +985,17 @@ describe("official Gmail API helpers", () => {
               type: "work",
               current: true,
             }],
+            birthdays: [{
+              date: { year: 1989, month: 2, day: 3 },
+              text: "February 3, 1989",
+              metadata: { primary: true, source: { type: "CONTACT", id: "source-1" } },
+            }],
+            events: [{
+              date: { month: 6, day: 7 },
+              type: "anniversary",
+              formattedType: "Anniversary",
+              metadata: { source: { type: "CONTACT", id: "source-1" } },
+            }],
             photos: [{
               url: "https://lh3.googleusercontent.com/photo?token=secret",
               default: false,
@@ -990,6 +1006,7 @@ describe("official Gmail API helpers", () => {
     });
     const page = await fetchGmailContacts(api, {
       collection: "contacts",
+      projection: "dates",
       limit: 25,
       pageToken: null,
     });
@@ -1006,6 +1023,14 @@ describe("official Gmail API helpers", () => {
         }],
       },
       displayName: "Friend",
+      name: {
+        displayName: "Friend",
+        givenName: "Ada",
+        middleName: "M",
+        familyName: "Lovelace",
+        honorificPrefix: "Countess",
+        honorificSuffix: "PhD",
+      },
       emailAddresses: [{
         value: "Friend+Tag@Example.com",
         canonicalValue: "friend+tag@example.com",
@@ -1017,6 +1042,16 @@ describe("official Gmail API helpers", () => {
         type: "mobile",
       }],
       photoUrl: null,
+      birthdays: [{
+        date: { year: 1989, month: 2, day: 3 },
+        text: "February 3, 1989",
+      }],
+      events: [{
+        date: { year: 0, month: 6, day: 7 },
+        text: null,
+        type: "anniversary",
+        formattedType: "Anniversary",
+      }],
     });
     expect(requests[0]?.hostname).toBe("people.googleapis.com");
     expect(requests[0]?.pathname).toBe("/v1/people/me/connections");
@@ -1024,6 +1059,8 @@ describe("official Gmail API helpers", () => {
       .toBe("connections(resourceName),nextPageToken,totalItems");
     expect(requests[1]?.pathname).toBe("/v1/people:batchGet");
     expect(requests[1]?.searchParams.getAll("resourceNames")).toEqual(["people/c123"]);
+    expect(requests[1]?.searchParams.get("personFields")).toContain("birthdays");
+    expect(requests[1]?.searchParams.get("personFields")).toContain("events");
     expect(requests[1]?.searchParams.get("fields")).not.toContain("classificationLabelValues");
   });
 
@@ -1116,6 +1153,32 @@ describe("official Gmail API helpers", () => {
         pageToken: null,
       }),
       "valid UTC calendar date and time",
+    );
+  });
+
+  test("rejects calendar-invalid saved-contact dates", async () => {
+    const api = client((input) => {
+      const url = urlOf(input);
+      if (url.pathname.endsWith("/connections")) {
+        return Promise.resolve(json({ connections: [{ resourceName: "people/c1" }] }));
+      }
+      return Promise.resolve(json({ responses: [{
+        requestedResourceName: "people/c1",
+        status: {},
+        person: {
+          resourceName: "people/c1",
+          birthdays: [{ date: { year: 2026, month: 2, day: 29 } }],
+        },
+      }] }));
+    });
+    await expectRejected(
+      fetchGmailContacts(api, {
+        collection: "contacts",
+        projection: "dates",
+        limit: 1,
+        pageToken: null,
+      }),
+      "valid Gregorian date",
     );
   });
 

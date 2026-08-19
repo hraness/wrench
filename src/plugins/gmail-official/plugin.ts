@@ -42,7 +42,7 @@ const runtime = lazyProviderApiRuntime(async () => {
 export const gmailOfficialPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "gmail-official",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "Gmail Official API",
   sourceKind: "built-in",
   implementationSources,
@@ -68,7 +68,7 @@ export const gmailOfficialPlugin = defineProviderPlugin({
     operations: officialContractOperations(
       Object.values(providerContractDefinitions.gmail),
       {
-        semanticIdentity: "48c6afcb50558029ca0822b84bc91a9fc5a27f02ccf138db535a38f4f3353ddf",
+        semanticIdentity: "8dd4fa0ef6b24cc1d5f35033091ce61fcea954d76b83a4e7a34867c3499e7106",
         validateInput: (contract, input) =>
           gmailProviderConditionalInputIssues(contract.operation, input),
         omni: {
@@ -88,6 +88,13 @@ export const gmailOfficialPlugin = defineProviderPlugin({
           },
         },
       },
+    ).map((operation) =>
+      operation.name === "contacts.list"
+        ? Object.freeze({
+          ...operation,
+          historicalContractVersions: Object.freeze([4]),
+        })
+        : operation
     ),
     subject: {
       format: "bounded ASCII Gmail mailbox email address",

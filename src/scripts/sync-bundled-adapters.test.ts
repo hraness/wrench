@@ -151,6 +151,7 @@ describe("single-process bundled adapter generation sync", () => {
       "facebook-page-web@1.0.0",
       "facebook-web@1.0.0",
       "facebook-web@1.1.0",
+      "gmail@1.2.0",
       "instagram-web@1.0.0",
       "instagram-web@1.1.0",
       "linkedin@0.4.0",

@@ -53,6 +53,7 @@ type ContactDirection = "sent" | "received";
 type ParsedContactsInput = Readonly<{
   collection: GmailContactCollection;
   cursor: string | null;
+  projection: "core" | "dates";
   includeStats: boolean;
   limit: number;
   statsScanLimit: number;
@@ -277,6 +278,7 @@ function parseContactsInput(input: OperationInput): ParsedContactsInput {
   exactKeys(source, [], [
     "collection",
     "cursor",
+    "include_dates",
     "include_stats",
     "limit",
     "stats_scan_limit",
@@ -286,6 +288,16 @@ function parseContactsInput(input: OperationInput): ParsedContactsInput {
     return fail(
       "contacts.list input.collection",
       "must be contacts or other-contacts",
+    );
+  }
+  const includeDates = source.include_dates === undefined ? false : source.include_dates;
+  if (typeof includeDates !== "boolean") {
+    return fail("contacts.list input.include_dates", "must be boolean");
+  }
+  if (includeDates && collection !== "contacts") {
+    return fail(
+      "contacts.list input.include_dates",
+      "is supported only for saved contacts",
     );
   }
   const includeStats = source.include_stats === undefined
@@ -326,6 +338,7 @@ function parseContactsInput(input: OperationInput): ParsedContactsInput {
   return Object.freeze({
     collection,
     cursor: optionalInputText(source.cursor, "contacts.list input.cursor", 4_096),
+    projection: includeDates ? "dates" : "core",
     includeStats,
     limit,
     statsScanLimit,
@@ -671,6 +684,7 @@ async function executeContactsList(context: ProviderActionContext): Promise<void
   const { client, profile } = await authenticatedClient(context);
   const page = await fetchGmailContacts(client, {
     collection: input.collection,
+    projection: input.projection,
     limit: input.limit,
     pageToken: input.cursor,
   });

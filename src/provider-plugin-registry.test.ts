@@ -240,11 +240,11 @@ describe("provider plugin definition and registry", () => {
   test("registers Gmail as a current-only durable provider identity", () => {
     const plugin = providerPluginRegistry.get("gmail-official");
     const binding = plugin?.bindings[0];
-    expect(plugin?.version).toBe("1.2.0");
+    expect(plugin?.version).toBe("1.3.0");
     expect(binding?.transport).toBe("provider-api");
     if (binding === undefined) throw new Error("Gmail provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
-      .toBe("821e81dcd0d09756253ace93bece4b906c9fca3f1ab27adcbf0108a3fb0f6702");
+      .toBe("ff44ca5a51055c2fe2a98c6767761ffbb6e9c5b0a98002594ba415cf2be0f77d");
     expect(providerPluginRegistry.legacyContractImplementationHashes(binding)).toEqual([]);
   });
 

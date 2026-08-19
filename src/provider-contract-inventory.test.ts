@@ -202,8 +202,8 @@ describe("durable provider contract inventory", () => {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
         rows: 266,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 3,
-        currentOnlySha256: "4f8870e2e46ea268c6a6062d6fcf06393b9aed4b7670e96bd051d5626adc852a",
+        currentOnlyRows: 4,
+        currentOnlySha256: "9baec44aca6a9d5dad234b5744ff8053b4cd369ffaac446270224826aca4e69b",
         legacyRows: [266, 266, 266, 266, 266, 266, 266],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,
