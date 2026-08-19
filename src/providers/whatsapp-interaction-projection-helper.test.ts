@@ -272,6 +272,43 @@ describe("WhatsApp content-free interaction projection helper", () => {
     }
   });
 
+  test("preserves rowids above JavaScript's safe-integer range", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query(`
+          INSERT INTO messages(rowid,chat_jid,msg_id,sender_jid,ts,from_me)
+          VALUES (?1,?2,?3,?4,?5,?6)
+        `).run(
+          9_007_199_254_740_993n,
+          "15557654321@s.whatsapp.net",
+          "MSG-LARGE-ROWID",
+          "15557654321:2@s.whatsapp.net",
+          1_776_513_604,
+          0,
+        );
+      } finally {
+        database.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      expect(await response(path, request(path, {
+        cursor: "3",
+        cursorAnchor: "a86ecbd8b98eb6466c2b584a5b3d3ca0458230bbd6ecc86981d57ca4aaa81830",
+        limit: 1,
+      }))).toMatchObject({
+        status: "succeeded",
+        interactions: [{
+          rowid: "9007199254740993",
+          messageId: "MSG-LARGE-ROWID",
+        }],
+        checkpoint: { cursor: "9007199254740993" },
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("fails closed on schema drift, owner mismatch, and SQLite sidecars", async () => {
     const schema = createStore({ extraMessageColumn: true });
     const owner = createStore();

@@ -1,5 +1,5 @@
 import {
-  constants,
+  constants as fsConstants,
   closeSync,
   fstatSync,
   lstatSync,
@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 
-import { Database } from "bun:sqlite";
+import { Database, constants as sqliteConstants } from "bun:sqlite";
 
 import {
   WHATSAPP_CONTACT_PROJECTION_PROTOCOL_VERSION,
@@ -32,6 +32,11 @@ import {
 
 const MESSAGE_DATABASE_NAME = "wacli.db";
 const IMMUTABLE_MESSAGE_DATABASE_URI = `file:${MESSAGE_DATABASE_NAME}?mode=ro&immutable=1`;
+const IMMUTABLE_MESSAGE_DATABASE_FLAGS = sqliteConstants.SQLITE_OPEN_READONLY
+  | sqliteConstants.SQLITE_OPEN_URI
+  | sqliteConstants.SQLITE_OPEN_NOFOLLOW
+  | sqliteConstants.SQLITE_OPEN_PRIVATECACHE
+  | sqliteConstants.SQLITE_OPEN_EXRESCODE;
 const MAX_MESSAGE_DATABASE_BYTES = 2n * 1024n * 1024n * 1024n;
 const SQLITE_CACHE_KIB = 4_096;
 const MAX_UNIX_SECONDS = 253_402_300_799n;
@@ -423,6 +428,9 @@ function assertPinnedSchema(database: Database): void {
 function sqliteBigInt(value: unknown): bigint {
   if (typeof value === "bigint") return value;
   if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
+  if (typeof value === "string" && /^(?:0|[1-9][0-9]{0,18})$/u.test(value)) {
+    return BigInt(value);
+  }
   return fail("projection-invalid");
 }
 
@@ -493,8 +501,9 @@ function assertCursorAnchor(
   try {
     projected = rows(database.query(`
       SELECT
-        m.rowid, m.chat_jid, m.msg_id, m.sender_jid,
-        m.ts, m.from_me, c.kind AS chat_kind
+        CAST(m.rowid AS TEXT) AS rowid, m.chat_jid, m.msg_id, m.sender_jid,
+        CAST(m.ts AS TEXT) AS ts, CAST(m.from_me AS TEXT) AS from_me,
+        c.kind AS chat_kind
       FROM messages m
       JOIN chats c ON c.jid = m.chat_jid
       WHERE m.rowid = ?1
@@ -518,12 +527,12 @@ function projectInteractions(
   try {
     projectedRows = rows(database.query(`
       SELECT
-        m.rowid,
+        CAST(m.rowid AS TEXT) AS rowid,
         m.chat_jid,
         m.msg_id,
         m.sender_jid,
-        m.ts,
-        m.from_me,
+        CAST(m.ts AS TEXT) AS ts,
+        CAST(m.from_me AS TEXT) AS from_me,
         c.kind AS chat_kind
       FROM messages m
       JOIN chats c ON c.jid = m.chat_jid
@@ -582,12 +591,12 @@ export function projectWhatsAppInteractionsFromBoundCwd(
   }
   assertBoundCwd(request, initialCwd);
   assertNoMessageSidecars();
-  const noFollow = constants.O_NOFOLLOW;
+  const noFollow = fsConstants.O_NOFOLLOW;
   if (typeof noFollow !== "number" || noFollow === 0) return fail("message-store-file-invalid");
-  const nonBlock = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+  const nonBlock = typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0;
   let descriptor: number;
   try {
-    descriptor = openSync(MESSAGE_DATABASE_NAME, constants.O_RDONLY | noFollow | nonBlock);
+    descriptor = openSync(MESSAGE_DATABASE_NAME, fsConstants.O_RDONLY | noFollow | nonBlock);
   } catch {
     return fail("message-store-file-invalid");
   }
@@ -605,11 +614,12 @@ export function projectWhatsAppInteractionsFromBoundCwd(
     // state. The path is fixed, the parent directory and inode are bound above,
     // and both are revalidated after close, so immutable mode is the correct
     // side-effect-free way to read that already-proven quiescent snapshot.
-    database = new Database(IMMUTABLE_MESSAGE_DATABASE_URI, {
-      readonly: true,
-      strict: true,
-      safeIntegers: true,
-    });
+    // SQLITE_OPEN_URI is explicit because Bun's Linux SQLite build does not
+    // inherit macOS SQLite's process-wide URI-filename configuration.
+    database = new Database(
+      IMMUTABLE_MESSAGE_DATABASE_URI,
+      IMMUTABLE_MESSAGE_DATABASE_FLAGS,
+    );
     configureDatabase(database);
     assertIntegrity(database);
     assertPinnedSchema(database);
