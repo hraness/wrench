@@ -354,6 +354,7 @@ function operationPolicies(
 
 const BLUESKY_WEB_OPERATIONS = operationPolicies("bluesky", [
   "comments.read",
+  "content.delete",
   "feeds.read",
   "media.read",
   "posts.publish",

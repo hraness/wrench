@@ -4,15 +4,15 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "617eedfbfdbfc15b21903f50618e521dc0858578d0a0423c2da3b16f3e7f5905";
+  "282569624baea28f4bbabd834142ee110339b488720d6e1ec97a0a1175066b74";
 const predecessorLegacyInventorySha256 = [
-  "45f7f5b61cbdbed07f2321cdf578ef9b2758dfe957517adbd17d84367aef56fe",
-  "a72f9c14ab04e5d4eff741bde6824ce2dc13736bb36494ffb1d3cc5cd2e013b7",
-  "eacba672aa5f0b7075714a69007ac432c3c6c4aa141a8d269ef7e908abe55aaf",
-  "49a023245d5108fc68b99f4f1f32628abe6558a689728c1bd5bfb690208bf1e2",
-  "466c22106de515c6053ed55026446522b61ae7564a6b805a8a7f30f3065298fc",
-  "3345e304d06ebaf2e64cb8fe39c3aedd10769f7436b5b7a8df00857f46ec5ef2",
-  "774b60761e7d575a45e733971c1b4752f8789603aab9fbd7c94ec1fc601a6b5b",
+  "37f1975674e147578fb69b7e6efb3bf765ebf9df85a85c376ac088dbd0bd39c7",
+  "b919cd9419d4280cea30ac103f779441ffa4ac9a0f1fc750e39d8c7105743c72",
+  "79b764a36de6478c57682d5e0b49c7297d567295bae1c28673a30aaf9bce821c",
+  "b0b15ab42b15839ce96b8bfcb6089ee132aab347e138c5237696b02061128955",
+  "0ae24661769b9d90dd05c2201d32a0e0db09636f58df326e48fa48ea542bddb9",
+  "2f3d644d4a4c8cd4760d4320b688d55fcccd76e827343a4a09f83da96e13d151",
+  "a35de9f27e6894ffec98c061e877849eac74005183ebdd3bd7f3cf76924be8e3",
 ];
 
 const moduleUrl = (name: string) => pathToFileURL(
@@ -200,11 +200,11 @@ describe("durable provider contract inventory", () => {
       "staging",
     ] as const) {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
-        rows: 279,
+        rows: 282,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 3,
-        currentOnlySha256: "0700d87cef45de71decb2994fc4c48979e5ead8011763f8d7782318a43babb74",
-        legacyRows: [279, 279, 279, 279, 279, 279, 279],
+        currentOnlySha256: "4f8870e2e46ea268c6a6062d6fcf06393b9aed4b7670e96bd051d5626adc852a",
+        legacyRows: [282, 282, 282, 282, 282, 282, 282],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,
         rejectedUnknown: true,
