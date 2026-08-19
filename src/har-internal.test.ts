@@ -241,6 +241,7 @@ describe("private LinkedIn internal-API HAR evidence", () => {
     const title = "private fixture title";
     const text = "private fixture text";
     const hyperlink = "https://example.com/private-fixture";
+    const coverAssetUrn = "urn:li:digitalmediaAsset:private-cover-fixture";
     const url = new URL(`https://www.linkedin.com/voyager/api/voyagerPublishingDashFirstPartyArticles/urn:li:fsd_firstPartyArticle:${draftId}`);
     url.searchParams.set("author", profileUrn);
     url.searchParams.set("q", "author");
@@ -257,6 +258,13 @@ describe("private LinkedIn internal-API HAR evidence", () => {
         patch: {
           $set: {
             title,
+            coverMediaV2Union: {
+              coverImage: {
+                $type: "com.linkedin.voyager.dash.publishing.CoverImage",
+                caption: { text: "" },
+                originalImageUrn: coverAssetUrn,
+              },
+            },
             content: [{
               textBlock: {
                 type: "PARAGRAPH",
@@ -297,6 +305,9 @@ describe("private LinkedIn internal-API HAR evidence", () => {
     expect(candidate.headerNames).toEqual(["authorization"]);
     for (const path of [
       "patch.$set.title",
+      "patch.$set.coverMediaV2Union.coverImage.$type",
+      "patch.$set.coverMediaV2Union.coverImage.caption.text",
+      "patch.$set.coverMediaV2Union.coverImage.originalImageUrn",
       "patch.$set.content[].textBlock.type",
       "patch.$set.content[].textBlock.content.text",
       "patch.$set.content[].textBlock.content.attributesV2[].start",
@@ -322,7 +333,15 @@ describe("private LinkedIn internal-API HAR evidence", () => {
       "included[].updatedAt",
     ]) expect(candidate.responseFieldPaths).toContain(path);
     const serialized = JSON.stringify(evidence);
-    for (const forbidden of [draftId, profileUrn, title, text, hyperlink, "fixture-private"]) {
+    for (const forbidden of [
+      draftId,
+      profileUrn,
+      title,
+      text,
+      hyperlink,
+      coverAssetUrn,
+      "fixture-private",
+    ]) {
       expect(serialized).not.toContain(forbidden);
     }
   });

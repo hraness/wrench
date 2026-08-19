@@ -130,6 +130,7 @@ function currentIdentityResponse(): unknown {
 function articleResponse(
   title: string,
   content: readonly Readonly<Record<string, unknown>>[],
+  overrides: Readonly<Record<string, unknown>> = {},
 ): unknown {
   const urn = `urn:li:fsd_firstPartyArticle:${ARTICLE_ID}`;
   return {
@@ -184,7 +185,51 @@ function articleResponse(
       updatedAt: 2,
       version: 3,
       viewerAllowedToEdit: null,
+      ...overrides,
     }],
+  };
+}
+
+function articleCoverFields(assetUrn: string | null): Readonly<Record<string, unknown>> {
+  if (assetUrn === null) return { coverMedia: null, coverMediaV2Union: null };
+  const vector = (includeAsset: boolean): Readonly<Record<string, unknown>> => ({
+    $type: "com.linkedin.common.VectorImage",
+    artifacts: [{
+      $type: "com.linkedin.common.VectorArtifact",
+      expiresAt: 1_900_000_000_000,
+      fileIdentifyingUrlPathSegment: "image/fixture/cover-1200x630",
+      height: 630,
+      width: 1200,
+    }],
+    ...(includeAsset ? { digitalmediaAsset: assetUrn } : {}),
+    rootUrl: "https://media.licdn.com/dms/image/fixture/",
+  });
+  const originalImage = (includeAsset: boolean): Readonly<Record<string, unknown>> => ({
+    $type: "com.linkedin.voyager.dash.common.image.ImageViewModel",
+    attributes: [{
+      $type: "com.linkedin.voyager.dash.common.image.ImageAttribute",
+      detailDataUnion: { vectorImage: vector(includeAsset) },
+    }],
+  });
+  return {
+    coverMedia: {
+      $type: "com.linkedin.voyager.dash.publishing.CoverImage",
+      caption: {
+        $type: "com.linkedin.voyager.dash.common.text.TextViewModel",
+        attributesV2: [],
+        text: "",
+        textDirection: "USER_LOCALE",
+      },
+      originalImage: originalImage(false),
+      originalImageUrn: assetUrn,
+    },
+    coverMediaV2Union: {
+      coverImage: {
+        $type: "com.linkedin.voyager.dash.publishing.CoverImage",
+        originalImage: originalImage(true),
+        originalImageUrn: assetUrn,
+      },
+    },
   };
 }
 
@@ -223,7 +268,7 @@ function imageArticleRecipe(): WebSessionRecipe {
   return {
     site: "linkedin",
     action: "articles.draft.save",
-    contractVersion: 3,
+    contractVersion: 6,
     timeoutMs: 60_000,
     maxOutputBytes: 2 * 1024 * 1024,
   };
@@ -936,23 +981,47 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       maximumCharacters: 125_000,
       maximumImages: 20,
     });
+    const coverAssetUrn = "urn:li:digitalmediaAsset:C4D22AQCoverFixture";
     const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
+    const staleContent = structuredClone(
+      buildLinkedInArticleContentV2(document, [assetUrn]),
+    ) as Record<string, unknown>[];
+    const staleImageBlock = staleContent[1]?.imageBlock as Record<string, unknown>;
+    const staleImageContent = staleImageBlock.content as Record<string, unknown>;
+    delete staleImageContent.accessibilityText;
+    delete staleImageContent.accessibilityTextAttributes;
     let currentTitle = "Old title";
-    let content: readonly Readonly<Record<string, unknown>>[] = [{
-      editorOwnedImageBlock: { opaque: true },
-    }];
+    let content: readonly Readonly<Record<string, unknown>>[] = staleContent;
+    let currentCoverAssetUrn: string | null = null;
     const calls: string[] = [];
     const transport: LinkedInArticleBrowserTransport = {
       currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
       prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
       createDraft: () => Promise.reject(new Error("replacement must not create")),
-      readDraftResponse: () => Promise.resolve(articleResponse(currentTitle, content)),
+      readDraftResponse: () => Promise.resolve(articleResponse(
+        currentTitle,
+        content,
+        articleCoverFields(currentCoverAssetUrn),
+      )),
       updateTitle: (_draftId, receivedTitle) => {
         calls.push("title");
         currentTitle = receivedTitle;
         return Promise.resolve();
       },
       updateContent: () => Promise.reject(new Error("image contract must not use v1 content")),
+      uploadCoverImage: (_draftId, image) => {
+        calls.push("cover-upload");
+        expect(image).toMatchObject({
+          filename: "cover-image-1.png",
+          mediaType: "image/png",
+        });
+        return Promise.resolve(coverAssetUrn);
+      },
+      updateCover: (_draftId, receivedAssetUrn) => {
+        calls.push("cover-bind");
+        currentCoverAssetUrn = receivedAssetUrn;
+        return Promise.resolve();
+      },
       uploadInlineImage: (_draftId, image) => {
         calls.push("image");
         expect(image).toMatchObject({
@@ -996,6 +1065,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
         title,
         document: documentValue,
         draft_id: ARTICLE_ID,
+        cover_image: { kind: "file", reference: "fixture-cover" },
         inline_images: [{ kind: "file", reference: "fixture-image" }],
       },
       linkedinAuth,
@@ -1004,7 +1074,10 @@ describe("LinkedIn authenticated internal-API runtime", () => {
           createArticleBrowserTransport: () => Promise.resolve(transport),
         },
         fileResolver: (files) => {
-          expect(files).toEqual([{ kind: "file", reference: "fixture-image" }]);
+          expect(files).toHaveLength(1);
+          const file = files[0];
+          if (file === undefined) throw new Error("expected one plan-bound Article image");
+          expect(["fixture-cover", "fixture-image"]).toContain(file.reference);
           return Promise.resolve([
             join(import.meta.dir, "..", "..", "website", "public", "og.png"),
           ]);
@@ -1021,9 +1094,148 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     );
     expect(result).toMatchObject({
       status: "succeeded",
+      dispatch: { planned: 3, started: 3, verified: 3 },
+      output: {
+        coverImageCount: 1,
+        documentSchemaVersion: 2,
+        draftId: ARTICLE_ID,
+        inlineImageCount: 1,
+        published: false,
+        title,
+      },
+    });
+    expect(calls).toEqual(["cover-upload", "cover-bind", "image", "title", "content"]);
+    expect(dispatches).toEqual([
+      "start:articles.cover",
+      "verified:articles.cover",
+      "start:articles.image[1]",
+      "verified:articles.image[1]",
+      "start:articles.replace",
+      "verified:articles.replace",
+    ]);
+    await expect(readLinkedInWebArticleDraftDesiredState(
+      imageArticleRecipe(),
+      {
+        title,
+        document: documentValue,
+        draft_id: ARTICLE_ID,
+        cover_image: { kind: "file", reference: "fixture-cover" },
+        inline_images: [{ kind: "file", reference: "fixture-image" }],
+      },
+      linkedinAuth,
+    )).rejects.toThrow("supports only articles.draft.save@2");
+  });
+
+  test("preserves one exact existing banner while replacing a malformed private Article body", async () => {
+    const title = "Recovered private draft";
+    const documentValue = canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Complete replacement body" },
+        {
+          type: "image",
+          imageIndex: 0,
+          altText: "A descriptive replacement image",
+          caption: "Replacement",
+        },
+      ],
+    });
+    const document = parseArticleDraftDocumentV2(documentValue, {
+      maximumBlocks: 5_000,
+      maximumCharacters: 125_000,
+      maximumImages: 20,
+    });
+    const coverAssetUrn = "urn:li:digitalmediaAsset:C4D22AQExistingCover";
+    const imageAssetUrn = "urn:li:digitalmediaAsset:C4D22AQReplacementImage";
+    let currentTitle = "Old title";
+    let content: readonly Readonly<Record<string, unknown>>[] = [{
+      $type: "com.linkedin.voyager.dash.publishing.ArticleImageBlock",
+      imageBlock: {
+        $type: "com.linkedin.voyager.dash.publishing.ImageBlock",
+        content: { $type: "com.linkedin.voyager.dash.publishing.ImageContent", attributes: [] },
+      },
+    }];
+    const calls: string[] = [];
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
+      createDraft: () => Promise.reject(new Error("replacement must not create")),
+      readDraftResponse: () => Promise.resolve(articleResponse(
+        currentTitle,
+        content,
+        articleCoverFields(coverAssetUrn),
+      )),
+      updateTitle: (_draftId, receivedTitle) => {
+        calls.push("title");
+        currentTitle = receivedTitle;
+        return Promise.resolve();
+      },
+      updateContent: () => Promise.reject(new Error("image contract must not use v1 content")),
+      uploadCoverImage: () => Promise.reject(new Error("existing cover must not be uploaded")),
+      updateCover: () => Promise.reject(new Error("existing cover must not be rebound")),
+      uploadInlineImage: () => {
+        calls.push("image");
+        return Promise.resolve(imageAssetUrn);
+      },
+      updateContentV2: (_draftId, receivedDocument, assets) => {
+        calls.push("content");
+        expect(receivedDocument).toEqual(document);
+        expect(assets).toEqual([imageAssetUrn]);
+        const write = structuredClone(buildLinkedInArticleContentV2(document, assets));
+        const wrapper = write[1] as Record<string, unknown>;
+        const imageBlock = wrapper.imageBlock as Record<string, unknown>;
+        const caption = imageBlock.caption as Record<string, unknown>;
+        caption.attributesV2 = [];
+        const imageContent = imageBlock.content as Record<string, unknown>;
+        imageContent.accessibilityTextAttributes = [];
+        const attribute = (imageContent.attributes as Record<string, unknown>[])[0]!;
+        const detail = attribute.detailDataUnion as Record<string, unknown>;
+        const vector = detail.vectorImage as Record<string, unknown>;
+        vector.artifacts = [{
+          $type: "com.linkedin.common.VectorArtifact",
+          expiresAt: 1,
+          fileIdentifyingUrlPathSegment: "fixture",
+          height: 630,
+          width: 1200,
+        }];
+        vector.rootUrl = "https://media.licdn.com/fixture/";
+        content = write;
+        return Promise.resolve();
+      },
+      close: () => Promise.resolve(),
+    };
+    const dispatches: string[] = [];
+    const result = await executeLinkedInWebOperation(
+      imageArticleRecipe(),
+      {
+        title,
+        document: documentValue,
+        draft_id: ARTICLE_ID,
+        inline_images: [{ kind: "file", reference: "fixture-image" }],
+      },
+      linkedinAuth,
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.resolve(transport),
+        },
+        fileResolver: () => Promise.resolve([
+          join(import.meta.dir, "..", "..", "website", "public", "og.png"),
+        ]),
+        beforeDispatch: (event) => {
+          dispatches.push(`start:${event.id}`);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          dispatches.push(`verified:${event.id}`);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
       dispatch: { planned: 2, started: 2, verified: 2 },
       output: {
-        documentSchemaVersion: 2,
+        coverImageCount: 1,
         draftId: ARTICLE_ID,
         inlineImageCount: 1,
         published: false,
@@ -1037,16 +1249,79 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       "start:articles.replace",
       "verified:articles.replace",
     ]);
-    await expect(readLinkedInWebArticleDraftDesiredState(
+  });
+
+  test.each([
+    {
+      privateDiagnostic: "LinkedIn Article image registration response.data.value has unsupported fields",
+      publicCategory: "image-registration-response-drift",
+    },
+    {
+      privateDiagnostic: "LinkedIn image staging changed shape around a private browser key",
+      publicCategory: "image-byte-staging-failed",
+    },
+    {
+      privateDiagnostic: "LinkedIn Article image upload returned an unreviewed private response",
+      publicCategory: "image-transfer-response-drift",
+    },
+  ])("categorizes Article image failures as $publicCategory without leaking diagnostics", async ({
+    privateDiagnostic,
+    publicCategory,
+  }) => {
+    const document = canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Before" },
+        { type: "image", imageIndex: 0, altText: "A descriptive fixture image" },
+      ],
+    });
+    const coverAssetUrn = "urn:li:digitalmediaAsset:C4D22AQCoverFixture";
+    let currentCoverAssetUrn: string | null = null;
+    const transport: LinkedInArticleBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
+      createDraft: () => Promise.reject(new Error("replacement must not create")),
+      readDraftResponse: () => Promise.resolve(articleResponse(
+        "Old title",
+        [],
+        articleCoverFields(currentCoverAssetUrn),
+      )),
+      updateTitle: () => Promise.reject(new Error("failed upload must not replace title")),
+      updateContent: () => Promise.reject(new Error("failed upload must not replace content")),
+      uploadCoverImage: () => Promise.resolve(coverAssetUrn),
+      updateCover: (_draftId, assetUrn) => {
+        currentCoverAssetUrn = assetUrn;
+        return Promise.resolve();
+      },
+      uploadInlineImage: () => Promise.reject(new Error(privateDiagnostic)),
+      updateContentV2: () => Promise.reject(new Error("failed upload must not replace content")),
+      close: () => Promise.resolve(),
+    };
+    const result = await executeLinkedInWebOperation(
       imageArticleRecipe(),
       {
-        title,
-        document: documentValue,
+        title: "Private fixture",
+        document,
         draft_id: ARTICLE_ID,
+        cover_image: { kind: "file", reference: "fixture-cover" },
         inline_images: [{ kind: "file", reference: "fixture-image" }],
       },
       linkedinAuth,
-    )).rejects.toThrow("supports only articles.draft.save@2");
+      {
+        dependencies: {
+          createArticleBrowserTransport: () => Promise.resolve(transport),
+        },
+        fileResolver: () => Promise.resolve([
+          join(import.meta.dir, "..", "..", "website", "public", "og.png"),
+        ]),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatch: { planned: 3, started: 2, verified: 1 },
+      error: expect.stringContaining(publicCategory),
+    });
+    expect(JSON.stringify(result)).not.toContain(privateDiagnostic);
   });
 
   test("replaces one exact private draft in place and reconciles only from unpublished readback", async () => {
@@ -1254,11 +1529,16 @@ describe("LinkedIn authenticated internal-API runtime", () => {
         },
       ],
     });
+    const existingCoverAssetUrn = "urn:li:digitalmediaAsset:C4D22AQExistingCover";
     const transport: LinkedInArticleBrowserTransport = {
       currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
       prepareCreateDraft: () => Promise.reject(new Error("replacement must not create")),
       createDraft: () => Promise.reject(new Error("replacement must not create")),
-      readDraftResponse: () => Promise.resolve(articleResponse("Private fixture", [])),
+      readDraftResponse: () => Promise.resolve(articleResponse(
+        "Private fixture",
+        [],
+        articleCoverFields(existingCoverAssetUrn),
+      )),
       updateTitle: () => Promise.reject(new Error("failed images must not update title")),
       updateContent: () => Promise.reject(new Error("failed images must not update content")),
       uploadInlineImage: () => Promise.reject(new Error(privateDiagnostic)),

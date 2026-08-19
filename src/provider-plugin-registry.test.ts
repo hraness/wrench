@@ -3254,7 +3254,26 @@ describe("provider plugin definition and registry", () => {
         [
           "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
           "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "authenticated web contract linkedin/articles.draft.save@3 is not installed",
           "authenticated web contract linkedin/posts.publish@1 is not installed",
+        ],
+      ],
+      ...["1.9.0", "1.10.0"].map((version) => [
+        join(root, "linkedin", `wrench-web-adapter.v${version}.json`),
+        [
+          "authenticated web contract linkedin/articles.draft.save@3 is not installed",
+        ],
+      ] as const),
+      [
+        join(root, "linkedin", "wrench-web-adapter.v1.11.0.json"),
+        [
+          "authenticated web contract linkedin/articles.draft.save@4 is not installed",
+        ],
+      ],
+      [
+        join(root, "linkedin", "wrench-web-adapter.v1.12.0.json"),
+        [
+          "authenticated web contract linkedin/articles.draft.save@5 is not installed",
         ],
       ],
       [

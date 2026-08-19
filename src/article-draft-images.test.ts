@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
+  articleDraftImageFileInput,
   articleDraftImageFileInputs,
+  materializeArticleDraftImage,
   materializeArticleDraftImages,
 } from "./article-draft-images";
 
@@ -33,6 +35,32 @@ describe("Article draft image files", () => {
     expect(() => articleDraftImageFileInputs([
       { kind: "file", reference: "one", path: "/tmp/escape" },
     ], 2)).toThrow("exact plan-bound file");
+    expect(articleDraftImageFileInput(
+      { kind: "file", reference: "sha256:cover" },
+      "input.cover_image",
+    )).toEqual({ kind: "file", reference: "sha256:cover" });
+  });
+
+  test("materializes one cover under a cover-only safe filename", async () => {
+    const root = await temporaryRoot();
+    const path = join(root, "cover.bin");
+    await writeFile(path, Uint8Array.from([0xff, 0xd8, 0xff, 0x00]));
+    const image = await materializeArticleDraftImage(
+      { kind: "file", reference: "cover" },
+      async (files) => {
+        expect(files).toEqual([{ kind: "file", reference: "cover" }]);
+        return [path];
+      },
+      {
+        maximumBytes: 100,
+        inputLabel: "input.cover_image",
+        filenamePrefix: "cover-image",
+      },
+    );
+    expect(image).toMatchObject({
+      filename: "cover-image-1.jpg",
+      mediaType: "image/jpeg",
+    });
   });
 
   test("materializes sniffed JPEG, PNG, and WebP bytes with safe names", async () => {
@@ -87,7 +115,7 @@ describe("Article draft image files", () => {
     await expect(materializeArticleDraftImages(file, async () => [large], {
       maximumBytes: 8,
       maximumImages: 1,
-    })).rejects.toThrow("regular files no larger than 8 bytes");
+    })).rejects.toThrow("regular file no larger than 8 bytes");
     await expect(materializeArticleDraftImages(file, async () => [link], {
       maximumBytes: 100,
       maximumImages: 1,

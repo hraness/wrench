@@ -1,10 +1,10 @@
 # LinkedIn authenticated web API adapter
 
 The current `linkedin-web` schema-v4 adapter has two observed operations:
-`articles.draft.save@3` and `posts.publish@2`. The draft operation creates or replaces one private native Article
+`articles.draft.save@6` and `posts.publish@3`. The draft operation creates or replaces one private native Article
 draft for the bound current member, supports paragraphs, H1/H2 headings,
-native HTTPS links, and ordered inline images with required alt text and
-optional captions, and independently verifies the exact unpublished result
+native HTTPS links, one distinct banner cover, and ordered inline images with
+required alt text and optional captions, and independently verifies the exact unpublished result
 from the authenticated editor-page server payload. The post operation publishes
 one confirmed text post with an optional single plan-bound PNG, binds the exact
 member and returned share, and verifies an independent exact-share readback.
@@ -147,24 +147,28 @@ LinkedIn Article draft. Its input uses the canonical provider-neutral
 `ArticleDraftDocument` described in [native article drafts](article-drafts.md),
 with an optional exact existing `draft_id`. The current contract accepts only
 paragraph, `heading1`, and `heading2` blocks, native HTTPS link ranges, and
-1–20 ordered plan-bound JPEG, PNG, or WebP inline images up to 5 MiB each.
-Every image requires descriptive alt text and may have a caption. Styles, list
-items, blockquotes, covers, embeds, HTML, Markdown, and editor payloads are
-rejected. The caller owns editorial translation, image placement, captions,
-and alt text.
+one separate plan-bound JPEG, PNG, or WebP cover on create, or preserves the
+independently read existing banner on an exact replacement when `cover_image`
+is omitted, plus 1–20 ordered inline images up to 5 MiB each. Every inline image requires descriptive alt text and
+may have a caption. The cover is outer input rendered only in the banner slot;
+it is never a document body block. Styles, list items, blockquotes, embeds,
+HTML, Markdown, and editor payloads are rejected. The caller owns editorial
+translation, image placement, captions, and alt text.
 
 Create first binds a private title shell and its exact current-author
-unpublished readback, then registers and transfers each image, then saves and
-reads back the complete document. Replacement reads the exact private draft,
-registers and transfers each confirmed image, then performs one conservative
+unpublished readback, registers, transfers, binds, and verifies the cover,
+then registers and transfers each inline image before saving and reading back
+the complete document. Replacement reads the exact private draft, performs
+the same distinct cover and inline-image steps, then performs one conservative
 title/document replacement. Neither schedule contains a publication or
 feed-share request.
 
 The contained browser is an authenticated transport, not a browser-operation
 fallback. Chrome supplies the bound device session, cookies, user agent, and
 TLS context; code-owned evaluation sends only the fixed current-member,
-create, image registration, signed byte transfer, exact
-editor-page readback, title-autosave, and content-autosave requests.
+create, distinct cover/inline image registrations, signed byte transfers,
+exact editor-page readback, cover-autosave, title-autosave, and
+content-autosave requests.
 The headed window may be visible during the save. Cleanup is tracked as part
 of the durable operation and an unverified close preserves private artifacts
 for explicit recovery instead of silently deleting evidence.
@@ -182,8 +186,36 @@ ordered image blocks, required accessibility text, optional captions,
 provider-restored CDN sources, and persistence after reopening. The editor
 proceeded directly from transfer to Article autosave and made no processing
 status poll, so Wrench follows that exact sequence and gates success on the
-later private Article response and independent readback. Covers remain
-deliberately excluded.
+later private Article response and independent readback.
+
+An August 18 recapture after registration drift proved the current
+`PUBLISHING_INLINE_IMAGE` response uses LinkedIn's bounded single-upload
+variant. Wrench accepts that exact known-field family and the prior vector
+variant, but still rejects multipart mechanisms, unknown response fields,
+unreviewed headers, and upload targets outside the fixed LinkedIn origin and
+path. File selection in the editor's preview dialog was not upload completion:
+the reviewed flow selected the staged image, advanced the dialog once, waited
+for the signed transfer, and only then observed the Article autosave.
+
+An August 19 capture proved that the Article banner is not a body image. The
+editor registers it with `PUBLISHING_COVER_IMAGE`, transfers the bytes once,
+and autosaves the returned asset through
+`coverMediaV2Union.coverImage` with the exact reviewed CoverImage type and an
+empty caption. Independent editor-response readback exposes matching legacy
+and V2 cover projections bound to the same stable asset URN. The current draft
+contract therefore requires one outer `cover_image` on create and plans a
+supplied replacement cover as `articles.cover` before body images. When an
+exact replacement omits it, Wrench preserves and verifies the current banner
+asset without registering or transferring another cover. In either case, the
+banner stays out of the document and `inline_images`.
+
+An August 19 recovery exercise also proved why this distinction matters: a
+cover dispatch can become indeterminate after LinkedIn has retained the banner
+but before Wrench verifies that dispatch. Never retry that cover upload. After
+separate inspection establishes that an exact replacement draft already has
+the intended banner, a new confirmed replacement may omit `cover_image` and
+preserve that independently read asset while repairing only its body. That is
+a distinct intent, not reconciliation or retry of the uncertain upload.
 
 The active image contract has no automated reconciliation path because an
 uncertain upload may have created a provider asset absent from the confirmed

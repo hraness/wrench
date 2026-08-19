@@ -60,6 +60,21 @@ preview, and reverifies the exact bytes before dispatch. Do not pass a URL,
 provider asset ID, expiring CDN source, cover, video, embed, HTML, Markdown, or
 editor payload as an inline image.
 
+`linkedin-web` requires one outer `input.cover_image` JPEG, PNG, or WebP file
+up to 5 MiB when creating a draft. Supply it on replacement only to replace
+the banner; omit it with an exact `draft_id` to preserve the independently
+read existing banner without another cover registration or transfer. A
+supplied cover is a separate plan-bound attachment and does not
+implicitly create a document `image` block or appear in `input.inline_images`.
+For a cover-only source asset, keep it out of the body; include the same bytes
+as an inline image only when the reviewed article intentionally shows them in
+both places.
+Wrench registers it as `PUBLISHING_COVER_IMAGE`, transfers the exact bytes,
+binds the returned asset only through LinkedIn's `coverMediaV2Union.coverImage`
+autosave, and independently verifies both saved cover projections. The current
+contract writes an empty cover caption. `x-web` cover saving remains
+capture-required.
+
 Provider text support remains narrower where capture evidence is narrower:
 `linkedin-web` accepts only `paragraph`, `heading1`, and `heading2`, native
 HTTPS links, and no text styles. `x-web` accepts all listed text block types,
@@ -86,6 +101,11 @@ For LinkedIn, add `"altText":"A descriptive account of the image"` before
 `caption` in the canonical image block. If the final block is an image, do not
 add an empty paragraph after it; LinkedIn owns that editor-only trailing block
 and Wrench removes exactly that provider-added value during readback.
+Also add a sibling `"cover_image":"/absolute/private/banner.jpg"` to the
+outer invocation object when creating or replacing the banner; keep the banner
+out of the document blocks and out of `inline_images`. For a replacement that
+must retain its existing banner, omit `cover_image` and keep the exact
+`draft_id`.
 
 Add `draft_id` only to replace the exact existing private draft owned by the
 bound account. Treat `wrench capabilities <adapter> --json` as authoritative
@@ -106,26 +126,27 @@ wrench confirm <preview-digest> --json
 
 Use the same sequence with `linkedin-web` and its bound LinkedIn cookie realm;
 never switch adapter or auth realm after preview. LinkedIn executes its fixed
-reviewed registration, signed byte-transfer, autosave, and editor-response
-readback contract inside contained headed Chrome. The reviewed editor proceeds
+reviewed current single-upload registration, signed byte-transfer, autosave,
+and editor-response readback contract inside contained headed Chrome. The reviewed editor proceeds
 from the transfer's `201` response directly to autosave; Wrench does not invent
 a processing poll that the editor does not perform. The window may appear, but
 Wrench does not type into or read the editor DOM, and callers cannot supply a
 URL, header, script, or selector.
 
-Review the account, title, canonical document, ordered attachment hashes,
+Review the account, title, canonical document, separate cover hash, ordered inline attachment hashes,
 optional draft ID, R2 side effect, contract version, and every planned
 dispatch. X plans one dispatch per image followed by create, or image uploads
 then title and content replacement. LinkedIn create plans the title shell,
-each image, then content; replacement plans each image followed by one
-conservative title/content replacement.
+cover, each inline image, then content; replacement plans cover, each inline
+image, then one conservative title/content replacement.
 
 Require a successful result to identify `articles.draft.save`, report
 `published: false` and `mode: "draft"`, return the private draft identity, and
-report the exact image count. X verifies the owner, private Draft lifecycle,
+report the exact cover and inline image counts. X verifies the owner, private Draft lifecycle,
 title, text/link/style structure, captions, image order, and uploaded media
 IDs. LinkedIn verifies the current author, private `DRAFT` lifecycle, title,
-text/link structure, image order, alt text, captions, and stable asset URNs.
+separate cover asset, text/link structure, inline-image order, alt text,
+captions, and stable asset URNs.
 Never continue into publication.
 
 ## Handle uncertainty
@@ -149,10 +170,10 @@ contracts retain read-only replacement reconciliation for an exact confirmed
   Article with native links, styles, ordered inline images, and captions, then
   verifies the unpublished result. Alt text and covers remain
   capture-required; `articles.publish` remains capture-required.
-- `linkedin-web`: `articles.draft.save@3` creates or replaces one private
-  paragraphs/headings/links Article with ordered inline images, required alt
-  text, and optional captions, then verifies the exact current-author
-  unpublished result. Styles, lists, blockquotes, covers, and
+- `linkedin-web`: `articles.draft.save@6` creates or replaces one private
+  paragraphs/headings/links Article with one separate new or preserved banner plus
+  ordered inline images, required alt text, and optional captions, then
+  verifies the exact current-author unpublished result. Styles, lists, blockquotes, and
   `articles.publish` remain capture-required.
 
 Never switch between an official API and a signed-in web adapter because one

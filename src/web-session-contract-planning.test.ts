@@ -144,23 +144,26 @@ describe("authenticated web contract planning", () => {
     expect(operation?.historicalContractVersions).toBeUndefined();
   });
 
-  test("the LinkedIn plugin plans bounded images while retaining text-only recovery", () => {
+  test("the LinkedIn plugin plans one cover plus bounded inline images while retaining text-only recovery", () => {
     const contract = webSessionContractDefinitions.linkedin["articles.draft.save"];
     expect(contract).toMatchObject({
-      contractVersion: 3,
+      contractVersion: 6,
       dispatch: "bounded-items",
       risk: "R2",
       state: "observed",
     });
     const operation = linkedinWebPlugin.bindings[0]?.operations.find((candidate) =>
-      candidate.name === "articles.draft.save" && candidate.contractVersion === 3);
+      candidate.name === "articles.draft.save" && candidate.contractVersion === 6);
     expect(operation).toBeDefined();
+    const cover_image = { kind: "file" as const, reference: "cover" };
     expect(operation!.planDispatches({
       title: "New private draft",
       document: "{}",
+      cover_image,
       inline_images: [{ kind: "file" as const, reference: "one" }],
     }).map((dispatch) => dispatch.id)).toEqual([
       "articles.create",
+      "articles.cover",
       "articles.image[1]",
       "articles.content",
     ]);
@@ -177,6 +180,21 @@ describe("authenticated web contract planning", () => {
       "articles.image[2]",
       "articles.replace",
     ]);
+    expect(operation!.planDispatches({
+      title: "Existing private draft",
+      document: "{}",
+      draft_id: "7000000000000000001",
+      cover_image,
+      inline_images: [
+        { kind: "file" as const, reference: "one" },
+        { kind: "file" as const, reference: "two" },
+      ],
+    }).map((dispatch) => dispatch.id)).toEqual([
+      "articles.cover",
+      "articles.image[1]",
+      "articles.image[2]",
+      "articles.replace",
+    ]);
     const supported = canonicalJson({
       schemaVersion: 2,
       blocks: [
@@ -188,6 +206,7 @@ describe("authenticated web contract planning", () => {
     expect(operation!.validateInput({
       title: "Private",
       document: supported,
+      cover_image,
       inline_images,
     })).toEqual([]);
     const unsupported = canonicalJson({
@@ -200,6 +219,7 @@ describe("authenticated web contract planning", () => {
     expect(operation!.validateInput({
       title: "Private",
       document: unsupported,
+      cover_image,
       inline_images,
     })).toContain(
       "LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks",
@@ -214,6 +234,7 @@ describe("authenticated web contract planning", () => {
           { type: "image", imageIndex: 0 },
         ],
       }),
+      cover_image,
       inline_images,
     })).toContain("LinkedIn Article inline images require descriptive altText");
 

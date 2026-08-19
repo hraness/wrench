@@ -728,6 +728,7 @@ const LINKEDIN_IMAGE_VIEW_MODEL_TYPE = "com.linkedin.voyager.dash.common.image.I
 const LINKEDIN_IMAGE_ATTRIBUTE_TYPE = "com.linkedin.voyager.dash.common.image.ImageAttribute";
 const LINKEDIN_VECTOR_IMAGE_TYPE = "com.linkedin.common.VectorImage";
 const LINKEDIN_VECTOR_ARTIFACT_TYPE = "com.linkedin.common.VectorArtifact";
+const LINKEDIN_COVER_IMAGE_TYPE = "com.linkedin.voyager.dash.publishing.CoverImage";
 
 export type LinkedInArticleDraftReadback = {
   readonly draftId: string;
@@ -742,6 +743,7 @@ export type LinkedInArticleDraftSnapshot = Omit<LinkedInArticleDraftReadback, "d
 
 export type LinkedInArticleDraftV2Readback = Omit<LinkedInArticleDraftReadback, "document"> & {
   readonly document: ArticleDraftDocumentV2;
+  readonly coverAssetUrn: string | null;
   readonly imageAssetUrns: readonly string[];
 };
 
@@ -997,7 +999,7 @@ export function normalizeLinkedInArticleImageUploadRegistration(
     "type",
     "urn",
   ] as const;
-  const singleRegistrationFields = [
+  const legacySingleRegistrationFields = [
     "mediaArtifactUrn",
     "recipes",
     "singleUploadHeaders",
@@ -1005,27 +1007,44 @@ export function normalizeLinkedInArticleImageUploadRegistration(
     "type",
     "urn",
   ] as const;
+  const currentSingleRegistrationFields = [
+    "$type",
+    "mediaArtifactUrn",
+    "singleUploadHeaders",
+    "singleUploadUrl",
+    "type",
+    "urn",
+  ] as const;
   const registrationFields = Object.keys(registration).sort().join(",");
   const fullFields = [...fullRegistrationFields].sort().join(",");
-  const singleFields = [...singleRegistrationFields].sort().join(",");
-  if (registrationFields !== fullFields && registrationFields !== singleFields) {
+  const legacySingleFields = [...legacySingleRegistrationFields].sort().join(",");
+  const currentSingleFields = [...currentSingleRegistrationFields].sort().join(",");
+  if (
+    registrationFields !== fullFields
+    && registrationFields !== legacySingleFields
+    && registrationFields !== currentSingleFields
+  ) {
     throw new Error("LinkedIn Article image registration response.data.value has unsupported fields");
   }
   const fullRegistration = registrationFields === fullFields;
+  const currentSingleRegistration = registrationFields === currentSingleFields;
+  if (
+    registration.$type !== undefined
+    && registration.$type !== "com.linkedin.mediauploader.MediaUploadMetadata"
+  ) throw new Error("LinkedIn Article image registration changed its response type");
+  if (registration.type !== "VECTOR" && registration.type !== "SINGLE") {
+    throw new Error("LinkedIn Article image registration changed its media type");
+  }
+  if (registration.type === "VECTOR" && !fullRegistration) {
+    throw new Error("LinkedIn Article image registration response.data.value has unsupported fields");
+  }
   if (fullRegistration) {
-    if (registration.$type !== "com.linkedin.mediauploader.MediaUploadMetadata") {
-      throw new Error("LinkedIn Article image registration changed its response type");
-    }
     boundedText(
       registration.assetRealtimeTopic,
       "LinkedIn Article image registration assetRealtimeTopic",
       4_096,
     );
   }
-  if (
-    registration.type !== "VECTOR"
-    && registration.type !== "SINGLE"
-  ) throw new Error("LinkedIn Article image registration changed its media type");
   linkedInUrn(
     registration.mediaArtifactUrn,
     "LinkedIn Article image registration mediaArtifactUrn",
@@ -1034,10 +1053,15 @@ export function normalizeLinkedInArticleImageUploadRegistration(
     registration.urn,
     "LinkedIn Article image registration urn",
   );
-  if (!Array.isArray(registration.recipes) || registration.recipes.length < 1 || registration.recipes.length > 20) {
+  const recipeValues = currentSingleRegistration ? [] : registration.recipes;
+  if (
+    !Array.isArray(recipeValues)
+    || (!currentSingleRegistration && recipeValues.length < 1)
+    || recipeValues.length > 20
+  ) {
     throw new Error("LinkedIn Article image registration recipes changed shape");
   }
-  const recipes = registration.recipes.map((recipe, index) =>
+  const recipes = recipeValues.map((recipe, index) =>
     linkedInUrn(recipe, `LinkedIn Article image registration recipes[${index}]`));
   if (new Set(recipes).size !== recipes.length) {
     throw new Error("LinkedIn Article image registration repeated a recipe");
@@ -1062,10 +1086,6 @@ export function normalizeLinkedInArticleImageUploadRegistration(
     && registration.type === "SINGLE"
     && registration.pollingUrl !== null
   ) {
-    // The current SINGLE editor registration retains same-origin processing
-    // metadata but never requests it. Validate that inert value strictly and
-    // omit it from the executable binding; exact Article readback remains the
-    // acceptance gate after the signed transfer.
     linkedInArticleBoundUrl(
       registration.pollingUrl,
       "LinkedIn Article image polling URL",
@@ -1471,6 +1491,29 @@ export function buildLinkedInArticleTitlePatch(titleValue: unknown): Readonly<Re
   });
 }
 
+export function buildLinkedInArticleCoverPatch(
+  assetUrnValue: unknown,
+): Readonly<Record<string, unknown>> {
+  const originalImageUrn = linkedInArticleImageAssetUrn(
+    assetUrnValue,
+    "LinkedIn Article cover image",
+  );
+  return Object.freeze({
+    patch: Object.freeze({
+      $set: Object.freeze({
+        coverMediaV2Union: Object.freeze({
+          coverImage: Object.freeze({
+            $type: LINKEDIN_COVER_IMAGE_TYPE,
+            caption: Object.freeze({ text: "" }),
+            originalImageUrn,
+          }),
+        }),
+        state: "AUTOSAVED",
+      }),
+    }),
+  });
+}
+
 export function buildLinkedInArticleContentPatch(
   document: ArticleDraftDocument,
 ): Readonly<Record<string, unknown>> {
@@ -1708,6 +1751,145 @@ function normalizeLinkedInArticleImageBlock(
   });
 }
 
+function normalizeLinkedInCoverImageViewModel(
+  value: unknown,
+  label: string,
+  requireAssetUrn: boolean,
+): string | null {
+  const image = graphqlRecord(value, label);
+  exactObjectKeys(image, ["$type", "attributes"], label);
+  if (
+    image.$type !== LINKEDIN_IMAGE_VIEW_MODEL_TYPE
+    || !Array.isArray(image.attributes)
+    || image.attributes.length !== 1
+  ) throw new Error(`${label} changed its reviewed image shape`);
+  const attribute = graphqlRecord(image.attributes[0], `${label}.attributes[0]`);
+  exactObjectKeys(attribute, ["$type", "detailDataUnion"], `${label}.attributes[0]`);
+  if (attribute.$type !== LINKEDIN_IMAGE_ATTRIBUTE_TYPE) {
+    throw new Error(`${label} changed its reviewed image attribute`);
+  }
+  const detail = graphqlRecord(
+    attribute.detailDataUnion,
+    `${label}.attributes[0].detailDataUnion`,
+  );
+  exactObjectKeys(detail, ["vectorImage"], `${label}.attributes[0].detailDataUnion`);
+  const vector = graphqlRecord(
+    detail.vectorImage,
+    `${label}.attributes[0].detailDataUnion.vectorImage`,
+  );
+  exactObjectKeys(
+    vector,
+    requireAssetUrn
+      ? ["$type", "artifacts", "digitalmediaAsset", "rootUrl"]
+      : ["$type", "artifacts", "rootUrl"],
+    `${label}.attributes[0].detailDataUnion.vectorImage`,
+  );
+  if (
+    vector.$type !== LINKEDIN_VECTOR_IMAGE_TYPE
+    || !Array.isArray(vector.artifacts)
+    || vector.artifacts.length < 1
+    || vector.artifacts.length > 20
+  ) throw new Error(`${label} changed its reviewed vector image shape`);
+  linkedInCanonicalHttpsUrl(vector.rootUrl, `${label}.vectorImage.rootUrl`);
+  for (const [artifactIndex, rawArtifact] of vector.artifacts.entries()) {
+    const artifactLabel = `${label}.vectorImage.artifacts[${artifactIndex}]`;
+    const artifact = graphqlRecord(rawArtifact, artifactLabel);
+    exactObjectKeys(
+      artifact,
+      ["$type", "expiresAt", "fileIdentifyingUrlPathSegment", "height", "width"],
+      artifactLabel,
+    );
+    if (
+      artifact.$type !== LINKEDIN_VECTOR_ARTIFACT_TYPE
+      || !Number.isSafeInteger(artifact.expiresAt)
+      || (artifact.expiresAt as number) < 0
+      || !Number.isSafeInteger(artifact.height)
+      || (artifact.height as number) < 1
+      || !Number.isSafeInteger(artifact.width)
+      || (artifact.width as number) < 1
+      || typeof artifact.fileIdentifyingUrlPathSegment !== "string"
+      || artifact.fileIdentifyingUrlPathSegment.length < 1
+      || artifact.fileIdentifyingUrlPathSegment.length > 4_096
+      || /[\0\r\n]/u.test(artifact.fileIdentifyingUrlPathSegment)
+    ) throw new Error(`${artifactLabel} changed its reviewed shape`);
+  }
+  return requireAssetUrn
+    ? linkedInArticleImageAssetUrn(vector.digitalmediaAsset, `${label}.vectorImage`)
+    : null;
+}
+
+function normalizeLinkedInArticleCover(
+  coverMediaValue: unknown,
+  coverMediaV2UnionValue: unknown,
+): string | null {
+  if (coverMediaValue === null && coverMediaV2UnionValue === null) return null;
+  if (coverMediaValue === null || coverMediaV2UnionValue === null) {
+    throw new Error("LinkedIn Article cover readback omitted one reviewed cover projection");
+  }
+  const legacy = graphqlRecord(coverMediaValue, "LinkedIn Article coverMedia");
+  exactObjectKeys(
+    legacy,
+    ["$type", "caption", "originalImage", "originalImageUrn"],
+    "LinkedIn Article coverMedia",
+  );
+  if (legacy.$type !== LINKEDIN_COVER_IMAGE_TYPE) {
+    throw new Error("LinkedIn Article coverMedia changed its reviewed type");
+  }
+  const legacyAssetUrn = linkedInArticleImageAssetUrn(
+    legacy.originalImageUrn,
+    "LinkedIn Article coverMedia.originalImageUrn",
+  );
+  normalizeLinkedInCoverImageViewModel(
+    legacy.originalImage,
+    "LinkedIn Article coverMedia.originalImage",
+    false,
+  );
+  const caption = graphqlRecord(legacy.caption, "LinkedIn Article coverMedia.caption");
+  exactObjectKeys(
+    caption,
+    ["$type", "attributesV2", "text", "textDirection"],
+    "LinkedIn Article coverMedia.caption",
+  );
+  if (
+    caption.$type !== LINKEDIN_TEXT_VIEW_MODEL_TYPE
+    || !Array.isArray(caption.attributesV2)
+    || caption.attributesV2.length !== 0
+    || caption.text !== ""
+    || caption.textDirection !== "USER_LOCALE"
+  ) throw new Error("LinkedIn Article cover caption changed its reviewed empty shape");
+
+  const union = graphqlRecord(
+    coverMediaV2UnionValue,
+    "LinkedIn Article coverMediaV2Union",
+  );
+  exactObjectKeys(union, ["coverImage"], "LinkedIn Article coverMediaV2Union");
+  const cover = graphqlRecord(
+    union.coverImage,
+    "LinkedIn Article coverMediaV2Union.coverImage",
+  );
+  exactObjectKeys(
+    cover,
+    ["$type", "originalImage", "originalImageUrn"],
+    "LinkedIn Article coverMediaV2Union.coverImage",
+  );
+  if (cover.$type !== LINKEDIN_COVER_IMAGE_TYPE) {
+    throw new Error("LinkedIn Article coverMediaV2Union changed its reviewed type");
+  }
+  const unionAssetUrn = linkedInArticleImageAssetUrn(
+    cover.originalImageUrn,
+    "LinkedIn Article coverMediaV2Union.coverImage.originalImageUrn",
+  );
+  const vectorAssetUrn = normalizeLinkedInCoverImageViewModel(
+    cover.originalImage,
+    "LinkedIn Article coverMediaV2Union.coverImage.originalImage",
+    true,
+  );
+  if (legacyAssetUrn !== unionAssetUrn || unionAssetUrn !== vectorAssetUrn) {
+    throw new Error("LinkedIn Article cover projections no longer bind one exact asset");
+  }
+  return unionAssetUrn;
+}
+
 type LinkedInArticleNormalizedDocument =
   | ArticleDraftDocument
   | ArticleDraftDocumentV2;
@@ -1717,6 +1899,7 @@ type LinkedInArticleNormalizedSnapshot = {
   readonly title: string;
   readonly document: LinkedInArticleNormalizedDocument | null;
   readonly profileUrn: string;
+  readonly coverAssetUrn: string | null;
   readonly imageAssetUrns: readonly string[];
 };
 
@@ -1727,6 +1910,7 @@ function normalizeLinkedInArticleDraftValue(
   allowEmptyContent: boolean,
   schemaVersion: 1 | 2 = 1,
   metadataOnly = false,
+  normalizeDocument = true,
 ): LinkedInArticleNormalizedSnapshot {
   const draftId = linkedInArticleDraftId(draftIdValue);
   const profileUrn = linkedInArticleProfileUrn(profileUrnValue);
@@ -1820,8 +2004,6 @@ function normalizeLinkedInArticleDraftValue(
     "articlePublishedTimeDescription",
     "contentDescription",
     "contentSegments",
-    "coverMedia",
-    "coverMediaV2Union",
     "featured",
     "gatedArticleMetadata",
     "initialUpdateUrn",
@@ -1846,6 +2028,10 @@ function normalizeLinkedInArticleDraftValue(
   if (nullFields.some((field) => article[field] !== null)) {
     throw new Error("LinkedIn Article readback was not the exact private unpublished draft");
   }
+  const coverAssetUrn = normalizeLinkedInArticleCover(
+    article.coverMedia,
+    article.coverMediaV2Union,
+  );
   if (
     article.$type !== LINKEDIN_ARTICLE_TYPE
     || article.entityUrn !== urn
@@ -1882,7 +2068,7 @@ function normalizeLinkedInArticleDraftValue(
   nonnegativeInteger(article.updatedAt, "LinkedIn Article readback updatedAt");
   nonnegativeInteger(article.version, "LinkedIn Article readback version");
   const imageAssetUrns: string[] = [];
-  const blocks = metadataOnly
+  const blocks = metadataOnly || !normalizeDocument
     ? []
     : article.content.map((block, index) => {
         if (schemaVersion === 1) return normalizeLinkedInArticleBlock(block, index);
@@ -1911,10 +2097,41 @@ function normalizeLinkedInArticleDraftValue(
     draftId,
     title,
     profileUrn,
+    coverAssetUrn,
     document: metadataOnly || blocks.length === 0
       ? null
       : Object.freeze({ schemaVersion, blocks: Object.freeze(blocks) }) as LinkedInArticleNormalizedDocument,
     imageAssetUrns: Object.freeze(imageAssetUrns),
+  });
+}
+
+export type LinkedInArticleDraftV2Metadata = Readonly<{
+  draftId: string;
+  title: string;
+  profileUrn: string;
+  coverAssetUrn: string | null;
+}>;
+
+/** Verify owner, private lifecycle, title, and cover without trusting stale body blocks. */
+export function normalizeLinkedInArticleDraftV2Metadata(
+  value: unknown,
+  draftIdValue: unknown,
+  profileUrnValue: unknown,
+): LinkedInArticleDraftV2Metadata {
+  const normalized = normalizeLinkedInArticleDraftValue(
+    value,
+    draftIdValue,
+    profileUrnValue,
+    true,
+    2,
+    true,
+    false,
+  );
+  return Object.freeze({
+    draftId: normalized.draftId,
+    title: normalized.title,
+    profileUrn: normalized.profileUrn,
+    coverAssetUrn: normalized.coverAssetUrn,
   });
 }
 
@@ -2009,6 +2226,7 @@ export function normalizeLinkedInArticleDraftV2Snapshot(
     title: normalized.title,
     profileUrn: normalized.profileUrn,
     document: normalized.document,
+    coverAssetUrn: normalized.coverAssetUrn,
     imageAssetUrns: normalized.imageAssetUrns,
   });
 }
@@ -2032,6 +2250,7 @@ export function normalizeLinkedInArticleDraftV2(
     title: normalized.title,
     profileUrn: normalized.profileUrn,
     document: normalized.document,
+    coverAssetUrn: normalized.coverAssetUrn,
     imageAssetUrns: normalized.imageAssetUrns,
   });
 }

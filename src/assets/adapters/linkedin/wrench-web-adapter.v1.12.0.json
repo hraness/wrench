@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.13.0",
+  "version": "1.12.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -422,7 +422,7 @@
       }
     },
     "posts.publish": {
-      "description": "Publish one exact confirmed LinkedIn post with text and an optional single PNG through the current first-party image-registration/upload and post-create contracts, then independently read it back by the response-bound share URN.",
+      "description": "Publish one exact confirmed LinkedIn post with text and an optional single PNG through bounded ordered page staging and the current first-party image-registration/upload and post-create contracts, durably retain the accepted share URN, then independently read it back.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible LinkedIn post with the exact confirmed audience and content.",
       "idempotency": "local-at-most-once",
@@ -472,7 +472,7 @@
       "webSession": {
         "site": "linkedin",
         "action": "posts.publish",
-        "contractVersion": 2,
+        "contractVersion": 3,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }
@@ -697,9 +697,9 @@
       }
     },
     "articles.draft.save": {
-      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 2 with ordered local inline images, alt text, captions, and either one local cover image or the exact existing replacement-draft cover using reviewed current-member-bound autosaves and unpublished readback.",
+      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 2 with one local cover image plus ordered local inline images, alt text, and captions using the reviewed current single-upload registrations, current-member-bound autosaves, and exact unpublished readback contract.",
       "risk": "R2",
-      "sideEffect": "Creates one private native LinkedIn Article draft with the confirmed cover, or replaces the exact confirmed existing private draft while either replacing or preserving its banner, plus the confirmed inline image bytes, alt text, and captions; it never publishes the draft.",
+      "sideEffect": "Creates one private native LinkedIn Article draft, or replaces the exact confirmed existing private draft, including the confirmed cover and inline image bytes, alt text, and captions; it never publishes the draft.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -724,7 +724,7 @@
           },
           "cover_image": {
             "type": "file",
-            "description": "Exact local JPEG, PNG, or WebP cover rendered only in LinkedIn's banner slot; required for create, optional on an exact replacement to preserve the existing banner",
+            "description": "Exact local JPEG, PNG, or WebP cover image rendered only in LinkedIn's Article banner slot, never as a document body block",
             "maxBytes": 5242880,
             "mediaTypes": [
               "image/jpeg",
@@ -752,13 +752,14 @@
         "required": [
           "title",
           "document",
+          "cover_image",
           "inline_images"
         ]
       },
       "webSession": {
         "site": "linkedin",
         "action": "articles.draft.save",
-        "contractVersion": 6,
+        "contractVersion": 5,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }

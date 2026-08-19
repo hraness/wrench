@@ -178,14 +178,27 @@ describe("authenticated web-session contract identity", () => {
     const activeLinkedInArticleDraft = contract({
       site: "linkedin",
       action: "articles.draft.save",
-      contractVersion: 3,
+      contractVersion: 6,
     });
     expect(historicalLinkedInArticleDraft.input.required).toEqual(["title", "document"]);
     expect(historicalLinkedInArticleDraft.input.properties.inline_images).toBeUndefined();
-    expect(activeLinkedInArticleDraft.input.required).toEqual(["title", "document", "inline_images"]);
+    expect(activeLinkedInArticleDraft.input.required).toEqual([
+      "title",
+      "document",
+      "inline_images",
+    ]);
+    expect(activeLinkedInArticleDraft.input.properties.cover_image).toMatchObject({
+      type: "file",
+      maxBytes: 5 * 1024 * 1024,
+    });
     expect(webSessionContractHash(historicalLinkedInArticleDraft)).not.toBe(
       webSessionContractHash(activeLinkedInArticleDraft),
     );
+    expect(() => contract({
+      site: "linkedin",
+      action: "articles.draft.save",
+      contractVersion: 3,
+    })).toThrow("is not installed");
   });
 
   test("keeps retired X Article manifests diagnostic-only instead of projecting v4 semantics", () => {

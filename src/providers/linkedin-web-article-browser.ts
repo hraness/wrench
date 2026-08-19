@@ -23,6 +23,7 @@ import {
   LINKEDIN_ARTICLE_PAGE_MAX_CHARACTERS,
   LINKEDIN_ARTICLE_INLINE_IMAGE_UPLOAD_PATH,
   LINKEDIN_FIRST_PARTY_ARTICLES_PATH,
+  buildLinkedInArticleCoverPatch,
   buildLinkedInArticleContentPatch,
   buildLinkedInArticleContentPatchV2,
   buildLinkedInArticleCreateBody,
@@ -30,7 +31,6 @@ import {
   linkedInArticleDraftEditUrl,
   linkedInArticleDraftEnvelopeFromCodePayloads,
   linkedInArticleDraftEntityUrl,
-  linkedInArticleImageRegistrationDriftCategory,
   normalizeLinkedInArticleImageUploadRegistration,
 } from "./linkedin-web";
 
@@ -66,6 +66,14 @@ export type LinkedInArticleBrowserTransport = {
     draftId: string,
     image: BoundArticleDraftImage,
   ) => Promise<string>;
+  readonly uploadCoverImage?: (
+    draftId: string,
+    image: BoundArticleDraftImage,
+  ) => Promise<string>;
+  readonly updateCover?: (
+    draftId: string,
+    assetUrn: string,
+  ) => Promise<void>;
   readonly updateContentV2?: (
     draftId: string,
     document: ArticleDraftDocumentV2,
@@ -306,6 +314,9 @@ function evaluationResult(
 }
 
 function linkedInArticleImageUploadEvaluationSource(input: {
+  readonly expectedBase64Length: number;
+  readonly expectedByteLength: number;
+  readonly expectedChunkCount: number;
   readonly key: string;
   readonly mediaType: string;
   readonly referrer: string;
@@ -313,7 +324,7 @@ function linkedInArticleImageUploadEvaluationSource(input: {
   readonly uploadUrl: string;
 }): string {
   const bound = JSON.stringify(input);
-  return `(async()=>{const input=${bound};if(location.origin!=="${LINKEDIN_ORIGIN}")throw new Error("unexpected LinkedIn origin");const chunks=globalThis[input.key];delete globalThis[input.key];if(!Array.isArray(chunks)||chunks.length<1||chunks.length>256)throw new Error("missing bounded LinkedIn image bytes");const encoded=chunks.join("");if(!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded))throw new Error("invalid LinkedIn image bytes");const binary=atob(encoded);const bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index+=1)bytes[index]=binary.charCodeAt(index);const raw=document.cookie.split("; ").find((part)=>part.startsWith("JSESSIONID="));if(typeof raw!=="string")throw new Error("missing LinkedIn browser CSRF cookie");const csrf=decodeURIComponent(raw.slice("JSESSIONID=".length)).replace(/^"|"$/g,"");if(!/^ajax:[A-Za-z0-9_-]{1,512}$/.test(csrf))throw new Error("invalid LinkedIn browser CSRF cookie");const upload=await fetch(input.uploadUrl,{body:bytes,credentials:"include",headers:{...input.uploadHeaders,"content-type":input.mediaType,"csrf-token":csrf},method:"PUT",redirect:"error",referrer:input.referrer});return{uploadStatus:upload.status}})()`;
+  return `(async()=>{const input=${bound};if(location.origin!=="${LINKEDIN_ORIGIN}")throw new Error("unexpected LinkedIn origin");if(!Number.isSafeInteger(input.expectedBase64Length)||input.expectedBase64Length<1||!Number.isSafeInteger(input.expectedByteLength)||input.expectedByteLength<1||!Number.isSafeInteger(input.expectedChunkCount)||input.expectedChunkCount<1||input.expectedChunkCount>256)throw new Error("invalid LinkedIn image byte binding");const chunks=globalThis[input.key];delete globalThis[input.key];if(!Array.isArray(chunks)||chunks.length!==input.expectedChunkCount)throw new Error("missing bounded LinkedIn image bytes");let encoded="";for(const chunk of chunks){if(typeof chunk!=="string"||chunk.length<1||chunk.length>49152||!/^[A-Za-z0-9+/]*={0,2}$/.test(chunk))throw new Error("invalid LinkedIn image bytes");encoded+=chunk}if(encoded.length!==input.expectedBase64Length)throw new Error("LinkedIn image changed encoded size");const binary=atob(encoded);encoded="";if(binary.length!==input.expectedByteLength)throw new Error("LinkedIn image changed size");const bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index+=1)bytes[index]=binary.charCodeAt(index);const image=new Blob([bytes],{type:input.mediaType});if(image.size!==input.expectedByteLength||image.type!==input.mediaType)throw new Error("LinkedIn image blob changed shape");const raw=document.cookie.split("; ").find((part)=>part.startsWith("JSESSIONID="));if(typeof raw!=="string")throw new Error("missing LinkedIn browser CSRF cookie");const csrf=decodeURIComponent(raw.slice("JSESSIONID=".length)).replace(/^"|"$/g,"");if(!/^ajax:[A-Za-z0-9_-]{1,512}$/.test(csrf))throw new Error("invalid LinkedIn browser CSRF cookie");const upload=await fetch(input.uploadUrl,{body:image,credentials:"include",headers:{...input.uploadHeaders,"content-type":input.mediaType,"csrf-token":csrf},method:"PUT",redirect:"error",referrer:input.referrer});return{uploadStatus:upload.status}})()`;
 }
 
 async function stageLinkedInArticleImageBytes(
@@ -503,6 +514,90 @@ export async function createLinkedInArticleBrowserTransport(
     throw error;
   }
 
+  const uploadArticleImage = async (
+    draftId: string,
+    image: BoundArticleDraftImage,
+    mediaUploadType: "PUBLISHING_COVER_IMAGE" | "PUBLISHING_INLINE_IMAGE",
+    label: string,
+  ): Promise<string> => {
+    if (
+      activeEditor?.kind !== "edit"
+      || activeEditor.draftId !== draftId
+      || articleBindings === null
+    ) throw new Error(`${label} upload omitted its exact editor binding`);
+    const registrationResult = await run({
+      method: "POST",
+      path: LINKEDIN_ARTICLE_INLINE_IMAGE_UPLOAD_PATH,
+      referrer: articleEditUrl(draftId),
+      body: canonicalJson({
+        fileSize: image.bytes.byteLength,
+        filename: image.filename,
+        mediaUploadType,
+      }),
+      pageInstance: articleBindings.pageInstance,
+      pemMetadata: null,
+      track: articleBindings.track,
+      response: "json",
+    });
+    exactKeys(
+      registrationResult,
+      ["body", "contentType", "status"],
+      `${label} registration request`,
+    );
+    if (
+      registrationResult.status !== 200
+      || (registrationResult.contentType !== "application/vnd.linkedin.normalized+json+2.1"
+        && registrationResult.contentType !== "application/json")
+    ) throw new Error(`${label} registration returned an unreviewed response`);
+    const registration = normalizeLinkedInArticleImageUploadRegistration(
+      registrationResult.body,
+    );
+    const key = `__wrenchLinkedInArticleImage_${randomUUID().replaceAll("-", "")}`;
+    const timeoutMs = options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs;
+    const encodedLength = Buffer.from(image.bytes).toString("base64").length;
+    const chunkCount = Math.ceil(encodedLength / (48 * 1_024));
+    await stageLinkedInArticleImageBytes(session, key, image, timeoutMs);
+    let transfer: Readonly<Record<string, unknown>>;
+    try {
+      const records = await session.runBatch(
+        [["eval", linkedInArticleImageUploadEvaluationSource({
+          expectedBase64Length: encodedLength,
+          expectedByteLength: image.bytes.byteLength,
+          expectedChunkCount: chunkCount,
+          key,
+          mediaType: image.mediaType,
+          referrer: articleEditUrl(draftId),
+          uploadHeaders: registration.uploadHeaders,
+          uploadUrl: registration.uploadUrl,
+        })]],
+        options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs,
+        MAX_BROWSER_OUTPUT_BYTES,
+      );
+      const first = records[0];
+      if (first === undefined) throw new Error(`${label} upload omitted its response`);
+      transfer = evaluationResult(first);
+    } catch (error) {
+      try {
+        await session.runBatch(
+          [["eval", `(async()=>{delete globalThis[${JSON.stringify(key)}];return true})()`]],
+          options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs,
+          MAX_BROWSER_OUTPUT_BYTES,
+        );
+      } catch {
+        // Browser finalization remains the authoritative private-artifact cleanup.
+      }
+      throw error;
+    }
+    exactKeys(transfer, ["uploadStatus"], `${label} upload`);
+    // The reviewed editor proceeds from the signed transfer's 201 response
+    // directly to the Article autosave. Exact acceptance remains gated by the
+    // later private Article response and independent readback.
+    if (transfer.uploadStatus !== 201) {
+      throw new Error(`${label} upload returned an unreviewed response`);
+    }
+    return registration.assetUrn;
+  };
+
   const transport: LinkedInArticleBrowserTransport = {
     currentIdentityResponse: async () => {
       const result = await run({
@@ -631,103 +726,40 @@ export async function createLinkedInArticleBrowserTransport(
         );
       }
     },
-    uploadInlineImage: async (draftId, image) => {
+    uploadInlineImage: (draftId, image) => uploadArticleImage(
+      draftId,
+      image,
+      "PUBLISHING_INLINE_IMAGE",
+      "LinkedIn Article inline image",
+    ),
+    uploadCoverImage: (draftId, image) => uploadArticleImage(
+      draftId,
+      image,
+      "PUBLISHING_COVER_IMAGE",
+      "LinkedIn Article cover image",
+    ),
+    updateCover: async (draftId, assetUrn) => {
       if (
         activeEditor?.kind !== "edit"
         || activeEditor.draftId !== draftId
         || articleBindings === null
-      ) throw new Error("LinkedIn Article image upload omitted its exact editor binding");
-      let registrationResult: Readonly<Record<string, unknown>>;
-      try {
-        registrationResult = await run({
-          method: "POST",
-          path: LINKEDIN_ARTICLE_INLINE_IMAGE_UPLOAD_PATH,
-          referrer: articleEditUrl(draftId),
-          body: canonicalJson({
-            fileSize: image.bytes.byteLength,
-            filename: image.filename,
-            mediaUploadType: "PUBLISHING_INLINE_IMAGE",
-          }),
-          pageInstance: articleBindings.pageInstance,
-          pemMetadata: null,
-          track: articleBindings.track,
-          response: "json",
-        });
-      } catch (error) {
-        throw new Error("LinkedIn Article image registration request failed", { cause: error });
-      }
-      exactKeys(
-        registrationResult,
-        ["body", "contentType", "status"],
-        "LinkedIn Article image registration request",
-      );
-      if (
-        registrationResult.status !== 200
-        || (registrationResult.contentType !== "application/vnd.linkedin.normalized+json+2.1"
-          && registrationResult.contentType !== "application/json")
-      ) throw new Error("LinkedIn Article image registration response drifted");
-      let registration: ReturnType<typeof normalizeLinkedInArticleImageUploadRegistration>;
-      try {
-        registration = normalizeLinkedInArticleImageUploadRegistration(
-          registrationResult.body,
+      ) throw new Error("LinkedIn Article cover update omitted its exact editor binding");
+      const result = await run({
+        method: "POST",
+        path: exactRequestPath(linkedInArticleDraftEntityUrl(draftId)),
+        referrer: articleEditUrl(draftId),
+        body: canonicalJson(buildLinkedInArticleCoverPatch(assetUrn)),
+        pageInstance: articleBindings.pageInstance,
+        pemMetadata: "article-autosave",
+        track: articleBindings.track,
+        response: "status",
+      });
+      exactKeys(result, ["contentType", "status"], "LinkedIn Article cover browser request");
+      if (result.status !== 200) {
+        throw new Error(
+          `LinkedIn Article cover browser request returned an unreviewed response (${articleReadbackResponseCategory(result.status, result.contentType, null)})`,
         );
-      } catch (error) {
-        const category = linkedInArticleImageRegistrationDriftCategory(
-          registrationResult.body,
-          error,
-        );
-        throw new Error(`LinkedIn Article image registration shape drifted:${category}`, {
-          cause: error,
-        });
       }
-      const key = `__wrenchLinkedInArticleImage_${randomUUID().replaceAll("-", "")}`;
-      const timeoutMs = options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs;
-      try {
-        await stageLinkedInArticleImageBytes(session, key, image, timeoutMs);
-      } catch (error) {
-        throw new Error("LinkedIn Article image staging failed", { cause: error });
-      }
-      let transfer: Readonly<Record<string, unknown>>;
-      try {
-        const records = await session.runBatch(
-          [["eval", linkedInArticleImageUploadEvaluationSource({
-            key,
-            mediaType: image.mediaType,
-            referrer: articleEditUrl(draftId),
-            uploadHeaders: registration.uploadHeaders,
-            uploadUrl: registration.uploadUrl,
-          })]],
-          options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs,
-          MAX_BROWSER_OUTPUT_BYTES,
-        );
-        const first = records[0];
-        if (first === undefined) throw new Error("LinkedIn Article image upload omitted its response");
-        transfer = evaluationResult(first);
-      } catch (error) {
-        try {
-          await session.runBatch(
-            [["eval", `(async()=>{delete globalThis[${JSON.stringify(key)}];return true})()`]],
-            options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs,
-            MAX_BROWSER_OUTPUT_BYTES,
-          );
-        } catch {
-          // Browser finalization remains the authoritative private-artifact cleanup.
-        }
-        throw new Error("LinkedIn Article image signed transfer failed", { cause: error });
-      }
-      exactKeys(
-        transfer,
-        ["uploadStatus"],
-        "LinkedIn Article image upload",
-      );
-      // LinkedIn's reviewed editor flow proceeds directly from the signed
-      // transfer's 201 response to the Article autosave. It does not poll the
-      // metadata URL exposed by registration. Exact image acceptance remains
-      // gated by the later private Article response and independent readback.
-      if (transfer.uploadStatus !== 201) {
-        throw new Error("LinkedIn Article image signed transfer status drifted");
-      }
-      return registration.assetUrn;
     },
     updateContentV2: async (draftId, document, imageAssetUrns) => {
       if (

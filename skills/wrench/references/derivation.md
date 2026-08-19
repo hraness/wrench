@@ -98,6 +98,16 @@ wrench derive browser <id> -- upload-and-seal @single-file-input fixture:1
 Continue with `derive review` and `derive finish`; do not expect to type or
 submit through a derivation after `upload-and-seal`.
 
+Do not use `upload-and-seal` at the file-selection step of a provider dialog
+that has a separate review or **Next** action. Selection proves only that page
+code received the staged file; it may produce no registration or transfer.
+Use nonterminal `upload`, inspect the resulting dialog, activate the one exact
+review/Next action, allow the fixed settling interval, and then run `derive
+review` to seal the recorder. LinkedIn's Article image dialog required this
+sequence before its single-upload registration, signed transfer, and autosave
+appeared. Keep snapshot references capture-local; never encode them in a
+runtime contract.
+
 Save the derivation ID. Use `wrench derive list` to recover it after an interruption. wrench serializes every lifecycle command for that ID from preflight through cleanup. A session becomes executable only after its create-only readiness marker binds the final session metadata; interrupted initialization remains visible as `ready: false`, `recoverable: true`. `socketAvailable` distinguishes a live helper from state left after a reboot.
 
 Agent-browser may navigate, snapshot, and exercise the chosen fixture while recording. Those actions exist only to generate evidence. Do not translate snapshot references, accessible labels, element order, or click sequences into the installed capability.

@@ -46,11 +46,11 @@ describe("LinkedIn web provider plugin", () => {
     })).toEqual([]);
   });
 
-  test("keeps current inline-image Article saving distinct from exact text-only recovery", () => {
+  test("keeps current covered Article saving distinct from exact text-only recovery", () => {
     const articleOperations = binding.operations.filter((candidate) =>
       candidate.name === "articles.draft.save");
-    expect(articleOperations.map((operation) => operation.contractVersion)).toEqual([2, 3]);
-    const current = articleOperations.find((operation) => operation.contractVersion === 3);
+    expect(articleOperations.map((operation) => operation.contractVersion)).toEqual([2, 6]);
+    const current = articleOperations.find((operation) => operation.contractVersion === 6);
     const archived = articleOperations.find((operation) => operation.contractVersion === 2);
     const document = canonicalJson({
       schemaVersion: 2,
@@ -68,20 +68,38 @@ describe("LinkedIn web provider plugin", () => {
       title: "Harnessing Puerto Rico",
       draft_id: "7000000000000000001",
       document,
+      cover_image: { kind: "file" as const, reference: "cover" },
       inline_images: [{ kind: "file" as const, reference: "fixture" }],
     };
     expect(current).toMatchObject({
-      contractVersion: 3,
+      contractVersion: 6,
       risk: "R2",
       state: "observed",
       dispatch: "bounded-items",
     });
     expect(current?.validateInput(input)).toEqual([]);
+    const { cover_image: _coverImage, ...missingCover } = input;
+    expect(current?.validateInput(missingCover)).toEqual([]);
+    const { draft_id: _draftId, ...missingCreateCover } = missingCover;
+    expect(current?.validateInput(missingCreateCover)).toContain(
+      "input.cover_image is required when creating a LinkedIn Article draft",
+    );
     expect(current?.planDispatches(input)).toEqual([
+      {
+        id: "articles.cover",
+        description: "Upload and bind the exact Article cover image only to LinkedIn's banner slot",
+      },
       { id: "articles.image[1]", description: "Upload and process exact inline image 1" },
       {
         id: "articles.replace",
-        description: "Bring the exact private LinkedIn Article title, document, and images to the confirmed state",
+        description: "Bring the exact private LinkedIn Article title, cover, document, and inline images to the confirmed state",
+      },
+    ]);
+    expect(current?.planDispatches(missingCover)).toEqual([
+      { id: "articles.image[1]", description: "Upload and process exact inline image 1" },
+      {
+        id: "articles.replace",
+        description: "Bring the exact private LinkedIn Article title, document, and inline images to the confirmed state while preserving its existing banner",
       },
     ]);
     expect(archived).toMatchObject({

@@ -396,7 +396,7 @@ The current provider state is explicit:
 | --- | --- | --- |
 | `x` | Observed R2 response-bound private draft create through the documented OAuth API | Observed R3 response-bound publication through the documented OAuth API |
 | `x-web` | Observed R2 structured private draft with ordered inline images and exact unpublished readback | Capture-required R3 |
-| `linkedin-web` | Observed R2 paragraphs/headings/native-link private draft with ordered inline images, alt text, captions, and exact unpublished readback | Capture-required R3 |
+| `linkedin-web` | Observed R2 paragraphs/headings/native-link private draft with a separate banner cover, ordered inline images, alt text, captions, and exact unpublished readback | Capture-required R3 |
 
 The `x-web` draft operation accepts a title, a canonical provider-neutral
 `ArticleDraftDocument` schemaVersion 2 string, 1–20 ordered plan-bound JPEG,
@@ -412,6 +412,13 @@ Capture or read source material separately. The caller owns every editorial
 choice involved in translating, abridging, retitling, attributing, and linking
 it for the destination. Wrench sends only the final reviewed title and
 document; it does not turn a source URL into provider copy.
+
+For `linkedin-web`, pass `cover_image` outside the canonical document when
+creating a draft or intentionally replacing its banner. On an exact
+`draft_id` replacement, omit `cover_image` to preserve the independently read
+existing banner without another upload. Wrench binds a supplied cover only to
+LinkedIn's Article banner slot. `inline_images` contains only images intended
+at exact body positions.
 
 For X, put the exact inner canonical JSON document and local image path in a
 private input file:
@@ -454,7 +461,7 @@ paragraphs, H1/H2 headings, native HTTPS links, and ordered inline images with
 required descriptive alt text and optional captions. It creates or replaces
 only one bound private draft and independently verifies the exact unpublished
 text/image/asset result from one bounded hidden server payload in the
-authenticated editor HTML. Its fixed first-party registration, signed byte
+authenticated editor HTML. Its fixed current single-upload registration, signed byte
 transfer, writes, and server-response read run inside a contained, account-bound Chrome
 session because LinkedIn rejects the same editor traffic when replayed by a
 standalone HTTP client. Wrench does not type into or inspect the editor DOM,

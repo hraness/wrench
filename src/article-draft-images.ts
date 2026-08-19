@@ -28,6 +28,13 @@ function fileInput(value: unknown, label: string): FileInputValue {
   return Object.freeze({ kind: "file", reference: value.reference });
 }
 
+export function articleDraftImageFileInput(
+  value: unknown,
+  label: string,
+): FileInputValue {
+  return fileInput(value, label);
+}
+
 export function articleDraftImageFileInputs(
   value: unknown,
   maximumImages: number,
@@ -39,7 +46,7 @@ export function articleDraftImageFileInputs(
     fileInput(item, `input.inline_images[${index}]`)));
 }
 
-function sniffImage(bytes: Uint8Array): ArticleDraftImageMediaType {
+function sniffImage(bytes: Uint8Array, label: string): ArticleDraftImageMediaType {
   if (
     bytes.length >= 3
     && bytes[0] === 0xff
@@ -62,18 +69,24 @@ function sniffImage(bytes: Uint8Array): ArticleDraftImageMediaType {
     && String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF"
     && String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP"
   ) return "image/webp";
-  throw new Error("Article inline images must be exact JPEG, PNG, or WebP bytes");
+  throw new Error(`${label} must contain exact JPEG, PNG, or WebP bytes`);
 }
 
-function filename(index: number, mediaType: ArticleDraftImageMediaType): string {
+function filename(
+  index: number,
+  mediaType: ArticleDraftImageMediaType,
+  prefix: string,
+): string {
   const extension = mediaType === "image/jpeg" ? "jpg" : mediaType === "image/png" ? "png" : "webp";
-  return `inline-image-${index + 1}.${extension}`;
+  return `${prefix}-${index + 1}.${extension}`;
 }
 
 async function readImage(
   path: string,
   index: number,
   maximumBytes: number,
+  label: string,
+  filenamePrefix: string,
   operationDeadline?: WebSessionOperationDeadline,
 ): Promise<BoundArticleDraftImage> {
   const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
@@ -92,7 +105,7 @@ async function readImage(
         );
     if (!before.isFile() || before.size < 1 || before.size > maximumBytes) {
       throw new Error(
-        `Article inline images must be regular files no larger than ${maximumBytes} bytes`,
+        `${label} must be a regular file no larger than ${maximumBytes} bytes`,
       );
     }
     const raw = operationDeadline === undefined
@@ -112,13 +125,72 @@ async function readImage(
       || before.ino !== after.ino
       || before.size !== after.size
       || raw.byteLength !== before.size
-    ) throw new Error("Article inline image changed while it was materialized");
+    ) throw new Error(`${label} changed while it was materialized`);
     const bytes = new Uint8Array(raw);
-    const mediaType = sniffImage(bytes);
-    return Object.freeze({ bytes, mediaType, filename: filename(index, mediaType) });
+    const mediaType = sniffImage(bytes, label);
+    return Object.freeze({
+      bytes,
+      mediaType,
+      filename: filename(index, mediaType, filenamePrefix),
+    });
   } finally {
     await handle.close();
   }
+}
+
+async function materializeImages(
+  files: readonly FileInputValue[],
+  fileResolver: BrowserFileResolver | undefined,
+  options: {
+    readonly maximumBytes: number;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly inputLabel: string;
+    readonly filenamePrefix: string;
+  },
+): Promise<readonly BoundArticleDraftImage[]> {
+  if (fileResolver === undefined) {
+    throw new Error(`${options.inputLabel} requires the plan-bound file resolver`);
+  }
+  const paths = options.operationDeadline === undefined
+    ? await fileResolver(files)
+    : await options.operationDeadline.run(
+        () => fileResolver(files),
+        "authenticated web operation deadline",
+      );
+  options.operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
+  if (
+    paths.length !== files.length
+    || paths.some((path) => typeof path !== "string" || path.length < 1)
+  ) throw new Error(`${options.inputLabel} resolver did not return every exact plan-bound path`);
+  const images: BoundArticleDraftImage[] = [];
+  for (const [index, path] of paths.entries()) {
+    images.push(await readImage(
+      path as string,
+      index,
+      options.maximumBytes,
+      `${options.inputLabel}[${index}]`,
+      options.filenamePrefix,
+      options.operationDeadline,
+    ));
+  }
+  return Object.freeze(images);
+}
+
+export async function materializeArticleDraftImage(
+  value: unknown,
+  fileResolver: BrowserFileResolver | undefined,
+  options: {
+    readonly maximumBytes: number;
+    readonly inputLabel: string;
+    readonly filenamePrefix: string;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+  },
+): Promise<BoundArticleDraftImage> {
+  const files = Object.freeze([articleDraftImageFileInput(value, options.inputLabel)]);
+  const images = await materializeImages(files, fileResolver, options);
+  const image = images[0];
+  if (image === undefined) throw new Error(`${options.inputLabel} materialization omitted its exact file`);
+  return image;
 }
 
 export async function materializeArticleDraftImages(
@@ -131,28 +203,12 @@ export async function materializeArticleDraftImages(
   },
 ): Promise<readonly BoundArticleDraftImage[]> {
   const files = articleDraftImageFileInputs(value, options.maximumImages);
-  if (fileResolver === undefined) {
-    throw new Error("Article inline images require the plan-bound file resolver");
-  }
-  const paths = options.operationDeadline === undefined
-    ? await fileResolver(files)
-    : await options.operationDeadline.run(
-        () => fileResolver(files),
-        "authenticated web operation deadline",
-      );
-  options.operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
-  if (
-    paths.length !== files.length
-    || paths.some((path) => typeof path !== "string" || path.length < 1)
-  ) throw new Error("Article inline image resolver did not return every exact plan-bound path");
-  const images: BoundArticleDraftImage[] = [];
-  for (const [index, path] of paths.entries()) {
-    images.push(await readImage(
-      path as string,
-      index,
-      options.maximumBytes,
-      options.operationDeadline,
-    ));
-  }
-  return Object.freeze(images);
+  return materializeImages(files, fileResolver, {
+    maximumBytes: options.maximumBytes,
+    inputLabel: "input.inline_images",
+    filenamePrefix: "inline-image",
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+  });
 }
