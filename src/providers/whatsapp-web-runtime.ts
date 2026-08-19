@@ -46,6 +46,14 @@ import {
   type WhatsAppContactProjectionRequest,
 } from "./whatsapp-contact-projection-protocol";
 import {
+  WHATSAPP_INTERACTION_PROJECTION_MAX_STDOUT_BYTES,
+  WHATSAPP_INTERACTION_PROJECTION_PROTOCOL_VERSION,
+  parseWhatsAppInteractionProjectionRequest,
+  parseWhatsAppInteractionProjectionResponse,
+  parseWhatsAppInteractionRowid,
+  type WhatsAppInteractionProjectionRequest,
+} from "./whatsapp-interaction-projection-protocol";
+import {
   WHATSAPP_PROTOCOL_PIN,
   WHATSAPP_WEB_OPERATIONS,
   WHATSAPP_WEB_OPERATION_NAMES,
@@ -140,6 +148,10 @@ export type WhatsAppWebRuntimeDependencies = {
   ) => Promise<number>;
   /** Test-only observation seam; production always uses the fixed Bun helper. */
   readonly runContactProjectionHelper?: (
+    invocation: WhatsAppContactProjectionHelperInvocation,
+  ) => Promise<WhatsAppContactProjectionHelperResult>;
+  /** Test-only observation seam; production always uses the fixed Bun helper. */
+  readonly runInteractionProjectionHelper?: (
     invocation: WhatsAppContactProjectionHelperInvocation,
   ) => Promise<WhatsAppContactProjectionHelperResult>;
 };
@@ -779,15 +791,42 @@ function inputFolder(input: OperationInput): "all" | "active" | "archived" | "un
   return value;
 }
 
-function exactContactInput(input: OperationInput): {
-  readonly cursor: string | null;
-  readonly limit: number;
-} {
+type ExactContactInput =
+  | { readonly collection: "contacts"; readonly cursor: string | null; readonly limit: number }
+  | { readonly collection: "interactions"; readonly cursor: string; readonly cursorAnchor: string | null; readonly limit: number };
+
+function exactContactInput(input: OperationInput): ExactContactInput {
   const unexpected = Object.keys(input).filter(
-    (key) => key !== "cursor" && key !== "limit",
+    (key) => key !== "collection" && key !== "cursor" && key !== "cursor_anchor" && key !== "limit",
   );
   if (unexpected.length > 0) {
     throw new Error("WhatsApp contacts.list input contained unsupported fields");
+  }
+  const collection = input.collection ?? "contacts";
+  if (collection !== "contacts" && collection !== "interactions") {
+    throw new Error("input.collection must be contacts or interactions");
+  }
+  if (collection === "interactions") {
+    const cursor = input.cursor === undefined
+      ? "0"
+      : parseWhatsAppInteractionRowid(input.cursor, "input.cursor");
+    const cursorAnchor = input.cursor_anchor === undefined
+      ? null
+      : typeof input.cursor_anchor === "string" && /^[a-f0-9]{64}$/u.test(input.cursor_anchor)
+        ? input.cursor_anchor
+        : (() => { throw new Error("input.cursor_anchor must be a SHA-256 digest"); })();
+    if ((cursor === "0") !== (cursorAnchor === null)) {
+      throw new Error("input.cursor_anchor must bind every nonzero interaction cursor");
+    }
+    return Object.freeze({
+      collection,
+      cursor,
+      cursorAnchor,
+      limit: inputInteger(input, "limit", DEFAULT_LIMIT, 1_000),
+    });
+  }
+  if (input.cursor_anchor !== undefined) {
+    throw new Error("input.cursor_anchor is only supported for interaction scans");
   }
   let cursor: string | null = null;
   if (input.cursor !== undefined) {
@@ -801,6 +840,7 @@ function exactContactInput(input: OperationInput): {
     cursor = parsed.jid;
   }
   return Object.freeze({
+    collection,
     cursor,
     limit: inputInteger(input, "limit", DEFAULT_LIMIT, 100),
   });
@@ -809,6 +849,12 @@ function exactContactInput(input: OperationInput): {
 type ContactProjectionParentIdentity = Readonly<{
   store: BigIntStats;
   session: BigIntStats;
+}>;
+
+type InteractionProjectionParentIdentity = Readonly<{
+  store: BigIntStats;
+  session: BigIntStats;
+  messageStore: BigIntStats;
 }>;
 
 function sameContactProjectionSnapshot(
@@ -896,6 +942,83 @@ async function revalidateContactProjectionParentIdentity(
   }
 }
 
+function assertParentInteractionProjectionIdentity(
+  store: BigIntStats,
+  session: BigIntStats,
+  messageStore: BigIntStats,
+): void {
+  assertParentContactProjectionIdentity(store, session);
+  const uid = currentBigIntUid();
+  if (
+    !messageStore.isFile()
+    || messageStore.isSymbolicLink()
+    || messageStore.nlink !== 1n
+    || (uid !== null && messageStore.uid !== uid)
+    || !isExactWhatsAppContactProjectionMode(messageStore.mode, 0o600)
+    || messageStore.size < 1n
+    || messageStore.size > 2n * 1024n * 1024n * 1024n
+  ) {
+    throw new Error(
+      "WhatsApp interaction projection parent could not verify its private message store",
+    );
+  }
+}
+
+async function captureInteractionProjectionParentIdentity(
+  store: string,
+): Promise<InteractionProjectionParentIdentity> {
+  try {
+    if (await realpath(store) !== store) throw new Error("non-canonical");
+    const [storeStats, sessionStats, messageStoreStats] = await Promise.all([
+      lstat(store, { bigint: true }),
+      lstat(join(store, "session.db"), { bigint: true }),
+      lstat(join(store, "wacli.db"), { bigint: true }),
+    ]);
+    assertParentInteractionProjectionIdentity(
+      storeStats,
+      sessionStats,
+      messageStoreStats,
+    );
+    return Object.freeze({
+      store: storeStats,
+      session: sessionStats,
+      messageStore: messageStoreStats,
+    });
+  } catch {
+    throw new Error(
+      "WhatsApp interaction projection parent could not bind its private stores",
+    );
+  }
+}
+
+async function revalidateInteractionProjectionParentIdentity(
+  store: string,
+  initial: InteractionProjectionParentIdentity,
+): Promise<void> {
+  try {
+    if (await realpath(store) !== store) throw new Error("non-canonical");
+    const [storeStats, sessionStats, messageStoreStats] = await Promise.all([
+      lstat(store, { bigint: true }),
+      lstat(join(store, "session.db"), { bigint: true }),
+      lstat(join(store, "wacli.db"), { bigint: true }),
+    ]);
+    assertParentInteractionProjectionIdentity(
+      storeStats,
+      sessionStats,
+      messageStoreStats,
+    );
+    if (
+      !sameContactProjectionSnapshot(initial.store, storeStats)
+      || !sameContactProjectionSnapshot(initial.session, sessionStats)
+      || !sameContactProjectionSnapshot(initial.messageStore, messageStoreStats)
+    ) throw new Error("identity changed");
+  } catch {
+    throw new Error(
+      "WhatsApp interaction projection parent binding changed during the helper read",
+    );
+  }
+}
+
 type FixedContactProjectionFiles = Readonly<{
   helper: string;
   config: string;
@@ -933,7 +1056,9 @@ async function fixedContactProjectionFile(
   }
 }
 
-async function resolveFixedContactProjectionFiles(): Promise<
+async function resolveFixedContactProjectionFiles(
+  helperName = "whatsapp-contact-projection-helper.ts",
+): Promise<
   FixedContactProjectionFiles
 > {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -941,14 +1066,14 @@ async function resolveFixedContactProjectionFiles(): Promise<
     {
       helper: resolve(
         moduleDirectory,
-        "whatsapp-contact-projection-helper.ts",
+        helperName,
       ),
       config: resolve(moduleDirectory, "../state-helper.bunfig.toml"),
     },
     {
       helper: resolve(
         moduleDirectory,
-        "../src/providers/whatsapp-contact-projection-helper.ts",
+        `../src/providers/${helperName}`,
       ),
       config: resolve(
         moduleDirectory,
@@ -1128,6 +1253,9 @@ async function projectWhatsAppLocalContacts(
   registerCleanupBarrier: WebSessionCleanupBarrierRegistrar | undefined,
 ): Promise<WebSessionExecution> {
   const parsedInput = exactContactInput(input);
+  if (parsedInput.collection !== "contacts") {
+    throw new Error("WhatsApp contact projection requires collection=contacts");
+  }
   if (auth.subject === undefined) {
     throw new Error(
       "WhatsApp linked-device auth must be bound to its current account before private reads",
@@ -1295,6 +1423,159 @@ async function projectWhatsAppLocalContacts(
     ]),
     statsScope: "unavailable",
     statsCompleteness: "unavailable",
+  });
+  return {
+    status: "succeeded",
+    output: outputWithinBound(output, recipe.maxOutputBytes),
+    finalUrl: WHATSAPP_ORIGIN,
+    dispatchStarted: false,
+    dispatch: { planned: 0, started: 0, verified: 0 },
+  };
+}
+
+async function projectWhatsAppLocalInteractions(
+  auth: WhatsAppAuth,
+  recipe: WebSessionRecipe,
+  parsedInput: Extract<ExactContactInput, { readonly collection: "interactions" }>,
+  dependencies: WhatsAppWebRuntimeDependencies | undefined,
+  operationDeadline: WebSessionOperationDeadline | undefined,
+  registerCleanupBarrier: WebSessionCleanupBarrierRegistrar | undefined,
+): Promise<WebSessionExecution> {
+  if (auth.subject === undefined) {
+    throw new Error(
+      "WhatsApp linked-device auth must be bound to its current account before private reads",
+    );
+  }
+  const accountSubject = auth.subject;
+  const rawOperation = startWebSessionCleanupTrackedOperation(
+    registerCleanupBarrier,
+    async () => {
+      operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+      const store = await validateWhatsAppStoreDirectory(auth.path, "projection");
+      const initial = await captureInteractionProjectionParentIdentity(store);
+      const fixed = await resolveFixedContactProjectionFiles(
+        "whatsapp-interaction-projection-helper.ts",
+      );
+      const request = parseWhatsAppInteractionProjectionRequest({
+        schemaVersion: WHATSAPP_INTERACTION_PROJECTION_PROTOCOL_VERSION,
+        operation: "contacts.interactions.list",
+        accountSubject,
+        cursor: parsedInput.cursor,
+        cursorAnchor: parsedInput.cursorAnchor,
+        limit: parsedInput.limit,
+        storeIdentity: {
+          dev: initial.store.dev.toString(),
+          ino: initial.store.ino.toString(),
+        },
+        sessionIdentity: {
+          dev: initial.session.dev.toString(),
+          ino: initial.session.ino.toString(),
+        },
+        messageStoreIdentity: {
+          dev: initial.messageStore.dev.toString(),
+          ino: initial.messageStore.ino.toString(),
+        },
+      }) satisfies WhatsAppInteractionProjectionRequest;
+      const timeoutMs = remainingTimeoutMs(recipe.timeoutMs, operationDeadline);
+      const invocation = Object.freeze({
+        command: Object.freeze([
+          process.execPath,
+          "--no-env-file",
+          "--no-install",
+          "--no-macros",
+          "--no-addons",
+          `--config=${fixed.config}`,
+          fixed.helper,
+        ]),
+        cwd: store,
+        environment: contactProjectionEnvironment(),
+        stdin: `${JSON.stringify(request)}\n`,
+        timeoutMs,
+        maxOutputBytes: Math.min(
+          recipe.maxOutputBytes,
+          WHATSAPP_INTERACTION_PROJECTION_MAX_STDOUT_BYTES,
+        ),
+        maxStderrBytes: MAX_CONTACT_PROJECTION_STDERR_BYTES,
+        ...(operationDeadline === undefined ? {} : { signal: operationDeadline.signal }),
+      }) satisfies WhatsAppContactProjectionHelperInvocation;
+      const run = dependencies?.runInteractionProjectionHelper
+        ?? runWhatsAppContactProjectionHelperChild;
+      let childResult: WhatsAppContactProjectionHelperResult | undefined;
+      let helperFailure: unknown;
+      try {
+        childResult = await run(invocation);
+      } catch (error) {
+        helperFailure = error;
+      }
+      let identityFailure: unknown;
+      try {
+        await revalidateInteractionProjectionParentIdentity(store, initial);
+      } catch (error) {
+        identityFailure = error;
+      }
+      if (helperFailure instanceof WhatsAppContactProjectionCleanupUnverifiedError) {
+        throw helperFailure;
+      }
+      if (identityFailure !== undefined) {
+        throw identityFailure instanceof Error
+          ? identityFailure
+          : new Error("WhatsApp interaction projection parent binding became unverifiable");
+      }
+      if (helperFailure !== undefined) {
+        throw helperFailure instanceof Error
+          ? helperFailure
+          : new Error("WhatsApp interaction projection helper failed");
+      }
+      if (
+        childResult === undefined
+        || childResult.exitCode !== 0
+        || childResult.stderr.length !== 0
+      ) {
+        throw new Error(
+          "WhatsApp interaction projection helper failed before reviewed output",
+        );
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(childResult.stdout.trim()) as unknown;
+      } catch {
+        throw new Error("WhatsApp interaction projection helper returned malformed output");
+      }
+      let response: ReturnType<typeof parseWhatsAppInteractionProjectionResponse>;
+      try {
+        response = parseWhatsAppInteractionProjectionResponse(parsed, request);
+      } catch {
+        throw new Error("WhatsApp interaction projection helper returned unsupported output");
+      }
+      if (response.status === "failed") {
+        throw new Error(
+          `WhatsApp interaction projection helper rejected the local store (${response.errorCode})`,
+        );
+      }
+      return response;
+    },
+    whatsappContactProjectionCleanupBarrier,
+  );
+  const response = operationDeadline === undefined
+    ? await rawOperation
+    : await operationDeadline.run(() => rawOperation, WEB_SESSION_OPERATION_LABEL);
+  operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+  const output = Object.freeze({
+    provider: "whatsapp",
+    operation: "contacts.list",
+    accountSubject,
+    contactCollection: "interactions",
+    projection: "quiescent-account-bound-local-message-inserts",
+    projectionGeneration: response.projectionGeneration,
+    interactions: response.interactions,
+    nextCursor: response.nextCursor,
+    localInsertPageComplete: response.localInsertPageComplete,
+    checkpoint: response.checkpoint,
+    remoteHistoryComplete: false,
+    incompleteReasons: Object.freeze([
+      "linked-device-history-coverage-unknown",
+      "rowid-cursor-discovers-inserts-only",
+    ]),
   });
   return {
     status: "succeeded",
@@ -1700,7 +1981,9 @@ export async function executeWhatsAppWebOperation(
 ): Promise<WebSessionExecution> {
   if (
     recipe.site !== "whatsapp"
-    || recipe.contractVersion !== 1
+    || (recipe.action === "contacts.list"
+      ? recipe.contractVersion !== 2
+      : recipe.contractVersion !== 1)
     || !isWhatsAppOperation(recipe.action)
   ) throw new Error("WhatsApp linked-device recipe is not installed");
   const contract = WHATSAPP_WEB_OPERATIONS[recipe.action];
@@ -1725,7 +2008,17 @@ export async function executeWhatsAppWebOperation(
     WEB_SESSION_OPERATION_LABEL,
   );
   if (recipe.action === "contacts.list") {
-    exactContactInput(input);
+    const parsedInput = exactContactInput(input);
+    if (parsedInput.collection === "interactions") {
+      return projectWhatsAppLocalInteractions(
+        requireWhatsAppAuth(auth),
+        recipe,
+        parsedInput,
+        options.dependencies,
+        options.operationDeadline,
+        options.registerCleanupBarrier,
+      );
+    }
     return projectWhatsAppLocalContacts(
       requireWhatsAppAuth(auth),
       recipe,

@@ -602,7 +602,7 @@ const reddit = {
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const whatsapp = {
-  "contacts.list": contract("whatsapp", "contacts.list", WHATSAPP_WEB_OPERATIONS["contacts.list"].risk, WHATSAPP_WEB_OPERATIONS["contacts.list"].state, WHATSAPP_WEB_OPERATIONS["contacts.list"].reason),
+  "contacts.list": contract("whatsapp", "contacts.list", WHATSAPP_WEB_OPERATIONS["contacts.list"].risk, WHATSAPP_WEB_OPERATIONS["contacts.list"].state, WHATSAPP_WEB_OPERATIONS["contacts.list"].reason, 2),
   "content.edit": contract("whatsapp", "content.edit", WHATSAPP_WEB_OPERATIONS["content.edit"].risk, WHATSAPP_WEB_OPERATIONS["content.edit"].state, WHATSAPP_WEB_OPERATIONS["content.edit"].reason),
   "content.save": contract("whatsapp", "content.save", WHATSAPP_WEB_OPERATIONS["content.save"].risk, WHATSAPP_WEB_OPERATIONS["content.save"].state, WHATSAPP_WEB_OPERATIONS["content.save"].reason),
   "content.share": contract("whatsapp", "content.share", WHATSAPP_WEB_OPERATIONS["content.share"].risk, WHATSAPP_WEB_OPERATIONS["content.share"].state, WHATSAPP_WEB_OPERATIONS["content.share"].reason),

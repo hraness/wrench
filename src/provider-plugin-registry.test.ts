@@ -3201,6 +3201,8 @@ describe("provider plugin definition and registry", () => {
       "kernel/state-helper.bunfig.toml",
       "providers/whatsapp-contact-projection-helper.ts",
       "providers/whatsapp-contact-projection-protocol.ts",
+      "providers/whatsapp-interaction-projection-helper.ts",
+      "providers/whatsapp-interaction-projection-protocol.ts",
     ]) {
       expect(whatsappSourceLabels.has(expected)).toBeTrue();
     }

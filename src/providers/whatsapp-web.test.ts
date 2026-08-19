@@ -92,13 +92,13 @@ describe("WhatsApp linked-device protocol registry", () => {
     });
     expect(whatsappManifest.schemaVersion).toBe(4);
     expect(whatsappManifest.id).toBe("whatsapp-web");
-    expect(whatsappManifest.version).toBe("1.2.0");
+    expect(whatsappManifest.version).toBe("1.3.0");
     expect(whatsappManifest.displayName).toContain("Linked-Device Protocol");
     expect(whatsappManifest.operations["contacts.list"].description).toContain(
-      "Whatsmeow session.db contact table",
+      "account-bound contact table",
     );
     expect(whatsappManifest.operations["contacts.list"].description).toContain(
-      "message statistics remain explicitly unavailable",
+      "content-free relationship evidence",
     );
     expect(Object.keys(whatsappManifest.operations).sort()).toEqual(
       [...WHATSAPP_WEB_OPERATION_NAMES].sort(),
@@ -108,7 +108,7 @@ describe("WhatsApp linked-device protocol registry", () => {
       expect(operation.webSession).toMatchObject({
         site: "whatsapp",
         action,
-        contractVersion: 1,
+        contractVersion: action === "contacts.list" ? 2 : 1,
       });
       expect(operation.risk).toBe(WHATSAPP_WEB_OPERATIONS[action].risk);
       expect(operation.description.startsWith(
