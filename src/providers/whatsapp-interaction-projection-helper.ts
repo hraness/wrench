@@ -31,9 +31,11 @@ import {
 } from "./whatsapp-interaction-projection-protocol";
 
 const MESSAGE_DATABASE_NAME = "wacli.db";
+const IMMUTABLE_MESSAGE_DATABASE_URI = `file:${MESSAGE_DATABASE_NAME}?mode=ro&immutable=1`;
 const MAX_MESSAGE_DATABASE_BYTES = 2n * 1024n * 1024n * 1024n;
 const SQLITE_CACHE_KIB = 4_096;
 const MAX_UNIX_SECONDS = 253_402_300_799n;
+const SYSTEM_SENTINEL_JID = "0@s.whatsapp.net";
 
 class HelperFailure extends Error {
   readonly code: WhatsAppInteractionProjectionErrorCode;
@@ -431,7 +433,8 @@ function projectedJid(value: unknown, nullable = false): string | null {
     || value.length < 9
     || value.length > 96
     || !(
-      /^[0-9]{5,20}(?::[0-9]{1,5})?@s\.whatsapp\.net$/u.test(value)
+      value === SYSTEM_SENTINEL_JID
+      || /^[0-9]{5,20}(?::[0-9]{1,5})?@s\.whatsapp\.net$/u.test(value)
       || /^[0-9]{5,32}(?::[0-9]{1,5})?@lid$/u.test(value)
       || /^[0-9]{5,32}(?:-[0-9]{5,20})?@g\.us$/u.test(value)
       || /^[0-9]{5,32}@newsletter$/u.test(value)
@@ -459,14 +462,15 @@ function projectItem(row: SqliteRow): WhatsAppInteractionProjectionItem {
       && row.chat_kind !== "newsletter"
       && row.chat_kind !== "unknown")
   ) fail("projection-invalid");
+  const chatJid = projectedJid(row.chat_jid)! as string;
   return Object.freeze({
     rowid: rowid.toString(),
-    chatJid: projectedJid(row.chat_jid)! as string,
+    chatJid,
     messageId: row.msg_id,
     senderJid: projectedJid(row.sender_jid, true),
     timestamp: new Date(Number(seconds) * 1_000).toISOString(),
     fromMe: fromMe === 1n,
-    chatKind: row.chat_kind,
+    chatKind: chatJid === SYSTEM_SENTINEL_JID ? "unknown" : row.chat_kind,
   });
 }
 
@@ -595,7 +599,13 @@ export function projectWhatsAppInteractionsFromBoundCwd(
     initialFile = fstatSync(descriptor, { bigint: true });
     assertMessageFile(initialFile, request);
     exactMessagePathSnapshot(initialFile, request);
-    database = new Database(MESSAGE_DATABASE_NAME, {
+    // wacli persists WAL journal mode in the database header. Once the linked
+    // device is quiescent it may leave no -wal/-shm sidecars, and an ordinary
+    // read-only SQLite open then tries (and fails) to recreate shared-memory
+    // state. The path is fixed, the parent directory and inode are bound above,
+    // and both are revalidated after close, so immutable mode is the correct
+    // side-effect-free way to read that already-proven quiescent snapshot.
+    database = new Database(IMMUTABLE_MESSAGE_DATABASE_URI, {
       readonly: true,
       strict: true,
       safeIntegers: true,

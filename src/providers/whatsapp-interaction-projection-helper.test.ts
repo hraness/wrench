@@ -33,7 +33,10 @@ function privateDirectory(): string {
   return path;
 }
 
-function createStore(options: { readonly extraMessageColumn?: boolean } = {}): string {
+function createStore(options: {
+  readonly extraMessageColumn?: boolean;
+  readonly journalMode?: "DELETE" | "WAL";
+} = {}): string {
   const path = privateDirectory();
   const session = new Database(join(path, "session.db"), { create: true, strict: true });
   try {
@@ -55,7 +58,7 @@ function createStore(options: { readonly extraMessageColumn?: boolean } = {}): s
   }
   const messages = new Database(join(path, "wacli.db"), { create: true, strict: true });
   try {
-    messages.exec("PRAGMA journal_mode = DELETE; PRAGMA foreign_keys = ON");
+    messages.exec(`PRAGMA journal_mode = ${options.journalMode ?? "DELETE"}; PRAGMA foreign_keys = ON`);
     messages.exec(`
       CREATE TABLE chats (
         jid TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT,
@@ -103,7 +106,18 @@ function createStore(options: { readonly extraMessageColumn?: boolean } = {}): s
       1_776_513_602, 0, "third private body",
     );
   } finally {
+    if (options.journalMode === "WAL") {
+      try {
+        messages.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      } catch {
+        // close still runs; the fixture cleanup below remains authoritative.
+      }
+    }
     messages.close();
+  }
+  if (options.journalMode === "WAL") {
+    rmSync(join(path, "wacli.db-wal"), { force: true });
+    rmSync(join(path, "wacli.db-shm"), { force: true });
   }
   chmodSync(join(path, "session.db"), 0o600);
   chmodSync(join(path, "wacli.db"), 0o600);
@@ -207,6 +221,52 @@ describe("WhatsApp content-free interaction projection helper", () => {
         cursor: "2",
         cursorAnchor: "f".repeat(64),
       }))).toMatchObject({ status: "failed", errorCode: "projection-invalid" });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("reads a quiescent WAL-mode message store without creating sidecars", async () => {
+    const path = createStore({ journalMode: "WAL" });
+    try {
+      expect(await response(path, request(path, { limit: 1 }))).toMatchObject({
+        status: "succeeded",
+        interactions: [{ rowid: "1", messageId: "MSG-1" }],
+      });
+      expect(() => lstatSync(join(path, "wacli.db-wal"))).toThrow();
+      expect(() => lstatSync(join(path, "wacli.db-shm"))).toThrow();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("projects the fixed system sentinel as an unsupported interaction", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query("INSERT INTO chats(jid, kind) VALUES (?1, ?2)")
+          .run("0@s.whatsapp.net", "dm");
+        database.query(`
+          INSERT INTO messages(chat_jid,msg_id,sender_jid,ts,from_me)
+          VALUES (?1,?2,NULL,?3,?4)
+        `).run("0@s.whatsapp.net", "SYSTEM-1", 1_776_513_603, 0);
+      } finally {
+        database.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      expect(await response(path, request(path, {
+        cursor: "3",
+        cursorAnchor: "a86ecbd8b98eb6466c2b584a5b3d3ca0458230bbd6ecc86981d57ca4aaa81830",
+        limit: 1,
+      }))).toMatchObject({
+        status: "succeeded",
+        interactions: [{
+          rowid: "4",
+          chatJid: "0@s.whatsapp.net",
+          chatKind: "unknown",
+        }],
+      });
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
