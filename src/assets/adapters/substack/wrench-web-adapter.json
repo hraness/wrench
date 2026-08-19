@@ -148,7 +148,7 @@
       }
     },
     "media.read": {
-      "description": "Observed contract: project bounded cover, podcast, video-upload, and audio-item metadata from one exact entitled Substack article response.",
+      "description": "Observed contract: project bounded cover, podcast, video-upload, API audio-item, and exact same-publication inline audio metadata from one exact entitled Substack article response.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",

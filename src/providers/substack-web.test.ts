@@ -11,6 +11,7 @@ import {
   normalizeSubstackMediaResponse,
   normalizeSubstackMessageInbox,
   normalizeSubstackNoteResponse,
+  parseSubstackInlineAudioEmbeds,
   parseSubstackLoggedInResponse,
   parseSubstackPreloadsHtml,
 } from "./substack-web";
@@ -20,6 +21,8 @@ const PUBLICATION_ID = 7;
 const ARTICLE_ID = 101;
 const NOTE_ID = 202;
 const COMMENT_ID = 303;
+const AUDIO_UPLOAD_ID_1 = "5af42c51-bb3d-44a9-bf33-65479016b0e6";
+const AUDIO_UPLOAD_ID_2 = "e7eb54c0-266e-4b10-b7f9-e97012266a1d";
 
 function preloadsHtml(overrides: Readonly<Record<string, unknown>> = {}): string {
   const payload = JSON.stringify({
@@ -345,13 +348,35 @@ describe("Substack account and response projection", () => {
 
     const media = normalizeSubstackMediaResponse({
       post: post({
+        body_html: [
+          `<audio data-testid="audio-element" src="/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src"></audio>`,
+          `<AUDIO SRC='https://wrench-owned.substack.com/api/v1/audio/upload/${AUDIO_UPLOAD_ID_2}/src'></AUDIO>`,
+        ].join(""),
         video_upload_id: "video-1",
         audio_items: [{ id: "audio-1", audio_url: "https://substackcdn.com/audio.mp3", duration: 30 }],
       }),
       publication: publication(),
-    }, ARTICLE_ID) as { readonly videoUploadId: string; readonly audioItems: readonly unknown[] };
+    }, ARTICLE_ID) as {
+      readonly videoUploadId: string;
+      readonly audioItems: readonly unknown[];
+      readonly inlineAudioEmbeds: readonly unknown[];
+    };
     expect(media.videoUploadId).toBe("video-1");
-    expect(media.audioItems).toHaveLength(1);
+    expect(media.audioItems).toEqual([{
+      id: "audio-1",
+      url: "https://substackcdn.com/audio.mp3",
+      duration: 30,
+    }]);
+    expect(media.inlineAudioEmbeds).toEqual([
+      {
+        uploadId: AUDIO_UPLOAD_ID_1,
+        url: `https://wrench-owned.substack.com/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src`,
+      },
+      {
+        uploadId: AUDIO_UPLOAD_ID_2,
+        url: `https://wrench-owned.substack.com/api/v1/audio/upload/${AUDIO_UPLOAD_ID_2}/src`,
+      },
+    ]);
 
     const inbox = normalizeSubstackMessageInbox({
       threads: [
@@ -370,6 +395,63 @@ describe("Substack account and response projection", () => {
       pubChatUnreadCount: 1,
     }, "all", 10) as { readonly threads: readonly unknown[] };
     expect(inbox.threads).toHaveLength(1);
+  });
+
+  test("extracts only bounded exact same-publication inline audio routes in document order", () => {
+    const baseUrl = "https://wrench-owned.substack.com";
+    const html = [
+      `<!-- <audio src="/api/v1/audio/upload/00000000-0000-0000-0000-000000000000/src"></audio> -->`,
+      `<audio controls src=/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src></audio>`,
+      `<audio data-extra="ignored" SRC="${baseUrl}/api/v1/audio/upload/${AUDIO_UPLOAD_ID_2}/src"></audio>`,
+      `<audio data-src="/api/v1/audio/upload/00000000-0000-0000-0000-000000000000/src"></audio>`,
+    ].join("");
+    expect(parseSubstackInlineAudioEmbeds(html, baseUrl)).toEqual([
+      {
+        uploadId: AUDIO_UPLOAD_ID_1,
+        url: `${baseUrl}/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src`,
+      },
+      {
+        uploadId: AUDIO_UPLOAD_ID_2,
+        url: `${baseUrl}/api/v1/audio/upload/${AUDIO_UPLOAD_ID_2}/src`,
+      },
+    ]);
+  });
+
+  test("rejects inline audio origin, route, attribute, tag, and item-bound drift", () => {
+    const baseUrl = "https://wrench-owned.substack.com";
+    const tag = (source: string): string => `<audio src="${source}"></audio>`;
+    expect(parseSubstackInlineAudioEmbeds("<p>No inline audio</p>", null)).toEqual([]);
+    expect(() => parseSubstackInlineAudioEmbeds(
+      tag(`/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src`),
+      null,
+    )).toThrow("publication base_url is required");
+    for (const source of [
+      `https://other.substack.com/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src`,
+      `/api/v1/audio/upload/not-a-uuid/src`,
+      `/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src?download=1`,
+      `/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/other`,
+    ]) {
+      expect(() => parseSubstackInlineAudioEmbeds(tag(source), baseUrl)).toThrow();
+    }
+    expect(() => parseSubstackInlineAudioEmbeds(
+      `<audio src="/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src" src="/api/v1/audio/upload/${AUDIO_UPLOAD_ID_2}/src"></audio>`,
+      baseUrl,
+    )).toThrow("repeated src");
+    expect(() => parseSubstackInlineAudioEmbeds(
+      `<audio src="/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src`,
+      baseUrl,
+    )).toThrow("malformed or exceeded");
+    expect(() => parseSubstackInlineAudioEmbeds(
+      "x".repeat(2 * 1024 * 1024 + 1),
+      baseUrl,
+    )).toThrow("must be bounded text");
+    expect(() => parseSubstackInlineAudioEmbeds(
+      Array.from(
+        { length: 21 },
+        () => tag(`/api/v1/audio/upload/${AUDIO_UPLOAD_ID_1}/src`),
+      ).join(""),
+      baseUrl,
+    )).toThrow("exceeded 20 items");
   });
 
   test("rejects cross-target article, Note, reply, and publication responses", () => {

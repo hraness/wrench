@@ -31,6 +31,7 @@ const IMAGE_ID = 505;
 const IMAGE_UUID = "11111111-1111-4111-8111-111111111111";
 const ATTACHMENT_UUID = "22222222-2222-4222-8222-222222222222";
 const NOTE_BODY = "how your email finds me";
+const AUDIO_UPLOAD_ID = "5af42c51-bb3d-44a9-bf33-65479016b0e6";
 
 const boundAuth = {
   schemaVersion: 1,
@@ -232,9 +233,13 @@ function post(overrides: Readonly<Record<string, unknown>> = {}): unknown {
     id: ARTICLE_ID,
     publication_id: PUBLICATION_ID,
     title: "Article",
-    body_html: "<p>Body</p>",
+    body_html: `<p>Body</p><audio src="/api/v1/audio/upload/${AUDIO_UPLOAD_ID}/src"></audio>`,
     reactions: {},
-    audio_items: [],
+    audio_items: [{
+      id: "tts-audio",
+      audio_url: "https://substackcdn.com/tts-audio.mp3",
+      duration: 60,
+    }],
     ...overrides,
   };
 }
@@ -421,7 +426,18 @@ describe("Substack authenticated internal API runtime", () => {
         action: "media.read",
         input: { article_id: ARTICLE_ID },
         expectedSemanticPaths: [`/api/v1/posts/by-id/${ARTICLE_ID}`],
-        verify: (output) => expect((output as { articleId: number }).articleId).toBe(ARTICLE_ID),
+        verify: (output) => expect(output).toMatchObject({
+          articleId: ARTICLE_ID,
+          audioItems: [{
+            id: "tts-audio",
+            url: "https://substackcdn.com/tts-audio.mp3",
+            duration: 60,
+          }],
+          inlineAudioEmbeds: [{
+            uploadId: AUDIO_UPLOAD_ID,
+            url: `https://wrench-owned.substack.com/api/v1/audio/upload/${AUDIO_UPLOAD_ID}/src`,
+          }],
+        }),
       },
       {
         action: "comments.read",
