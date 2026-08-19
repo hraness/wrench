@@ -35,6 +35,7 @@ import {
   type WebSessionDispatchEvent,
   type WebSessionExecution,
   type WebSessionOperationDeadline,
+  type WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
 import {
   BLUESKY_APPVIEW_PROXY,
@@ -46,11 +47,16 @@ import {
   BLUESKY_XRPC_METHODS,
   assertBlueskyText,
   authorizeBlueskyXrpcRequest,
+  blueskyCid,
   blueskyDid,
   blueskyPostUri,
   parseBlueskyAtUri,
   parseBlueskyBootstrapAccount,
   parseBlueskyCreateRecordResponse,
+  parseBlueskyCurrentPostRecordResponse,
+  parseBlueskyDeleteRecordResponse,
+  parseBlueskyGetRecordResponse,
+  parseBlueskyRecordNotFoundResponse,
   parseBlueskyRefreshSessionResponse,
   parseBlueskySessionResponse,
   parseBlueskyUploadBlobResponse,
@@ -77,6 +83,8 @@ const MAX_READ_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 2_000_000;
 const DEFAULT_LIMIT = 25;
 const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
+const PUBLISH_READBACK_DELAYS_MS = Object.freeze([0, 250, 750, 1_500]);
+const BLUESKY_RECORD_NOT_FOUND = Symbol("bluesky-record-not-found");
 
 type JsonRecord = Record<string, unknown>;
 type BlueskyFetch = (
@@ -88,6 +96,7 @@ export type BlueskyWebRuntimeDependencies = {
   readonly fetch?: BlueskyFetch;
   readonly createBrowserSession?: typeof createBrowserSession;
   readonly now?: () => number;
+  readonly sleep?: (milliseconds: number) => Promise<void>;
   /**
    * Test-only seam. The result is still parsed by the sealed account parser
    * before it can reach an authorization header.
@@ -685,6 +694,8 @@ type XrpcOptions = {
     readonly kind: "refresh";
     readonly token: string;
   };
+  /** Restricted to authoritative getRecord absence reconciliation. */
+  readonly recordNotFound?: true;
 };
 
 async function xrpc(
@@ -698,6 +709,12 @@ async function xrpc(
   const refreshRequest = options.authorization?.kind === "refresh";
   if (refreshRequest !== (nsid === "com.atproto.server.refreshSession")) {
     throw new Error("Bluesky refresh authorization is restricted to refreshSession");
+  }
+  if (
+    options.recordNotFound === true
+    && nsid !== "com.atproto.repo.getRecord"
+  ) {
+    throw new Error("Bluesky RecordNotFound handling is restricted to getRecord");
   }
   const authorizationToken = refreshRequest
     ? options.authorization?.token
@@ -733,10 +750,11 @@ async function xrpc(
     body = JSON.stringify(options.jsonBody);
   } else if (options.blobBody !== undefined) {
     headers.set("content-type", options.blobBody.mediaType);
-    body = new Blob(
-      [new Uint8Array(options.blobBody.bytes)],
-      { type: options.blobBody.mediaType },
-    );
+    // Keep the upload body in the owned-byte form accepted by Wrench's
+    // DNS-pinned HTTPS transport. A Web Blob reaches custom fetch fixtures,
+    // but the production transport deliberately rejects that body shape
+    // before opening a socket.
+    body = new Uint8Array(options.blobBody.bytes);
   }
   const operationDeadline = client.operationDeadline;
   const controller = operationDeadline === undefined
@@ -767,6 +785,21 @@ async function xrpc(
       throw new Error("Bluesky XRPC failed before a reviewed response was received", {
         cause: error,
       });
+    }
+    if (
+      response.status === 400
+      && options.recordNotFound === true
+    ) {
+      const bytes = await boundedBytes(
+        response,
+        64 * 1024,
+        operationDeadline,
+      );
+      if (!jsonContentType(response)) {
+        throw new Error("Bluesky RecordNotFound response used an unreviewed content type");
+      }
+      parseBlueskyRecordNotFoundResponse(parseJson(bytes));
+      return BLUESKY_RECORD_NOT_FOUND;
     }
     if (response.status !== 200) {
       response.body?.cancel().catch(() => undefined);
@@ -926,6 +959,306 @@ async function getPost(
     }),
     uri,
   );
+}
+
+async function getAuthoritativeRecord(
+  client: BlueskyClient,
+  expected: BlueskyStrongRef,
+  expectedValue: Readonly<Record<string, unknown>>,
+): Promise<BlueskyStrongRef> {
+  const parsed = parseBlueskyAtUri(
+    expected.uri,
+    "Bluesky created post URI",
+    "app.bsky.feed.post",
+  );
+  if (parsed.actor !== client.session.did) {
+    throw new Error("Bluesky created post actor did not match the bound viewer");
+  }
+  return parseBlueskyGetRecordResponse(
+    await xrpc(client, "com.atproto.repo.getRecord", {
+      query: {
+        repo: [client.session.did],
+        collection: ["app.bsky.feed.post"],
+        rkey: [parsed.rkey],
+      },
+    }),
+    expected,
+    expectedValue,
+  );
+}
+
+type BlueskyAuthoritativePostPresence =
+  | { readonly present: false }
+  | { readonly present: true; readonly ref: BlueskyStrongRef };
+
+async function authoritativePostPresence(
+  client: BlueskyClient,
+  uri: string,
+  expectedCid: string,
+): Promise<BlueskyAuthoritativePostPresence> {
+  const parsed = parseBlueskyAtUri(
+    uri,
+    "Bluesky deletion target URI",
+    "app.bsky.feed.post",
+  );
+  if (parsed.actor !== client.session.did) {
+    throw new Error("Bluesky deletion target actor did not match the bound viewer");
+  }
+  const response = await xrpc(client, "com.atproto.repo.getRecord", {
+    query: {
+      repo: [client.session.did],
+      collection: ["app.bsky.feed.post"],
+      rkey: [parsed.rkey],
+    },
+    recordNotFound: true,
+  });
+  if (response === BLUESKY_RECORD_NOT_FOUND) {
+    return Object.freeze({ present: false });
+  }
+  return Object.freeze({
+    present: true,
+    ref: parseBlueskyCurrentPostRecordResponse(
+      response,
+      parsed.uri,
+      expectedCid,
+    ),
+  });
+}
+
+/**
+ * Reconcile deletion from the authoritative account repository only. A
+ * different current CID is revision drift, not absence.
+ */
+export async function readBlueskyWebContentDeleteDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly dependencies?: BlueskyWebRuntimeDependencies;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<{ readonly present: boolean; readonly postUri: string }> {
+  if (
+    recipe.site !== "bluesky"
+    || recipe.action !== "content.delete"
+    || recipe.contractVersion !== 1
+  ) {
+    throw new Error("Bluesky deletion recovery supports only content.delete@1");
+  }
+  const deadline = new OperationDeadline(recipe.timeoutMs, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+  try {
+    const client = await bootstrapClient(
+      auth,
+      recipe.timeoutMs,
+      recipe.maxOutputBytes,
+      options.dependencies,
+      deadline,
+    );
+    requireBoundSubject(auth, client.session);
+    const postUri = postUriInput(input);
+    const expectedCid = blueskyCid(
+      inputString(input, "expected_cid", 201),
+      "input.expected_cid",
+    );
+    const presence = await authoritativePostPresence(
+      client,
+      postUri,
+      expectedCid,
+    );
+    return Object.freeze({ present: presence.present, postUri });
+  } finally {
+    deadline.dispose();
+  }
+}
+
+type BlueskyPublishedMutationTarget = {
+  readonly uri: string;
+  readonly cid: string;
+  readonly createdAt: string;
+  readonly media: null | {
+    readonly cid: string;
+    readonly mediaType: "image/jpeg" | "image/png" | "image/webp";
+    readonly size: number;
+  };
+};
+
+function parseBlueskyPublishedMutationTarget(
+  identifier: string,
+): BlueskyPublishedMutationTarget {
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier);
+  } catch {
+    throw new Error("Bluesky provider-accepted post target is not canonical JSON");
+  }
+  const target = record(value, "Bluesky provider-accepted post target");
+  if (Object.keys(target).sort().join(",") !== "cid,createdAt,media,uri") {
+    throw new Error("Bluesky provider-accepted post target contained unsupported fields");
+  }
+  const parsedUri = parseBlueskyAtUri(
+    target.uri,
+    "Bluesky provider-accepted post target URI",
+    "app.bsky.feed.post",
+  );
+  const strongRef = parseBlueskyCreateRecordResponse(
+    { uri: parsedUri.uri, cid: target.cid },
+    parsedUri.actor,
+    "app.bsky.feed.post",
+  );
+  if (
+    typeof target.createdAt !== "string"
+    || target.createdAt.length > 64
+    || Number.isNaN(Date.parse(target.createdAt))
+    || new Date(target.createdAt).toISOString() !== target.createdAt
+  ) {
+    throw new Error("Bluesky provider-accepted post target createdAt is malformed");
+  }
+  let media: BlueskyPublishedMutationTarget["media"] = null;
+  if (target.media !== null) {
+    const rawMedia = record(
+      target.media,
+      "Bluesky provider-accepted post target media",
+    );
+    if (Object.keys(rawMedia).sort().join(",") !== "cid,mediaType,size") {
+      throw new Error("Bluesky provider-accepted post target media contained unsupported fields");
+    }
+    if (
+      typeof rawMedia.cid !== "string"
+      || !/^b[a-z2-7]{10,200}$/u.test(rawMedia.cid)
+      || (
+        rawMedia.mediaType !== "image/jpeg"
+        && rawMedia.mediaType !== "image/png"
+        && rawMedia.mediaType !== "image/webp"
+      )
+      || !Number.isSafeInteger(rawMedia.size)
+      || (rawMedia.size as number) < 1
+      || (rawMedia.size as number) > MAX_IMAGE_BYTES
+    ) {
+      throw new Error("Bluesky provider-accepted post target media is malformed");
+    }
+    media = Object.freeze({
+      cid: rawMedia.cid,
+      mediaType: rawMedia.mediaType,
+      size: rawMedia.size as number,
+    });
+  }
+  const parsed = Object.freeze({
+    uri: strongRef.uri,
+    cid: strongRef.cid,
+    createdAt: target.createdAt,
+    media,
+  });
+  if (canonicalJson(parsed) !== identifier) {
+    throw new Error("Bluesky provider-accepted post target is not canonical");
+  }
+  return parsed;
+}
+
+/**
+ * Reconcile one exact response-bound Bluesky publish target using only the
+ * authoritative PDS record and its public AppView projection.
+ */
+export async function readBlueskyWebPublishedMutationTarget(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  identifier: string,
+  options: {
+    readonly dependencies?: BlueskyWebRuntimeDependencies;
+  } = {},
+): Promise<{ readonly present: true; readonly uri: string; readonly cid: string }> {
+  if (
+    recipe.site !== "bluesky"
+    || recipe.action !== "posts.publish"
+    || recipe.contractVersion !== 3
+  ) {
+    throw new Error("Bluesky publish recovery supports only posts.publish@3");
+  }
+  const target = parseBlueskyPublishedMutationTarget(identifier);
+  const body = assertBlueskyText(input.body, "input.body", 280, 3_000);
+  const rawAlt = input.alt;
+  const alt = rawAlt === undefined
+    ? ""
+    : typeof rawAlt === "string" && rawAlt.length <= 10_000 && !/[\0\r]/u.test(rawAlt)
+      ? rawAlt
+      : (() => {
+          throw new Error("input.alt must be bounded text");
+        })();
+  if (
+    (input.media === undefined) !== (target.media === null)
+    || (target.media === null
+      ? input.media_type !== undefined || input.alt !== undefined
+      : input.media_type !== target.media.mediaType)
+  ) {
+    throw new Error("Bluesky provider-accepted post target did not bind the confirmed attachment shape");
+  }
+  const recordValue = Object.freeze({
+    $type: "app.bsky.feed.post",
+    text: body,
+    createdAt: target.createdAt,
+    ...(target.media === null
+      ? {}
+      : {
+          embed: {
+            $type: "app.bsky.embed.images",
+            images: [{
+              image: {
+                $type: "blob",
+                ref: { $link: target.media.cid },
+                mimeType: target.media.mediaType,
+                size: target.media.size,
+              },
+              alt,
+            }],
+          },
+        }),
+  });
+  const client = await bootstrapClient(
+    auth,
+    recipe.timeoutMs,
+    recipe.maxOutputBytes,
+    options.dependencies,
+  );
+  requireBoundSubject(auth, client.session);
+  const strongRef = Object.freeze({ uri: target.uri, cid: target.cid });
+  await getAuthoritativeRecord(client, strongRef, recordValue);
+  const projected = await getPost(client, target.uri);
+  if (projected.cid !== target.cid || projected.createdAt !== target.createdAt) {
+    throw new Error("Bluesky publish recovery readback changed the accepted record revision");
+  }
+  assertPublishedPost(projected, {
+    actorDid: client.session.did,
+    text: body,
+    reply: null,
+    quote: null,
+    mediaAlt: target.media === null ? null : alt,
+  });
+  return Object.freeze({ present: true, uri: target.uri, cid: target.cid });
+}
+
+async function waitForPublishReadback(
+  client: BlueskyClient,
+  uri: string,
+  sleep: (milliseconds: number) => Promise<void>,
+): Promise<BlueskyProjectedPost> {
+  let lastError: unknown;
+  for (const delay of PUBLISH_READBACK_DELAYS_MS) {
+    if (delay > 0) {
+      const pause = () => sleep(delay);
+      if (client.operationDeadline === undefined) await pause();
+      else await client.operationDeadline.run(pause, WEB_SESSION_OPERATION_LABEL);
+    }
+    try {
+      return await getPost(client, uri);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error("Bluesky public post readback did not settle within the reviewed bound", {
+    cause: lastError,
+  });
 }
 
 async function getProfile(
@@ -1267,6 +1600,111 @@ async function deleteRecord(
   });
 }
 
+async function executeContentDelete(
+  client: BlueskyClient,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  options: {
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+  },
+): Promise<WebSessionExecution> {
+  const postUri = postUriInput(input);
+  const expectedCid = blueskyCid(
+    inputString(input, "expected_cid", 201),
+    "input.expected_cid",
+  );
+  const parsed = parseBlueskyAtUri(
+    postUri,
+    "Bluesky deletion target URI",
+    "app.bsky.feed.post",
+  );
+  if (parsed.actor !== client.session.did) {
+    throw new Error("Bluesky deletion target actor did not match the bound viewer");
+  }
+  const finalUrl = `${BLUESKY_APP_ORIGIN}/profile/${client.session.did}/post/${parsed.rkey}`;
+  let started = 0;
+  let verified = 0;
+  let failureStage = "authoritative pre-read";
+  try {
+    const before = await authoritativePostPresence(
+      client,
+      postUri,
+      expectedCid,
+    );
+    if (!before.present) {
+      return {
+        status: "succeeded",
+        output: Object.freeze({
+          postUri,
+          expectedCid,
+          deleted: true,
+          effect: "already-absent",
+        }),
+        finalUrl,
+        noOp: true,
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+      };
+    }
+    failureStage = "dispatch rebinding";
+    await rebindBeforeDispatch(client);
+    failureStage = "dispatch admission";
+    await options.beforeDispatch?.(
+      dispatchEvent(recipe.action, 1, 1, 0, 0),
+    );
+    started = 1;
+    failureStage = "delete response";
+    parseBlueskyDeleteRecordResponse(
+      await xrpc(client, "com.atproto.repo.deleteRecord", {
+        jsonBody: {
+          repo: client.session.did,
+          collection: "app.bsky.feed.post",
+          rkey: parsed.rkey,
+          swapRecord: before.ref.cid,
+        },
+      }),
+    );
+    failureStage = "authoritative absence readback";
+    const after = await authoritativePostPresence(
+      client,
+      postUri,
+      expectedCid,
+    );
+    if (after.present) {
+      throw new Error("Bluesky deletion readback still found the confirmed record");
+    }
+    verified = 1;
+    failureStage = "verification recording";
+    await options.afterDispatchVerified?.(
+      dispatchEvent(recipe.action, 1, 1, 1, 1),
+    );
+    return {
+      status: "succeeded",
+      output: Object.freeze({
+        postUri,
+        expectedCid,
+        deleted: true,
+        effect: "deleted",
+      }),
+      finalUrl,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? `Bluesky may have deleted the exact confirmed post; failure stage: ${failureStage}; reconcile authoritative record absence and never retry automatically`
+        : `Bluesky deletion failed before submission; failure stage: ${failureStage}`,
+    };
+  }
+}
+
 type PostStateKind = "like" | "repost" | "bookmark";
 
 function postState(
@@ -1600,6 +2038,17 @@ function assertPublishedPost(
   }
 }
 
+type BlueskyPublishFailureStage =
+  | "media-upload"
+  | "record-preparation"
+  | "dispatch-rebinding"
+  | "dispatch-admission"
+  | "create-record"
+  | "accepted-target-recording"
+  | "authoritative-record-readback"
+  | "public-post-readback"
+  | "verification-recording";
+
 async function executePublish(
   client: BlueskyClient,
   recipe: WebSessionRecipe,
@@ -1607,12 +2056,17 @@ async function executePublish(
   options: {
     readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly now: () => number;
+    readonly sleep: (milliseconds: number) => Promise<void>;
   },
 ): Promise<WebSessionExecution> {
   let started = 0;
   let verified = 0;
+  let failureStage: BlueskyPublishFailureStage = "record-preparation";
   const posts: BlueskyStrongRef[] = [];
   let planned = recipe.action === "threads.publish" && Array.isArray(input.items)
     ? input.items.length
@@ -1656,14 +2110,11 @@ async function executePublish(
           parent,
         });
       }
-      await rebindBeforeDispatch(client);
-      await options.beforeDispatch?.(
-        dispatchEvent(id, index, planned, started, verified),
-      );
-      started = index;
+      failureStage = "media-upload";
       const blob = media === null || offset > 0 ? null : await uploadImage(client, media);
+      failureStage = "record-preparation";
       const createdAt = new Date(options.now()).toISOString();
-      const created = await createRecord(client, "app.bsky.feed.post", {
+      const record = Object.freeze({
         $type: "app.bsky.feed.post",
         text,
         createdAt,
@@ -1685,7 +2136,47 @@ async function executePublish(
               },
             }),
       });
-      const readback = await getPost(client, created.uri);
+      failureStage = "dispatch-rebinding";
+      await rebindBeforeDispatch(client);
+      failureStage = "dispatch-admission";
+      await options.beforeDispatch?.(
+        dispatchEvent(id, index, planned, started, verified),
+      );
+      started = index;
+      // createRecord is the externally visible public-post mutation. Keep the
+      // optional uploadBlob preparation entirely before this durable dispatch
+      // boundary: an uploaded blob is not a feed record and cannot publish by
+      // itself.
+      failureStage = "create-record";
+      const created = await createRecord(client, "app.bsky.feed.post", record);
+      failureStage = "accepted-target-recording";
+      await options.afterProviderAcceptedMutationTarget?.({
+        id,
+        index,
+        target: {
+          schemaVersion: 1,
+          identifier: canonicalJson({
+            uri: created.uri,
+            cid: created.cid,
+            createdAt,
+            media: blob === null
+              ? null
+              : {
+                  cid: blob.ref.$link,
+                  mediaType: blob.mimeType,
+                  size: blob.size,
+                },
+          }),
+        },
+      });
+      failureStage = "authoritative-record-readback";
+      await getAuthoritativeRecord(client, created, record);
+      failureStage = "public-post-readback";
+      const readback = await waitForPublishReadback(
+        client,
+        created.uri,
+        options.sleep,
+      );
       if (readback.cid !== created.cid || readback.createdAt !== createdAt) {
         throw new Error("Bluesky post readback did not bind the created record revision");
       }
@@ -1698,6 +2189,7 @@ async function executePublish(
       });
       posts.push(created);
       verified = index;
+      failureStage = "verification-recording";
       await options.afterDispatchVerified?.(
         dispatchEvent(id, index, planned, started, verified),
       );
@@ -1718,17 +2210,20 @@ async function executePublish(
       dispatch: { planned, started, verified },
     };
   } catch {
+    const status = started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed";
     return {
-      status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
+      status,
       output: posts.length === 0 ? null : Object.freeze({ posts }),
       finalUrl: posts.length === 0
         ? BLUESKY_APP_ORIGIN
         : `${BLUESKY_APP_ORIGIN}/profile/${client.session.did}/post/${blueskyPostUri(posts.at(-1)!.uri).rkey}`,
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
-      error: started > verified
-        ? "Bluesky may have accepted the current post dispatch; reconcile before retrying"
-        : "Bluesky post dispatch failed before a response-bound result was verified",
+      error: status === "indeterminate"
+        ? `Bluesky may have accepted the current post dispatch; failure stage: ${failureStage}; reconcile before retrying`
+        : status === "partial"
+          ? `Bluesky verified only part of the confirmed post workflow; failure stage: ${failureStage}; inspect the verified results before retrying`
+          : `Bluesky post preparation failed before public record submission; failure stage: ${failureStage}; retry with a fresh confirmed plan`,
     };
   }
 }
@@ -1809,6 +2304,9 @@ export async function executeBlueskyWebOperation(
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: BlueskyWebRuntimeDependencies;
   } = {},
@@ -1817,7 +2315,7 @@ export async function executeBlueskyWebOperation(
     recipe.site !== "bluesky"
     || !isBlueskyOperation(recipe.action)
   ) throw new Error("Bluesky authenticated web recipe is not installed");
-  const expectedContractVersion = recipe.action === "posts.publish" ? 2 : 1;
+  const expectedContractVersion = recipe.action === "posts.publish" ? 3 : 1;
   if (recipe.contractVersion !== expectedContractVersion) {
     throw new Error(
       `Bluesky authenticated web operation ${recipe.action} contract version ${recipe.contractVersion} is not installed`,
@@ -1849,13 +2347,24 @@ export async function executeBlueskyWebOperation(
     ...(options.afterDispatchVerified === undefined
       ? {}
       : { afterDispatchVerified: options.afterDispatchVerified }),
+    ...(options.afterProviderAcceptedMutationTarget === undefined
+      ? {}
+      : {
+          afterProviderAcceptedMutationTarget:
+            options.afterProviderAcceptedMutationTarget,
+        }),
     now: options.dependencies?.now ?? Date.now,
+    sleep: options.dependencies?.sleep
+      ?? ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))),
   };
   if (
     recipe.action === "likes.set"
     || recipe.action === "content.save"
     || recipe.action === "posts.repost"
   ) return executePostDesiredState(client, recipe, input, mutationOptions);
+  if (recipe.action === "content.delete") {
+    return executeContentDelete(client, recipe, input, mutationOptions);
+  }
   if (recipe.action === "relationships.follow.set") {
     return executeFollowDesiredState(client, recipe, input, mutationOptions);
   }

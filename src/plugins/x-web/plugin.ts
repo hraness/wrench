@@ -147,9 +147,10 @@ function xArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "b7b3d2533e5726d39a40e2f750f026ad5e723c497f8de071c2dcec8a478f8472",
+  "e3fae3aad8250c57428d34015eb3448f07d0a793fd9302d88ccb4f68c504423a",
   {
     "likes.set": [1],
+    "posts.publish": [2],
   },
   {
     "messaging.list": {
@@ -165,6 +166,14 @@ const currentOperations = webSessionContractOperations(
     "articles.draft.save": xArticleDraftV2Dispatches,
   },
 ).map((operation) => {
+  if (operation.name === "posts.publish") {
+    return Object.freeze({
+      ...operation,
+      reconciliation: Object.freeze({
+        kind: "provider-accepted-target-presence" as const,
+      }),
+    });
+  }
   if (
     operation.name !== "content.save"
     && operation.name !== "likes.set"
@@ -286,7 +295,23 @@ export const xWebPlugin = defineProviderPlugin({
         probe: runtime.probeXWebSubject,
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeXWebOperation(recipe, input, auth, options),
-        reconcile: async (operation, input, auth) => {
+        reconcile: async (operation, input, auth, context) => {
+          if (operation === "posts.publish") {
+            if (context?.kind !== "provider-accepted-target-presence") {
+              throw new Error("X posts.publish reconciliation requires one exact accepted target");
+            }
+            const readback = await runtime.readXWebPublishedMutationTarget({
+              site: "x",
+              action: operation,
+              contractVersion: 3,
+              timeoutMs: 60_000,
+              maxOutputBytes: 2 * 1024 * 1024,
+            }, input, auth, context.target.identifier);
+            return {
+              actualState: readback.present,
+              reason: "exact-target-readback",
+            };
+          }
           if (operation === "articles.draft.save") {
             const readback = await runtime.readXWebArticleDraftDesiredState({
               site: "x",

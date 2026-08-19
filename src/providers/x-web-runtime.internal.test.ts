@@ -19,6 +19,7 @@ import {
   executeXWebOperation,
   readXWebArticleDraftDesiredState,
   readXWebDesiredState,
+  readXWebPublishedMutationTarget,
   resolveCurrentXWebChunkUrl,
   xWebArticleImageFailureCategory,
   type XWebRuntimeDependencies,
@@ -283,6 +284,7 @@ function dependencies(
   handler: (request: CapturedRequest) => Response | Promise<Response>,
   options: {
     readonly createBrowserSession?: NonNullable<XWebRuntimeDependencies["createBrowserSession"]>;
+    readonly sleep?: NonNullable<XWebRuntimeDependencies["sleep"]>;
   } = {},
 ): XWebRuntimeDependencies {
   const acquireCookies: CookieRecordReader = () => Promise.resolve({ cookies: xCookies, warnings: [] });
@@ -319,7 +321,12 @@ function dependencies(
       };
       return Promise.resolve(session);
     });
-  return { acquireCookies, fetch, createBrowserSession: createTransactionBrowser };
+  return {
+    acquireCookies,
+    fetch,
+    createBrowserSession: createTransactionBrowser,
+    sleep: options.sleep ?? (() => Promise.resolve()),
+  };
 }
 
 function xRecipe(action: WebSessionRecipe["action"], contractVersion = 1): WebSessionRecipe {
@@ -1651,6 +1658,7 @@ describe("X authenticated internal-API runtime", () => {
     const calls: CapturedRequest[] = [];
     const before: WebSessionDispatchEvent[] = [];
     const after: WebSessionDispatchEvent[] = [];
+    const accepted: unknown[] = [];
     const body = "runtime dispatch fixture";
     const runtimeDependencies = dependencies(calls, (request) => {
       if (request.url.href === "https://x.com/home") {
@@ -1700,6 +1708,10 @@ describe("X authenticated internal-API runtime", () => {
           before.push(event);
           return Promise.resolve();
         },
+        afterProviderAcceptedMutationTarget: (event) => {
+          accepted.push(event);
+          return Promise.resolve();
+        },
         afterDispatchVerified: (event) => {
           after.push(event);
           return Promise.resolve();
@@ -1719,11 +1731,107 @@ describe("X authenticated internal-API runtime", () => {
       index: 1,
       progress: { planned: 1, started: 0, verified: 0 },
     }]);
+    expect(accepted).toEqual([{
+      id: "posts.publish",
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: canonicalJson({ postId: CREATED_POST_ID, mediaId: null }),
+      },
+    }]);
     expect(after).toEqual([{
       id: "posts.publish",
       index: 1,
       progress: { planned: 1, started: 1, verified: 1 },
     }]);
+  });
+
+  test("polls a bounded exact post locator when X public readback settles late", async () => {
+    const calls: CapturedRequest[] = [];
+    const pauses: number[] = [];
+    const body = "late X readback fixture";
+    let readbacks = 0;
+    const result = await executeXWebOperation(
+      xRecipe("posts.publish"),
+      { body },
+      xAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/CreateTweet")) {
+            return jsonResponse(createTweetResponse({ text: body }));
+          }
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            readbacks += 1;
+            return readbacks === 1
+              ? jsonResponse({ data: { tweetResult: { result: null } } })
+              : jsonResponse(publishedTweetReadback({ text: body }));
+          }
+          throw new Error(`unexpected delayed X readback request ${request.url.href}`);
+        }, {
+          sleep: (milliseconds) => {
+            pauses.push(milliseconds);
+            return Promise.resolve();
+          },
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: { posts: [{ id: CREATED_POST_ID }] },
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(readbacks).toBe(2);
+    expect(pauses).toEqual([250]);
+  });
+
+  test("reconciles one exact accepted X post without a provider write", async () => {
+    const calls: CapturedRequest[] = [];
+    const body = "Reconciled X post";
+    const identifier = canonicalJson({ postId: CREATED_POST_ID, mediaId: null });
+    const result = await readXWebPublishedMutationTarget(
+      xRecipe("posts.publish", 3),
+      { body },
+      xAuth,
+      identifier,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({ text: body }));
+          }
+          throw new Error(`unexpected X reconciliation request ${request.url.href}`);
+        }),
+      },
+    );
+    expect(result).toEqual({ present: true, postId: CREATED_POST_ID });
+    expect(calls.every((request) => request.method === "GET")).toBeTrue();
+    await expect(readXWebPublishedMutationTarget(
+      xRecipe("posts.publish", 3),
+      { body },
+      xAuth,
+      `${identifier} `,
+    )).rejects.toThrow("not canonical");
   });
 
   test("uploads one plan-bound PNG before CreateTweet and independently binds the returned photo", async () => {
@@ -1824,14 +1932,19 @@ describe("X authenticated internal-API runtime", () => {
         dispatchStarted: true,
         dispatch: { planned: 1, started: 1, verified: 1 },
       });
-      expect(events).toContain("POST upload.x.com/i/media/upload.json");
+      const lastUpload = events.lastIndexOf("POST upload.x.com/i/media/upload.json");
+      const admitted = events.indexOf("before 0");
+      const create = events.indexOf("POST x.com/i/api/graphql/hIL9XdleMYEtVXOZVbr8Bg/CreateTweet");
+      expect(lastUpload).toBeGreaterThan(-1);
+      expect(admitted).toBeGreaterThan(lastUpload);
+      expect(create).toBeGreaterThan(admitted);
       expect(events.at(-1)).toBe("after 1");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("marks an admitted X image upload failure indeterminate without creating a post", async () => {
+  test("keeps an X image upload failure before public-post admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-x-upload-failure-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
@@ -1872,11 +1985,12 @@ describe("X authenticated internal-API runtime", () => {
         },
       );
       expect(result).toMatchObject({
-        status: "indeterminate",
-        dispatchStarted: true,
-        dispatch: { planned: 1, started: 1, verified: 0 },
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "X post preparation failed before public post submission; failure stage: media-upload-init; retry with a fresh confirmed plan",
       });
-      expect(admissions).toBe(1);
+      expect(admissions).toBe(0);
       expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeFalse();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -2038,6 +2152,7 @@ describe("X authenticated internal-API runtime", () => {
         status: "indeterminate",
         dispatchStarted: true,
         dispatch: { planned: 1, started: 1, verified: 0 },
+        error: "X may have accepted the current post dispatch; failure stage: create-response-binding; reconcile before retrying",
       });
       expect(after).toEqual([]);
       expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);

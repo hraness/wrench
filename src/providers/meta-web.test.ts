@@ -8,6 +8,7 @@ import instagramManifest from "../assets/adapters/instagram/wrench-web-adapter.j
 import instagramV1Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.0.0.json";
 import threadsManifest from "../assets/adapters/threads/wrench-web-adapter.json";
 import threadsV1Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.0.0.json";
+import threadsV12Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.2.0.json";
 import { metaWebPlugin } from "../plugins/meta-web/plugin";
 import {
   META_WEB_OPERATIONS,
@@ -25,6 +26,7 @@ import {
   normalizeInstagramInbox,
   normalizeInstagramPost,
   normalizeThreadsFeedHtml,
+  normalizeThreadsPostHtml,
   parseFacebookViewerId,
   parseInstagramViewerId,
   parseMetaJsonScripts,
@@ -162,6 +164,9 @@ const threadsHtml = html({
                         has_liked: false,
                         has_viewer_saved: true,
                         like_count: 2,
+                        media_type: 2,
+                        original_width: 1080,
+                        original_height: 1920,
                       },
                     }],
                   },
@@ -397,6 +402,10 @@ describe("Meta consumer-web policy", () => {
       state: "observed",
       contractVersion: 2,
     });
+    expect(META_WEB_OPERATIONS.threads["posts.publish"]).toMatchObject({
+      state: "observed",
+      contractVersion: 4,
+    });
     expect(META_WEB_OPERATIONS.instagram["likes.set"]).toMatchObject({ state: "capture-required" });
     expect(META_WEB_OPERATIONS.instagram["messaging.send"]?.reason).toContain("E2EE");
     expect(META_WEB_OPERATIONS.threads["messaging.list"]).toMatchObject({ state: "capture-required" });
@@ -438,7 +447,7 @@ describe("Meta consumer-web policy", () => {
 
     expect(instagramManifest.version).toBe("1.2.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
-    expect(threadsManifest.version).toBe("1.2.0");
+    expect(threadsManifest.version).toBe("1.4.0");
     expect(threadsV1Manifest.version).toBe("1.0.0");
 
     for (const [site, operation, current, prior] of affected) {
@@ -456,6 +465,19 @@ describe("Meta consumer-web policy", () => {
         candidate.name === operation);
       expect(descriptor?.contractVersions).toEqual([1, 2]);
     }
+  });
+
+  test("versions locator-bound Threads publication while preserving reviewed predecessors", () => {
+    expect(threadsV12Manifest.version).toBe("1.2.0");
+    expect(threadsV12Manifest.operations["posts.publish"].webSession.contractVersion).toBe(2);
+    expect(threadsManifest.operations["posts.publish"].webSession.contractVersion).toBe(4);
+    expect(threadsManifest.operations["posts.publish"].input.required).toContain("attachment");
+
+    const binding = metaWebPlugin.bindings.find((candidate) =>
+      candidate.surfaceId === "threads");
+    const descriptor = binding?.operations.find((candidate) =>
+      candidate.name === "posts.publish");
+    expect(descriptor?.contractVersions).toEqual([1, 2, 3, 4]);
   });
 
   test("binds each consumer surface to its exact bootstrapped viewer", () => {
@@ -821,12 +843,14 @@ describe("Meta consumer-web policy", () => {
   });
 
   test("projects viewer-bound Threads and Facebook Relay preloads", () => {
-    expect(normalizeThreadsFeedHtml(threadsHtml, "12345", 10)).toMatchObject({
+    const threadsFeed = normalizeThreadsFeedHtml(threadsHtml, "12345", 10);
+    expect(threadsFeed).toMatchObject({
       feed: "for-you",
       posts: [{ id: "900_12345", caption: "hello" }],
       page_scope: "first-page-only",
       continuation_supported: false,
     });
+    expect((threadsFeed as { posts: readonly unknown[] }).posts[0]).not.toHaveProperty("image");
     expect(normalizeFacebookFeedHtml(facebookHtml, "24680", 10)).toMatchObject({
       feed: "home",
       posts: [{ id: "24680_999", message: "hello" }],
@@ -839,6 +863,106 @@ describe("Meta consumer-web policy", () => {
       threads: [{ thread_id: "777", participants: [{ id: "123", name: "Friend" }] }],
     });
     expect(metaWebEvidenceSnapshot.operations.facebook).not.toHaveProperty("inbox");
+  });
+
+  test("requires one exact response-bound Threads image in permalink readback", () => {
+    const expected = {
+      pk: "987654321_12345",
+      code: "CodeABC",
+      canonical_url: "https://www.threads.com/@person/post/CodeABC",
+      caption: { text: "how your email finds me" },
+      user: { pk: "12345", username: "person" },
+      media_type: 1,
+      original_width: 959,
+      original_height: 1022,
+      image_versions2: {
+        candidates: [{
+          width: 959,
+          height: 1022,
+          url: "https://scontent.cdninstagram.com/threads-fixture.png",
+        }],
+      },
+    };
+    expect(normalizeThreadsPostHtml(
+      `${threadsHtml}${html({ post: expected })}`,
+      "12345",
+      "987654321_12345",
+      "CodeABC",
+      "https://www.threads.com/@person/post/CodeABC",
+      "how your email finds me",
+      { width: 959, height: 1022 },
+    )).toMatchObject({
+      id: "987654321_12345",
+      image: {
+        height: 1022,
+        mediaId: "987654321_12345",
+        mediaType: 1,
+        width: 959,
+      },
+    });
+
+    const withoutImage = {
+      pk: expected.pk,
+      code: expected.code,
+      canonical_url: expected.canonical_url,
+      caption: expected.caption,
+      user: expected.user,
+    };
+    expect(() => normalizeThreadsPostHtml(
+      `${threadsHtml}${html({ post: withoutImage })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      { width: 959, height: 1022 },
+    )).toThrow("did not bind the confirmed actor, ID, code, permalink, text, and image");
+
+    expect(() => normalizeThreadsPostHtml(
+      `${threadsHtml}${html({
+        post: {
+          ...expected,
+          canonical_url: "https://www.threads.com/@other/post/CodeABC",
+        },
+      })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      { width: 959, height: 1022 },
+    )).toThrow("did not bind the confirmed actor, ID, code, permalink, text, and image");
+
+    expect(() => normalizeThreadsPostHtml(
+      `${threadsHtml}${html({ post: { ...expected, media_type: 2 } })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      { width: 959, height: 1022 },
+    )).toThrow("media_type must identify one reviewed image");
+
+    expect(() => normalizeThreadsPostHtml(
+      `${threadsHtml}${html({
+        post: {
+          ...expected,
+          image_versions2: {
+            candidates: [{
+              width: 320,
+              height: 341,
+              url: "https://scontent.cdninstagram.com/wrong-image.png",
+            }],
+          },
+        },
+      })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      { width: 959, height: 1022 },
+    )).toThrow("omitted an exact original-dimension image candidate");
   });
 
   test("accepts Facebook Stories only from one error-free reviewed news-feed root", () => {

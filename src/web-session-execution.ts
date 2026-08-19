@@ -8,6 +8,7 @@ import type {
   OperationInput,
   WebSessionRecipe,
 } from "./model";
+import type { ProviderAcceptedMutationTarget } from "./recovery";
 import {
   OperationDeadline,
   type OperationDeadlineClock,
@@ -49,6 +50,12 @@ export type WebSessionDispatchEvent = {
   readonly id: string;
   readonly index: number;
   readonly progress: WebSessionExecution["dispatch"];
+};
+
+export type WebSessionProviderAcceptedMutationTargetEvent = {
+  readonly id: string;
+  readonly index: number;
+  readonly target: ProviderAcceptedMutationTarget;
 };
 
 export type WebSessionOperationDeadline = Pick<
@@ -115,6 +122,14 @@ export type WebSessionExecutionOptions = {
    */
   readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
   readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+  /**
+   * Persist the exact provider-owned target immediately after a strict
+   * mutation response accepts the dispatch and before independent readback.
+   * Implementations must never call this for an inferred or scraped target.
+   */
+  readonly afterProviderAcceptedMutationTarget?: (
+    event: WebSessionProviderAcceptedMutationTargetEvent,
+  ) => Promise<void>;
   readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
 };
 
@@ -250,6 +265,13 @@ export async function runWebSessionOperationWithDeadline<T>(
           WEB_SESSION_OPERATION_LABEL,
         );
   const beforeDispatch = guardDispatch(options.beforeDispatch);
+  const afterProviderAcceptedMutationTarget =
+    options.afterProviderAcceptedMutationTarget === undefined
+      ? undefined
+      : (event: WebSessionProviderAcceptedMutationTargetEvent) => deadline.run(
+          () => options.afterProviderAcceptedMutationTarget!(event),
+          WEB_SESSION_OPERATION_LABEL,
+        );
   const afterDispatchVerified = guardDispatch(options.afterDispatchVerified);
   const cleanupBarriers: TrackedWebSessionCleanupBarrier[] = [];
   let acceptingCleanupBarriers = true;
@@ -284,6 +306,9 @@ export async function runWebSessionOperationWithDeadline<T>(
     operationDeadline: deadline,
     registerCleanupBarrier,
     ...(beforeDispatch === undefined ? {} : { beforeDispatch }),
+    ...(afterProviderAcceptedMutationTarget === undefined
+      ? {}
+      : { afterProviderAcceptedMutationTarget }),
     ...(afterDispatchVerified === undefined ? {} : { afterDispatchVerified }),
   };
   let outcome:

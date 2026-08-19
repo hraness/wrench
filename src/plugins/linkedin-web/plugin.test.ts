@@ -17,6 +17,9 @@ describe("LinkedIn web provider plugin", () => {
       risk: "R3",
       state: "observed",
       dispatch: "single",
+      reconciliation: {
+        kind: "provider-accepted-target-presence",
+      },
     });
     expect(operation?.historicalContractVersions).toEqual([2]);
     expect(operation?.planDispatches({

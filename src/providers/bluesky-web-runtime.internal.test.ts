@@ -14,7 +14,9 @@ import { BLUESKY_APPVIEW_PROXY } from "./bluesky-web";
 import {
   executeBlueskyWebOperation,
   probeBlueskyWebSubject,
+  readBlueskyWebContentDeleteDesiredState,
   readBlueskyWebDesiredState,
+  readBlueskyWebPublishedMutationTarget,
   type BlueskyWebRuntimeDependencies,
 } from "./bluesky-web-runtime";
 
@@ -133,6 +135,13 @@ function jsonResponse(value: unknown): Response {
   });
 }
 
+function jsonErrorResponse(value: unknown, status = 400): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
 function requestUrl(value: string | URL | Request): URL {
   return new URL(
     typeof value === "string"
@@ -165,6 +174,7 @@ function dependencies(
     bootstrapAccount: () => Promise.resolve(bootstrapAccount()),
     fetch,
     now: () => 2_000_000_000_000,
+    sleep: () => Promise.resolve(),
   };
 }
 
@@ -172,7 +182,7 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "bluesky",
     action,
-    contractVersion: action === "posts.publish" ? 2 : 1,
+    contractVersion: action === "posts.publish" ? 3 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 8 * 1024 * 1024,
   };
@@ -737,6 +747,200 @@ describe("Bluesky authenticated XRPC runtime", () => {
     ]);
   });
 
+  test("deletes only the exact current-account post revision and proves authoritative absence", async () => {
+    const postUri = `at://${VIEWER_DID}/app.bsky.feed.post/3ldelete`;
+    const expectedCid = `b${"e".repeat(40)}`;
+    const calls: CapturedRequest[] = [];
+    const events: string[] = [];
+    let recordReads = 0;
+    const deps = dependencies(calls, (request) => {
+      events.push(`${request.method} ${nsid(request)}`);
+      if (nsid(request) === "com.atproto.server.getSession") {
+        return jsonResponse(sessionResponse());
+      }
+      if (nsid(request) === "com.atproto.repo.getRecord") {
+        recordReads += 1;
+        expect(Object.fromEntries(request.url.searchParams)).toEqual({
+          repo: VIEWER_DID,
+          collection: "app.bsky.feed.post",
+          rkey: "3ldelete",
+        });
+        return recordReads === 1
+          ? jsonResponse({
+              uri: postUri,
+              cid: expectedCid,
+              value: {
+                $type: "app.bsky.feed.post",
+                text: "delete me",
+                createdAt: "2026-08-19T12:00:00.000Z",
+              },
+            })
+          : jsonErrorResponse({
+              error: "RecordNotFound",
+              message: "Could not locate record",
+            });
+      }
+      if (nsid(request) === "com.atproto.repo.deleteRecord") {
+        expect(request.method).toBe("POST");
+        expect(JSON.parse(String(request.body))).toEqual({
+          repo: VIEWER_DID,
+          collection: "app.bsky.feed.post",
+          rkey: "3ldelete",
+          swapRecord: expectedCid,
+        });
+        return jsonResponse({
+          commit: {
+            cid: `b${"f".repeat(40)}`,
+            rev: "3m4abcde234fg",
+          },
+        });
+      }
+      throw new Error(`unexpected deletion XRPC method ${nsid(request)}`);
+    });
+    const result = await executeBlueskyWebOperation(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        beforeDispatch: (event) => {
+          events.push(`before ${event.progress.started}`);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          events.push(`after ${event.progress.verified}`);
+          return Promise.resolve();
+        },
+        dependencies: deps,
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+      output: {
+        postUri,
+        expectedCid,
+        deleted: true,
+        effect: "deleted",
+      },
+    });
+    expect(events).toEqual([
+      "GET com.atproto.server.getSession",
+      "GET com.atproto.repo.getRecord",
+      "GET com.atproto.server.getSession",
+      "before 0",
+      "POST com.atproto.repo.deleteRecord",
+      "GET com.atproto.repo.getRecord",
+      "after 1",
+    ]);
+  });
+
+  test("reconciles deletion through read-only authoritative absence and fails closed on revision drift", async () => {
+    const postUri = `at://${VIEWER_DID}/app.bsky.feed.post/3ldelete`;
+    const expectedCid = `b${"e".repeat(40)}`;
+    const absentCalls: CapturedRequest[] = [];
+    expect(await readBlueskyWebContentDeleteDesiredState(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        dependencies: dependencies(absentCalls, (request) =>
+          nsid(request) === "com.atproto.server.getSession"
+            ? jsonResponse(sessionResponse())
+            : jsonErrorResponse({
+                error: "RecordNotFound",
+                message: "Could not locate record",
+              })
+        ),
+      },
+    )).toEqual({ present: false, postUri });
+    expect(absentCalls.every((request) => request.method === "GET")).toBeTrue();
+
+    const driftCalls: CapturedRequest[] = [];
+    const result = await executeBlueskyWebOperation(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        dependencies: dependencies(driftCalls, (request) =>
+          nsid(request) === "com.atproto.server.getSession"
+            ? jsonResponse(sessionResponse())
+            : jsonResponse({
+                uri: postUri,
+                cid: `b${"f".repeat(40)}`,
+                value: { $type: "app.bsky.feed.post" },
+              })
+        ),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+    });
+    expect(driftCalls.every((request) => request.method === "GET")).toBeTrue();
+  });
+
+  test("treats authoritative prior absence as a no-op and malformed post-dispatch responses as indeterminate", async () => {
+    const postUri = `at://${VIEWER_DID}/app.bsky.feed.post/3ldelete`;
+    const expectedCid = `b${"e".repeat(40)}`;
+    const absentCalls: CapturedRequest[] = [];
+    const absent = await executeBlueskyWebOperation(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        dependencies: dependencies(absentCalls, (request) =>
+          nsid(request) === "com.atproto.server.getSession"
+            ? jsonResponse(sessionResponse())
+            : jsonErrorResponse({
+                error: "RecordNotFound",
+                message: "Could not locate record",
+              })
+        ),
+      },
+    );
+    expect(absent).toMatchObject({
+      status: "succeeded",
+      noOp: true,
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+      output: { deleted: true, effect: "already-absent" },
+    });
+    expect(absentCalls.map(nsid)).toEqual([
+      "com.atproto.server.getSession",
+      "com.atproto.repo.getRecord",
+    ]);
+
+    const malformedCalls: CapturedRequest[] = [];
+    const malformed = await executeBlueskyWebOperation(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        dependencies: dependencies(malformedCalls, (request) => {
+          if (nsid(request) === "com.atproto.server.getSession") {
+            return jsonResponse(sessionResponse());
+          }
+          if (nsid(request) === "com.atproto.repo.getRecord") {
+            return jsonResponse({
+              uri: postUri,
+              cid: expectedCid,
+              value: { $type: "app.bsky.feed.post" },
+            });
+          }
+          return jsonResponse({ deleted: true });
+        }),
+      },
+    );
+    expect(malformed).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+    });
+    expect(malformed.error).toContain("failure stage: delete response");
+  });
+
   test("uploads one plan-bound PNG, creates one post, and independently binds its exact readback", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-publish-"));
     chmodSync(root, 0o700);
@@ -749,8 +953,26 @@ describe("Bluesky authenticated XRPC runtime", () => {
     const createdUri = `at://${VIEWER_DID}/app.bsky.feed.post/3lpublishedfixture`;
     const createdCid = `b${"c".repeat(40)}`;
     const blobCid = `b${"d".repeat(40)}`;
+    const expectedRecord = {
+      $type: "app.bsky.feed.post",
+      text,
+      createdAt,
+      embed: {
+        $type: "app.bsky.embed.images",
+        images: [{
+          image: {
+            $type: "blob",
+            ref: { $link: blobCid },
+            mimeType: "image/png",
+            size: imageBytes.byteLength,
+          },
+          alt,
+        }],
+      },
+    };
     const calls: CapturedRequest[] = [];
     const events: string[] = [];
+    const accepted: unknown[] = [];
     try {
       const result = await executeBlueskyWebOperation(
         recipe("posts.publish"),
@@ -767,6 +989,10 @@ describe("Bluesky authenticated XRPC runtime", () => {
             events.push(`before ${event.progress.started}`);
             return Promise.resolve();
           },
+          afterProviderAcceptedMutationTarget: (event) => {
+            accepted.push(event);
+            return Promise.resolve();
+          },
           afterDispatchVerified: (event) => {
             events.push(`after ${event.progress.verified}`);
             return Promise.resolve();
@@ -779,9 +1005,8 @@ describe("Bluesky authenticated XRPC runtime", () => {
               case "com.atproto.repo.uploadBlob": {
                 expect(request.method).toBe("POST");
                 expect(request.headers.get("content-type")).toBe("image/png");
-                expect(request.body).toBeInstanceOf(Blob);
-                const bytes = new Uint8Array(await (request.body as Blob).arrayBuffer());
-                expect(bytes).toEqual(imageBytes);
+                expect(request.body).toBeInstanceOf(Uint8Array);
+                expect(request.body).toEqual(imageBytes);
                 return jsonResponse({
                   blob: {
                     $type: "blob",
@@ -796,25 +1021,21 @@ describe("Bluesky authenticated XRPC runtime", () => {
                 expect(JSON.parse(String(request.body))).toEqual({
                   repo: VIEWER_DID,
                   collection: "app.bsky.feed.post",
-                  record: {
-                    $type: "app.bsky.feed.post",
-                    text,
-                    createdAt,
-                    embed: {
-                      $type: "app.bsky.embed.images",
-                      images: [{
-                        image: {
-                          $type: "blob",
-                          ref: { $link: blobCid },
-                          mimeType: "image/png",
-                          size: imageBytes.byteLength,
-                        },
-                        alt,
-                      }],
-                    },
-                  },
+                  record: expectedRecord,
                 });
                 return jsonResponse({ uri: createdUri, cid: createdCid });
+              case "com.atproto.repo.getRecord":
+                expect(request.method).toBe("GET");
+                expect(Object.fromEntries(request.url.searchParams)).toEqual({
+                  repo: VIEWER_DID,
+                  collection: "app.bsky.feed.post",
+                  rkey: "3lpublishedfixture",
+                });
+                return jsonResponse({
+                  uri: createdUri,
+                  cid: createdCid,
+                  value: expectedRecord,
+                });
               case "app.bsky.feed.getPosts":
                 expect(request.method).toBe("GET");
                 expect(request.url.searchParams.getAll("uris")).toEqual([createdUri]);
@@ -874,19 +1095,163 @@ describe("Bluesky authenticated XRPC runtime", () => {
       });
       expect(events).toEqual([
         "GET com.atproto.server.getSession",
+        "POST com.atproto.repo.uploadBlob",
         "GET com.atproto.server.getSession",
         "before 0",
-        "POST com.atproto.repo.uploadBlob",
         "POST com.atproto.repo.createRecord",
+        "GET com.atproto.repo.getRecord",
         "GET app.bsky.feed.getPosts",
         "after 1",
       ]);
+      expect(accepted).toEqual([{
+        id: "posts.publish",
+        index: 1,
+        target: {
+          schemaVersion: 1,
+          identifier: canonicalJson({
+            uri: createdUri,
+            cid: createdCid,
+            createdAt,
+            media: {
+              cid: blobCid,
+              mediaType: "image/png",
+              size: imageBytes.byteLength,
+            },
+          }),
+        },
+      }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("marks a post indeterminate when the image upload fails after durable dispatch admission", async () => {
+  test("polls the exact response-bound URI when the public Bluesky projection settles late", async () => {
+    const text = "Late Bluesky projection";
+    const createdAt = new Date(2_000_000_000_000).toISOString();
+    const createdUri = `at://${VIEWER_DID}/app.bsky.feed.post/3llatefixture`;
+    const createdCid = `b${"e".repeat(40)}`;
+    const expectedRecord = {
+      $type: "app.bsky.feed.post",
+      text,
+      createdAt,
+    };
+    const calls: CapturedRequest[] = [];
+    const pauses: number[] = [];
+    let appViewReads = 0;
+    const baseDependencies = dependencies(calls, (request) => {
+      switch (nsid(request)) {
+        case "com.atproto.server.getSession":
+          return jsonResponse(sessionResponse());
+        case "com.atproto.repo.createRecord":
+          return jsonResponse({ uri: createdUri, cid: createdCid });
+        case "com.atproto.repo.getRecord":
+          return jsonResponse({
+            uri: createdUri,
+            cid: createdCid,
+            value: expectedRecord,
+          });
+        case "app.bsky.feed.getPosts":
+          appViewReads += 1;
+          return appViewReads === 1
+            ? jsonResponse({ posts: [] })
+            : jsonResponse({
+                posts: [{
+                  uri: createdUri,
+                  cid: createdCid,
+                  author: {
+                    did: VIEWER_DID,
+                    handle: "viewer.test",
+                    displayName: "Synthetic viewer",
+                  },
+                  record: expectedRecord,
+                  indexedAt: createdAt,
+                  replyCount: 0,
+                  repostCount: 0,
+                  likeCount: 0,
+                  quoteCount: 0,
+                  viewer: {},
+                }],
+              });
+        default:
+          throw new Error(`unexpected delayed Bluesky readback request ${nsid(request)}`);
+      }
+    });
+    const runtimeDependencies: CompleteDependencies = {
+      ...baseDependencies,
+      sleep: (milliseconds) => {
+        pauses.push(milliseconds);
+        return Promise.resolve();
+      },
+    };
+
+    const result = await executeBlueskyWebOperation(
+      recipe("posts.publish"),
+      { body: text },
+      blueskyAuth,
+      { dependencies: runtimeDependencies },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: { posts: [{ uri: createdUri, cid: createdCid }] },
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(appViewReads).toBe(2);
+    expect(pauses).toEqual([250]);
+  });
+
+  test("reconciles one exact accepted Bluesky record without a provider write", async () => {
+    const text = "Reconciled Bluesky post";
+    const createdAt = "2026-08-18T12:00:00.000Z";
+    const uri = `at://${VIEWER_DID}/app.bsky.feed.post/3lreconcilefixture`;
+    const cid = `b${"f".repeat(40)}`;
+    const record = { $type: "app.bsky.feed.post", text, createdAt };
+    const identifier = canonicalJson({ uri, cid, createdAt, media: null });
+    const calls: CapturedRequest[] = [];
+    const result = await readBlueskyWebPublishedMutationTarget(
+      recipe("posts.publish"),
+      { body: text },
+      blueskyAuth,
+      identifier,
+      {
+        dependencies: dependencies(calls, (request) => {
+          switch (nsid(request)) {
+            case "com.atproto.server.getSession":
+              return jsonResponse(sessionResponse());
+            case "com.atproto.repo.getRecord":
+              return jsonResponse({ uri, cid, value: record });
+            case "app.bsky.feed.getPosts":
+              return jsonResponse({
+                posts: [{
+                  uri,
+                  cid,
+                  author: { did: VIEWER_DID, handle: "viewer.test" },
+                  record,
+                  indexedAt: createdAt,
+                  replyCount: 0,
+                  repostCount: 0,
+                  likeCount: 0,
+                  quoteCount: 0,
+                  viewer: {},
+                }],
+              });
+            default:
+              throw new Error(`unexpected Bluesky reconciliation request ${nsid(request)}`);
+          }
+        }),
+      },
+    );
+    expect(result).toEqual({ present: true, uri, cid });
+    expect(calls.every((request) => request.method === "GET")).toBeTrue();
+    await expect(readBlueskyWebPublishedMutationTarget(
+      recipe("posts.publish"),
+      { body: text },
+      blueskyAuth,
+      `${identifier} `,
+    )).rejects.toThrow("not canonical");
+  });
+
+  test("keeps an image upload failure before durable createRecord admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-upload-failure-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
@@ -921,19 +1286,108 @@ describe("Bluesky authenticated XRPC runtime", () => {
         },
       );
       expect(result).toMatchObject({
-        status: "indeterminate",
-        dispatchStarted: true,
-        dispatch: { planned: 1, started: 1, verified: 0 },
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "Bluesky post preparation failed before public record submission; failure stage: media-upload; retry with a fresh confirmed plan",
       });
-      expect(beforeDispatch).toBe(1);
+      expect(beforeDispatch).toBe(0);
       expect(calls.map(nsid)).toEqual([
-        "com.atproto.server.getSession",
         "com.atproto.server.getSession",
         "com.atproto.repo.uploadBlob",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("keeps a createRecord failure indeterminate after exact dispatch admission", async () => {
+    const calls: CapturedRequest[] = [];
+    let beforeDispatch = 0;
+    const result = await executeBlueskyWebOperation(
+      recipe("posts.publish"),
+      { body: "Create response must remain uncertain" },
+      blueskyAuth,
+      {
+        beforeDispatch: () => {
+          beforeDispatch += 1;
+          return Promise.resolve();
+        },
+        dependencies: dependencies(calls, (request) => {
+          if (nsid(request) === "com.atproto.server.getSession") {
+            return jsonResponse(sessionResponse());
+          }
+          if (nsid(request) === "com.atproto.repo.createRecord") {
+            return new Response("create failed", { status: 503 });
+          }
+          throw new Error(`unexpected request after failed createRecord: ${nsid(request)}`);
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+      error: "Bluesky may have accepted the current post dispatch; failure stage: create-record; reconcile before retrying",
+    });
+    expect(beforeDispatch).toBe(1);
+    expect(calls.map(nsid)).toEqual([
+      "com.atproto.server.getSession",
+      "com.atproto.server.getSession",
+      "com.atproto.repo.createRecord",
+    ]);
+  });
+
+  test("retains the exact accepted target when authoritative readback fails", async () => {
+    const text = "Accepted Bluesky readback failure";
+    const createdAt = new Date(2_000_000_000_000).toISOString();
+    const uri = `at://${VIEWER_DID}/app.bsky.feed.post/3lreadbackfailure`;
+    const cid = `b${"f".repeat(40)}`;
+    const calls: CapturedRequest[] = [];
+    const accepted: unknown[] = [];
+    const result = await executeBlueskyWebOperation(
+      recipe("posts.publish"),
+      { body: text },
+      blueskyAuth,
+      {
+        afterProviderAcceptedMutationTarget: (event) => {
+          accepted.push(event);
+          return Promise.resolve();
+        },
+        dependencies: dependencies(calls, (request) => {
+          switch (nsid(request)) {
+            case "com.atproto.server.getSession":
+              return jsonResponse(sessionResponse());
+            case "com.atproto.repo.createRecord":
+              return jsonResponse({ uri, cid });
+            case "com.atproto.repo.getRecord":
+              return new Response("readback failed", { status: 503 });
+            default:
+              throw new Error(`unexpected request after failed record readback: ${nsid(request)}`);
+          }
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+      error: "Bluesky may have accepted the current post dispatch; failure stage: authoritative-record-readback; reconcile before retrying",
+    });
+    expect(accepted).toEqual([{
+      id: "posts.publish",
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: canonicalJson({ uri, cid, createdAt, media: null }),
+      },
+    }]);
+    expect(calls.map(nsid)).toEqual([
+      "com.atproto.server.getSession",
+      "com.atproto.server.getSession",
+      "com.atproto.repo.createRecord",
+      "com.atproto.repo.getRecord",
+    ]);
   });
 
   test("all unproven operations acquire no session and dispatch nothing", () => {

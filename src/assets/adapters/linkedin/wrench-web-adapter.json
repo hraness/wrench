@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -422,7 +422,7 @@
       }
     },
     "posts.publish": {
-      "description": "Publish one exact confirmed LinkedIn post with text and an optional single PNG through the current first-party image-registration/upload and post-create contracts, then independently read it back by the response-bound share URN.",
+      "description": "Publish one exact confirmed LinkedIn post with text and an optional single PNG through bounded ordered page staging and the current first-party image-registration/upload and post-create contracts, durably retain the accepted share URN, then independently read it back.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible LinkedIn post with the exact confirmed audience and content.",
       "idempotency": "local-at-most-once",
@@ -472,7 +472,7 @@
       "webSession": {
         "site": "linkedin",
         "action": "posts.publish",
-        "contractVersion": 2,
+        "contractVersion": 3,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }

@@ -22,8 +22,10 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(blueskyContracts),
-  "5a038a2dea2dc580f1771c3e25ff53cf170f615e3b905847fdb85351d6ffe82b",
-  {},
+  "e7d1cfaeb830ed769874b28541af19713ed750a9edf0f9e76f8078bc2adf8bea",
+  {
+    "posts.publish": [2],
+  },
   {
     "messaging.list": {
       state: "unsupported",
@@ -35,6 +37,23 @@ const operations = webSessionContractOperations(
     },
   },
 ).map((operation) => {
+  if (operation.name === "posts.publish") {
+    return Object.freeze({
+      ...operation,
+      reconciliation: Object.freeze({
+        kind: "provider-accepted-target-presence" as const,
+      }),
+    });
+  }
+  if (operation.name === "content.delete") {
+    return Object.freeze({
+      ...operation,
+      reconciliation: Object.freeze({
+        kind: "boolean-desired-state" as const,
+        desiredState: (): boolean => false,
+      }),
+    });
+  }
   if (!Object.hasOwn(desiredStateKeys, operation.name)) return operation;
   const stateKey = desiredStateKeys[
     operation.name as keyof typeof desiredStateKeys
@@ -85,7 +104,36 @@ export const blueskyWebPlugin = defineProviderPlugin({
         probe: runtime.probeBlueskyWebSubject,
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeBlueskyWebOperation(recipe, input, auth, options),
-        reconcile: async (operation, input, auth) => {
+        reconcile: async (operation, input, auth, context) => {
+          if (operation === "posts.publish") {
+            if (context?.kind !== "provider-accepted-target-presence") {
+              throw new Error("Bluesky posts.publish reconciliation requires one exact accepted target");
+            }
+            const readback = await runtime.readBlueskyWebPublishedMutationTarget({
+              site: "bluesky",
+              action: operation,
+              contractVersion: 3,
+              timeoutMs: 60_000,
+              maxOutputBytes: 8 * 1024 * 1024,
+            }, input, auth, context.target.identifier);
+            return {
+              actualState: readback.present,
+              reason: "exact-target-readback",
+            };
+          }
+          if (operation === "content.delete") {
+            const readback = await runtime.readBlueskyWebContentDeleteDesiredState({
+              site: "bluesky",
+              action: operation,
+              contractVersion: 1,
+              timeoutMs: 60_000,
+              maxOutputBytes: 8 * 1024 * 1024,
+            }, input, auth);
+            return {
+              actualState: readback.present,
+              reason: "authoritative-record-readback",
+            };
+          }
           if (!Object.hasOwn(desiredStateKeys, operation)) {
             throw new Error(`Bluesky ${operation} has no reconciliation hook`);
           }

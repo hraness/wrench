@@ -529,6 +529,32 @@ describe("wrench CLI grammar", () => {
 
   test("parses secret-free auth locators and explicit removal", () => {
     expect(parseWrenchArguments([
+      "auth", "login", "gmail-main",
+      "--client-file", "/private/google-desktop-client.json",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "auth-login",
+        id: "gmail-main",
+        provider: "gmail",
+        clientFile: "/private/google-desktop-client.json",
+        openBrowser: true,
+        force: false,
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "auth", "login", "gmail-main",
+      "--provider", "gmail",
+      "--client-file", "/private/google-desktop-client.json",
+      "--no-open",
+      "--force",
+    ])).toMatchObject({
+      ok: true,
+      value: { openBrowser: false, force: true },
+    });
+    expect(parseWrenchArguments([
       "auth",
       "add",
       "linkedin",
@@ -905,6 +931,7 @@ describe("wrench CLI grammar", () => {
         operationId: "messaging.send",
         inputSource: "@message.json",
         authId: "linkedin-live",
+        duplicateRiskOf: [],
         preview: true,
         cacheOnly: false,
         projectionIdentityOnly: false,
@@ -930,6 +957,7 @@ describe("wrench CLI grammar", () => {
         operationId: "messaging.send",
         inputSource: "{}",
         authId: "linkedin",
+        duplicateRiskOf: [],
         preview: false,
         cacheOnly: false,
         projectionIdentityOnly: false,
@@ -1112,6 +1140,39 @@ describe("wrench CLI grammar", () => {
     expect(parseWrenchArguments(["plans", "cancel", "a".repeat(64), "--yes"])).toEqual({
       ok: true,
       value: { command: "plans-cancel", digest: "a".repeat(64), yes: true },
+    });
+  });
+
+  test("parses bounded explicit duplicate-risk source runs", () => {
+    const first = "11111111-1111-4111-8111-111111111111";
+    const second = "22222222-2222-4222-8222-222222222222";
+    expect(parseWrenchArguments([
+      "invoke", "x-web", "posts.publish",
+      "--input", "{}", "--auth", "x-main", "--preview",
+      "--duplicate-risk-of", first,
+    ])).toMatchObject({
+      ok: true,
+      value: { duplicateRiskOf: [first] },
+    });
+    for (const values of [
+      ["not-a-run"],
+      [first, first],
+      [first, second],
+      Array.from({ length: 26 }, (_, index) =>
+        `00000000-0000-4000-8${String(index).padStart(3, "0")}-000000000000`),
+    ]) {
+      const raw = [
+        "invoke", "x-web", "posts.publish", "--preview",
+        ...values.flatMap((value) => ["--duplicate-risk-of", value]),
+      ];
+      expect(parseWrenchArguments(raw).ok).toBeFalse();
+    }
+    expect(parseWrenchArguments([
+      "thread", "publish", "x", "--adapter", "x-web", "--text", "hello",
+      "--auth", "x-main", "--preview", "--duplicate-risk-of", first,
+    ])).toEqual({
+      ok: false,
+      message: "unknown option: --duplicate-risk-of",
     });
   });
 

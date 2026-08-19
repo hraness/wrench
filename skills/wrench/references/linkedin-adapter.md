@@ -6,8 +6,10 @@ draft for the bound current member, supports paragraphs, H1/H2 headings, native 
 native HTTPS links, one distinct banner cover, and ordered inline images with
 required alt text and optional captions, and independently verifies the exact unpublished result
 from the authenticated editor-page server payload. The post operation publishes
-one confirmed text post with an optional single plan-bound PNG, binds the exact
-member and returned share, and verifies an independent exact-share readback.
+one confirmed text post with an optional single plan-bound PNG, stages real-size
+image bytes in bounded ordered contained-browser commands, binds the exact
+member and returned share, durably retains that accepted share target, and
+verifies an independent exact-share readback.
 Every other consumer-web capability remains `capture-required` and inert.
 
 A browser may record a managed HAR, bootstrap the private session, or resolve
@@ -269,10 +271,12 @@ Do not guess a Voyager/GraphQL mutation from a bundle, replay a captured payload
 
 For `messaging.send`, use an already-read, user-approved, low-stakes conversation. Keep recruiting and employment threads out of fixtures. A successful pressure test requires the internal `createMessage` response contract and an independent R1 read of the exact returned message; a visibly cleared textbox is irrelevant. Text-only and each attachment family are separate fixtures: the current manifest accepts one reviewed image, GIF, MP4 video, PDF, presentation, or word-processing document, but that input schema remains inert until upload initialization, byte transfer, asset ownership, message association, and independent readback are all captured and response-bound.
 
-`posts.publish@2` is the separate observed R3 post contract. It accepts exact
+`posts.publish@3` is the separate observed R3 post contract. It accepts exact
 text and at most one plan-bound PNG with descriptive alt text, admits the
-image transfer and post create once, and verifies the response-bound share
-URN through an independent current-member readback. It does not authorize an
+image transfer and post create once, stages the PNG as at most 569 ordered
+48-KiB base64 chunks in batches of at most 32 commands, clears that page state
+before transfer, durably retains the response-bound share URN, and verifies it
+through an independent current-member readback. It does not authorize an
 Article publication, repost, quote, comment, message, or additional media.
 
 For `relationships.connect`, use a user-approved profile that is not already
@@ -287,7 +291,7 @@ R1 reads run only after they graduate and pass account binding.
 private `articles.draft.save` is R2 because its exact autosave and unpublished
 readback contract has graduated. Messages, comments, replies, posts, reposts,
 quotes, connection requests, and article publication are R3; only the exact
-observed `posts.publish@2` post shape is executable among those R3 families.
+observed `posts.publish@3` post shape is executable among those R3 families.
 
 Every R2/R3 operation must preview the exact account realm, actor, target, text/media hashes, side effect, contract hash, and dispatch schedule. Confirm once. Require local duplicate refusal. Treat an uncertain response after request start as `indeterminate`; never retry by clicking LinkedIn or by changing message whitespace.
 

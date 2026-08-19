@@ -124,11 +124,11 @@ Bind the auth realm separately to the current provider account. Resolve a stable
 | `R1` | Reviewed read with no intended mutation | Direct |
 | `R2` | Bounded, normally reversible mutation | Exact preview and digest confirmation |
 | `R3` | Externally visible or consequential mutation | Exact preview and digest confirmation |
-| `R4` | Sensitive/destructive action outside this boundary | Blocked |
+| `R4` | Sensitive/high-authority action outside this boundary | Blocked |
 
 For R1, use `sideEffect: "none"`, `idempotency: "none"`, and `dedupeWindowMs: 0`. Permit only read methods and explicitly deny observed presence, seen, delivery, read-receipt, badge, and acknowledgement requests.
 
-For R2/R3, describe the remote effect, use `local-at-most-once`, and choose a 60-second-to-30-day dedupe window. Bind the complete dispatch schedule before confirmation. Messages, comments, replies, posts, reposts, quotes, and threads are R3. Likes, bookmarks, reversible reactions, and follows may be R2 when the exact create/delete desired-state contract is captured. Credential, access-control, financial, bulk, destructive deletion, and administration actions remain R4.
+For R2/R3, describe the remote effect, use `local-at-most-once`, and choose a 60-second-to-30-day dedupe window. Bind the complete dispatch schedule before confirmation. Messages, comments, replies, posts, reposts, quotes, and threads are R3. Likes, bookmarks, reversible reactions, and follows may be R2 when the exact create/delete desired-state contract is captured. One exact authored-item deletion may be R3 only on a reviewed surface that binds current-account ownership, an immutable target/revision, a single delete request, and independent exact absence readback. Credential, access-control, financial, bulk/untargeted deletion, account deletion, and administration actions remain R4.
 
 Mark dispatch durable immediately before the request leaves. Mark verification only after an exact response variant and target/account bindings pass. A timeout or binding failure after dispatch is `indeterminate`; a stopped multi-request schedule after verified earlier effects is `partial`. Never auto-resume either state.
 

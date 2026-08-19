@@ -36,6 +36,15 @@ export type WrenchArguments =
       readonly json: boolean;
     }
   | { readonly command: "auth-list"; readonly json: boolean }
+  | {
+      readonly command: "auth-login";
+      readonly id: string;
+      readonly provider: "gmail";
+      readonly clientFile: string;
+      readonly openBrowser: boolean;
+      readonly force: boolean;
+      readonly json: boolean;
+    }
   | { readonly command: "auth-bind"; readonly id: string; readonly site: ProviderPluginSurfaceId; readonly force: boolean; readonly json: boolean }
   | { readonly command: "auth-pair"; readonly id: string; readonly phone?: string }
   | { readonly command: "auth-sync"; readonly id: string; readonly once: true; readonly json: boolean }
@@ -183,6 +192,7 @@ export type WrenchArguments =
       readonly operationId: string;
       readonly inputSource: string;
       readonly authId: string;
+      readonly duplicateRiskOf: readonly string[];
       readonly preview: boolean;
       readonly cacheOnly: boolean;
       readonly projectionIdentityOnly: boolean;
@@ -242,6 +252,28 @@ function validRunId(value: string): string | null {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
     ? null
     : "run ID must be a lowercase UUID";
+}
+
+function duplicateRiskRunIds(
+  values: readonly string[],
+): ParseWrenchFailure | readonly string[] {
+  if (values.length > 1) {
+    return {
+      ok: false,
+      message: "duplicate-tolerant intent v1 accepts exactly one --duplicate-risk-of source run",
+    };
+  }
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (validRunId(value) !== null) {
+      return { ok: false, message: "--duplicate-risk-of must name a lowercase UUID run ID" };
+    }
+    if (seen.has(value)) {
+      return { ok: false, message: "--duplicate-risk-of must not name the same run more than once" };
+    }
+    seen.add(value);
+  }
+  return Object.freeze([...values].sort());
 }
 
 function knownPlatformSurface(value: string): PlatformSurfaceId | null {
@@ -821,6 +853,40 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       const json = simpleJsonOptions(raw.slice(2), "auth list");
       return typeof json === "boolean" ? { ok: true, value: { command: "auth-list", json } } : json;
     }
+    if (subcommand === "login") {
+      const id = raw[2];
+      if (id === undefined) return { ok: false, message: "auth login requires an ID" };
+      const issue = validId(id, "auth ID");
+      if (issue !== null) return { ok: false, message: issue };
+      const parsed = optionValues(
+        raw.slice(3),
+        ["--provider", "--client-file"],
+        ["--no-open", "--force", "--json"],
+      );
+      if (isFailure(parsed)) return parsed;
+      if (
+        parsed.values["--provider"] !== undefined
+        && parsed.values["--provider"] !== "gmail"
+      ) {
+        return { ok: false, message: "auth login supports only --provider gmail" };
+      }
+      const clientFile = parsed.values["--client-file"];
+      if (clientFile === undefined || clientFile.length > 4_096) {
+        return { ok: false, message: "auth login requires --client-file <downloaded-desktop-client.json>" };
+      }
+      return {
+        ok: true,
+        value: {
+          command: "auth-login",
+          id,
+          provider: "gmail",
+          clientFile,
+          openBrowser: !parsed.booleans.has("--no-open"),
+          force: parsed.booleans.has("--force"),
+          json: parsed.booleans.has("--json"),
+        },
+      };
+    }
     if (subcommand === "add") {
       const id = raw[2];
       if (id === undefined) return { ok: false, message: "auth add requires an ID" };
@@ -1044,7 +1110,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       const parsed = optionValues(raw.slice(3), [], ["--yes"]);
       return isFailure(parsed) ? parsed : { ok: true, value: { command: "auth-remove", id, yes: parsed.booleans.has("--yes") } };
     }
-    return { ok: false, message: "auth requires list, add, pair, sync, bind, or remove" };
+    return { ok: false, message: "auth requires list, login, add, pair, sync, bind, or remove" };
   }
   if (first === "adapter") {
     const subcommand = raw[1];
@@ -1320,8 +1386,17 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     if (adapterIssue !== null) return { ok: false, message: adapterIssue };
     const operationIssue = validOperation(operationId);
     if (operationIssue !== null) return { ok: false, message: operationIssue };
-    const parsed = optionValues(raw.slice(3), ["--input", "--auth"], ["--preview", "--cache-only", "--projection-identity-only", "--headed", "--json"]);
+    const parsed = optionValues(
+      raw.slice(3),
+      ["--input", "--auth"],
+      ["--preview", "--cache-only", "--projection-identity-only", "--headed", "--json"],
+      ["--duplicate-risk-of"],
+    );
     if (isFailure(parsed)) return parsed;
+    const duplicateRiskOf = duplicateRiskRunIds(
+      parsed.repeatedValues["--duplicate-risk-of"] ?? [],
+    );
+    if ("ok" in duplicateRiskOf) return duplicateRiskOf;
     if (
       parsed.booleans.has("--cache-only")
       && parsed.booleans.has("--preview")
@@ -1357,6 +1432,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         operationId,
         inputSource: parsed.values["--input"] ?? "{}",
         authId: parsed.values["--auth"] ?? adapterId,
+        duplicateRiskOf,
         preview: parsed.booleans.has("--preview"),
         cacheOnly: parsed.booleans.has("--cache-only"),
         projectionIdentityOnly:

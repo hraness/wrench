@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "threads-web",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "displayName": "Threads (Authenticated Internal API)",
   "surfaceId": "threads",
   "origins": [
@@ -367,7 +367,7 @@
       }
     },
     "posts.publish": {
-      "description": "Observed contract: publish one confirmed Threads post with one reviewed PNG after exact viewer, upload, response, and independent permalink readback binding.",
+      "description": "Observed contract: publish one confirmed Threads post with one reviewed PNG after exact viewer binding, synchronous upload completion, exact minimal created-locator binding, durable upload-dimension target retention, and independent exact permalink actor/text/image readback.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible Threads post with the exact confirmed text and one reviewed PNG.",
       "idempotency": "local-at-most-once",
@@ -404,7 +404,7 @@
       "webSession": {
         "site": "threads",
         "action": "posts.publish",
-        "contractVersion": 2,
+        "contractVersion": 4,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }

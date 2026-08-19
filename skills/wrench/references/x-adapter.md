@@ -171,15 +171,17 @@ The current registry keeps these text/desired-state exchanges capture-required:
 - `replies.create` (`R3`): one text reply bound to an exact parent;
 - `posts.repost` (`R3`): exact desired repost state;
 - `posts.quote` (`R3`): one text quote bound to an exact post.
+- `content.delete` (`R3`): the DeleteTweet descriptor is revision evidence only; keep deletion capture-required until an authorized fixture binds the exact authored target and text, request variables, accepted response, and exact not-found readback.
 
 Current `x-client-transaction-id` generation is code-owned: wrench resolves the unique wrapper module, exported helper, and lazy-module evidence from the current first-party main bundle, calls that cached helper through one contained private agent-browser session, closes and cleans the session, then places the ephemeral value only on the already-reviewed in-origin mutation request. Drift or bootstrap failure occurs before the durable dispatch boundary and is never retried. This prerequisite does not by itself graduate the contract states listed above.
 
 `likes.set` and `content.save` (`R2`) bind the exact account and post, select only the matching create/delete mutation for the confirmed desired state, validate the operation-specific `Done` response, and independently read the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. `articles.draft.save` is the separate observed private structured-text-and-inline-image contract above.
 
-`posts.publish@2` is the separate observed R3 post contract. It accepts exact
+`posts.publish@3` is the separate observed R3 post contract. It accepts exact
 text and at most one plan-bound PNG, binds the account and uploaded media ID,
-admits one CreateTweet dispatch, and independently verifies the returned post
-through TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
+admits one CreateTweet dispatch, durably retains the response-bound post/media
+target before readback, and polls only that exact post through
+TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
 Article publishing remain capture-required.
 
 Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.

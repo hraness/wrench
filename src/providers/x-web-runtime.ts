@@ -37,6 +37,7 @@ import {
   type WebSessionDispatchEvent,
   type WebSessionExecution,
   type WebSessionOperationDeadline,
+  type WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
 import {
   generateXClientTransactionId,
@@ -78,11 +79,13 @@ const MAX_ARTICLE_MEDIA_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_X_IMAGE_BYTES = 20 * 1024 * 1024;
 const X_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const MAX_X_UPLOAD_RESPONSE_BYTES = 512 * 1024;
+const PUBLISH_READBACK_DELAYS_MS = Object.freeze([0, 250, 750, 1_500]);
 
 type JsonRecord = Record<string, unknown>;
 
 export type XWebRuntimeDependencies = Partial<WebSessionNetworkDependencies>
-  & Pick<XTransactionBrowserDependencies, "createBrowserSession">;
+  & Pick<XTransactionBrowserDependencies, "createBrowserSession">
+  & { readonly sleep?: (milliseconds: number) => Promise<void> };
 
 type XBootstrap = {
   readonly auth: WrenchAuth;
@@ -1018,6 +1021,115 @@ async function tweetReadback(bootstrap: XBootstrap, id: string): Promise<JsonRec
   return result;
 }
 
+async function waitForTweetPublishReadback(
+  bootstrap: XBootstrap,
+  id: string,
+  sleep: (milliseconds: number) => Promise<void>,
+): Promise<JsonRecord> {
+  let lastError: unknown;
+  for (const delay of PUBLISH_READBACK_DELAYS_MS) {
+    if (delay > 0) {
+      const pause = () => sleep(delay);
+      if (bootstrap.operationDeadline === undefined) await pause();
+      else await bootstrap.operationDeadline.run(
+        pause,
+        "authenticated web operation deadline",
+      );
+    }
+    try {
+      return await tweetReadback(bootstrap, id);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error("X independent post readback did not settle within the reviewed bound", {
+    cause: lastError,
+  });
+}
+
+type XWebPublishedMutationTarget = {
+  readonly postId: string;
+  readonly mediaId: string | null;
+};
+
+function parseXWebPublishedMutationTarget(
+  identifier: string,
+): XWebPublishedMutationTarget {
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier);
+  } catch {
+    throw new Error("X provider-accepted post target is not canonical JSON");
+  }
+  const target = record(value, "X provider-accepted post target");
+  if (Object.keys(target).sort().join(",") !== "mediaId,postId") {
+    throw new Error("X provider-accepted post target contained unsupported fields");
+  }
+  const postIdValue = postId(
+    target.postId,
+    "X provider-accepted post target post ID",
+  );
+  const mediaId = target.mediaId === null
+    ? null
+    : xMediaId(
+        target.mediaId,
+        "X provider-accepted post target media ID",
+      );
+  const parsed = Object.freeze({ postId: postIdValue, mediaId });
+  if (canonicalJson(parsed) !== identifier) {
+    throw new Error("X provider-accepted post target is not canonical");
+  }
+  return parsed;
+}
+
+/**
+ * Reconcile one exact response-bound X publish target with reviewed reads
+ * only. Absence or drift throws so the kernel retains the unsettled ledger.
+ */
+export async function readXWebPublishedMutationTarget(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  identifier: string,
+  options: {
+    readonly dependencies?: XWebRuntimeDependencies;
+  } = {},
+): Promise<{ readonly present: true; readonly postId: string }> {
+  if (
+    recipe.site !== "x"
+    || recipe.action !== "posts.publish"
+    || recipe.contractVersion !== 3
+  ) {
+    throw new Error("X publish recovery supports only posts.publish@3");
+  }
+  const target = parseXWebPublishedMutationTarget(identifier);
+  const hasMedia = input.media !== undefined;
+  if (
+    hasMedia !== (target.mediaId !== null)
+    || (hasMedia && input.media_type !== "image/png")
+    || (!hasMedia && input.media_type !== undefined)
+  ) {
+    throw new Error("X provider-accepted post target did not bind the confirmed attachment shape");
+  }
+  const text = requiredString(input.body, "input.body", 280);
+  const bootstrap = await bootstrapX(auth, recipe, options.dependencies);
+  const viewer = await requireBoundViewer(bootstrap, auth);
+  const readback = await tweetReadback(bootstrap, target.postId);
+  const rebound = assertTweetBinding(
+    readback,
+    text,
+    null,
+    null,
+    viewer.id,
+    target.mediaId,
+    "X publish recovery readback",
+  );
+  if (rebound.id !== target.postId) {
+    throw new Error("X publish recovery readback changed the accepted post ID");
+  }
+  return Object.freeze({ present: true, postId: target.postId });
+}
+
 async function desiredStateReadback(
   bootstrap: XBootstrap,
   id: string,
@@ -1238,36 +1350,60 @@ function parseXMediaInit(value: unknown, expectedSize: number): XUploadedMedia {
   return Object.freeze({ id, key });
 }
 
+type XMediaFinalizeBindingFailureStage =
+  | "media-upload-finalize-response-object"
+  | "media-upload-finalize-response-fields"
+  | "media-upload-finalize-media-id"
+  | "media-upload-finalize-media-key"
+  | "media-upload-finalize-size-type"
+  | "media-upload-finalize-size-value"
+  | "media-upload-finalize-expiry"
+  | "media-upload-finalize-image";
+
 function parseXMediaFinalize(
   value: unknown,
   expected: XUploadedMedia,
   expectedSize: number,
   expectedMediaType: string,
+  onFailureStage?: (stage: XMediaFinalizeBindingFailureStage) => void,
 ): void {
+  onFailureStage?.("media-upload-finalize-response-object");
   const response = record(value, "X media FINALIZE response");
+  onFailureStage?.("media-upload-finalize-response-fields");
   exactResponseKeys(
     response,
     ["expires_after_secs", "media_id", "media_id_string", "size"],
     ["image", "media_key"],
     "X media FINALIZE response",
   );
+  onFailureStage?.("media-upload-finalize-media-id");
   if (xMediaId(response.media_id_string, "X media FINALIZE response media_id_string") !== expected.id) {
     throw new Error("X media FINALIZE response did not bind the initialized media ID");
   }
   if (response.media_key !== undefined) {
+    onFailureStage?.("media-upload-finalize-media-key");
     if (xMediaKey(response.media_key, expected.id, "X media FINALIZE response media_key") !== expected.key) {
       throw new Error("X media FINALIZE response changed the initialized media key");
     }
   }
+  onFailureStage?.("media-upload-finalize-size-type");
+  if (
+    !Number.isSafeInteger(response.size)
+    || (response.size as number) < 1
+    || (response.size as number) > MAX_X_IMAGE_BYTES
+  ) throw new Error("X media FINALIZE response size was invalid");
+  onFailureStage?.("media-upload-finalize-size-value");
   if (response.size !== expectedSize) {
     throw new Error("X media FINALIZE response did not bind the confirmed file size");
   }
+  onFailureStage?.("media-upload-finalize-expiry");
   if (
     !Number.isSafeInteger(response.expires_after_secs)
     || (response.expires_after_secs as number) < 1
     || (response.expires_after_secs as number) > 7 * 24 * 60 * 60
   ) throw new Error("X media FINALIZE response expiry was invalid");
   if (response.image !== undefined) {
+    onFailureStage?.("media-upload-finalize-image");
     const image = record(response.image, "X media FINALIZE response image");
     exactResponseKeys(image, ["h", "image_type", "w"], [], "X media FINALIZE response image");
     if (
@@ -1364,10 +1500,19 @@ function xUploadHeaders(
   return { ...xHeaders(bootstrap, false), ...fixed };
 }
 
+type XMediaUploadFailureStage =
+  | "media-upload-session"
+  | "media-upload-init"
+  | "media-upload-append"
+  | "media-upload-finalize-request"
+  | XMediaFinalizeBindingFailureStage;
+
 async function uploadXImage(
   bootstrap: XBootstrap,
   image: XBoundImage,
+  onFailureStage?: (stage: XMediaUploadFailureStage) => void,
 ): Promise<XUploadedMedia> {
+  onFailureStage?.("media-upload-session");
   const uploadClient = await createWebSessionClient(X_UPLOAD_ORIGIN, bootstrap.auth, {
     timeoutMs: bootstrap.timeoutMs,
     ...(bootstrap.signal === undefined ? {} : { signal: bootstrap.signal }),
@@ -1381,6 +1526,7 @@ async function uploadXImage(
   if (webSessionCookie(uploadClient.cookies, "ct0") !== bootstrap.csrf) {
     throw new Error("X upload origin no longer matched the confirmed session");
   }
+  onFailureStage?.("media-upload-init");
   const initialized = parseXMediaInit(
     await uploadClient.requestJson({
       url: xMediaUploadUrl("INIT", {
@@ -1396,6 +1542,7 @@ async function uploadXImage(
   );
   const chunks = Math.ceil(image.bytes.byteLength / X_UPLOAD_CHUNK_BYTES);
   if (chunks < 1 || chunks > 4) throw new Error("X image exceeded the reviewed upload chunk count");
+  onFailureStage?.("media-upload-append");
   for (let segmentIndex = 0; segmentIndex < chunks; segmentIndex += 1) {
     const start = segmentIndex * X_UPLOAD_CHUNK_BYTES;
     const chunk = image.bytes.subarray(
@@ -1414,17 +1561,20 @@ async function uploadXImage(
       throw new Error("X media APPEND response added an unsupported location");
     }
   }
-  parseXMediaFinalize(
-    await uploadClient.requestJson({
+  onFailureStage?.("media-upload-finalize-request");
+  const finalized = await uploadClient.requestJson({
       url: xMediaUploadUrl("FINALIZE", { id: initialized.id }),
       method: "POST",
       headers: xUploadHeaders(bootstrap),
       expectedStatuses: [200, 201],
       maxBytes: MAX_X_UPLOAD_RESPONSE_BYTES,
-    }),
+    });
+  parseXMediaFinalize(
+    finalized,
     initialized,
     image.bytes.byteLength,
     image.mediaType,
+    onFailureStage,
   );
   return initialized;
 }
@@ -2213,6 +2363,18 @@ function dispatchEvent(id: string, index: number, planned: number, started: numb
   return { id, index, progress: { planned, started, verified } };
 }
 
+type XPostFailureStage =
+  | "viewer-binding-before-media-upload"
+  | XMediaUploadFailureStage
+  | "viewer-binding-after-media-upload"
+  | "post-request-preparation"
+  | "dispatch-admission"
+  | "post-dispatch"
+  | "create-response-binding"
+  | "accepted-target-recording"
+  | "independent-readback"
+  | "verification-recording";
+
 async function publishOne(
   bootstrap: XBootstrap,
   text: string,
@@ -2221,8 +2383,18 @@ async function publishOne(
   media: XUploadedMedia | null,
   authorId: string,
   mutationOperation: XWebMutationOperationId,
+  sleep: (milliseconds: number) => Promise<void>,
+  afterProviderAcceptedMutationTarget?: (
+    post: {
+      readonly id: string;
+      readonly url: string;
+      readonly mediaId: string | null;
+    },
+  ) => Promise<void>,
   beforeRequest?: () => Promise<void>,
+  onFailureStage?: (stage: XPostFailureStage) => void,
 ): Promise<{ readonly id: string; readonly url: string }> {
+  onFailureStage?.("post-request-preparation");
   const descriptor = await resolveDescriptor(bootstrap, "CreateTweet", "mutation");
   const response = await graphQl(
     bootstrap,
@@ -2233,6 +2405,7 @@ async function publishOne(
     mutationOperation,
     beforeRequest,
   );
+  onFailureStage?.("create-response-binding");
   const created = createdTweet(
     response,
     text,
@@ -2241,8 +2414,18 @@ async function publishOne(
     authorId,
     media?.id ?? null,
   );
+  onFailureStage?.("accepted-target-recording");
+  await afterProviderAcceptedMutationTarget?.({
+    ...created,
+    mediaId: media?.id ?? null,
+  });
   if (mutationOperation !== "posts.publish") return created;
-  const readback = await tweetReadback(bootstrap, created.id);
+  onFailureStage?.("independent-readback");
+  const readback = await waitForTweetPublishReadback(
+    bootstrap,
+    created.id,
+    sleep,
+  );
   const rebound = assertTweetBinding(
     readback,
     text,
@@ -2279,6 +2462,9 @@ async function executePublish(
     readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
     readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
   },
 ): Promise<WebSessionExecution> {
@@ -2299,6 +2485,7 @@ async function executePublish(
   const posts: { readonly id: string; readonly url: string }[] = [];
   let started = 0;
   let verified = 0;
+  let failureStage: XPostFailureStage = "post-request-preparation";
   let previous: string | null = action === "replies.create" ? postId(input.post_id, "input.post_id") : null;
   const quote = action === "posts.quote" ? postId(input.post_id, "input.post_id") : null;
   try {
@@ -2306,24 +2493,31 @@ async function executePublish(
       const index = offset + 1;
       const id = action === "threads.publish" ? `${action}[${index}]` : action;
       let media: XUploadedMedia | null = null;
-      let beforeRequest: (() => Promise<void>) | undefined;
+      const beforeRequest = async () => {
+        failureStage = "dispatch-admission";
+        await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
+        started = index;
+        failureStage = "post-dispatch";
+      };
       if (image !== null) {
+        failureStage = "viewer-binding-before-media-upload";
         const rebound = await requireBoundViewer(bootstrap, auth);
         if (rebound.id !== currentViewer.id) {
           throw new Error("X viewer changed during media dispatch preparation");
         }
-        await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
-        started = index;
-        media = await uploadXImage(bootstrap, image);
+        // The upload produces only an expiring, unpublished provider blob. Keep
+        // it before the durable CreateTweet dispatch boundary so a transport or
+        // upload-response failure cannot strand the public-post intent as
+        // indeterminate when no CreateTweet request was admitted.
+        failureStage = "media-upload-session";
+        media = await uploadXImage(bootstrap, image, (stage) => {
+          failureStage = stage;
+        });
+        failureStage = "viewer-binding-after-media-upload";
         const afterUpload = await requireBoundViewer(bootstrap, auth);
         if (afterUpload.id !== currentViewer.id) {
           throw new Error("X viewer changed after media upload");
         }
-      } else {
-        beforeRequest = async () => {
-          await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
-          started = index;
-        };
       }
       const post = await publishOne(
         bootstrap,
@@ -2333,11 +2527,30 @@ async function executePublish(
         media,
         currentViewer.id,
         action === "threads.publish" && offset > 0 ? "threads.reply" : action as XWebMutationOperationId,
+        bootstrap.dependencies?.sleep
+          ?? ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))),
+        options.afterProviderAcceptedMutationTarget === undefined
+          ? undefined
+          : (accepted) => options.afterProviderAcceptedMutationTarget!({
+              id,
+              index,
+              target: {
+                schemaVersion: 1,
+                identifier: canonicalJson({
+                  postId: accepted.id,
+                  mediaId: accepted.mediaId,
+                }),
+              },
+            }),
         beforeRequest,
+        (stage) => {
+          failureStage = stage;
+        },
       );
       posts.push(post);
       previous = post.id;
       verified = index;
+      failureStage = "verification-recording";
       await options.afterDispatchVerified?.(dispatchEvent(id, index, planned, started, verified));
     }
     return {
@@ -2348,15 +2561,18 @@ async function executePublish(
       dispatch: { planned, started, verified },
     };
   } catch {
+    const status = started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed";
     return {
-      status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
+      status,
       output: posts.length === 0 ? null : { posts },
       finalUrl: posts.at(-1)?.url ?? null,
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
-      error: started > verified
-        ? "X may have accepted the current post dispatch; reconcile before retrying"
-        : "X post dispatch failed before a response-bound result was verified",
+      error: status === "indeterminate"
+        ? `X may have accepted the current post dispatch; failure stage: ${failureStage}; reconcile before retrying`
+        : status === "partial"
+          ? `X verified only part of the confirmed post workflow; failure stage: ${failureStage}; inspect the verified results before retrying`
+          : `X post preparation failed before public post submission; failure stage: ${failureStage}; retry with a fresh confirmed plan`,
     };
   }
 }
@@ -2682,6 +2898,9 @@ export async function executeXWebOperation(
     readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
     readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: XWebRuntimeDependencies;
   } = {},

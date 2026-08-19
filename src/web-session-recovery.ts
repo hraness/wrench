@@ -8,6 +8,10 @@ import {
 } from "./model";
 import { cleanupPlanAssets } from "./plan-assets";
 import { requireProviderPluginAuth } from "./provider-plugin-auth";
+import {
+  runProviderPluginPlanConformance,
+  type ProviderPluginReconciliationContextV1,
+} from "./provider-plugin";
 import type {
   ProviderPluginOperationResolutionV1,
   ProviderPluginRegistry,
@@ -15,7 +19,9 @@ import type {
 import { providerPluginRegistry } from "./provider-plugins";
 import {
   appendReconciliationObservation,
+  readProviderAcceptedMutationTargetEvidence,
   readRecoveryCapsule,
+  removeProviderAcceptedMutationTargetEvidence,
   removeRecoveryCapsule,
   type ReconciliationObservation,
   type RecoveryCapsule,
@@ -65,6 +71,7 @@ export type WebSessionRecoveryDependencies = {
     recipe: WebSessionRecipe,
     input: OperationInput,
     auth: WrenchAuth,
+    context?: ProviderPluginReconciliationContextV1,
   ) => Promise<unknown>;
   readonly releaseRecoveryArtifacts: (
     runId: string,
@@ -82,6 +89,7 @@ const defaultReleaseRecoveryArtifacts:
     // Remove the digest-bound media first so a cleanup failure leaves the
     // encrypted capsule available for another inspection.
     cleanupPlanAssets(planDigest, environment);
+    removeProviderAcceptedMutationTargetEvidence(runId, environment);
     removeRecoveryCapsule(runId, environment);
   };
 
@@ -101,6 +109,7 @@ type SelectedReconciliation = {
     | "current"
     | "pre-provider-plugin-x"
     | "ancient-x";
+  readonly reconciliationContext?: ProviderPluginReconciliationContextV1;
 };
 
 type PreProviderPluginXContract = {
@@ -277,6 +286,63 @@ function resolveOperation(
   return resolution;
 }
 
+function providerAcceptedTargetReconciliationContext(
+  receipt: Extract<RunReceipt, { readonly schemaVersion: 4 }>,
+  capsule: RecoveryCapsule,
+  resolution: ProviderPluginOperationResolutionV1,
+  input: OperationInput,
+  environment: Environment,
+): ProviderPluginReconciliationContextV1 | undefined {
+  if (
+    resolution.operation.reconciliation?.kind
+      !== "provider-accepted-target-presence"
+  ) {
+    return undefined;
+  }
+  if (
+    receipt.dispatchStarted !== true
+    || receipt.dispatch.planned !== 1
+    || receipt.dispatch.started !== 1
+    || receipt.dispatch.verified < 0
+    || receipt.dispatch.verified > 1
+  ) {
+    throw new Error(
+      "provider-accepted target reconciliation requires one exact started dispatch",
+    );
+  }
+  const plannedDispatches = runProviderPluginPlanConformance(
+    resolution.operation,
+    input,
+  );
+  const plannedDispatch = plannedDispatches[0];
+  if (plannedDispatches.length !== 1 || plannedDispatch === undefined) {
+    throw new Error(
+      "provider-accepted target reconciliation requires one exact confirmed dispatch",
+    );
+  }
+  const dispatch = Object.freeze({
+    id: plannedDispatch.id,
+    index: 1,
+    planned: 1,
+  });
+  const evidence = readProviderAcceptedMutationTargetEvidence(
+    capsule,
+    dispatch,
+    environment,
+  );
+  if (evidence === null) {
+    throw new Error(
+      "this provider-accepted target run has no encrypted response-derived target and is not safely reconcilable",
+    );
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    kind: "provider-accepted-target-presence",
+    dispatch,
+    target: evidence.target,
+  });
+}
+
 function selectReconciliation(
   receipt: Extract<RunReceipt, { readonly schemaVersion: 4 }>,
   providedInput: unknown,
@@ -309,6 +375,14 @@ function selectReconciliation(
         "provided reconciliation input does not match the encrypted recovery capsule",
       );
     }
+    const reconciliationContext =
+      providerAcceptedTargetReconciliationContext(
+        receipt,
+        capsule,
+        resolution,
+        input,
+        environment,
+      );
     return {
       receipt,
       resolution,
@@ -318,6 +392,9 @@ function selectReconciliation(
       contractIdentity: isPreProviderPluginXContract(receipt, capsule)
         ? "pre-provider-plugin-x"
         : "current",
+      ...(reconciliationContext === undefined
+        ? {}
+        : { reconciliationContext }),
     };
   }
 
@@ -434,7 +511,12 @@ async function observeActualState(
     );
   }
   const value = dependency === undefined
-    ? await binding.reconcile(operation.name, selected.input, auth)
+    ? await binding.reconcile(
+        operation.name,
+        selected.input,
+        auth,
+        selected.reconciliationContext,
+      )
     : await dependency(
         {
           site: binding.surfaceId,
@@ -445,6 +527,7 @@ async function observeActualState(
         },
         selected.input,
         auth,
+        selected.reconciliationContext,
       );
   if (
     !isUnknownRecord(value)
@@ -511,7 +594,9 @@ export async function reconcileWebSessionRun(
   if (reconciliation === undefined) {
     throw new Error("provider plugin operation has no registered reconciler");
   }
-  const desired = reconciliation.desiredState(selected.input);
+  const desired = reconciliation.kind === "boolean-desired-state"
+    ? reconciliation.desiredState(selected.input)
+    : true;
   if (typeof desired !== "boolean") {
     throw new Error(
       "provider plugin reconciliation desired state is invalid",
@@ -537,6 +622,14 @@ export async function reconcileWebSessionRun(
       auth,
       options.dependencies?.observeActualState,
     );
+    if (
+      reconciliation.kind === "provider-accepted-target-presence"
+      && actual !== true
+    ) {
+      throw new Error(
+        "provider-accepted target absence is not proof that the earlier write was not applied",
+      );
+    }
     const matched = actual === desired;
     observation = {
       ...common,
@@ -558,9 +651,8 @@ export async function reconcileWebSessionRun(
   }
   appendReconciliationObservation(observation, environment);
 
-  const recoveryArtifactsReleased =
-    observation.outcome === "desired-state-observed";
-  if (recoveryArtifactsReleased) {
+  let recoveryArtifactsReleased = false;
+  if (observation.outcome === "desired-state-observed") {
     try {
       const releaseKind = releaseReconciledRunRecovery(
         receipt.runId,
@@ -574,6 +666,8 @@ export async function reconcileWebSessionRun(
           ?? defaultReleaseRecoveryArtifacts
         )(receipt.runId, selected.planDigest, environment);
       }
+      recoveryArtifactsReleased =
+        releaseKind !== "journal-retained-for-duplicate-successor";
     } catch (error) {
       throw new Error(
         "the desired-state observation was stored, but its recovery artifacts could not be fully released; rerun reconciliation",

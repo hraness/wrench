@@ -1,0 +1,819 @@
+{
+  "schemaVersion": 4,
+  "id": "linkedin-web",
+  "version": "1.14.0",
+  "displayName": "LinkedIn (Authenticated Web API)",
+  "surfaceId": "linkedin",
+  "origins": [
+    "https://www.linkedin.com",
+    "https://static.licdn.com"
+  ],
+  "browserDomains": [
+    "www.linkedin.com",
+    "static.licdn.com"
+  ],
+  "operations": {
+    "contacts.list": {
+      "description": "Capture-required contract reservation: list bounded LinkedIn messaging participants with statistics only after current viewer binding, real conversation and message pagination, group attribution, completeness, and acknowledgement-free behavior are reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding reviewed conversation page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected messaging participants",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "stats_scan_limit": {
+            "type": "number",
+            "description": "Maximum reviewed messages scanned per contact and direction",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": []
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "contacts.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "feeds.read": {
+      "description": "Capture-required contract reservation: the LinkedIn home-feed query revision is known, but execution remains disabled until exact current variables and a bounded response projection are captured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Captured feed surface",
+            "enum": [
+              "home"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum feed entries to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "profiles.read": {
+      "description": "Capture-required contract reservation: read one exact LinkedIn member profile only after public-identifier or profile-URN lookup, viewer binding, and the bounded response projection are captured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Exact LinkedIn public profile identifier or provider profile URN",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "organizations.read": {
+      "description": "Capture-required contract reservation: read one exact LinkedIn organization Page only after public-identifier or organization-URN lookup, viewer binding, and the bounded response projection are captured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "organization": {
+            "type": "string",
+            "description": "Exact LinkedIn organization public identifier or provider organization URN",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "organization"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "organizations.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "relationships.recommendations.read": {
+      "description": "Capture-required contract reservation: list one bounded page of LinkedIn recommended connections only after the exact viewer-bound collection, paging variables, and completeness projection are captured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Exact recommended-connections surface",
+            "enum": [
+              "all"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding recommendations page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum recommended profiles to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "relationships.recommendations.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.list": {
+      "description": "Capture-required contract reservation: list one bounded LinkedIn inbox page only after the current-account mailbox projection, registered query, paging, completeness, and acknowledgement-free behavior are recaptured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Exact LinkedIn inbox folder",
+            "enum": [
+              "focused",
+              "other",
+              "requests",
+              "archive",
+              "spam",
+              "all"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum conversations to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.read": {
+      "description": "Capture-required contract reservation: the LinkedIn message query revision is known, but execution remains disabled until exact current variables and acknowledgement-free response handling are captured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact opaque conversation identifier returned by messaging.list",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum messages to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "conversation_id"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: send one confirmed LinkedIn message, optionally with one reviewed attachment, only after createMessage request and response bindings are captured and reviewed.",
+      "risk": "R3",
+      "sideEffect": "Sends one externally visible LinkedIn message to the exact confirmed conversation.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact opaque conversation identifier returned by messaging.list",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact message text",
+            "minLength": 1,
+            "maxLength": 8000
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional reviewed image, video, or document attachment",
+            "maxBytes": 536870912,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "video/mp4",
+              "application/pdf",
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ]
+          }
+        },
+        "required": [
+          "conversation_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.read": {
+      "description": "Capture-required contract reservation: read one LinkedIn consumer-web post after its exact first-party post-detail query and bounded projection are captured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn share or UGC-post URN",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "post_urn"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.read": {
+      "description": "Capture-required contract reservation: list one bounded page of comments for an exact LinkedIn post after the consumer-web collection request is captured and reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn share or UGC-post URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum comments to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "post_urn"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "articles.read": {
+      "description": "Capture-required contract reservation: list LinkedIn first-party article records only after a fresh capture proves exact author, article identity, and paging response bindings.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "author_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn person or organization author URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "start": {
+            "type": "number",
+            "description": "Zero-based article offset",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum article records to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "author_urn"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "articles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.publish": {
+      "description": "Publish one exact confirmed LinkedIn post with text and an optional single PNG through the current first-party image-registration/upload and post-create contracts, then independently read it back by the response-bound share URN.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible LinkedIn post with the exact confirmed audience and content.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact post commentary",
+            "minLength": 1,
+            "maxLength": 3000
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Confirmed post audience",
+            "enum": [
+              "public",
+              "connections"
+            ]
+          },
+          "media": {
+            "type": "array",
+            "description": "Optional single exact PNG image",
+            "items": {
+              "type": "file",
+              "description": "One exact PNG post image",
+              "maxBytes": 20971520,
+              "mediaTypes": [
+                "image/png"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "alt_text": {
+            "type": "string",
+            "description": "Optional image alternative text",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "body",
+          "visibility"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "posts.publish",
+        "contractVersion": 2,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.repost": {
+      "description": "Capture-required contract reservation: create one confirmed LinkedIn repost after the exact repost mutation and returned post identity are captured and reviewed.",
+      "risk": "R3",
+      "sideEffect": "Creates one externally visible LinkedIn repost of the exact confirmed post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn share or UGC-post URN to repost",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "post_urn"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.quote": {
+      "description": "Capture-required contract reservation: publish one confirmed LinkedIn quote repost after its exact mutation and returned post identity are captured and reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible LinkedIn quote repost with the exact confirmed commentary.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn share or UGC-post URN to quote",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact quote commentary",
+            "minLength": 1,
+            "maxLength": 3000
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Confirmed quote-post audience",
+            "enum": [
+              "public",
+              "connections"
+            ]
+          }
+        },
+        "required": [
+          "post_urn",
+          "body",
+          "visibility"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "posts.quote",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.create": {
+      "description": "Capture-required contract reservation: create one confirmed top-level LinkedIn comment after exact actor, post, and returned-comment bindings are captured and reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible comment on the exact confirmed LinkedIn post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn share or UGC-post URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact comment text",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "post_urn",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "comments.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: create one confirmed LinkedIn comment reply after exact actor, root, parent, and returned-reply bindings are captured and reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible reply to the exact confirmed LinkedIn comment.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_urn": {
+            "type": "string",
+            "description": "Exact root LinkedIn share or UGC-post URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "comment_urn": {
+            "type": "string",
+            "description": "Exact parent comment URN",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact reply text",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "post_urn",
+          "comment_urn",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "reactions.set": {
+      "description": "Capture-required contract reservation: set the exact desired LinkedIn reaction after reviewed create and delete mutations can bind the actor, target post, and resulting state.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated account's reaction on the exact confirmed LinkedIn post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn share or UGC-post URN",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "reaction": {
+            "type": "string",
+            "description": "Exact desired reaction, or none to clear it",
+            "enum": [
+              "like",
+              "celebrate",
+              "support",
+              "love",
+              "insightful",
+              "funny",
+              "none"
+            ]
+          }
+        },
+        "required": [
+          "post_urn",
+          "reaction"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "reactions.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "relationships.connect": {
+      "description": "Capture-required contract reservation: send one confirmed LinkedIn connection invitation only after the exact viewer, target profile, optional note, duplicate state, request, and response bindings are captured and reviewed.",
+      "risk": "R3",
+      "sideEffect": "Sends one externally visible LinkedIn connection invitation to the exact confirmed profile.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_profile_urn": {
+            "type": "string",
+            "description": "Exact LinkedIn profile URN returned by a reviewed profile or recommendation read",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "note": {
+            "type": "string",
+            "description": "Optional exact invitation note",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "target_profile_urn"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "relationships.connect",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "articles.draft.save": {
+      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 2 with native quote blocks, ordered local inline images, alt text, captions, and either one local cover image or the exact existing replacement-draft cover using reviewed current-member-bound autosaves and unpublished readback.",
+      "risk": "R2",
+      "sideEffect": "Creates one private native LinkedIn Article draft with the confirmed cover, or replaces the exact confirmed existing private draft while either replacing or preserving its banner, plus the confirmed inline image bytes, alt text, and captions; it never publishes the draft.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Exact native article title",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "document": {
+            "type": "string",
+            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 2; this reviewed LinkedIn contract supports bounded paragraphs, H1/H2 headings, native blockquotes, native HTTPS links, and ordered inline image blocks with required alt text and optional captions",
+            "minLength": 1,
+            "maxLength": 524288
+          },
+          "draft_id": {
+            "type": "string",
+            "description": "Optional exact existing private LinkedIn Article draft to replace in place",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cover_image": {
+            "type": "file",
+            "description": "Exact local JPEG, PNG, or WebP cover rendered only in LinkedIn's banner slot; required for create, optional on an exact replacement to preserve the existing banner",
+            "maxBytes": 5242880,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ]
+          },
+          "inline_images": {
+            "type": "array",
+            "description": "Ordered plan-bound local image files referenced by document imageIndex",
+            "items": {
+              "type": "file",
+              "description": "One exact JPEG, PNG, or WebP inline image",
+              "maxBytes": 5242880,
+              "mediaTypes": [
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "title",
+          "document",
+          "inline_images"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "articles.draft.save",
+        "contractVersion": 7,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "articles.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed native LinkedIn article only after its draft, optional cover upload, and publish sequence is captured and response-bound.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible native LinkedIn article with the exact confirmed title, body, cover, and audience.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Exact article title",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact native article body",
+            "minLength": 1,
+            "maxLength": 125000
+          },
+          "cover_image": {
+            "type": "file",
+            "description": "Optional reviewed article cover image",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Confirmed article audience",
+            "enum": [
+              "public",
+              "connections"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "visibility"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "articles.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}

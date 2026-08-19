@@ -29,4 +29,23 @@ describe("Meta web plugin account subjects", () => {
       }
     }
   });
+
+  test("declares exact accepted-target reconciliation only for Threads publishing", () => {
+    const threadsPublish = binding("threads").operations.find((operation) =>
+      operation.name === "posts.publish");
+    expect(threadsPublish?.historicalContractVersions).toEqual([1, 2, 3]);
+    expect(threadsPublish?.reconciliation).toEqual({
+      kind: "provider-accepted-target-presence",
+    });
+    for (const surfaceId of [
+      "instagram",
+      "facebook",
+      "facebook-page",
+      "facebook-group",
+      "facebook-marketplace",
+    ]) {
+      expect(binding(surfaceId).operations.some((operation) =>
+        operation.reconciliation !== undefined)).toBeFalse();
+    }
+  });
 });

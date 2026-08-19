@@ -31,8 +31,12 @@ describe("YouTube provider plugin", () => {
     for (const [name, [key, value]] of Object.entries(expected)) {
       const operation = binding.operations.find((candidate) => candidate.name === name);
       expect(operation?.state).toBe("capture-required");
-      expect(operation?.reconciliation?.desiredState({ [key]: value })).toBe(value);
-      expect(() => operation?.reconciliation?.desiredState({ [key]: "invalid" }))
+      const reconciliation = operation?.reconciliation;
+      if (reconciliation?.kind !== "boolean-desired-state") {
+        throw new Error("expected boolean YouTube reconciliation");
+      }
+      expect(reconciliation.desiredState({ [key]: value })).toBe(value);
+      expect(() => reconciliation.desiredState({ [key]: "invalid" }))
         .toThrow(`requires boolean input.${key}`);
     }
     const runtime = await binding.loadRuntime();

@@ -19,7 +19,9 @@ import { createAuth, saveAuth, type WrenchAuth } from "./auth";
 import { canonicalJson, sha256, type OperationInput, type WebSessionRecipe } from "./model";
 import {
   listReconciliationObservations,
+  readProviderAcceptedMutationTargetEvidence,
   readRecoveryCapsule,
+  writeProviderAcceptedMutationTargetEvidence,
   writeRecoveryCapsule,
   type RecoveryCapsule,
 } from "./recovery";
@@ -27,9 +29,17 @@ import {
   createRunJournal,
   parseRunJournal,
   readRunJournal,
+  updateRunJournal,
   type RunJournal,
 } from "./run-journal";
 import { planAssetBundlePath } from "./plan-assets";
+import {
+  defineProviderPlugin,
+  lazyWebSessionRuntime,
+  type ProviderPluginReconciliationContextV1,
+  type WebSessionPluginOperationDefinitionV1,
+} from "./provider-plugin";
+import { createProviderPluginRegistry } from "./provider-plugin-registry";
 import type { RunReceipt } from "./runtime";
 import { writePrivateJson } from "./storage";
 import {
@@ -276,11 +286,15 @@ function terminalJournalFor(
       token: "40000000-0000-4000-8000-000000000004",
       bootId: "a".repeat(64),
       processStartId: "b".repeat(64),
-      leaseUntil: "2026-07-23T12:01:30.000Z",
+      leaseUntil: new Date(
+        Date.parse(selectedReceipt.startedAt) + 90_000,
+      ).toISOString(),
     },
     startedAt: selectedReceipt.startedAt,
     updatedAt: selectedReceipt.finishedAt,
-    dedupeExpiresAt: "2026-07-24T12:00:00.000Z",
+    dedupeExpiresAt: new Date(
+      Date.parse(selectedReceipt.startedAt) + 86_400_000,
+    ).toISOString(),
     finalOrigin: selectedReceipt.finalOrigin,
     error: options.error ?? selectedReceipt.error,
   });
@@ -322,7 +336,486 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   }
 }
 
+const PRESENCE_RUN_ID = "80000000-0000-4000-8000-000000000008";
+const PRESENCE_PLAN_DIGEST = "8".repeat(64);
+const PRESENCE_TARGET = "presence:post:private-123";
+const presenceOperation: WebSessionPluginOperationDefinitionV1 = {
+  name: "posts.publish",
+  contractVersion: 1,
+  risk: "R3",
+  input: {
+    properties: {
+      body: {
+        type: "string",
+        description: "Exact post body",
+        minLength: 1,
+        maxLength: 2_000,
+      },
+    },
+    required: ["body"],
+  },
+  sideEffect: "publishes one post",
+  idempotency: "local-at-most-once",
+  dedupeWindowMs: 86_400_000,
+  state: "observed",
+  dispatch: "single",
+  implementation: "synthetic accepted-target presence fixture",
+  planDispatches: () => [{
+    id: "posts.publish",
+    description: "Publish one post",
+  }],
+  validateInput: (input) => typeof input.body === "string"
+    ? []
+    : ["input.body must be a string"],
+  reconciliation: {
+    kind: "provider-accepted-target-presence",
+  },
+};
+
+function presenceRegistry() {
+  const plugin = defineProviderPlugin({
+    apiVersion: 1,
+    id: "presence-test-plugin",
+    version: "1.0.0",
+    displayName: "Presence Test Plugin",
+    sourceKind: "source",
+    implementationSources: [{
+      label: "plugin.ts",
+      url: new URL("./provider-plugin-test-fixture.ts", import.meta.url),
+    }],
+    bindings: [{
+      transport: "web-session-api",
+      surfaceId: "presence-test",
+      origin: "https://presence-test.example",
+      authKinds: ["cookie-source"],
+      operations: [presenceOperation],
+      subject: {
+        format: "presence:<id>",
+        matches: (value) => /^presence:[a-z0-9-]{1,40}$/u.test(value),
+      },
+      runtime: lazyWebSessionRuntime(() => Promise.resolve({
+        probe: () => Promise.resolve("presence:viewer"),
+        execute: () => Promise.resolve({
+          status: "failed",
+          output: null,
+          finalUrl: null,
+          dispatchStarted: false,
+          dispatch: { planned: 1, started: 0, verified: 0 },
+          error: "inert recovery fixture",
+        }),
+        reconcile: () => Promise.resolve({
+          actualState: true,
+          reason: "synthetic presence",
+        }),
+      })),
+    }],
+  });
+  return createProviderPluginRegistry([plugin]);
+}
+
+function installPresenceRun(
+  testState: TestState,
+  withTargetEvidence: boolean,
+) {
+  const registry = presenceRegistry();
+  const auth = createAuth("presence-main", {
+    source: "arc",
+    profile: "Profile 1",
+    subject: "presence:viewer",
+  });
+  saveAuth(auth, testState.environment);
+  const input = { body: "private presence reconciliation body" };
+  const selectedRecipe: WebSessionRecipe = {
+    site: "presence-test",
+    action: "posts.publish",
+    contractVersion: 1,
+    timeoutMs: 60_000,
+    maxOutputBytes: 2 * 1024 * 1024,
+  };
+  const contractHash = webSessionContractHash(
+    getWebSessionContract(selectedRecipe, registry),
+    registry,
+  );
+  const selectedReceipt: Extract<
+    RunReceipt,
+    { readonly schemaVersion: 4 }
+  > = {
+    schemaVersion: 4,
+    transport: "web-session-api",
+    runId: PRESENCE_RUN_ID,
+    planDigest: PRESENCE_PLAN_DIGEST,
+    adapter: {
+      id: "presence-test-web",
+      version: "1.0.0",
+      hash: sha256("presence-test-adapter"),
+    },
+    operation: "posts.publish",
+    risk: "R3",
+    inputHash: sha256(canonicalJson(input)),
+    auth: {
+      id: auth.id,
+      hash: sha256(canonicalJson(auth)),
+      kind: auth.kind,
+    },
+    status: "indeterminate",
+    dispatchStarted: true,
+    dispatch: { planned: 1, started: 1, verified: 0 },
+    startedAt: "2026-08-18T12:00:00.000Z",
+    finishedAt: "2026-08-18T12:00:01.000Z",
+    finalOrigin: "https://presence-test.example",
+    error: "authenticated web API result is indeterminate after the dispatch boundary",
+    webSessionContractHash: contractHash,
+  };
+  const selectedCapsule: WebSessionRecoveryCapsule = {
+    schemaVersion: 1,
+    runId: selectedReceipt.runId,
+    createdAt: selectedReceipt.startedAt,
+    planDigest: PRESENCE_PLAN_DIGEST,
+    adapter: selectedReceipt.adapter,
+    operation: selectedReceipt.operation,
+    risk: "R3",
+    input,
+    inputHash: selectedReceipt.inputHash,
+    auth: selectedReceipt.auth,
+    contract: {
+      transport: "web-session-api",
+      site: "presence-test",
+      action: "posts.publish",
+      version: 1,
+      hash: contractHash,
+    },
+  };
+  writePrivateJson(
+    join(testState.directory, "runs", `${PRESENCE_RUN_ID}.json`),
+    selectedReceipt,
+    { privateParent: true },
+  );
+  writeRecoveryCapsule(selectedCapsule, testState.environment);
+  if (withTargetEvidence) {
+    writeProviderAcceptedMutationTargetEvidence({
+      schemaVersion: 1,
+      runId: selectedCapsule.runId,
+      acceptedAt: "2026-08-18T12:00:00.500Z",
+      planDigest: selectedCapsule.planDigest,
+      adapter: selectedCapsule.adapter,
+      operation: selectedCapsule.operation,
+      inputHash: selectedCapsule.inputHash,
+      auth: selectedCapsule.auth,
+      contract: selectedCapsule.contract,
+      dispatch: { id: "posts.publish", index: 1, planned: 1 },
+      target: { schemaVersion: 1, identifier: PRESENCE_TARGET },
+    }, testState.environment);
+  }
+  return Object.freeze({
+    auth,
+    input,
+    receipt: selectedReceipt,
+    capsule: selectedCapsule,
+    recipe: selectedRecipe,
+    registry,
+  });
+}
+
 describe("web-session run reconciliation", () => {
+  test("reconciles an exact provider-accepted target only when it is present", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(testState, true);
+      let observedContext: ProviderPluginReconciliationContextV1 | undefined;
+      const result = await reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          now: new Date("2026-08-18T12:00:02.000Z"),
+          dependencies: {
+            observeActualState: (selectedRecipe, input, auth, context) => {
+              expect(selectedRecipe).toEqual(installed.recipe);
+              expect(input).toEqual(installed.input);
+              expect(auth).toEqual(installed.auth);
+              observedContext = context;
+              return Promise.resolve({
+                actualState: true,
+                reason: "exact target readback",
+              });
+            },
+          },
+        },
+      );
+
+      expect(observedContext).toEqual({
+        schemaVersion: 1,
+        kind: "provider-accepted-target-presence",
+        dispatch: { id: "posts.publish", index: 1, planned: 1 },
+        target: { schemaVersion: 1, identifier: PRESENCE_TARGET },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        status: "reconciliation-observed",
+        recoveryArtifactsReleased: true,
+        observation: {
+          outcome: "desired-state-observed",
+          desiredStateMatched: true,
+          actualState: true,
+          reason: "exact-readback",
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain(PRESENCE_TARGET);
+      expect(readRecoveryCapsule(
+        PRESENCE_RUN_ID,
+        installed.auth.id,
+        installed.receipt.auth.hash,
+        testState.environment,
+      )).toBeNull();
+      expect(existsSync(join(
+        testState.directory,
+        "recovery",
+        "provider-accepted-targets",
+        PRESENCE_RUN_ID,
+      ))).toBeFalse();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("retains exact source evidence when successor election wins reconciliation CAS", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(testState, true);
+      const journal = terminalJournalFor(installed.receipt, {
+        hasPlanAssets: false,
+      });
+      createRunJournal(journal, testState.environment);
+      if (journal.ledgerRelativePath === null) {
+        throw new Error("expected duplicate-risk source ledger coordinate");
+      }
+      const ledgerPath = join(
+        testState.directory,
+        ...journal.ledgerRelativePath.split("/"),
+      );
+      writePrivateJson(ledgerPath, ledgerFor(journal), {
+        privateParent: true,
+      });
+      const capsulePath = join(
+        testState.directory,
+        "recovery",
+        "capsules",
+        `${PRESENCE_RUN_ID}.json`,
+      );
+      const targetPath = join(
+        testState.directory,
+        "recovery",
+        "provider-accepted-targets",
+        PRESENCE_RUN_ID,
+        "1.json",
+      );
+      const receiptBefore = readFileSync(
+        join(testState.directory, "runs", `${PRESENCE_RUN_ID}.json`),
+        "utf8",
+      );
+      const ledgerBefore = readFileSync(ledgerPath, "utf8");
+      const capsuleBefore = readFileSync(capsulePath, "utf8");
+      const targetBefore = readFileSync(targetPath, "utf8");
+
+      const result = await reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          now: new Date("2026-08-18T12:00:03.000Z"),
+          dependencies: {
+            observeActualState: () => {
+              const source = readRunJournal(
+                PRESENCE_RUN_ID,
+                testState.environment,
+              );
+              if (source === null) throw new Error("source journal missing");
+              updateRunJournal(source, {
+                type: "duplicate-successor-claimed",
+                intentHash: "9".repeat(64),
+                runId: "90000000-0000-4000-8000-000000000009",
+                at: "2026-08-18T12:00:02.000Z",
+              }, testState.environment);
+              return Promise.resolve({
+                actualState: true,
+                reason: "exact target readback",
+              });
+            },
+          },
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        status: "reconciliation-observed",
+        receiptUnchanged: true,
+        providerWriteDispatched: false,
+        recoveryArtifactsReleased: false,
+      });
+      expect(readRunJournal(
+        PRESENCE_RUN_ID,
+        testState.environment,
+      )?.journal).toMatchObject({
+        status: "indeterminate",
+        ledgerState: "indeterminate",
+        recoveryState: "retained",
+        duplicateSuccessor: {
+          intentHash: "9".repeat(64),
+          runId: "90000000-0000-4000-8000-000000000009",
+        },
+      });
+      expect(listReconciliationObservations(
+        PRESENCE_RUN_ID,
+        testState.environment,
+      )).toHaveLength(1);
+      expect(readFileSync(
+        join(testState.directory, "runs", `${PRESENCE_RUN_ID}.json`),
+        "utf8",
+      )).toBe(receiptBefore);
+      expect(readFileSync(ledgerPath, "utf8")).toBe(ledgerBefore);
+      expect(readFileSync(capsulePath, "utf8")).toBe(capsuleBefore);
+      expect(readFileSync(targetPath, "utf8")).toBe(targetBefore);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects targetless historical create runs before provider readback", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(testState, false);
+      let readbacks = 0;
+      const message = await rejectionMessage(reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          dependencies: {
+            observeActualState: () => {
+              readbacks += 1;
+              return Promise.resolve({
+                actualState: true,
+                reason: "must not run",
+              });
+            },
+          },
+        },
+      ));
+
+      expect(message).toContain("no encrypted response-derived target");
+      expect(message).toContain("not safely reconcilable");
+      expect(readbacks).toBe(0);
+      expect(listReconciliationObservations(
+        PRESENCE_RUN_ID,
+        testState.environment,
+      )).toEqual([]);
+      expect(readRecoveryCapsule(
+        PRESENCE_RUN_ID,
+        installed.auth.id,
+        installed.receipt.auth.hash,
+        testState.environment,
+      )).toEqual(installed.capsule);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("treats accepted-target absence as inconclusive and retains recovery", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(testState, true);
+      const result = await reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          dependencies: {
+            observeActualState: () => Promise.resolve({
+              actualState: false,
+              reason: "exact target absent",
+            }),
+          },
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: "reconciliation-inconclusive",
+        recoveryArtifactsReleased: false,
+        observation: {
+          outcome: "inconclusive",
+          desiredStateMatched: null,
+          actualState: null,
+          reason: "readback-failed",
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("exact target absent");
+      expect(readRecoveryCapsule(
+        PRESENCE_RUN_ID,
+        installed.auth.id,
+        installed.receipt.auth.hash,
+        testState.environment,
+      )).toEqual(installed.capsule);
+      expect(readProviderAcceptedMutationTargetEvidence(
+        installed.capsule,
+        { id: "posts.publish", index: 1, planned: 1 },
+        testState.environment,
+      )?.target.identifier).toBe(PRESENCE_TARGET);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("treats accepted-target provider errors as inconclusive and retains recovery", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(testState, true);
+      const result = await reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          dependencies: {
+            observeActualState: () => Promise.reject(
+              new Error("private provider error containing secret target"),
+            ),
+          },
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: "reconciliation-inconclusive",
+        recoveryArtifactsReleased: false,
+        observation: {
+          outcome: "inconclusive",
+          desiredStateMatched: null,
+          actualState: null,
+          reason: "readback-failed",
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("private provider error");
+      expect(readRecoveryCapsule(
+        PRESENCE_RUN_ID,
+        installed.auth.id,
+        installed.receipt.auth.hash,
+        testState.environment,
+      )).toEqual(installed.capsule);
+      expect(readProviderAcceptedMutationTargetEvidence(
+        installed.capsule,
+        { id: "posts.publish", index: 1, planned: 1 },
+        testState.environment,
+      )?.target.identifier).toBe(PRESENCE_TARGET);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("records a matching exact R1 readback without changing the receipt or ledger", async () => {
     const testState = state();
     try {

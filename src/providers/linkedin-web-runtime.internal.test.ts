@@ -20,11 +20,15 @@ import {
 import {
   executeLinkedInWebOperation,
   probeLinkedInWebSubject,
+  readLinkedInWebAcceptedPostTargetPresence,
   readLinkedInWebArticleDraftDesiredState,
   type LinkedInWebRuntimeDependencies,
 } from "./linkedin-web-runtime";
 import type { LinkedInArticleBrowserTransport } from "./linkedin-web-article-browser";
-import type { LinkedInPostBrowserTransport } from "./linkedin-web-post-browser";
+import {
+  LinkedInPostCreateResponseError,
+  type LinkedInPostBrowserTransport,
+} from "./linkedin-web-post-browser";
 
 const MEMBER_ID = "123456789";
 const MEMBER_URN = `urn:li:fsd_profile:${MEMBER_ID}`;
@@ -288,7 +292,7 @@ function postRecipe(): WebSessionRecipe {
   return {
     site: "linkedin",
     action: "posts.publish",
-    contractVersion: 2,
+    contractVersion: 3,
     timeoutMs: 1_000,
     maxOutputBytes: 2 * 1024 * 1024,
   };
@@ -1685,7 +1689,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
           return Promise.resolve(mediaUrn);
         },
         createPost: (subject, profileUrn, variables, receivedMediaUrn) => {
-          events.push("create-readback");
+          events.push("create");
           expect(subject).toBe(MEMBER_URN);
           expect(profileUrn).toBe(ARTICLE_PROFILE_URN);
           expect(receivedMediaUrn).toBe(mediaUrn);
@@ -1696,6 +1700,17 @@ describe("LinkedIn authenticated internal-API runtime", () => {
               media: { altText, category: "IMAGE", mediaUrn },
               visibilityDataUnion: { visibilityType: "ANYONE" },
             },
+          });
+          return Promise.resolve(entityUrn);
+        },
+        readPost: (subject, profileUrn, variables, receivedMediaUrn, receivedEntityUrn) => {
+          events.push("readback");
+          expect(subject).toBe(MEMBER_URN);
+          expect(profileUrn).toBe(ARTICLE_PROFILE_URN);
+          expect(receivedMediaUrn).toBe(mediaUrn);
+          expect(receivedEntityUrn).toBe(entityUrn);
+          expect(variables).toMatchObject({
+            post: { commentary: { text: body } },
           });
           return Promise.resolve({
             actorMatched: true,
@@ -1731,6 +1746,18 @@ describe("LinkedIn authenticated internal-API runtime", () => {
             events.push(`before:${event.progress.started}`);
             return Promise.resolve();
           },
+          afterProviderAcceptedMutationTarget: (event) => {
+            expect(event).toEqual({
+              id: "posts.publish",
+              index: 1,
+              target: {
+                schemaVersion: 1,
+                identifier: canonicalJson({ entityUrn, mediaUrn }),
+              },
+            });
+            events.push(`accepted:${event.target.identifier}`);
+            return Promise.resolve();
+          },
           afterDispatchVerified: (event) => {
             events.push(`after:${event.progress.verified}`);
             return Promise.resolve();
@@ -1757,9 +1784,11 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       });
       expect(events).toEqual([
         "identity",
-        "before:0",
         "upload",
-        "create-readback",
+        "before:0",
+        "create",
+        `accepted:${canonicalJson({ entityUrn, mediaUrn })}`,
+        "readback",
         "after:1",
         "close",
       ]);
@@ -1768,7 +1797,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     }
   });
 
-  test("keeps one admitted upload failure indeterminate and never creates or retries", async () => {
+  test("keeps a preparatory upload failure before public-post admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-linkedin-upload-failure-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
@@ -1787,6 +1816,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
           creates += 1;
           return Promise.reject(new Error("must not create after upload failure"));
         },
+        readPost: () => Promise.reject(new Error("must not read after upload failure")),
         close: () => Promise.resolve(),
       };
       const result = await executeLinkedInWebOperation(
@@ -1809,17 +1839,160 @@ describe("LinkedIn authenticated internal-API runtime", () => {
         },
       );
       expect(result).toMatchObject({
-        status: "indeterminate",
-        dispatchStarted: true,
-        dispatch: { planned: 1, started: 1, verified: 0 },
-        error: expect.stringContaining("reconcile before retrying"),
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: expect.stringMatching(
+          /failure stage: image preparation; retry with a fresh confirmed plan/u,
+        ),
       });
-      expect(admissions).toBe(1);
+      expect(admissions).toBe(0);
       expect(uploads).toBe(1);
       expect(creates).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("keeps a post-create response failure indeterminate after exact admission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-linkedin-create-failure-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    writeFileSync(imagePath, pngFixture(959, 1022), { mode: 0o600 });
+    let admissions = 0;
+    let uploads = 0;
+    let creates = 0;
+    try {
+      const transport: LinkedInPostBrowserTransport = {
+        currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+        uploadImage: () => {
+          uploads += 1;
+          return Promise.resolve("urn:li:digitalmediaAsset:C4D22AQPreparedImage");
+        },
+        createPost: () => {
+          creates += 1;
+          return Promise.reject(new LinkedInPostCreateResponseError(
+            new Error("LinkedIn post create omitted its entity: private create response detail"),
+          ));
+        },
+        readPost: () => Promise.reject(new Error("must not read after create failure")),
+        close: () => Promise.resolve(),
+      };
+      const result = await executeLinkedInWebOperation(
+        postRecipe(),
+        {
+          body: "indeterminate create",
+          media: [{ kind: "file", reference: "fixture" }],
+          visibility: "public",
+        },
+        linkedinAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          dependencies: {
+            createPostBrowserTransport: () => Promise.resolve(transport),
+          },
+          beforeDispatch: () => {
+            admissions += 1;
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(JSON.stringify(result)).not.toContain("private create response detail");
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+        error: expect.stringMatching(
+          /failure stage: post create entity absent; reconcile before retrying/u,
+        ),
+      });
+      expect(admissions).toBe(1);
+      expect(uploads).toBe(1);
+      expect(creates).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reads only the exact accepted LinkedIn post target for later presence reconciliation", async () => {
+    const body = "how your email finds me";
+    const mediaUrn = "urn:li:digitalmediaAsset:C4D22AQExactImage";
+    const entityUrn = "urn:li:fsd_share:7000000000000000000";
+    const finalUrl = "https://www.linkedin.com/feed/update/urn:li:activity:7000000000000000000/";
+    let uploads = 0;
+    let creates = 0;
+    let reads = 0;
+    const transport: LinkedInPostBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      uploadImage: () => {
+        uploads += 1;
+        return Promise.reject(new Error("accepted-target read must not upload"));
+      },
+      createPost: () => {
+        creates += 1;
+        return Promise.reject(new Error("accepted-target read must not create"));
+      },
+      readPost: (subject, profileUrn, variables, receivedMediaUrn, receivedEntityUrn) => {
+        reads += 1;
+        expect(subject).toBe(MEMBER_URN);
+        expect(profileUrn).toBe(ARTICLE_PROFILE_URN);
+        expect(receivedMediaUrn).toBe(mediaUrn);
+        expect(receivedEntityUrn).toBe(entityUrn);
+        expect(variables).toMatchObject({
+          post: {
+            commentary: { text: body },
+            media: { mediaUrn },
+            visibilityDataUnion: { visibilityType: "ANYONE" },
+          },
+        });
+        return Promise.resolve({
+          actorMatched: true,
+          entityMatched: true,
+          entityUrn,
+          lifecycle: "PUBLISHED",
+          mediaMatched: true,
+          mediaUrn,
+          textMatched: true,
+          url: finalUrl,
+        });
+      },
+      close: () => Promise.resolve(),
+    };
+
+    expect(await readLinkedInWebAcceptedPostTargetPresence(
+      postRecipe(),
+      {
+        body,
+        media: [{ kind: "file", reference: "fixture" }],
+        visibility: "public",
+      },
+      linkedinAuth,
+      canonicalJson({ entityUrn, mediaUrn }),
+      {
+        dependencies: {
+          createPostBrowserTransport: () => Promise.resolve(transport),
+        },
+      },
+    )).toEqual({ present: true, entityUrn, mediaUrn });
+    expect(uploads).toBe(0);
+    expect(creates).toBe(0);
+    expect(reads).toBe(1);
+    await expect(readLinkedInWebAcceptedPostTargetPresence(
+      postRecipe(),
+      {
+        body,
+        media: [{ kind: "file", reference: "fixture" }],
+        visibility: "public",
+      },
+      linkedinAuth,
+      JSON.stringify({ mediaUrn, entityUrn }),
+      {
+        dependencies: {
+          createPostBrowserTransport: () => Promise.resolve(transport),
+        },
+      },
+    )).rejects.toThrow("canonical JSON");
+    expect(reads).toBe(1);
   });
 
   test("rejects a changed LinkedIn member before durable post admission", async () => {
@@ -1835,6 +2008,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
         return Promise.reject(new Error("must not upload"));
       },
       createPost: () => Promise.reject(new Error("must not create")),
+      readPost: () => Promise.reject(new Error("must not read")),
       close: () => Promise.resolve(),
     };
     const result = await executeLinkedInWebOperation(

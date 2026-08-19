@@ -205,8 +205,8 @@ export const META_WEB_OPERATIONS = Object.freeze({
     ),
     "posts.publish": observedMutation(
       "R3",
-      "reviewed live single-PNG upload plus first-party configure_text_post_app_feed contract, exact viewer binding, one durable dispatch, response-bound post identity, and independent permalink readback",
-      2,
+      "reviewed live single-PNG upload with synchronous 200 completion, exact minimal configure_text_post_app_feed created-locator binding, durable response-bound post identity plus completed-upload dimensions, and independent exact permalink actor/text/image readback",
+      4,
     ),
     "messaging.list": captureRequired(
       "messaging.list",
@@ -1342,7 +1342,123 @@ export function normalizeInstagramContacts(
   });
 }
 
-function threadsPost(value: unknown, label: string): Readonly<Record<string, unknown>> {
+export type ThreadsImageProjection = Readonly<{
+  candidateCount: number;
+  height: number;
+  mediaId: string;
+  mediaType: 1;
+  width: number;
+}>;
+
+export type ThreadsPostProjection = Readonly<{
+  id: string;
+  code: string | null;
+  canonical_url: string | null;
+  caption: string | null;
+  user: Readonly<Record<string, unknown>> | null;
+  taken_at: number | null;
+  has_liked: boolean | null;
+  has_viewer_saved: boolean | null;
+  like_count: number | null;
+  image: ThreadsImageProjection | null;
+}>;
+
+function positiveThreadsImageDimension(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 20_000) {
+    throw new Error(`${label} must be an integer between 1 and 20000`);
+  }
+  return value as number;
+}
+
+function threadsImageCandidateUrl(value: unknown, label: string): string {
+  const source = boundedString(value, label, 16_384);
+  let url: URL;
+  try {
+    url = new URL(source);
+  } catch {
+    throw new Error(`${label} must be an exact reviewed HTTPS media URL`);
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (
+    url.protocol !== "https:"
+    || url.username !== ""
+    || url.password !== ""
+    || url.hash !== ""
+    || ![
+      "cdninstagram.com",
+      "fbcdn.net",
+      "instagram.com",
+      "threads.com",
+    ].some((family) => hostname === family || hostname.endsWith(`.${family}`))
+  ) throw new Error(`${label} left the reviewed Threads media host families`);
+  return url.href;
+}
+
+function threadsImage(
+  post: JsonRecord,
+  mediaId: string,
+  label: string,
+): ThreadsImageProjection | null {
+  const hasImageFields = post.media_type !== undefined
+    || post.original_width !== undefined
+    || post.original_height !== undefined
+    || post.image_versions2 !== undefined;
+  if (!hasImageFields) return null;
+  if (post.media_type !== 1) {
+    throw new Error(`${label}.media_type must identify one reviewed image`);
+  }
+  if (post.carousel_media !== undefined && post.carousel_media !== null) {
+    throw new Error(`${label} unexpectedly returned carousel media`);
+  }
+  const width = positiveThreadsImageDimension(
+    post.original_width,
+    `${label}.original_width`,
+  );
+  const height = positiveThreadsImageDimension(
+    post.original_height,
+    `${label}.original_height`,
+  );
+  const versions = record(post.image_versions2, `${label}.image_versions2`);
+  if (
+    !Array.isArray(versions.candidates)
+    || versions.candidates.length < 1
+    || versions.candidates.length > 20
+  ) throw new Error(`${label}.image_versions2.candidates must contain 1 to 20 images`);
+  let originalCandidateFound = false;
+  for (const [index, candidateValue] of versions.candidates.entries()) {
+    const candidate = record(
+      candidateValue,
+      `${label}.image_versions2.candidates[${index}]`,
+    );
+    const candidateWidth = positiveThreadsImageDimension(
+      candidate.width,
+      `${label}.image_versions2.candidates[${index}].width`,
+    );
+    const candidateHeight = positiveThreadsImageDimension(
+      candidate.height,
+      `${label}.image_versions2.candidates[${index}].height`,
+    );
+    threadsImageCandidateUrl(
+      candidate.url,
+      `${label}.image_versions2.candidates[${index}].url`,
+    );
+    if (candidateWidth === width && candidateHeight === height) {
+      originalCandidateFound = true;
+    }
+  }
+  if (!originalCandidateFound) {
+    throw new Error(`${label} omitted an exact original-dimension image candidate`);
+  }
+  return Object.freeze({
+    candidateCount: versions.candidates.length,
+    height,
+    mediaId,
+    mediaType: 1,
+    width,
+  });
+}
+
+function threadsPost(value: unknown, label: string): Omit<ThreadsPostProjection, "image"> {
   const post = record(value, label);
   const id = boundedString(post.id ?? post.pk, `${label}.id`, 80);
   if (!/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(id)) throw new Error(`${label}.id must be an exact Threads post ID`);
@@ -1359,6 +1475,18 @@ function threadsPost(value: unknown, label: string): Readonly<Record<string, unk
     has_liked: optionalBoolean(post.has_liked, `${label}.has_liked`),
     has_viewer_saved: optionalBoolean(post.has_viewer_saved, `${label}.has_viewer_saved`),
     like_count: optionalInteger(post.like_count, `${label}.like_count`),
+  });
+}
+
+export function projectThreadsPublishPost(
+  value: unknown,
+  label: string,
+): ThreadsPostProjection {
+  const post = record(value, label);
+  const projected = threadsPost(post, label);
+  return Object.freeze({
+    ...projected,
+    image: threadsImage(post, projected.id, label),
   });
 }
 
@@ -1399,11 +1527,35 @@ export function normalizeThreadsPostHtml(
   html: unknown,
   viewerId: string,
   expectedPostId: string,
+  expectedCode: string,
+  expectedUrl: string,
   expectedCaption: string,
-): Readonly<Record<string, unknown>> {
+  expectedImage: Readonly<{ readonly height: number; readonly width: number }>,
+): ThreadsPostProjection {
   if (!/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(expectedPostId)) {
     throw new Error("Threads readback expected post ID is invalid");
   }
+  if (!/^[A-Za-z0-9_-]{1,64}$/u.test(expectedCode)) {
+    throw new Error("Threads readback expected post code is invalid");
+  }
+  let locator: URL;
+  try {
+    locator = new URL(expectedUrl);
+  } catch {
+    throw new Error("Threads readback expected permalink is invalid");
+  }
+  const locatorPath = locator.pathname.split("/");
+  if (
+    locator.origin !== "https://www.threads.com"
+    || locator.username !== ""
+    || locator.password !== ""
+    || locator.search !== ""
+    || locator.hash !== ""
+    || locatorPath.length !== 4
+    || !/^@[A-Za-z0-9._]{1,64}$/u.test(locatorPath[1] ?? "")
+    || locatorPath[2] !== "post"
+    || locatorPath[3] !== expectedCode
+  ) throw new Error("Threads readback expected permalink is invalid");
   if (parseThreadsViewerId(html) !== viewerId) {
     throw new Error("Threads post readback changed its bound viewer");
   }
@@ -1415,16 +1567,28 @@ export function normalizeThreadsPostHtml(
       || value.caption === undefined
       || value.user === undefined
     ) return;
-    const projected = threadsPost(value, "Threads post readback");
+    const projected = projectThreadsPublishPost(value, "Threads post readback");
     const user = isRecord(projected.user) ? projected.user : null;
-    if (projected.caption === expectedCaption && user?.id === viewerId) {
+    if (
+      projected.caption === expectedCaption
+      && projected.code === expectedCode
+      && projected.canonical_url === locator.href
+      && user?.id === viewerId
+      && projected.image !== null
+      && projected.image.mediaId === expectedPostId
+      && projected.image.width === expectedImage.width
+      && projected.image.height === expectedImage.height
+    ) {
       matches.push(projected);
     }
   });
   if (matches.length < 1) {
-    throw new Error("Threads post readback did not bind the confirmed actor, ID, and text");
+    throw new Error("Threads post readback did not bind the confirmed actor, ID, code, permalink, text, and image");
   }
-  return matches[0]!;
+  if (matches.length !== 1) {
+    throw new Error("Threads post readback returned an ambiguous exact post");
+  }
+  return matches[0] as ThreadsPostProjection;
 }
 
 function facebookPost(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -2250,6 +2414,7 @@ export const metaWebEvidenceSnapshot = Object.freeze({
     threads: Object.freeze({
       viewer: "GET / HTML BarcelonaSessionInfo plus Relay viewer.user.id",
       feed: "GET / signed-in first-page Relay feedData preload without cursor continuation",
+      publish: "POST one PNG to the exact rupload entity with synchronous 200 completion, POST configure_text_post_app_feed with exact actor/text/image response binding, then GET the exact returned permalink for independent image readback",
     }),
     facebook: Object.freeze({
       viewer: "GET / HTML CurrentUserInitialData, corroborated by c_user",

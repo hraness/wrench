@@ -4,13 +4,16 @@ import blueskyManifest from "../assets/adapters/bluesky/wrench-web-adapter.json"
 import {
   BLUESKY_APPVIEW_PROXY,
   BLUESKY_CHAT_PROXY,
-  BLUESKY_CONTENT_DELETE_POLICY,
   BLUESKY_NOTIFICATION_PROXY,
   BLUESKY_WEB_OPERATIONS,
   BLUESKY_WEB_OPERATION_NAMES,
   authorizeBlueskyXrpcRequest,
   parseBlueskyAtUri,
   parseBlueskyBootstrapAccount,
+  parseBlueskyCurrentPostRecordResponse,
+  parseBlueskyDeleteRecordResponse,
+  parseBlueskyGetRecordResponse,
+  parseBlueskyRecordNotFoundResponse,
   parseBlueskyRefreshSessionResponse,
   projectBlueskyConvoList,
   projectBlueskyFeed,
@@ -78,6 +81,7 @@ describe("Bluesky authenticated API policy", () => {
     );
     const observedReads = new Set([
       "comments.read",
+      "content.delete",
       "feeds.read",
       "media.read",
       "posts.publish",
@@ -98,11 +102,55 @@ describe("Bluesky authenticated API policy", () => {
       expect("browser" in operation).toBe(false);
       expect("provider" in operation).toBe(false);
     }
-    expect(BLUESKY_CONTENT_DELETE_POLICY).toEqual({
-      risk: "R4",
-      state: "prohibited",
-      reason: "content deletion is outside wrench's executable safety boundary",
+  });
+
+  test("strictly binds deletion pre-read, commit, and absence projections", () => {
+    const uri = `at://${VIEWER_DID}/app.bsky.feed.post/3ldelete`;
+    expect(parseBlueskyCurrentPostRecordResponse({
+      uri,
+      cid: CID,
+      value: {
+        $type: "app.bsky.feed.post",
+        text: "delete me",
+        createdAt: "2026-08-19T12:00:00.000Z",
+      },
+    }, uri, CID)).toEqual({ uri, cid: CID });
+    expect(() => parseBlueskyCurrentPostRecordResponse({
+      uri,
+      cid: `b${"c".repeat(40)}`,
+      value: { $type: "app.bsky.feed.post" },
+    }, uri, CID)).toThrow("revision changed");
+    expect(() => parseBlueskyCurrentPostRecordResponse({
+      uri,
+      cid: CID,
+      value: { $type: "app.bsky.feed.like" },
+    }, uri, CID)).toThrow("not an app.bsky.feed.post");
+
+    expect(parseBlueskyDeleteRecordResponse({})).toEqual({ commit: null });
+    expect(parseBlueskyDeleteRecordResponse({
+      commit: {
+        cid: `b${"d".repeat(40)}`,
+        rev: "3m4abcde234fg",
+      },
+    })).toEqual({
+      commit: {
+        cid: `b${"d".repeat(40)}`,
+        rev: "3m4abcde234fg",
+      },
     });
+    expect(() => parseBlueskyDeleteRecordResponse({ commit: { cid: CID, rev: "bad" } }))
+      .toThrow("must be a TID");
+    expect(() => parseBlueskyDeleteRecordResponse({ commit: { cid: CID, rev: "3m4abcde234fg" }, extra: true }))
+      .toThrow("unsupported fields");
+
+    expect(parseBlueskyRecordNotFoundResponse({
+      error: "RecordNotFound",
+      message: "Could not locate record",
+    })).toBeUndefined();
+    expect(() => parseBlueskyRecordNotFoundResponse({
+      error: "InvalidRequest",
+      message: "no",
+    })).toThrow("unexpected error code");
   });
 
   test("accepts only the exact selected account fields and reviewed first-party PDS hosts", () => {
@@ -275,6 +323,34 @@ describe("Bluesky authenticated API policy", () => {
         "post",
       )
     ).toThrow("exact record AT URI");
+  });
+
+  test("binds authoritative records to the exact created revision and submitted value", () => {
+    const value = {
+      $type: "app.bsky.feed.post",
+      text: "Exact record",
+      createdAt: "2026-08-18T12:00:00.000Z",
+    };
+    expect(parseBlueskyGetRecordResponse(
+      { uri: POST_URI, cid: CID, value },
+      { uri: POST_URI, cid: CID },
+      value,
+    )).toEqual({ uri: POST_URI, cid: CID });
+    expect(() => parseBlueskyGetRecordResponse(
+      { uri: POST_URI, cid: `b${"c".repeat(40)}`, value },
+      { uri: POST_URI, cid: CID },
+      value,
+    )).toThrow("changed the created record CID");
+    expect(() => parseBlueskyGetRecordResponse(
+      { uri: POST_URI, cid: CID, value: { ...value, text: "Different" } },
+      { uri: POST_URI, cid: CID },
+      value,
+    )).toThrow("confirmed record value");
+    expect(() => parseBlueskyGetRecordResponse(
+      { uri: POST_URI, cid: CID, value, extra: true },
+      { uri: POST_URI, cid: CID },
+      value,
+    )).toThrow("unsupported fields");
   });
 
   test("projects posts, feeds, notifications, and threads without raw response fields or media URLs", () => {

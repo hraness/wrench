@@ -354,12 +354,13 @@ function operationPolicies(
 
 const BLUESKY_WEB_OPERATIONS = operationPolicies("bluesky", [
   "comments.read",
+  "content.delete",
   "feeds.read",
   "media.read",
   "posts.publish",
   "posts.read",
 ], {
-  "posts.publish": 2,
+  "posts.publish": 3,
 });
 const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
   "articles.draft.save",
@@ -389,7 +390,7 @@ const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
   "posts.publish",
   "posts.read",
 ], {
-  "posts.publish": 2,
+  "posts.publish": 3,
 });
 const TIKTOK_WEB_OPERATIONS = operationPolicies("tiktok", [
   "comments.read",
@@ -425,7 +426,7 @@ const META_WEB_OPERATIONS = Object.freeze({
   }),
   threads: operationPolicies("threads", ["feeds.read", "posts.publish"], {
     "feeds.read": 2,
-    "posts.publish": 2,
+    "posts.publish": 4,
   }),
   facebook: operationPolicies("facebook", ["feeds.read"], {
     "feeds.read": 2,
@@ -496,6 +497,7 @@ const facebookGroup = metaRegistry("facebook-group");
 const facebookMarketplace = metaRegistry("facebook-marketplace");
 
 const bluesky = {
+  "content.delete": contract("bluesky", "content.delete", BLUESKY_WEB_OPERATIONS["content.delete"].risk, BLUESKY_WEB_OPERATIONS["content.delete"].state, BLUESKY_WEB_OPERATIONS["content.delete"].reason),
   "comments.read": contract("bluesky", "comments.read", BLUESKY_WEB_OPERATIONS["comments.read"].risk, BLUESKY_WEB_OPERATIONS["comments.read"].state, BLUESKY_WEB_OPERATIONS["comments.read"].reason),
   "content.save": contract("bluesky", "content.save", BLUESKY_WEB_OPERATIONS["content.save"].risk, BLUESKY_WEB_OPERATIONS["content.save"].state, BLUESKY_WEB_OPERATIONS["content.save"].reason),
   "content.share": contract("bluesky", "content.share", BLUESKY_WEB_OPERATIONS["content.share"].risk, BLUESKY_WEB_OPERATIONS["content.share"].state, BLUESKY_WEB_OPERATIONS["content.share"].reason),
@@ -539,7 +541,7 @@ const linkedin = {
     "posts.publish",
     LINKEDIN_WEB_OPERATIONS["posts.publish"].risk,
     LINKEDIN_WEB_OPERATIONS["posts.publish"].state,
-    "reviewed member-bound IMAGE_SHARING registration/upload, registered post-create mutation, and independent exact-share readback",
+    "reviewed member-bound bounded page-staged IMAGE_SHARING registration/upload, registered post-create mutation, durable accepted-share targeting, and independent exact-share readback",
     LINKEDIN_WEB_OPERATIONS["posts.publish"].contractVersion,
   ),
   "posts.repost": contract("linkedin", "posts.repost", "R3", "capture-required", "repost requires an exact reviewed mutation"),
@@ -572,13 +574,14 @@ const x = {
   "articles.read": contract("x", "articles.read", "R1", "capture-required", "native article detail requires entitlement-specific reviewed capture"),
   "articles.draft.save": contract("x", "articles.draft.save", "R2", "observed", "current bounded media INIT/APPEND/FINALIZE plus Article entity create/title/content mutations save one response-bound private rich-text-and-image draft and never call ArticleEntityPublish", 2),
   "messaging.send": contract("x", "messaging.send", "R3", "capture-required", "DM send requires exact current mutation and target binding"),
-  "posts.publish": contract("x", "posts.publish", "R3", "observed", "current optional single-PNG upload plus CreateTweet response and independent TweetResultByRestId readback binding", 2),
+  "posts.publish": contract("x", "posts.publish", "R3", "observed", "current optional single-PNG upload plus strict CreateTweet response, durable accepted-target evidence, and bounded independent TweetResultByRestId readback binding", 3),
   "threads.publish": contract("x", "threads.publish", "R3", "capture-required", "ordered CreateTweet root/self-reply dispatch needs an authorized live fixture and reviewed transaction-header behavior"),
   "replies.create": contract("x", "replies.create", "R3", "capture-required", "CreateTweet reply needs an authorized live fixture and reviewed transaction-header behavior"),
   "posts.repost": contract("x", "posts.repost", "R3", "capture-required", "repost desired-state mutation needs an authorized live fixture and reviewed transaction-header behavior"),
   "posts.quote": contract("x", "posts.quote", "R3", "capture-required", "CreateTweet quote needs an authorized live fixture and reviewed transaction-header behavior"),
   "likes.set": contract("x", "likes.set", "R2", "observed", "current FavoriteTweet/UnfavoriteTweet desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback", 2),
   "content.save": contract("x", "content.save", "R2", "observed", "current CreateBookmark/DeleteBookmark desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback"),
+  "content.delete": contract("x", "content.delete", "R3", "capture-required", "current DeleteTweet request, accepted response, author binding, and exact not-found readback require an authorized live fixture"),
   "articles.publish": contract("x", "articles.publish", "R3", "capture-required", "ArticleEntityPublish and public readback remain outside the private draft contract", 4),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 

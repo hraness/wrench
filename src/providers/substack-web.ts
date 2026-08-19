@@ -96,7 +96,7 @@ export const SUBSTACK_WEB_OPERATIONS = Object.freeze({
     "exact article reply branch read with post and publication binding",
   ),
   "media.read": observedRead(
-    "bounded media metadata projected from an exact entitled article response",
+    "bounded cover, podcast, video-upload, API audio-item, and exact same-publication inline audio metadata projected from an exact entitled article response",
   ),
   "messaging.list": observedRead(
     "acknowledgement-free inbox listing for all, people, and unread tabs",
@@ -136,7 +136,7 @@ export const SUBSTACK_WEB_OPERATIONS = Object.freeze({
     "DM start/send and optional media URL upload need exact recipient, thread, response, and attachment bindings",
   ),
   "posts.publish": observedWrite(
-    "authorized Note composer capture proving one optional PNG upload, exact public create payload, actor and attachment response binding, and independent Note readback",
+    "authorized Note composer capture proving one optional PNG upload, exact public create payload, durable accepted-Note targeting, actor and attachment response binding, and four bounded exact readbacks over a six-second visibility window",
   ),
   "posts.quote": captureRequired(
     "R3",
@@ -174,6 +174,9 @@ const SUBSTACK_ORIGIN = "https://substack.com";
 const MAX_HTML_BYTES = 8 * 1024 * 1024;
 const MAX_ITEMS = 100;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_INLINE_AUDIO_EMBEDS = 20;
+const MAX_INLINE_AUDIO_TAG_CODE_UNITS = 16_384;
+const INLINE_AUDIO_UPLOAD_PATH = /^\/api\/v1\/audio\/upload\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/src$/u;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -255,6 +258,216 @@ function exactHttpsUrl(value: unknown, label: string, maximum = 8_192): string |
     || parsed.hash !== ""
   ) throw new Error(`${label} must be a credential-free HTTPS URL`);
   return parsed.href;
+}
+
+export type SubstackInlineAudioEmbed = Readonly<{
+  uploadId: string;
+  url: string;
+}>;
+
+function isHtmlWhitespace(value: string | undefined): boolean {
+  return value === " "
+    || value === "\t"
+    || value === "\n"
+    || value === "\f"
+    || value === "\r";
+}
+
+function asciiCaseEqualAt(
+  value: string,
+  offset: number,
+  expected: string,
+): boolean {
+  if (offset < 0 || offset + expected.length > value.length) return false;
+  for (let index = 0; index < expected.length; index += 1) {
+    const actual = value.charCodeAt(offset + index);
+    const folded = actual >= 0x41 && actual <= 0x5a ? actual + 0x20 : actual;
+    if (folded !== expected.charCodeAt(index)) return false;
+  }
+  return true;
+}
+
+function isTagBoundary(value: string | undefined): boolean {
+  return value === undefined || value === ">" || value === "/" || isHtmlWhitespace(value);
+}
+
+function inlineAudioTagEnd(bodyHtml: string, start: number): number {
+  let quote: "\"" | "'" | null = null;
+  const maximumEnd = Math.min(
+    bodyHtml.length,
+    start + MAX_INLINE_AUDIO_TAG_CODE_UNITS,
+  );
+  for (let cursor = start + 1; cursor < maximumEnd; cursor += 1) {
+    const character = bodyHtml[cursor];
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === "\"" || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return cursor;
+    }
+  }
+  throw new Error("Substack inline audio tag was malformed or exceeded its bound");
+}
+
+function inlineAudioSrcAttribute(tag: string): string | null {
+  let cursor = "<audio".length;
+  let source: string | null = null;
+  const end = tag.length - 1;
+  while (cursor < end) {
+    while (isHtmlWhitespace(tag[cursor])) cursor += 1;
+    if (cursor >= end || tag[cursor] === "/") break;
+
+    const nameStart = cursor;
+    while (
+      cursor < end
+      && !isHtmlWhitespace(tag[cursor])
+      && tag[cursor] !== "="
+      && tag[cursor] !== "/"
+      && tag[cursor] !== ">"
+      && tag[cursor] !== "\""
+      && tag[cursor] !== "'"
+      && tag[cursor] !== "<"
+    ) cursor += 1;
+    if (cursor === nameStart) {
+      throw new Error("Substack inline audio tag contained a malformed attribute");
+    }
+    const name = tag.slice(nameStart, cursor).toLowerCase();
+    while (isHtmlWhitespace(tag[cursor])) cursor += 1;
+    if (tag[cursor] !== "=") {
+      if (name === "src") {
+        throw new Error("Substack inline audio src attribute omitted its value");
+      }
+      continue;
+    }
+
+    cursor += 1;
+    while (isHtmlWhitespace(tag[cursor])) cursor += 1;
+    if (cursor >= end) {
+      throw new Error("Substack inline audio attribute omitted its value");
+    }
+    let attributeValue: string;
+    const quote = tag[cursor];
+    if (quote === "\"" || quote === "'") {
+      cursor += 1;
+      const valueStart = cursor;
+      while (cursor < end && tag[cursor] !== quote) cursor += 1;
+      if (cursor >= end) {
+        throw new Error("Substack inline audio attribute was unterminated");
+      }
+      attributeValue = tag.slice(valueStart, cursor);
+      cursor += 1;
+    } else {
+      const valueStart = cursor;
+      while (cursor < end && !isHtmlWhitespace(tag[cursor]) && tag[cursor] !== ">") {
+        if (tag[cursor] === "\"" || tag[cursor] === "'" || tag[cursor] === "<") {
+          throw new Error("Substack inline audio attribute was malformed");
+        }
+        cursor += 1;
+      }
+      attributeValue = tag.slice(valueStart, cursor);
+    }
+    if (name !== "src") continue;
+    if (source !== null) {
+      throw new Error("Substack inline audio tag contained repeated src attributes");
+    }
+    source = boundedString(
+      attributeValue,
+      "Substack inline audio src",
+      2_048,
+    );
+  }
+  return source;
+}
+
+function normalizedInlineAudioEmbed(
+  source: string,
+  publicationBaseUrl: URL,
+): SubstackInlineAudioEmbed {
+  let path = source;
+  if (!source.startsWith("/")) {
+    let absolute: URL;
+    try {
+      absolute = new URL(source);
+    } catch {
+      throw new Error("Substack inline audio src must be an exact publication URL or path");
+    }
+    if (
+      absolute.protocol !== "https:"
+      || absolute.username !== ""
+      || absolute.password !== ""
+      || absolute.origin !== publicationBaseUrl.origin
+      || absolute.search !== ""
+      || absolute.hash !== ""
+      || absolute.href !== source
+    ) {
+      throw new Error("Substack inline audio src must use the exact publication origin");
+    }
+    path = absolute.pathname;
+  }
+  const match = INLINE_AUDIO_UPLOAD_PATH.exec(path);
+  if (match?.[1] === undefined) {
+    throw new Error("Substack inline audio src must use the exact audio upload route");
+  }
+  return Object.freeze({
+    uploadId: match[1],
+    url: new URL(path, publicationBaseUrl.origin).href,
+  });
+}
+
+/** Project only exact first-party inline audio upload elements in document order. */
+export function parseSubstackInlineAudioEmbeds(
+  bodyHtml: unknown,
+  publicationBaseUrl: unknown,
+): readonly SubstackInlineAudioEmbed[] {
+  const html = boundedString(
+    bodyHtml,
+    "Substack inline audio body_html",
+    MAX_BODY_BYTES,
+    true,
+  );
+  let publication: URL | null = null;
+  const embeds: SubstackInlineAudioEmbed[] = [];
+  let cursor = 0;
+  while (cursor < html.length) {
+    const start = html.indexOf("<", cursor);
+    if (start < 0) break;
+    if (html.startsWith("<!--", start)) {
+      const commentEnd = html.indexOf("-->", start + 4);
+      if (commentEnd < 0) {
+        throw new Error("Substack inline audio body_html contained an unterminated comment");
+      }
+      cursor = commentEnd + 3;
+      continue;
+    }
+    if (
+      !asciiCaseEqualAt(html, start + 1, "audio")
+      || !isTagBoundary(html[start + 6])
+    ) {
+      cursor = start + 1;
+      continue;
+    }
+    const tagEnd = inlineAudioTagEnd(html, start);
+    const source = inlineAudioSrcAttribute(html.slice(start, tagEnd + 1));
+    cursor = tagEnd + 1;
+    if (source === null) continue;
+    if (embeds.length >= MAX_INLINE_AUDIO_EMBEDS) {
+      throw new Error(`Substack inline audio embeds exceeded ${String(MAX_INLINE_AUDIO_EMBEDS)} items`);
+    }
+    if (publication === null) {
+      const base = exactHttpsUrl(
+        publicationBaseUrl,
+        "Substack inline audio publication base_url",
+        2_048,
+      );
+      if (base === null) {
+        throw new Error("Substack inline audio publication base_url is required");
+      }
+      publication = new URL(base);
+    }
+    embeds.push(normalizedInlineAudioEmbed(source, publication));
+  }
+  return Object.freeze(embeds);
 }
 
 function exactOrigin(value: unknown, label: string): string {
@@ -848,8 +1061,12 @@ export function normalizeSubstackCommentsResponse(
 
 export function normalizeSubstackMediaResponse(value: unknown, articleId: number): unknown {
   const article = normalizeSubstackArticleResponse(value, articleId) as {
-    readonly post: Readonly<Record<string, unknown>>;
-    readonly publication: unknown;
+    readonly post: Readonly<{
+      readonly bodyHtml: string | null;
+      readonly coverImage: string | null;
+      readonly podcastUrl: string | null;
+    }>;
+    readonly publication: Readonly<{ readonly baseUrl: string | null }> | null;
   };
   const source = record(record(value, "Substack media response").post, "Substack media response.post");
   const audioItems = boundedArray(source.audio_items ?? [], "Substack article audio_items", 20)
@@ -871,6 +1088,12 @@ export function normalizeSubstackMediaResponse(value: unknown, articleId: number
         ),
       });
     });
+  const inlineAudioEmbeds = article.post.bodyHtml === null
+    ? Object.freeze([])
+    : parseSubstackInlineAudioEmbeds(
+        article.post.bodyHtml,
+        article.publication?.baseUrl,
+      );
   return Object.freeze({
     articleId,
     publication: article.publication,
@@ -884,6 +1107,7 @@ export function normalizeSubstackMediaResponse(value: unknown, articleId: number
       256,
     ),
     audioItems: Object.freeze(audioItems),
+    inlineAudioEmbeds,
   });
 }
 

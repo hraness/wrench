@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "substack-web",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "displayName": "Substack (Authenticated Web API)",
   "surfaceId": "substack",
   "origins": [
@@ -148,7 +148,7 @@
       }
     },
     "media.read": {
-      "description": "Observed contract: project bounded cover, podcast, video-upload, and audio-item metadata from one exact entitled Substack article response.",
+      "description": "Observed contract: project bounded cover, podcast, video-upload, API audio-item, and exact same-publication inline audio metadata from one exact entitled Substack article response.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -496,7 +496,7 @@
       }
     },
     "posts.publish": {
-      "description": "Observed contract: publish one confirmed Substack Note with an optional reviewed PNG after exact asset, actor, returned-entity, and independent readback binding.",
+      "description": "Observed contract: publish one confirmed Substack Note with an optional reviewed PNG after exact asset, actor, and returned-entity binding, durably retain the accepted Note ID, and poll the same exact independent readback at four bounded attempts over six seconds.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible Substack Note with the exact confirmed text and optional media.",
       "idempotency": "local-at-most-once",
@@ -525,7 +525,7 @@
       "webSession": {
         "site": "substack",
         "action": "posts.publish",
-        "contractVersion": 2,
+        "contractVersion": 3,
         "timeoutMs": 600000,
         "maxOutputBytes": 4194304
       }

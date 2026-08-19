@@ -20,15 +20,19 @@ const MAX_ATTACHMENT_RESPONSE_ENVELOPE_BYTES = 32 * 1024;
 const HTML_DEADLINE_CHECKPOINT_CODE_UNITS = 4_096;
 
 const GMAIL_PROFILE_FIELDS = "emailAddress,messagesTotal,threadsTotal,historyId";
+const GMAIL_SEND_AS_FIELDS = "sendAs(sendAsEmail,verificationStatus)";
 const GMAIL_THREAD_LIST_FIELDS = "threads(id,snippet,historyId),nextPageToken,resultSizeEstimate";
 const GMAIL_MESSAGE_LIST_FIELDS = "messages(id,threadId),nextPageToken,resultSizeEstimate";
 const GMAIL_MESSAGE_FIELDS = "id,threadId,labelIds,snippet,historyId,internalDate,payload(partId,mimeType,filename,headers(name,value),body(attachmentId,size,data),parts),sizeEstimate";
+const GMAIL_INTERACTION_MESSAGE_FIELDS = "id,threadId,labelIds,internalDate,payload(headers(name,value))";
 const GMAIL_THREAD_FIELDS = `id,snippet,historyId,messages(${GMAIL_MESSAGE_FIELDS})`;
 const GMAIL_ATTACHMENT_FIELDS = "attachmentId,size,data";
 const PEOPLE_CONNECTION_LIST_FIELDS = "connections(resourceName),nextPageToken,totalItems";
 const PEOPLE_PERSON_FIELDS = "metadata,names,emailAddresses,phoneNumbers,organizations,photos";
 const PEOPLE_PERSON_PROJECTION = "resourceName,etag,metadata(sources(type,id,etag,updateTime),deleted),names(displayName,givenName,familyName,metadata(primary,sourcePrimary,verified,source(type,id))),emailAddresses(value,type,metadata(primary,sourcePrimary,verified,source(type,id))),phoneNumbers(value,type,canonicalForm,metadata(primary,sourcePrimary,verified,source(type,id))),organizations(name,title,department,type,current),photos(url,default)";
 const PEOPLE_BATCH_FIELDS = `responses(requestedResourceName,httpStatusCode,status(code),person(${PEOPLE_PERSON_PROJECTION}))`;
+const PEOPLE_OTHER_PERSON_PROJECTION = "resourceName,etag,metadata(sources(type,id,etag,updateTime),deleted),names(displayName,givenName,familyName,metadata(primary,sourcePrimary,verified,source(type,id))),emailAddresses(value,type,metadata(primary,sourcePrimary,verified,source(type,id))),phoneNumbers(value,type,canonicalForm,metadata(primary,sourcePrimary,verified,source(type,id))),photos(url,default)";
+const PEOPLE_OTHER_LIST_FIELDS = `otherContacts(${PEOPLE_OTHER_PERSON_PROJECTION}),nextPageToken,totalSize`;
 
 const inlineAttachmentBytes = new WeakMap<GmailAttachment, Uint8Array>();
 const parsedThreadBodies = new WeakMap<GmailThread, ParsedThreadBodyState>();
@@ -48,6 +52,60 @@ export type GmailProfile = Readonly<{
   threadsTotal: number;
   historyId: string;
 }>;
+
+/** List every configured primary or custom send-as address for self exclusion. */
+export async function listGmailSendAsAliases(
+  client: GmailApiClient,
+  maximumResponseBytes?: number,
+): Promise<readonly string[]> {
+  const url = gmailUrl("/gmail/v1/users/me/settings/sendAs");
+  url.searchParams.set("fields", GMAIL_SEND_AS_FIELDS);
+  const source = record(
+    await gmailGet(client, url, maximumResponseBytes),
+    "send-as aliases response",
+  );
+  exactKeys(source, ["sendAs"], [], "send-as aliases response");
+  if (!Array.isArray(source.sendAs) || source.sendAs.length < 1 || source.sendAs.length > 100) {
+    return fail("send-as aliases response.sendAs", "must contain 1-100 aliases");
+  }
+  const aliases = new Set<string>();
+  for (const [index, value] of source.sendAs.entries()) {
+    const alias = record(value, `send-as aliases response.sendAs[${index}]`);
+    exactKeys(
+      alias,
+      ["sendAsEmail"],
+      ["verificationStatus"],
+      `send-as aliases response.sendAs[${index}]`,
+    );
+    const email = text(
+      alias.sendAsEmail,
+      `send-as aliases response.sendAs[${index}].sendAsEmail`,
+      254,
+    ).toLowerCase();
+    if (!isGmailAccountSubject(email)) {
+      return fail(
+        `send-as aliases response.sendAs[${index}].sendAsEmail`,
+        "must be an exact email address",
+      );
+    }
+    if (
+      alias.verificationStatus !== undefined
+      && alias.verificationStatus !== "accepted"
+      && alias.verificationStatus !== "pending"
+      && alias.verificationStatus !== "verificationStatusUnspecified"
+    ) {
+      return fail(
+        `send-as aliases response.sendAs[${index}].verificationStatus`,
+        "is unsupported",
+      );
+    }
+    aliases.add(email);
+  }
+  if (!aliases.has(client.subject.toLowerCase())) {
+    return fail("send-as aliases response", "does not contain the authenticated subject");
+  }
+  return Object.freeze([...aliases].sort());
+}
 
 export type GmailThreadView = "all" | "inbox";
 
@@ -188,6 +246,8 @@ export type GmailContactPage = Readonly<{
   nextPageToken: string | null;
   totalItems: number | null;
 }>;
+
+export type GmailContactCollection = "contacts" | "other-contacts";
 
 function fail(label: string, message: string): never {
   throw new Error(`official Gmail ${label} ${message}`);
@@ -749,6 +809,59 @@ function parseHeaders(value: unknown, label: string): readonly ParsedHeader[] {
       value: text(source.value, `${path}.value`, MAX_HEADER_BYTES, true, true),
     });
   }));
+}
+
+function interactionMetadataHeaders(
+  value: unknown,
+  label: string,
+): readonly ParsedHeader[] {
+  const merged: ParsedHeader[] = [];
+  const destinationIndexes = new Map<string, number>();
+  const sources = value === undefined ? [] : array(value, label, MAX_HEADERS);
+  for (const [sourceIndex, entry] of sources.entries()) {
+    const path = `${label}[${sourceIndex}]`;
+    const source = record(entry, path);
+    exactKeys(source, ["name", "value"], [], path);
+    const headerName = text(source.name, `${path}.name`, 256);
+    if (typeof source.value !== "string") {
+      return fail(`${path}.value`, "must be bounded text without unsafe controls");
+    }
+    const name = headerName.toLowerCase();
+    if (name !== "from" && name !== "to" && name !== "cc" && name !== "bcc") {
+      return fail(`${path}.name`, "is outside the reviewed interaction projection");
+    }
+    if (
+      !isWellFormedText(source.value)
+      || Buffer.byteLength(source.value, "utf8") > MAX_HEADER_BYTES
+      || hasUnsafeControl(source.value, true)
+    ) continue;
+    const header = Object.freeze({ name: headerName, value: source.value });
+    if (name === "from") {
+      merged.push(header);
+      continue;
+    }
+    const destinationIndex = destinationIndexes.get(name);
+    if (destinationIndex === undefined) {
+      destinationIndexes.set(name, merged.length);
+      merged.push(header);
+      continue;
+    }
+    const prior = merged[destinationIndex];
+    if (prior === undefined) {
+      throw new Error("interaction header merge index is unavailable");
+    }
+    merged[destinationIndex] = Object.freeze({
+      name: prior.name,
+      value: text(
+        `${prior.value}, ${header.value}`,
+        `${label}.${prior.name}`,
+        MAX_HEADER_BYTES,
+        true,
+        true,
+      ),
+    });
+  }
+  return Object.freeze(merged);
 }
 
 function normalizedHeaderValue(value: string): string {
@@ -1839,6 +1952,67 @@ export async function fetchGmailMessageMetadata(
   ).message;
 }
 
+/**
+ * Fetch only the message metadata needed to project contact interactions.
+ * The Gmail partial-response mask can yield a headers-only payload, so the
+ * code-owned MIME defaults below adapt that exact projection before the
+ * ordinary strict Gmail message parser validates it.
+ */
+export async function fetchGmailMessageInteractionMetadata(
+  client: GmailApiClient,
+  messageIdValue: string,
+): Promise<GmailMessage> {
+  const messageId = parseGmailId(messageIdValue, "interaction message metadata fetch ID");
+  const url = gmailUrl(`/gmail/v1/users/me/messages/${encodedPathSegment(messageId)}`);
+  url.searchParams.set("format", "metadata");
+  for (const header of ["From", "To", "Cc", "Bcc"]) {
+    url.searchParams.append("metadataHeaders", header);
+  }
+  url.searchParams.set("fields", GMAIL_INTERACTION_MESSAGE_FIELDS);
+  const response = record(
+    await gmailGet(client, url),
+    "interaction message metadata response",
+  );
+  let projectedResponse: JsonRecord = response;
+  if (response.payload !== undefined) {
+    const payload = record(
+      response.payload,
+      "interaction message metadata response.payload",
+    );
+    exactKeys(
+      payload,
+      [],
+      ["headers"],
+      "interaction message metadata response.payload",
+    );
+    const headers = interactionMetadataHeaders(
+      payload.headers,
+      "interaction message metadata response.payload.headers",
+    );
+    projectedResponse = Object.freeze({
+      ...response,
+      payload: Object.freeze({
+        partId: "",
+        mimeType: "application/octet-stream",
+        headers,
+      }),
+    });
+  }
+  const bodyBudget: BodyBudget = {
+    maxBodyBytes: MAX_RESPONSE_TEXT_BYTES,
+    deadlineCheckpoint: () => client.http.throwIfUnavailable(),
+    directBodyBytes: 0,
+    decodedBodyBytes: 0,
+    renderedBodyBytes: 0,
+  };
+  return parseMessage(
+    projectedResponse,
+    "interaction message metadata response",
+    MAX_MIME_DEPTH,
+    bodyBudget,
+  ).message;
+}
+
 export async function fetchGmailAttachmentBytes(
   client: GmailApiClient,
   messageIdValue: string,
@@ -2208,6 +2382,14 @@ function peopleResourceName(value: unknown, label: string): string {
   return resourceName;
 }
 
+function contactResourceName(value: unknown, label: string): string {
+  const resourceName = text(value, label, 512);
+  if (!/^(?:people|otherContacts)\/[A-Za-z0-9_-]{1,256}$/u.test(resourceName)) {
+    return fail(label, "must be an exact contact resource name");
+  }
+  return resourceName;
+}
+
 function parseContact(value: unknown, label: string): GmailContact {
   const source = record(value, label);
   exactKeys(source, ["resourceName"], [
@@ -2219,7 +2401,7 @@ function parseContact(value: unknown, label: string): GmailContact {
     "organizations",
     "photos",
   ], label);
-  const resourceName = peopleResourceName(source.resourceName, `${label}.resourceName`);
+  const resourceName = contactResourceName(source.resourceName, `${label}.resourceName`);
   let displayName: string | null = null;
   if (source.names !== undefined) {
     const names = array(source.names, `${label}.names`, 100);
@@ -2269,6 +2451,52 @@ type PeopleConnectionIndexPage = Readonly<{
   nextPageToken: string | null;
   totalItems: number | null;
 }>;
+
+function parseOtherContactsPage(value: unknown, maximum: number): GmailContactPage {
+  const source = record(value, "People Other contacts response");
+  exactKeys(source, [], [
+    "otherContacts",
+    "nextPageToken",
+    "totalSize",
+  ], "People Other contacts response");
+  const contacts = source.otherContacts === undefined
+    ? Object.freeze([])
+    : Object.freeze(array(
+        source.otherContacts,
+        "People Other contacts response.otherContacts",
+        maximum,
+      ).map((entry, index) => {
+        const contact = parseContact(
+          entry,
+          `People Other contacts response.otherContacts[${index}]`,
+        );
+        if (!contact.resourceName.startsWith("otherContacts/")) {
+          return fail(
+            `People Other contacts response.otherContacts[${index}].resourceName`,
+            "must identify an Other contact",
+          );
+        }
+        return contact;
+      }));
+  const identities = contacts.map((contact) => contact.resourceName);
+  if (new Set(identities).size !== identities.length) {
+    return fail(
+      "People Other contacts response.otherContacts",
+      "contains duplicate resource names",
+    );
+  }
+  return Object.freeze({
+    contacts,
+    nextPageToken: optionalPageToken(
+      source.nextPageToken,
+      "People Other contacts response.nextPageToken",
+    ),
+    totalItems: optionalInteger(
+      source.totalSize,
+      "People Other contacts response.totalSize",
+    ),
+  });
+}
 
 function parseConnectionIndexPage(value: unknown, maximum: number): PeopleConnectionIndexPage {
   const source = record(value, "People connections response");
@@ -2343,7 +2571,11 @@ function parsePeopleBatch(
     }
     if (!hasStatus) return fail(path, "must contain an exact per-person status");
     if (response.person === undefined) return fail(`${path}.person`, "is required for a successful response");
-    byRequestedName.set(requestedResourceName, parseContact(response.person, `${path}.person`));
+    const contact = parseContact(response.person, `${path}.person`);
+    if (!contact.resourceName.startsWith("people/")) {
+      return fail(`${path}.person.resourceName`, "must identify a saved contact");
+    }
+    byRequestedName.set(requestedResourceName, contact);
   }
   for (const resourceName of requestedResourceNames) {
     if (!byRequestedName.has(resourceName)) {
@@ -2364,9 +2596,33 @@ function parsePeopleBatch(
 
 export async function fetchGmailContacts(
   client: GmailApiClient,
-  input: Readonly<{ limit: number; pageToken: string | null }>,
+  input: Readonly<{
+    collection: GmailContactCollection;
+    limit: number;
+    pageToken: string | null;
+  }>,
 ): Promise<GmailContactPage> {
   const limit = integer(input.limit, "People connections limit", 1, 200);
+  if (input.collection === "other-contacts") {
+    const otherUrl = peopleUrl("/v1/otherContacts");
+    otherUrl.searchParams.set("pageSize", String(limit));
+    otherUrl.searchParams.set(
+      "readMask",
+      "metadata,names,emailAddresses,phoneNumbers,photos",
+    );
+    otherUrl.searchParams.set("sources", "READ_SOURCE_TYPE_CONTACT");
+    otherUrl.searchParams.set("fields", PEOPLE_OTHER_LIST_FIELDS);
+    if (input.pageToken !== null) {
+      otherUrl.searchParams.set(
+        "pageToken",
+        pageToken(input.pageToken, "People Other contacts page token"),
+      );
+    }
+    return parseOtherContactsPage(await peopleGet(client, otherUrl), limit);
+  }
+  if (input.collection !== "contacts") {
+    return fail("People contact collection", "must be contacts or other-contacts");
+  }
   const url = peopleUrl("/v1/people/me/connections");
   url.searchParams.set("pageSize", String(limit));
   // personFields is mandatory even though the exact partial-response mask keeps

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 
 import type { OperationInput } from "../model";
@@ -12,9 +13,11 @@ import {
   createGmailApiClient,
   extractGmailEmailAddresses,
   fetchGmailContacts,
+  fetchGmailMessageInteractionMetadata,
   fetchGmailMessageList,
   fetchGmailMessageMetadata,
   fetchGmailThread,
+  listGmailSendAsAliases,
   fetchGmailThreadList,
   fetchGmailThreadMetadata,
   getAuthenticatedGmailProfile,
@@ -23,6 +26,7 @@ import {
   resolveGmailThreadBodies,
   type GmailApiClient,
   type GmailContact,
+  type GmailContactCollection,
   type GmailProfile,
   type GmailThread,
 } from "./gmail-api";
@@ -32,6 +36,9 @@ const CONTACTS_MAX_LIMIT = 100;
 const CONTACTS_DEFAULT_STATS_SCAN_LIMIT = 100;
 const CONTACTS_MAX_STATS_SCAN_LIMIT = 2_000;
 const CONTACT_STATS_MAX_DIRECTION_PRODUCT = 2_000;
+const INTERACTIONS_DEFAULT_LIMIT = 100;
+const INTERACTIONS_MAX_LIMIT = 100;
+const INTERACTIONS_MAX_ADDRESSES = 10_000;
 const MESSAGING_DEFAULT_LIMIT = 50;
 const MESSAGING_MAX_LIMIT = 100;
 const GMAIL_LIST_PAGE_MAXIMUM = 500;
@@ -44,9 +51,20 @@ type GmailListView = "inbox" | "search";
 type ContactDirection = "sent" | "received";
 
 type ParsedContactsInput = Readonly<{
+  collection: GmailContactCollection;
   cursor: string | null;
+  includeStats: boolean;
   limit: number;
   statsScanLimit: number;
+}>;
+
+type ParsedInteractionsInput = Readonly<{
+  after: string | null;
+  afterMilliseconds: number | null;
+  before: string;
+  beforeMilliseconds: number;
+  cursor: string | null;
+  limit: number;
 }>;
 
 type ParsedMessagingListInput = Readonly<{
@@ -106,6 +124,48 @@ export type GmailMessagingReadOutput = Readonly<{
   accountSubject: string;
   thread: GmailThread;
   threadUrl: string;
+}>;
+
+export type GmailContactInteraction = Readonly<{
+  email: string;
+  sentCount: number;
+  receivedCount: number;
+  sentCountComplete: boolean;
+  receivedCountComplete: boolean;
+  firstSentAt: string | null;
+  lastSentAt: string | null;
+  firstReceivedAt: string | null;
+  lastReceivedAt: string | null;
+  sent30d: number;
+  sent90d: number;
+  sent365d: number;
+  received30d: number;
+  received90d: number;
+  received365d: number;
+}>;
+
+export type GmailContactInteractionsListOutput = Readonly<{
+  provider: "gmail";
+  operation: "contacts.list";
+  contactCollection: "interactions";
+  accountSubject: string;
+  accountAddresses: readonly string[];
+  after: string | null;
+  before: string;
+  interactions: readonly GmailContactInteraction[];
+  messageKeys: readonly string[];
+  threadKeys: readonly string[];
+  messagesScanned: number;
+  messagesIncluded: number;
+  messagesSkipped: Readonly<{
+    draftOrChat: number;
+    missingInternalDate: number;
+    noExternalAddress: number;
+    outsideWindow: number;
+  }>;
+  nextCursor: string | null;
+  resultSizeEstimate: number;
+  scanScope: "messages-in-half-open-window-excluding-spam-trash-drafts-chats";
 }>;
 
 function fail(label: string, message: string): never {
@@ -214,7 +274,32 @@ function inputInteger(
 
 function parseContactsInput(input: OperationInput): ParsedContactsInput {
   const source = record(input, "contacts.list input");
-  exactKeys(source, [], ["cursor", "limit", "stats_scan_limit"], "contacts.list input");
+  exactKeys(source, [], [
+    "collection",
+    "cursor",
+    "include_stats",
+    "limit",
+    "stats_scan_limit",
+  ], "contacts.list input");
+  const collection = source.collection === undefined ? "contacts" : source.collection;
+  if (collection !== "contacts" && collection !== "other-contacts") {
+    return fail(
+      "contacts.list input.collection",
+      "must be contacts or other-contacts",
+    );
+  }
+  const includeStats = source.include_stats === undefined
+    ? true
+    : source.include_stats;
+  if (typeof includeStats !== "boolean") {
+    return fail("contacts.list input.include_stats", "must be boolean");
+  }
+  if (!includeStats && source.stats_scan_limit !== undefined) {
+    return fail(
+      "contacts.list input.stats_scan_limit",
+      "is accepted only when include_stats is true",
+    );
+  }
   const limit = inputInteger(
       source.limit,
       "contacts.list input.limit",
@@ -229,16 +314,87 @@ function parseContactsInput(input: OperationInput): ParsedContactsInput {
       1,
       CONTACTS_MAX_STATS_SCAN_LIMIT,
     );
-  if (limit * statsScanLimit > CONTACT_STATS_MAX_DIRECTION_PRODUCT) {
+  if (
+    includeStats
+    && limit * statsScanLimit > CONTACT_STATS_MAX_DIRECTION_PRODUCT
+  ) {
     return fail(
       "contacts.list input",
       `limit multiplied by stats_scan_limit must not exceed the ${CONTACT_STATS_MAX_DIRECTION_PRODUCT}-entry per-direction work budget`,
     );
   }
   return Object.freeze({
+    collection,
     cursor: optionalInputText(source.cursor, "contacts.list input.cursor", 4_096),
+    includeStats,
     limit,
     statsScanLimit,
+  });
+}
+
+function parseInteractionsInput(input: OperationInput): ParsedInteractionsInput {
+  const source = record(input, "contacts.list interactions input");
+  exactKeys(
+    source,
+    ["collection", "before"],
+    ["after", "cursor", "limit"],
+    "contacts.list interactions input",
+  );
+  if (source.collection !== "interactions") {
+    return fail("contacts.list interactions input.collection", "must be interactions");
+  }
+  const before = boundedInputText(
+    source.before,
+    "contacts.list interactions input.before",
+    24,
+  );
+  const parsed = new Date(before);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/u.test(before)
+    || !Number.isFinite(parsed.getTime())
+    || parsed.toISOString() !== before
+  ) {
+    return fail(
+      "contacts.list interactions input.before",
+      "must be a canonical whole-second UTC timestamp",
+    );
+  }
+  const after = source.after === undefined
+    ? null
+    : boundedInputText(source.after, "contacts.list interactions input.after", 24);
+  const parsedAfter = after === null ? null : new Date(after);
+  if (
+    after !== null
+    && (
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/u.test(after)
+      || parsedAfter === null
+      || !Number.isFinite(parsedAfter.getTime())
+      || parsedAfter.toISOString() !== after
+      || parsedAfter.getTime() >= parsed.getTime()
+    )
+  ) {
+    return fail(
+      "contacts.list interactions input.after",
+      "must be a canonical whole-second UTC timestamp before input.before",
+    );
+  }
+  return Object.freeze({
+    after,
+    afterMilliseconds: parsedAfter?.getTime() ?? null,
+    before,
+    beforeMilliseconds: parsed.getTime(),
+    cursor: optionalInputText(
+      source.cursor,
+      "contacts.list interactions input.cursor",
+      4_096,
+    ),
+    limit: inputInteger(
+      source.limit,
+      "contacts.list interactions input.limit",
+      INTERACTIONS_DEFAULT_LIMIT,
+      1,
+      INTERACTIONS_MAX_LIMIT,
+    ),
   });
 }
 
@@ -514,17 +670,18 @@ async function executeContactsList(context: ProviderActionContext): Promise<void
   const input = parseContactsInput(context.input);
   const { client, profile } = await authenticatedClient(context);
   const page = await fetchGmailContacts(client, {
+    collection: input.collection,
     limit: input.limit,
     pageToken: input.cursor,
   });
-  const tasks = page.contacts.flatMap((contact) => {
+  const tasks = input.includeStats ? page.contacts.flatMap((contact) => {
     const addressCoverage = contactEmailCoverage(contact);
     return (["sent", "received"] as const).map((direction) => Object.freeze({
       addressCoverage,
       resourceName: contact.resourceName,
       direction,
     }));
-  });
+  }) : [];
   const stats = await mapConcurrent(
     tasks,
     MAX_CONCURRENT_GMAIL_READS,
@@ -547,6 +704,7 @@ async function executeContactsList(context: ProviderActionContext): Promise<void
     byContact.set(entry.resourceName, current);
   }
   const contacts = page.contacts.map((contact) => {
+    if (!input.includeStats) return contact;
     const values = byContact.get(contact.resourceName);
     if (values?.sent === undefined || values.received === undefined) {
       return fail("contacts.list stats", "did not settle both directions for one contact");
@@ -564,12 +722,241 @@ async function executeContactsList(context: ProviderActionContext): Promise<void
     provider: "gmail",
     operation: "contacts.list",
     accountSubject: profile.emailAddress,
+    contactCollection: input.collection,
+    statsIncluded: input.includeStats,
     contacts: Object.freeze(contacts),
     nextCursor: page.nextPageToken,
     totalItems: page.totalItems,
-    statsScanLimit: input.statsScanLimit,
-    statsScope: "per-contact-gmail-search-excluding-spam-trash",
+    statsScanLimit: input.includeStats ? input.statsScanLimit : null,
+    statsScope: input.includeStats
+      ? "per-contact-gmail-search-excluding-spam-trash"
+      : "not-requested",
   }));
+}
+
+type MutableInteractionDirection = {
+  count: number;
+  complete: boolean;
+  firstAt: string | null;
+  lastAt: string | null;
+  count30d: number;
+  count90d: number;
+  count365d: number;
+};
+
+type MutableContactInteraction = {
+  sent: MutableInteractionDirection;
+  received: MutableInteractionDirection;
+};
+
+function newInteractionDirection(): MutableInteractionDirection {
+  return {
+    count: 0,
+    complete: true,
+    firstAt: null,
+    lastAt: null,
+    count30d: 0,
+    count90d: 0,
+    count365d: 0,
+  };
+}
+
+function interactionFor(
+  interactions: Map<string, MutableContactInteraction>,
+  email: string,
+): MutableContactInteraction {
+  const present = interactions.get(email);
+  if (present !== undefined) return present;
+  if (interactions.size >= INTERACTIONS_MAX_ADDRESSES) {
+    return fail(
+      "contacts.list interactions response",
+      `contains more than ${INTERACTIONS_MAX_ADDRESSES} external addresses in one page`,
+    );
+  }
+  const created = {
+    sent: newInteractionDirection(),
+    received: newInteractionDirection(),
+  };
+  interactions.set(email, created);
+  return created;
+}
+
+function messageInteractionAddresses(
+  message: GmailThread["messages"][number],
+  accountAddresses: ReadonlySet<string>,
+  direction: ContactDirection,
+): readonly string[] {
+  const headers = direction === "sent"
+    ? [message.to, message.cc, message.bcc]
+    : [message.from];
+  return Object.freeze([...new Set(headers.flatMap((header) =>
+    extractGmailEmailAddresses(header)))].filter((email) => !accountAddresses.has(email)));
+}
+
+function recordDatedInteraction(
+  direction: MutableInteractionDirection,
+  timestamp: string,
+  beforeMilliseconds: number,
+): void {
+  const milliseconds = new Date(timestamp).getTime();
+  direction.count += 1;
+  if (direction.firstAt === null || timestamp < direction.firstAt) direction.firstAt = timestamp;
+  if (direction.lastAt === null || timestamp > direction.lastAt) direction.lastAt = timestamp;
+  const age = beforeMilliseconds - milliseconds;
+  if (age <= 30 * 86_400_000) direction.count30d += 1;
+  if (age <= 90 * 86_400_000) direction.count90d += 1;
+  if (age <= 365 * 86_400_000) direction.count365d += 1;
+}
+
+function opaqueGmailKey(kind: "message" | "thread", id: string): string {
+  return createHash("sha256").update(`gmail-${kind}\0${id}`, "utf8").digest("hex");
+}
+
+function projectInteraction(
+  email: string,
+  interaction: MutableContactInteraction,
+): GmailContactInteraction {
+  return Object.freeze({
+    email,
+    sentCount: interaction.sent.count,
+    receivedCount: interaction.received.count,
+    sentCountComplete: interaction.sent.complete,
+    receivedCountComplete: interaction.received.complete,
+    firstSentAt: interaction.sent.firstAt,
+    lastSentAt: interaction.sent.lastAt,
+    firstReceivedAt: interaction.received.firstAt,
+    lastReceivedAt: interaction.received.lastAt,
+    sent30d: interaction.sent.count30d,
+    sent90d: interaction.sent.count90d,
+    sent365d: interaction.sent.count365d,
+    received30d: interaction.received.count30d,
+    received90d: interaction.received.count90d,
+    received365d: interaction.received.count365d,
+  });
+}
+
+async function executeContactInteractionsList(
+  context: ProviderActionContext,
+): Promise<void> {
+  const input = parseInteractionsInput(context.input);
+  const { client, profile } = await authenticatedClient(context);
+  const accountAddresses = input.cursor === null
+    ? await listGmailSendAsAliases(client)
+    : Object.freeze([] as string[]);
+  const page = await fetchGmailMessageList(client, {
+    limit: input.limit,
+    pageToken: input.cursor,
+    query: input.afterMilliseconds === null
+      ? `before:${String(input.beforeMilliseconds / 1_000)}`
+      : `after:${String(input.afterMilliseconds / 1_000 - 1)} before:${String(input.beforeMilliseconds / 1_000)}`,
+    includeSpamTrash: false,
+  });
+  const messages = await mapConcurrent(
+    page.messages,
+    MAX_CONCURRENT_GMAIL_READS,
+    async (stub, _index, admit) => {
+      const message = await admit(() =>
+        fetchGmailMessageInteractionMetadata(client, stub.id));
+      if (message.id !== stub.id) {
+        return fail(
+          "contacts.list interactions metadata",
+          "returned a message other than the requested ID",
+        );
+      }
+      if (
+        stub.threadId !== null
+        && message.threadId !== null
+        && stub.threadId !== message.threadId
+      ) {
+        return fail(
+          "contacts.list interactions metadata",
+          "returned a message bound to a different thread",
+        );
+      }
+      return message;
+    },
+  );
+  const accountSubject = profile.emailAddress.toLowerCase();
+  const selfAddresses = new Set([accountSubject, ...accountAddresses]);
+  const interactions = new Map<string, MutableContactInteraction>();
+  const threadKeys = new Set<string>();
+  let messagesIncluded = 0;
+  let draftOrChat = 0;
+  let missingInternalDate = 0;
+  let noExternalAddress = 0;
+  let outsideWindow = 0;
+  for (const message of messages) {
+    if (message.threadId !== null) {
+      threadKeys.add(opaqueGmailKey("thread", message.threadId));
+    }
+    if (message.labelIds.includes("DRAFT") || message.labelIds.includes("CHAT")) {
+      draftOrChat += 1;
+      continue;
+    }
+    const direction: ContactDirection = message.labelIds.includes("SENT")
+      ? "sent"
+      : "received";
+    const addresses = messageInteractionAddresses(message, selfAddresses, direction);
+    if (addresses.length === 0) {
+      noExternalAddress += 1;
+      continue;
+    }
+    if (message.internalDate === null) {
+      missingInternalDate += 1;
+      for (const email of addresses) {
+        interactionFor(interactions, email)[direction].complete = false;
+      }
+      continue;
+    }
+    if (
+      input.afterMilliseconds !== null
+      && new Date(message.internalDate).getTime() < input.afterMilliseconds
+    ) {
+      outsideWindow += 1;
+      continue;
+    }
+    if (new Date(message.internalDate).getTime() >= input.beforeMilliseconds) {
+      return fail(
+        "contacts.list interactions metadata",
+        "returned a message outside the requested before cutoff",
+      );
+    }
+    messagesIncluded += 1;
+    for (const email of addresses) {
+      recordDatedInteraction(
+        interactionFor(interactions, email)[direction],
+        message.internalDate,
+        input.beforeMilliseconds,
+      );
+    }
+  }
+  const output: GmailContactInteractionsListOutput = Object.freeze({
+    provider: "gmail",
+    operation: "contacts.list",
+    contactCollection: "interactions",
+    accountSubject,
+    accountAddresses,
+    after: input.after,
+    before: input.before,
+    interactions: Object.freeze([...interactions.entries()]
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([email, interaction]) => projectInteraction(email, interaction))),
+    messageKeys: Object.freeze(page.messages.map((message) =>
+      opaqueGmailKey("message", message.id))),
+    threadKeys: Object.freeze([...threadKeys].sort()),
+    messagesScanned: messages.length,
+    messagesIncluded,
+    messagesSkipped: Object.freeze({
+      draftOrChat,
+      missingInternalDate,
+      noExternalAddress,
+      outsideWindow,
+    }),
+    nextCursor: page.nextPageToken,
+    resultSizeEstimate: page.resultSizeEstimate,
+    scanScope: "messages-in-half-open-window-excluding-spam-trash-drafts-chats",
+  });
+  context.setOutput(output);
 }
 
 function threadOrderedAt(thread: GmailThread): string | null {
@@ -701,7 +1088,11 @@ async function executeMessagingRead(context: ProviderActionContext): Promise<voi
 /** Execute one reviewed official Gmail or People read without acknowledgement mutation. */
 export async function executeGmailProvider(context: ProviderActionContext): Promise<void> {
   const action = context.recipe.action;
-  if (action === "contacts.list") await executeContactsList(context);
+  if (action === "contacts.list") {
+    const source = record(context.input, "contacts.list input");
+    if (source.collection === "interactions") await executeContactInteractionsList(context);
+    else await executeContactsList(context);
+  }
   else if (action === "messaging.list") await executeMessagingList(context);
   else if (action === "messaging.read") await executeMessagingRead(context);
   else throw new Error(`official Gmail provider does not implement ${action}`);

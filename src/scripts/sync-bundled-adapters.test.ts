@@ -146,6 +146,8 @@ describe("single-process bundled adapter generation sync", () => {
       )
     )).toEqual([
       "bluesky-web@1.0.0",
+      "bluesky-web@1.1.0",
+      "bluesky-web@1.2.0",
       "facebook-group-web@1.0.0",
       "facebook-marketplace-web@1.0.0",
       "facebook-marketplace-web@1.1.0",
@@ -162,6 +164,7 @@ describe("single-process bundled adapter generation sync", () => {
       "linkedin-web@1.11.0",
       "linkedin-web@1.12.0",
       "linkedin-web@1.13.0",
+      "linkedin-web@1.14.0",
       "linkedin-web@1.2.0",
       "linkedin-web@1.3.0",
       "linkedin-web@1.4.0",
@@ -171,8 +174,11 @@ describe("single-process bundled adapter generation sync", () => {
       "linkedin-web@1.8.0",
       "linkedin-web@1.9.0",
       "substack-web@1.0.0",
+      "substack-web@1.1.0",
       "threads-web@1.0.0",
       "threads-web@1.1.0",
+      "threads-web@1.2.0",
+      "threads-web@1.3.0",
       "whatsapp-web@1.0.0",
       "whatsapp-web@1.1.0",
       "whatsapp-web@1.2.0",
@@ -184,6 +190,8 @@ describe("single-process bundled adapter generation sync", () => {
       "x-web@1.4.0",
       "x-web@1.5.0",
       "x-web@1.6.0",
+      "x-web@1.7.0",
+      "x-web@1.8.0",
     ]);
     expect(Object.fromEntries(discovered.flatMap((adapter) =>
       adapter.upgradeFrom.map((baseline) => [
@@ -193,6 +201,7 @@ describe("single-process bundled adapter generation sync", () => {
     ))).toMatchObject({
       "instagram-web@1.0.0": "bc3e17911739cc496105aac3bec522ef64b5e3b55183a2a0541850bb0f0ad18b",
       "threads-web@1.0.0": "750a6db23ea6e3e3c96f3a9086ce17d73c3c5c90066e576525e848fe4583ec41",
+      "threads-web@1.3.0": "125936943ac8f0ed00e85367ee01dc953d5115c55f4849a85d8f8b68e4e286f5",
     });
     expect(discovered.map((adapter) => adapter.id)).toEqual([
       "bluesky-web",

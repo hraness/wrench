@@ -42,6 +42,7 @@ import type {
   WebSessionDispatchEvent,
   WebSessionExecution,
   WebSessionOperationDeadline,
+  WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
 import { startWebSessionCleanupTrackedOperation } from "../web-session-execution";
 import {
@@ -62,6 +63,8 @@ import {
   linkedInMailboxUrnFromMiniProfile,
   linkedInMessengerConversationsUrl,
   linkedInPostAltText,
+  linkedInPostEntityUrn,
+  linkedInPostMediaUrn,
   linkedInPostText,
   linkedInPostVisibility,
   normalizeLinkedInPostProjection,
@@ -79,6 +82,8 @@ import {
 } from "./linkedin-web-article-browser";
 import {
   createLinkedInPostBrowserTransport,
+  LinkedInPostCreateResponseError,
+  LinkedInPostImagePreparationError,
   type LinkedInPostBrowserTransport,
 } from "./linkedin-web-post-browser";
 
@@ -122,6 +127,9 @@ export type LinkedInWebExecutionOptions = {
   readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
   readonly publishCleanupResource?: WebSessionCleanupResourcePublisher;
   readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+  readonly afterProviderAcceptedMutationTarget?: (
+    event: WebSessionProviderAcceptedMutationTargetEvent,
+  ) => Promise<void>;
   readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
 };
 
@@ -980,6 +988,133 @@ async function createLinkedInPostTransport(
   });
 }
 
+type LinkedInAcceptedPostTarget = Readonly<{
+  entityUrn: string;
+  mediaUrn: string | null;
+}>;
+
+function parseLinkedInAcceptedPostTarget(
+  identifier: unknown,
+): LinkedInAcceptedPostTarget {
+  if (
+    typeof identifier !== "string"
+    || identifier.length < 1
+    || identifier.length > 2_048
+    || /[\0\r\n]/u.test(identifier)
+  ) throw new Error("LinkedIn accepted post target must be bounded canonical JSON");
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier) as unknown;
+  } catch {
+    throw new Error("LinkedIn accepted post target must be bounded canonical JSON");
+  }
+  if (!isRecord(value)) {
+    throw new Error("LinkedIn accepted post target changed shape");
+  }
+  exactKeys(value, ["entityUrn", "mediaUrn"], "LinkedIn accepted post target");
+  if (canonicalJson(value) !== identifier) {
+    throw new Error("LinkedIn accepted post target must use canonical JSON");
+  }
+  return Object.freeze({
+    entityUrn: linkedInPostEntityUrn(value.entityUrn),
+    mediaUrn: value.mediaUrn === null ? null : linkedInPostMediaUrn(value.mediaUrn),
+  });
+}
+
+async function readLinkedInWebAcceptedPostTargetPresenceInternal(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  acceptedIdentifier: string,
+  options: LinkedInWebExecutionOptions,
+): Promise<Readonly<{
+  present: true;
+  entityUrn: string;
+  mediaUrn: string | null;
+}>> {
+  if (
+    recipe.site !== "linkedin"
+    || recipe.action !== "posts.publish"
+    || recipe.contractVersion !== 3
+  ) throw new Error("LinkedIn accepted post readback supports only posts.publish@3");
+  if (input.media_title !== undefined || input.link_url !== undefined) {
+    throw new Error("LinkedIn reviewed post publishing supports text or one PNG image only");
+  }
+  const target = parseLinkedInAcceptedPostTarget(acceptedIdentifier);
+  const body = linkedInPostText(input.body);
+  const visibility = linkedInPostVisibility(input.visibility);
+  const media = linkedInPostFileInput(input.media);
+  const altText = linkedInPostAltText(input.alt_text, media !== null);
+  if ((media !== null) !== (target.mediaUrn !== null)) {
+    throw new Error("LinkedIn accepted post target did not bind the confirmed media input");
+  }
+  const transport = await createLinkedInPostTransport(auth, recipe.timeoutMs, options);
+  try {
+    const identity = identityFromMeResponse(await transport.currentIdentityResponse());
+    const profileUrn = requireBoundLinkedInIdentity(identity, auth);
+    const expectedSubject = webSessionAuthSubject(auth);
+    if (expectedSubject === null || expectedSubject !== identity.subject) {
+      throw new Error("LinkedIn current member no longer matches the bound auth subject");
+    }
+    const variables = buildLinkedInPostCreateVariables({
+      altText,
+      body,
+      mediaUrn: target.mediaUrn,
+      visibility,
+    });
+    const projection = normalizeLinkedInPostProjection(
+      await transport.readPost(
+        expectedSubject,
+        profileUrn,
+        variables,
+        target.mediaUrn,
+        target.entityUrn,
+      ),
+      { body, mediaUrn: target.mediaUrn, profileUrn },
+    );
+    if (projection.entityUrn !== target.entityUrn) {
+      throw new Error("LinkedIn accepted post target readback changed entity identity");
+    }
+    return Object.freeze({
+      present: true as const,
+      entityUrn: target.entityUrn,
+      mediaUrn: target.mediaUrn,
+    });
+  } finally {
+    await transport.close();
+  }
+}
+
+/** Read only the exact provider-accepted LinkedIn post target; never dispatch. */
+export function readLinkedInWebAcceptedPostTargetPresence(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  acceptedIdentifier: string,
+  options: LinkedInWebExecutionOptions = {},
+): Promise<Readonly<{
+  present: true;
+  entityUrn: string;
+  mediaUrn: string | null;
+}>> {
+  return startWebSessionCleanupTrackedOperation(
+    options.registerCleanupBarrier,
+    (publishCleanupResource) => readLinkedInWebAcceptedPostTargetPresenceInternal(
+      recipe,
+      input,
+      auth,
+      acceptedIdentifier,
+      {
+        ...options,
+        ...(publishCleanupResource === undefined
+          ? {}
+          : { publishCleanupResource }),
+      },
+    ),
+    browserCleanupBarrier,
+  );
+}
+
 function linkedInArticleTitle(value: unknown): string {
   if (
     typeof value !== "string"
@@ -1168,8 +1303,8 @@ async function executeLinkedInPostPublish(
   if (
     recipe.site !== "linkedin"
     || recipe.action !== "posts.publish"
-    || recipe.contractVersion !== 2
-  ) throw new Error("LinkedIn post publishing supports only posts.publish@2");
+    || recipe.contractVersion !== 3
+  ) throw new Error("LinkedIn post publishing supports only posts.publish@3");
   if (input.media_title !== undefined || input.link_url !== undefined) {
     throw new Error("LinkedIn reviewed post publishing supports text or one PNG image only");
   }
@@ -1186,18 +1321,21 @@ async function executeLinkedInPostPublish(
   let verified = 0;
   let transport: LinkedInPostBrowserTransport | null = null;
   let projection: ReturnType<typeof normalizeLinkedInPostProjection> | null = null;
+  let failureStage = "opening the contained post transport";
   try {
     transport = await createLinkedInPostTransport(auth, recipe.timeoutMs, options);
+    failureStage = "current-member binding";
     const identity = identityFromMeResponse(await transport.currentIdentityResponse());
     const profileUrn = requireBoundLinkedInIdentity(identity, auth);
     const expectedSubject = webSessionAuthSubject(auth);
     if (expectedSubject === null || expectedSubject !== identity.subject) {
       throw new Error("LinkedIn current member no longer matches the bound auth subject");
     }
-    await options.beforeDispatch?.(
-      articleDispatchEvent("posts.publish", 1, 1, started, verified),
-    );
-    started = 1;
+    failureStage = image === null ? "public post dispatch admission" : "image preparation";
+    // Page staging and IMAGE_SHARING upload can leave an orphaned private
+    // provider asset, but neither can publish a feed post. Keep the durable
+    // public-post dispatch boundary immediately in front of createPost so a
+    // preparatory failure remains safely retryable.
     const mediaUrn = image === null
       ? null
       : await transport.uploadImage(expectedSubject, image.bytes);
@@ -1207,16 +1345,40 @@ async function executeLinkedInPostPublish(
       mediaUrn,
       visibility,
     });
+    failureStage = "public post dispatch admission";
+    await options.beforeDispatch?.(
+      articleDispatchEvent("posts.publish", 1, 1, started, verified),
+    );
+    started = 1;
+    failureStage = "post create response";
+    const entityUrn = await transport.createPost(
+      expectedSubject,
+      profileUrn,
+      variables,
+      mediaUrn,
+    );
+    failureStage = "accepted target retention";
+    await options.afterProviderAcceptedMutationTarget?.({
+      id: "posts.publish",
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: canonicalJson({ entityUrn, mediaUrn }),
+      },
+    });
+    failureStage = "independent post readback";
     projection = normalizeLinkedInPostProjection(
-      await transport.createPost(
+      await transport.readPost(
         expectedSubject,
         profileUrn,
         variables,
         mediaUrn,
+        entityUrn,
       ),
       { body, mediaUrn, profileUrn },
     );
     verified = 1;
+    failureStage = "dispatch verification";
     await options.afterDispatchVerified?.(
       articleDispatchEvent("posts.publish", 1, 1, started, verified),
     );
@@ -1245,7 +1407,12 @@ async function executeLinkedInPostPublish(
       dispatchStarted: true,
       dispatch: { planned: 1, started, verified },
     };
-  } catch {
+  } catch (error) {
+    const publicFailureStage = error instanceof LinkedInPostImagePreparationError
+      ? error.stage
+      : error instanceof LinkedInPostCreateResponseError
+        ? error.stage
+        : failureStage;
     return {
       status: started > verified ? "indeterminate" : "failed",
       output: null,
@@ -1253,8 +1420,8 @@ async function executeLinkedInPostPublish(
       dispatchStarted: started > 0,
       dispatch: { planned: 1, started, verified },
       error: started > verified
-        ? "LinkedIn may have accepted the image upload or post but exact member, text, media, and permalink readback was not verified; reconcile before retrying"
-        : "LinkedIn post publishing failed before remote submission",
+        ? `LinkedIn may have accepted the post but exact member, text, media, and permalink readback was not verified; failure stage: ${publicFailureStage}; reconcile before retrying`
+        : `LinkedIn post publishing failed before public post submission; failure stage: ${publicFailureStage}; retry with a fresh confirmed plan`,
     };
   } finally {
     await transport?.close();
@@ -1723,7 +1890,7 @@ export async function executeLinkedInWebOperation(
   }
   if (
     recipe.site === "linkedin"
-    && recipe.contractVersion === 2
+    && recipe.contractVersion === 3
     && recipe.action === "posts.publish"
   ) {
     return startWebSessionCleanupTrackedOperation(
