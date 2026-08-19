@@ -10,6 +10,7 @@ const ROWID_PATTERN = /^(?:0|[1-9][0-9]{0,18})$/u;
 const PN_SUBJECT_PATTERN = /^whatsapp:pn:[0-9]{5,20}$/u;
 const LID_SUBJECT_PATTERN = /^whatsapp:lid:[0-9]{5,32}$/u;
 const JID_PATTERNS = [
+  /^0@s\.whatsapp\.net$/u,
   /^[0-9]{5,20}(?::[0-9]{1,5})?@s\.whatsapp\.net$/u,
   /^[0-9]{5,32}(?::[0-9]{1,5})?@lid$/u,
   /^[0-9]{5,32}(?:-[0-9]{5,20})?@g\.us$/u,

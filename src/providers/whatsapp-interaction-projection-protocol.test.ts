@@ -89,6 +89,22 @@ describe("WhatsApp interaction projection protocol", () => {
       localInsertPageComplete: true,
       checkpoint: { cursor: "42", anchor: "d".repeat(64) },
     }, request())).toMatchObject({ localInsertPageComplete: true });
+    expect(parseWhatsAppInteractionProjectionResponse({
+      schemaVersion: 1,
+      status: "succeeded",
+      projectionGeneration: generation(),
+      interactions: [{
+        ...interaction("42"),
+        chatJid: "0@s.whatsapp.net",
+        senderJid: null,
+        chatKind: "unknown",
+      }],
+      nextCursor: null,
+      localInsertPageComplete: true,
+      checkpoint: { cursor: "42", anchor: "d".repeat(64) },
+    }, request())).toMatchObject({
+      interactions: [{ chatJid: "0@s.whatsapp.net", chatKind: "unknown" }],
+    });
     expect(parseWhatsAppInteractionProjectionResponse(
       createWhatsAppInteractionProjectionFailure("schema-mismatch"),
     )).toEqual({ schemaVersion: 1, status: "failed", errorCode: "schema-mismatch" });
