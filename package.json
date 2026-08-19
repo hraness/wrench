@@ -61,6 +61,7 @@
     "bunfig.toml",
     "src/args.ts",
     "src/article-draft-document.ts",
+    "src/article-draft-embeds.ts",
     "src/article-draft-images.ts",
     "src/assets/adapter-template/wrench-adapter.json",
     "src/assets/adapters/bluesky/wrench-web-adapter.json",

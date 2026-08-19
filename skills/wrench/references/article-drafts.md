@@ -4,6 +4,7 @@
 
 - [Own the editorial translation](#own-the-editorial-translation)
 - [Build the mixed document](#build-the-mixed-document)
+- [Project source-post embeds](#project-source-post-embeds)
 - [Save without publishing](#save-without-publishing)
 - [Handle uncertainty](#handle-uncertainty)
 - [Check provider state](#check-provider-state)
@@ -79,6 +80,36 @@ Provider text support remains narrower where capture evidence is narrower:
 `linkedin-web` accepts only `paragraph`, `heading1`, and `heading2`, native
 HTTPS links, and no text styles. `x-web` accepts all listed text block types,
 native links, and bold, italic, or strikethrough.
+
+## Project source-post embeds
+
+Treat a source X status as editorial content, not as provider editor payload.
+Do not copy its profile chrome, timestamp, engagement counts, or screenshot of
+the rendered card into an Article by default. Do not assume that pasting a URL
+creates a proprietary embed.
+
+Use the exported `projectXStatusArticleEmbed` helper with the exact status text,
+canonical source URL, and destination adapter. It removes share-tracking query
+parameters and emits the status URL as one native linked paragraph immediately
+after the content:
+
+- `x-web`: emit each non-empty source line as a `blockquote`.
+- `linkedin-web`: emit each non-empty source line as a `paragraph`, because the
+  reviewed LinkedIn Article contract does not support blockquotes.
+
+Preserve media attached to the source status only when the user explicitly
+wants that media as independent Article images. Otherwise keep the quote and
+status link only. The helper does not fetch a status, infer its text, upload
+media, or claim that either provider created a native embed card.
+
+```ts
+import { projectXStatusArticleEmbed } from "@hraness/wrench";
+
+const blocks = projectXStatusArticleEmbed({
+  text: "Exact source-post text",
+  url: "https://x.com/example/status/123?s=20",
+}, "x-web");
+```
 
 This is canonical X document JSON with one native link and one image:
 

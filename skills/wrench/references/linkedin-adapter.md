@@ -155,6 +155,12 @@ it is never a document body block. Styles, list items, blockquotes, embeds,
 HTML, Markdown, and editor payloads are rejected. The caller owns editorial
 translation, image placement, captions, and alt text.
 
+When the source Article contains an X status, use
+`projectXStatusArticleEmbed` with the `linkedin-web` target. The reviewed
+LinkedIn contract cannot express blockquotes, so the helper emits the exact
+status text as paragraphs followed immediately by one canonical linked X URL.
+Omit source-post chrome, metrics, and card screenshots by default.
+
 Create first binds a private title shell and its exact current-author
 unpublished readback, registers, transfers, binds, and verifies the cover,
 then registers and transfers each inline image before saving and reading back

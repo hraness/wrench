@@ -411,7 +411,10 @@ capability instead of translating inputs or switching transports implicitly.
 Capture or read source material separately. The caller owns every editorial
 choice involved in translating, abridging, retitling, attributing, and linking
 it for the destination. Wrench sends only the final reviewed title and
-document; it does not turn a source URL into provider copy.
+document; it does not turn a source URL into provider copy. The exported
+`projectXStatusArticleEmbed` helper provides one deterministic destination
+projection for already-reviewed X status text: blockquote plus canonical X
+link for `x-web`, or paragraphs plus canonical X link for `linkedin-web`.
 
 For `linkedin-web`, pass `cover_image` outside the canonical document when
 creating a draft or intentionally replacing its banner. On an exact
