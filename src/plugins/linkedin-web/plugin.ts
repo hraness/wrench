@@ -8,7 +8,10 @@ import {
   parseArticleDraftDocument,
   parseArticleDraftDocumentV2,
 } from "../../article-draft-document";
-import { articleDraftImageFileInputs } from "../../article-draft-images";
+import {
+  articleDraftImageFileInput,
+  articleDraftImageFileInputs,
+} from "../../article-draft-images";
 import archivedLinkedInWebManifest from "../../assets/adapters/linkedin/wrench-web-adapter.v1.8.0.json";
 import {
   browserSessionAuthKinds,
@@ -81,6 +84,17 @@ function linkedinArticleDraftV2Issues(
     }),
     ...linkedinArticleDraftIdentityIssues(input),
   ];
+  if (input.cover_image === undefined) {
+    if (input.draft_id === undefined) {
+      issues.push("input.cover_image is required when creating a LinkedIn Article draft");
+    }
+  } else {
+    try {
+      articleDraftImageFileInput(input.cover_image, "input.cover_image");
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : "input.cover_image is invalid");
+    }
+  }
   try {
     articleDraftImageFileInputs(input.inline_images, 20);
   } catch (error) {
@@ -96,8 +110,9 @@ function linkedinArticleDraftV2Issues(
     if (textBlocks.some((block) =>
       block.type !== "paragraph"
       && block.type !== "heading1"
-      && block.type !== "heading2")) {
-      issues.push("LinkedIn Article drafts currently support only paragraph, heading1, and heading2 blocks");
+      && block.type !== "heading2"
+      && block.type !== "blockquote")) {
+      issues.push("LinkedIn Article drafts currently support only paragraph, heading1, heading2, and blockquote blocks");
     }
     if (textBlocks.some((block) => block.styles.length !== 0)) {
       issues.push("LinkedIn Article text styles remain capture-required");
@@ -140,31 +155,42 @@ function linkedinArticleDraftV2Dispatches(
     id: `articles.image[${index + 1}]`,
     description: `Upload and process exact inline image ${index + 1}`,
   }));
+  const cover = Object.freeze({
+    id: "articles.cover",
+    description: "Upload and bind the exact Article cover image only to LinkedIn's banner slot",
+  });
+  const covers = input.cover_image === undefined ? [] : [cover];
   return input.draft_id === undefined
     ? Object.freeze([
         Object.freeze({
           id: "articles.create",
           description: "Create one exact private LinkedIn Article title shell",
         }),
+        ...covers,
         ...images,
         Object.freeze({
           id: "articles.content",
-          description: "Replace the new private LinkedIn Article document and images",
+          description: "Replace the new private LinkedIn Article document and inline images while preserving the confirmed cover",
         }),
       ])
     : Object.freeze([
+        ...covers,
         ...images,
         Object.freeze({
           id: "articles.replace",
-          description: "Bring the exact private LinkedIn Article title, document, and images to the confirmed state",
+          description: input.cover_image === undefined
+            ? "Bring the exact private LinkedIn Article title, document, and inline images to the confirmed state while preserving its existing banner"
+            : "Bring the exact private LinkedIn Article title, cover, document, and inline images to the confirmed state",
         }),
       ]);
 }
 
 const currentOperations = webSessionContractOperations(
   Object.values(linkedinContracts),
-  "eb1916d62fab48f18c18135c8012a1ae6c80fe2568e7b6c3c56f2261458c4b9e",
-  {},
+  "cd17cb5fd80a9188c92da6cbaa15323a52e65643d19aeffec8b4f70523e61270",
+  {
+    "posts.publish": [2],
+  },
   {
     "messaging.list": {
       state: "unsupported",

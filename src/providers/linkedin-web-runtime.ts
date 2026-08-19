@@ -17,6 +17,7 @@ import {
   parseArticleDraftDocumentV2,
 } from "../article-draft-document";
 import {
+  materializeArticleDraftImage,
   materializeArticleDraftImages,
 } from "../article-draft-images";
 import {
@@ -47,6 +48,7 @@ import {
   LINKEDIN_ARTICLE_PAGE_MAX_CHARACTERS,
   LINKEDIN_FIRST_PARTY_ARTICLES_PATH,
   LINKEDIN_MESSENGER_CONVERSATIONS_OBSERVED_QUERY_ID,
+  buildLinkedInArticleCoverPatch,
   buildLinkedInArticleContentPatch,
   buildLinkedInArticleContentPatchV2,
   buildLinkedInArticleCreateBody,
@@ -67,6 +69,7 @@ import {
   normalizeLinkedInArticleDraftMetadata,
   normalizeLinkedInArticleDraftSnapshot,
   normalizeLinkedInArticleDraftV2,
+  normalizeLinkedInArticleDraftV2Metadata,
   normalizeLinkedInMessagingList,
 } from "./linkedin-web";
 import { resolveLinkedInMessengerConversationsQueryId } from "./linkedin-web-bootstrap";
@@ -793,6 +796,20 @@ async function createDirectLinkedInArticleTransport(
         "LinkedIn Article inline images require the reviewed browser-bound upload transport",
       );
     },
+    uploadCoverImage: () => {
+      throw new Error(
+        "LinkedIn Article cover images require the reviewed browser-bound upload transport",
+      );
+    },
+    updateCover: async (draftId, assetUrn) => {
+      await client.requestStatus({
+        url: linkedInArticleDraftEntityUrl(draftId),
+        method: "POST",
+        headers: linkedInArticleHeaders(csrf, articleEditUrl(draftId)),
+        body: canonicalJson(buildLinkedInArticleCoverPatch(assetUrn)),
+        expectedStatuses: [200],
+      });
+    },
     updateContentV2: async (draftId, document, imageAssetUrns) => {
       await client.requestStatus({
         url: linkedInArticleDraftEntityUrl(draftId),
@@ -997,16 +1014,24 @@ function linkedInArticleFailureCategory(error: unknown): string {
   if (message.includes("bootstrap")) return "bootstrap-response-drift";
   if (message.includes("readback")) return "readback-rejected";
   if (message.includes("image registration request")) return "image-registration-request-failed";
-  if (message.includes("image registration response")) return "image-registration-response-drift";
   const imageRegistrationShape = /image registration shape drifted:([a-z0-9-]{1,192})/u
     .exec(message)?.[1];
   if (imageRegistrationShape !== undefined) {
     return `image-registration-shape-${imageRegistrationShape}`;
   }
   if (message.includes("image registration shape")) return "image-registration-shape-drift";
+  if (
+    message.includes("image registration response")
+    || /Article (?:cover |inline )?image registration/u.test(message)
+  ) return "image-registration-response-drift";
+  if (message.includes("image staging changed shape")) return "image-byte-staging-failed";
   if (message.includes("image staging")) return "image-staging-failed";
+  if (message.includes("image bytes")) return "image-byte-staging-failed";
   if (message.includes("image signed transfer status")) return "image-transfer-status-drift";
   if (message.includes("image signed transfer")) return "image-transfer-failed";
+  if (/Article (?:cover |inline )?image upload/u.test(message)) {
+    return "image-transfer-response-drift";
+  }
   return "contract-step-failed";
 }
 
@@ -1044,6 +1069,15 @@ async function readLinkedInArticleDraftV2(
 ): Promise<ReturnType<typeof normalizeLinkedInArticleDraftV2>> {
   const response = await transport.readDraftResponse(draftId);
   return normalizeLinkedInArticleDraftV2(response, draftId, profileUrn);
+}
+
+async function readLinkedInArticleDraftV2Metadata(
+  transport: LinkedInArticleBrowserTransport,
+  draftId: string,
+  profileUrn: string,
+): Promise<ReturnType<typeof normalizeLinkedInArticleDraftV2Metadata>> {
+  const response = await transport.readDraftResponse(draftId);
+  return normalizeLinkedInArticleDraftV2Metadata(response, draftId, profileUrn);
 }
 
 function requireBoundLinkedInIdentity(
@@ -1407,7 +1441,7 @@ async function executeLinkedInArticleDraftSave(
   }
 }
 
-async function executeLinkedInArticleDraftSaveV3(
+async function executeLinkedInArticleDraftSaveV7(
   recipe: WebSessionRecipe,
   input: OperationInput,
   auth: WrenchAuth,
@@ -1416,8 +1450,8 @@ async function executeLinkedInArticleDraftSaveV3(
   if (
     recipe.site !== "linkedin"
     || recipe.action !== "articles.draft.save"
-    || recipe.contractVersion !== 3
-  ) throw new Error("LinkedIn image Article draft saving supports only articles.draft.save@3");
+    || recipe.contractVersion !== 7
+  ) throw new Error("LinkedIn image Article draft saving supports only articles.draft.save@7");
   const title = linkedInArticleTitle(input.title);
   const document = parseArticleDraftDocumentV2(input.document, {
     maximumBlocks: MAX_LINKEDIN_ARTICLE_BLOCKS,
@@ -1444,6 +1478,26 @@ async function executeLinkedInArticleDraftSaveV3(
     (_, index) => `urn:li:digitalmediaAsset:wrenchFixture${index}`,
   ));
   buildLinkedInArticleContentPatchV2(document, fixtureAssets);
+  const requestedDraftId = input.draft_id === undefined
+    ? null
+    : linkedInArticleDraftId(input.draft_id, "input.draft_id");
+  if (input.cover_image === undefined && requestedDraftId === null) {
+    throw new Error("input.cover_image is required when creating a LinkedIn Article draft");
+  }
+  const coverImage = input.cover_image === undefined
+    ? null
+    : await materializeArticleDraftImage(
+        input.cover_image,
+        options.fileResolver,
+        {
+          maximumBytes: MAX_LINKEDIN_ARTICLE_IMAGE_BYTES,
+          inputLabel: "input.cover_image",
+          filenamePrefix: "cover-image",
+          ...(options.operationDeadline === undefined
+            ? {}
+            : { operationDeadline: options.operationDeadline }),
+        },
+      );
   const images = await materializeArticleDraftImages(
     input.inline_images,
     options.fileResolver,
@@ -1458,10 +1512,9 @@ async function executeLinkedInArticleDraftSaveV3(
   if (images.length !== imageCount) {
     throw new Error("input.inline_images must match every document imageIndex exactly");
   }
-  const requestedDraftId = input.draft_id === undefined
-    ? null
-    : linkedInArticleDraftId(input.draft_id, "input.draft_id");
-  const planned = images.length + (requestedDraftId === null ? 2 : 1);
+  const planned = images.length
+    + (requestedDraftId === null ? 2 : 1)
+    + (coverImage === null ? 0 : 1);
   let started = 0;
   let verified = 0;
   let nextIndex = 0;
@@ -1499,9 +1552,10 @@ async function executeLinkedInArticleDraftSaveV3(
     if (
       transport.uploadInlineImage === undefined
       || transport.updateContentV2 === undefined
-    ) throw new Error("LinkedIn Article image transport is unavailable");
+    ) throw new Error("LinkedIn Article cover and inline image transport is unavailable");
     const uploadInlineImage = transport.uploadInlineImage;
     const updateContentV2 = transport.updateContentV2;
+    let coverAssetUrn: string | null = null;
 
     if (draftId === null) {
       failureStage = "opening the private Article editor before creation";
@@ -1524,11 +1578,41 @@ async function executeLinkedInArticleDraftSaveV3(
       await complete(dispatchId, index);
     } else {
       failureStage = "reading the exact existing private Article";
-      await readLinkedInArticleDraftMetadata(
+      const existing = await readLinkedInArticleDraftV2Metadata(
         transport,
         draftId,
         profileUrn,
       );
+      coverAssetUrn = existing.coverAssetUrn;
+      if (coverImage === null && coverAssetUrn === null) {
+        throw new Error("LinkedIn Article replacement without input.cover_image requires one existing private banner");
+      }
+    }
+
+    if (coverImage !== null) {
+      if (
+        transport.uploadCoverImage === undefined
+        || transport.updateCover === undefined
+      ) throw new Error("LinkedIn Article cover transport is unavailable");
+      const coverDispatchId = "articles.cover";
+      failureStage = "uploading the private Article cover image";
+      const coverDispatchIndex = await begin(coverDispatchId);
+      coverAssetUrn = await transport.uploadCoverImage(draftId, coverImage);
+      failureStage = "binding the private Article cover only to the banner slot";
+      await transport.updateCover(draftId, coverAssetUrn);
+      failureStage = "verifying the private Article cover banner";
+      const covered = await readLinkedInArticleDraftV2Metadata(
+        transport,
+        draftId,
+        profileUrn,
+      );
+      if (covered.coverAssetUrn !== coverAssetUrn) {
+        throw new Error("LinkedIn Article cover readback did not bind the confirmed banner asset");
+      }
+      await complete(coverDispatchId, coverDispatchIndex);
+    }
+    if (coverAssetUrn === null) {
+      throw new Error("LinkedIn Article draft requires one exact private banner");
     }
 
     const imageAssetUrns: string[] = [];
@@ -1562,8 +1646,9 @@ async function executeLinkedInArticleDraftSaveV3(
     if (
       final.title !== title
       || canonicalJson(final.document) !== canonicalJson(document)
+      || final.coverAssetUrn !== coverAssetUrn
       || canonicalJson(final.imageAssetUrns) !== canonicalJson(imageAssetUrns)
-    ) throw new Error("LinkedIn Article final readback did not bind the confirmed draft and images");
+    ) throw new Error("LinkedIn Article final readback did not bind the confirmed draft, cover, and inline images");
     await complete(finalDispatchId, finalDispatchIndex);
 
     if (nextIndex !== planned || verified !== planned) {
@@ -1580,6 +1665,7 @@ async function executeLinkedInArticleDraftSaveV3(
         draftId,
         title,
         documentSchemaVersion: 2,
+        coverImageCount: 1,
         inlineImageCount: images.length,
         url,
       },
@@ -1597,7 +1683,7 @@ async function executeLinkedInArticleDraftSaveV3(
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
       error: started > verified
-        ? `LinkedIn may have accepted the current private Article image or replacement dispatch while ${diagnostic}; preserve the indeterminate run, inspect the exact draft, and do not retry`
+        ? `LinkedIn may have accepted the current private Article cover, inline image, or replacement dispatch while ${diagnostic}; preserve the indeterminate run, inspect the exact draft, and do not retry`
         : verified > 0
           ? `LinkedIn verified only part of the confirmed private Article image workflow while ${diagnostic}; inspect the draft before retrying`
           : `LinkedIn Article image draft failed before remote submission while ${diagnostic}`,
@@ -1616,12 +1702,12 @@ export async function executeLinkedInWebOperation(
 ): Promise<WebSessionExecution> {
   if (
     recipe.site === "linkedin"
-    && recipe.contractVersion === 3
+    && recipe.contractVersion === 7
     && recipe.action === "articles.draft.save"
   ) {
     return startWebSessionCleanupTrackedOperation(
       options.registerCleanupBarrier,
-      (publishCleanupResource) => executeLinkedInArticleDraftSaveV3(
+      (publishCleanupResource) => executeLinkedInArticleDraftSaveV7(
         recipe,
         input,
         auth,

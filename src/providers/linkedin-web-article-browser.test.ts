@@ -8,6 +8,7 @@ import {
   parseArticleDraftDocumentV2,
 } from "../article-draft-document";
 import {
+  buildLinkedInArticleCoverPatch,
   buildLinkedInArticleContentPatch,
   buildLinkedInArticleContentPatchV2,
   buildLinkedInArticleCreateBody,
@@ -345,7 +346,6 @@ describe("LinkedIn native Article contained-browser transport", () => {
 
   test("registers, stages, uploads, and writes one bounded inline image", async () => {
     const assetUrn = "urn:li:digitalmediaAsset:C4D22AQFixtureAsset";
-    const recipe = "urn:li:digitalmediaRecipe:feedshare-image_1280";
     const imageBytes = new Uint8Array(1_300_000);
     imageBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const document = parseArticleDraftDocumentV2(canonicalJson({
@@ -392,6 +392,9 @@ describe("LinkedIn native Article contained-browser transport", () => {
         if (source.includes('method:"PUT"')) {
           transferCommands += 1;
           expect(source).toContain("delete globalThis[input.key]");
+          expect(source).toContain("new Blob([bytes],{type:input.mediaType})");
+          expect(source).toContain("chunks.length!==input.expectedChunkCount");
+          expect(source).toContain("binary.length!==input.expectedByteLength");
           expect(source).not.toContain("pollingUrl");
           expect(source).not.toContain("Object.values");
           return Promise.resolve([browserRecord({
@@ -419,10 +422,10 @@ describe("LinkedIn native Article contained-browser transport", () => {
             body: {
               data: {
                 value: {
+                  $type: "com.linkedin.mediauploader.MediaUploadMetadata",
                   mediaArtifactUrn: "urn:li:mediaArtifact:fixture",
-                  recipes: [recipe],
                   singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
-                  singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture?ca=vector",
+                  singleUploadUrl: "https://www.linkedin.com/dms-uploads/fixture?ca=article",
                   type: "SINGLE",
                   urn: assetUrn,
                 },
@@ -443,6 +446,12 @@ describe("LinkedIn native Article contained-browser transport", () => {
       dependencies: { createBrowserSession: () => Promise.resolve(session) },
     });
     await transport.readDraftResponse(ARTICLE_ID);
+    expect(await transport.uploadCoverImage?.(ARTICLE_ID, {
+      bytes: Uint8Array.from([0xff, 0xd8, 0xff]),
+      filename: "cover-image-1.jpg",
+      mediaType: "image/jpeg",
+    })).toBe(assetUrn);
+    await transport.updateCover?.(ARTICLE_ID, assetUrn);
     expect(await transport.uploadInlineImage?.(ARTICLE_ID, {
       bytes: imageBytes,
       filename: "inline-image-1.png",
@@ -451,17 +460,26 @@ describe("LinkedIn native Article contained-browser transport", () => {
     await transport.updateContentV2?.(ARTICLE_ID, document, [assetUrn]);
     await transport.close();
 
-    expect(stagedCommands).toBeGreaterThanOrEqual(2);
-    expect(stagedBatchSizes).toEqual([1, 16, 16, 4]);
-    expect(transferCommands).toBe(1);
-    const registration = requests.find((request) =>
+    expect(stagedCommands).toBeGreaterThanOrEqual(4);
+    expect(stagedBatchSizes).toEqual([1, 1, 1, 16, 16, 4]);
+    expect(transferCommands).toBe(2);
+    const registrations = requests.filter((request) =>
       request.path === "/voyager/api/voyagerVideoDashMediaUploadMetadata?action=upload");
-    expect(JSON.parse(registration?.body ?? "null")).toEqual({
-      fileSize: imageBytes.byteLength,
-      filename: "inline-image-1.png",
-      mediaUploadType: "PUBLISHING_INLINE_IMAGE",
-    });
-    expect(registration?.pemMetadata).toBeNull();
+    expect(registrations.map((registration) => JSON.parse(registration.body ?? "null"))).toEqual([
+      {
+        fileSize: 3,
+        filename: "cover-image-1.jpg",
+        mediaUploadType: "PUBLISHING_COVER_IMAGE",
+      },
+      {
+        fileSize: imageBytes.byteLength,
+        filename: "inline-image-1.png",
+        mediaUploadType: "PUBLISHING_INLINE_IMAGE",
+      },
+    ]);
+    expect(registrations.every((registration) => registration.pemMetadata === null)).toBeTrue();
+    const cover = requests.find((request) => request.body?.includes("coverMediaV2Union") === true);
+    expect(JSON.parse(cover?.body ?? "null")).toEqual(buildLinkedInArticleCoverPatch(assetUrn));
     const content = requests.at(-1);
     expect(content?.pemMetadata).toBe("article-autosave");
     expect(JSON.parse(content?.body ?? "null")).toEqual(

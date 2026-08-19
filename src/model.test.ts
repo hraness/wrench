@@ -1027,22 +1027,25 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.9.0");
+    expect(current.value.version).toBe("1.14.0");
     const draft = current.value.operations["articles.draft.save"];
     expect(draft !== undefined && isWebSessionOperation(draft)).toBeTrue();
     if (draft === undefined || !isWebSessionOperation(draft)) return;
     expect(draft.risk).toBe("R2");
     expect(draft.webSession).toMatchObject({
       action: "articles.draft.save",
-      contractVersion: 3,
+      contractVersion: 7,
     });
     expect(draft.input.required).toEqual(["title", "document", "inline_images"]);
+    expect(draft.input.properties.cover_image).toMatchObject({
+      type: "file",
+      maxBytes: 5 * 1024 * 1024,
+    });
     expect(draft.input.properties.inline_images).toMatchObject({
       type: "array",
       minItems: 1,
       maxItems: 20,
     });
-    expect(draft.input.properties.cover_image).toBeUndefined();
     const richInput = validateOperationInput(draft.input, {
       title: "Harnessing Puerto Rico",
       document: canonicalJson({
@@ -1057,6 +1060,7 @@ describe("wrench manifest parsing", () => {
           },
         ],
       }),
+      cover_image: "fixture-cover",
       inline_images: ["fixture-image"],
     }, current.value.origins);
     expect(richInput.ok).toBeTrue();
@@ -1066,6 +1070,76 @@ describe("wrench manifest parsing", () => {
         "articles.draft.save",
         richInput.value,
       )).toEqual({ ok: true, value: richInput.value });
+    }
+
+    const priorQuoteValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.13.0.json"),
+      "utf8",
+    )) as unknown;
+    const priorQuote = parseDiagnosticManifest(priorQuoteValue);
+    expect(priorQuote.ok).toBeTrue();
+    if (priorQuote.ok) {
+      expect(priorQuote.value.version).toBe("1.13.0");
+      const priorQuoteDraft = priorQuote.value.operations["articles.draft.save"];
+      expect(priorQuoteDraft !== undefined && isWebSessionOperation(priorQuoteDraft)).toBeTrue();
+      if (priorQuoteDraft !== undefined && isWebSessionOperation(priorQuoteDraft)) {
+        expect(priorQuoteDraft.webSession.contractVersion).toBe(6);
+        expect(priorQuoteDraft.input.properties.document?.description).not.toContain("blockquotes");
+      }
+    }
+
+    const requiredCoverValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.12.0.json"),
+      "utf8",
+    )) as unknown;
+    const requiredCover = parseDiagnosticManifest(requiredCoverValue);
+    expect(requiredCover.ok).toBeTrue();
+    if (requiredCover.ok) {
+      expect(requiredCover.value.version).toBe("1.12.0");
+      const requiredCoverDraft = requiredCover.value.operations["articles.draft.save"];
+      expect(requiredCoverDraft !== undefined && isWebSessionOperation(requiredCoverDraft)).toBeTrue();
+      if (requiredCoverDraft !== undefined && isWebSessionOperation(requiredCoverDraft)) {
+        expect(requiredCoverDraft.webSession.contractVersion).toBe(5);
+        expect(requiredCoverDraft.input.required).toEqual([
+          "title",
+          "document",
+          "cover_image",
+          "inline_images",
+        ]);
+      }
+    }
+
+    const priorCoveredValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.11.0.json"),
+      "utf8",
+    )) as unknown;
+    const priorCovered = parseDiagnosticManifest(priorCoveredValue);
+    expect(priorCovered.ok).toBeTrue();
+    if (priorCovered.ok) {
+      expect(priorCovered.value.version).toBe("1.11.0");
+      const priorCoveredDraft = priorCovered.value.operations["articles.draft.save"];
+      expect(priorCoveredDraft !== undefined && isWebSessionOperation(priorCoveredDraft)).toBeTrue();
+      if (priorCoveredDraft !== undefined && isWebSessionOperation(priorCoveredDraft)) {
+        expect(priorCoveredDraft.webSession.contractVersion).toBe(4);
+        expect(priorCoveredDraft.input.required).toEqual(["title", "document", "inline_images"]);
+        expect(priorCoveredDraft.input.properties.cover_image).toBeUndefined();
+      }
+    }
+
+    const priorImageValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "linkedin", "wrench-web-adapter.v1.10.0.json"),
+      "utf8",
+    )) as unknown;
+    const priorImage = parseDiagnosticManifest(priorImageValue);
+    expect(priorImage.ok).toBeTrue();
+    if (priorImage.ok) {
+      expect(priorImage.value.version).toBe("1.10.0");
+      const priorImageDraft = priorImage.value.operations["articles.draft.save"];
+      expect(priorImageDraft !== undefined && isWebSessionOperation(priorImageDraft)).toBeTrue();
+      if (priorImageDraft !== undefined && isWebSessionOperation(priorImageDraft)) {
+        expect(priorImageDraft.webSession.contractVersion).toBe(3);
+        expect(priorImageDraft.input.required).toEqual(["title", "document", "inline_images"]);
+      }
     }
 
     const textOnlyValue = JSON.parse(readFileSync(

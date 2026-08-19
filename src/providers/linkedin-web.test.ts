@@ -12,6 +12,7 @@ import {
   LINKEDIN_WEB_OPERATION_NAMES,
   RESTLI_V2_VALUE_LIMITS,
   assertLinkedInWebR1RequestAllowed,
+  buildLinkedInArticleCoverPatch,
   buildLinkedInArticleContent,
   buildLinkedInArticleContentHtml,
   buildLinkedInArticleContentHtmlV2,
@@ -34,6 +35,8 @@ import {
   normalizeLinkedInGraphqlEnvelope,
   normalizeLinkedInArticleDraft,
   normalizeLinkedInArticleDraftV2,
+  normalizeLinkedInArticleDraftV2Metadata,
+  normalizeLinkedInArticleDraftV2Snapshot,
   normalizeLinkedInArticleImageUploadRegistration,
   normalizeLinkedInArticleImageUploadStatus,
   normalizeLinkedInMessagingList,
@@ -630,6 +633,48 @@ describe("LinkedIn native Article draft contract", () => {
     return `<html><body><code style="display: none" id="bpr-guid-123456">${encoded}</code></body></html>`;
   }
 
+  function coverResponseFields(assetUrn: string): Readonly<Record<string, unknown>> {
+    const vector = (includeAsset: boolean): Readonly<Record<string, unknown>> => ({
+      $type: "com.linkedin.common.VectorImage",
+      artifacts: [{
+        $type: "com.linkedin.common.VectorArtifact",
+        expiresAt: 1_900_000_000_000,
+        fileIdentifyingUrlPathSegment: "image/fixture/cover-1200x630",
+        height: 630,
+        width: 1200,
+      }],
+      ...(includeAsset ? { digitalmediaAsset: assetUrn } : {}),
+      rootUrl: "https://media.licdn.com/dms/image/fixture/",
+    });
+    const originalImage = (includeAsset: boolean): Readonly<Record<string, unknown>> => ({
+      $type: "com.linkedin.voyager.dash.common.image.ImageViewModel",
+      attributes: [{
+        $type: "com.linkedin.voyager.dash.common.image.ImageAttribute",
+        detailDataUnion: { vectorImage: vector(includeAsset) },
+      }],
+    });
+    return {
+      coverMedia: {
+        $type: "com.linkedin.voyager.dash.publishing.CoverImage",
+        caption: {
+          $type: "com.linkedin.voyager.dash.common.text.TextViewModel",
+          attributesV2: [],
+          text: "",
+          textDirection: "USER_LOCALE",
+        },
+        originalImage: originalImage(false),
+        originalImageUrn: assetUrn,
+      },
+      coverMediaV2Union: {
+        coverImage: {
+          $type: "com.linkedin.voyager.dash.publishing.CoverImage",
+          originalImage: originalImage(true),
+          originalImageUrn: assetUrn,
+        },
+      },
+    };
+  }
+
   test("builds only the observed create, title, content, and exact-read routes", () => {
     expect(buildLinkedInArticleCreateBody(profileUrn, title)).toEqual({
       authors: [{ profileUrn }],
@@ -639,6 +684,21 @@ describe("LinkedIn native Article draft contract", () => {
     });
     expect(buildLinkedInArticleTitlePatch(title)).toEqual({
       patch: { $set: { state: "AUTOSAVED", title } },
+    });
+    const coverAssetUrn = "urn:li:digitalmediaAsset:C4D22AQCoverFixture";
+    expect(buildLinkedInArticleCoverPatch(coverAssetUrn)).toEqual({
+      patch: {
+        $set: {
+          coverMediaV2Union: {
+            coverImage: {
+              $type: "com.linkedin.voyager.dash.publishing.CoverImage",
+              caption: { text: "" },
+              originalImageUrn: coverAssetUrn,
+            },
+          },
+          state: "AUTOSAVED",
+        },
+      },
     });
     expect(buildLinkedInArticleContentPatch(document)).toEqual({
       patch: {
@@ -674,6 +734,38 @@ describe("LinkedIn native Article draft contract", () => {
       title,
       document,
     });
+  });
+
+  test("projects and independently reads LinkedIn's native QUOTE block", () => {
+    const quoteDocument = parseArticleDraftDocument(canonicalJson({
+      schemaVersion: 1,
+      blocks: [{
+        type: "blockquote",
+        text: "A quoted X post",
+      }],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000 });
+    const content = buildLinkedInArticleContent(quoteDocument);
+    expect(content).toEqual([{
+      textBlock: {
+        $type: "com.linkedin.voyager.dash.publishing.TextBlock",
+        content: {
+          $type: "com.linkedin.voyager.dash.common.text.TextViewModel",
+          attributesV2: [],
+          text: "A quoted X post",
+        },
+        type: "QUOTE",
+      },
+    }]);
+    expect(buildLinkedInArticleContentHtml(quoteDocument)).toBe(
+      "<blockquote>A quoted X post</blockquote>",
+    );
+    expect(normalizeLinkedInArticleDraft(
+      articleResponse(content, {
+        contentHtml: "<blockquote>A quoted X post</blockquote>",
+      }),
+      draftId,
+      profileUrn,
+    ).document).toEqual(quoteDocument);
   });
 
   test("projects and verifies ordered inline images without persisting transient CDN URLs", () => {
@@ -779,8 +871,67 @@ describe("LinkedIn native Article draft contract", () => {
       profileUrn,
       title,
       document: imageDocument,
+      coverAssetUrn: null,
       imageAssetUrns: [assetUrn],
     });
+  });
+
+  test("keeps the reviewed cover asset separate from Article body blocks", () => {
+    const coverAssetUrn = "urn:li:digitalmediaAsset:C4D22AQCoverFixture";
+    const bodyDocument = parseArticleDraftDocumentV2(canonicalJson({
+      schemaVersion: 2,
+      blocks: [{ type: "paragraph", text: "The complete article body." }],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000, maximumImages: 20 });
+    const normalized = normalizeLinkedInArticleDraftV2(
+      articleResponse(buildLinkedInArticleContentV2(bodyDocument, []), {
+        ...coverResponseFields(coverAssetUrn),
+        contentHtml: "<p>The complete article body.</p>",
+      }),
+      draftId,
+      profileUrn,
+    );
+    expect(normalized.coverAssetUrn).toBe(coverAssetUrn);
+    expect(normalized.document).toEqual(bodyDocument);
+    expect(normalized.imageAssetUrns).toEqual([]);
+    expect(normalized.document.blocks.some((block) => block.type === "image")).toBeFalse();
+  });
+
+  test("binds replacement metadata without trusting an incomplete stale body image", () => {
+    const assetUrn = "urn:li:digitalmediaAsset:C4D22AQStaleBodyImage";
+    const staleDocument = parseArticleDraftDocumentV2(canonicalJson({
+      schemaVersion: 2,
+      blocks: [
+        { type: "paragraph", text: "Stale partial body." },
+        { type: "image", imageIndex: 0, altText: "Expected alt text" },
+      ],
+    }), { maximumBlocks: 5_000, maximumCharacters: 125_000, maximumImages: 20 });
+    const staleContent = structuredClone(
+      buildLinkedInArticleContentV2(staleDocument, [assetUrn]),
+    ) as Record<string, unknown>[];
+    const imageBlock = staleContent[1]?.imageBlock as Record<string, unknown>;
+    (imageBlock.caption as Record<string, unknown>).attributesV2 = [];
+    const imageContent = imageBlock.content as Record<string, unknown>;
+    delete imageContent.accessibilityText;
+    delete imageContent.accessibilityTextAttributes;
+    const vector = (((imageContent.attributes as Record<string, unknown>[])[0]?.detailDataUnion as Record<string, unknown>).vectorImage) as Record<string, unknown>;
+    vector.artifacts = [{
+      $type: "com.linkedin.common.VectorArtifact",
+      expiresAt: 1,
+      fileIdentifyingUrlPathSegment: "fixture",
+      height: 1,
+      width: 1,
+    }];
+    vector.rootUrl = "https://media.licdn.com/fixture/";
+    const response = articleResponse(staleContent);
+    expect(normalizeLinkedInArticleDraftV2Metadata(response, draftId, profileUrn)).toEqual({
+      coverAssetUrn: null,
+      draftId,
+      profileUrn,
+      title,
+    });
+    expect(() => normalizeLinkedInArticleDraftV2Snapshot(response, draftId, profileUrn)).toThrow(
+      "imageBlock.content has unsupported fields",
+    );
   });
 
   test("strips only LinkedIn's editor-owned paragraph after a final image", () => {
@@ -988,6 +1139,59 @@ describe("LinkedIn native Article draft contract", () => {
     expect(drift).not.toContain("unexpectedField");
     expect(drift).not.toContain("uploadMechanism");
     expect(drift).not.toContain("privateEnvelopeField");
+  });
+
+  test("accepts only the reviewed current single-upload Article registration shape", () => {
+    const assetUrn = "urn:li:digitalmediaAsset:C4D22AQCurrentSingleAsset";
+    const binding = normalizeLinkedInArticleImageUploadRegistration({
+      data: {
+        $type: "com.linkedin.restli.common.ActionResponse",
+        value: {
+          $type: "com.linkedin.mediauploader.MediaUploadMetadata",
+          mediaArtifactUrn: "urn:li:mediaArtifact:current-single",
+          singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+          singleUploadUrl: "https://www.linkedin.com/dms-uploads/current-single?ca=article",
+          type: "SINGLE",
+          urn: assetUrn,
+        },
+      },
+      included: [],
+    });
+    expect(binding).toEqual({
+      assetUrn,
+      pollingUrl: null,
+      recipes: [],
+      uploadHeaders: { "media-type-family": "STILLIMAGE" },
+      uploadUrl: "https://www.linkedin.com/dms-uploads/current-single?ca=article",
+    });
+    expect(() => normalizeLinkedInArticleImageUploadRegistration({
+      data: {
+        $type: "com.linkedin.restli.common.ActionResponse",
+        value: {
+          $type: "com.linkedin.mediauploader.MediaUploadMetadata",
+          mediaArtifactUrn: "urn:li:mediaArtifact:multipart",
+          singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+          singleUploadUrl: "https://www.linkedin.com/dms-uploads/multipart",
+          type: "MULTIPART",
+          urn: assetUrn,
+        },
+      },
+      included: [],
+    })).toThrow("changed its media type");
+    expect(() => normalizeLinkedInArticleImageUploadRegistration({
+      data: {
+        $type: "com.linkedin.restli.common.ActionResponse",
+        value: {
+          mediaArtifactUrn: "urn:li:mediaArtifact:extra",
+          providerPrivateField: "must not be admitted",
+          singleUploadHeaders: { "media-type-family": "STILLIMAGE" },
+          singleUploadUrl: "https://www.linkedin.com/dms-uploads/extra",
+          type: "SINGLE",
+          urn: assetUrn,
+        },
+      },
+      included: [],
+    })).toThrow("unsupported fields");
   });
 
 

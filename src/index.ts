@@ -110,3 +110,13 @@ export type {
   ArticleDraftTextBlock,
   ArticleDraftTextBlockType,
 } from "./article-draft-document";
+
+export {
+  MAX_X_STATUS_ARTICLE_EMBED_CHARACTERS,
+  projectXStatusArticleEmbed,
+} from "./article-draft-embeds";
+
+export type {
+  ArticleDraftEmbedTarget,
+  XStatusArticleEmbed,
+} from "./article-draft-embeds";

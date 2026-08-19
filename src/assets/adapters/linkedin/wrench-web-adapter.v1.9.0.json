@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.14.0",
+  "version": "1.9.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -697,9 +697,9 @@
       }
     },
     "articles.draft.save": {
-      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 2 with native quote blocks, ordered local inline images, alt text, captions, and either one local cover image or the exact existing replacement-draft cover using reviewed current-member-bound autosaves and unpublished readback.",
+      "description": "Create or replace one private native LinkedIn Article draft from ArticleDraftDocument schemaVersion 2 with ordered local inline images, alt text, and captions using the reviewed current-member-bound autosave and exact unpublished readback contract.",
       "risk": "R2",
-      "sideEffect": "Creates one private native LinkedIn Article draft with the confirmed cover, or replaces the exact confirmed existing private draft while either replacing or preserving its banner, plus the confirmed inline image bytes, alt text, and captions; it never publishes the draft.",
+      "sideEffect": "Creates one private native LinkedIn Article draft, or replaces the exact confirmed existing private draft, including the confirmed inline image bytes, alt text, and captions; it never publishes the draft.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -712,7 +712,7 @@
           },
           "document": {
             "type": "string",
-            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 2; this reviewed LinkedIn contract supports bounded paragraphs, H1/H2 headings, native blockquotes, native HTTPS links, and ordered inline image blocks with required alt text and optional captions",
+            "description": "Canonical JSON for ArticleDraftDocument schemaVersion 2; this reviewed LinkedIn contract supports bounded paragraphs, H1/H2 headings, native HTTPS links, and ordered inline image blocks with required alt text and optional captions",
             "minLength": 1,
             "maxLength": 524288
           },
@@ -721,16 +721,6 @@
             "description": "Optional exact existing private LinkedIn Article draft to replace in place",
             "minLength": 1,
             "maxLength": 512
-          },
-          "cover_image": {
-            "type": "file",
-            "description": "Exact local JPEG, PNG, or WebP cover rendered only in LinkedIn's banner slot; required for create, optional on an exact replacement to preserve the existing banner",
-            "maxBytes": 5242880,
-            "mediaTypes": [
-              "image/jpeg",
-              "image/png",
-              "image/webp"
-            ]
           },
           "inline_images": {
             "type": "array",
@@ -758,7 +748,7 @@
       "webSession": {
         "site": "linkedin",
         "action": "articles.draft.save",
-        "contractVersion": 7,
+        "contractVersion": 3,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }

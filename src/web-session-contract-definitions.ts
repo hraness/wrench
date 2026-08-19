@@ -365,8 +365,8 @@ const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
   "articles.draft.save",
   "posts.publish",
 ], {
-  "articles.draft.save": 2,
-  "posts.publish": 2,
+  "articles.draft.save": 7,
+  "posts.publish": 3,
 });
 const HACKER_NEWS_WEB_OPERATIONS = operationPolicies("hacker-news", [
   "comments.read",
@@ -526,10 +526,10 @@ const linkedin = {
   "articles.draft.save": contract(
     "linkedin",
     "articles.draft.save",
-    "R2",
-    "observed",
-    "reviewed current-member-bound native Article title/content autosave plus bounded inline image registration, signed transfer, asset-URN projection, and exact unpublished server-response readback",
-    3,
+    LINKEDIN_WEB_OPERATIONS["articles.draft.save"].risk,
+    LINKEDIN_WEB_OPERATIONS["articles.draft.save"].state,
+    "reviewed current-member-bound native Article title/content autosave with PARAGRAPH, HEADING_1, HEADING_2, and QUOTE blocks plus distinct bounded cover and inline-image single-upload registrations, signed transfers, asset-URN projections, and exact unpublished server-response readback",
+    LINKEDIN_WEB_OPERATIONS["articles.draft.save"].contractVersion,
   ),
   "posts.read": contract("linkedin", "posts.read", "R1", "capture-required", "exact consumer-web post read requires a reviewed capture"),
   "comments.read": contract("linkedin", "comments.read", "R1", "capture-required", "exact comment collection requires a reviewed capture"),

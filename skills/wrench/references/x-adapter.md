@@ -40,8 +40,17 @@ The current contract uses `ArticleDraftDocument` schemaVersion 2. It supports
 paragraphs, headings, lists, blockquotes, native HTTPS links, bold, italic, or
 strikethrough ranges, and 1–20 ordered plan-bound JPEG, PNG, or WebP inline
 images up to 5 MiB each. Image captions are supported. Native alt-text writing,
-covers, embeds, HTML, Markdown, and editor payloads remain outside this
-contract. The caller owns every editorial and image-placement choice.
+covers, proprietary embed cards, HTML, Markdown, and editor payloads remain
+outside this contract. The caller owns every editorial and image-placement
+choice.
+
+For a source X status embedded in an Article, use
+`projectXStatusArticleEmbed`. The default X projection is the exact status text
+in a blockquote followed immediately by its canonical native X link. Omit
+profile chrome, timestamps, engagement metrics, and card screenshots unless
+the user explicitly requests them as Article content. This representation is
+stable rich text plus a native link; it does not claim to create a proprietary
+X embed card.
 
 ```sh
 wrench adapter sync-bundled --json
