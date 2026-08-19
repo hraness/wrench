@@ -989,6 +989,8 @@ describe("official Gmail API helpers", () => {
               date: { year: 1989, month: 2, day: 3 },
               text: "February 3, 1989",
               metadata: { primary: true, source: { type: "CONTACT", id: "source-1" } },
+            }, {
+              metadata: { source: { type: "CONTACT", id: "source-1" } },
             }],
             events: [{
               date: { month: 6, day: 7 },
@@ -1045,6 +1047,10 @@ describe("official Gmail API helpers", () => {
       birthdays: [{
         date: { year: 1989, month: 2, day: 3 },
         text: "February 3, 1989",
+      }, {
+        date: null,
+        text: null,
+        metadata: { source: { type: "CONTACT", id: "source-1" } },
       }],
       events: [{
         date: { year: 0, month: 6, day: 7 },
@@ -1179,6 +1185,30 @@ describe("official Gmail API helpers", () => {
         pageToken: null,
       }),
       "valid Gregorian date",
+    );
+  });
+
+  test("accepts only source-bound empty birthday observations", async () => {
+    const run = (birthday: unknown) => fetchGmailContacts(client((input) => {
+      const url = urlOf(input);
+      return Promise.resolve(json(url.pathname.endsWith("/connections")
+        ? { connections: [{ resourceName: "people/c1" }] }
+        : { responses: [{
+            requestedResourceName: "people/c1",
+            status: {},
+            person: { resourceName: "people/c1", birthdays: [birthday] },
+          }] }));
+    }), {
+      collection: "contacts",
+      projection: "dates",
+      limit: 1,
+      pageToken: null,
+    });
+    await expect(run({ metadata: { source: { type: "CONTACT", id: "source" } } }))
+      .resolves.toMatchObject({ contacts: [{ birthdays: [{ date: null, text: null }] }] });
+    await expectRejected(
+      run({}),
+      "source-bound empty observation",
     );
   });
 

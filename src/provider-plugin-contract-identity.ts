@@ -76,6 +76,7 @@ const identities = Object.freeze({
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
     reviewedClosureSha256: [
+      "ef129124abb04293b3eddd78d0e1927b409b220c05b6f832b8506d501b5c376b",
       "c0b0e5be40264cd8a00acea6b03d5115ed5d4c2b13a1929ec4b55cf84a0b385c",
       "e41ea85044468d1305b51cd87f9d320779ed22e102ecddf27494d5e1f6912bf8",
       "ccd0519003d6f06a7c105833c7b3cc615afdf14483fe7520a8a3f35351127a77",

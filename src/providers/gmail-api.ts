@@ -2405,11 +2405,14 @@ function parseContactDates(
     const date = source.date === undefined ? null : parsePersonDate(source.date, `${path}.date`);
     const textValue = optionalPersonText(source.text, `${path}.text`, 1_024);
     const text = textValue === "" ? null : textValue;
-    if (date === null && text === null) return fail(path, "must contain a date or text value");
+    const metadata = parseFieldMetadata(source.metadata, `${path}.metadata`);
+    if (date === null && text === null && (metadata === null || metadata.source === null)) {
+      return fail(path, "must contain a date, text value, or exact source-bound empty observation");
+    }
     return Object.freeze({
       date,
       text,
-      metadata: parseFieldMetadata(source.metadata, `${path}.metadata`),
+      metadata,
     });
   }));
 }
