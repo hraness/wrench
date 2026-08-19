@@ -684,7 +684,8 @@ bun run check
 
 The full gate type-checks, tests, builds, runs the secret-free CLI and portable
 plugin lifecycle smoke, then installs and imports the packed package in a clean
-consumer. See [CONTRIBUTING.md](CONTRIBUTING.md) for change boundaries.
+consumer. See [CONTRIBUTING.md](CONTRIBUTING.md) for change boundaries and
+[local development](docs/local-development.md) for isolated parallel worktrees.
 
 ## License
 

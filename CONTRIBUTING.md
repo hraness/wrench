@@ -11,6 +11,10 @@ bun install --frozen-lockfile
 bun run check
 ```
 
+For parallel chats or other concurrent local work, follow the
+[isolated worktree workflow](docs/local-development.md). It keeps changing
+source and development state separate from the stable Wrench installation.
+
 Provider changes must keep semantic operations separate from transport
 mechanics. Add deterministic tests for strict parsing, account and target
 binding, request construction, response projection, drift, cancellation,

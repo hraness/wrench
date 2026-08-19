@@ -1,0 +1,148 @@
+#!/bin/sh
+set -eu
+
+required_bun_version=1.3.14
+
+usage() {
+  echo "usage: $0 <lowercase-task-name>" >&2
+  exit 64
+}
+
+validate_task_name() {
+  task_name=$1
+  case "$task_name" in
+    "" | *[!a-z0-9-]* | -* | *-)
+      echo "task name must use lowercase letters, digits, and internal hyphens" >&2
+      exit 64
+      ;;
+  esac
+
+  if [ "${#task_name}" -gt 48 ]; then
+    echo "task name must be at most 48 characters" >&2
+    exit 64
+  fi
+}
+
+resolve_dedicated_directory() (
+  candidate=$1
+  variable_name=$2
+  normalized=$(bun --no-install --no-env-file --no-macros \
+    --config=/dev/null -e '
+    import { resolve } from "node:path";
+    process.stdout.write(resolve(process.argv[process.argv.length - 1]));
+  ' -- "$candidate") || exit 69
+  ancestor=$normalized
+  while [ ! -e "$ancestor" ] && [ ! -L "$ancestor" ]; do
+    parent=$(dirname "$ancestor")
+    [ "$parent" != "$ancestor" ] || break
+    ancestor=$parent
+  done
+  if [ ! -d "$ancestor" ]; then
+    echo "$variable_name must have an existing directory ancestor" >&2
+    exit 64
+  fi
+  ancestor_physical=$(CDPATH= cd -P "$ancestor" && pwd) || exit 64
+  suffix=${normalized#"$ancestor"}
+  projected=$(bun --no-install --no-env-file --no-macros \
+    --config=/dev/null -e '
+    import { resolve } from "node:path";
+    process.stdout.write(resolve(process.argv[process.argv.length - 1]));
+  ' -- "$ancestor_physical$suffix") || exit 69
+  if [ "$projected" = / ] || [ "$(dirname "$projected")" = / ]; then
+    echo "$variable_name must be a dedicated directory below the filesystem root" >&2
+    exit 64
+  fi
+  printf '%s\n' "$projected"
+)
+
+if [ "$#" -ne 1 ]; then
+  usage
+fi
+
+task=$1
+validate_task_name "$task"
+
+script_directory=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+if ! control_repo=$(git -C "$script_directory" rev-parse --show-toplevel 2>/dev/null); then
+  echo "cannot derive the Wrench control repository from $script_directory" >&2
+  exit 66
+fi
+
+control_parent=$(dirname "$control_repo")
+control_name=$(basename "$control_repo")
+worktree_root=${WRENCH_WORKTREE_ROOT:-"$control_parent/$control_name-worktrees"}
+
+case "$worktree_root" in
+  /*) ;;
+  *)
+    echo "WRENCH_WORKTREE_ROOT must be an absolute path" >&2
+    exit 64
+  ;;
+esac
+
+unset BUN_CONFIG_FILE BUN_OPTIONS NODE_OPTIONS
+if ! command -v bun >/dev/null 2>&1; then
+  echo "Bun $required_bun_version is required" >&2
+  exit 69
+fi
+
+bun_version=$(bun --version)
+if [ "$bun_version" != "$required_bun_version" ]; then
+  echo "Bun $required_bun_version is required; found $bun_version" >&2
+  exit 69
+fi
+
+worktree_root=$(resolve_dedicated_directory \
+  "$worktree_root" WRENCH_WORKTREE_ROOT)
+mkdir -p "$worktree_root"
+
+branch=codex/$task
+target=$worktree_root/$task
+base=${WRENCH_WORKTREE_BASE:-HEAD}
+
+case "$base" in
+  "" | -* | *[!A-Za-z0-9._/-]*)
+    echo "WRENCH_WORKTREE_BASE must be a locally known commit or ref" >&2
+    exit 64
+    ;;
+esac
+
+if [ -e "$target" ] || [ -L "$target" ]; then
+  echo "target already exists: $target" >&2
+  exit 73
+fi
+
+if git -C "$control_repo" show-ref --verify --quiet "refs/heads/$branch"; then
+  echo "branch already exists: $branch" >&2
+  exit 73
+fi
+
+base_commit=$(git -C "$control_repo" rev-parse --verify "$base^{commit}" 2>/dev/null) || {
+  echo "Wrench worktree base is unavailable: $base" >&2
+  exit 69
+}
+for required_file in \
+  package.json \
+  bun.lock \
+  bunfig.toml \
+  tsconfig.json \
+  src/cli.ts \
+  scripts/local-dev/launch-wrench.ts
+do
+  if ! git -C "$control_repo" cat-file -e "$base_commit:$required_file" 2>/dev/null; then
+    echo "Wrench worktree base lacks local-development file: $required_file" >&2
+    exit 69
+  fi
+done
+
+git -C "$control_repo" worktree add -b "$branch" "$target" "$base_commit"
+
+if ! bun install --cwd "$target" --frozen-lockfile; then
+  echo "worktree was created, but the frozen dependency installation failed: $target" >&2
+  exit 1
+fi
+
+echo "ready: $target"
+echo "branch: $branch"
+echo "base: $base_commit"
+echo "dev CLI: $control_repo/scripts/local-dev/run-wrench $task doctor --json"

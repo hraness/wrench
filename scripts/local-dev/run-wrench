@@ -1,0 +1,191 @@
+#!/bin/sh
+set -eu
+umask 077
+
+required_bun_version=1.3.14
+
+usage() {
+  echo "usage: $0 <lowercase-task-name> <wrench-arguments...>" >&2
+  exit 64
+}
+
+validate_task_name() {
+  task_name=$1
+  case "$task_name" in
+    "" | *[!a-z0-9-]* | -* | *-)
+      echo "task name must use lowercase letters, digits, and internal hyphens" >&2
+      exit 64
+      ;;
+  esac
+
+  if [ "${#task_name}" -gt 48 ]; then
+    echo "task name must be at most 48 characters" >&2
+    exit 64
+  fi
+}
+
+resolve_dedicated_directory() (
+  candidate=$1
+  variable_name=$2
+  normalized=$(bun --no-install --no-env-file --no-macros \
+    --config=/dev/null -e '
+    import { resolve } from "node:path";
+    process.stdout.write(resolve(process.argv[process.argv.length - 1]));
+  ' -- "$candidate") || exit 69
+  ancestor=$normalized
+  while [ ! -e "$ancestor" ] && [ ! -L "$ancestor" ]; do
+    parent=$(dirname "$ancestor")
+    [ "$parent" != "$ancestor" ] || break
+    ancestor=$parent
+  done
+  if [ ! -d "$ancestor" ]; then
+    echo "$variable_name must have an existing directory ancestor" >&2
+    exit 64
+  fi
+  ancestor_physical=$(CDPATH= cd -P "$ancestor" && pwd) || exit 64
+  suffix=${normalized#"$ancestor"}
+  projected=$(bun --no-install --no-env-file --no-macros \
+    --config=/dev/null -e '
+    import { resolve } from "node:path";
+    process.stdout.write(resolve(process.argv[process.argv.length - 1]));
+  ' -- "$ancestor_physical$suffix") || exit 69
+  if [ "$projected" = / ] || [ "$(dirname "$projected")" = / ]; then
+    echo "$variable_name must be a dedicated directory below the filesystem root" >&2
+    exit 64
+  fi
+  printf '%s\n' "$projected"
+)
+
+if [ "$#" -lt 2 ]; then
+  usage
+fi
+
+task=$1
+validate_task_name "$task"
+shift
+
+script_directory=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+if ! control_repo=$(git -C "$script_directory" rev-parse --show-toplevel 2>/dev/null); then
+  echo "cannot derive the Wrench control repository from $script_directory" >&2
+  exit 66
+fi
+
+control_parent=$(dirname "$control_repo")
+control_name=$(basename "$control_repo")
+worktree_root=${WRENCH_WORKTREE_ROOT:-"$control_parent/$control_name-worktrees"}
+
+if [ -n "${WRENCH_DEV_HOME:-}" ]; then
+  dev_home=$WRENCH_DEV_HOME
+else
+  if [ -z "${HOME:-}" ]; then
+    echo "HOME or WRENCH_DEV_HOME must be set" >&2
+    exit 64
+  fi
+  dev_home=$HOME/.local/share/wrench-dev
+fi
+
+case "$worktree_root" in
+  /*) ;;
+  *)
+    echo "WRENCH_WORKTREE_ROOT must be an absolute path" >&2
+    exit 64
+    ;;
+esac
+
+case "$dev_home" in
+  /*) ;;
+  *)
+    echo "WRENCH_DEV_HOME must be an absolute path" >&2
+    exit 64
+    ;;
+esac
+case "$dev_home" in
+  / | //*)
+    echo "WRENCH_DEV_HOME must be a dedicated directory below the filesystem root" >&2
+    exit 64
+    ;;
+esac
+
+target=$worktree_root/$task
+launcher=$target/scripts/local-dev/launch-wrench.ts
+if [ -L "$target" ] || [ ! -f "$target/package.json" ] \
+  || [ ! -f "$target/src/cli.ts" ] || [ ! -f "$target/bunfig.toml" ] \
+  || [ ! -f "$target/tsconfig.json" ] || [ ! -f "$launcher" ]; then
+  echo "Wrench worktree not found: $target" >&2
+  exit 66
+fi
+
+target_root=$(git -C "$target" rev-parse --show-toplevel 2>/dev/null) || {
+  echo "Wrench task is not a registered Git worktree: $target" >&2
+  exit 66
+}
+target_physical=$(CDPATH= cd -P "$target" && pwd)
+target_root_physical=$(CDPATH= cd -P "$target_root" && pwd)
+control_common=$(git -C "$control_repo" rev-parse --git-common-dir 2>/dev/null) || exit 66
+target_common=$(git -C "$target" rev-parse --git-common-dir 2>/dev/null) || exit 66
+case "$control_common" in
+  /*) ;;
+  *) control_common=$control_repo/$control_common ;;
+esac
+case "$target_common" in
+  /*) ;;
+  *) target_common=$target/$target_common ;;
+esac
+control_common=$(CDPATH= cd -P "$control_common" && pwd)
+target_common=$(CDPATH= cd -P "$target_common" && pwd)
+target_branch=$(git -C "$target" symbolic-ref --quiet --short HEAD 2>/dev/null) || {
+  echo "Wrench task worktree must use branch codex/$task" >&2
+  exit 66
+}
+if [ "$target_physical" != "$target_root_physical" ] \
+  || [ "$target_common" != "$control_common" ] \
+  || [ "$target_branch" != "codex/$task" ]; then
+  echo "Wrench task is not the registered codex/$task worktree: $target" >&2
+  exit 66
+fi
+
+# Do not allow caller-provided runtime hooks to affect even the version probe.
+unset BUN_CONFIG_FILE BUN_OPTIONS NODE_OPTIONS
+if ! command -v bun >/dev/null 2>&1; then
+  echo "Bun $required_bun_version is required" >&2
+  exit 69
+fi
+
+bun_version=$(bun --version)
+if [ "$bun_version" != "$required_bun_version" ]; then
+  echo "Bun $required_bun_version is required; found $bun_version" >&2
+  exit 69
+fi
+
+dev_home=$(resolve_dedicated_directory "$dev_home" WRENCH_DEV_HOME)
+mkdir -p "$dev_home"
+task_home=$dev_home/$task
+if [ -L "$task_home" ]; then
+  echo "Wrench task state directory must not be a symbolic link: $task_home" >&2
+  exit 73
+fi
+mkdir -p "$task_home"
+task_home=$(CDPATH= cd -P "$task_home" && pwd)
+if [ "$task_home" != "$dev_home/$task" ]; then
+  echo "Wrench task state directory escaped its development home: $task_home" >&2
+  exit 73
+fi
+for private_name in state media
+do
+  private_path=$task_home/$private_name
+  if [ -L "$private_path" ]; then
+    echo "Wrench task $private_name directory must not be a symbolic link: $private_path" >&2
+    exit 73
+  fi
+  mkdir -p "$private_path"
+done
+caller_working_directory=$(pwd -P)
+cd "$target"
+
+exec env \
+  WRENCH_STATE_HOME="$task_home/state" \
+  OH_STATE_HOME="$task_home/state" \
+  IO_HOME="$task_home/state" \
+  WRENCH_MEDIA_HOME="$task_home/media" \
+  WRENCH_LOCAL_DEV_CALLER_CWD="$caller_working_directory" \
+  bun run --no-install --no-env-file "$launcher" "$@"
