@@ -933,7 +933,7 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.8.0");
+    expect(current.value.version).toBe("1.9.0");
     const article = current.value.operations["articles.draft.save"];
     expect(article !== undefined && isWebSessionOperation(article)).toBeTrue();
     if (article === undefined || !isWebSessionOperation(article)) return;

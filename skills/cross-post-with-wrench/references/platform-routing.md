@@ -12,6 +12,12 @@ Use this as routing guidance only. Always inspect `wrench capabilities <adapter>
 | Substack | `substack-web` | Browser cookies/profile | `body`, optional Note media | Public Substack Note, not an article/newsletter |
 | Threads | `threads-web` | Browser cookies/profile | `body`, explicit audience when required, one required PNG attachment in the current reviewed schema | Threads post |
 
+Cleanup is capability-driven too. At this reference revision, `bluesky-web`
+exposes observed `content.delete@1` only for one current-account post URI plus
+its exact confirmed CID. `x-web` reserves `content.delete@1` as
+`capture-required`; LinkedIn, Substack, and Threads deletion remain unavailable
+unless their installed canonical capability independently says otherwise.
+
 ## Selection rules
 
 - Use exactly one adapter and one stable bound account realm per surface.

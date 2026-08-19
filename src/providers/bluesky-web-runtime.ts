@@ -47,12 +47,16 @@ import {
   BLUESKY_XRPC_METHODS,
   assertBlueskyText,
   authorizeBlueskyXrpcRequest,
+  blueskyCid,
   blueskyDid,
   blueskyPostUri,
   parseBlueskyAtUri,
   parseBlueskyBootstrapAccount,
   parseBlueskyCreateRecordResponse,
+  parseBlueskyCurrentPostRecordResponse,
+  parseBlueskyDeleteRecordResponse,
   parseBlueskyGetRecordResponse,
+  parseBlueskyRecordNotFoundResponse,
   parseBlueskyRefreshSessionResponse,
   parseBlueskySessionResponse,
   parseBlueskyUploadBlobResponse,
@@ -80,6 +84,7 @@ const MAX_IMAGE_BYTES = 2_000_000;
 const DEFAULT_LIMIT = 25;
 const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
 const PUBLISH_READBACK_DELAYS_MS = Object.freeze([0, 250, 750, 1_500]);
+const BLUESKY_RECORD_NOT_FOUND = Symbol("bluesky-record-not-found");
 
 type JsonRecord = Record<string, unknown>;
 type BlueskyFetch = (
@@ -689,6 +694,8 @@ type XrpcOptions = {
     readonly kind: "refresh";
     readonly token: string;
   };
+  /** Restricted to authoritative getRecord absence reconciliation. */
+  readonly recordNotFound?: true;
 };
 
 async function xrpc(
@@ -702,6 +709,12 @@ async function xrpc(
   const refreshRequest = options.authorization?.kind === "refresh";
   if (refreshRequest !== (nsid === "com.atproto.server.refreshSession")) {
     throw new Error("Bluesky refresh authorization is restricted to refreshSession");
+  }
+  if (
+    options.recordNotFound === true
+    && nsid !== "com.atproto.repo.getRecord"
+  ) {
+    throw new Error("Bluesky RecordNotFound handling is restricted to getRecord");
   }
   const authorizationToken = refreshRequest
     ? options.authorization?.token
@@ -772,6 +785,21 @@ async function xrpc(
       throw new Error("Bluesky XRPC failed before a reviewed response was received", {
         cause: error,
       });
+    }
+    if (
+      response.status === 400
+      && options.recordNotFound === true
+    ) {
+      const bytes = await boundedBytes(
+        response,
+        64 * 1024,
+        operationDeadline,
+      );
+      if (!jsonContentType(response)) {
+        throw new Error("Bluesky RecordNotFound response used an unreviewed content type");
+      }
+      parseBlueskyRecordNotFoundResponse(parseJson(bytes));
+      return BLUESKY_RECORD_NOT_FOUND;
     }
     if (response.status !== 200) {
       response.body?.cancel().catch(() => undefined);
@@ -957,6 +985,92 @@ async function getAuthoritativeRecord(
     expected,
     expectedValue,
   );
+}
+
+type BlueskyAuthoritativePostPresence =
+  | { readonly present: false }
+  | { readonly present: true; readonly ref: BlueskyStrongRef };
+
+async function authoritativePostPresence(
+  client: BlueskyClient,
+  uri: string,
+  expectedCid: string,
+): Promise<BlueskyAuthoritativePostPresence> {
+  const parsed = parseBlueskyAtUri(
+    uri,
+    "Bluesky deletion target URI",
+    "app.bsky.feed.post",
+  );
+  if (parsed.actor !== client.session.did) {
+    throw new Error("Bluesky deletion target actor did not match the bound viewer");
+  }
+  const response = await xrpc(client, "com.atproto.repo.getRecord", {
+    query: {
+      repo: [client.session.did],
+      collection: ["app.bsky.feed.post"],
+      rkey: [parsed.rkey],
+    },
+    recordNotFound: true,
+  });
+  if (response === BLUESKY_RECORD_NOT_FOUND) {
+    return Object.freeze({ present: false });
+  }
+  return Object.freeze({
+    present: true,
+    ref: parseBlueskyCurrentPostRecordResponse(
+      response,
+      parsed.uri,
+      expectedCid,
+    ),
+  });
+}
+
+/**
+ * Reconcile deletion from the authoritative account repository only. A
+ * different current CID is revision drift, not absence.
+ */
+export async function readBlueskyWebContentDeleteDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly dependencies?: BlueskyWebRuntimeDependencies;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<{ readonly present: boolean; readonly postUri: string }> {
+  if (
+    recipe.site !== "bluesky"
+    || recipe.action !== "content.delete"
+    || recipe.contractVersion !== 1
+  ) {
+    throw new Error("Bluesky deletion recovery supports only content.delete@1");
+  }
+  const deadline = new OperationDeadline(recipe.timeoutMs, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+  try {
+    const client = await bootstrapClient(
+      auth,
+      recipe.timeoutMs,
+      recipe.maxOutputBytes,
+      options.dependencies,
+      deadline,
+    );
+    requireBoundSubject(auth, client.session);
+    const postUri = postUriInput(input);
+    const expectedCid = blueskyCid(
+      inputString(input, "expected_cid", 201),
+      "input.expected_cid",
+    );
+    const presence = await authoritativePostPresence(
+      client,
+      postUri,
+      expectedCid,
+    );
+    return Object.freeze({ present: presence.present, postUri });
+  } finally {
+    deadline.dispose();
+  }
 }
 
 type BlueskyPublishedMutationTarget = {
@@ -1484,6 +1598,111 @@ async function deleteRecord(
       rkey: parsed.rkey,
     },
   });
+}
+
+async function executeContentDelete(
+  client: BlueskyClient,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  options: {
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+  },
+): Promise<WebSessionExecution> {
+  const postUri = postUriInput(input);
+  const expectedCid = blueskyCid(
+    inputString(input, "expected_cid", 201),
+    "input.expected_cid",
+  );
+  const parsed = parseBlueskyAtUri(
+    postUri,
+    "Bluesky deletion target URI",
+    "app.bsky.feed.post",
+  );
+  if (parsed.actor !== client.session.did) {
+    throw new Error("Bluesky deletion target actor did not match the bound viewer");
+  }
+  const finalUrl = `${BLUESKY_APP_ORIGIN}/profile/${client.session.did}/post/${parsed.rkey}`;
+  let started = 0;
+  let verified = 0;
+  let failureStage = "authoritative pre-read";
+  try {
+    const before = await authoritativePostPresence(
+      client,
+      postUri,
+      expectedCid,
+    );
+    if (!before.present) {
+      return {
+        status: "succeeded",
+        output: Object.freeze({
+          postUri,
+          expectedCid,
+          deleted: true,
+          effect: "already-absent",
+        }),
+        finalUrl,
+        noOp: true,
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+      };
+    }
+    failureStage = "dispatch rebinding";
+    await rebindBeforeDispatch(client);
+    failureStage = "dispatch admission";
+    await options.beforeDispatch?.(
+      dispatchEvent(recipe.action, 1, 1, 0, 0),
+    );
+    started = 1;
+    failureStage = "delete response";
+    parseBlueskyDeleteRecordResponse(
+      await xrpc(client, "com.atproto.repo.deleteRecord", {
+        jsonBody: {
+          repo: client.session.did,
+          collection: "app.bsky.feed.post",
+          rkey: parsed.rkey,
+          swapRecord: before.ref.cid,
+        },
+      }),
+    );
+    failureStage = "authoritative absence readback";
+    const after = await authoritativePostPresence(
+      client,
+      postUri,
+      expectedCid,
+    );
+    if (after.present) {
+      throw new Error("Bluesky deletion readback still found the confirmed record");
+    }
+    verified = 1;
+    failureStage = "verification recording";
+    await options.afterDispatchVerified?.(
+      dispatchEvent(recipe.action, 1, 1, 1, 1),
+    );
+    return {
+      status: "succeeded",
+      output: Object.freeze({
+        postUri,
+        expectedCid,
+        deleted: true,
+        effect: "deleted",
+      }),
+      finalUrl,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? `Bluesky may have deleted the exact confirmed post; failure stage: ${failureStage}; reconcile authoritative record absence and never retry automatically`
+        : `Bluesky deletion failed before submission; failure stage: ${failureStage}`,
+    };
+  }
 }
 
 type PostStateKind = "like" | "repost" | "bookmark";
@@ -2143,6 +2362,9 @@ export async function executeBlueskyWebOperation(
     || recipe.action === "content.save"
     || recipe.action === "posts.repost"
   ) return executePostDesiredState(client, recipe, input, mutationOptions);
+  if (recipe.action === "content.delete") {
+    return executeContentDelete(client, recipe, input, mutationOptions);
+  }
   if (recipe.action === "relationships.follow.set") {
     return executeFollowDesiredState(client, recipe, input, mutationOptions);
   }

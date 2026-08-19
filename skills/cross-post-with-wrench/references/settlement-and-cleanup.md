@@ -60,6 +60,13 @@ Deletion is eligible only when all of these are true:
 
 If deletion becomes `pending`, `partial`, or `indeterminate`, preserve it and reconcile only through its advertised exact readback. Never retry deletion. Never substitute `posts.delete`, another semantic name, direct browser interaction, raw HTTP, or capture replay for `content.delete`.
 
+For the observed Bluesky contract, carry the exact authored `post_uri` and the
+authoritative current `expected_cid` into the preview. CID drift is a refusal,
+not permission to delete a newer revision. A successful mutation is settled
+only by authoritative PDS `RecordNotFound`; AppView/feed absence alone is not
+proof. Never use this cleanup path for an intended post merely because another
+platform attempt is uncertain.
+
 ## Report availability time precisely
 
 Keep these times distinct:

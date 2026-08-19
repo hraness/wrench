@@ -11,6 +11,7 @@ import { canonicalJson } from "../canonical-json";
 
 export const BLUESKY_WEB_OPERATION_NAMES = Object.freeze([
   "comments.read",
+  "content.delete",
   "content.save",
   "content.share",
   "feeds.read",
@@ -103,6 +104,11 @@ export const BLUESKY_WEB_OPERATIONS = Object.freeze({
     "R2",
     "the code-owned private bookmark exchange needs an authorized live fixture proving create/delete and independent readback",
   ),
+  "content.delete": observed(
+    "write",
+    "R3",
+    "exact current-account app.bsky.feed.post deletion uses an authoritative PDS pre-read, CID compare-and-swap, strict commit response, and authoritative RecordNotFound readback",
+  ),
   "relationships.follow.set": captureRequired(
     "write",
     "R2",
@@ -146,13 +152,6 @@ export const BLUESKY_WEB_OPERATIONS = Object.freeze({
 } as const satisfies Readonly<
   Record<BlueskyWebOperationName, BlueskyWebOperationContract>
 >);
-
-/** Deletion is intentionally outside the executable web-session operation set. */
-export const BLUESKY_CONTENT_DELETE_POLICY = Object.freeze({
-  risk: "R4",
-  state: "prohibited",
-  reason: "content deletion is outside wrench's executable safety boundary",
-} as const);
 
 export const BLUESKY_APP_ORIGIN = "https://bsky.app";
 export const BLUESKY_APPVIEW_PROXY =
@@ -1150,6 +1149,93 @@ export function parseBlueskyGetRecordResponse(
     throw new Error("Bluesky getRecord response did not bind the confirmed record value");
   }
   return actual;
+}
+
+/** Bind the current authoritative PDS revision before deleting one post. */
+export function parseBlueskyCurrentPostRecordResponse(
+  value: unknown,
+  expectedUri: string,
+  expectedCid: string,
+): BlueskyStrongRef {
+  const parsedUri = blueskyPostUri(
+    expectedUri,
+    "Bluesky deletion target URI",
+  );
+  const response = record(value, "Bluesky deletion pre-read response");
+  exactKeys(
+    response,
+    ["uri", "cid", "value"],
+    [],
+    "Bluesky deletion pre-read response",
+  );
+  const actual = blueskyStrongRef(
+    response,
+    "Bluesky deletion pre-read response",
+    parsedUri.uri,
+  );
+  if (actual.cid !== blueskyCid(expectedCid, "Bluesky deletion target CID")) {
+    throw new Error("Bluesky deletion target revision changed from the confirmed CID");
+  }
+  const recordValue = record(
+    response.value,
+    "Bluesky deletion pre-read response.value",
+  );
+  if (recordValue.$type !== "app.bsky.feed.post") {
+    throw new Error("Bluesky deletion target was not an app.bsky.feed.post record");
+  }
+  return actual;
+}
+
+/** Parse only the documented XRPC absence marker for an authoritative record read. */
+export function parseBlueskyRecordNotFoundResponse(value: unknown): void {
+  const response = record(value, "Bluesky RecordNotFound response");
+  exactKeys(
+    response,
+    ["error", "message"],
+    [],
+    "Bluesky RecordNotFound response",
+  );
+  if (response.error !== "RecordNotFound") {
+    throw new Error("Bluesky record absence response used an unexpected error code");
+  }
+  string(
+    response.message,
+    "Bluesky RecordNotFound response.message",
+    1_024,
+  );
+}
+
+/** Bind the documented optional commit projection returned by deleteRecord. */
+export function parseBlueskyDeleteRecordResponse(
+  value: unknown,
+): { readonly commit: null | { readonly cid: string; readonly rev: string } } {
+  const response = record(value, "Bluesky deleteRecord response");
+  exactKeys(response, [], ["commit"], "Bluesky deleteRecord response");
+  if (response.commit === undefined) return Object.freeze({ commit: null });
+  const commit = record(response.commit, "Bluesky deleteRecord response.commit");
+  exactKeys(
+    commit,
+    ["cid", "rev"],
+    [],
+    "Bluesky deleteRecord response.commit",
+  );
+  const rev = string(
+    commit.rev,
+    "Bluesky deleteRecord response.commit.rev",
+    64,
+  );
+  if (!/^[234567abcdefghijklmnopqrstuvwxyz]{13}$/u.test(rev)) {
+    throw new Error("Bluesky deleteRecord response.commit.rev must be a TID");
+  }
+  return Object.freeze({
+    commit: Object.freeze({
+      cid: blueskyCid(
+        commit.cid,
+        "Bluesky deleteRecord response.commit.cid",
+      ),
+      rev,
+    }),
+  });
 }
 
 export type BlueskyBlobRef = {

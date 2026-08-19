@@ -613,12 +613,12 @@ export const socialPlatformCatalog = {
         "posts.quote",
         "content.share",
         "content.edit",
+        "content.delete",
         "content.schedule",
       ],
       unsupported: ["media.publish"],
       notApplicable: ["comments.create", "reactions.set", "listings.read", "listings.publish", "relationships.connect"],
       R4: [
-        "content.delete",
         "content.audience.set",
         "communities.membership.manage",
         "administration.manage",
@@ -1429,6 +1429,7 @@ export const socialPlatformCatalog = {
         "posts.repost",
         "posts.quote",
         "content.share",
+        "content.delete",
       ],
       unsupported: ["media.publish", "articles.read", "articles.draft.save", "articles.publish", "content.edit", "content.schedule"],
       notApplicable: [
@@ -1442,7 +1443,7 @@ export const socialPlatformCatalog = {
         "communities.membership.manage",
         "commerce.purchase",
       ],
-      R4: ["content.delete", "administration.manage", "account.delete", "moderation.bulk"],
+      R4: ["administration.manage", "account.delete", "moderation.bulk"],
     }),
     compositions: {
       message: {

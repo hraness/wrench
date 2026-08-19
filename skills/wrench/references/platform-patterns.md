@@ -104,9 +104,9 @@ Facebook internal-API operation.
 ## Bluesky
 
 - Prefer the public AT Protocol for public reads and a reviewed authenticated protocol module when it exactly covers the requested account action. Keep browser-session auth separate if consumer web capture is still needed.
-- The strict direct XRPC runtime live-proves bounded feed, post, thread, and media projections against the selected signed-in DID. `posts.publish@3` additionally publishes exact text with at most one plan-bound JPEG/PNG/WebP image, retains the response-bound URI/CID and media identity before readback, verifies the authoritative PDS record, and then polls only the exact public AppView post. DM reads and every other mutation remain capture-required until exact nonempty fixtures or authorized write evidence exist.
+- The strict direct XRPC runtime live-proves bounded feed, post, thread, and media projections against the selected signed-in DID. `posts.publish@3` additionally publishes exact text with at most one plan-bound JPEG/PNG/WebP image, retains the response-bound URI/CID and media identity before readback, verifies the authoritative PDS record, and then polls only the exact public AppView post. `content.delete@1` is limited to one current-account post URI plus confirmed CID, uses authoritative PDS pre-read and `swapRecord`, and verifies exact `RecordNotFound`. DM reads and every other mutation remain capture-required until exact nonempty fixtures or authorized write evidence exist.
 - Bootstrap the exact engine-affine profile from `BSKY_STORAGE`. When its access JWT expires, rotate it only through the selected account's allowlisted PDS `com.atproto.server.refreshSession` procedure; bind both token subjects and the response DID, then retain the rotated pair only in the encrypted auth-hash-bound session cache.
-- Posts, replies, DMs, quotes, reposts, and ordered threads are R3. Likes, follows, and saves are R2 desired state.
+- Posts, replies, DMs, quotes, reposts, ordered threads, and exact authored-post deletion are R3. Likes, follows, and saves are R2 desired state.
 - Bind the DID/account, repository record keys, parent/root references, and every returned URI/CID. Stop an ordered thread on partial or indeterminate delivery.
 - Never expose a generic AT Protocol request surface through wrench.
 

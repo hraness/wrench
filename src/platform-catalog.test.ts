@@ -60,6 +60,7 @@ const r3Operations = new Set<SemanticOperationName>([
   "posts.quote",
   "content.share",
   "content.edit",
+  "content.delete",
   "content.schedule",
 ]);
 
@@ -223,6 +224,7 @@ const expandedExecutableOperationNames = [
   "content.share",
   "content.save",
   "content.edit",
+  "content.delete",
   "content.schedule",
   "communities.membership.set",
   "threads.publish",
@@ -240,7 +242,7 @@ const expandedExecutableContracts = {
   },
   x: {
     R2: ["relationships.follow.set", "content.save", "communities.membership.set"],
-    R3: ["posts.repost", "posts.quote", "content.share", "content.edit", "content.schedule", "threads.publish"],
+    R3: ["posts.repost", "posts.quote", "content.share", "content.edit", "content.delete", "content.schedule", "threads.publish"],
   },
   reddit: {
     R2: ["relationships.follow.set", "content.save", "communities.membership.set"],
@@ -283,12 +285,11 @@ const expandedExecutableContracts = {
   },
   bluesky: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["posts.repost", "posts.quote", "content.share", "threads.publish"],
+    R3: ["posts.repost", "posts.quote", "content.share", "content.delete", "threads.publish"],
   },
 } as const satisfies Readonly<Record<PlatformSurfaceId, ExpandedExecutableContract>>;
 
 const neverExecutableOperationNames = [
-  "content.delete",
   "content.audience.set",
   "communities.membership.manage",
   "administration.manage",
@@ -442,12 +443,16 @@ describe("social platform catalog", () => {
     }
   });
 
-  test("never makes destructive, audience, member-admin, financial, or administrative actions executable", () => {
-    for (const surface of surfaces) {
+  test("keeps exact authored deletion narrow while blocking all other high-authority actions", () => {
+    for (const [surfaceId, surface] of Object.entries(socialPlatformCatalog) as [PlatformSurfaceId, PlatformSurfaceCatalogEntry][]) {
       for (const operationName of neverExecutableOperationNames) {
         expect(surface.operations[operationName].state).not.toBe("adapter-eligible");
       }
-      expect(surface.operations["content.delete"]).toMatchObject({ state: "R4", risk: "R4" });
+      expect(surface.operations["content.delete"]).toMatchObject(
+        surfaceId === "x" || surfaceId === "bluesky"
+          ? { state: "adapter-eligible", risk: "R3" }
+          : { state: "R4", risk: "R4" },
+      );
     }
   });
 

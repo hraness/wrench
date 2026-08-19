@@ -496,6 +496,7 @@ const facebookGroup = metaRegistry("facebook-group");
 const facebookMarketplace = metaRegistry("facebook-marketplace");
 
 const bluesky = {
+  "content.delete": contract("bluesky", "content.delete", BLUESKY_WEB_OPERATIONS["content.delete"].risk, BLUESKY_WEB_OPERATIONS["content.delete"].state, BLUESKY_WEB_OPERATIONS["content.delete"].reason),
   "comments.read": contract("bluesky", "comments.read", BLUESKY_WEB_OPERATIONS["comments.read"].risk, BLUESKY_WEB_OPERATIONS["comments.read"].state, BLUESKY_WEB_OPERATIONS["comments.read"].reason),
   "content.save": contract("bluesky", "content.save", BLUESKY_WEB_OPERATIONS["content.save"].risk, BLUESKY_WEB_OPERATIONS["content.save"].state, BLUESKY_WEB_OPERATIONS["content.save"].reason),
   "content.share": contract("bluesky", "content.share", BLUESKY_WEB_OPERATIONS["content.share"].risk, BLUESKY_WEB_OPERATIONS["content.share"].state, BLUESKY_WEB_OPERATIONS["content.share"].reason),
@@ -579,6 +580,7 @@ const x = {
   "posts.quote": contract("x", "posts.quote", "R3", "capture-required", "CreateTweet quote needs an authorized live fixture and reviewed transaction-header behavior"),
   "likes.set": contract("x", "likes.set", "R2", "observed", "current FavoriteTweet/UnfavoriteTweet desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback", 2),
   "content.save": contract("x", "content.save", "R2", "observed", "current CreateBookmark/DeleteBookmark desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback"),
+  "content.delete": contract("x", "content.delete", "R3", "capture-required", "current DeleteTweet request, accepted response, author binding, and exact not-found readback require an authorized live fixture"),
   "articles.publish": contract("x", "articles.publish", "R3", "capture-required", "ArticleEntityPublish and public readback remain outside the private draft contract", 4),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 

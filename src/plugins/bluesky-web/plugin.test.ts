@@ -27,7 +27,7 @@ describe("Bluesky provider plugin", () => {
     ]);
   });
 
-  test("keeps all four boolean reconciliations capture-required", async () => {
+  test("keeps reversible state capture-required and deletion exact-target reconciliable", async () => {
     const expected = {
       "likes.set": ["liked", true],
       "content.save": ["saved", false],
@@ -37,7 +37,7 @@ describe("Bluesky provider plugin", () => {
     expect(binding.operations
       .filter((operation) => operation.reconciliation !== undefined)
       .map((operation) => operation.name)
-      .sort()).toEqual([...Object.keys(expected), "posts.publish"].sort());
+      .sort()).toEqual([...Object.keys(expected), "content.delete", "posts.publish"].sort());
     for (const [name, [key, value]] of Object.entries(expected)) {
       const operation = binding.operations.find((candidate) => candidate.name === name);
       expect(operation?.state).toBe("capture-required");
@@ -49,6 +49,14 @@ describe("Bluesky provider plugin", () => {
       expect(() => reconciliation.desiredState({ [key]: "invalid" }))
         .toThrow(`requires boolean input.${key}`);
     }
+    const deletion = binding.operations.find((operation) =>
+      operation.name === "content.delete");
+    expect(deletion?.state).toBe("observed");
+    expect(deletion?.risk).toBe("R3");
+    if (deletion?.reconciliation?.kind !== "boolean-desired-state") {
+      throw new Error("expected boolean Bluesky deletion reconciliation");
+    }
+    expect(deletion.reconciliation.desiredState({})).toBeFalse();
     const publish = binding.operations.find((operation) =>
       operation.name === "posts.publish");
     expect(publish?.historicalContractVersions).toEqual([2]);

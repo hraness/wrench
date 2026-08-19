@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.9.0",
+  "version": "1.8.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -542,40 +542,6 @@
       "webSession": {
         "site": "x",
         "action": "content.save",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 2097152
-      }
-    },
-    "content.delete": {
-      "description": "Capture-required contract reservation: delete one exact current-account X post only after the current DeleteTweet request, accepted response, author binding, and exact not-found readback are live-proven.",
-      "risk": "R3",
-      "sideEffect": "Permanently deletes the exact confirmed authored X post from the authenticated account.",
-      "idempotency": "local-at-most-once",
-      "dedupeWindowMs": 2592000000,
-      "input": {
-        "properties": {
-          "post_id": {
-            "type": "string",
-            "description": "Exact X post ID",
-            "minLength": 1,
-            "maxLength": 32
-          },
-          "expected_text": {
-            "type": "string",
-            "description": "Exact current post text used for pre-delete confirmation",
-            "minLength": 1,
-            "maxLength": 280
-          }
-        },
-        "required": [
-          "post_id",
-          "expected_text"
-        ]
-      },
-      "webSession": {
-        "site": "x",
-        "action": "content.delete",
         "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 2097152

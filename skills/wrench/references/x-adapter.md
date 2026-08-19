@@ -171,6 +171,7 @@ The current registry keeps these text/desired-state exchanges capture-required:
 - `replies.create` (`R3`): one text reply bound to an exact parent;
 - `posts.repost` (`R3`): exact desired repost state;
 - `posts.quote` (`R3`): one text quote bound to an exact post.
+- `content.delete` (`R3`): the DeleteTweet descriptor is revision evidence only; keep deletion capture-required until an authorized fixture binds the exact authored target and text, request variables, accepted response, and exact not-found readback.
 
 Current `x-client-transaction-id` generation is code-owned: wrench resolves the unique wrapper module, exported helper, and lazy-module evidence from the current first-party main bundle, calls that cached helper through one contained private agent-browser session, closes and cleans the session, then places the ephemeral value only on the already-reviewed in-origin mutation request. Drift or bootstrap failure occurs before the durable dispatch boundary and is never retried. This prerequisite does not by itself graduate the contract states listed above.
 

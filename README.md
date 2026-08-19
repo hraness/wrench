@@ -636,7 +636,9 @@ preserving per-provider attachment limits and at-most-once dispatch evidence.
 
 - R1 is a reviewed read with no intended remote mutation.
 - R2 is one bounded, normally reversible change.
-- R3 is an externally visible or consequential change.
+- R3 is an externally visible or consequential change, including an exact
+  authored-item deletion only where a provider-specific contract binds the
+  target, current account, revision, mutation, and independent absence readback.
 - R4 is blocked.
 
 R2 and R3 commands create an exact, short-lived preview. Review its adapter,

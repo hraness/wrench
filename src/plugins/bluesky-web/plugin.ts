@@ -22,7 +22,7 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(blueskyContracts),
-  "05bfb2469a3c515fd0a16032b8532288a21d3ef027e15636e1a4dc01ff2d08c8",
+  "e3e46da572247715e03a7a94038b74cb00c41afa230b0c473eb5d13ece097bba",
   {
     "posts.publish": [2],
   },
@@ -42,6 +42,15 @@ const operations = webSessionContractOperations(
       ...operation,
       reconciliation: Object.freeze({
         kind: "provider-accepted-target-presence" as const,
+      }),
+    });
+  }
+  if (operation.name === "content.delete") {
+    return Object.freeze({
+      ...operation,
+      reconciliation: Object.freeze({
+        kind: "boolean-desired-state" as const,
+        desiredState: (): boolean => false,
       }),
     });
   }
@@ -110,6 +119,19 @@ export const blueskyWebPlugin = defineProviderPlugin({
             return {
               actualState: readback.present,
               reason: "exact-target-readback",
+            };
+          }
+          if (operation === "content.delete") {
+            const readback = await runtime.readBlueskyWebContentDeleteDesiredState({
+              site: "bluesky",
+              action: operation,
+              contractVersion: 1,
+              timeoutMs: 60_000,
+              maxOutputBytes: 8 * 1024 * 1024,
+            }, input, auth);
+            return {
+              actualState: readback.present,
+              reason: "authoritative-record-readback",
             };
           }
           if (!Object.hasOwn(desiredStateKeys, operation)) {

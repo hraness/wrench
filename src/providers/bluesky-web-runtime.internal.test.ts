@@ -14,6 +14,7 @@ import { BLUESKY_APPVIEW_PROXY } from "./bluesky-web";
 import {
   executeBlueskyWebOperation,
   probeBlueskyWebSubject,
+  readBlueskyWebContentDeleteDesiredState,
   readBlueskyWebDesiredState,
   readBlueskyWebPublishedMutationTarget,
   type BlueskyWebRuntimeDependencies,
@@ -130,6 +131,13 @@ function postView(
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function jsonErrorResponse(value: unknown, status = 400): Response {
+  return new Response(JSON.stringify(value), {
+    status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
 }
@@ -737,6 +745,200 @@ describe("Bluesky authenticated XRPC runtime", () => {
       "com.atproto.server.getSession",
       "app.bsky.actor.getProfile",
     ]);
+  });
+
+  test("deletes only the exact current-account post revision and proves authoritative absence", async () => {
+    const postUri = `at://${VIEWER_DID}/app.bsky.feed.post/3ldelete`;
+    const expectedCid = `b${"e".repeat(40)}`;
+    const calls: CapturedRequest[] = [];
+    const events: string[] = [];
+    let recordReads = 0;
+    const deps = dependencies(calls, (request) => {
+      events.push(`${request.method} ${nsid(request)}`);
+      if (nsid(request) === "com.atproto.server.getSession") {
+        return jsonResponse(sessionResponse());
+      }
+      if (nsid(request) === "com.atproto.repo.getRecord") {
+        recordReads += 1;
+        expect(Object.fromEntries(request.url.searchParams)).toEqual({
+          repo: VIEWER_DID,
+          collection: "app.bsky.feed.post",
+          rkey: "3ldelete",
+        });
+        return recordReads === 1
+          ? jsonResponse({
+              uri: postUri,
+              cid: expectedCid,
+              value: {
+                $type: "app.bsky.feed.post",
+                text: "delete me",
+                createdAt: "2026-08-19T12:00:00.000Z",
+              },
+            })
+          : jsonErrorResponse({
+              error: "RecordNotFound",
+              message: "Could not locate record",
+            });
+      }
+      if (nsid(request) === "com.atproto.repo.deleteRecord") {
+        expect(request.method).toBe("POST");
+        expect(JSON.parse(String(request.body))).toEqual({
+          repo: VIEWER_DID,
+          collection: "app.bsky.feed.post",
+          rkey: "3ldelete",
+          swapRecord: expectedCid,
+        });
+        return jsonResponse({
+          commit: {
+            cid: `b${"f".repeat(40)}`,
+            rev: "3m4abcde234fg",
+          },
+        });
+      }
+      throw new Error(`unexpected deletion XRPC method ${nsid(request)}`);
+    });
+    const result = await executeBlueskyWebOperation(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        beforeDispatch: (event) => {
+          events.push(`before ${event.progress.started}`);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          events.push(`after ${event.progress.verified}`);
+          return Promise.resolve();
+        },
+        dependencies: deps,
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+      output: {
+        postUri,
+        expectedCid,
+        deleted: true,
+        effect: "deleted",
+      },
+    });
+    expect(events).toEqual([
+      "GET com.atproto.server.getSession",
+      "GET com.atproto.repo.getRecord",
+      "GET com.atproto.server.getSession",
+      "before 0",
+      "POST com.atproto.repo.deleteRecord",
+      "GET com.atproto.repo.getRecord",
+      "after 1",
+    ]);
+  });
+
+  test("reconciles deletion through read-only authoritative absence and fails closed on revision drift", async () => {
+    const postUri = `at://${VIEWER_DID}/app.bsky.feed.post/3ldelete`;
+    const expectedCid = `b${"e".repeat(40)}`;
+    const absentCalls: CapturedRequest[] = [];
+    expect(await readBlueskyWebContentDeleteDesiredState(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        dependencies: dependencies(absentCalls, (request) =>
+          nsid(request) === "com.atproto.server.getSession"
+            ? jsonResponse(sessionResponse())
+            : jsonErrorResponse({
+                error: "RecordNotFound",
+                message: "Could not locate record",
+              })
+        ),
+      },
+    )).toEqual({ present: false, postUri });
+    expect(absentCalls.every((request) => request.method === "GET")).toBeTrue();
+
+    const driftCalls: CapturedRequest[] = [];
+    const result = await executeBlueskyWebOperation(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        dependencies: dependencies(driftCalls, (request) =>
+          nsid(request) === "com.atproto.server.getSession"
+            ? jsonResponse(sessionResponse())
+            : jsonResponse({
+                uri: postUri,
+                cid: `b${"f".repeat(40)}`,
+                value: { $type: "app.bsky.feed.post" },
+              })
+        ),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+    });
+    expect(driftCalls.every((request) => request.method === "GET")).toBeTrue();
+  });
+
+  test("treats authoritative prior absence as a no-op and malformed post-dispatch responses as indeterminate", async () => {
+    const postUri = `at://${VIEWER_DID}/app.bsky.feed.post/3ldelete`;
+    const expectedCid = `b${"e".repeat(40)}`;
+    const absentCalls: CapturedRequest[] = [];
+    const absent = await executeBlueskyWebOperation(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        dependencies: dependencies(absentCalls, (request) =>
+          nsid(request) === "com.atproto.server.getSession"
+            ? jsonResponse(sessionResponse())
+            : jsonErrorResponse({
+                error: "RecordNotFound",
+                message: "Could not locate record",
+              })
+        ),
+      },
+    );
+    expect(absent).toMatchObject({
+      status: "succeeded",
+      noOp: true,
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+      output: { deleted: true, effect: "already-absent" },
+    });
+    expect(absentCalls.map(nsid)).toEqual([
+      "com.atproto.server.getSession",
+      "com.atproto.repo.getRecord",
+    ]);
+
+    const malformedCalls: CapturedRequest[] = [];
+    const malformed = await executeBlueskyWebOperation(
+      recipe("content.delete"),
+      { post_uri: postUri, expected_cid: expectedCid },
+      blueskyAuth,
+      {
+        dependencies: dependencies(malformedCalls, (request) => {
+          if (nsid(request) === "com.atproto.server.getSession") {
+            return jsonResponse(sessionResponse());
+          }
+          if (nsid(request) === "com.atproto.repo.getRecord") {
+            return jsonResponse({
+              uri: postUri,
+              cid: expectedCid,
+              value: { $type: "app.bsky.feed.post" },
+            });
+          }
+          return jsonResponse({ deleted: true });
+        }),
+      },
+    );
+    expect(malformed).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+    });
+    expect(malformed.error).toContain("failure stage: delete response");
   });
 
   test("uploads one plan-bound PNG, creates one post, and independently binds its exact readback", async () => {
