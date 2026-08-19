@@ -205,8 +205,8 @@ export const META_WEB_OPERATIONS = Object.freeze({
     ),
     "posts.publish": observedMutation(
       "R3",
-      "reviewed live single-PNG upload with synchronous 200 completion, first-party configure_text_post_app_feed create-response actor/text/image binding, durable response-bound post identity, and independent exact permalink media readback",
-      3,
+      "reviewed live single-PNG upload with synchronous 200 completion, exact minimal configure_text_post_app_feed created-locator binding, durable response-bound post identity plus completed-upload dimensions, and independent exact permalink actor/text/image readback",
+      4,
     ),
     "messaging.list": captureRequired(
       "messaging.list",

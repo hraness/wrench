@@ -2325,6 +2325,18 @@ function dispatchEvent(id: string, index: number, planned: number, started: numb
   return { id, index, progress: { planned, started, verified } };
 }
 
+type XPostFailureStage =
+  | "viewer-binding-before-media-upload"
+  | "media-upload"
+  | "viewer-binding-after-media-upload"
+  | "post-request-preparation"
+  | "dispatch-admission"
+  | "post-dispatch"
+  | "create-response-binding"
+  | "accepted-target-recording"
+  | "independent-readback"
+  | "verification-recording";
+
 async function publishOne(
   bootstrap: XBootstrap,
   text: string,
@@ -2342,7 +2354,9 @@ async function publishOne(
     },
   ) => Promise<void>,
   beforeRequest?: () => Promise<void>,
+  onFailureStage?: (stage: XPostFailureStage) => void,
 ): Promise<{ readonly id: string; readonly url: string }> {
+  onFailureStage?.("post-request-preparation");
   const descriptor = await resolveDescriptor(bootstrap, "CreateTweet", "mutation");
   const response = await graphQl(
     bootstrap,
@@ -2353,6 +2367,7 @@ async function publishOne(
     mutationOperation,
     beforeRequest,
   );
+  onFailureStage?.("create-response-binding");
   const created = createdTweet(
     response,
     text,
@@ -2361,11 +2376,13 @@ async function publishOne(
     authorId,
     media?.id ?? null,
   );
+  onFailureStage?.("accepted-target-recording");
   await afterProviderAcceptedMutationTarget?.({
     ...created,
     mediaId: media?.id ?? null,
   });
   if (mutationOperation !== "posts.publish") return created;
+  onFailureStage?.("independent-readback");
   const readback = await waitForTweetPublishReadback(
     bootstrap,
     created.id,
@@ -2430,6 +2447,7 @@ async function executePublish(
   const posts: { readonly id: string; readonly url: string }[] = [];
   let started = 0;
   let verified = 0;
+  let failureStage: XPostFailureStage = "post-request-preparation";
   let previous: string | null = action === "replies.create" ? postId(input.post_id, "input.post_id") : null;
   const quote = action === "posts.quote" ? postId(input.post_id, "input.post_id") : null;
   try {
@@ -2437,24 +2455,29 @@ async function executePublish(
       const index = offset + 1;
       const id = action === "threads.publish" ? `${action}[${index}]` : action;
       let media: XUploadedMedia | null = null;
-      let beforeRequest: (() => Promise<void>) | undefined;
+      const beforeRequest = async () => {
+        failureStage = "dispatch-admission";
+        await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
+        started = index;
+        failureStage = "post-dispatch";
+      };
       if (image !== null) {
+        failureStage = "viewer-binding-before-media-upload";
         const rebound = await requireBoundViewer(bootstrap, auth);
         if (rebound.id !== currentViewer.id) {
           throw new Error("X viewer changed during media dispatch preparation");
         }
-        await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
-        started = index;
+        // The upload produces only an expiring, unpublished provider blob. Keep
+        // it before the durable CreateTweet dispatch boundary so a transport or
+        // upload-response failure cannot strand the public-post intent as
+        // indeterminate when no CreateTweet request was admitted.
+        failureStage = "media-upload";
         media = await uploadXImage(bootstrap, image);
+        failureStage = "viewer-binding-after-media-upload";
         const afterUpload = await requireBoundViewer(bootstrap, auth);
         if (afterUpload.id !== currentViewer.id) {
           throw new Error("X viewer changed after media upload");
         }
-      } else {
-        beforeRequest = async () => {
-          await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
-          started = index;
-        };
       }
       const post = await publishOne(
         bootstrap,
@@ -2480,10 +2503,14 @@ async function executePublish(
               },
             }),
         beforeRequest,
+        (stage) => {
+          failureStage = stage;
+        },
       );
       posts.push(post);
       previous = post.id;
       verified = index;
+      failureStage = "verification-recording";
       await options.afterDispatchVerified?.(dispatchEvent(id, index, planned, started, verified));
     }
     return {
@@ -2494,15 +2521,18 @@ async function executePublish(
       dispatch: { planned, started, verified },
     };
   } catch {
+    const status = started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed";
     return {
-      status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
+      status,
       output: posts.length === 0 ? null : { posts },
       finalUrl: posts.at(-1)?.url ?? null,
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
-      error: started > verified
-        ? "X may have accepted the current post dispatch; reconcile before retrying"
-        : "X post dispatch failed before a response-bound result was verified",
+      error: status === "indeterminate"
+        ? `X may have accepted the current post dispatch; failure stage: ${failureStage}; reconcile before retrying`
+        : status === "partial"
+          ? `X verified only part of the confirmed post workflow; failure stage: ${failureStage}; inspect the verified results before retrying`
+          : `X post preparation failed before public post submission; failure stage: ${failureStage}; retry with a fresh confirmed plan`,
     };
   }
 }

@@ -39,7 +39,6 @@ import {
   normalizeInstagramPost,
   normalizeThreadsFeedHtml,
   normalizeThreadsPostHtml,
-  projectThreadsPublishPost,
   parseFacebookViewerId,
   parseMetaJsonDocuments,
   parseMetaJsonScripts,
@@ -49,7 +48,6 @@ import {
   type MetaWebOperationContract,
   type MetaWebSite,
   type ThreadsImageProjection,
-  type ThreadsPostProjection,
 } from "./meta-web";
 import {
   bootstrapMetaComet,
@@ -622,22 +620,79 @@ export type ThreadsPostLocator = Readonly<{
 
 type ThreadsCreatedPost = Readonly<{
   readonly locator: ThreadsPostLocator;
-  readonly post: ThreadsPostProjection;
+  readonly image: Readonly<{
+    readonly height: number;
+    readonly mediaId: string;
+    readonly mediaType: 1;
+    readonly width: number;
+  }>;
 }>;
+
+type ThreadsCreateFailureCategory =
+  | "transport"
+  | "status"
+  | "content-type"
+  | "json"
+  | "success-shape"
+  | "identifiers"
+  | "permalink"
+  | "actor"
+  | "unexpected";
+
+class ThreadsCreateResponseError extends Error {
+  readonly category: ThreadsCreateFailureCategory;
+
+  constructor(
+    category: ThreadsCreateFailureCategory,
+    message: string,
+    options: { readonly cause?: unknown } = {},
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "ThreadsCreateResponseError";
+    this.category = category;
+  }
+}
+
+function threadsCreateRequestFailureCategory(error: unknown): ThreadsCreateFailureCategory {
+  if (!(error instanceof Error)) return "unexpected";
+  if (
+    error.message === "authenticated web API request failed before a reviewed response was received"
+    || error.message.includes("authenticated web operation deadline")
+    || error.message.includes("authenticated web operation timed out")
+  ) return "transport";
+  const statusAndContentType =
+    /^authenticated web API returned unreviewed status\/content type ([0-9]{3})\//u.exec(
+      error.message,
+    );
+  if (statusAndContentType !== null) {
+    return statusAndContentType[1] === "200" ? "content-type" : "status";
+  }
+  if (
+    error.message === "authenticated web API returned invalid UTF-8 JSON"
+    || error.message === "authenticated web API returned malformed JSON"
+  ) return "json";
+  return "unexpected";
+}
 
 function threadsCreatedPost(
   value: unknown,
   viewerId: string,
-  body: string,
   uploaded: ThreadsUploadedImage,
 ): ThreadsCreatedPost {
+  // The reviewed synchronous composer response projects only the new post
+  // locator. Keep the upload dimensions locally bound, then require the
+  // independent permalink readback below to prove actor, text, and image.
   if (
     !isRecord(value)
     || Object.keys(value).sort().join(",") !== "media,status"
     || value.status !== "ok"
     || !isRecord(value.media)
+    || Object.keys(value.media).sort().join(",") !== "code,permalink,pk"
   ) {
-    throw new Error("Threads create response did not match the reviewed success shape");
+    throw new ThreadsCreateResponseError(
+      "success-shape",
+      "Threads create response did not match the reviewed success shape",
+    );
   }
   const { code, permalink, pk } = value.media;
   if (
@@ -647,8 +702,21 @@ function threadsCreatedPost(
     || permalink.length > 2_048
     || typeof pk !== "string"
     || !/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(pk)
-  ) throw new Error("Threads create response returned invalid post identifiers");
-  const url = new URL(permalink, ORIGINS.threads);
+  ) {
+    throw new ThreadsCreateResponseError(
+      "identifiers",
+      "Threads create response returned invalid post identifiers",
+    );
+  }
+  let url: URL;
+  try {
+    url = new URL(permalink);
+  } catch {
+    throw new ThreadsCreateResponseError(
+      "permalink",
+      "Threads create response returned an unreviewed permalink",
+    );
+  }
   const path = url.pathname.split("/");
   if (
     url.origin !== ORIGINS.threads
@@ -660,28 +728,26 @@ function threadsCreatedPost(
     || !/^@[A-Za-z0-9._]{1,64}$/u.test(path[1] ?? "")
     || path[2] !== "post"
     || path[3] !== code
-  ) throw new Error("Threads create response returned an unreviewed permalink");
-  if (pk.includes("_") && !pk.endsWith(`_${viewerId}`)) {
-    throw new Error("Threads create response changed the confirmed actor");
+  ) {
+    throw new ThreadsCreateResponseError(
+      "permalink",
+      "Threads create response returned an unreviewed permalink",
+    );
   }
-  const post = projectThreadsPublishPost(value.media, "Threads create response.media");
-  const user = isRecord(post.user) ? post.user : null;
-  if (
-    post.id !== pk
-    || post.code !== code
-    || post.caption !== body
-    || user?.id !== viewerId
-    || post.image === null
-    || post.image.mediaId !== pk
-    || post.image.width !== uploaded.width
-    || post.image.height !== uploaded.height
-  ) throw new Error("Threads create response did not bind the confirmed actor, text, and uploaded image");
-  if (post.canonical_url !== null && post.canonical_url !== url.href) {
-    throw new Error("Threads create response canonical URL changed the returned permalink");
+  if (pk.includes("_") && !pk.endsWith(`_${viewerId}`)) {
+    throw new ThreadsCreateResponseError(
+      "actor",
+      "Threads create response changed the confirmed actor",
+    );
   }
   return Object.freeze({
     locator: Object.freeze({ code, id: pk, url: url.href }),
-    post,
+    image: Object.freeze({
+      height: uploaded.height,
+      mediaId: pk,
+      mediaType: 1,
+      width: uploaded.width,
+    }),
   });
 }
 
@@ -721,21 +787,30 @@ async function createThreadsPost(
     config.sprinkleParameter,
     threadsSprinkleValue(csrfToken, config.sprinkleVersion),
   );
-  const response = await client.requestJson({
-    url: new URL("/api/v1/media/configure_text_post_app_feed/", ORIGINS.threads),
-    method: "POST",
-    headers: threadsApiHeaders(
-      client,
-      config,
-      webSessionId,
-      "application/x-www-form-urlencoded;charset=UTF-8",
-    ),
-    body: form.toString(),
-    expectedStatuses: [200],
-    expectedContentTypes: ["application/json", "text/plain"],
-    maxBytes: 256 * 1024,
-  });
-  return threadsCreatedPost(response, viewer.id, prepared.body, uploaded);
+  let response: unknown;
+  try {
+    response = await client.requestJson({
+      url: new URL("/api/v1/media/configure_text_post_app_feed/", ORIGINS.threads),
+      method: "POST",
+      headers: threadsApiHeaders(
+        client,
+        config,
+        webSessionId,
+        "application/x-www-form-urlencoded;charset=UTF-8",
+      ),
+      body: form.toString(),
+      expectedStatuses: [200],
+      expectedContentTypes: ["application/json", "text/plain"],
+      maxBytes: 256 * 1024,
+    });
+  } catch (error) {
+    throw new ThreadsCreateResponseError(
+      threadsCreateRequestFailureCategory(error),
+      "Threads create request did not return one reviewed response",
+      { cause: error },
+    );
+  }
+  return threadsCreatedPost(response, viewer.id, uploaded);
 }
 
 function metaDispatchEvent(
@@ -787,7 +862,7 @@ async function executeThreadsPost(
     started = 1;
     failureStage = "post create response";
     created = await createThreadsPost(client, reboundViewer, prepared, uploaded, config);
-    const createdImage = created.post.image as ThreadsImageProjection;
+    const createdImage = created.image;
     failureStage = "accepted target retention";
     await options.afterProviderAcceptedMutationTarget?.({
       id: "posts.publish",
@@ -847,7 +922,10 @@ async function executeThreadsPost(
       dispatchStarted: true,
       dispatch: { planned: 1, started, verified },
     };
-  } catch {
+  } catch (error) {
+    const publicFailureStage = failureStage === "post create response"
+      ? `${failureStage} (${error instanceof ThreadsCreateResponseError ? error.category : "unexpected"})`
+      : failureStage;
     return {
       status: started > 0 ? "indeterminate" : "failed",
       output: null,
@@ -855,7 +933,7 @@ async function executeThreadsPost(
       dispatchStarted: started > 0,
       dispatch: { planned: 1, started, verified },
       error: started > 0
-        ? `Threads may have accepted the image upload or post but exact actor, ID, code, text, image, and permalink readback was not verified; failure stage: ${failureStage}; reconcile before retrying`
+        ? `Threads may have accepted the image upload or post but exact actor, ID, code, text, image, and permalink readback was not verified; failure stage: ${publicFailureStage}; reconcile before retrying`
         : "Threads image upload failed before post submission; retry with a fresh confirmed plan",
     };
   }
@@ -965,8 +1043,8 @@ export async function readThreadsWebPublishedMutationTarget(
   if (
     recipe.site !== "threads"
     || recipe.action !== "posts.publish"
-    || recipe.contractVersion !== 3
-  ) throw new Error("Threads publish recovery supports only posts.publish@3");
+    || recipe.contractVersion !== 4
+  ) throw new Error("Threads publish recovery supports only posts.publish@4");
   const target = parseThreadsPublishedMutationTarget(identifier);
   const prepared = prepareMetaRead(recipe, input, auth, Object.freeze({}));
   if (prepared.kind !== "threads-post") {

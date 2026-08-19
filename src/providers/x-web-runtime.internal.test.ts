@@ -1932,14 +1932,19 @@ describe("X authenticated internal-API runtime", () => {
         dispatchStarted: true,
         dispatch: { planned: 1, started: 1, verified: 1 },
       });
-      expect(events).toContain("POST upload.x.com/i/media/upload.json");
+      const lastUpload = events.lastIndexOf("POST upload.x.com/i/media/upload.json");
+      const admitted = events.indexOf("before 0");
+      const create = events.indexOf("POST x.com/i/api/graphql/hIL9XdleMYEtVXOZVbr8Bg/CreateTweet");
+      expect(lastUpload).toBeGreaterThan(-1);
+      expect(admitted).toBeGreaterThan(lastUpload);
+      expect(create).toBeGreaterThan(admitted);
       expect(events.at(-1)).toBe("after 1");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("marks an admitted X image upload failure indeterminate without creating a post", async () => {
+  test("keeps an X image upload failure before public-post admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-x-upload-failure-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
@@ -1980,11 +1985,12 @@ describe("X authenticated internal-API runtime", () => {
         },
       );
       expect(result).toMatchObject({
-        status: "indeterminate",
-        dispatchStarted: true,
-        dispatch: { planned: 1, started: 1, verified: 0 },
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "X post preparation failed before public post submission; failure stage: media-upload; retry with a fresh confirmed plan",
       });
-      expect(admissions).toBe(1);
+      expect(admissions).toBe(0);
       expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeFalse();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -2146,6 +2152,7 @@ describe("X authenticated internal-API runtime", () => {
         status: "indeterminate",
         dispatchStarted: true,
         dispatch: { planned: 1, started: 1, verified: 0 },
+        error: "X may have accepted the current post dispatch; failure stage: create-response-binding; reconcile before retrying",
       });
       expect(after).toEqual([]);
       expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);

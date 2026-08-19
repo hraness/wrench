@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import type { WrenchAuth } from "../auth";
 import type { BrowserSession } from "../browser";
-import { createLinkedInPostBrowserTransport } from "./linkedin-web-post-browser";
+import {
+  createLinkedInPostBrowserTransport,
+  LinkedInPostImagePreparationError,
+} from "./linkedin-web-post-browser";
 
 const auth = {
   schemaVersion: 1,
@@ -238,12 +241,66 @@ describe("LinkedIn native post contained-browser transport", () => {
       },
     });
 
-    expect(transport.uploadImage(auth.subject, image)).rejects.toThrow(
-      "bounded staging failure",
-    );
+    try {
+      await transport.uploadImage(auth.subject, image);
+      throw new Error("expected LinkedIn staging failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(LinkedInPostImagePreparationError);
+      expect(error).toMatchObject({ stage: "page image staging" });
+      expect((error as Error).message).not.toContain("bounded staging failure");
+    }
     await transport.close();
     expect(stagingBatches).toBe(2);
     expect(cleanupKey).toBe(stagingKey);
     expect(uploads).toBe(0);
+  });
+
+  test("categorizes registration or upload failure without exposing browser detail", async () => {
+    const image = new Uint8Array(24);
+    const session: BrowserSession = {
+      runBatch: (commands) => {
+        const command = commands[0];
+        if (command?.[0] === "open") {
+          return Promise.resolve([{ success: true, result: { opened: true } }]);
+        }
+        if (command?.[0] === "network") return Promise.resolve([pageBindingRecord()]);
+        const source = command?.[1] ?? "";
+        if (source.includes("return{ready:true}")) {
+          return Promise.resolve([browserRecord({ ready: true })]);
+        }
+        if (source.includes("return{staged:chunks.length}")) {
+          return Promise.resolve([browserRecord({ staged: 1 })]);
+        }
+        if (source.includes("const registrationBody=")) {
+          return Promise.reject(new Error("private signed-upload response detail"));
+        }
+        if (source.includes("return{removed}")) {
+          return Promise.resolve([browserRecord({ removed: true })]);
+        }
+        throw new Error("unexpected LinkedIn evaluation source");
+      },
+      close: () => Promise.resolve(),
+      cleanup: () => Promise.resolve(),
+    };
+    const transport = await createLinkedInPostBrowserTransport(auth, {
+      timeoutMs: 10_000,
+      dependencies: {
+        createBrowserSession: () => Promise.resolve(session),
+      },
+    });
+
+    try {
+      await transport.uploadImage(auth.subject, image);
+      throw new Error("expected LinkedIn registration failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(LinkedInPostImagePreparationError);
+      expect(error).toMatchObject({
+        stage: "image registration or upload response",
+      });
+      expect((error as Error).message).not.toContain(
+        "private signed-upload response detail",
+      );
+    }
+    await transport.close();
   });
 });

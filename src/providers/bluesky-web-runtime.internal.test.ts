@@ -893,9 +893,9 @@ describe("Bluesky authenticated XRPC runtime", () => {
       });
       expect(events).toEqual([
         "GET com.atproto.server.getSession",
+        "POST com.atproto.repo.uploadBlob",
         "GET com.atproto.server.getSession",
         "before 0",
-        "POST com.atproto.repo.uploadBlob",
         "POST com.atproto.repo.createRecord",
         "GET com.atproto.repo.getRecord",
         "GET app.bsky.feed.getPosts",
@@ -1049,7 +1049,7 @@ describe("Bluesky authenticated XRPC runtime", () => {
     )).rejects.toThrow("not canonical");
   });
 
-  test("marks a post indeterminate when the image upload fails after durable dispatch admission", async () => {
+  test("keeps an image upload failure before durable createRecord admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-upload-failure-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
@@ -1084,19 +1084,108 @@ describe("Bluesky authenticated XRPC runtime", () => {
         },
       );
       expect(result).toMatchObject({
-        status: "indeterminate",
-        dispatchStarted: true,
-        dispatch: { planned: 1, started: 1, verified: 0 },
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "Bluesky post preparation failed before public record submission; failure stage: media-upload; retry with a fresh confirmed plan",
       });
-      expect(beforeDispatch).toBe(1);
+      expect(beforeDispatch).toBe(0);
       expect(calls.map(nsid)).toEqual([
-        "com.atproto.server.getSession",
         "com.atproto.server.getSession",
         "com.atproto.repo.uploadBlob",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("keeps a createRecord failure indeterminate after exact dispatch admission", async () => {
+    const calls: CapturedRequest[] = [];
+    let beforeDispatch = 0;
+    const result = await executeBlueskyWebOperation(
+      recipe("posts.publish"),
+      { body: "Create response must remain uncertain" },
+      blueskyAuth,
+      {
+        beforeDispatch: () => {
+          beforeDispatch += 1;
+          return Promise.resolve();
+        },
+        dependencies: dependencies(calls, (request) => {
+          if (nsid(request) === "com.atproto.server.getSession") {
+            return jsonResponse(sessionResponse());
+          }
+          if (nsid(request) === "com.atproto.repo.createRecord") {
+            return new Response("create failed", { status: 503 });
+          }
+          throw new Error(`unexpected request after failed createRecord: ${nsid(request)}`);
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+      error: "Bluesky may have accepted the current post dispatch; failure stage: create-record; reconcile before retrying",
+    });
+    expect(beforeDispatch).toBe(1);
+    expect(calls.map(nsid)).toEqual([
+      "com.atproto.server.getSession",
+      "com.atproto.server.getSession",
+      "com.atproto.repo.createRecord",
+    ]);
+  });
+
+  test("retains the exact accepted target when authoritative readback fails", async () => {
+    const text = "Accepted Bluesky readback failure";
+    const createdAt = new Date(2_000_000_000_000).toISOString();
+    const uri = `at://${VIEWER_DID}/app.bsky.feed.post/3lreadbackfailure`;
+    const cid = `b${"f".repeat(40)}`;
+    const calls: CapturedRequest[] = [];
+    const accepted: unknown[] = [];
+    const result = await executeBlueskyWebOperation(
+      recipe("posts.publish"),
+      { body: text },
+      blueskyAuth,
+      {
+        afterProviderAcceptedMutationTarget: (event) => {
+          accepted.push(event);
+          return Promise.resolve();
+        },
+        dependencies: dependencies(calls, (request) => {
+          switch (nsid(request)) {
+            case "com.atproto.server.getSession":
+              return jsonResponse(sessionResponse());
+            case "com.atproto.repo.createRecord":
+              return jsonResponse({ uri, cid });
+            case "com.atproto.repo.getRecord":
+              return new Response("readback failed", { status: 503 });
+            default:
+              throw new Error(`unexpected request after failed record readback: ${nsid(request)}`);
+          }
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+      error: "Bluesky may have accepted the current post dispatch; failure stage: authoritative-record-readback; reconcile before retrying",
+    });
+    expect(accepted).toEqual([{
+      id: "posts.publish",
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: canonicalJson({ uri, cid, createdAt, media: null }),
+      },
+    }]);
+    expect(calls.map(nsid)).toEqual([
+      "com.atproto.server.getSession",
+      "com.atproto.server.getSession",
+      "com.atproto.repo.createRecord",
+      "com.atproto.repo.getRecord",
+    ]);
   });
 
   test("all unproven operations acquire no session and dispatch nothing", () => {

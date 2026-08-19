@@ -425,7 +425,7 @@ const META_WEB_OPERATIONS = Object.freeze({
   }),
   threads: operationPolicies("threads", ["feeds.read", "posts.publish"], {
     "feeds.read": 2,
-    "posts.publish": 3,
+    "posts.publish": 4,
   }),
   facebook: operationPolicies("facebook", ["feeds.read"], {
     "feeds.read": 2,

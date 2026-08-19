@@ -180,6 +180,15 @@ function createdNote(imageUrl: string): unknown {
   };
 }
 
+function createdTextNote(): Record<string, unknown> {
+  const imageUrl =
+    `https://substack-post-media.s3.amazonaws.com/public/images/${IMAGE_UUID}_959x1022.png`;
+  return {
+    ...createdNote(imageUrl) as Record<string, unknown>,
+    attachments: [],
+  };
+}
+
 function noteReadback(imageUrl: string, body = NOTE_BODY): unknown {
   return {
     item: {
@@ -269,6 +278,95 @@ function bootstrapResponse(request: CapturedRequest, userId = USER_ID): Response
   }
   if (request.url.pathname === "/") return textResponse(preloadHtml(userId));
   return null;
+}
+
+async function executeTextOnlyPostWithCreateResponse(
+  createResponse: (
+    request: CapturedRequest,
+  ) => Response | Promise<Response>,
+) {
+  const calls: CapturedRequest[] = [];
+  const result = await executeSubstackWebOperation(
+    recipe("posts.publish"),
+    { body: NOTE_BODY },
+    boundAuth,
+    {
+      beforeDispatch: () => Promise.resolve(),
+      dependencies: {
+        ...dependencies(calls, (request) => {
+          const bootstrap = bootstrapResponse(request);
+          if (bootstrap !== null) return bootstrap;
+          if (
+            request.method === "POST"
+            && request.url.pathname === "/api/v1/comment/feed"
+          ) return createResponse(request);
+          if (
+            request.method === "GET"
+            && request.url.pathname === `/api/v1/reader/comment/${CREATED_NOTE_ID}`
+          ) return jsonResponse(noteReadbackWithoutImage());
+          throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+        }),
+        sleep: () => Promise.resolve(),
+      },
+    },
+  );
+  return { calls, result };
+}
+
+async function executeImagePostWithCreateResponse(
+  imagePath: string,
+  createResponse: (
+    request: CapturedRequest,
+    imageUrl: string,
+  ) => Response | Promise<Response>,
+) {
+  const imageBytes = pngFixture(959, 1022);
+  const imageUrl =
+    `https://substack-post-media.s3.amazonaws.com/public/images/${IMAGE_UUID}_959x1022.png`;
+  const calls: CapturedRequest[] = [];
+  const result = await executeSubstackWebOperation(
+    recipe("posts.publish"),
+    {
+      body: NOTE_BODY,
+      media: { kind: "file", reference: "fixture" },
+    },
+    boundAuth,
+    {
+      fileResolver: () => Promise.resolve([imagePath]),
+      beforeDispatch: () => Promise.resolve(),
+      dependencies: {
+        ...dependencies(calls, (request) => {
+          const bootstrap = bootstrapResponse(request);
+          if (bootstrap !== null) return bootstrap;
+          if (request.method === "POST" && request.url.pathname === "/api/v1/image") {
+            return jsonResponse({
+              bytes: imageBytes.byteLength,
+              contentType: "image/png",
+              id: IMAGE_ID,
+              imageHeight: 1022,
+              imageWidth: 959,
+              url: imageUrl,
+            });
+          }
+          if (
+            request.method === "POST"
+            && request.url.pathname === "/api/v1/comment/attachment"
+          ) return jsonResponse(imageAttachment(imageUrl));
+          if (
+            request.method === "POST"
+            && request.url.pathname === "/api/v1/comment/feed"
+          ) return createResponse(request, imageUrl);
+          if (
+            request.method === "GET"
+            && request.url.pathname === `/api/v1/reader/comment/${CREATED_NOTE_ID}`
+          ) return jsonResponse(noteReadback(imageUrl));
+          throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+        }),
+        sleep: () => Promise.resolve(),
+      },
+    },
+  );
+  return { calls, result };
 }
 
 describe("Substack authenticated internal API runtime", () => {
@@ -549,9 +647,9 @@ describe("Substack authenticated internal API runtime", () => {
         "GET /",
         "GET /api/v1/am_i_logged_in",
         "GET /",
-        "before 0",
         "POST /api/v1/image",
         "POST /api/v1/comment/attachment",
+        "before 0",
         "POST /api/v1/comment/feed",
         `accepted ${canonicalJson({
           noteId: CREATED_NOTE_ID,
@@ -571,7 +669,222 @@ describe("Substack authenticated internal API runtime", () => {
     }
   });
 
-  test("marks a Substack image-upload failure indeterminate after durable dispatch and never creates a Note", async () => {
+  test("classifies Note-create transport responses without exposing provider diagnostics", async () => {
+    const scenarios: readonly {
+      readonly stage: string;
+      readonly respond: () => Response | Promise<Response>;
+    }[] = [
+      {
+        stage: "note-create-transport",
+        respond: () => Promise.reject(new Error("private transport diagnostic")),
+      },
+      {
+        stage: "note-create-http-status",
+        respond: () => new Response("private status diagnostic", {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+      },
+      {
+        stage: "note-create-content-type",
+        respond: () => new Response("private content-type diagnostic", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      },
+      {
+        stage: "note-create-json",
+        respond: () => new Response('{"private":', {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      },
+      {
+        stage: "note-create-response-bounds",
+        respond: () => new Response("", {
+          status: 200,
+          headers: {
+            "content-length": String(9 * 1024 * 1024),
+            "content-type": "application/json",
+          },
+        }),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const { calls, result } = await executeTextOnlyPostWithCreateResponse(
+        () => scenario.respond(),
+      );
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+        error: expect.stringContaining(`stage: ${scenario.stage}`),
+      });
+      expect(String(result.error)).not.toContain("private");
+      expect(calls.filter(
+        (call) => call.url.pathname === "/api/v1/comment/feed",
+      )).toHaveLength(1);
+      expect(calls.filter(
+        (call) => call.url.pathname.startsWith("/api/v1/reader/comment/"),
+      )).toHaveLength(0);
+    }
+  });
+
+  test("classifies every exact Note-create response binding guard", async () => {
+    const imageUrl =
+      `https://substack-post-media.s3.amazonaws.com/public/images/${IMAGE_UUID}_959x1022.png`;
+    const scenarios: readonly {
+      readonly stage: string;
+      readonly response: () => unknown;
+    }[] = [
+      {
+        stage: "note-create-response-object",
+        response: () => null,
+      },
+      {
+        stage: "note-create-response-fields",
+        response: () => ({ ...createdTextNote(), private_provider_field: "private" }),
+      },
+      {
+        stage: "note-create-actor",
+        response: () => ({ ...createdTextNote(), user_id: USER_ID + 1 }),
+      },
+      {
+        stage: "note-create-body",
+        response: () => ({ ...createdTextNote(), body: "private mismatched body" }),
+      },
+      {
+        stage: "note-create-kind",
+        response: () => ({ ...createdTextNote(), type: "reply" }),
+      },
+      {
+        stage: "note-create-deleted-state",
+        response: () => ({ ...createdTextNote(), deleted: true }),
+      },
+      {
+        stage: "note-create-parent-post",
+        response: () => ({ ...createdTextNote(), post_id: ARTICLE_ID }),
+      },
+      {
+        stage: "note-create-publication",
+        response: () => ({ ...createdTextNote(), publication_id: PUBLICATION_ID }),
+      },
+      {
+        stage: "note-create-reply-role",
+        response: () => ({ ...createdTextNote(), reply_minimum_role: "paid" }),
+      },
+      {
+        stage: "note-create-body-json",
+        response: () => ({ ...createdTextNote(), body_json: null }),
+      },
+      {
+        stage: "note-create-publication-status",
+        response: () => ({ ...createdTextNote(), status: "scheduled" }),
+      },
+      {
+        stage: "note-create-attachments-shape",
+        response: () => ({ ...createdTextNote(), attachments: {} }),
+      },
+      {
+        stage: "note-create-attachments-count",
+        response: () => ({
+          ...createdTextNote(),
+          attachments: [imageAttachment(imageUrl)],
+        }),
+      },
+      {
+        stage: "note-create-id",
+        response: () => ({ ...createdTextNote(), id: 0 }),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const { calls, result } = await executeTextOnlyPostWithCreateResponse(
+        () => jsonResponse(scenario.response()),
+      );
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+        error: expect.stringContaining(`stage: ${scenario.stage}`),
+      });
+      expect(String(result.error)).not.toContain("private");
+      expect(calls.filter(
+        (call) => call.url.pathname.startsWith("/api/v1/reader/comment/"),
+      )).toHaveLength(0);
+    }
+  });
+
+  test("classifies every exact Note-create attachment binding guard", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-substack-create-binding-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    writeFileSync(imagePath, pngFixture(959, 1022), { mode: 0o600 });
+    try {
+      const scenarios: readonly {
+        readonly stage: string;
+        readonly attachment: (imageUrl: string) => unknown;
+      }[] = [
+        {
+          stage: "note-create-attachment-object",
+          attachment: () => null,
+        },
+        {
+          stage: "note-create-attachment-fields",
+          attachment: (imageUrl) => ({
+            ...imageAttachment(imageUrl) as Record<string, unknown>,
+            private_provider_field: "private",
+          }),
+        },
+        {
+          stage: "note-create-attachment-id",
+          attachment: (imageUrl) => ({
+            ...imageAttachment(imageUrl) as Record<string, unknown>,
+            id: "33333333-3333-4333-8333-333333333333",
+          }),
+        },
+        {
+          stage: "note-create-attachment-url",
+          attachment: (imageUrl) => ({
+            ...imageAttachment(imageUrl) as Record<string, unknown>,
+            imageUrl: imageUrl.replace(IMAGE_UUID, "44444444-4444-4444-8444-444444444444"),
+          }),
+        },
+        {
+          stage: "note-create-attachment-kind",
+          attachment: (imageUrl) => ({
+            ...imageAttachment(imageUrl) as Record<string, unknown>,
+            type: "video",
+          }),
+        },
+      ];
+
+      for (const scenario of scenarios) {
+        const { calls, result } = await executeImagePostWithCreateResponse(
+          imagePath,
+          (_request, imageUrl) => jsonResponse({
+            ...createdNote(imageUrl) as Record<string, unknown>,
+            attachments: [scenario.attachment(imageUrl)],
+          }),
+        );
+        expect(result).toMatchObject({
+          status: "indeterminate",
+          dispatchStarted: true,
+          dispatch: { planned: 1, started: 1, verified: 0 },
+          error: expect.stringContaining(`stage: ${scenario.stage}`),
+        });
+        expect(String(result.error)).not.toContain("private");
+        expect(calls.filter(
+          (call) => call.url.pathname.startsWith("/api/v1/reader/comment/"),
+        )).toHaveLength(0);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("settles a Substack image-upload preparation failure before dispatch and never creates a Note", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-substack-upload-failure-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
@@ -608,16 +921,170 @@ describe("Substack authenticated internal API runtime", () => {
         },
       );
       expect(result).toMatchObject({
-        status: "indeterminate",
-        dispatchStarted: true,
-        dispatch: { planned: 1, started: 1, verified: 0 },
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
         error: expect.stringContaining("stage: image-upload"),
       });
       expect(String(result.error)).not.toContain("upload failed");
-      expect(beforeDispatch).toBe(1);
+      expect(beforeDispatch).toBe(0);
       expect(creates).toBe(0);
       expect(calls.filter((call) => call.url.pathname === "/api/v1/image")).toHaveLength(1);
       expect(calls.filter((call) => call.url.pathname === "/api/v1/comment/attachment")).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("settles a Substack attachment preparation failure before dispatch and never creates a Note", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-substack-attachment-failure-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    const imageBytes = pngFixture(959, 1022);
+    writeFileSync(imagePath, imageBytes, { mode: 0o600 });
+    const imageUrl =
+      `https://substack-post-media.s3.amazonaws.com/public/images/${IMAGE_UUID}_959x1022.png`;
+    const calls: CapturedRequest[] = [];
+    let beforeDispatch = 0;
+    let creates = 0;
+    try {
+      const result = await executeSubstackWebOperation(
+        recipe("posts.publish"),
+        {
+          body: NOTE_BODY,
+          media: { kind: "file", reference: "fixture" },
+        },
+        boundAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          beforeDispatch: () => {
+            beforeDispatch += 1;
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            const bootstrap = bootstrapResponse(request);
+            if (bootstrap !== null) return bootstrap;
+            if (request.method === "POST" && request.url.pathname === "/api/v1/image") {
+              return jsonResponse({
+                bytes: imageBytes.byteLength,
+                contentType: "image/png",
+                id: IMAGE_ID,
+                imageHeight: 1022,
+                imageWidth: 959,
+                url: imageUrl,
+              });
+            }
+            if (
+              request.method === "POST"
+              && request.url.pathname === "/api/v1/comment/attachment"
+            ) {
+              return new Response(JSON.stringify({ error: "private attachment failure" }), {
+                status: 502,
+                headers: { "content-type": "application/json" },
+              });
+            }
+            if (request.url.pathname === "/api/v1/comment/feed") creates += 1;
+            throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: expect.stringContaining("stage: image-upload"),
+      });
+      expect(String(result.error)).not.toContain("private");
+      expect(beforeDispatch).toBe(0);
+      expect(creates).toBe(0);
+      expect(calls.filter((call) => call.url.pathname === "/api/v1/image"))
+        .toHaveLength(1);
+      expect(calls.filter(
+        (call) => call.url.pathname === "/api/v1/comment/attachment",
+      )).toHaveLength(1);
+      expect(calls.filter(
+        (call) => call.url.pathname === "/api/v1/comment/feed",
+      )).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("places the durable dispatch fence immediately after image preparation and before Note create", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-substack-dispatch-fence-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    const imageBytes = pngFixture(959, 1022);
+    writeFileSync(imagePath, imageBytes, { mode: 0o600 });
+    const imageUrl =
+      `https://substack-post-media.s3.amazonaws.com/public/images/${IMAGE_UUID}_959x1022.png`;
+    const calls: CapturedRequest[] = [];
+    const events: string[] = [];
+    let creates = 0;
+    let acceptedTargets = 0;
+    try {
+      const result = await executeSubstackWebOperation(
+        recipe("posts.publish"),
+        {
+          body: NOTE_BODY,
+          media: { kind: "file", reference: "fixture" },
+        },
+        boundAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          beforeDispatch: (event) => {
+            expect(event).toEqual({
+              id: "posts.publish",
+              index: 1,
+              progress: { planned: 1, started: 0, verified: 0 },
+            });
+            events.push("before-dispatch");
+            return Promise.reject(new Error("private dispatch-admission failure"));
+          },
+          afterProviderAcceptedMutationTarget: () => {
+            acceptedTargets += 1;
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            const bootstrap = bootstrapResponse(request);
+            if (bootstrap !== null) return bootstrap;
+            events.push(`${request.method} ${request.url.pathname}`);
+            if (request.method === "POST" && request.url.pathname === "/api/v1/image") {
+              return jsonResponse({
+                bytes: imageBytes.byteLength,
+                contentType: "image/png",
+                id: IMAGE_ID,
+                imageHeight: 1022,
+                imageWidth: 959,
+                url: imageUrl,
+              });
+            }
+            if (
+              request.method === "POST"
+              && request.url.pathname === "/api/v1/comment/attachment"
+            ) return jsonResponse(imageAttachment(imageUrl));
+            if (request.url.pathname === "/api/v1/comment/feed") creates += 1;
+            throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: expect.stringContaining("stage: dispatch-admission"),
+      });
+      expect(String(result.error)).not.toContain("private");
+      expect(events).toEqual([
+        "POST /api/v1/image",
+        "POST /api/v1/comment/attachment",
+        "before-dispatch",
+      ]);
+      expect(creates).toBe(0);
+      expect(acceptedTargets).toBe(0);
+      expect(calls.filter(
+        (call) => call.url.pathname === "/api/v1/comment/feed",
+      )).toHaveLength(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

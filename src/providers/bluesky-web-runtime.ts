@@ -1819,6 +1819,17 @@ function assertPublishedPost(
   }
 }
 
+type BlueskyPublishFailureStage =
+  | "media-upload"
+  | "record-preparation"
+  | "dispatch-rebinding"
+  | "dispatch-admission"
+  | "create-record"
+  | "accepted-target-recording"
+  | "authoritative-record-readback"
+  | "public-post-readback"
+  | "verification-recording";
+
 async function executePublish(
   client: BlueskyClient,
   recipe: WebSessionRecipe,
@@ -1836,6 +1847,7 @@ async function executePublish(
 ): Promise<WebSessionExecution> {
   let started = 0;
   let verified = 0;
+  let failureStage: BlueskyPublishFailureStage = "record-preparation";
   const posts: BlueskyStrongRef[] = [];
   let planned = recipe.action === "threads.publish" && Array.isArray(input.items)
     ? input.items.length
@@ -1879,12 +1891,9 @@ async function executePublish(
           parent,
         });
       }
-      await rebindBeforeDispatch(client);
-      await options.beforeDispatch?.(
-        dispatchEvent(id, index, planned, started, verified),
-      );
-      started = index;
+      failureStage = "media-upload";
       const blob = media === null || offset > 0 ? null : await uploadImage(client, media);
+      failureStage = "record-preparation";
       const createdAt = new Date(options.now()).toISOString();
       const record = Object.freeze({
         $type: "app.bsky.feed.post",
@@ -1908,7 +1917,20 @@ async function executePublish(
               },
             }),
       });
+      failureStage = "dispatch-rebinding";
+      await rebindBeforeDispatch(client);
+      failureStage = "dispatch-admission";
+      await options.beforeDispatch?.(
+        dispatchEvent(id, index, planned, started, verified),
+      );
+      started = index;
+      // createRecord is the externally visible public-post mutation. Keep the
+      // optional uploadBlob preparation entirely before this durable dispatch
+      // boundary: an uploaded blob is not a feed record and cannot publish by
+      // itself.
+      failureStage = "create-record";
       const created = await createRecord(client, "app.bsky.feed.post", record);
+      failureStage = "accepted-target-recording";
       await options.afterProviderAcceptedMutationTarget?.({
         id,
         index,
@@ -1928,7 +1950,9 @@ async function executePublish(
           }),
         },
       });
+      failureStage = "authoritative-record-readback";
       await getAuthoritativeRecord(client, created, record);
+      failureStage = "public-post-readback";
       const readback = await waitForPublishReadback(
         client,
         created.uri,
@@ -1946,6 +1970,7 @@ async function executePublish(
       });
       posts.push(created);
       verified = index;
+      failureStage = "verification-recording";
       await options.afterDispatchVerified?.(
         dispatchEvent(id, index, planned, started, verified),
       );
@@ -1966,17 +1991,20 @@ async function executePublish(
       dispatch: { planned, started, verified },
     };
   } catch {
+    const status = started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed";
     return {
-      status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
+      status,
       output: posts.length === 0 ? null : Object.freeze({ posts }),
       finalUrl: posts.length === 0
         ? BLUESKY_APP_ORIGIN
         : `${BLUESKY_APP_ORIGIN}/profile/${client.session.did}/post/${blueskyPostUri(posts.at(-1)!.uri).rkey}`,
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
-      error: started > verified
-        ? "Bluesky may have accepted the current post dispatch; reconcile before retrying"
-        : "Bluesky post dispatch failed before a response-bound result was verified",
+      error: status === "indeterminate"
+        ? `Bluesky may have accepted the current post dispatch; failure stage: ${failureStage}; reconcile before retrying`
+        : status === "partial"
+          ? `Bluesky verified only part of the confirmed post workflow; failure stage: ${failureStage}; inspect the verified results before retrying`
+          : `Bluesky post preparation failed before public record submission; failure stage: ${failureStage}; retry with a fresh confirmed plan`,
     };
   }
 }

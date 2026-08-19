@@ -404,7 +404,7 @@ describe("Meta consumer-web policy", () => {
     });
     expect(META_WEB_OPERATIONS.threads["posts.publish"]).toMatchObject({
       state: "observed",
-      contractVersion: 3,
+      contractVersion: 4,
     });
     expect(META_WEB_OPERATIONS.instagram["likes.set"]).toMatchObject({ state: "capture-required" });
     expect(META_WEB_OPERATIONS.instagram["messaging.send"]?.reason).toContain("E2EE");
@@ -447,7 +447,7 @@ describe("Meta consumer-web policy", () => {
 
     expect(instagramManifest.version).toBe("1.2.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
-    expect(threadsManifest.version).toBe("1.3.0");
+    expect(threadsManifest.version).toBe("1.4.0");
     expect(threadsV1Manifest.version).toBe("1.0.0");
 
     for (const [site, operation, current, prior] of affected) {
@@ -467,17 +467,17 @@ describe("Meta consumer-web policy", () => {
     }
   });
 
-  test("versions hardened Threads publication while preserving the reviewed v2 contract", () => {
+  test("versions locator-bound Threads publication while preserving reviewed predecessors", () => {
     expect(threadsV12Manifest.version).toBe("1.2.0");
     expect(threadsV12Manifest.operations["posts.publish"].webSession.contractVersion).toBe(2);
-    expect(threadsManifest.operations["posts.publish"].webSession.contractVersion).toBe(3);
+    expect(threadsManifest.operations["posts.publish"].webSession.contractVersion).toBe(4);
     expect(threadsManifest.operations["posts.publish"].input.required).toContain("attachment");
 
     const binding = metaWebPlugin.bindings.find((candidate) =>
       candidate.surfaceId === "threads");
     const descriptor = binding?.operations.find((candidate) =>
       candidate.name === "posts.publish");
-    expect(descriptor?.contractVersions).toEqual([1, 2, 3]);
+    expect(descriptor?.contractVersions).toEqual([1, 2, 3, 4]);
   });
 
   test("binds each consumer surface to its exact bootstrapped viewer", () => {

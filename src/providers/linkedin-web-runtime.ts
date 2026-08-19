@@ -82,6 +82,7 @@ import {
 } from "./linkedin-web-article-browser";
 import {
   createLinkedInPostBrowserTransport,
+  LinkedInPostImagePreparationError,
   type LinkedInPostBrowserTransport,
 } from "./linkedin-web-post-browser";
 
@@ -1319,18 +1320,21 @@ async function executeLinkedInPostPublish(
   let verified = 0;
   let transport: LinkedInPostBrowserTransport | null = null;
   let projection: ReturnType<typeof normalizeLinkedInPostProjection> | null = null;
+  let failureStage = "opening the contained post transport";
   try {
     transport = await createLinkedInPostTransport(auth, recipe.timeoutMs, options);
+    failureStage = "current-member binding";
     const identity = identityFromMeResponse(await transport.currentIdentityResponse());
     const profileUrn = requireBoundLinkedInIdentity(identity, auth);
     const expectedSubject = webSessionAuthSubject(auth);
     if (expectedSubject === null || expectedSubject !== identity.subject) {
       throw new Error("LinkedIn current member no longer matches the bound auth subject");
     }
-    await options.beforeDispatch?.(
-      articleDispatchEvent("posts.publish", 1, 1, started, verified),
-    );
-    started = 1;
+    failureStage = image === null ? "public post dispatch admission" : "image preparation";
+    // Page staging and IMAGE_SHARING upload can leave an orphaned private
+    // provider asset, but neither can publish a feed post. Keep the durable
+    // public-post dispatch boundary immediately in front of createPost so a
+    // preparatory failure remains safely retryable.
     const mediaUrn = image === null
       ? null
       : await transport.uploadImage(expectedSubject, image.bytes);
@@ -1340,12 +1344,19 @@ async function executeLinkedInPostPublish(
       mediaUrn,
       visibility,
     });
+    failureStage = "public post dispatch admission";
+    await options.beforeDispatch?.(
+      articleDispatchEvent("posts.publish", 1, 1, started, verified),
+    );
+    started = 1;
+    failureStage = "post create response";
     const entityUrn = await transport.createPost(
       expectedSubject,
       profileUrn,
       variables,
       mediaUrn,
     );
+    failureStage = "accepted target retention";
     await options.afterProviderAcceptedMutationTarget?.({
       id: "posts.publish",
       index: 1,
@@ -1354,6 +1365,7 @@ async function executeLinkedInPostPublish(
         identifier: canonicalJson({ entityUrn, mediaUrn }),
       },
     });
+    failureStage = "independent post readback";
     projection = normalizeLinkedInPostProjection(
       await transport.readPost(
         expectedSubject,
@@ -1365,6 +1377,7 @@ async function executeLinkedInPostPublish(
       { body, mediaUrn, profileUrn },
     );
     verified = 1;
+    failureStage = "dispatch verification";
     await options.afterDispatchVerified?.(
       articleDispatchEvent("posts.publish", 1, 1, started, verified),
     );
@@ -1393,7 +1406,10 @@ async function executeLinkedInPostPublish(
       dispatchStarted: true,
       dispatch: { planned: 1, started, verified },
     };
-  } catch {
+  } catch (error) {
+    const publicFailureStage = error instanceof LinkedInPostImagePreparationError
+      ? error.stage
+      : failureStage;
     return {
       status: started > verified ? "indeterminate" : "failed",
       output: null,
@@ -1401,8 +1417,8 @@ async function executeLinkedInPostPublish(
       dispatchStarted: started > 0,
       dispatch: { planned: 1, started, verified },
       error: started > verified
-        ? "LinkedIn may have accepted the image upload or post but exact member, text, media, and permalink readback was not verified; reconcile before retrying"
-        : "LinkedIn post publishing failed before remote submission",
+        ? `LinkedIn may have accepted the post but exact member, text, media, and permalink readback was not verified; failure stage: ${publicFailureStage}; reconcile before retrying`
+        : `LinkedIn post publishing failed before public post submission; failure stage: ${publicFailureStage}; retry with a fresh confirmed plan`,
     };
   } finally {
     await transport?.close();

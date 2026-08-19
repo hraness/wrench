@@ -75,6 +75,25 @@ export type LinkedInPostBrowserDependencies = {
   readonly createBrowserSession: typeof createBrowserSession;
 };
 
+export type LinkedInPostImageFailureStage =
+  | "page image staging"
+  | "image registration or upload response";
+
+/**
+ * Secret-free stage evidence for the preparatory image path. The underlying
+ * contained-browser failure remains attached as a cause and is never copied
+ * into a public run receipt.
+ */
+export class LinkedInPostImagePreparationError extends Error {
+  readonly stage: LinkedInPostImageFailureStage;
+
+  constructor(stage: LinkedInPostImageFailureStage, cause: unknown) {
+    super(`LinkedIn post image preparation failed during ${stage}`, { cause });
+    this.name = "LinkedInPostImagePreparationError";
+    this.stage = stage;
+  }
+}
+
 type LinkedInPostPageBindings = {
   readonly pageInstance: string;
   readonly track: string;
@@ -419,6 +438,7 @@ export async function createLinkedInPostBrowserTransport(
         base64Length: encoded.length,
         chunkCount,
       });
+      let failureStage: LinkedInPostImageFailureStage = "page image staging";
       try {
         const initialized = await run(imageStagingInitializationSource(staging));
         exactKeys(initialized, ["ready"], "LinkedIn image staging initialization");
@@ -449,9 +469,12 @@ export async function createLinkedInPostBrowserTransport(
             }
           }
         }
+        failureStage = "image registration or upload response";
         const result = await run(uploadEvaluationSource(bindings, expectedSubject, staging));
         exactKeys(result, ["mediaUrn"], "LinkedIn image upload browser request");
         return linkedInPostMediaUrn(result.mediaUrn);
+      } catch (error) {
+        throw new LinkedInPostImagePreparationError(failureStage, error);
       } finally {
         try {
           await run(imageStagingCleanupSource(staging.key));

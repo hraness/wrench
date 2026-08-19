@@ -1781,8 +1781,8 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       });
       expect(events).toEqual([
         "identity",
-        "before:0",
         "upload",
+        "before:0",
         "create",
         `accepted:${canonicalJson({ entityUrn, mediaUrn })}`,
         "readback",
@@ -1794,7 +1794,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     }
   });
 
-  test("keeps one admitted upload failure indeterminate and never creates or retries", async () => {
+  test("keeps a preparatory upload failure before public-post admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-linkedin-upload-failure-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
@@ -1836,14 +1836,74 @@ describe("LinkedIn authenticated internal-API runtime", () => {
         },
       );
       expect(result).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: expect.stringMatching(
+          /failure stage: image preparation; retry with a fresh confirmed plan/u,
+        ),
+      });
+      expect(admissions).toBe(0);
+      expect(uploads).toBe(1);
+      expect(creates).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a post-create response failure indeterminate after exact admission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-linkedin-create-failure-"));
+    chmodSync(root, 0o700);
+    const imagePath = join(root, "fixture.png");
+    writeFileSync(imagePath, pngFixture(959, 1022), { mode: 0o600 });
+    let admissions = 0;
+    let uploads = 0;
+    let creates = 0;
+    try {
+      const transport: LinkedInPostBrowserTransport = {
+        currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+        uploadImage: () => {
+          uploads += 1;
+          return Promise.resolve("urn:li:digitalmediaAsset:C4D22AQPreparedImage");
+        },
+        createPost: () => {
+          creates += 1;
+          return Promise.reject(new Error("private create response detail"));
+        },
+        readPost: () => Promise.reject(new Error("must not read after create failure")),
+        close: () => Promise.resolve(),
+      };
+      const result = await executeLinkedInWebOperation(
+        postRecipe(),
+        {
+          body: "indeterminate create",
+          media: [{ kind: "file", reference: "fixture" }],
+          visibility: "public",
+        },
+        linkedinAuth,
+        {
+          fileResolver: () => Promise.resolve([imagePath]),
+          dependencies: {
+            createPostBrowserTransport: () => Promise.resolve(transport),
+          },
+          beforeDispatch: () => {
+            admissions += 1;
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(JSON.stringify(result)).not.toContain("private create response detail");
+      expect(result).toMatchObject({
         status: "indeterminate",
         dispatchStarted: true,
         dispatch: { planned: 1, started: 1, verified: 0 },
-        error: expect.stringContaining("reconcile before retrying"),
+        error: expect.stringMatching(
+          /failure stage: post create response; reconcile before retrying/u,
+        ),
       });
       expect(admissions).toBe(1);
       expect(uploads).toBe(1);
-      expect(creates).toBe(0);
+      expect(creates).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

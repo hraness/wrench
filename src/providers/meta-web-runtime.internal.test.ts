@@ -159,6 +159,20 @@ function threadsImagePost(
   });
 }
 
+function threadsCreateResponse(
+  postId: string,
+  postCode: string,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    media: Object.freeze({
+      code: postCode,
+      permalink: `https://www.threads.com/@viewer/post/${postCode}`,
+      pk: postId,
+    }),
+    status: "ok",
+  });
+}
+
 const facebookHtml = [
   script(hydratedFacebookViewer()),
   script(facebookStream(facebookHomeStreamKey, {
@@ -561,7 +575,7 @@ function recipe(
   )
     ? 2
     : site === "threads" && action === "posts.publish"
-      ? 3
+      ? 4
     : 1,
 ): WebSessionRecipe {
   return {
@@ -571,6 +585,73 @@ function recipe(
     timeoutMs: 1_000,
     maxOutputBytes: 8 * 1024 * 1024,
   };
+}
+
+async function executeThreadsCreateFixture(
+  createResponse: () => Response,
+): Promise<{
+  readonly acceptedTargets: number;
+  readonly calls: readonly Call[];
+  readonly result: Awaited<ReturnType<typeof executeMetaWebOperation>>;
+}> {
+  const root = mkdtempSync(join(tmpdir(), "wrench-threads-create-response-"));
+  chmodSync(root, 0o700);
+  stateRoots.push(root);
+  const imagePath = join(root, "fixture.png");
+  writeFileSync(imagePath, pngFixture(959, 1022), { mode: 0o600 });
+  const uploadId = "1786923725481";
+  const bootstrap = threadsHtml + script({
+    require: [
+      ["SprinkleConfig", [], {
+        param_name: "jazoest",
+        version: 2,
+        should_randomize: false,
+      }, 1],
+      ["WebBloksVersioningID", [], {
+        versioningID: "a".repeat(64),
+      }, 2],
+    ],
+  });
+  const calls: Call[] = [];
+  let acceptedTargets = 0;
+  const result = await executeMetaWebOperation(
+    recipe("threads", "posts.publish"),
+    {
+      attachment: { kind: "file", reference: "fixture" },
+      audience: "default",
+      body: "how your email finds me",
+    },
+    auth("threads"),
+    {
+      fileResolver: () => Promise.resolve([imagePath]),
+      afterProviderAcceptedMutationTarget: () => {
+        acceptedTargets += 1;
+        return Promise.resolve();
+      },
+      dependencies: {
+        ...dependencies("threads", calls, (call) => {
+          if (call.method === "GET" && call.url.pathname === "/") {
+            return new Response(bootstrap, {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            });
+          }
+          if (call.url.pathname === `/rupload_igphoto/fb_uploader_${uploadId}`) {
+            return new Response(JSON.stringify({ status: "ok", upload_id: uploadId }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
+            return createResponse();
+          }
+          throw new Error(`unexpected Threads create fixture request ${call.method} ${call.url.pathname}`);
+        }, undefined, threadsMutationCookies()),
+        now: () => Number(uploadId),
+      },
+    },
+  );
+  return { acceptedTargets, calls, result };
 }
 
 async function rejectionMessage(value: Promise<unknown>): Promise<string> {
@@ -744,13 +825,7 @@ describe("Meta authenticated internal-data runtime", () => {
             web_session_id: "::wg8yw9",
             jazoest: "21250",
           });
-          return new Response(JSON.stringify({
-            status: "ok",
-            media: {
-              ...published,
-              permalink: `https://www.threads.com/@viewer/post/${postCode}`,
-            },
-          }), {
+          return new Response(JSON.stringify(threadsCreateResponse(postId, postCode)), {
             status: 200,
             headers: { "content-type": "application/json" },
           });
@@ -910,93 +985,80 @@ describe("Meta authenticated internal-data runtime", () => {
     }
   });
 
-  test("rejects a Threads create response with missing or mismatched remote media", async () => {
-    const root = mkdtempSync(join(tmpdir(), "wrench-threads-create-media-"));
-    chmodSync(root, 0o700);
-    stateRoots.push(root);
-    const imagePath = join(root, "fixture.png");
-    writeFileSync(imagePath, pngFixture(959, 1022), { mode: 0o600 });
-    const uploadId = "1786923725481";
+  test("categorizes Threads create transport, status, content-type, and JSON failures without leaking details", async () => {
     const postId = "987654321_12345";
     const postCode = "CodeABC";
-    const text = "how your email finds me";
-    const bootstrap = threadsHtml + script({
-      require: [
-        ["SprinkleConfig", [], {
-          param_name: "jazoest",
-          version: 2,
-          should_randomize: false,
-        }, 1],
-        ["WebBloksVersioningID", [], {
-          versioningID: "a".repeat(64),
-        }, 2],
-      ],
-    });
-    for (const published of [
-      threadsImagePost(postId, postCode, text, { includeImage: false }),
-      { ...threadsImagePost(postId, postCode, text), media_type: 2 },
-    ]) {
-      const calls: Call[] = [];
-      let permalinkReads = 0;
-      let acceptedTargets = 0;
-      const result = await executeMetaWebOperation(
-        recipe("threads", "posts.publish"),
-        {
-          attachment: { kind: "file", reference: "fixture" },
-          audience: "default",
-          body: text,
-        },
-        auth("threads"),
-        {
-          fileResolver: () => Promise.resolve([imagePath]),
-          afterProviderAcceptedMutationTarget: () => {
-            acceptedTargets += 1;
-            return Promise.resolve();
-          },
-          dependencies: {
-            ...dependencies("threads", calls, (call) => {
-              if (call.method === "GET" && call.url.pathname === "/") {
-                return new Response(bootstrap, {
-                  status: 200,
-                  headers: { "content-type": "text/html" },
-                });
-              }
-              if (call.url.pathname === `/rupload_igphoto/fb_uploader_${uploadId}`) {
-                return new Response(JSON.stringify({ status: "ok", upload_id: uploadId }), {
-                  status: 200,
-                  headers: { "content-type": "application/json" },
-                });
-              }
-              if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
-                return new Response(JSON.stringify({
-                  status: "ok",
-                  media: {
-                    ...published,
-                    permalink: `https://www.threads.com/@viewer/post/${postCode}`,
-                  },
-                }), {
-                  status: 200,
-                  headers: { "content-type": "application/json" },
-                });
-              }
-              if (call.url.pathname === `/@viewer/post/${postCode}`) {
-                permalinkReads += 1;
-              }
-              throw new Error(`unexpected Threads test request ${call.method} ${call.url.pathname}`);
-            }, undefined, threadsMutationCookies()),
-            now: () => Number(uploadId),
-          },
-        },
-      );
+    const cases = [
+      ["transport", () => {
+        throw new Error("private-transport-sentinel");
+      }],
+      ["status", () => new Response(JSON.stringify(threadsCreateResponse(postId, postCode)), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      })],
+      ["content-type", () => new Response(JSON.stringify(threadsCreateResponse(postId, postCode)), {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      })],
+      ["json", () => new Response("{private-json-sentinel", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })],
+    ] as const;
+    for (const [category, createResponse] of cases) {
+      const { acceptedTargets, calls, result } = await executeThreadsCreateFixture(createResponse);
       expect(result).toMatchObject({
         status: "indeterminate",
         dispatchStarted: true,
         dispatch: { planned: 1, started: 1, verified: 0 },
       });
+      expect(result.error).toContain(`failure stage: post create response (${category})`);
+      expect(result.error).not.toContain("private");
       expect(calls.filter((call) =>
         call.url.pathname === "/api/v1/media/configure_text_post_app_feed/"
       )).toHaveLength(1);
-      expect(permalinkReads).toBe(0);
+      expect(acceptedTargets).toBe(0);
+    }
+  });
+
+  test("categorizes every strict Threads create locator binding guard", async () => {
+    const postId = "987654321_12345";
+    const postCode = "CodeABC";
+    const locator = threadsCreateResponse(postId, postCode) as {
+      readonly media: Readonly<Record<string, unknown>>;
+      readonly status: string;
+    };
+    const cases = [
+      ["success-shape", {
+        ...locator,
+        media: { ...locator.media, privateDiagnostic: "private-shape-sentinel" },
+      }],
+      ["identifiers", {
+        ...locator,
+        media: { ...locator.media, code: "invalid code" },
+      }],
+      ["permalink", {
+        ...locator,
+        media: { ...locator.media, permalink: `https://example.com/@viewer/post/${postCode}` },
+      }],
+      ["actor", {
+        ...locator,
+        media: { ...locator.media, pk: "987654321_99999" },
+      }],
+    ] as const;
+    for (const [category, response] of cases) {
+      const { acceptedTargets, result } = await executeThreadsCreateFixture(() =>
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }));
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+      });
+      expect(result.error).toContain(`failure stage: post create response (${category})`);
+      expect(result.error).not.toContain("private");
       expect(acceptedTargets).toBe(0);
     }
   });
@@ -1011,7 +1073,6 @@ describe("Meta authenticated internal-data runtime", () => {
     const postId = "987654321_12345";
     const postCode = "CodeABC";
     const text = "how your email finds me";
-    const published = threadsImagePost(postId, postCode, text);
     const withoutImage = threadsImagePost(postId, postCode, text, { includeImage: false });
     const acceptedTargetIdentifier = canonicalJson({
       code: postCode,
@@ -1065,13 +1126,7 @@ describe("Meta authenticated internal-data runtime", () => {
               });
             }
             if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
-              return new Response(JSON.stringify({
-                status: "ok",
-                media: {
-                  ...published,
-                  permalink: `https://www.threads.com/@viewer/post/${postCode}`,
-                },
-              }), {
+              return new Response(JSON.stringify(threadsCreateResponse(postId, postCode)), {
                 status: 200,
                 headers: { "content-type": "application/json" },
               });
