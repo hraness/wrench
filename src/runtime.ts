@@ -3252,14 +3252,6 @@ function executionOutputLimit(
   return operation.browser.maxOutputBytes;
 }
 
-function redactedUnexpectedExecutorFailure(error: unknown): string {
-  const fallback = "provider executor terminated without returning a bounded result";
-  const raw = error instanceof Error ? error.message : String(error);
-  const redacted = redactSensitiveText(raw).replace(/\s+/gu, " ").trim().slice(0, 500);
-  if (redacted.length === 0) return fallback;
-  return `${fallback}: ${redacted}`;
-}
-
 function boundedExecutionResult(
   value: unknown,
   kind: "browser" | "provider" | "web-session" | "reviewed-template",
@@ -4087,7 +4079,7 @@ async function runPreparedCore(
         ? "provider browser cleanup could not be verified; private artifacts were preserved and durable cleanup admission requires wrench doctor before retry"
         : error instanceof WebSessionCleanupUnverifiedError
           ? "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves exact browser-closed evidence, or reboot recovery proves quiescence"
-          : redactedUnexpectedExecutorFailure(error),
+          : "provider executor terminated without returning a bounded result",
       ...(preservedArtifactsError === null
         ? {}
         : {
