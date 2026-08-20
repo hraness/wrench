@@ -12,11 +12,11 @@ describe("X web provider plugin", () => {
     const publish = binding.operations.find((operation) =>
       operation.name === "posts.publish");
     expect(publish).toMatchObject({
-      contractVersion: 3,
+      contractVersion: 4,
       risk: "R3",
       state: "observed",
       dispatch: "single",
-      historicalContractVersions: [2],
+      historicalContractVersions: [2, 3],
       reconciliation: {
         kind: "provider-accepted-target-presence",
       },

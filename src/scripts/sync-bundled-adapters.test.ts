@@ -192,6 +192,7 @@ describe("single-process bundled adapter generation sync", () => {
       "x-web@1.6.0",
       "x-web@1.7.0",
       "x-web@1.8.0",
+      "x-web@1.9.0",
     ]);
     expect(Object.fromEntries(discovered.flatMap((adapter) =>
       adapter.upgradeFrom.map((baseline) => [

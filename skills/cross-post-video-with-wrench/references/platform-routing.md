@@ -6,7 +6,8 @@ are authoritative and may change.
 
 | Surface | Candidate adapter | Video operation | Meaning |
 | --- | --- | --- | --- |
-| X | `x-web` or `x` | only if the installed schema accepts `video/mp4` | Consumer X post. A PNG-only `posts.publish` is not video support. |
+| X | `x-web` | `posts.publish` when the installed schema accepts `video/mp4` | Consumer X post. Observed `x-web` `posts.publish` now accepts one plan-bound PNG or one MP4. |
+| X | `x` | `posts.publish` when the installed schema accepts `video/mp4` | Official OAuth post. Already schemas MP4. |
 | LinkedIn | `linkedin-web` or `linkedin` | inspect `media.publish` or a video-capable `posts.publish` | Member or explicitly bound organization post |
 | Bluesky | `bluesky-web` | inspect for `video/mp4` | AT Protocol feed post |
 | Substack | `substack-web` | inspect; Notes only | Public Substack Note, not an article or newsletter |
@@ -14,10 +15,13 @@ are authoritative and may change.
 | Instagram | `meta-web` on the Instagram surface | inspect media/posts publish | Instagram video or Reel only when the schema says so |
 | YouTube Shorts | `youtube-web` | `media.publish` when observed | Studio video upload. Community `posts.publish` is not a Short. |
 
-At the 2026-08-20 reference revision, several video operations exist as
-`capture-required` reservations, including TikTok `media.publish` and
-YouTube `media.publish`. Treat those as unavailable until the installed
-capability independently says `observed`.
+At the 2026-08-20 reference revision, `x-web` `posts.publish` is observed
+for one plan-bound `image/png` or one plan-bound `video/mp4`. Official `x`
+already schemas MP4. LinkedIn-web remains image-only on `posts.publish`.
+TikTok `media.publish`, Instagram/meta-web video, and YouTube
+`media.publish` stay `capture-required` until their request, response, and
+readback contracts are implemented. Treat those as unavailable until the
+installed capability independently says `observed`.
 
 ## Selection rules
 

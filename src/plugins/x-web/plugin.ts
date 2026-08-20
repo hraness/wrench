@@ -147,10 +147,10 @@ function xArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "e3fae3aad8250c57428d34015eb3448f07d0a793fd9302d88ccb4f68c504423a",
+  "5a6d64add05fd2c5b70408ad74ff1f263d57bd1634e571d8b6800f7dac4d34a8",
   {
     "likes.set": [1],
-    "posts.publish": [2],
+    "posts.publish": [2, 3],
   },
   {
     "messaging.list": {
@@ -303,7 +303,7 @@ export const xWebPlugin = defineProviderPlugin({
             const readback = await runtime.readXWebPublishedMutationTarget({
               site: "x",
               action: operation,
-              contractVersion: 3,
+              contractVersion: 4,
               timeoutMs: 60_000,
               maxOutputBytes: 2 * 1024 * 1024,
             }, input, auth, context.target.identifier);

@@ -674,7 +674,7 @@ function validateCreateTweetVariables(operationId: XWebMutationOperationId, vari
   }
   if (operationId === "posts.publish") {
     if (media.media_entities.length > 1) {
-      throw new Error("X posts.publish supports at most one reviewed image");
+      throw new Error("X posts.publish supports at most one reviewed image or video");
     }
     if (media.media_entities.length === 1) {
       const entity = record(media.media_entities[0], "X posts.publish media entity");
