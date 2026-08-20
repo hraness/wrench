@@ -74,19 +74,43 @@ describe("Gmail provider conditional input", () => {
   test("enforces the three exact Google contact projection shapes", () => {
     expect(gmailProviderConditionalInputIssues("contacts.list", {
       collection: "contacts",
+      include_dates: false,
+    }, 4)).toEqual([
+      "input.include_dates is available only in contacts.list contract v5",
+    ]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "contacts",
+      include_dates: true,
+      limit: 20,
+      stats_scan_limit: 100,
+    }, 5)).toEqual([]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "other-contacts",
+      include_dates: false,
       limit: 20,
       stats_scan_limit: 100,
     })).toEqual([]);
     expect(gmailProviderConditionalInputIssues("contacts.list", {
       collection: "other-contacts",
+      include_dates: true,
       limit: 20,
       stats_scan_limit: 100,
-    })).toEqual([]);
+    })).toEqual([
+      "input.include_dates is supported only for saved contacts",
+    ]);
     expect(gmailProviderConditionalInputIssues("contacts.list", {
       collection: "interactions",
       before: "2026-08-14T12:00:00.000Z",
       limit: 100,
     })).toEqual([]);
+    expect(gmailProviderConditionalInputIssues("contacts.list", {
+      collection: "interactions",
+      include_dates: false,
+      before: "2026-08-14T12:00:00.000Z",
+      limit: 100,
+    })).toEqual([
+      "input.include_dates is not accepted for the interactions collection",
+    ]);
     expect(gmailProviderConditionalInputIssues("contacts.list", {
       collection: "interactions",
       include_stats: false,

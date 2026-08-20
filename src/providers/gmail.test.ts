@@ -73,12 +73,19 @@ function harness(
   action: "contacts.list" | "messaging.list" | "messaging.read",
   input: OperationInput,
   fetch: ProviderFetch,
+  contractVersion = action === "contacts.list" ? 5 : 1,
 ) {
   let output: unknown;
   let finalUrl: string | null = null;
   let dispatches = 0;
   const context = {
-    recipe: { action, timeoutMs: 30_000, maxOutputBytes: 16 * 1024 * 1024 },
+    recipe: {
+      provider: "gmail",
+      action,
+      contractVersion,
+      timeoutMs: 30_000,
+      maxOutputBytes: 16 * 1024 * 1024,
+    },
     input,
     auth: {
       kind: "oauth-token-file",
@@ -604,6 +611,8 @@ describe("official Gmail provider reads", () => {
               emailAddresses: [{ value: "Friend+Tag|Ops*{x}@Example.com", type: "work" }, {
                 value: "friend+tag|ops*{x}@example.com", type: "other",
               }],
+              names: [{ displayName: "Friend", givenName: "Ada", middleName: "M" }],
+              birthdays: [{ date: { month: 2, day: 3 } }],
               photos: [{
                 url: "https://lh3.googleusercontent.com/photo?signed=secret",
                 default: false,
@@ -660,6 +669,7 @@ describe("official Gmail provider reads", () => {
       throw new Error(`unexpected request ${url.href}`);
     };
     const run = harness("contacts.list", {
+      include_dates: true,
       limit: 1,
       stats_scan_limit: 2,
     }, fetch);
@@ -675,6 +685,8 @@ describe("official Gmail provider reads", () => {
           type: "work",
         }],
         photoUrl: null,
+        name: { displayName: "Friend", givenName: "Ada", middleName: "M" },
+        birthdays: [{ date: { year: 0, month: 2, day: 3 } }],
         sentCount: 2,
         sentCountComplete: false,
         sentCountLowerBound: true,
@@ -787,6 +799,83 @@ describe("official Gmail provider reads", () => {
     expect(requests.some((url) => url.pathname.endsWith("/messages"))).toBeFalse();
   });
 
+  test("preserves the exact v4 core output and rejects every date opt-in", async () => {
+    const requests: URL[] = [];
+    const fetch: ProviderFetch = (input) => {
+      const url = urlOf(input);
+      requests.push(url);
+      if (url.pathname.endsWith("/profile")) return Promise.resolve(json(profile()));
+      if (url.pathname.endsWith("/connections")) {
+        return Promise.resolve(json({
+          connections: [{ resourceName: "people/legacy" }],
+          totalItems: 1,
+        }));
+      }
+      if (url.pathname.endsWith("/people:batchGet")) {
+        return Promise.resolve(json({
+          responses: [{
+            requestedResourceName: "people/legacy",
+            status: {},
+            person: {
+              resourceName: "people/legacy",
+              names: [{ displayName: "Legacy Contact" }],
+              emailAddresses: [{ value: "legacy@example.com" }],
+            },
+          }],
+        }));
+      }
+      throw new Error(`unexpected request ${url.href}`);
+    };
+    const run = harness("contacts.list", {
+      collection: "contacts",
+      include_stats: false,
+      limit: 1,
+    }, fetch, 4);
+    await executeGmailProvider(run.context);
+    expect(run.output()).toEqual({
+      provider: "gmail",
+      operation: "contacts.list",
+      accountSubject: "person@example.com",
+      contactCollection: "contacts",
+      statsIncluded: false,
+      contacts: [{
+        resourceName: "people/legacy",
+        etag: null,
+        metadata: null,
+        displayName: "Legacy Contact",
+        emailAddresses: [{
+          value: "legacy@example.com",
+          canonicalValue: "legacy@example.com",
+          type: null,
+          metadata: null,
+        }],
+        phoneNumbers: [],
+        organizations: [],
+        photoUrl: null,
+      }],
+      nextCursor: null,
+      totalItems: 1,
+      statsScanLimit: null,
+      statsScope: "not-requested",
+    });
+    expect(requests[2]?.searchParams.get("personFields")).not.toContain("birthdays");
+
+    let rejectedRequests = 0;
+    const rejected = harness("contacts.list", {
+      collection: "contacts",
+      include_dates: false,
+      include_stats: false,
+    }, () => {
+      rejectedRequests += 1;
+      return Promise.resolve(json(profile()));
+    }, 4);
+    await expectRejected(
+      executeGmailProvider(rejected.context),
+      "include_dates is available only in contract v5",
+    );
+    expect(rejectedRequests).toBe(0);
+  });
+
   test("does not silently ignore a stats limit when statistics are disabled", async () => {
     const run = harness("contacts.list", {
       include_stats: false,
@@ -798,6 +887,22 @@ describe("official Gmail provider reads", () => {
       executeGmailProvider(run.context),
       "stats_scan_limit is accepted only when include_stats is true",
     );
+  });
+
+  test("rejects saved-contact dates for Other contacts before account preflight", async () => {
+    let requests = 0;
+    const run = harness("contacts.list", {
+      collection: "other-contacts",
+      include_dates: true,
+    }, () => {
+      requests += 1;
+      return Promise.resolve(json(profile()));
+    });
+    await expectRejected(
+      executeGmailProvider(run.context),
+      "include_dates is supported only for saved contacts",
+    );
+    expect(requests).toBe(0);
   });
 
   test("rejects an unreviewed contact collection before account preflight", async () => {

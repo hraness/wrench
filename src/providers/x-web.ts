@@ -242,8 +242,8 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
   currentBundleResolutionRequired: true,
   mainBundleUrl: "https://abs.twimg.com/responsive-web/client-web/main.9929b02a.js",
   descriptors: Object.freeze([
-    { operationName: "HomeTimeline", operationType: "query", queryId: "lqfNCpeO0wydVAAXAbAU5w", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.e992705a.js" },
-    { operationName: "HomeLatestTimeline", operationType: "query", queryId: "lyhT5o5ECF6_kYqTqpUUew", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.e992705a.js" },
+    { operationName: "HomeTimeline", operationType: "query", queryId: "wp06oo3fRGU4P1sK8rECqQ", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.c12c8a9a.js", observedOn: "2026-08-20" },
+    { operationName: "HomeLatestTimeline", operationType: "query", queryId: "BLQWpfVqtgBqAqwRRJcJjA", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.c12c8a9a.js", observedOn: "2026-08-20" },
     { operationName: "ListLatestTweetsTimeline", operationType: "query", queryId: "LV64djPRhnsVhGCK76s13w", sourceChunk: "shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js" },
     { operationName: "ListRankedTweetsTimeline", operationType: "query", queryId: "dPN7GrkxeMF4SUYCo9D9YA", sourceChunk: "shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js" },
     { operationName: "Bookmarks", operationType: "query", queryId: "LoLaMO4GuHLEPJOhH9kjAw", sourceChunk: "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js" },

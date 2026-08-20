@@ -11,6 +11,13 @@ import {
 } from "./provider-catalog-views";
 import type { SemanticOperationName } from "./platform-catalog";
 import {
+  gmailProviderContractDefinitionsV4,
+  providerContractDefinitions,
+} from "./provider-contract-definitions";
+import {
+  contractSemanticIdentity,
+} from "./provider-contract-semantic-identity";
+import {
   getProviderContract as getProviderContractWithRegistry,
   isCompatibleProviderContractHash as isCompatibleProviderContractHashWithRegistry,
   planProviderDispatches as planProviderDispatchesWithRegistry,
@@ -111,6 +118,55 @@ describe("official provider contract registry", () => {
     expect(providerContractHash(structuredClone(providerContracts.x["feeds.read"])))
       .toBe(providerContractHash(providerContracts.x["feeds.read"]));
     expect(() => getProviderContract(recipe("x", "feeds.read", 2))).toThrow("x/feeds.read@2 is not installed");
+  });
+
+  test("keeps Gmail contacts v4 exact while v5 alone owns date metadata", () => {
+    const v4 = getProviderContract(recipe("gmail", "contacts.list", 4));
+    const v5 = getProviderContract(recipe("gmail", "contacts.list", 5));
+    expect(v4).toEqual(gmailProviderContractDefinitionsV4["contacts.list"]);
+    expect(v4.input.properties).not.toHaveProperty("include_dates");
+    expect(v4.coverage).not.toContain("optional-saved-contact-birthdays");
+    expect(v4.implementation).toBe(
+      "subject-bound People contacts plus Gmail interactions; saved contacts expand by batchGet; Other contacts retain their limited projection; interactions use one fixed half-open epoch window, list send-as aliases on page one, disable spam/trash, read metadata only, skip drafts/chats and lower-bound overlap, derive direction from SENT, dedupe addresses per message, expose rolling counts and undated lower bounds, emit opaque ID evidence, and never read bodies",
+    );
+    expect(v5).toBe(providerContracts.gmail["contacts.list"]);
+    expect(v5.input.properties.include_dates).toMatchObject({ type: "boolean" });
+    expect(providerContractHash(v4)).toBe(
+      "1580251063470ed6a0b326fd7dec748fa70ae8d88ed6c1ca7dd275026fb0d078",
+    );
+    expect(providerContractHash(v5)).toBe(
+      "00fd339dc60286f2ebe2d88f34b5f29625cf986e20e862021e6979e3e03d5ae8",
+    );
+    expect(isCompatibleProviderContractHash(
+      v4,
+      "1580251063470ed6a0b326fd7dec748fa70ae8d88ed6c1ca7dd275026fb0d078",
+    )).toBeTrue();
+    expect(providerConditionalInputIssues(
+      recipe("gmail", "contacts.list", 4),
+      { collection: "contacts", include_dates: false },
+    )).toEqual([
+      "input.include_dates is available only in contacts.list contract v5",
+    ]);
+    expect(providerConditionalInputIssues(
+      recipe("gmail", "contacts.list", 5),
+      { collection: "contacts", include_dates: true },
+    )).toEqual([]);
+  });
+
+  test("pins both exact Gmail contacts descriptors into semantic identity", () => {
+    const v4 = gmailProviderContractDefinitionsV4["contacts.list"];
+    const current = Object.values(providerContractDefinitions.gmail);
+    expect(contractSemanticIdentity([v4])).toBe(
+      "5a259ca50a82f0103b0350dab7f05f683d54608c6c0392cbca2a177b978b1e66",
+    );
+    expect(contractSemanticIdentity([
+      providerContractDefinitions.gmail["contacts.list"],
+    ])).toBe(
+      "5d3740a2d766fa15ac0f51180a97401b083af0c83c6b68e2118e4cfd992b6f92",
+    );
+    expect(contractSemanticIdentity([v4, ...current])).toBe(
+      "e7cffcefe3dd00f292a0e71cf2fa3f3286b763656b746e44dbb841eed3e61d6d",
+    );
   });
 
   test("accepts exact bounded predecessor hashes only as read aliases", () => {
