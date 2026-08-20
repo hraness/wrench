@@ -685,6 +685,39 @@ describe("X authenticated internal-API runtime", () => {
         cursorEntry("would-skip-second"),
       ));
     });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "user", user_id: VIEWER_ID, limit: 1 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toMatchObject({
+      posts: [{ id: FOCAL_POST_ID }],
+      cursor: null,
+    });
+    expect((result.output as { posts: readonly unknown[] }).posts).toHaveLength(1);
+    expect(JSON.stringify(result.output)).not.toContain("would-skip-second");
+  });
+
+  test("rejects an oversized feed page that exposes no continuation cursor", async () => {
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("UserTweets", "6r5OLCC_wFH4CpRyXKuAmQ", "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      return jsonResponse(userFeedResponse(
+        VIEWER_ID,
+        tweetEntry(FOCAL_POST_ID, "first"),
+        tweetEntry(CREATED_POST_ID, "second"),
+      ));
+    });
     const message = await rejectionMessage(executeXWebOperation(
       xRecipe("feeds.read"),
       { feed: "user", user_id: VIEWER_ID, limit: 1 },
@@ -847,14 +880,19 @@ describe("X authenticated internal-API runtime", () => {
         cursorEntry("would-skip-second-reply"),
       ));
     });
-    const message = await rejectionMessage(executeXWebOperation(
+    const result = await executeXWebOperation(
       xRecipe("comments.read"),
       { post_id: FOCAL_POST_ID, limit: 1 },
       xAuth,
       { dependencies: runtimeDependencies },
-    ));
-    expect(message).toContain("more entries than the requested limit");
-    expect(message).toContain("no continuation cursor was exposed");
+    );
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toMatchObject({
+      comments: [{ id: firstReplyId }],
+      cursor: null,
+    });
+    expect((result.output as { comments: readonly unknown[] }).comments).toHaveLength(1);
+    expect(JSON.stringify(result.output)).not.toContain("would-skip-second-reply");
   });
 
   test("requires a bound X viewer and rejects an account switch before a post read", async () => {

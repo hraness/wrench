@@ -906,11 +906,18 @@ function assertFeedTargetBound(
   }
 }
 
-function requireCompleteProviderPage<T>(items: readonly T[], limit: number, label: string): readonly T[] {
-  if (items.length > limit) {
+function requireCompleteProviderPage<T>(
+  items: readonly T[],
+  limit: number,
+  label: string,
+  continuationAvailable: boolean,
+): { readonly items: readonly T[]; readonly truncated: boolean } {
+  if (items.length <= limit) return { items, truncated: false };
+  if (!continuationAvailable) {
     throw new Error(`${label} returned more entries than the requested limit; no continuation cursor was exposed`);
   }
-  return items;
+  // Keep the provider cursor unpublished. It points past the unseen suffix.
+  return { items: items.slice(0, limit), truncated: true };
 }
 
 function normalizedPost(item: ReturnType<typeof normalizeXWebGraphQlTimelineResponse>["items"][number]): Readonly<Record<string, unknown>> {
@@ -944,9 +951,15 @@ async function readFeed(bootstrap: XBootstrap, input: OperationInput): Promise<u
   const normalized = normalizeXWebGraphQlTimelineResponse(request.operationId, response);
   const limit = integerInput(input, "limit", DEFAULT_LIMIT, 1, 100);
   const posts = normalized.items.map(normalizedPost).filter((row) => row.kind === "post");
+  const page = requireCompleteProviderPage(
+    posts,
+    limit,
+    "X feed page",
+    normalized.cursors.bottom !== null,
+  );
   return {
-    posts: requireCompleteProviderPage(posts, limit, "X feed page"),
-    cursor: normalized.cursors.bottom?.value ?? null,
+    posts: page.items,
+    cursor: page.truncated ? null : normalized.cursors.bottom?.value ?? null,
     terminatedDirections: normalized.terminatedDirections,
   };
 }
@@ -990,9 +1003,15 @@ async function readConversation(bootstrap: XBootstrap, input: OperationInput, co
       changed = true;
     }
   }
+  const page = requireCompleteProviderPage(
+    descendants,
+    limit,
+    "X conversation page",
+    normalized.cursors.bottom !== null,
+  );
   return {
-    comments: requireCompleteProviderPage(descendants, limit, "X conversation page"),
-    cursor: normalized.cursors.bottom?.value ?? null,
+    comments: page.items,
+    cursor: page.truncated ? null : normalized.cursors.bottom?.value ?? null,
   };
 }
 

@@ -366,6 +366,8 @@ wrench auth add gmail-main --oauth-provider gmail \
 wrench gmail contacts.list --auth gmail-main \
   --input '{"collection":"contacts","limit":20,"stats_scan_limit":100}' --json
 wrench gmail contacts.list --auth gmail-main \
+  --input '{"collection":"contacts","include_dates":true,"include_stats":false,"limit":20}' --json
+wrench gmail contacts.list --auth gmail-main \
   --input '{"collection":"other-contacts","limit":100,"include_stats":false}' --json
 wrench gmail contacts.list --auth gmail-main \
   --input '{"collection":"interactions","before":"2026-08-14T12:00:00.000Z","limit":100}' --json
@@ -384,7 +386,11 @@ contacts, or the mailbox-wide `interactions` projection. Paginate each
 collection independently with its returned
 `nextCursor`; the OAuth token must carry both People read scopes. Contact
 statistics are optional so bulk enumeration can avoid per-contact Gmail
-queries. When requested, they report sent and received counts plus the maximum internal
+queries. For saved contacts, `include_dates:true` adds birthdays, contact
+events, and the selected name's display, given, middle, family, prefix, and
+suffix fields. Wrench selects the sole People primary name when present and
+otherwise accepts only a single unmarked name. Other contacts and interaction
+rows do not accept this option. When requested, contact statistics report sent and received counts plus the maximum internal
 date across every bounded matched message. Count and date completeness flags
 remain explicit when the scan bound truncates a query or a message lacks a
 date. Contacts with mixed, unsupported, or absent addresses report `partial`,
