@@ -10,12 +10,15 @@ import {
 } from "../../article-draft-document";
 import { articleDraftImageFileInputs } from "../../article-draft-images";
 import archivedXWebManifest from "../../assets/adapters/x/wrench-web-adapter.v1.4.0.json";
+import archivedXWebPostsPublishV2Manifest from "../../assets/adapters/x/wrench-web-adapter.v1.7.0.json";
+import archivedXWebPostsPublishV3Manifest from "../../assets/adapters/x/wrench-web-adapter.v1.9.0.json";
 import {
   browserSessionAuthKinds,
   webSessionContractOperations,
   webImplementationSources,
 } from "../../provider-plugin-builtins";
 import {
+  planWebSessionContractDispatches,
   reviewedArchivedWebSessionContract,
   webSessionContractDefinitions,
 } from "../../web-session-contract-definitions";
@@ -150,7 +153,6 @@ const currentOperations = webSessionContractOperations(
   "5a6d64add05fd2c5b70408ad74ff1f263d57bd1634e571d8b6800f7dac4d34a8",
   {
     "likes.set": [1],
-    "posts.publish": [2, 3],
   },
   {
     "messaging.list": {
@@ -259,9 +261,58 @@ const archivedArticleDraftOperation = Object.freeze({
   }),
 });
 
+function archivedXWebPostsPublishOperation(
+  manifest: unknown,
+  adapterVersion: string,
+  contractVersion: number,
+) {
+  const contract = reviewedArchivedWebSessionContract(
+    manifest,
+    {
+      adapterId: "x-web",
+      adapterVersion,
+      site: "x",
+      operation: "posts.publish",
+      contractVersion,
+      risk: "R3",
+      state: "observed",
+      implementation:
+        "optional single-PNG upload plus strict CreateTweet response, durable accepted-target evidence, and bounded independent TweetResultByRestId readback binding",
+    },
+  );
+  return Object.freeze({
+    name: contract.operation,
+    contractVersion: contract.contractVersion,
+    risk: contract.risk,
+    input: contract.input,
+    sideEffect: contract.sideEffect,
+    idempotency: contract.idempotency,
+    dedupeWindowMs: contract.dedupeWindowMs,
+    state: contract.state,
+    dispatch: contract.dispatch,
+    implementation: contract.implementation,
+    planDispatches: (input: Readonly<Record<string, unknown>>) =>
+      planWebSessionContractDispatches(contract, input),
+    validateInput: () => Object.freeze([]),
+    reconciliation: Object.freeze({
+      kind: "provider-accepted-target-presence" as const,
+    }),
+  });
+}
+
 const operations = Object.freeze([
   ...currentOperations,
   archivedArticleDraftOperation,
+  archivedXWebPostsPublishOperation(
+    archivedXWebPostsPublishV2Manifest,
+    "1.7.0",
+    2,
+  ),
+  archivedXWebPostsPublishOperation(
+    archivedXWebPostsPublishV3Manifest,
+    "1.9.0",
+    3,
+  ),
 ]);
 
 export const xWebPlugin = defineProviderPlugin({
