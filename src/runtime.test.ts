@@ -2668,9 +2668,39 @@ describe("local at-most-once dispatch ledger", () => {
         dispatch: { planned: 1, started: 0, verified: 0 },
       });
       expect(result.receipt.error).toBe(
-        "official API operation failed before the dispatch boundary; reason: provider executor terminated without returning a bounded result",
+        "official API operation failed before the dispatch boundary; reason: provider executor terminated without returning a bounded result: private unexpected diagnostic",
       );
-      expect(JSON.stringify(readRunReceipt(result.receipt.runId, testState.environment))).not.toContain("private unexpected diagnostic");
+      expect(JSON.stringify(readRunReceipt(result.receipt.runId, testState.environment))).toContain("private unexpected diagnostic");
+      expect(readdirSync(join(testState.directory, "recovery", "capsules"))).toEqual([]);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("redacts credentials from unexpected pre-dispatch executor throws", async () => {
+    const testState = state();
+    try {
+      installFixture(testState);
+      const stored = createInvocationPlan(prepared(testState));
+      saveInvocationPlan(stored, testState.environment);
+      const result = await confirmInvocation(stored.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeProvider: () => Promise.reject(new Error(
+          "cookie leaked eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaaaaaaa.bbbbbbbb",
+        )),
+      });
+      expect(result.receipt).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+      });
+      expect(result.receipt.error).toContain(
+        "provider executor terminated without returning a bounded result: cookie leaked [REDACTED JWT]",
+      );
+      const serialized = JSON.stringify(readRunReceipt(result.receipt.runId, testState.environment));
+      expect(serialized).toContain("[REDACTED JWT]");
+      expect(serialized).not.toContain("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
       expect(readdirSync(join(testState.directory, "recovery", "capsules"))).toEqual([]);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
