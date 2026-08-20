@@ -1707,7 +1707,7 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.href === MAIN_URL) {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-          descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+          descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
           descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
         ), { headers: { "content-type": "application/javascript" } });
       }
@@ -1724,7 +1724,7 @@ describe("X authenticated internal-API runtime", () => {
             semantic_annotation_ids: [],
           },
           features: {},
-          queryId: "hIL9XdleMYEtVXOZVbr8Bg",
+          queryId: "WXTdKnLddrQOunD6MhWi3g",
         });
         return jsonResponse(createTweetResponse({ text: body }));
       }
@@ -1803,7 +1803,7 @@ describe("X authenticated internal-API runtime", () => {
           if (request.url.href === MAIN_URL) {
             return new Response(mainBundle(
               descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-              descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+              descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
               descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
             ), { headers: { "content-type": "application/javascript" } });
           }
@@ -1944,7 +1944,7 @@ describe("X authenticated internal-API runtime", () => {
             if (request.url.href === MAIN_URL) {
               return new Response(mainBundle(
                 descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
                 descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
               ), { headers: { "content-type": "application/javascript" } });
             }
@@ -2007,7 +2007,7 @@ describe("X authenticated internal-API runtime", () => {
       });
       const lastUpload = events.lastIndexOf("POST upload.x.com/i/media/upload.json");
       const admitted = events.indexOf("before 0");
-      const create = events.indexOf("POST x.com/i/api/graphql/hIL9XdleMYEtVXOZVbr8Bg/CreateTweet");
+      const create = events.indexOf("POST x.com/i/api/graphql/WXTdKnLddrQOunD6MhWi3g/CreateTweet");
       expect(lastUpload).toBeGreaterThan(-1);
       expect(admitted).toBeGreaterThan(lastUpload);
       expect(create).toBeGreaterThan(admitted);
@@ -2055,7 +2055,7 @@ describe("X authenticated internal-API runtime", () => {
             if (request.url.href === MAIN_URL) {
               return new Response(mainBundle(
                 descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
                 descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
               ), { headers: { "content-type": "application/javascript" } });
             }
@@ -2133,7 +2133,7 @@ describe("X authenticated internal-API runtime", () => {
       expect(pauses).toEqual([1_000]);
       const status = events.indexOf("GET upload.x.com/i/media/upload.json");
       const admitted = events.indexOf("before 0");
-      const create = events.indexOf("POST x.com/i/api/graphql/hIL9XdleMYEtVXOZVbr8Bg/CreateTweet");
+      const create = events.indexOf("POST x.com/i/api/graphql/WXTdKnLddrQOunD6MhWi3g/CreateTweet");
       expect(status).toBeGreaterThan(-1);
       expect(admitted).toBeGreaterThan(status);
       expect(create).toBeGreaterThan(admitted);
@@ -2172,7 +2172,7 @@ describe("X authenticated internal-API runtime", () => {
             if (request.url.href === MAIN_URL) {
               return new Response(mainBundle(
                 descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
               ), { headers: { "content-type": "application/javascript" } });
             }
             if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -2286,7 +2286,7 @@ describe("X authenticated internal-API runtime", () => {
             if (request.url.href === MAIN_URL) {
               return new Response(mainBundle(
                 descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
               ), { headers: { "content-type": "application/javascript" } });
             }
             if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -2384,7 +2384,7 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.href === MAIN_URL) {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-          descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+          descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
         ), { headers: { "content-type": "application/javascript" } });
       }
       if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -2430,7 +2430,7 @@ describe("X authenticated internal-API runtime", () => {
         if (request.url.href === MAIN_URL) {
           return new Response(mainBundle(
             descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-            descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+            descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
           ), { headers: { "content-type": "application/javascript" } });
         }
         if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());

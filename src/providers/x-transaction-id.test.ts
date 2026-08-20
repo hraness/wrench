@@ -13,7 +13,7 @@ import {
 } from "./x-transaction-id";
 
 const MAIN_URL = "https://abs.twimg.com/responsive-web/client-web/main.9929b02a.js";
-const MUTATION_PATH = "/i/api/graphql/hIL9XdleMYEtVXOZVbr8Bg/CreateTweet";
+const MUTATION_PATH = "/i/api/graphql/WXTdKnLddrQOunD6MhWi3g/CreateTweet";
 const TRANSACTION_ID = "synthetic_transaction_id_0123456789";
 const MAIN_BUNDLE = [
   "previousModule()},991160(e,t,r){\"use strict\";let cached;r.d(t,{Ay:()=>l,_E:()=>s,kc:()=>a});",
