@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import fc from "fast-check";
 
 import {
   ProviderHttpClient,
@@ -40,6 +41,42 @@ function client(fetch: ProviderFetch) {
     http: new ProviderHttpClient(fetch, 30_000, 16 * 1024 * 1024),
     accessToken: "unit-test-access-token",
     subject: "Person@Example.com",
+  });
+}
+
+const EXPECTED_PEOPLE_CORE_PERSON_FIELDS =
+  "metadata,names,emailAddresses,phoneNumbers,organizations,photos";
+const EXPECTED_PEOPLE_DATES_PERSON_FIELDS =
+  `${EXPECTED_PEOPLE_CORE_PERSON_FIELDS},birthdays,events`;
+const EXPECTED_PEOPLE_CORE_PERSON_PROJECTION =
+  "resourceName,etag,metadata(sources(type,id,etag,updateTime),deleted),names(displayName,givenName,familyName,metadata(primary,sourcePrimary,verified,source(type,id))),emailAddresses(value,type,metadata(primary,sourcePrimary,verified,source(type,id))),phoneNumbers(value,type,canonicalForm,metadata(primary,sourcePrimary,verified,source(type,id))),organizations(name,title,department,type,current),photos(url,default)";
+const EXPECTED_PEOPLE_DATES_PERSON_PROJECTION =
+  "resourceName,etag,metadata(sources(type,id,etag,updateTime),deleted),names(displayName,givenName,middleName,familyName,honorificPrefix,honorificSuffix,metadata(primary,sourcePrimary,verified,source(type,id))),emailAddresses(value,type,metadata(primary,sourcePrimary,verified,source(type,id))),phoneNumbers(value,type,canonicalForm,metadata(primary,sourcePrimary,verified,source(type,id))),organizations(name,title,department,type,current),photos(url,default),birthdays(date(year,month,day),text,metadata(primary,sourcePrimary,verified,source(type,id))),events(date(year,month,day),type,formattedType,metadata(primary,sourcePrimary,verified,source(type,id)))";
+const EXPECTED_PEOPLE_CORE_BATCH_FIELDS =
+  `responses(requestedResourceName,httpStatusCode,status(code),person(${EXPECTED_PEOPLE_CORE_PERSON_PROJECTION}))`;
+const EXPECTED_PEOPLE_DATES_BATCH_FIELDS =
+  `responses(requestedResourceName,httpStatusCode,status(code),person(${EXPECTED_PEOPLE_DATES_PERSON_PROJECTION}))`;
+
+function fetchSingleGmailContact(
+  person: Readonly<Record<string, unknown>>,
+  projection: "core" | "dates" = "dates",
+) {
+  return fetchGmailContacts(client((input) => {
+    const url = urlOf(input);
+    return Promise.resolve(json(url.pathname.endsWith("/connections")
+      ? { connections: [{ resourceName: "people/c1" }] }
+      : {
+          responses: [{
+            requestedResourceName: "people/c1",
+            status: {},
+            person: { resourceName: "people/c1", ...person },
+          }],
+        }));
+  }), {
+    collection: "contacts",
+    projection,
+    limit: 1,
+    pageToken: null,
   });
 }
 
@@ -923,7 +960,7 @@ describe("official Gmail API helpers", () => {
     expect(checkpoints).toBe(8);
   });
 
-  test("retains People metadata and exact field values while dropping signed photo URLs", async () => {
+  test("retains strict People date and name metadata while dropping signed photo URLs", async () => {
     const requests: URL[] = [];
     const api = client((input) => {
       const url = urlOf(input);
@@ -953,6 +990,11 @@ describe("official Gmail API helpers", () => {
             },
             names: [{
               displayName: "Friend",
+              givenName: "Ada",
+              middleName: "M",
+              familyName: "Lovelace",
+              honorificPrefix: "Countess",
+              honorificSuffix: "PhD",
               metadata: {
                 primary: true,
                 sourcePrimary: true,
@@ -980,6 +1022,19 @@ describe("official Gmail API helpers", () => {
               type: "work",
               current: true,
             }],
+            birthdays: [{
+              date: { year: 1989, month: 2, day: 3 },
+              text: "February 3, 1989",
+              metadata: { primary: true, source: { type: "CONTACT", id: "source-1" } },
+            }, {
+              metadata: { source: { type: "CONTACT", id: "source-1" } },
+            }],
+            events: [{
+              date: { month: 6, day: 7 },
+              type: "anniversary",
+              formattedType: "Anniversary",
+              metadata: { source: { type: "CONTACT", id: "source-1" } },
+            }],
             photos: [{
               url: "https://lh3.googleusercontent.com/photo?token=secret",
               default: false,
@@ -990,6 +1045,7 @@ describe("official Gmail API helpers", () => {
     });
     const page = await fetchGmailContacts(api, {
       collection: "contacts",
+      projection: "dates",
       limit: 25,
       pageToken: null,
     });
@@ -1006,6 +1062,14 @@ describe("official Gmail API helpers", () => {
         }],
       },
       displayName: "Friend",
+      name: {
+        displayName: "Friend",
+        givenName: "Ada",
+        middleName: "M",
+        familyName: "Lovelace",
+        honorificPrefix: "Countess",
+        honorificSuffix: "PhD",
+      },
       emailAddresses: [{
         value: "Friend+Tag@Example.com",
         canonicalValue: "friend+tag@example.com",
@@ -1017,6 +1081,20 @@ describe("official Gmail API helpers", () => {
         type: "mobile",
       }],
       photoUrl: null,
+      birthdays: [{
+        date: { year: 1989, month: 2, day: 3 },
+        text: "February 3, 1989",
+      }, {
+        date: null,
+        text: null,
+        metadata: { source: { type: "CONTACT", id: "source-1" } },
+      }],
+      events: [{
+        date: { year: 0, month: 6, day: 7 },
+        text: null,
+        type: "anniversary",
+        formattedType: "Anniversary",
+      }],
     });
     expect(requests[0]?.hostname).toBe("people.googleapis.com");
     expect(requests[0]?.pathname).toBe("/v1/people/me/connections");
@@ -1024,7 +1102,12 @@ describe("official Gmail API helpers", () => {
       .toBe("connections(resourceName),nextPageToken,totalItems");
     expect(requests[1]?.pathname).toBe("/v1/people:batchGet");
     expect(requests[1]?.searchParams.getAll("resourceNames")).toEqual(["people/c123"]);
-    expect(requests[1]?.searchParams.get("fields")).not.toContain("classificationLabelValues");
+    expect(requests[1]?.searchParams.get("personFields"))
+      .toBe(EXPECTED_PEOPLE_DATES_PERSON_FIELDS);
+    expect(requests[1]?.searchParams.get("fields"))
+      .toBe(EXPECTED_PEOPLE_DATES_BATCH_FIELDS);
+    expect(requests[1]?.searchParams.get("sources"))
+      .toBe("READ_SOURCE_TYPE_CONTACT");
   });
 
   test("reorders People batch results and rejects duplicate, missing, extra, or failed entries", async () => {
@@ -1117,6 +1200,156 @@ describe("official Gmail API helpers", () => {
       }),
       "valid UTC calendar date and time",
     );
+  });
+
+  test("accepts exactly the four non-empty Google Date shapes", async () => {
+    for (const [date, expected] of [
+      [{ year: 1989 }, { year: 1989, month: 0, day: 0 }],
+      [{ year: 1989, month: 2 }, { year: 1989, month: 2, day: 0 }],
+      [{ month: 2, day: 29 }, { year: 0, month: 2, day: 29 }],
+      [{ year: 2000, month: 2, day: 29 }, { year: 2000, month: 2, day: 29 }],
+    ] as const) {
+      const page = await fetchSingleGmailContact({ birthdays: [{ date }] });
+      expect(page.contacts[0]?.birthdays?.[0]?.date).toEqual(expected);
+    }
+  });
+
+  test("rejects empty, partial, and calendar-invalid saved-contact dates", async () => {
+    for (const [date, message] of [
+      [{ year: 2026, month: 2, day: 29 }, "valid Gregorian date"],
+      [{ year: 0, month: 0, day: 0 }, "must contain a date component"],
+      [{ year: 2026, month: 0, day: 4 }, "cannot contain a day without a month"],
+      [{ year: 0, month: 2, day: 0 }, "cannot contain a month without a year or day"],
+      [{ month: 2 }, "cannot contain a month without a year or day"],
+      [{ day: 4 }, "cannot contain a day without a month"],
+    ] as const) {
+      await expectRejected(
+        fetchSingleGmailContact({ birthdays: [{ date }] }),
+        message,
+      );
+    }
+  });
+
+  test("accepts only exact CONTACT-source-bound empty birthday observations", async () => {
+    const run = (birthday: unknown) =>
+      fetchSingleGmailContact({ birthdays: [birthday] });
+    await expect(run({ metadata: { source: { type: "CONTACT", id: "source" } } }))
+      .resolves.toMatchObject({ contacts: [{ birthdays: [{ date: null, text: null }] }] });
+    await expectRejected(
+      run({}),
+      "source-bound empty observation",
+    );
+    await expectRejected(
+      run({ metadata: { primary: true } }),
+      "CONTACT source-bound empty observation",
+    );
+    await expectRejected(
+      run({ metadata: { source: { type: "OTHER_CONTACT", id: "source" } } }),
+      "CONTACT source-bound empty observation",
+    );
+    await expectRejected(
+      run({ metadata: { source: { type: "CONTACT", id: "" } } }),
+      "bounded text",
+    );
+    await expectRejected(
+      run({ metadata: { source: { type: "CONTACT" } } }),
+      "source.id is required",
+    );
+    await expectRejected(
+      run({ metadata: { source: { type: "CONTACT", id: "source", extra: true } } }),
+      "contains unreviewed property extra",
+    );
+  });
+
+  test("selects one primary name or a sole unmarked name", async () => {
+    const primary = await fetchSingleGmailContact({
+      names: [{ displayName: "Fallback", givenName: "First" }, {
+        displayName: "Primary",
+        givenName: "Selected",
+        metadata: { primary: true, source: { type: "CONTACT", id: "source" } },
+      }],
+    });
+    expect(primary.contacts[0]).toMatchObject({
+      displayName: "Primary",
+      name: { displayName: "Primary", givenName: "Selected" },
+    });
+
+    const fallback = await fetchSingleGmailContact({
+      names: [{ givenName: "Only" }],
+    });
+    expect(fallback.contacts[0]).toMatchObject({
+      displayName: null,
+      name: { displayName: null, givenName: "Only" },
+    });
+
+    await expectRejected(fetchSingleGmailContact({
+      names: [{ displayName: "One", metadata: { primary: true } }, {
+        displayName: "Two",
+        metadata: { primary: true },
+      }],
+    }), "must not contain multiple primary names");
+    await expectRejected(fetchSingleGmailContact({
+      names: [{ givenName: "First" }, { displayName: "Second", givenName: "Later" }],
+    }), "must contain at most one name when no primary name is marked");
+    await expectRejected(fetchSingleGmailContact({
+      names: [{ displayName: "Selected", unstructuredName: "Unrequested" }],
+    }), "contains unreviewed property unstructuredName");
+  });
+
+  test("keeps the core contact projection free of optional date fields", async () => {
+    const requests: URL[] = [];
+    const page = await fetchGmailContacts(client((input) => {
+      const url = urlOf(input);
+      requests.push(url);
+      return Promise.resolve(json(url.pathname.endsWith("/connections")
+        ? { connections: [{ resourceName: "people/c1" }] }
+        : {
+            responses: [{
+              requestedResourceName: "people/c1",
+              status: {},
+              person: {
+                resourceName: "people/c1",
+                names: [{ displayName: "Core", givenName: "Contact" }],
+              },
+            }],
+          }));
+    }), {
+      collection: "contacts",
+      projection: "core",
+      limit: 1,
+      pageToken: null,
+    });
+    expect(page.contacts[0]).not.toHaveProperty("name");
+    expect(page.contacts[0]).not.toHaveProperty("birthdays");
+    expect(page.contacts[0]).not.toHaveProperty("events");
+    expect(requests[1]?.searchParams.get("personFields"))
+      .toBe(EXPECTED_PEOPLE_CORE_PERSON_FIELDS);
+    expect(requests[1]?.searchParams.get("fields"))
+      .toBe(EXPECTED_PEOPLE_CORE_BATCH_FIELDS);
+    expect(requests[1]?.searchParams.get("sources"))
+      .toBe("READ_SOURCE_TYPE_CONTACT");
+    await expectRejected(
+      fetchSingleGmailContact({
+        birthdays: [{ date: { month: 2, day: 3 } }],
+      }, "core"),
+      "contains unreviewed property birthdays",
+    );
+  });
+
+  test("property: accepts every complete Gregorian saved-contact date", async () => {
+    const canonicalDate = fc.integer({ min: 1, max: 9_999 }).chain((year) =>
+      fc.integer({ min: 1, max: 12 }).chain((month) => {
+        const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+        const days = month === 2
+          ? (leap ? 29 : 28)
+          : ([4, 6, 9, 11].includes(month) ? 30 : 31);
+        return fc.integer({ min: 1, max: days }).map((day) => ({ year, month, day }));
+      })
+    );
+    await fc.assert(fc.asyncProperty(canonicalDate, async (date) => {
+      const page = await fetchSingleGmailContact({ birthdays: [{ date }] });
+      expect(page.contacts[0]?.birthdays?.[0]?.date).toEqual(date);
+    }));
   });
 
   test("lists Other contacts directly with their limited People projection", async () => {

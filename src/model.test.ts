@@ -866,6 +866,60 @@ describe("wrench manifest parsing", () => {
     }
   });
 
+  test("validates exact Gmail contacts v4 and v5 manifests independently", () => {
+    const currentValue = JSON.parse(readFileSync(join(
+      import.meta.dir,
+      "assets",
+      "adapters",
+      "gmail",
+      "wrench-adapter.json",
+    ), "utf8")) as Record<string, unknown>;
+    const priorValue = JSON.parse(readFileSync(join(
+      import.meta.dir,
+      "assets",
+      "adapters",
+      "gmail",
+      "wrench-adapter.v1.2.0.json",
+    ), "utf8")) as Record<string, unknown>;
+    const current = parseRuntimeManifest(currentValue);
+    const prior = parseRuntimeManifest(priorValue);
+    expect(current.ok).toBeTrue();
+    expect(prior.ok).toBeTrue();
+    if (!current.ok || !prior.ok) return;
+    const currentContacts = current.value.operations["contacts.list"];
+    const priorContacts = prior.value.operations["contacts.list"];
+    expect(current.value.version).toBe("1.3.0");
+    expect(prior.value.version).toBe("1.2.0");
+    expect(currentContacts).toMatchObject({
+      provider: { contractVersion: 5 },
+    });
+    expect(priorContacts).toMatchObject({
+      provider: { contractVersion: 4 },
+    });
+    expect(currentContacts?.input.properties.include_dates).toMatchObject({
+      type: "boolean",
+    });
+    expect(priorContacts?.input.properties).not.toHaveProperty("include_dates");
+    expect(manifestHash(current.value)).toBe(
+      "b638f7251a76a8be0d75cfd671f30f9c6b1b3357f9f6b23ee1ec3b40593bc84e",
+    );
+    expect(manifestHash(prior.value)).toBe(
+      "f864c55cdeaab6293be02b58607e9dced349e45225b17652e8838047957a1273",
+    );
+
+    const widened = structuredClone(priorValue) as {
+      operations: Record<string, { input: { properties: Record<string, unknown> } }>;
+    };
+    widened.operations["contacts.list"]!.input.properties.include_dates = {
+      type: "boolean",
+      description: "Unreviewed v4 widening",
+    };
+    expect(parseRuntimeManifest(widened)).toMatchObject({
+      ok: false,
+      issues: [expect.stringContaining("input must exactly match")],
+    });
+  });
+
   test("ships separate official X Article draft and publish contracts with an exact upgrade baseline", () => {
     const currentValue = JSON.parse(readFileSync(
       join(import.meta.dir, "assets", "adapters", "x", "wrench-adapter.json"),
