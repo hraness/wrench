@@ -17,6 +17,7 @@ import {
   webSessionContractOperations,
   webImplementationSources,
 } from "../../provider-plugin-builtins";
+import type { OperationInput } from "../../model";
 import {
   planWebSessionContractDispatches,
   reviewedArchivedWebSessionContract,
@@ -291,7 +292,7 @@ function archivedXWebPostsPublishOperation(
     state: contract.state,
     dispatch: contract.dispatch,
     implementation: contract.implementation,
-    planDispatches: (input: Readonly<Record<string, unknown>>) =>
+    planDispatches: (input: OperationInput) =>
       planWebSessionContractDispatches(contract, input),
     validateInput: () => Object.freeze([]),
     reconciliation: Object.freeze({
