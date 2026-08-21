@@ -8,9 +8,10 @@
 
 # Guidelines
 
-- Keep the page useful without JavaScript. JavaScript is optional analytics enhancement only.
+- Keep the page useful without JavaScript. JavaScript may progressively enhance explicit copy controls and canonical-host analytics; keep all commands readable and selectable without it.
 - Keep every product claim observable in the public Wrench release and put each qualification beside the claim it limits.
 - Derive release identity and install commands from the validated root `package.json`; never copy a version into page source.
+- Keep the Agent Skill install command centralized in `build.ts`, render it as inert HTML, and make clipboard enhancement reusable through the `data-skill-install` contract.
 - Keep canonical metadata, robots, sitemap, Open Graph, X metadata, and the linked JSON-LD graph aligned to `https://wrench.rip/`.
 - Keep analytics canonical-host-only, cookieless, personless, memory-only, DNT-aware, query-free, and restricted to page lifecycle plus the two explicit GitHub links.
 - Do not add private packages, private assets, cookies, replay, identity, feature flags, broad autocapture, console capture, or application behavior.

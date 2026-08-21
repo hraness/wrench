@@ -1,25 +1,13 @@
----
-name: cross-post-video-with-wrench
-description: >-
-  Prepare one exact local video for social posting, then preview, publish,
-  settle, and safely account for it across any selected combination of X,
-  LinkedIn, Bluesky, Substack Notes, TikTok, Instagram, and YouTube Shorts
-  through Wrench's bounded provider operations. Use when Codex must
-  cross-post a video, invent a short caption, add tags only where that is
-  the norm, inspect signed-in Wrench realms, refuse capture-required video
-  operations, reconcile uncertain runs, or assess canonical duplicate cleanup.
----
-
-# Cross-post video with Wrench
+# Cross-post video
 
 Use the installed `wrench` CLI as the only posting transport. Orchestrate
 provider operations; do not implement a second HTTP client, click a composer
 at runtime, or treat a browser login as proof that video publishing is
 supported.
 
-This skill is the video sibling of [cross-post-with-wrench](../cross-post-with-wrench/SKILL.md).
-Reuse that skill's preview, confirm, settlement, and ledger rules. Do not
-invent a second confirmation model.
+Reuse the preview, confirm, settlement, and ledger rules in
+[cross-post text and images](cross-posting.md). Do not invent a second
+confirmation model.
 
 ## Build one exact video package
 
@@ -67,9 +55,9 @@ assessment.
 
 ## Preflight every target
 
-1. Run `wrench --help`; if it is unavailable, report that Wrench must be
-   installed.
-2. Read [platform routing](references/platform-routing.md).
+1. Run `wrench --help`; if it is unavailable, follow
+   [installation and diagnostics](install.md).
+2. Read [video platform routing](social-video-platform-routing.md).
 3. Run `wrench capabilities <adapter> --json` for every candidate adapter.
    Treat its current operation state and input schema as authoritative over
    the reference and over remembered platform behavior.
@@ -134,7 +122,7 @@ does not create authority to delete or repost on other platforms.
 
 ## Settle and account for every attempt
 
-Read [settlement and duplicate cleanup](../cross-post-with-wrench/references/settlement-and-cleanup.md)
+Read [settlement and duplicate cleanup](settlement-and-duplicate-cleanup.md)
 after confirmation. Give every attempt its own immutable ledger entry. Use
 exact returned locators and exact provider readback; never infer delivery
 from a cleared composer, a profile search, or matching text.

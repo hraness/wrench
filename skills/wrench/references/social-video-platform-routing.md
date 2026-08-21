@@ -1,4 +1,4 @@
-# Video platform routing
+# Social video platform routing
 
 Use this as routing guidance only. Always inspect
 `wrench capabilities <adapter> --json`; installed adapter state and schemas

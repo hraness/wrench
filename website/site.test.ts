@@ -13,6 +13,8 @@ import {
   SITE_DESCRIPTION,
   SITE_ORIGIN,
   SITE_TITLE,
+  SKILL_INSTALL_COMMAND,
+  SKILL_INSTALL_COMMAND_BUNX,
 } from "./build";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -87,6 +89,22 @@ describe("wrench.rip static site", () => {
     expect(html).not.toContain('<meta name="keywords"');
     expect(html).toContain(`github:hraness/wrench#${packageIdentity.release}`);
     expect(html).toContain(`Install Wrench ${packageIdentity.release}`);
+    expect(html).toContain(`>${SKILL_INSTALL_COMMAND}</code>`);
+    expect(html).toContain(`<code>${SKILL_INSTALL_COMMAND_BUNX}</code>`);
+    expect(html).not.toContain(`value="${SKILL_INSTALL_COMMAND}"`);
+    expect(html).toContain('class="skill-install" data-skill-install');
+    expect(html).toContain("data-skill-install-copy");
+    expect(html).toMatch(/data-skill-install-copy\s+hidden/gu);
+    expect(html).toContain('aria-label="Copy Agent Skill install command"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('role="status"');
+    expect(html).toContain('/assets/skill-install-');
+    expect(html.indexOf('class="hero-statement"')).toBeLessThan(
+      html.indexOf('class="skill-install"'),
+    );
+    expect(html.indexOf('class="skill-install"')).toBeLessThan(
+      html.indexOf('class="hero-explainer"'),
+    );
     expect(html).not.toContain("{{");
     expect(html).not.toContain("@jungle/");
     expect(html).not.toContain("hraness.com/wrench");
