@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.10.0",
+  "version": "1.9.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -309,7 +309,7 @@
       }
     },
     "posts.publish": {
-      "description": "Observed contract: publish one confirmed X post with optional reviewed PNG or MP4 through exact upload, CreateTweet response, and independent TweetResultByRestId readback binding.",
+      "description": "Observed contract: publish one confirmed X post with optional reviewed PNG through exact upload, CreateTweet response, and independent TweetResultByRestId readback binding.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible X post with the exact confirmed content and reply audience.",
       "idempotency": "local-at-most-once",
@@ -324,19 +324,17 @@
           },
           "media": {
             "type": "file",
-            "description": "Optional single plan-bound PNG or MP4",
-            "maxBytes": 536870912,
+            "description": "Optional single plan-bound PNG",
+            "maxBytes": 20971520,
             "mediaTypes": [
-              "image/png",
-              "video/mp4"
+              "image/png"
             ]
           },
           "media_type": {
             "type": "string",
-            "description": "Exact media type when one PNG or MP4 is attached",
+            "description": "Exact media type when the PNG is attached",
             "enum": [
-              "image/png",
-              "video/mp4"
+              "image/png"
             ]
           }
         },
@@ -347,7 +345,7 @@
       "webSession": {
         "site": "x",
         "action": "posts.publish",
-        "contractVersion": 4,
+        "contractVersion": 3,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }

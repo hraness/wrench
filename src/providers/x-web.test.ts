@@ -131,6 +131,14 @@ describe("X query descriptor revision evidence", () => {
     });
   });
 
+  test("records the current reviewed CreateTweet observation", () => {
+    expect(evidence("CreateTweet")).toMatchObject({
+      queryId: "WXTdKnLddrQOunD6MhWi3g",
+      sourceChunk: "main.7792f4fa.js",
+      observedOn: "2026-08-20",
+    });
+  });
+
   test("records the current reviewed Viewer and Article descriptor observations", () => {
     expect(evidence("Viewer")).toMatchObject({
       queryId: "5XShkXk2oO2J7SYmTu6pvw",

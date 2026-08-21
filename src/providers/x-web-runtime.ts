@@ -77,7 +77,12 @@ const MAX_ARTICLE_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_ARTICLE_INLINE_IMAGES = 20;
 const MAX_ARTICLE_MEDIA_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_X_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_X_VIDEO_BYTES = 512 * 1024 * 1024;
 const X_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
+const MAX_X_IMAGE_UPLOAD_CHUNKS = 4;
+const MAX_X_VIDEO_UPLOAD_CHUNKS = Math.ceil(MAX_X_VIDEO_BYTES / X_UPLOAD_CHUNK_BYTES);
+const MAX_X_MEDIA_STATUS_POLLS = 100;
+const MAX_X_MEDIA_STATUS_WAIT_MS = 8 * 60_000;
 const MAX_X_UPLOAD_RESPONSE_BYTES = 512 * 1024;
 const PUBLISH_READBACK_DELAYS_MS = Object.freeze([0, 250, 750, 1_500]);
 
@@ -1117,17 +1122,14 @@ export async function readXWebPublishedMutationTarget(
   if (
     recipe.site !== "x"
     || recipe.action !== "posts.publish"
-    || recipe.contractVersion !== 3
+    || (recipe.contractVersion !== 3 && recipe.contractVersion !== 4)
   ) {
-    throw new Error("X publish recovery supports only posts.publish@3");
+    throw new Error("X publish recovery supports only posts.publish@3 or posts.publish@4");
   }
   const target = parseXWebPublishedMutationTarget(identifier);
   const hasMedia = input.media !== undefined;
-  if (
-    hasMedia !== (target.mediaId !== null)
-    || (hasMedia && input.media_type !== "image/png")
-    || (!hasMedia && input.media_type !== undefined)
-  ) {
+  const mediaType = xPublishMediaType(input.media_type, hasMedia);
+  if (hasMedia !== (target.mediaId !== null)) {
     throw new Error("X provider-accepted post target did not bind the confirmed attachment shape");
   }
   const text = requiredString(input.body, "input.body", 280);
@@ -1141,6 +1143,7 @@ export async function readXWebPublishedMutationTarget(
     null,
     viewer.id,
     target.mediaId,
+    mediaType,
     "X publish recovery readback",
   );
   if (rebound.id !== target.postId) {
@@ -1233,22 +1236,47 @@ export async function readXWebArticleDraftDesiredState(
   };
 }
 
-type XBoundImage = {
+type XPublishMediaType = "image/png" | "video/mp4";
+
+function xPublishMediaType(value: unknown, hasMedia: boolean): XPublishMediaType | null {
+  if (!hasMedia) {
+    if (value !== undefined) throw new Error("X media_type requires one plan-bound PNG or MP4");
+    return null;
+  }
+  if (value !== "image/png" && value !== "video/mp4") {
+    throw new Error("X reviewed media upload supports one PNG or one MP4");
+  }
+  return value;
+}
+
+function xMediaMaxBytes(mediaType: XPublishMediaType): number {
+  return mediaType === "video/mp4" ? MAX_X_VIDEO_BYTES : MAX_X_IMAGE_BYTES;
+}
+
+function xMediaCategory(mediaType: XPublishMediaType): "tweet_image" | "tweet_video" {
+  return mediaType === "video/mp4" ? "tweet_video" : "tweet_image";
+}
+
+function xMediaUploadName(mediaType: XPublishMediaType): "media.png" | "upload.mp4" {
+  return mediaType === "video/mp4" ? "upload.mp4" : "media.png";
+}
+
+function xMediaReadbackType(mediaType: XPublishMediaType): "photo" | "video" {
+  return mediaType === "video/mp4" ? "video" : "photo";
+}
+
+type XBoundMedia = {
   readonly bytes: Uint8Array;
-  readonly mediaType: "image/png";
+  readonly mediaType: XPublishMediaType;
 };
 
-async function readBoundXImage(
+async function readBoundXMedia(
   input: OperationInput,
   fileResolver: BrowserFileResolver | undefined,
   operationDeadline?: WebSessionOperationDeadline,
-): Promise<XBoundImage | null> {
-  if (input.media === undefined) {
-    if (input.media_type !== undefined) {
-      throw new Error("X media_type requires one plan-bound image");
-    }
-    return null;
-  }
+): Promise<XBoundMedia | null> {
+  const mediaType = xPublishMediaType(input.media_type, input.media !== undefined);
+  if (input.media === undefined || mediaType === null) return null;
   if (!isRecord(input.media)) throw new Error("X media must be one plan-bound file");
   const descriptor = input.media;
   if (
@@ -1258,21 +1286,19 @@ async function readBoundXImage(
     || descriptor.reference.length < 1
     || descriptor.reference.length > 1_024
   ) throw new Error("X media must be one plan-bound file");
-  if (input.media_type !== "image/png") {
-    throw new Error("X reviewed media upload currently supports one PNG image");
-  }
   if (fileResolver === undefined) {
-    throw new Error("X image upload requires the plan-bound file resolver");
+    throw new Error("X media upload requires the plan-bound file resolver");
   }
   const resolveFile = () => fileResolver([descriptor as FileInputValue]);
   const paths = operationDeadline === undefined
     ? await resolveFile()
     : await operationDeadline.run(resolveFile, "authenticated web operation deadline");
   if (paths.length !== 1 || typeof paths[0] !== "string") {
-    throw new Error("X image resolver did not return exactly one file");
+    throw new Error("X media resolver did not return exactly one file");
   }
   const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
   const handle = await open(paths[0], constants.O_RDONLY | noFollow);
+  const maxBytes = xMediaMaxBytes(mediaType);
   try {
     const before = operationDeadline === undefined
       ? await handle.stat()
@@ -1280,8 +1306,12 @@ async function readBoundXImage(
           () => handle.stat(),
           "authenticated web operation deadline",
         );
-    if (!before.isFile() || before.size < 1 || before.size > MAX_X_IMAGE_BYTES) {
-      throw new Error("X image must be a regular PNG no larger than 20 MiB");
+    if (!before.isFile() || before.size < 1 || before.size > maxBytes) {
+      throw new Error(
+        mediaType === "video/mp4"
+          ? "X video must be a regular MP4 no larger than 512 MiB"
+          : "X image must be a regular PNG no larger than 20 MiB",
+      );
     }
     const bytes = operationDeadline === undefined
       ? await handle.readFile()
@@ -1300,10 +1330,10 @@ async function readBoundXImage(
       || after.ino !== before.ino
       || after.size !== before.size
       || bytes.byteLength !== before.size
-    ) throw new Error("X image changed while it was materialized");
+    ) throw new Error("X media changed while it was materialized");
     return Object.freeze({
       bytes: new Uint8Array(bytes),
-      mediaType: "image/png",
+      mediaType,
     });
   } finally {
     await handle.close();
@@ -1313,6 +1343,7 @@ async function readBoundXImage(
 type XUploadedMedia = {
   readonly id: string;
   readonly key: string;
+  readonly mediaType: XPublishMediaType;
 };
 
 function xMediaId(value: unknown, label: string): string {
@@ -1345,7 +1376,11 @@ function xMediaKey(value: unknown, id: string, label: string): string {
   return key;
 }
 
-function parseXMediaInit(value: unknown, expectedSize: number): XUploadedMedia {
+function parseXMediaInit(
+  value: unknown,
+  expectedSize: number,
+  mediaType: XPublishMediaType,
+): XUploadedMedia {
   const response = record(value, "X media INIT response");
   exactResponseKeys(
     response,
@@ -1363,10 +1398,51 @@ function parseXMediaInit(value: unknown, expectedSize: number): XUploadedMedia {
   ) throw new Error("X media INIT response expiry was invalid");
   const id = xMediaId(response.media_id_string, "X media INIT response media_id_string");
   const key = xMediaKey(response.media_key, id, "X media INIT response media_key");
-  if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 || expectedSize > MAX_X_IMAGE_BYTES) {
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 || expectedSize > xMediaMaxBytes(mediaType)) {
     throw new Error("X media INIT expected size was invalid");
   }
-  return Object.freeze({ id, key });
+  return Object.freeze({ id, key, mediaType });
+}
+
+type XMediaProcessingState = "pending" | "in_progress" | "succeeded" | "failed";
+
+type XMediaProcessing = {
+  readonly state: XMediaProcessingState;
+  readonly checkAfterSeconds: number;
+};
+
+function parseXMediaProcessingInfo(value: unknown, label: string): XMediaProcessing {
+  const processing = record(value, label);
+  exactResponseKeys(
+    processing,
+    ["state"],
+    ["check_after_secs", "error", "progress_percent"],
+    label,
+  );
+  if (
+    processing.state !== "pending"
+    && processing.state !== "in_progress"
+    && processing.state !== "succeeded"
+    && processing.state !== "failed"
+  ) throw new Error(`${label} contained an unsupported state`);
+  const check = processing.check_after_secs;
+  if (
+    check !== undefined
+    && (!Number.isSafeInteger(check) || (check as number) < 0 || (check as number) > 60)
+  ) throw new Error(`${label} contained an invalid check_after_secs`);
+  if (
+    processing.progress_percent !== undefined
+    && (
+      !Number.isSafeInteger(processing.progress_percent)
+      || (processing.progress_percent as number) < 0
+      || (processing.progress_percent as number) > 100
+    )
+  ) throw new Error(`${label} contained an invalid progress_percent`);
+  if (processing.error !== undefined) record(processing.error, `${label}.error`);
+  return Object.freeze({
+    state: processing.state,
+    checkAfterSeconds: check === undefined ? 1 : check as number,
+  });
 }
 
 type XMediaFinalizeBindingFailureStage =
@@ -1377,22 +1453,26 @@ type XMediaFinalizeBindingFailureStage =
   | "media-upload-finalize-size-type"
   | "media-upload-finalize-size-value"
   | "media-upload-finalize-expiry"
-  | "media-upload-finalize-image";
+  | "media-upload-finalize-image"
+  | "media-upload-finalize-video"
+  | "media-upload-finalize-processing";
 
 function parseXMediaFinalize(
   value: unknown,
   expected: XUploadedMedia,
   expectedSize: number,
-  expectedMediaType: string,
+  expectedMediaType: XPublishMediaType,
   onFailureStage?: (stage: XMediaFinalizeBindingFailureStage) => void,
-): void {
+): XMediaProcessing | null {
   onFailureStage?.("media-upload-finalize-response-object");
   const response = record(value, "X media FINALIZE response");
   onFailureStage?.("media-upload-finalize-response-fields");
   exactResponseKeys(
     response,
     ["expires_after_secs", "media_id", "media_id_string", "size"],
-    ["image", "media_key"],
+    expectedMediaType === "video/mp4"
+      ? ["media_key", "processing_info", "video"]
+      : ["image", "media_key"],
     "X media FINALIZE response",
   );
   onFailureStage?.("media-upload-finalize-media-id");
@@ -1409,7 +1489,7 @@ function parseXMediaFinalize(
   if (
     !Number.isSafeInteger(response.size)
     || (response.size as number) < 1
-    || (response.size as number) > MAX_X_IMAGE_BYTES
+    || (response.size as number) > xMediaMaxBytes(expectedMediaType)
   ) throw new Error("X media FINALIZE response size was invalid");
   onFailureStage?.("media-upload-finalize-size-value");
   if (response.size !== expectedSize) {
@@ -1435,31 +1515,45 @@ function parseXMediaFinalize(
       || (image.h as number) > 100_000
     ) throw new Error("X media FINALIZE response image metadata was invalid");
   }
+  if (response.video !== undefined) {
+    onFailureStage?.("media-upload-finalize-video");
+    const video = record(response.video, "X media FINALIZE response video");
+    exactResponseKeys(video, ["video_type"], [], "X media FINALIZE response video");
+    if (video.video_type !== expectedMediaType) {
+      throw new Error("X media FINALIZE response video metadata was invalid");
+    }
+  }
+  if (response.processing_info === undefined) return null;
+  onFailureStage?.("media-upload-finalize-processing");
+  return parseXMediaProcessingInfo(response.processing_info, "X media FINALIZE response processing_info");
 }
 
 function xMediaUploadUrl(
-  command: "INIT" | "APPEND" | "FINALIZE",
+  command: "INIT" | "APPEND" | "FINALIZE" | "STATUS",
   values: {
     readonly id?: string;
     readonly segmentIndex?: number;
     readonly totalBytes?: number;
-    readonly mediaType?: string;
+    readonly mediaType?: XPublishMediaType;
   },
 ): URL {
   const url = new URL("/i/media/upload.json", X_UPLOAD_ORIGIN);
   url.searchParams.set("command", command);
   if (command === "INIT") {
+    const mediaType = values.mediaType;
+    if (mediaType !== "image/png" && mediaType !== "video/mp4") {
+      throw new Error("X media INIT request escaped its reviewed contract");
+    }
     if (
       !Number.isSafeInteger(values.totalBytes)
       || values.totalBytes! < 1
-      || values.totalBytes! > MAX_X_IMAGE_BYTES
-      || values.mediaType !== "image/png"
+      || values.totalBytes! > xMediaMaxBytes(mediaType)
       || values.id !== undefined
       || values.segmentIndex !== undefined
     ) throw new Error("X media INIT request escaped its reviewed contract");
     url.searchParams.set("total_bytes", String(values.totalBytes));
-    url.searchParams.set("media_type", values.mediaType);
-    url.searchParams.set("media_category", "tweet_image");
+    url.searchParams.set("media_type", mediaType);
+    url.searchParams.set("media_category", xMediaCategory(mediaType));
   } else {
     const id = xMediaId(values.id, `X media ${command} media ID`);
     url.searchParams.set("media_id", id);
@@ -1467,7 +1561,7 @@ function xMediaUploadUrl(
       if (
         !Number.isSafeInteger(values.segmentIndex)
         || values.segmentIndex! < 0
-        || values.segmentIndex! > 3
+        || values.segmentIndex! > MAX_X_VIDEO_UPLOAD_CHUNKS - 1
         || values.totalBytes !== undefined
         || values.mediaType !== undefined
       ) throw new Error("X media APPEND request escaped its reviewed contract");
@@ -1476,14 +1570,15 @@ function xMediaUploadUrl(
       values.segmentIndex !== undefined
       || values.totalBytes !== undefined
       || values.mediaType !== undefined
-    ) throw new Error("X media FINALIZE request escaped its reviewed contract");
+    ) throw new Error(`X media ${command} request escaped its reviewed contract`);
   }
   return url;
 }
 
-function multipartImageChunk(
+function multipartMediaChunk(
   chunk: Uint8Array,
   segmentIndex: number,
+  mediaType: XPublishMediaType,
 ): { readonly body: Uint8Array; readonly contentType: string } {
   const digest = createHash("sha256")
     .update(chunk)
@@ -1495,8 +1590,9 @@ function multipartImageChunk(
   if (Buffer.from(chunk).includes(boundaryBytes)) {
     throw new Error("X media chunk collided with its deterministic multipart boundary");
   }
+  const filename = xMediaUploadName(mediaType);
   const prefix = Buffer.from(
-    `--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="media.png"\r\nContent-Type: image/png\r\n\r\n`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="${filename}"\r\nContent-Type: ${mediaType}\r\n\r\n`,
     "utf8",
   );
   const suffix = Buffer.from(`\r\n--${boundary}--\r\n`, "ascii");
@@ -1524,11 +1620,66 @@ type XMediaUploadFailureStage =
   | "media-upload-init"
   | "media-upload-append"
   | "media-upload-finalize-request"
+  | "media-upload-status"
   | XMediaFinalizeBindingFailureStage;
 
-async function uploadXImage(
+function parseXMediaStatus(value: unknown, expected: XUploadedMedia): XMediaProcessing {
+  const response = record(value, "X media STATUS response");
+  exactResponseKeys(
+    response,
+    ["media_id_string", "processing_info"],
+    ["expires_after_secs", "media_id", "media_key", "size", "video"],
+    "X media STATUS response",
+  );
+  if (xMediaId(response.media_id_string, "X media STATUS response media_id_string") !== expected.id) {
+    throw new Error("X media STATUS response did not bind the initialized media ID");
+  }
+  if (response.media_key !== undefined) {
+    if (xMediaKey(response.media_key, expected.id, "X media STATUS response media_key") !== expected.key) {
+      throw new Error("X media STATUS response changed the initialized media key");
+    }
+  }
+  return parseXMediaProcessingInfo(response.processing_info, "X media STATUS response processing_info");
+}
+
+async function waitForXMediaProcessing(
+  uploadClient: WebSessionClient,
   bootstrap: XBootstrap,
-  image: XBoundImage,
+  initialized: XUploadedMedia,
+  initial: XMediaProcessing | null,
+  sleep: (milliseconds: number) => Promise<void>,
+  onFailureStage?: (stage: XMediaUploadFailureStage) => void,
+): Promise<void> {
+  let current = initial;
+  if (current === null || current.state === "succeeded") return;
+  if (current.state === "failed") throw new Error("X media processing failed");
+  const deadline = Date.now() + MAX_X_MEDIA_STATUS_WAIT_MS;
+  for (let attempt = 0; attempt < MAX_X_MEDIA_STATUS_POLLS; attempt += 1) {
+    const remaining = deadline - Date.now();
+    if (remaining < 1) break;
+    const delay = current.checkAfterSeconds * 1_000;
+    if (delay >= remaining) break;
+    if (delay > 0) await sleep(delay);
+    onFailureStage?.("media-upload-status");
+    current = parseXMediaStatus(
+      await uploadClient.requestJson({
+        url: xMediaUploadUrl("STATUS", { id: initialized.id }),
+        method: "GET",
+        headers: xUploadHeaders(bootstrap),
+        expectedStatuses: [200],
+        maxBytes: MAX_X_UPLOAD_RESPONSE_BYTES,
+      }),
+      initialized,
+    );
+    if (current.state === "succeeded") return;
+    if (current.state === "failed") throw new Error("X media processing failed");
+  }
+  throw new Error("X media processing did not complete within the bounded polling window");
+}
+
+async function uploadXMedia(
+  bootstrap: XBootstrap,
+  media: XBoundMedia,
   onFailureStage?: (stage: XMediaUploadFailureStage) => void,
 ): Promise<XUploadedMedia> {
   onFailureStage?.("media-upload-session");
@@ -1549,26 +1700,36 @@ async function uploadXImage(
   const initialized = parseXMediaInit(
     await uploadClient.requestJson({
       url: xMediaUploadUrl("INIT", {
-        totalBytes: image.bytes.byteLength,
-        mediaType: image.mediaType,
+        totalBytes: media.bytes.byteLength,
+        mediaType: media.mediaType,
       }),
       method: "POST",
       headers: xUploadHeaders(bootstrap),
       expectedStatuses: [200, 202],
       maxBytes: MAX_X_UPLOAD_RESPONSE_BYTES,
     }),
-    image.bytes.byteLength,
+    media.bytes.byteLength,
+    media.mediaType,
   );
-  const chunks = Math.ceil(image.bytes.byteLength / X_UPLOAD_CHUNK_BYTES);
-  if (chunks < 1 || chunks > 4) throw new Error("X image exceeded the reviewed upload chunk count");
+  const maxChunks = media.mediaType === "video/mp4"
+    ? MAX_X_VIDEO_UPLOAD_CHUNKS
+    : MAX_X_IMAGE_UPLOAD_CHUNKS;
+  const chunks = Math.ceil(media.bytes.byteLength / X_UPLOAD_CHUNK_BYTES);
+  if (chunks < 1 || chunks > maxChunks) {
+    throw new Error(
+      media.mediaType === "video/mp4"
+        ? "X video exceeded the reviewed upload chunk count"
+        : "X image exceeded the reviewed upload chunk count",
+    );
+  }
   onFailureStage?.("media-upload-append");
   for (let segmentIndex = 0; segmentIndex < chunks; segmentIndex += 1) {
     const start = segmentIndex * X_UPLOAD_CHUNK_BYTES;
-    const chunk = image.bytes.subarray(
+    const chunk = media.bytes.subarray(
       start,
-      Math.min(image.bytes.byteLength, start + X_UPLOAD_CHUNK_BYTES),
+      Math.min(media.bytes.byteLength, start + X_UPLOAD_CHUNK_BYTES),
     );
-    const multipart = multipartImageChunk(chunk, segmentIndex);
+    const multipart = multipartMediaChunk(chunk, segmentIndex, media.mediaType);
     const appended = await uploadClient.requestStatus({
       url: xMediaUploadUrl("APPEND", { id: initialized.id, segmentIndex }),
       method: "POST",
@@ -1588,13 +1749,24 @@ async function uploadXImage(
       expectedStatuses: [200, 201],
       maxBytes: MAX_X_UPLOAD_RESPONSE_BYTES,
     });
-  parseXMediaFinalize(
+  const processing = parseXMediaFinalize(
     finalized,
     initialized,
-    image.bytes.byteLength,
-    image.mediaType,
+    media.bytes.byteLength,
+    media.mediaType,
     onFailureStage,
   );
+  if (media.mediaType === "video/mp4") {
+    await waitForXMediaProcessing(
+      uploadClient,
+      bootstrap,
+      initialized,
+      processing,
+      bootstrap.dependencies?.sleep
+        ?? ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))),
+      onFailureStage,
+    );
+  }
   return initialized;
 }
 
@@ -1812,7 +1984,7 @@ export function xWebArticleImageFailureCategory(error: unknown): string {
   return "media-contract-step-failed";
 }
 
-function tweetMediaIds(legacy: JsonRecord): readonly string[] {
+function tweetMediaIds(legacy: JsonRecord, expectedReadbackType: "photo" | "video"): readonly string[] {
   const ids: string[][] = [];
   for (const [name, value] of [
     ["entities", legacy.entities],
@@ -1826,7 +1998,7 @@ function tweetMediaIds(legacy: JsonRecord): readonly string[] {
     }
     ids.push(container.media.map((item, index) => {
       const media = record(item, `X post ${name}.media[${index}]`);
-      if (media.type !== "photo") {
+      if (media.type !== expectedReadbackType) {
         throw new Error("X post readback contained an unsupported media type");
       }
       return xMediaId(media.id_str, `X post ${name}.media[${index}].id_str`);
@@ -1847,6 +2019,7 @@ function assertTweetBinding(
   quote: string | null,
   expectedAuthorId: string,
   expectedMediaId: string | null,
+  expectedMediaType: XPublishMediaType | null,
   label: string,
 ): { readonly id: string; readonly url: string } {
   const result = unwrapTweet(value, `${label}.result`);
@@ -1865,7 +2038,9 @@ function assertTweetBinding(
   if (returnedReply !== replyTo) throw new Error("X created post response did not bind the confirmed reply target");
   const returnedQuote = typeof legacy.quoted_status_id_str === "string" ? legacy.quoted_status_id_str : null;
   if (returnedQuote !== quote) throw new Error("X created post response did not bind the confirmed quote target");
-  const mediaIds = tweetMediaIds(legacy);
+  const mediaIds = expectedMediaType === null
+    ? tweetMediaIds(legacy, "photo")
+    : tweetMediaIds(legacy, xMediaReadbackType(expectedMediaType));
   if (
     (expectedMediaId === null && mediaIds.length !== 0)
     || (expectedMediaId !== null && (mediaIds.length !== 1 || mediaIds[0] !== expectedMediaId))
@@ -1880,6 +2055,7 @@ function createdTweet(
   quote: string | null,
   expectedAuthorId: string,
   expectedMediaId: string | null,
+  expectedMediaType: XPublishMediaType | null,
 ): { readonly id: string; readonly url: string } {
   const data = graphQlData(response, "X CreateTweet response");
   const create = record(data.create_tweet, "X CreateTweet response.create_tweet");
@@ -1891,6 +2067,7 @@ function createdTweet(
     quote,
     expectedAuthorId,
     expectedMediaId,
+    expectedMediaType,
     "X CreateTweet response",
   );
 }
@@ -2432,6 +2609,7 @@ async function publishOne(
     quote,
     authorId,
     media?.id ?? null,
+    media?.mediaType ?? null,
   );
   onFailureStage?.("accepted-target-recording");
   await afterProviderAcceptedMutationTarget?.({
@@ -2452,6 +2630,7 @@ async function publishOne(
     quote,
     authorId,
     media?.id ?? null,
+    media?.mediaType ?? null,
     "X independent post readback",
   );
   if (rebound.id !== created.id) {
@@ -2493,9 +2672,9 @@ async function executePublish(
   if (
     action !== "posts.publish"
     && (input.media !== undefined || input.media_type !== undefined)
-  ) throw new Error("X image upload is reviewed only for posts.publish");
-  const image = action === "posts.publish"
-    ? await readBoundXImage(input, options.fileResolver, bootstrap.operationDeadline)
+  ) throw new Error("X media upload is reviewed only for posts.publish");
+  const boundMedia = action === "posts.publish"
+    ? await readBoundXMedia(input, options.fileResolver, bootstrap.operationDeadline)
     : null;
   const texts = action === "threads.publish"
     ? threadTexts(input)
@@ -2518,7 +2697,7 @@ async function executePublish(
         started = index;
         failureStage = "post-dispatch";
       };
-      if (image !== null) {
+      if (boundMedia !== null) {
         failureStage = "viewer-binding-before-media-upload";
         const rebound = await requireBoundViewer(bootstrap, auth);
         if (rebound.id !== currentViewer.id) {
@@ -2529,7 +2708,7 @@ async function executePublish(
         // upload-response failure cannot strand the public-post intent as
         // indeterminate when no CreateTweet request was admitted.
         failureStage = "media-upload-session";
-        media = await uploadXImage(bootstrap, image, (stage) => {
+        media = await uploadXMedia(bootstrap, boundMedia, (stage) => {
           failureStage = stage;
         });
         failureStage = "viewer-binding-after-media-upload";
