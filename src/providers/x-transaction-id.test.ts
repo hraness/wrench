@@ -105,7 +105,7 @@ function fakeBrowser(options: FakeBrowserOptions = {}): {
         if (command[0] === "get" && command[1] === "url") {
           return Promise.resolve([{
             success: true,
-            data: { url: options.currentUrl ?? "https://x.com/robots.txt" },
+            data: { url: options.currentUrl ?? "https://x.com/home" },
           }]);
         }
         if (command[0] === "eval") {
@@ -215,7 +215,7 @@ describe("X client transaction browser bootstrap", () => {
       maxOutputBytes: 64 * 1024,
     });
     expect(fake.batchTimeouts).toEqual([1_000, 1_000, 1_000]);
-    expect(fake.commands[0]).toEqual(["open", "https://x.com/robots.txt"]);
+    expect(fake.commands[0]).toEqual(["open", "https://x.com/home"]);
     expect(fake.commands[1]).toEqual(["get", "url"]);
     expect(fake.commands[2]?.[0]).toBe("eval");
     const source = fake.commands[2]?.[1] ?? "";
@@ -224,7 +224,9 @@ describe("X client transaction browser bootstrap", () => {
     expect(source).toContain('"mainBundlePath":"/responsive-web/client-web/main.9929b02a.js"');
     expect(source).toContain("https://abs.twimg.com");
     expect(source).toContain("listedMains");
-    expect(source).not.toContain("https://x.com/home");
+    expect(source).toContain("text/html");
+    expect(source).toContain("X webpack runtime is unavailable");
+    expect(source).not.toContain("https://x.com/robots.txt");
     expect(source).toContain('"wrapperModuleId":991160');
     expect(source).toContain('"exportName":"kc"');
     expect(source).toContain('"chunkId":59924');
@@ -264,7 +266,7 @@ describe("X client transaction browser bootstrap", () => {
       (resolve) => {
         releaseBlockedBatch = () => resolve([{
           success: true,
-          data: { url: "https://x.com/robots.txt" },
+          data: { url: "https://x.com/home" },
         }]);
       },
     );

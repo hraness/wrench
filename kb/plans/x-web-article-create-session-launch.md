@@ -72,7 +72,7 @@ Box curls on the same machine: GET `https://x.com/` and `https://x.com/robots.tx
 
 ## Risks and recovery
 
-- First-party `main.js` might still refuse to install webpack on `/robots.txt` after cookies. The receipt will name that evaluation Error.
+- First-party `main.js` refused to install webpack on `/robots.txt` after cookies. Follow-up is [[plans/x-web-article-create-webpack|x-web Article transaction webpack document]].
 - If a later environment 403s `/robots.txt` itself, the receipt stays at create-prep and this launch URL must be revisited.
 
 ## Execution evidence

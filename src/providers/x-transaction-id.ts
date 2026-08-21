@@ -14,7 +14,7 @@ import type {
 } from "../web-session-execution";
 
 const X_ORIGIN = "https://x.com";
-const X_TRANSACTION_BOOTSTRAP = `${X_ORIGIN}/robots.txt`;
+const X_TRANSACTION_DOCUMENT = `${X_ORIGIN}/home`;
 const X_ASSET_ORIGIN = "https://abs.twimg.com";
 const MAX_MAIN_BUNDLE_BYTES = 16 * 1024 * 1024;
 const MAX_EVALUATION_OUTPUT_BYTES = 64 * 1024;
@@ -164,7 +164,7 @@ function transactionEvaluationSource(input: {
     chunkId: input.runtime.chunkId,
     moduleId: input.runtime.moduleId,
   });
-  return `(async()=>{const input=${bound};if(location.origin!=="${X_ORIGIN}")throw new Error("unexpected X origin");const listedMains=()=>Array.from(document.scripts).map((node)=>{try{return new URL(node.src,location.href)}catch{return null}}).filter((url)=>url!==null&&url.origin==="${X_ASSET_ORIGIN}"&&/^\\/responsive-web\\/client-web\\/main\\.[A-Za-z0-9_-]{6,128}\\.js$/.test(url.pathname));let mains=listedMains();if(mains.length===0){await new Promise((resolve,reject)=>{const script=document.createElement("script");script.src="${X_ASSET_ORIGIN}"+input.mainBundlePath;script.onload=()=>resolve();script.onerror=()=>reject(new Error("X main runtime failed to load"));document.documentElement.appendChild(script)});mains=listedMains()}if(mains.length!==1||mains[0].pathname!==input.mainBundlePath)throw new Error("X main runtime drifted");const chunks=globalThis.webpackChunk_twitter_responsive_web;if(!Array.isArray(chunks)||typeof chunks.push!=="function")throw new Error("X webpack runtime is unavailable");let runtime=null;chunks.push([["wrench_x_client_transaction_bootstrap"],{},(candidate)=>{runtime=candidate}]);if(typeof runtime!=="function")throw new Error("X webpack runtime is unavailable");const exports=runtime(input.wrapperModuleId);if(exports===null||typeof exports!=="object")throw new Error("X transaction wrapper is unavailable");const helper=exports[input.exportName];if(typeof helper!=="function")throw new Error("X transaction wrapper helper is unavailable");const value=await helper(location.host,input.path,input.method);if(typeof value!=="string"||value.length<8||value.length>2048)throw new Error("X transaction wrapper returned an invalid value");try{if(atob(value).startsWith("e:"))throw new Error("X transaction wrapper reported an error")}catch(error){if(error instanceof Error&&error.message==="X transaction wrapper reported an error")throw error}return value})()`;
+  return `(async()=>{const input=${bound};if(location.origin!=="${X_ORIGIN}")throw new Error("unexpected X origin");if(document.contentType!=="text/html")throw new Error("X webpack runtime is unavailable");const listedMains=()=>Array.from(document.scripts).map((node)=>{try{return new URL(node.src,location.href)}catch{return null}}).filter((url)=>url!==null&&url.origin==="${X_ASSET_ORIGIN}"&&/^\\/responsive-web\\/client-web\\/main\\.[A-Za-z0-9_-]{6,128}\\.js$/.test(url.pathname));let mains=listedMains();if(mains.length===0){await new Promise((resolve,reject)=>{const script=document.createElement("script");script.src="${X_ASSET_ORIGIN}"+input.mainBundlePath;script.onload=()=>resolve();script.onerror=()=>reject(new Error("X main runtime failed to load"));document.documentElement.appendChild(script)});mains=listedMains()}if(mains.length!==1||mains[0].pathname!==input.mainBundlePath)throw new Error("X main runtime drifted");const chunks=globalThis.webpackChunk_twitter_responsive_web;if(!Array.isArray(chunks)||typeof chunks.push!=="function")throw new Error("X webpack runtime is unavailable");let runtime=null;chunks.push([["wrench_x_client_transaction_bootstrap"],{},(candidate)=>{runtime=candidate}]);if(typeof runtime!=="function")throw new Error("X webpack runtime is unavailable");const exports=runtime(input.wrapperModuleId);if(exports===null||typeof exports!=="object")throw new Error("X transaction wrapper is unavailable");const helper=exports[input.exportName];if(typeof helper!=="function")throw new Error("X transaction wrapper helper is unavailable");const value=await helper(location.host,input.path,input.method);if(typeof value!=="string"||value.length<8||value.length>2048)throw new Error("X transaction wrapper returned an invalid value");try{if(atob(value).startsWith("e:"))throw new Error("X transaction wrapper reported an error")}catch(error){if(error instanceof Error&&error.message==="X transaction wrapper reported an error")throw error}return value})()`;
 }
 
 function currentBrowserUrl(record: Record<string, unknown>): URL {
@@ -359,10 +359,13 @@ export async function generateXClientTransactionId(input: {
     );
   };
   try {
-    // Cookie-source session launch now opens this same URL before cookies.
-    // This second open is after injection. /home still 403s for unauthenticated
-    // or bot-challenged Chromium (net::ERR_HTTP_RESPONSE_CODE_FAILURE).
-    await runBatch([["open", X_TRANSACTION_BOOTSTRAP]]);
+    // Cookie-source session launch already opened /robots.txt before cookies.
+    // After injection, eval needs the responsive-web HTML that installs
+    // webpackChunk_twitter_responsive_web (vendor + main). /robots.txt is
+    // text/plain and cannot host that runtime. / is a logged-out x-web stack.
+    // /home is the same document bootstrapX already fetched as text/html with
+    // these cookies.
+    await runBatch([["open", X_TRANSACTION_DOCUMENT]]);
     const [urlRecord] = await runBatch([["get", "url"]]);
     if (urlRecord === undefined) throw new Error("X transaction bootstrap browser omitted its current URL");
     currentBrowserUrl(urlRecord);
