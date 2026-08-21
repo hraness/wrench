@@ -1714,6 +1714,133 @@ describe("X authenticated internal-API runtime", () => {
     expect(calls.filter((call) => call.method === "POST" && call.url.hostname === "x.com")).toHaveLength(0);
   });
 
+  test("keeps create undispatched after two verified images when transaction navigation is rejected", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Private native Article with images";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = twoImageArticleDocument();
+    let initCount = 0;
+    let opened = 0;
+    const tokens = articleImageSupportTokens();
+    const createBrowser: NonNullable<XWebRuntimeDependencies["createBrowserSession"]> = () => {
+      const session: BrowserSession = {
+        runBatch: (batch) => {
+          const command = batch[0];
+          if (batch.length !== 1 || command === undefined) throw new Error("unexpected transaction browser batch");
+          if (command[0] === "open") {
+            opened += 1;
+            throw new Error(
+              "agent-browser batch failed with exit code 1: Navigation failed: net::ERR_HTTP_RESPONSE_CODE_FAILURE",
+            );
+          }
+          throw new Error(`unexpected browser command after navigation failure ${command[0]}`);
+        },
+        close: () => Promise.resolve(),
+        cleanup: () => Promise.resolve(),
+      };
+      return Promise.resolve(session);
+    };
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response([
+          observedArticleDescriptor("ArticleEntityDraftCreate", ARTICLE_QUERY_ID, "mutation"),
+          observedArticleDescriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_UPLOADER_BUNDLE_URL) {
+        return new Response(tokens.uploader, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+        return new Response(tokens.entities, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+        return new Response(tokens.converter, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.hostname === "upload.x.com") {
+        const command = request.url.searchParams.get("command");
+        if (command === "INIT") {
+          const mediaId = mediaIds[initCount];
+          initCount += 1;
+          expect(mediaId).toBeDefined();
+          return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 202);
+        }
+        if (command === "APPEND") {
+          return new Response(null, { status: 204 });
+        }
+        if (command === "FINALIZE") {
+          return jsonResponse({
+            media_id_string: request.url.searchParams.get("media_id"),
+            expires_after_secs: 86_400,
+          }, 201);
+        }
+      }
+      throw new Error(`unexpected navigation-failure Article request ${request.url.href}`);
+    }, { createBrowserSession: createBrowser });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: (files) => {
+          expect(files).toHaveLength(2);
+          return Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]);
+        },
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "partial",
+      output: null,
+      finalUrl: null,
+      dispatchStarted: true,
+      dispatch: { planned: 3, started: 2, verified: 2 },
+    });
+    expect(result.error).toBe(
+      "X verified only part of the confirmed private Article workflow; failure stage: preparing the Article create mutation; agent-browser batch failed with exit code 1: Navigation failed: net::ERR_HTTP_RESPONSE_CODE_FAILURE; inspect the draft before retrying",
+    );
+    expect(opened).toBe(1);
+    expect(before.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+    ]);
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+    ]);
+    expect(initCount).toBe(2);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toBeFalse();
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+    expect(calls.filter((call) => call.method === "POST" && call.url.hostname === "x.com")).toHaveLength(0);
+  });
+
   test("reconciles one exact existing text-and-links Article without a mutation path", async () => {
     const calls: CapturedRequest[] = [];
     const title = "Harnessing Puerto Rico";
@@ -2615,13 +2742,13 @@ describe("X authenticated internal-API runtime", () => {
                 throw new Error("unexpected transaction browser batch");
               }
               if (command[0] === "open") {
-                expect(command[1]).toBe("https://x.com/home");
+                expect(command[1]).toBe("https://x.com/robots.txt");
                 order.push("transaction:open");
                 return Promise.resolve([{ success: true, data: null }]);
               }
               if (command[0] === "get" && command[1] === "url") {
                 order.push("transaction:get-url");
-                return Promise.resolve([{ success: true, data: { url: "https://x.com/home" } }]);
+                return Promise.resolve([{ success: true, data: { url: "https://x.com/robots.txt" } }]);
               }
               if (command[0] === "eval") {
                 expect(command[1]).toContain(`"method":"POST","path":"${mutationPath}"`);
