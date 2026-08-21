@@ -99,6 +99,12 @@ describe("wrench.rip static site", () => {
     expect(html).toContain("Privacy: cookieless PostHog analytics");
     expect(html).toContain(`href="${PUBLISHER_URL}">Hraness GitHub organization</a>`);
     expect(notFound).toContain('<meta name="robots" content="noindex, nofollow">');
+    expect(notFound).toContain(
+      '<meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">',
+    );
+    expect(notFound).toContain(
+      '<meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">',
+    );
     expect(notFound).toContain("Privacy: this page uses cookieless, personless PostHog analytics");
     expect(notFound).not.toContain('type="application/ld+json"');
     expect(robots).toBe(`User-agent: *\nAllow: /\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`);
@@ -173,6 +179,13 @@ describe("wrench.rip static site", () => {
       expect(pageHtml).toContain(`<meta name="twitter:title" content="${definition.title}">`);
       expect(pageHtml).toContain(`<meta name="twitter:description" content="${definition.description}">`);
       expect(pageHtml).toContain('<meta name="robots" content="max-image-preview:large">');
+      expect(pageHtml).toContain(
+        '<meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">',
+      );
+      expect(pageHtml).toContain(
+        '<meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">',
+      );
+      expect(pageHtml.match(/<meta name="theme-color"/gu)).toHaveLength(2);
       expect(pageHtml.match(/<h1\b/gu)).toHaveLength(1);
       expect(pageHtml).not.toContain('<meta name="keywords"');
       expect(pageHtml).not.toContain("{{");
