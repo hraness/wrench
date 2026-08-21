@@ -2048,26 +2048,105 @@ function orderedArticleReadbackEntities(
   });
 }
 
+function observedArticleValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isFinite(value)) return `${value}`;
+  if (typeof value === "boolean") return `${value}`;
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  return typeof value;
+}
+
+function articleReadbackField(
+  value: JsonRecord,
+  snake: string,
+  camel: string,
+): unknown {
+  return value[snake] !== undefined ? value[snake] : value[camel];
+}
+
+function normalizedArticleLocalMediaId(
+  value: unknown,
+  label: string,
+  entityType: string,
+): number {
+  if (
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= 1
+    && value <= MAX_ARTICLE_INLINE_IMAGES
+  ) {
+    return value;
+  }
+  if (typeof value === "string" && /^(?:[1-9]|1[0-9]|20)$/u.test(value)) {
+    return Number(value);
+  }
+  throw new Error(
+    `${label} is not a reviewed local media ID; type: ${JSON.stringify(entityType)}; observed local_media_id: ${observedArticleValue(value)} (${value === null ? "null" : typeof value})`,
+  );
+}
+
 function normalizedArticleMediaItems(
   value: unknown,
   label: string,
-  fields: {
-    readonly localMediaId: string;
-    readonly mediaCategory: string;
-    readonly mediaId: string;
-  },
+  entityType: string,
 ): unknown {
   if (!Array.isArray(value)) {
     return value;
   }
-  return Object.freeze(value.map((item) => {
-    const media = record(item, label);
+  return Object.freeze(value.map((item, index) => {
+    const media = record(item, `${label}[${index}]`);
     return Object.freeze({
-      local_media_id: media[fields.localMediaId],
-      media_category: media[fields.mediaCategory],
-      media_id: media[fields.mediaId],
+      local_media_id: normalizedArticleLocalMediaId(
+        articleReadbackField(media, "local_media_id", "localMediaId"),
+        `${label}[${index}].local_media_id`,
+        entityType,
+      ),
+      media_category: articleReadbackField(media, "media_category", "mediaCategory"),
+      media_id: articleReadbackField(media, "media_id", "mediaId"),
     });
   }));
+}
+
+function normalizedArticleMediaEntityData(
+  data: JsonRecord,
+  sourceEntityKey: string,
+  index: number,
+  entityType: string,
+): Readonly<Record<string, unknown>> {
+  const sourceDataKey = normalizedArticleEntityKey(
+    articleReadbackField(data, "entity_key", "entityKey"),
+    `X Article readback entity ${index}.data.entity_key`,
+  );
+  if (sourceDataKey !== sourceEntityKey) {
+    throw new Error(`X Article readback entity ${index} changed its media entity key`);
+  }
+  return Object.freeze({
+    ...(data.caption === undefined || data.caption === null || data.caption === ""
+      ? {}
+      : { caption: data.caption }),
+    entity_key: `${index}`,
+    media_items: normalizedArticleMediaItems(
+      articleReadbackField(data, "media_items", "mediaItems"),
+      `X Article readback entity ${index}.media_items`,
+      entityType,
+    ),
+  });
+}
+
+function unreviewedArticleEntityError(
+  index: number,
+  entityType: unknown,
+  data: JsonRecord,
+): Error {
+  const items = articleReadbackField(data, "media_items", "mediaItems");
+  const first = Array.isArray(items) ? items[0] : undefined;
+  const localId = isRecord(first)
+    ? articleReadbackField(first, "local_media_id", "localMediaId")
+    : undefined;
+  return new Error(
+    `X Article readback entity ${index} used unreviewed type ${JSON.stringify(entityType)}; observed local_media_id: ${observedArticleValue(localId)} (${localId === null ? "null" : typeof localId})`,
+  );
 }
 
 function remappedArticleEntityKey(
@@ -2271,31 +2350,11 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
         entry.data,
         `X Article readback entity ${index}.data`,
       );
+      if (entry.type !== "MEDIA" && entry.type !== "LINK") {
+        throw unreviewedArticleEntityError(index, entry.type, data);
+      }
       const normalizedData = entry.type === "MEDIA"
-        ? Object.freeze({
-            ...(data.caption === undefined || data.caption === null || data.caption === ""
-              ? {}
-              : { caption: data.caption }),
-            entity_key: (() => {
-              const sourceDataKey = normalizedArticleEntityKey(
-                data.entity_key,
-                `X Article readback entity ${index}.data.entity_key`,
-              );
-              if (sourceDataKey !== sourceEntityKey) {
-                throw new Error(`X Article readback entity ${index} changed its media entity key`);
-              }
-              return `${index}`;
-            })(),
-            media_items: normalizedArticleMediaItems(
-              data.media_items,
-              `X Article readback entity ${index}.media_items`,
-              {
-                localMediaId: "local_media_id",
-                mediaCategory: "media_category",
-                mediaId: "media_id",
-              },
-            ),
-          })
+        ? normalizedArticleMediaEntityData(data, sourceEntityKey, index, entry.type)
         : Object.freeze({ url: data.url });
       return Object.freeze({
         key: `${index}`,
@@ -2369,31 +2428,11 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
     );
     const entry = record(entity.value, `X Article readback entity ${index}.value`);
     const data = record(entry.data, `X Article readback entity ${index}.data`);
+    if (entry.type !== "MEDIA" && entry.type !== "LINK") {
+      throw unreviewedArticleEntityError(index, entry.type, data);
+    }
     const normalizedData = entry.type === "MEDIA"
-      ? Object.freeze({
-          ...(data.caption === undefined || data.caption === null || data.caption === ""
-            ? {}
-            : { caption: data.caption }),
-          entity_key: (() => {
-            const sourceDataKey = normalizedArticleEntityKey(
-              data.entityKey,
-              `X Article readback entity ${index}.data.entityKey`,
-            );
-            if (sourceDataKey !== sourceEntityKey) {
-              throw new Error(`X Article readback entity ${index} changed its media entity key`);
-            }
-            return `${index}`;
-          })(),
-          media_items: normalizedArticleMediaItems(
-            data.mediaItems,
-            `X Article readback entity ${index}.media_items`,
-            {
-              localMediaId: "localMediaId",
-              mediaCategory: "mediaCategory",
-              mediaId: "mediaId",
-            },
-          ),
-        })
+      ? normalizedArticleMediaEntityData(data, sourceEntityKey, index, entry.type)
       : Object.freeze({ url: data.url });
     return Object.freeze({
       key: `${index}`,
@@ -2433,8 +2472,33 @@ function verifyFinalRichArticle(
   }
   const content = normalizeArticleContentReadback(article.content_state);
   if (canonicalJson(content) !== canonicalJson(expected.contentState)) {
+    const expectedIds = new Set(
+      articleContentMediaLocalIds(expected.contentState).map((id) => `${id}`),
+    );
+    for (const id of articleContentMediaLocalIds(content)) {
+      if (!expectedIds.has(`${id}`)) {
+        throw new Error(
+          `X Article readback included an unreviewed MEDIA entity; type: "MEDIA"; observed local_media_id: ${observedArticleValue(id)} (${typeof id})`,
+        );
+      }
+    }
     throw new Error("X Article readback did not bind the confirmed rich content state");
   }
+}
+
+function articleContentMediaLocalIds(
+  contentState: XWebRichArticleContentState,
+): readonly unknown[] {
+  const ids: unknown[] = [];
+  for (const entity of contentState.entity_map) {
+    const value = record(entity.value, "X Article entity value");
+    if (value.type !== "MEDIA") continue;
+    const data = record(value.data, "X Article entity data");
+    if (!Array.isArray(data.media_items) || data.media_items[0] === undefined) continue;
+    const media = record(data.media_items[0], "X Article media item");
+    ids.push(media.local_media_id);
+  }
+  return ids;
 }
 
 async function waitForVerifiedArticleReadback(

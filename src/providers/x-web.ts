@@ -37,6 +37,13 @@ function record(value: unknown, label: string): JsonRecord {
   return value;
 }
 
+function observedLocalMediaId(value: unknown): string {
+  if (typeof value === "string") return `${JSON.stringify(value)} (string)`;
+  if (value === undefined) return "undefined (undefined)";
+  if (value === null) return "null (null)";
+  return `${value} (${typeof value})`;
+}
+
 function exactKeys(value: JsonRecord, expected: readonly string[], label: string): void {
   const expectedSet = new Set(expected);
   const extra = Object.keys(value).filter((key) => !expectedSet.has(key));
@@ -819,7 +826,9 @@ export function validateXWebRichArticleContentState(value: unknown): void {
     const media = record(data.media_items[0], `X rich Article entity ${index}.media_items[0]`);
     exactMutationKeys(media, ["local_media_id", "media_category", "media_id"], `X rich Article entity ${index}.media_items[0]`);
     if (!Number.isSafeInteger(media.local_media_id) || (media.local_media_id as number) < 1) {
-      throw new Error("X rich Article local media IDs must be positive integers");
+      throw new Error(
+        `X rich Article local media IDs must be positive integers; type: ${JSON.stringify(entry.type)}; observed local_media_id: ${observedLocalMediaId(media.local_media_id)}`,
+      );
     }
     if (media.media_category !== "DraftTweetImage") {
       throw new Error("X rich Article inline media must use DraftTweetImage");

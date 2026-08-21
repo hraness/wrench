@@ -208,6 +208,83 @@ function articleContentStateWithBlockData(
   };
 }
 
+function articleContentStateWithMixedLocalMediaIds(
+  contentState: ReturnType<typeof buildXWebRichArticleContentState>,
+): unknown {
+  let mediaIndex = 0;
+  return {
+    blocks: contentState.blocks,
+    entity_map: contentState.entity_map.map((entity) => {
+      const value = entity.value as {
+        readonly data: Record<string, unknown>;
+        readonly type: string;
+        readonly mutability: string;
+      };
+      if (value.type !== "MEDIA" || !Array.isArray(value.data.media_items)) {
+        return entity;
+      }
+      const item = value.data.media_items[0] as Record<string, unknown>;
+      mediaIndex += 1;
+      return {
+        key: entity.key,
+        value: {
+          data: {
+            ...value.data,
+            media_items: [mediaIndex === 1
+              ? {
+                  localMediaId: "1",
+                  mediaCategory: item.media_category,
+                  mediaId: item.media_id,
+                  url: "https://pbs.twimg.com/media/example.webp",
+                }
+              : {
+                  local_media_id: "2",
+                  media_category: item.media_category,
+                  media_id: item.media_id,
+                }],
+          },
+          mutability: value.mutability,
+          type: value.type,
+        },
+      };
+    }),
+  };
+}
+
+function articleContentStateWithTweetUrlMedia(
+  contentState: ReturnType<typeof buildXWebRichArticleContentState>,
+  tweetUrl: string,
+): unknown {
+  return {
+    blocks: contentState.blocks,
+    entity_map: contentState.entity_map.map((entity) => {
+      const value = entity.value as {
+        readonly data: Record<string, unknown>;
+        readonly type: string;
+        readonly mutability: string;
+      };
+      if (value.type !== "LINK" || value.data.url !== tweetUrl) {
+        return entity;
+      }
+      return {
+        key: entity.key,
+        value: {
+          data: {
+            entity_key: entity.key,
+            media_items: [{
+              local_media_id: "2090583665583468672",
+              media_category: "DraftTweetImage",
+              media_id: "2090583665583468672",
+            }],
+          },
+          mutability: "Immutable",
+          type: "MEDIA",
+        },
+      };
+    }),
+  };
+}
+
 function articleContentStateWithExtraMediaFields(
   contentState: ReturnType<typeof buildXWebRichArticleContentState>,
 ): unknown {
@@ -1842,6 +1919,148 @@ describe("X authenticated internal-API runtime", () => {
         variables: { content_state: expectedContentState, title },
       });
     expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("creates one private Article when readback local_media_id is a digit string or camelCase on a snake-case entity map", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Building a software factory";
+    const articleId = "700000000000000013";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = mentionQuoteTwoImageArticleDocument();
+    const expectedContentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocumentV2(documentValue, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+        maximumImages: 20,
+      }),
+      mediaIds,
+    );
+    const runtimeDependencies = twoImageCreateRuntime(calls, {
+      title,
+      articleId,
+      mediaIds,
+      expectedContentState,
+      readback: () => jsonResponse(privateDraftArticleResponse({
+        articleId,
+        title,
+        contentState: articleContentStateWithMixedLocalMediaIds(expectedContentState),
+      })),
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: () => Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]),
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        published: false,
+        mode: "draft",
+        draftId: articleId,
+        url: `https://x.com/compose/articles/edit/${articleId}`,
+      },
+      dispatch: { planned: 3, started: 3, verified: 3 },
+    });
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+      "articles.create",
+    ]);
+    expect(JSON.parse(calls.find((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))?.body ?? "null"))
+      .toMatchObject({
+        variables: { content_state: expectedContentState, title },
+      });
+    expect(
+      JSON.parse(calls.find((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))?.body ?? "null")
+        .variables.content_state.entity_map[0].value.data.media_items[0].local_media_id,
+    ).toBe(1);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("surfaces an unreviewed created-Article MEDIA local id and stays indeterminate", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Building a software factory";
+    const articleId = "700000000000000013";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const tweetUrl = "https://x.com/hraness/status/2090583665583468672";
+    const documentValue = mentionQuoteTwoImageArticleDocument();
+    const expectedContentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocumentV2(documentValue, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+        maximumImages: 20,
+      }),
+      mediaIds,
+    );
+    const runtimeDependencies = twoImageCreateRuntime(calls, {
+      title,
+      articleId,
+      mediaIds,
+      expectedContentState,
+      readback: () => jsonResponse(privateDraftArticleResponse({
+        articleId,
+        title,
+        contentState: articleContentStateWithTweetUrlMedia(expectedContentState, tweetUrl),
+      })),
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: () => Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]),
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      output: null,
+      dispatchStarted: true,
+      dispatch: { planned: 3, started: 3, verified: 2 },
+    });
+    expect(result.error).toBe(
+      "X may have accepted an inline-image upload or private Article dispatch while verifying the created Article readback; X Article readback entity 2.media_items[0].local_media_id is not a reviewed local media ID; type: \"MEDIA\"; observed local_media_id: \"2090583665583468672\" (string); its provider media IDs are not present in the confirmed input, so preserve the indeterminate run and do not retry",
+    );
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+    ]);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(4);
     expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
   });
 
