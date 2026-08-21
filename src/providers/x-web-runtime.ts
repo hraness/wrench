@@ -2679,6 +2679,7 @@ async function executeArticleDraftSave(
         uploadedImageIds.push(mediaId);
         await complete(id, index);
       }
+      failureStage = "preparing the Article content state";
       contentState = buildXWebRichArticleContentState(document, uploadedImageIds);
     }
     if (contentState === null) {
@@ -2786,6 +2787,9 @@ async function executeArticleDraftSave(
     };
   } catch (error) {
     const url = draftId === null ? null : `${X_ORIGIN}/compose/articles/edit/${draftId}`;
+    const preparationReason = error instanceof Error && error.message.trim() !== ""
+      ? error.message.trim()
+      : "unknown preparation failure";
     return {
       status: started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed",
       output: null,
@@ -2799,8 +2803,8 @@ async function executeArticleDraftSave(
           ? "X may have accepted the private Article create, but the confirmed input has no exact draft ID for safe reconciliation; preserve the indeterminate run and do not retry"
           : "X may have accepted the current private Article replacement dispatch; reconcile the exact existing draft before retrying"
         : verified > 0
-          ? "X verified only part of the confirmed private Article workflow; inspect the draft before retrying"
-          : `X Article draft failed before remote submission while ${failureStage}`,
+          ? `X verified only part of the confirmed private Article workflow; failure stage: ${failureStage}; ${preparationReason}; inspect the draft before retrying`
+          : `X Article draft failed before remote submission while ${failureStage}; ${preparationReason}`,
     };
   }
 }

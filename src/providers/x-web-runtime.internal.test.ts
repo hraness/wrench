@@ -30,8 +30,20 @@ const CREATE_TWEET_QUERY_ID = "WXTdKnLddrQOunD6MhWi3g";
 const STALE_CREATE_TWEET_QUERY_ID = "hIL9XdleMYEtVXOZVbr8Bg";
 const VIEWER_QUERY_ID = "5XShkXk2oO2J7SYmTu6pvw";
 const ARTICLE_QUERY_ID = "btD9FyMDa3_vydVp7fr87Q";
+const STALE_ARTICLE_QUERY_ID = "StaleArticleDraftCreateId";
 const ARTICLE_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/bundle.TwitterArticles.305538ca.js";
 const ARTICLE_RESULT_QUERY_ID = "rPdndX2XxQoXIMUafLSSJQ";
+const ARTICLE_CREATE_FEATURE_SWITCHES = Object.freeze([
+  "profile_label_improvements_pcf_label_in_post_enabled",
+  "responsive_web_profile_redirect_enabled",
+  "rweb_tipjar_consumption_enabled",
+  "verified_phone_label_enabled",
+  "responsive_web_graphql_timeline_navigation_enabled",
+]);
+const ARTICLE_CREATE_FIELD_TOGGLES = Object.freeze([
+  "withPayments",
+  "withAuxiliaryUserLabels",
+]);
 const ARTICLE_TITLE_QUERY_ID = "z_xdvTUbZjSVjt232b4D4A";
 const ARTICLE_CONTENT_QUERY_ID = "P5Nc3DYs9D4XqVthNrig8w";
 const ARTICLE_ENTITIES_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory.d1314bba.js";
@@ -99,6 +111,65 @@ function mainBundle(...descriptors: readonly string[]): string {
 
 function articleHtml(): string {
   return `${homeHtml()}<script>p.u=e=>({31770:"bundle.TwitterArticles"})[e]||e)+"."+({31770:"305538c"})[e]+"a.js"</script>`;
+}
+
+function articleImageSupportTokens(): {
+  readonly uploader: string;
+  readonly entities: string;
+  readonly converter: string;
+} {
+  return {
+    uploader: [
+      '"upload.x.com"',
+      '"upload-a.x.com"',
+      '"upload-b.x.com"',
+      "/i/media/${l}",
+      '"INIT"',
+      '"APPEND"',
+      '"FINALIZE"',
+      "media_category=${p}",
+      'TweetImage:"tweet_image"',
+      'TwitterArticle:"twitter_article"',
+    ].join(";"),
+    entities: [
+      "createEntity(p.LA.MEDIA,p.Ei.IMMUTABLE",
+      "mediaCategory:E(e)",
+      "mediaId:e.uploadId",
+      'createEntity(w.Sg,"MUTABLE",{url:',
+    ].join(";"),
+    converter: [
+      "media_items:r.data?.mediaItems?.map",
+      "media_category:e.mediaCategory",
+      "mutability:s[r.mutability]",
+      "inline_style_ranges:",
+    ].join(";"),
+  };
+}
+
+function observedArticleDescriptor(
+  operationName: string,
+  queryId: string,
+  operationType: "query" | "mutation",
+): string {
+  const featureSwitches = ARTICLE_CREATE_FEATURE_SWITCHES.map((name) => `"${name}"`).join(",");
+  const fieldToggles = ARTICLE_CREATE_FIELD_TOGGLES.map((name) => `"${name}"`).join(",");
+  return `queryId:"${queryId}",operationName:"${operationName}",operationType:"${operationType}",metadata:{featureSwitches:[${featureSwitches}],fieldToggles:[${fieldToggles}]}`;
+}
+
+function fixtureArticleImagePath(): string {
+  return join(import.meta.dir, "..", "..", "website", "public", "og.png");
+}
+
+function twoImageArticleDocument(): string {
+  return canonicalJson({
+    schemaVersion: 2,
+    blocks: [
+      { type: "paragraph", text: "Before the images" },
+      { type: "image", imageIndex: 0, caption: "First inline" },
+      { type: "image", imageIndex: 1, caption: "Second inline" },
+      { type: "paragraph", text: "After the images" },
+    ],
+  });
 }
 
 function richArticleHtml(): string {
@@ -1245,34 +1316,19 @@ describe("X authenticated internal-API runtime", () => {
         ].join(";"), { headers: { "content-type": "application/javascript" } });
       }
       if (request.url.href === ARTICLE_UPLOADER_BUNDLE_URL) {
-        return new Response([
-          '"upload.x.com"',
-          '"upload-a.x.com"',
-          '"upload-b.x.com"',
-          "/i/media/${l}",
-          '"INIT"',
-          '"APPEND"',
-          '"FINALIZE"',
-          "media_category=${p}",
-          'TweetImage:"tweet_image"',
-          'TwitterArticle:"twitter_article"',
-        ].join(";"), { headers: { "content-type": "application/javascript" } });
+        return new Response(articleImageSupportTokens().uploader, {
+          headers: { "content-type": "application/javascript" },
+        });
       }
       if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
-        return new Response([
-          "createEntity(p.LA.MEDIA,p.Ei.IMMUTABLE",
-          "mediaCategory:E(e)",
-          "mediaId:e.uploadId",
-          'createEntity(w.Sg,"MUTABLE",{url:',
-        ].join(";"), { headers: { "content-type": "application/javascript" } });
+        return new Response(articleImageSupportTokens().entities, {
+          headers: { "content-type": "application/javascript" },
+        });
       }
       if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
-        return new Response([
-          "media_items:r.data?.mediaItems?.map",
-          "media_category:e.mediaCategory",
-          "mutability:s[r.mutability]",
-          "inline_style_ranges:",
-        ].join(";"), { headers: { "content-type": "application/javascript" } });
+        return new Response(articleImageSupportTokens().converter, {
+          headers: { "content-type": "application/javascript" },
+        });
       }
       if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
       if (request.url.hostname === "upload.x.com") {
@@ -1342,9 +1398,7 @@ describe("X authenticated internal-API runtime", () => {
         dependencies: runtimeDependencies,
         fileResolver: (files) => {
           expect(files).toEqual([{ kind: "file", reference: "fixture-image" }]);
-          return Promise.resolve([
-            join(import.meta.dir, "..", "..", "website", "public", "og.png"),
-          ]);
+          return Promise.resolve([fixtureArticleImagePath()]);
         },
         beforeDispatch: (event) => {
           before.push(event);
@@ -1387,6 +1441,277 @@ describe("X authenticated internal-API runtime", () => {
       },
       xAuth,
     )).rejects.toThrow("supports only articles.draft.save@1");
+  });
+
+  test("creates one private Article after two verified inline-image uploads and never publishes", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Private native Article with images";
+    const articleId = "700000000000000013";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = twoImageArticleDocument();
+    const document = parseArticleDraftDocumentV2(documentValue, {
+      maximumBlocks: 2_000,
+      maximumCharacters: 20_000,
+      maximumImages: 20,
+    });
+    const expectedContentState = buildXWebRichArticleContentState(document, mediaIds);
+    let initCount = 0;
+    const tokens = articleImageSupportTokens();
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response([
+          observedArticleDescriptor("ArticleEntityDraftCreate", ARTICLE_QUERY_ID, "mutation"),
+          observedArticleDescriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_UPLOADER_BUNDLE_URL) {
+        return new Response(tokens.uploader, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+        return new Response(tokens.entities, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+        return new Response(tokens.converter, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.hostname === "upload.x.com") {
+        const command = request.url.searchParams.get("command");
+        if (command === "INIT") {
+          const mediaId = mediaIds[initCount];
+          initCount += 1;
+          expect(mediaId).toBeDefined();
+          expect(request.url.searchParams.get("media_category")).toBe("tweet_image");
+          expect(request.url.searchParams.get("media_type")).toBe("image/png");
+          expect(request.url.searchParams.get("total_bytes")).toBe("869311");
+          return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 202);
+        }
+        if (command === "APPEND") {
+          const mediaId = request.url.searchParams.get("media_id");
+          expect(mediaId === mediaIds[0] || mediaId === mediaIds[1]).toBeTrue();
+          expect(request.url.searchParams.get("segment_index")).toBe("0");
+          return new Response(null, { status: 204 });
+        }
+        if (command === "FINALIZE") {
+          const mediaId = request.url.searchParams.get("media_id");
+          expect(mediaId === mediaIds[0] || mediaId === mediaIds[1]).toBeTrue();
+          return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 201);
+        }
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityDraftCreate")) {
+        expect(request.method).toBe("POST");
+        expect(request.headers.get("x-client-transaction-id")).toBe(CLIENT_TRANSACTION_ID);
+        expect(JSON.parse(request.body ?? "null")).toEqual({
+          variables: { content_state: expectedContentState, title },
+          features: Object.fromEntries(ARTICLE_CREATE_FEATURE_SWITCHES.map((name) => [name, false])),
+          fieldToggles: Object.fromEntries(ARTICLE_CREATE_FIELD_TOGGLES.map((name) => [name, false])),
+          queryId: ARTICLE_QUERY_ID,
+        });
+        return jsonResponse({
+          data: {
+            articleentity_create_draft: {
+              article_entity_results: { result: { rest_id: articleId, title } },
+            },
+          },
+        });
+      }
+      if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+        expect(request.method).toBe("GET");
+        return jsonResponse({
+          data: {
+            article_result_by_rest_id: {
+              rest_id: articleId,
+              title,
+              metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+              lifecycle_state: { lifecycle: "Draft" },
+              content_state: expectedContentState,
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected create-after-images request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: (files) => {
+          expect(files).toEqual([
+            { kind: "file", reference: "fixture-image-1" },
+            { kind: "file", reference: "fixture-image-2" },
+          ]);
+          return Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]);
+        },
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.draft.save",
+        published: false,
+        mode: "draft",
+        draftId: articleId,
+        title,
+        documentSchemaVersion: 2,
+        inlineImageCount: 2,
+        url: `https://x.com/compose/articles/edit/${articleId}`,
+      },
+      finalUrl: `https://x.com/compose/articles/edit/${articleId}`,
+      dispatchStarted: true,
+      dispatch: { planned: 3, started: 3, verified: 3 },
+    });
+    expect(before.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+      "articles.create",
+    ]);
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+      "articles.create",
+    ]);
+    expect(initCount).toBe(2);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("keeps create undispatched after two verified images when ArticleEntityDraftCreate evidence drifted", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Private native Article with images";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = twoImageArticleDocument();
+    let initCount = 0;
+    const tokens = articleImageSupportTokens();
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response([
+          observedArticleDescriptor("ArticleEntityDraftCreate", STALE_ARTICLE_QUERY_ID, "mutation"),
+          observedArticleDescriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+        ].join(";"), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_UPLOADER_BUNDLE_URL) {
+        return new Response(tokens.uploader, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+        return new Response(tokens.entities, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+        return new Response(tokens.converter, { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.hostname === "upload.x.com") {
+        const command = request.url.searchParams.get("command");
+        if (command === "INIT") {
+          const mediaId = mediaIds[initCount];
+          initCount += 1;
+          expect(mediaId).toBeDefined();
+          return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 202);
+        }
+        if (command === "APPEND") {
+          return new Response(null, { status: 204 });
+        }
+        if (command === "FINALIZE") {
+          return jsonResponse({
+            media_id_string: request.url.searchParams.get("media_id"),
+            expires_after_secs: 86_400,
+          }, 201);
+        }
+      }
+      throw new Error(`unexpected drifted create-after-images request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: (files) => {
+          expect(files).toHaveLength(2);
+          return Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]);
+        },
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "partial",
+      output: null,
+      finalUrl: null,
+      dispatchStarted: true,
+      dispatch: { planned: 3, started: 2, verified: 2 },
+    });
+    expect(result.error).toBe(
+      "X verified only part of the confirmed private Article workflow; failure stage: resolving the Article create mutation; X query-ID drift for ArticleEntityDraftCreate:mutation; reviewed evidence is stale; inspect the draft before retrying",
+    );
+    expect(result.error).not.toContain(STALE_ARTICLE_QUERY_ID);
+    expect(result.error).not.toContain(ARTICLE_QUERY_ID);
+    expect(before.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+    ]);
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+    ]);
+    expect(initCount).toBe(2);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toBeFalse();
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+    expect(calls.filter((call) => call.method === "POST" && call.url.hostname === "x.com")).toHaveLength(0);
   });
 
   test("reconciles one exact existing text-and-links Article without a mutation path", async () => {
