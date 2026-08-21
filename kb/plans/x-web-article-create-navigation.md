@@ -68,7 +68,7 @@ Confirm `8de55083-91ff-41b3-abff-bf2589ce5209` on isolated current-main / x-web 
 ## Risks and recovery
 
 - First-party `main.js` might refuse to install webpack on an inert path. The receipt will still name the evaluation Error.
-- If session setup later 403s on `https://x.com/` itself, apply the same robots.txt launch there.
+- Session setup 403 on `https://x.com/` fired on box confirm `42c33ead-76ad-47cc-ab48-d2bd8049b5ee`. Follow-up is [[plans/x-web-article-create-session-launch|x-web Article cookie-source session launch]].
 
 ## Execution evidence
 

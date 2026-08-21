@@ -359,10 +359,9 @@ export async function generateXClientTransactionId(input: {
     );
   };
   try {
-    // /home is a signed-in document. Unauthenticated or bot-challenged Chromium
-    // receives 403 (net::ERR_HTTP_RESPONSE_CODE_FAILURE). robots.txt is the
-    // same-origin 200 bootstrap used by derivation; the evaluation then loads
-    // the already-resolved public main bundle.
+    // Cookie-source session launch now opens this same URL before cookies.
+    // This second open is after injection. /home still 403s for unauthenticated
+    // or bot-challenged Chromium (net::ERR_HTTP_RESPONSE_CODE_FAILURE).
     await runBatch([["open", X_TRANSACTION_BOOTSTRAP]]);
     const [urlRecord] = await runBatch([["get", "url"]]);
     if (urlRecord === undefined) throw new Error("X transaction bootstrap browser omitted its current URL");

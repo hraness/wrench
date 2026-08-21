@@ -125,6 +125,29 @@ export type BrowserOperationDeadline = Pick<
   "signal" | "remainingTimeMs" | "run" | "throwIfUnavailable"
 >;
 
+/**
+ * Domain-contained cookie launches reject `about:blank` because it has no
+ * hostname. `manifest.origins[0]` is a first-party document and can 403 in
+ * headless Chromium before cookies exist (`https://x.com/` and `/home`).
+ * `/robots.txt` is the same-origin 200 used by derivation.
+ */
+export function containedSessionLaunchUrl(origin: string): string {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    throw new Error("contained browser session requires one reviewed origin");
+  }
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "") {
+    throw new Error("contained browser session launch origin is not an exact HTTPS origin");
+  }
+  const bootstrap = new URL("/robots.txt", url.origin);
+  if (bootstrap.origin !== url.origin) {
+    throw new Error("contained browser session launch escaped its reviewed origin");
+  }
+  return bootstrap.href;
+}
+
 export type CreateBrowserSessionOptions = {
   readonly headed: boolean;
   readonly timeoutMs: number;
@@ -1116,10 +1139,11 @@ export async function createBrowserSession(
     );
     guardBrowserSetup(operationDeadline);
     globalArguments.push(...proxyArguments);
+    const reviewedOrigin = manifest.origins[0];
+    if (reviewedOrigin === undefined) throw new Error("contained browser session requires one reviewed origin");
     const launchUrl = auth.kind === "browser-profile"
       ? "about:blank"
-      : manifest.origins[0];
-    if (launchUrl === undefined) throw new Error("contained browser session requires one reviewed origin");
+      : containedSessionLaunchUrl(reviewedOrigin);
     guardBrowserSetup(operationDeadline);
     launchAttempted = true;
     await runBatch(

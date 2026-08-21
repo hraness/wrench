@@ -24,6 +24,7 @@ import {
   classifyBrowserProcessGroupProbe,
   cloneBrowserProfile,
   cloneProfile,
+  containedSessionLaunchUrl,
   createBrowserSession,
   executeBrowserRecipe,
   isolatedEnvironment,
@@ -989,11 +990,164 @@ describe("browser process isolation helpers", () => {
           },
         },
       }))).toContain("browser session setup timed out");
-      expect(batches).toEqual([[["open", "https://example.com"]]]);
+      expect(batches).toEqual([[["open", "https://example.com/robots.txt"]]]);
       expect(proxyClosed).toBe(1);
     } finally {
       deadline.dispose();
     }
+  });
+
+  test("opens a harmless same-origin URL before cookie-source injection", async () => {
+    expect(containedSessionLaunchUrl("https://x.com")).toBe("https://x.com/robots.txt");
+    expect(containedSessionLaunchUrl("https://example.com:8443")).toBe("https://example.com:8443/robots.txt");
+    expect(() => containedSessionLaunchUrl("https://user:pass@x.com")).toThrow("exact HTTPS origin");
+    expect(() => containedSessionLaunchUrl("not-a-url")).toThrow("reviewed origin");
+
+    const xManifest: WrenchManifest = {
+      schemaVersion: 1,
+      id: "x-session-launch",
+      version: "1.0.0",
+      displayName: "X session launch",
+      origins: ["https://x.com"],
+      browserDomains: ["x.com", "*.x.com", "abs.twimg.com"],
+      operations: {},
+    };
+    const batches: (readonly (readonly string[])[])[] = [];
+    const steps: string[] = [];
+    const session = await createBrowserSession(xManifest, {
+      schemaVersion: 1,
+      id: "x-main",
+      kind: "cookie-source",
+      source: "chrome",
+      profile: "Default",
+    }, {
+      headed: false,
+      timeoutMs: 1_000,
+      maxOutputBytes: 64 * 1024,
+      dependencies: {
+        startNetworkProxy: () => Promise.resolve({
+          url: "http://127.0.0.1:43124",
+          port: 43_124,
+          close: () => Promise.resolve(),
+        }),
+        runCommand: (command, options) => {
+          if (command.includes("batch")) {
+            const batch = JSON.parse(options.stdin ?? "[]") as readonly (readonly string[])[];
+            batches.push(batch);
+            steps.push(batch[0]?.[0] === "open" ? "launch" : "inject");
+            expect(command).toContain("--allowed-domains");
+            return Promise.resolve({
+              stdout: `${JSON.stringify(batch.map(() => ({
+                success: true,
+                data: null,
+              })))}\n`,
+              stderr: "",
+              exitCode: 0,
+            });
+          }
+          return Promise.resolve({
+            stdout: "{\"success\":true}\n",
+            stderr: "",
+            exitCode: 0,
+          });
+        },
+        acquireCookieRecords: (_options, target) => {
+          steps.push("cookies");
+          expect(target.origin).toBe("https://x.com");
+          return Promise.resolve({
+            cookies: [{
+              name: "auth_token",
+              value: "private",
+              domain: "x.com",
+              hostOnly: true,
+              path: "/",
+              secure: true,
+              httpOnly: true,
+              sameSite: "Lax" as const,
+              expires: 0,
+            }],
+            warnings: [],
+          });
+        },
+      },
+    });
+
+    expect(steps).toEqual(["launch", "cookies", "inject"]);
+    const opened = batches.flat().filter((command) => command[0] === "open").map((command) => command[1]);
+    expect(opened).toEqual(["https://x.com/robots.txt"]);
+    expect(opened).not.toContain("https://x.com");
+    expect(opened).not.toContain("https://x.com/");
+    expect(opened).not.toContain("https://x.com/home");
+    await session.close();
+    await session.cleanup();
+  });
+
+  test("keeps browser-profile launch on about:blank before optional cookie seeding", async () => {
+    const batches: (readonly (readonly string[])[])[] = [];
+    const session = await createBrowserSession({
+      ...manifest,
+      origins: ["https://x.com"],
+      browserDomains: ["x.com", "*.x.com"],
+    }, {
+      schemaVersion: 1,
+      id: "x-profile",
+      kind: "browser-profile",
+      profile: "Work",
+      trustUnfilteredEgress: true,
+      cookieSource: "chrome",
+      cookieProfile: "Default",
+    }, {
+      headed: false,
+      timeoutMs: 1_000,
+      maxOutputBytes: 64 * 1024,
+      dependencies: {
+        startNetworkProxy: () => Promise.resolve({
+          url: "http://127.0.0.1:43124",
+          port: 43_124,
+          close: () => Promise.resolve(),
+        }),
+        runCommand: (command, options) => {
+          if (command.includes("batch")) {
+            const batch = JSON.parse(options.stdin ?? "[]") as readonly (readonly string[])[];
+            batches.push(batch);
+            return Promise.resolve({
+              stdout: `${JSON.stringify(batch.map(() => ({
+                success: true,
+                data: null,
+              })))}\n`,
+              stderr: "",
+              exitCode: 0,
+            });
+          }
+          return Promise.resolve({
+            stdout: "{\"success\":true}\n",
+            stderr: "",
+            exitCode: 0,
+          });
+        },
+        acquireCookieRecords: () => Promise.resolve({
+          cookies: [{
+            name: "auth_token",
+            value: "private",
+            domain: "x.com",
+            hostOnly: true,
+            path: "/",
+            secure: true,
+            httpOnly: true,
+            sameSite: "Lax" as const,
+            expires: 0,
+          }],
+          warnings: [],
+        }),
+      },
+    });
+
+    const opened = batches.flat().filter((command) => command[0] === "open").map((command) => command[1]);
+    expect(opened).toEqual(["about:blank"]);
+    expect(opened).not.toContain("https://x.com");
+    expect(opened).not.toContain("https://x.com/home");
+    await session.close();
+    await session.cleanup();
   });
 
   test("never lets close or cleanup race an unsettled aborted batch", async () => {
