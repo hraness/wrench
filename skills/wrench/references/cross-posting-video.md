@@ -38,7 +38,9 @@ Encoding may use a local encoder such as ffmpeg. Posting may not.
 
 - If the user provided a caption, use it exactly. Do not rewrite it to pass
   a provider limit; ask for a shorter shared caption or an explicit
-  platform-specific variant.
+  platform-specific variant. Never mark that caption as AI-generated;
+  follow the unlabeled-copy rule in
+  [cross-post text and images](cross-posting.md).
 - If no caption was provided, write one short caption from the video's
   actual subject: about one sentence, under 120 characters. Do not invent a
   long marketing paragraph.
