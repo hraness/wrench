@@ -1,4 +1,0 @@
-interface:
-  display_name: "Cross-post video with Wrench"
-  short_description: "Publish one video safely across social platforms"
-  default_prompt: "Use $cross-post-video-with-wrench to prepare this video and publish it across my selected social platforms."

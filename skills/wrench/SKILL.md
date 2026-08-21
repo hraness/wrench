@@ -1,11 +1,33 @@
 ---
 name: wrench
-description: Use the bring-your-own-agent Wrench CLI and SDK to capture or read web content, archive media, save private native article drafts, query encrypted normalized cross-provider views, inspect installed semantic capabilities, and operate bounded provider plugins. Use when an agent needs a new site integration without adding raw HTTP, DOM automation, or credentials to its tool surface.
+description: >-
+  Use Wrench to give a bring-your-own coding agent bounded, local-first web
+  capabilities: capture or scrape public and signed-in web pages into Markdown;
+  archive authorized audio, video, and transcripts with verification; query
+  encrypted cached email, contacts, inbox, and messaging views; publish and
+  reconcile text, image, and video posts through observed installed social
+  capabilities; inspect or develop bounded provider contracts for X, LinkedIn,
+  Bluesky, Substack Notes, Threads, TikTok, Instagram, and YouTube Shorts; save
+  private native article drafts; and build or run typed provider plugins from
+  recorded browser-session APIs. Trigger for web capture,
+  URL clipping, authenticated sites, social media posting or cross-posting,
+  media download or archiving, transcription, email and messaging integrations,
+  HAR-to-API workflows, browser-session API automation, semantic operations,
+  and safe provider mutations when raw HTTP, DOM control, cookies, and
+  credentials must stay outside the agent.
 ---
 
 # Wrench
 
-Wrench supplies bounded CLI and SDK capabilities, not an agent runtime or application. Use it from the caller's own agent loop. Start with the installed `wrench --help`; if it is unavailable, report that the CLI must be installed instead of guessing a source-tree command.
+Wrench supplies bounded CLI and SDK capabilities, not an agent runtime or application. Use it from the caller's own agent loop.
+
+## Install or verify Wrench
+
+Start with `wrench --help`. If the command is unavailable, read
+[installation and diagnostics](references/install.md) and install the pinned
+CLI before continuing when the user's request includes installing or using
+Wrench. Never guess a source-tree command or substitute general browser
+automation.
 
 ## Choose the smallest path
 
@@ -19,6 +41,8 @@ Wrench supplies bounded CLI and SDK capabilities, not an agent runtime or applic
 - Read a previously validated exact query without a provider roundtrip: repeat the subject-bound R1 invocation with `--cache-only`; omit that flag to revalidate it explicitly.
 - Read a normalized cross-provider inbox without a provider roundtrip: `wrench omni read --input <json|@file|-> --cache-only --json`; use `--from-exact-cache` to rebuild from exact ciphertext or omit the mode to revalidate supported sources.
 - Save one private native article draft, including supported plan-bound covers, inline images, and destination-safe source-post references: inspect `articles.draft.save`, then follow [native article drafts](references/article-drafts.md). Keep a provider cover outside the body document; on an exact LinkedIn replacement, omit it only to preserve the independently read existing banner. Never substitute `articles.publish`.
+- Cross-post one exact text and optional ordered-image package: inspect every installed target schema, then follow [social cross-posting](references/cross-posting.md).
+- Cross-post one exact video package: require an observed video-capable operation for every selected target, then follow [video social cross-posting](references/cross-posting-video.md).
 - Add a provider without changing Wrench source: author a portable plugin.
 - Derive a reviewed first-party contract from authorized HAR evidence: follow [the derivation guide](references/derivation.md).
 

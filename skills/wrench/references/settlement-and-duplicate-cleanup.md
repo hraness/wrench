@@ -1,4 +1,4 @@
-# Settlement and duplicate cleanup
+# Social settlement and duplicate cleanup
 
 Use this after every confirmation and before any possible repost or deletion.
 

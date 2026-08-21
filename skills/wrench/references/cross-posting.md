@@ -1,9 +1,4 @@
----
-name: cross-post-with-wrench
-description: Preview, publish, settle, and safely account for one exact text post with an optional ordered local-image package across any selected combination of X, LinkedIn, Bluesky, Substack Notes, and Threads through Wrench's bounded provider operations. Use when Codex must cross-post social content, inspect signed-in Wrench realms, adapt images and accessibility text to installed provider schemas without silent loss, reconcile uncertain runs, intentionally create a freshly authorized possible duplicate, or assess canonical duplicate cleanup.
----
-
-# Cross-post with Wrench
+# Cross-post text and images
 
 Use the installed `wrench` CLI as the only posting transport. Orchestrate provider operations; do not implement a second HTTP client, click a composer at runtime, or treat a browser login as proof that publishing is supported.
 
@@ -24,8 +19,8 @@ Give the package a task-local identity. Preserve image order through planning, s
 
 ## Preflight every target
 
-1. Run `wrench --help`; if it is unavailable, report that Wrench must be installed.
-2. Read [platform routing](references/platform-routing.md).
+1. Run `wrench --help`; if it is unavailable, follow [installation and diagnostics](install.md).
+2. Read [social platform routing](social-platform-routing.md).
 3. Run `wrench capabilities <adapter> --json` for every candidate adapter. Treat its current operation state and input schema as authoritative over the reference and over remembered platform behavior.
 4. Select one exact transport and auth realm per platform. Never switch between a browser-session and official OAuth adapter after planning.
 5. Require `posts.publish` to be `observed`, the adapter to be valid, and the auth realm to be bound to its current provider subject. `capture-required` is unavailable, not degraded support.
@@ -65,7 +60,7 @@ An unsettled target does not create authority to delete or repost on other platf
 
 ## Settle and account for every attempt
 
-Read [settlement and duplicate cleanup](references/settlement-and-cleanup.md) after confirmation. Give every attempt its own immutable ledger entry. Use exact returned locators and exact provider readback; never infer delivery from a cleared composer, a profile search, or matching text.
+Read [settlement and duplicate cleanup](settlement-and-duplicate-cleanup.md) after confirmation. Give every attempt its own immutable ledger entry. Use exact returned locators and exact provider readback; never infer delivery from a cleared composer, a profile search, or matching text.
 
 A duplicate-tolerant action is a materially new intent, not a retry. Permit it only after explicit fresh authorization of the exact platform/package and duplicate risk. In the current v1 workflow, create the new preview with one exact eligible source run via `--duplicate-risk-of <run-id>`; Wrench binds that run to one deterministic successor intent. Keep every other prior uncertain attempt linked separately in the task ledger. Never clear, overwrite, or weaken an old Wrench ledger, receipt, recovery capsule, or attachment bundle.
 

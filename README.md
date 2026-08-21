@@ -2,6 +2,8 @@
 
 [![Wrench: precise web capabilities for AI agents](https://wrench.rip/og.png)](https://wrench.rip)
 
+[![skills.sh](https://skills.sh/b/hraness/wrench)](https://skills.sh/hraness/wrench)
+
 **Give your agent a precise handle on the web.**
 
 Wrench is an open-source, bring-your-own-agent CLI and TypeScript SDK. It is the
@@ -61,7 +63,19 @@ owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
-Pin the public repository to the immutable `v0.10.1` tag:
+Install the single Wrench Agent Skill with either runner:
+
+```sh
+npx skills add hraness/wrench
+# or
+bunx skills add hraness/wrench
+```
+
+The skill teaches Codex, Claude Code, Cursor, and other compatible coding
+agents when to use Wrench, how to preserve its trust boundaries, and how to
+install the CLI if it is missing. Start a new agent session after installation.
+
+Install the current immutable CLI release from the `v0.10.1` tag:
 
 ```sh
 bun add --global github:hraness/wrench#v0.10.1
@@ -632,11 +646,14 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.10.1/skills/wrench/SKILL.md)
-gives coding agents the same workflow and safety boundary. The packaged
-[cross-post skill](skills/cross-post-with-wrench/SKILL.md) orchestrates exact,
-previewed posts across X, LinkedIn, Bluesky, Substack Notes, and Threads while
-preserving per-provider attachment limits and at-most-once dispatch evidence.
+with an observed contract. The repository's [Wrench Agent Skill](skills/wrench/SKILL.md)
+gives coding agents the same workflow and safety boundary. Its bundled
+[social cross-posting guidance](skills/wrench/references/cross-posting.md)
+orchestrates exact, previewed text, image, and video posts across supported
+platforms while preserving per-provider attachment limits and at-most-once
+dispatch evidence. Packages built from this source carry the same consolidated
+skill; the current `v0.10.1` runtime tag contains an earlier skill revision, so
+use the skills CLI for the current guide.
 
 ## Risk and confirmation
 
