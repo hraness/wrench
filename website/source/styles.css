@@ -935,7 +935,18 @@ code:not(pre code) {
   color: var(--muted);
   font-size: clamp(1rem, 1.8vw, 1.2rem);
   line-height: 1.65;
-  margin: 1.5rem 0 2rem;
+  margin: 1.5rem 0 1.25rem;
+}
+
+.route-state .recovery-links {
+  color: var(--muted);
+  line-height: 1.65;
+  margin: 0 0 2rem;
+  padding-left: 1.2rem;
+}
+
+.route-state .recovery-links a {
+  color: var(--foreground);
 }
 
 .route-state .button {

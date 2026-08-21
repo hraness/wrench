@@ -9,6 +9,8 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { htmlMainToMarkdown } from "./html-to-markdown";
+
 export const SITE_ORIGIN = "https://wrench.rip" as const;
 export const SITE_TITLE = "Wrench: precise web capabilities for AI agents" as const;
 export const SITE_DESCRIPTION =
@@ -66,9 +68,37 @@ export const PUBLIC_PAGES = [
     sourceFile: "plugins.html",
     title: "Author and verify Wrench provider plugins",
   },
+  {
+    canonicalPath: "/about/",
+    description:
+      "Wrench is an open-source CLI and TypeScript SDK that gives command-capable agents precise web capabilities with local custody.",
+    outputFile: "about/index.html",
+    sourceFile: "about.html",
+    title: "About Wrench: open-source web capabilities for AI agents",
+  },
+  {
+    canonicalPath: "/contact/",
+    description:
+      "Contact Wrench through public GitHub issues or private vulnerability reporting. No telephone, postal address, or support inbox is published.",
+    outputFile: "contact/index.html",
+    sourceFile: "contact.html",
+    title: "Contact Wrench maintainers and report security issues",
+  },
+  {
+    canonicalPath: "/privacy/",
+    description:
+      "wrench.rip uses cookieless, personless, DNT-aware PostHog analytics limited to page lifecycle, Core Web Vitals, and two GitHub links.",
+    outputFile: "privacy/index.html",
+    sourceFile: "privacy.html",
+    title: "Wrench website privacy: cookieless, personless analytics",
+  },
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];
+
+export function markdownSiblingPath(canonicalPath: string): string {
+  return canonicalPath === "/" ? "/index.md" : `${canonicalPath.slice(0, -1)}.md`;
+}
 
 const websiteRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(websiteRoot, "..");
@@ -150,6 +180,17 @@ function replaceRequired(template: string, placeholder: string, value: string): 
     throw new Error(`Template is missing ${placeholder}.`);
   }
   return template.replaceAll(placeholder, value);
+}
+
+function isHtmlTemplate(template: string): boolean {
+  return /<!doctype html/iu.test(template);
+}
+
+function replaceHtmlRequired(template: string, placeholder: string, value: string): string {
+  if (!isHtmlTemplate(template)) {
+    return template.includes(placeholder) ? template.replaceAll(placeholder, value) : template;
+  }
+  return replaceRequired(template, placeholder, value);
 }
 
 function sharedJsonLd(identity: PackageIdentity): ReadonlyArray<Readonly<Record<string, unknown>>> {
@@ -284,16 +325,23 @@ function renderTemplate(
   const { packageIdentity: identity } = options;
   const installCommand = `bun add --global github:hraness/wrench#${identity.release}`;
   let rendered = template;
-  rendered = replaceRequired(rendered, "{{ANALYTICS_ASSET}}", escapeHtml(options.analyticsAsset));
-  rendered = replaceRequired(rendered, "{{CSS_ASSET}}", escapeHtml(options.cssAsset));
+  rendered = replaceHtmlRequired(rendered, "{{ANALYTICS_ASSET}}", escapeHtml(options.analyticsAsset));
+  rendered = replaceHtmlRequired(rendered, "{{CSS_ASSET}}", escapeHtml(options.cssAsset));
   if (page) {
     const structuredData = JSON.stringify(jsonLd(identity, page)).replaceAll("<", "\\u003c");
     rendered = replaceRequired(rendered, "{{JSON_LD}}", structuredData);
+    rendered = replaceRequired(
+      rendered,
+      "{{MARKDOWN_ALTERNATE}}",
+      `<link rel="alternate" type="text/markdown" title="Markdown" href="${SITE_ORIGIN}${markdownSiblingPath(page.canonicalPath)}">`,
+    );
   } else if (rendered.includes("{{JSON_LD}}")) {
     throw new Error("A non-indexable page must not include structured data.");
+  } else if (rendered.includes("{{MARKDOWN_ALTERNATE}}")) {
+    throw new Error("A non-indexable page must not advertise a markdown alternate.");
   }
-  rendered = replaceRequired(rendered, "{{POSTHOG_HOST}}", escapeHtml(options.postHogHost));
-  rendered = replaceRequired(rendered, "{{POSTHOG_KEY}}", escapeHtml(options.postHogKey));
+  rendered = replaceHtmlRequired(rendered, "{{POSTHOG_HOST}}", escapeHtml(options.postHogHost));
+  rendered = replaceHtmlRequired(rendered, "{{POSTHOG_KEY}}", escapeHtml(options.postHogKey));
   const optionalValues = new Map([
     ["{{WRENCH_DESCRIPTION}}", identity.description],
     ["{{WRENCH_INSTALL_COMMAND}}", installCommand],
@@ -338,10 +386,12 @@ function postHogEnvironment(environment: Readonly<Record<string, string | undefi
 export async function buildWebsite(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<void> {
-  const [manifest, publicTemplates, notFoundTemplate, css, analyticsBuild] = await Promise.all([
+  const [manifest, publicTemplates, notFoundTemplate, notFoundMarkdown, llmsTemplate, css, analyticsBuild] = await Promise.all([
     Bun.file(join(repositoryRoot, "package.json")).json(),
     Promise.all(PUBLIC_PAGES.map((page) => readFile(join(sourceRoot, page.sourceFile), "utf8"))),
     readFile(join(sourceRoot, "404.html"), "utf8"),
+    readFile(join(sourceRoot, "404.md"), "utf8"),
+    readFile(join(sourceRoot, "llms.txt"), "utf8"),
     readFile(join(sourceRoot, "styles.css")),
     Bun.build({
       entrypoints: [join(sourceRoot, "analytics.ts")],
@@ -378,12 +428,19 @@ export async function buildWebsite(
   await Promise.all(PUBLIC_PAGES.map((page) => mkdir(dirname(join(outputRoot, page.outputFile)), {
     recursive: true,
   })));
+  const renderedPages = PUBLIC_PAGES.map((page, index) => ({
+    page,
+    html: renderTemplate(publicTemplates[index]!, renderOptions, page),
+  }));
   await Promise.all([
-    ...PUBLIC_PAGES.map((page, index) => writeFile(
-      join(outputRoot, page.outputFile),
-      renderTemplate(publicTemplates[index]!, renderOptions, page),
+    ...renderedPages.map(({ page, html }) => writeFile(join(outputRoot, page.outputFile), html)),
+    ...renderedPages.map(({ page, html }) => writeFile(
+      join(outputRoot, markdownSiblingPath(page.canonicalPath).slice(1)),
+      htmlMainToMarkdown(html, `${SITE_ORIGIN}${page.canonicalPath}`),
     )),
     writeFile(join(outputRoot, "404.html"), renderTemplate(notFoundTemplate, renderOptions)),
+    writeFile(join(outputRoot, "404.md"), renderTemplate(notFoundMarkdown, renderOptions)),
+    writeFile(join(outputRoot, "llms.txt"), renderTemplate(llmsTemplate, renderOptions)),
     writeFile(join(outputRoot, cssAsset.slice(1)), css),
     writeFile(join(outputRoot, analyticsAsset.slice(1)), analytics),
     writeFile(

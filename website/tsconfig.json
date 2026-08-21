@@ -4,6 +4,6 @@
     "lib": ["DOM", "DOM.Iterable", "ES2023"],
     "types": ["bun"]
   },
-  "include": ["./**/*.ts"],
+  "include": ["./**/*.ts", "../middleware.ts"],
   "exclude": ["./dist"]
 }

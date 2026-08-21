@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#181817">
+    <title>Contact Wrench maintainers and report security issues</title>
+    <meta name="description" content="Contact Wrench through public GitHub issues or private vulnerability reporting. No telephone, postal address, or support inbox is published.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/contact/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Contact Wrench maintainers and report security issues">
+    <meta property="og:description" content="Contact Wrench through public GitHub issues or private vulnerability reporting. No telephone, postal address, or support inbox is published.">
+    <meta property="og:url" content="https://wrench.rip/contact/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Contact Wrench maintainers and report security issues">
+    <meta name="twitter:description" content="Contact Wrench through public GitHub issues or private vulnerability reporting. No telephone, postal address, or support inbox is published.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Contact</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Contact · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Use GitHub for product questions and private security reports.</h1>
+          <p class="answer-lede">Wrench is maintained in public by the <a href="https://github.com/hraness">Hraness GitHub organization</a>. The published contact surfaces are the repository issue tracker and GitHub private vulnerability reporting. This project does not publish a telephone number, postal address, or support inbox.</p>
+          <p class="review-note">These contact paths match the public {{WRENCH_RELEASE}} repository metadata and security policy.</p>
+        </header>
+
+        <section aria-labelledby="public-issues">
+          <h2 id="public-issues">Public product questions</h2>
+          <p>Open a public issue on <a href="{{WRENCH_REPOSITORY}}/issues">github.com/hraness/wrench/issues</a> for defects, documentation gaps, or questions that do not include secrets. Do not paste credentials, authenticated traffic, private content, browser profiles, state directories, or provider account identifiers into a public issue.</p>
+        </section>
+
+        <section aria-labelledby="unpublished-channels">
+          <h2 id="unpublished-channels">No other published contact channels</h2>
+          <p>Wrench does not publish a telephone number, postal address, or support inbox. Do not treat unofficial mirrors, social replies, or guessed email addresses as maintainer contact. If a report includes secrets, use private vulnerability reporting rather than inventing another channel.</p>
+        </section>
+
+        <section aria-labelledby="security-reports">
+          <h2 id="security-reports">Security reports</h2>
+          <p>Report suspected vulnerabilities through <a href="{{WRENCH_REPOSITORY}}/security/advisories/new">GitHub private vulnerability reporting</a> for the Wrench repository. That is the path named by the public security policy. Do not open a public issue containing credentials, cookies, tokens, private content, or local paths.</p>
+          <p>The <a href="/security/">security guide</a> summarizes the local-custody and fail-closed contract that agents should read before binding an account. Source-side policy lives in the repository <code>SECURITY.md</code> for {{WRENCH_RELEASE}}.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="contact-next">
+          <h2 id="contact-next">Read before you file</h2>
+          <p>Confirm current behavior in the <a href="/getting-started/">getting started guide</a> and <a href="/llms.txt">llms.txt</a> before opening an issue.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>

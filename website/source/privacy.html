@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#181817">
+    <title>Wrench website privacy: cookieless, personless analytics</title>
+    <meta name="description" content="wrench.rip uses cookieless, personless, DNT-aware PostHog analytics limited to page lifecycle, Core Web Vitals, and two GitHub links.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/privacy/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Wrench website privacy: cookieless, personless analytics">
+    <meta property="og:description" content="wrench.rip uses cookieless, personless, DNT-aware PostHog analytics limited to page lifecycle, Core Web Vitals, and two GitHub links.">
+    <meta property="og:url" content="https://wrench.rip/privacy/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Wrench website privacy: cookieless, personless analytics">
+    <meta name="twitter:description" content="wrench.rip uses cookieless, personless, DNT-aware PostHog analytics limited to page lifecycle, Core Web Vitals, and two GitHub links.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Privacy</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Privacy · Wrench {{WRENCH_VERSION}}</p>
+          <h1>This website measures pages, not people.</h1>
+          <p class="answer-lede">wrench.rip is a static documentation site. On the canonical production host only, an optional PostHog bootstrap records cookieless, personless, memory-only analytics. The CLI and TypeScript SDK do not send website analytics.</p>
+          <p class="review-note">This statement describes the current website analytics contract. It is not a privacy policy for local Wrench state, provider accounts, or captured content.</p>
+        </header>
+
+        <section aria-labelledby="what-is-collected">
+          <h2 id="what-is-collected">What the website may record</h2>
+          <p>Allowed events are page view, page leave, Core Web Vitals, and the two explicit GitHub repository links on the home page. The runtime is DNT-aware, query-free, and restricted to the canonical host. URL query strings, fragments, and common attribution parameters are stripped before an event can leave the browser.</p>
+          <p>The site does not use cookies, replay, identity, feature flags, broad autocapture, console capture, or person profiles. It does not record form input, local file paths, or provider account material. JavaScript is optional; every public page remains readable without it.</p>
+        </section>
+
+        <section aria-labelledby="without-javascript">
+          <h2 id="without-javascript">Reading without JavaScript</h2>
+          <p>Every public page remains readable without JavaScript. Agents can request <code>Accept: text/markdown</code> on the same URL and receive a Markdown body with <code>Vary: Accept</code>. A Do Not Track signal is honored by the optional analytics bootstrap, so the pages stay useful when that script does not run.</p>
+        </section>
+
+        <section aria-labelledby="what-this-does-not-cover">
+          <h2 id="what-this-does-not-cover">What this page does not cover</h2>
+          <p>Wrench stores local credentials, encrypted snapshots, and archives on the operator's machine. Those artifacts are not website analytics. Use the <a href="/security/">security guide</a> for local custody, and GitHub private vulnerability reporting on the <a href="/contact/">contact page</a> for suspected product issues.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="privacy-next">
+          <h2 id="privacy-next">Related public documents</h2>
+          <p>See <a href="/llms.txt">llms.txt</a> for agent-oriented site guidance and the <a href="/about/">about page</a> for project identity.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>
