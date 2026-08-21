@@ -172,6 +172,134 @@ function twoImageArticleDocument(): string {
   });
 }
 
+function articleContentStateWithExtraMediaFields(
+  contentState: ReturnType<typeof buildXWebRichArticleContentState>,
+): unknown {
+  return {
+    blocks: contentState.blocks,
+    entity_map: contentState.entity_map.map((entity) => {
+      const value = entity.value as {
+        readonly data: Record<string, unknown>;
+        readonly type: string;
+        readonly mutability: string;
+      };
+      if (value.type !== "MEDIA" || !Array.isArray(value.data.media_items)) {
+        return entity;
+      }
+      return {
+        key: entity.key,
+        value: {
+          data: {
+            ...value.data,
+            media_items: value.data.media_items.map((item) => ({
+              ...(item as Record<string, unknown>),
+              original_img_height: 800,
+              original_img_width: 1200,
+              url: "https://pbs.twimg.com/media/example.webp",
+            })),
+          },
+          mutability: value.mutability,
+          type: value.type,
+        },
+      };
+    }),
+  };
+}
+
+function privateDraftArticleResponse(options: {
+  readonly articleId: string;
+  readonly title: string;
+  readonly contentState?: unknown;
+}): unknown {
+  return {
+    data: {
+      article_result_by_rest_id: {
+        rest_id: options.articleId,
+        title: options.title,
+        metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+        lifecycle_state: { lifecycle: "Draft" },
+        ...(options.contentState === undefined ? {} : { content_state: options.contentState }),
+      },
+    },
+  };
+}
+
+function twoImageCreateRuntime(
+  calls: CapturedRequest[],
+  options: {
+    readonly title: string;
+    readonly articleId: string;
+    readonly mediaIds: readonly [string, string];
+    readonly expectedContentState: ReturnType<typeof buildXWebRichArticleContentState>;
+    readonly readback: (attempt: number) => Response;
+    readonly sleep?: NonNullable<XWebRuntimeDependencies["sleep"]>;
+  },
+): XWebRuntimeDependencies {
+  let initCount = 0;
+  let readbacks = 0;
+  const tokens = articleImageSupportTokens();
+  return dependencies(calls, (request) => {
+    if (request.url.href === "https://x.com/home") {
+      return new Response(richArticleHtml(), { headers: { "content-type": "text/html" } });
+    }
+    if (request.url.href === MAIN_URL) {
+      return new Response(mainBundle(descriptor("Viewer", VIEWER_QUERY_ID, "query")), {
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (request.url.href === ARTICLE_BUNDLE_URL) {
+      return new Response([
+        observedArticleDescriptor("ArticleEntityDraftCreate", ARTICLE_QUERY_ID, "mutation"),
+        observedArticleDescriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+      ].join(";"), { headers: { "content-type": "application/javascript" } });
+    }
+    if (request.url.href === ARTICLE_UPLOADER_BUNDLE_URL) {
+      return new Response(tokens.uploader, { headers: { "content-type": "application/javascript" } });
+    }
+    if (request.url.href === ARTICLE_ENTITIES_BUNDLE_URL) {
+      return new Response(tokens.entities, { headers: { "content-type": "application/javascript" } });
+    }
+    if (request.url.href === ARTICLE_CONVERTER_BUNDLE_URL) {
+      return new Response(tokens.converter, { headers: { "content-type": "application/javascript" } });
+    }
+    if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+    if (request.url.hostname === "upload.x.com") {
+      const command = request.url.searchParams.get("command");
+      if (command === "INIT") {
+        const mediaId = options.mediaIds[initCount];
+        initCount += 1;
+        expect(mediaId).toBeDefined();
+        return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 202);
+      }
+      if (command === "APPEND") return new Response(null, { status: 204 });
+      if (command === "FINALIZE") {
+        const mediaId = request.url.searchParams.get("media_id");
+        return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 201);
+      }
+    }
+    if (request.url.pathname.endsWith("/ArticleEntityDraftCreate")) {
+      expect(JSON.parse(request.body ?? "null")).toEqual({
+        variables: { content_state: options.expectedContentState, title: options.title },
+        features: Object.fromEntries(ARTICLE_CREATE_FEATURE_SWITCHES.map((name) => [name, false])),
+        fieldToggles: Object.fromEntries(ARTICLE_CREATE_FIELD_TOGGLES.map((name) => [name, false])),
+        queryId: ARTICLE_QUERY_ID,
+      });
+      return jsonResponse({
+        data: {
+          articleentity_create_draft: {
+            article_entity_results: { result: { rest_id: options.articleId, title: options.title } },
+          },
+        },
+      });
+    }
+    if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+      readbacks += 1;
+      return options.readback(readbacks);
+    }
+    throw new Error(`unexpected create-after-images request ${request.url.href}`);
+  }, options.sleep === undefined ? {} : { sleep: options.sleep });
+}
+
 function richArticleHtml(): string {
   return `${homeHtml()}<script>p.u=e=>({31770:"bundle.TwitterArticles",31771:"shared~bundle.LoggedInMain~ondemand.HoverCard~loader.AudioDock~loader.Dock~bundle.BookmarkFolders~bundle.Book",31772:"shared~bundle.TwitterArticles~ondemand.Verified~bundle.SettingsExtendedProfile~bundle.WorkHistory",31773:"shared~bundle.Grok~bundle.GrokDrawer~bundle.ReaderMode~bundle.Birdwatch~bundle.TwitterArticles~bundle.Compose"})[e]||e)+"."+({31770:"305538c",31771:"a9bac6b",31772:"d1314bb",31773:"02f6dc7"})[e]+"a.js"</script>`;
 }
@@ -1526,17 +1654,11 @@ describe("X authenticated internal-API runtime", () => {
       }
       if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
         expect(request.method).toBe("GET");
-        return jsonResponse({
-          data: {
-            article_result_by_rest_id: {
-              rest_id: articleId,
-              title,
-              metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
-              lifecycle_state: { lifecycle: "Draft" },
-              content_state: expectedContentState,
-            },
-          },
-        });
+        return jsonResponse(privateDraftArticleResponse({
+          articleId,
+          title,
+          contentState: articleContentStateWithExtraMediaFields(expectedContentState),
+        }));
       }
       throw new Error(`unexpected create-after-images request ${request.url.href}`);
     });
@@ -1602,6 +1724,216 @@ describe("X authenticated internal-API runtime", () => {
     expect(initCount).toBe(2);
     expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
     expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("finishes private create after the first created-Article readback omits content_state", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const slept: number[] = [];
+    const title = "Private native Article with images";
+    const articleId = "700000000000000013";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = twoImageArticleDocument();
+    const expectedContentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocumentV2(documentValue, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+        maximumImages: 20,
+      }),
+      mediaIds,
+    );
+    const runtimeDependencies = twoImageCreateRuntime(calls, {
+      title,
+      articleId,
+      mediaIds,
+      expectedContentState,
+      sleep: async (milliseconds) => {
+        slept.push(milliseconds);
+      },
+      readback: (attempt) => jsonResponse(privateDraftArticleResponse({
+        articleId,
+        title,
+        ...(attempt === 1
+          ? {}
+          : { contentState: articleContentStateWithExtraMediaFields(expectedContentState) }),
+      })),
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: () => Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]),
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        published: false,
+        mode: "draft",
+        draftId: articleId,
+        url: `https://x.com/compose/articles/edit/${articleId}`,
+      },
+      dispatch: { planned: 3, started: 3, verified: 3 },
+    });
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+      "articles.create",
+    ]);
+    expect(slept).toEqual([250]);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(2);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("surfaces the real created-Article readback mismatch and stays indeterminate", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const slept: number[] = [];
+    const title = "Private native Article with images";
+    const articleId = "700000000000000013";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = twoImageArticleDocument();
+    const expectedContentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocumentV2(documentValue, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+        maximumImages: 20,
+      }),
+      mediaIds,
+    );
+    const runtimeDependencies = twoImageCreateRuntime(calls, {
+      title,
+      articleId,
+      mediaIds,
+      expectedContentState,
+      sleep: async (milliseconds) => {
+        slept.push(milliseconds);
+      },
+      readback: () => jsonResponse(privateDraftArticleResponse({
+        articleId,
+        title: "Different title",
+        contentState: expectedContentState,
+      })),
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: () => Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]),
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      output: null,
+      dispatchStarted: true,
+      dispatch: { planned: 3, started: 3, verified: 2 },
+    });
+    expect(result.error).toBe(
+      "X may have accepted an inline-image upload or private Article dispatch while verifying the created Article readback; X Article readback did not bind the confirmed title; its provider media IDs are not present in the confirmed input, so preserve the indeterminate run and do not retry",
+    );
+    expect(result.error).not.toContain("media-contract-step-failed");
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+    ]);
+    expect(slept).toEqual([250, 750, 1_500]);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(4);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("surfaces the real created-Article query failure and stays indeterminate", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Private native Article with images";
+    const articleId = "700000000000000013";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = twoImageArticleDocument();
+    const expectedContentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocumentV2(documentValue, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+        maximumImages: 20,
+      }),
+      mediaIds,
+    );
+    const runtimeDependencies = twoImageCreateRuntime(calls, {
+      title,
+      articleId,
+      mediaIds,
+      expectedContentState,
+      readback: () => jsonResponse({ errors: [{ message: "redacted" }] }),
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: () => Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]),
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      output: null,
+      dispatchStarted: true,
+      dispatch: { planned: 3, started: 3, verified: 2 },
+    });
+    expect(result.error).toBe(
+      "X may have accepted an inline-image upload or private Article dispatch while reading back the created Article; X article_result_by_rest_id response contained provider errors; its provider media IDs are not present in the confirmed input, so preserve the indeterminate run and do not retry",
+    );
+    expect(result.error).not.toContain("media-contract-step-failed");
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+    ]);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(4);
     expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
   });
 

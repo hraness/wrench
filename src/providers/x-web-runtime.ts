@@ -2048,6 +2048,28 @@ function orderedArticleReadbackEntities(
   });
 }
 
+function normalizedArticleMediaItems(
+  value: unknown,
+  label: string,
+  fields: {
+    readonly localMediaId: string;
+    readonly mediaCategory: string;
+    readonly mediaId: string;
+  },
+): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  return Object.freeze(value.map((item) => {
+    const media = record(item, label);
+    return Object.freeze({
+      local_media_id: media[fields.localMediaId],
+      media_category: media[fields.mediaCategory],
+      media_id: media[fields.mediaId],
+    });
+  }));
+}
+
 function remappedArticleEntityKey(
   value: unknown,
   keys: ReadonlyMap<string, string>,
@@ -2215,7 +2237,15 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
               }
               return `${index}`;
             })(),
-            media_items: data.media_items,
+            media_items: normalizedArticleMediaItems(
+              data.media_items,
+              `X Article readback entity ${index}.media_items`,
+              {
+                localMediaId: "local_media_id",
+                mediaCategory: "media_category",
+                mediaId: "media_id",
+              },
+            ),
           })
         : Object.freeze({ url: data.url });
       return Object.freeze({
@@ -2305,16 +2335,15 @@ function normalizeArticleContentReadback(value: unknown): XWebRichArticleContent
             }
             return `${index}`;
           })(),
-          media_items: Array.isArray(data.mediaItems)
-            ? Object.freeze(data.mediaItems.map((value) => {
-                const item = record(value, "X Article readback media item");
-                return Object.freeze({
-                  local_media_id: item.localMediaId,
-                  media_category: item.mediaCategory,
-                  media_id: item.mediaId,
-                });
-              }))
-            : data.mediaItems,
+          media_items: normalizedArticleMediaItems(
+            data.mediaItems,
+            `X Article readback entity ${index}.media_items`,
+            {
+              localMediaId: "localMediaId",
+              mediaCategory: "mediaCategory",
+              mediaId: "mediaId",
+            },
+          ),
         })
       : Object.freeze({ url: data.url });
     return Object.freeze({
@@ -2357,6 +2386,46 @@ function verifyFinalRichArticle(
   if (canonicalJson(content) !== canonicalJson(expected.contentState)) {
     throw new Error("X Article readback did not bind the confirmed rich content state");
   }
+}
+
+async function waitForVerifiedArticleReadback(
+  bootstrap: XBootstrap,
+  expected: {
+    readonly id: string;
+    readonly viewerId: string;
+    readonly title: string;
+    readonly contentState: XWebRichArticleContentState;
+  },
+  onStage: (stage: "reading" | "verifying") => void,
+): Promise<JsonRecord> {
+  const sleep = bootstrap.dependencies?.sleep ?? ((milliseconds: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, milliseconds);
+    }));
+  let lastError: unknown;
+  for (const delay of PUBLISH_READBACK_DELAYS_MS) {
+    if (delay > 0) {
+      const pause = () => sleep(delay);
+      if (bootstrap.operationDeadline === undefined) await pause();
+      else {
+        await bootstrap.operationDeadline.run(
+          pause,
+          "authenticated web operation deadline",
+        );
+      }
+    }
+    try {
+      onStage("reading");
+      const article = await readArticleDraft(bootstrap, expected.id);
+      onStage("verifying");
+      verifyFinalRichArticle(article, expected);
+      return article;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError instanceof Error) throw lastError;
+  throw new Error("X Article readback did not settle within the reviewed bound");
 }
 
 function dispatchEvent(id: string, index: number, planned: number, started: number, verified: number): WebSessionDispatchEvent {
@@ -2705,14 +2774,15 @@ async function executeArticleDraftSave(
       failureStage = "binding the Article create response";
       const article = responseBoundArticle(response, "articleentity_create_draft", null);
       draftId = articleId(article, "X created Article draft response");
-      failureStage = "reading back the created Article";
-      const finalArticle = await readArticleDraft(bootstrap, draftId);
-      failureStage = "verifying the created Article readback";
-      verifyFinalRichArticle(finalArticle, {
+      await waitForVerifiedArticleReadback(bootstrap, {
         id: draftId,
         viewerId: currentViewer.id,
         title,
         contentState,
+      }, (stage) => {
+        failureStage = stage === "reading"
+          ? "reading back the created Article"
+          : "verifying the created Article readback";
       });
       await complete(id, index);
     } else {
@@ -2752,12 +2822,15 @@ async function executeArticleDraftSave(
         },
       );
       responseBoundArticle(contentResponse, "articleentity_update_content_state", draftId);
-      const finalArticle = await readArticleDraft(bootstrap, draftId);
-      verifyFinalRichArticle(finalArticle, {
+      await waitForVerifiedArticleReadback(bootstrap, {
         id: draftId,
         viewerId: currentViewer.id,
         title,
         contentState,
+      }, (stage) => {
+        failureStage = stage === "reading"
+          ? "reading back the updated Article"
+          : "verifying the updated Article readback";
       });
       await complete(contentId, contentIndex);
     }
@@ -2798,7 +2871,7 @@ async function executeArticleDraftSave(
       dispatch: { planned, started, verified },
       error: started > verified
         ? images.length > 0
-          ? `X may have accepted an inline-image upload or private Article dispatch while ${failureStage}; ${xWebArticleImageFailureCategory(error)}; its provider media IDs are not present in the confirmed input, so preserve the indeterminate run and do not retry`
+          ? `X may have accepted an inline-image upload or private Article dispatch while ${failureStage}; ${preparationReason}; its provider media IDs are not present in the confirmed input, so preserve the indeterminate run and do not retry`
           : requestedDraftId === null
           ? "X may have accepted the private Article create, but the confirmed input has no exact draft ID for safe reconciliation; preserve the indeterminate run and do not retry"
           : "X may have accepted the current private Article replacement dispatch; reconcile the exact existing draft before retrying"
