@@ -26,6 +26,8 @@ import {
 } from "./x-web-runtime";
 
 const MAIN_URL = "https://abs.twimg.com/responsive-web/client-web/main.abcdef12.js";
+const CREATE_TWEET_QUERY_ID = "WXTdKnLddrQOunD6MhWi3g";
+const STALE_CREATE_TWEET_QUERY_ID = "hIL9XdleMYEtVXOZVbr8Bg";
 const VIEWER_QUERY_ID = "5XShkXk2oO2J7SYmTu6pvw";
 const ARTICLE_QUERY_ID = "btD9FyMDa3_vydVp7fr87Q";
 const ARTICLE_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/bundle.TwitterArticles.305538ca.js";
@@ -1667,7 +1669,7 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.href === MAIN_URL) {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-          descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+          descriptor("CreateTweet", CREATE_TWEET_QUERY_ID, "mutation"),
           descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
         ), { headers: { "content-type": "application/javascript" } });
       }
@@ -1684,7 +1686,7 @@ describe("X authenticated internal-API runtime", () => {
             semantic_annotation_ids: [],
           },
           features: {},
-          queryId: "hIL9XdleMYEtVXOZVbr8Bg",
+          queryId: CREATE_TWEET_QUERY_ID,
         });
         return jsonResponse(createTweetResponse({ text: body }));
       }
@@ -1699,7 +1701,7 @@ describe("X authenticated internal-API runtime", () => {
     });
 
     const result = await executeXWebOperation(
-      xRecipe("posts.publish"),
+      xRecipe("posts.publish", 3),
       { body },
       xAuth,
       {
@@ -1746,6 +1748,52 @@ describe("X authenticated internal-API runtime", () => {
     }]);
   });
 
+  test("fixture confirm of historical posts.publish@2 starts and verifies CreateTweet", async () => {
+    const calls: CapturedRequest[] = [];
+    const body = "historical posts.publish@2 dispatch fixture";
+    const result = await executeXWebOperation(
+      xRecipe("posts.publish", 2),
+      { body },
+      xAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("CreateTweet", CREATE_TWEET_QUERY_ID, "mutation"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/CreateTweet")) {
+            const payload = JSON.parse(request.body ?? "null") as Record<string, unknown>;
+            expect(payload).toMatchObject({
+              variables: { tweet_text: body },
+              queryId: CREATE_TWEET_QUERY_ID,
+            });
+            return jsonResponse(createTweetResponse({ text: body }));
+          }
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({ text: body }));
+          }
+          throw new Error(`unexpected test request ${request.url.href}`);
+        }),
+      },
+    );
+
+    expect(result).toEqual({
+      status: "succeeded",
+      output: { posts: [{ id: CREATED_POST_ID, url: `https://x.com/i/status/${CREATED_POST_ID}` }] },
+      finalUrl: `https://x.com/i/status/${CREATED_POST_ID}`,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeTrue();
+  });
+
   test("polls a bounded exact post locator when X public readback settles late", async () => {
     const calls: CapturedRequest[] = [];
     const pauses: number[] = [];
@@ -1763,7 +1811,7 @@ describe("X authenticated internal-API runtime", () => {
           if (request.url.href === MAIN_URL) {
             return new Response(mainBundle(
               descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-              descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+              descriptor("CreateTweet", CREATE_TWEET_QUERY_ID, "mutation"),
               descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
             ), { headers: { "content-type": "application/javascript" } });
           }
@@ -1871,7 +1919,7 @@ describe("X authenticated internal-API runtime", () => {
             if (request.url.href === MAIN_URL) {
               return new Response(mainBundle(
                 descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("CreateTweet", CREATE_TWEET_QUERY_ID, "mutation"),
                 descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
               ), { headers: { "content-type": "application/javascript" } });
             }
@@ -1934,7 +1982,7 @@ describe("X authenticated internal-API runtime", () => {
       });
       const lastUpload = events.lastIndexOf("POST upload.x.com/i/media/upload.json");
       const admitted = events.indexOf("before 0");
-      const create = events.indexOf("POST x.com/i/api/graphql/hIL9XdleMYEtVXOZVbr8Bg/CreateTweet");
+      const create = events.indexOf(`POST x.com/i/api/graphql/${CREATE_TWEET_QUERY_ID}/CreateTweet`);
       expect(lastUpload).toBeGreaterThan(-1);
       expect(admitted).toBeGreaterThan(lastUpload);
       expect(create).toBeGreaterThan(admitted);
@@ -1973,7 +2021,7 @@ describe("X authenticated internal-API runtime", () => {
             if (request.url.href === MAIN_URL) {
               return new Response(mainBundle(
                 descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("CreateTweet", CREATE_TWEET_QUERY_ID, "mutation"),
               ), { headers: { "content-type": "application/javascript" } });
             }
             if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -1988,7 +2036,9 @@ describe("X authenticated internal-API runtime", () => {
         status: "failed",
         dispatchStarted: false,
         dispatch: { planned: 1, started: 0, verified: 0 },
-        error: "X post preparation failed before public post submission; failure stage: media-upload-init; retry with a fresh confirmed plan",
+        error: expect.stringMatching(
+          /^X post preparation failed before public post submission; failure stage: media-upload-init; .+; retry with a fresh confirmed plan$/u,
+        ),
       });
       expect(admissions).toBe(0);
       expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeFalse();
@@ -2014,7 +2064,7 @@ describe("X authenticated internal-API runtime", () => {
     });
 
     const result = await executeXWebOperation(
-      xRecipe("posts.publish"),
+      xRecipe("posts.publish", 3),
       { body: "must not dispatch" },
       xAuth,
       {
@@ -2030,7 +2080,49 @@ describe("X authenticated internal-API runtime", () => {
       status: "failed",
       dispatchStarted: false,
       dispatch: { planned: 1, started: 0, verified: 0 },
+      error: "X post preparation failed before public post submission; failure stage: post-request-preparation; X bundle omitted operation CreateTweet; retry with a fresh confirmed plan",
     });
+    expect(before).toEqual([]);
+    expect(calls.some((call) => call.method === "POST")).toBeFalse();
+  });
+
+  test("fails before dispatch when the live CreateTweet query ID drifted from reviewed evidence", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const result = await executeXWebOperation(
+      xRecipe("posts.publish", 3),
+      { body: "stale CreateTweet evidence must not dispatch" },
+      xAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("CreateTweet", STALE_CREATE_TWEET_QUERY_ID, "mutation"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          throw new Error(`unexpected test request ${request.url.href}`);
+        }),
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      dispatchStarted: false,
+      finalUrl: null,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+      error: "X post preparation failed before public post submission; failure stage: post-request-preparation; X query-ID drift for CreateTweet:mutation; reviewed evidence is stale; retry with a fresh confirmed plan",
+    });
+    expect(result.error).not.toContain(STALE_CREATE_TWEET_QUERY_ID);
+    expect(result.error).not.toContain(CREATE_TWEET_QUERY_ID);
     expect(before).toEqual([]);
     expect(calls.some((call) => call.method === "POST")).toBeFalse();
   });
@@ -2071,7 +2163,7 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.href === MAIN_URL) {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-          descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+          descriptor("CreateTweet", CREATE_TWEET_QUERY_ID, "mutation"),
         ), { headers: { "content-type": "application/javascript" } });
       }
       if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -2117,7 +2209,7 @@ describe("X authenticated internal-API runtime", () => {
         if (request.url.href === MAIN_URL) {
           return new Response(mainBundle(
             descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-            descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+            descriptor("CreateTweet", CREATE_TWEET_QUERY_ID, "mutation"),
           ), { headers: { "content-type": "application/javascript" } });
         }
         if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());

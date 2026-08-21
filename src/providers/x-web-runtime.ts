@@ -2560,8 +2560,11 @@ async function executePublish(
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
     };
-  } catch {
+  } catch (error) {
     const status = started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed";
+    const preparationReason = error instanceof Error && error.message.trim() !== ""
+      ? error.message.trim()
+      : "unknown preparation failure";
     return {
       status,
       output: posts.length === 0 ? null : { posts },
@@ -2572,7 +2575,7 @@ async function executePublish(
         ? `X may have accepted the current post dispatch; failure stage: ${failureStage}; reconcile before retrying`
         : status === "partial"
           ? `X verified only part of the confirmed post workflow; failure stage: ${failureStage}; inspect the verified results before retrying`
-          : `X post preparation failed before public post submission; failure stage: ${failureStage}; retry with a fresh confirmed plan`,
+          : `X post preparation failed before public post submission; failure stage: ${failureStage}; ${preparationReason}; retry with a fresh confirmed plan`,
     };
   }
 }

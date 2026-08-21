@@ -457,6 +457,7 @@ function publishBundledAdapterGeneration(
 
   const selections: BundledAdapterGenerationSelection[] = [];
   const preservedIds: string[] = [];
+  const replacedIds: string[] = [];
   let installed = 0;
   const installedSnapshots = new Map(
     listInstalledDiagnosticManifestSnapshots(environment, registry).map((entry) =>
@@ -491,13 +492,22 @@ function publishBundledAdapterGeneration(
       installed += 1;
       continue;
     }
-    if (!snapshot.result.ok) {
+    const kernelOwned = snapshot.result.ok
+      && parseRuntimeManifest(snapshot.result.value, registry).ok;
+    if (!kernelOwned) {
+      // Diagnostic parse allows retired or future contract versions so a
+      // leftover 1.10.0 data manifest can look structurally present. Runtime
+      // parse is the kernel-owned check. Replace anything this CLI cannot
+      // execute, and preserve only still-valid user-edited manifests.
       selections.push({
         id: adapter.id,
-        state: "legacy",
+        state: "present",
+        manifest: adapter.current.manifest,
+        sourceContentSha256: adapter.current.sourceContentSha256,
         expectedCurrentContentSha256: snapshot.contentSha256,
       });
-      preservedIds.push(adapter.id);
+      installed += 1;
+      replacedIds.push(adapter.id);
       continue;
     }
     const installedHash = manifestHash(snapshot.result.value);
@@ -543,6 +553,11 @@ function publishBundledAdapterGeneration(
     if (preservedIds.includes(adapter.id)) continue;
     output.stdout(
       `Installed ${adapter.id} at ${adapterManifestPath(adapter.id, environment)}.\n`,
+    );
+  }
+  for (const id of replacedIds) {
+    output.stderr(
+      `wrench installer: replaced the installed ${id} adapter because it is not valid on this CLI kernel; installed the bundled contract instead\n`,
     );
   }
   for (const id of preservedIds) {

@@ -262,7 +262,7 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
     { operationName: "DeleteBookmark", operationType: "mutation", queryId: "Wlmlj2-xzyS1GN3a6cj-mQ", sourceChunk: "main.9929b02a.js" },
     { operationName: "CreateRetweet", operationType: "mutation", queryId: "mbRO74GrOvSfRcJnlMapnQ", sourceChunk: "main.9929b02a.js" },
     { operationName: "DeleteRetweet", operationType: "mutation", queryId: "ZyZigVsNiFO6v1dEks1eWg", sourceChunk: "main.9929b02a.js" },
-    { operationName: "CreateTweet", operationType: "mutation", queryId: "hIL9XdleMYEtVXOZVbr8Bg", sourceChunk: "main.9929b02a.js" },
+    { operationName: "CreateTweet", operationType: "mutation", queryId: "WXTdKnLddrQOunD6MhWi3g", sourceChunk: "main.7792f4fa.js", observedOn: "2026-08-20" },
     { operationName: "CreateNoteTweet", operationType: "mutation", queryId: "uGXMU9aKbNB9qxxAg4jxkA", sourceChunk: "main.9929b02a.js" },
     { operationName: "DeleteTweet", operationType: "mutation", queryId: "nxpZCY2K-I6QoFHAHeojFQ", sourceChunk: "main.9929b02a.js" },
     { operationName: "DmAllSearchSlice", operationType: "query", queryId: "zd0F6a_svKAXdlMGbCZDFg", sourceChunk: "bundle.DirectMessages.265735ba.js" },
