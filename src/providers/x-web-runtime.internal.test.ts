@@ -172,6 +172,42 @@ function twoImageArticleDocument(): string {
   });
 }
 
+function mentionQuoteTwoImageArticleDocument(): string {
+  const tweetUrl = "https://x.com/hraness/status/2090583665583468672";
+  return canonicalJson({
+    schemaVersion: 2,
+    blocks: [
+      { type: "paragraph", text: "Before the images" },
+      { type: "image", imageIndex: 0, caption: "First inline" },
+      { type: "image", imageIndex: 1 },
+      {
+        type: "blockquote",
+        text: "(70x subsidy reported by @SemiAnalysis_ in June)",
+      },
+      {
+        type: "paragraph",
+        text: tweetUrl,
+        links: [{ offset: 0, length: tweetUrl.length, url: tweetUrl }],
+      },
+    ],
+  });
+}
+
+function articleContentStateWithBlockData(
+  contentState: ReturnType<typeof buildXWebRichArticleContentState>,
+  match: (block: Readonly<Record<string, unknown>>) => boolean,
+  extraData: Readonly<Record<string, unknown>>,
+): unknown {
+  return {
+    blocks: contentState.blocks.map((block) => {
+      if (!match(block)) return block;
+      const data = block.data as Record<string, unknown>;
+      return { ...block, data: { ...data, ...extraData } };
+    }),
+    entity_map: contentState.entity_map,
+  };
+}
+
 function articleContentStateWithExtraMediaFields(
   contentState: ReturnType<typeof buildXWebRichArticleContentState>,
 ): unknown {
@@ -1724,6 +1760,165 @@ describe("X authenticated internal-API runtime", () => {
     expect(initCount).toBe(2);
     expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
     expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("creates one private Article after two verified images when readback annotates a mention onto blockquote data", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Building a software factory";
+    const articleId = "700000000000000013";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = mentionQuoteTwoImageArticleDocument();
+    const expectedContentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocumentV2(documentValue, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+        maximumImages: 20,
+      }),
+      mediaIds,
+    );
+    const runtimeDependencies = twoImageCreateRuntime(calls, {
+      title,
+      articleId,
+      mediaIds,
+      expectedContentState,
+      readback: () => jsonResponse(privateDraftArticleResponse({
+        articleId,
+        title,
+        contentState: articleContentStateWithBlockData(
+          expectedContentState,
+          (block) => block.type === "blockquote",
+          {
+            screen_name: "SemiAnalysis_",
+            user_mentions: [{
+              fromIndex: 25,
+              screen_name: "SemiAnalysis_",
+              toIndex: 40,
+            }],
+          },
+        ),
+      })),
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: () => Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]),
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        published: false,
+        mode: "draft",
+        draftId: articleId,
+        url: `https://x.com/compose/articles/edit/${articleId}`,
+      },
+      dispatch: { planned: 3, started: 3, verified: 3 },
+    });
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+      "articles.create",
+    ]);
+    expect(JSON.parse(calls.find((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))?.body ?? "null"))
+      .toMatchObject({
+        variables: { content_state: expectedContentState, title },
+      });
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
+  });
+
+  test("surfaces a load-bearing created-Article block data shape and stays indeterminate", async () => {
+    const calls: CapturedRequest[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const title = "Building a software factory";
+    const articleId = "700000000000000013";
+    const mediaIds = ["700000000000000011", "700000000000000012"] as const;
+    const documentValue = mentionQuoteTwoImageArticleDocument();
+    const expectedContentState = buildXWebRichArticleContentState(
+      parseArticleDraftDocumentV2(documentValue, {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+        maximumImages: 20,
+      }),
+      mediaIds,
+    );
+    const runtimeDependencies = twoImageCreateRuntime(calls, {
+      title,
+      articleId,
+      mediaIds,
+      expectedContentState,
+      readback: () => jsonResponse(privateDraftArticleResponse({
+        articleId,
+        title,
+        contentState: articleContentStateWithBlockData(
+          expectedContentState,
+          (block) => block.type === "blockquote",
+          {
+            media_items: [{
+              local_media_id: 3,
+              media_category: "DraftTweetImage",
+              media_id: "700000000000000099",
+            }],
+            user_mentions: [{ screen_name: "SemiAnalysis_" }],
+          },
+        ),
+      })),
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.draft.save", 2),
+      {
+        title,
+        document: documentValue,
+        inline_images: [
+          { kind: "file", reference: "fixture-image-1" },
+          { kind: "file", reference: "fixture-image-2" },
+        ],
+      },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        fileResolver: () => Promise.resolve([fixtureArticleImagePath(), fixtureArticleImagePath()]),
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      output: null,
+      dispatchStarted: true,
+      dispatch: { planned: 3, started: 3, verified: 2 },
+    });
+    expect(result.error).toBe(
+      "X may have accepted an inline-image upload or private Article dispatch while verifying the created Article readback; X Article readback block 4.data left a load-bearing data shape; observed keys: media_items, user_mentions; its provider media IDs are not present in the confirmed input, so preserve the indeterminate run and do not retry",
+    );
+    expect(after.map(({ id }) => id)).toEqual([
+      "articles.media.inline[1]",
+      "articles.media.inline[2]",
+    ]);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityDraftCreate"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.pathname.endsWith("/ArticleEntityResultByRestId"))).toHaveLength(4);
     expect(calls.some((call) => call.url.pathname.endsWith("/ArticleEntityPublish"))).toBeFalse();
   });
 

@@ -2083,6 +2083,35 @@ function remappedArticleEntityKey(
   return normalized;
 }
 
+const ARTICLE_BLOCK_DATA_LOAD_BEARING_KEYS = Object.freeze(new Set([
+  "blocks",
+  "entityMap",
+  "entityRanges",
+  "entity_map",
+  "entity_ranges",
+  "localMediaId",
+  "local_media_id",
+  "mediaId",
+  "mediaItems",
+  "media_id",
+  "media_items",
+]));
+
+function articleBlockDataIsLoadBearing(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => articleBlockDataIsLoadBearing(item));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.entries(value).some(([key, nested]) =>
+    ARTICLE_BLOCK_DATA_LOAD_BEARING_KEYS.has(key) || articleBlockDataIsLoadBearing(nested));
+}
+
+function observedArticleBlockDataKeys(data: JsonRecord): string {
+  return Object.keys(data).sort().join(", ");
+}
+
 function normalizedArticleBlockData(
   value: unknown,
   label: string,
@@ -2094,8 +2123,28 @@ function normalizedArticleBlockData(
   const data = record(value, label);
   const keys = Object.keys(data);
   if (keys.length === 0) return Object.freeze({});
-  if (keys.length !== 1 || keys[0] !== "urls" || !Array.isArray(data.urls)) {
-    throw new Error(`${label} left the reviewed empty-or-urls shape`);
+  // Provider readback may annotate mentions onto block.data. Extra keys are
+  // non-binding, matching extra MEDIA media_items fields. urls still have to
+  // bind this block. Media or entity-map fields on data would change the
+  // article and stay rejected with the observed key names.
+  if (
+    keys.some((key) =>
+      key !== "urls" && (
+        ARTICLE_BLOCK_DATA_LOAD_BEARING_KEYS.has(key)
+        || articleBlockDataIsLoadBearing(data[key])
+      ))
+  ) {
+    throw new Error(
+      `${label} left a load-bearing data shape; observed keys: ${observedArticleBlockDataKeys(data)}`,
+    );
+  }
+  if (data.urls === undefined) {
+    return Object.freeze({});
+  }
+  if (!Array.isArray(data.urls)) {
+    throw new Error(
+      `${label} left a load-bearing data shape; observed keys: ${observedArticleBlockDataKeys(data)}`,
+    );
   }
   if (data.urls.length > 100) {
     throw new Error(`${label}.urls exceeded its reviewed bound`);
