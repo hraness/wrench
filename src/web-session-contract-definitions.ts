@@ -356,11 +356,13 @@ const BLUESKY_WEB_OPERATIONS = operationPolicies("bluesky", [
   "comments.read",
   "content.delete",
   "feeds.read",
+  "media.publish",
   "media.read",
   "posts.publish",
   "posts.read",
   "profiles.read",
 ], {
+  "media.publish": 2,
   "profiles.read": 2,
   "posts.publish": 3,
 });
@@ -437,8 +439,9 @@ const META_WEB_OPERATIONS = Object.freeze({
     "feeds.read": 2,
     "messaging.list": 2,
   }),
-  threads: operationPolicies("threads", ["feeds.read", "posts.publish", "profiles.read"], {
+  threads: operationPolicies("threads", ["feeds.read", "media.publish", "posts.publish", "profiles.read"], {
     "feeds.read": 2,
+    "media.publish": 1,
     "posts.publish": 4,
   }),
   facebook: operationPolicies("facebook", ["feeds.read"], {
@@ -516,7 +519,7 @@ const bluesky = {
   "content.share": contract("bluesky", "content.share", BLUESKY_WEB_OPERATIONS["content.share"].risk, BLUESKY_WEB_OPERATIONS["content.share"].state, BLUESKY_WEB_OPERATIONS["content.share"].reason),
   "feeds.read": contract("bluesky", "feeds.read", BLUESKY_WEB_OPERATIONS["feeds.read"].risk, BLUESKY_WEB_OPERATIONS["feeds.read"].state, BLUESKY_WEB_OPERATIONS["feeds.read"].reason),
   "likes.set": contract("bluesky", "likes.set", BLUESKY_WEB_OPERATIONS["likes.set"].risk, BLUESKY_WEB_OPERATIONS["likes.set"].state, BLUESKY_WEB_OPERATIONS["likes.set"].reason),
-  "media.publish": contract("bluesky", "media.publish", BLUESKY_WEB_OPERATIONS["media.publish"].risk, BLUESKY_WEB_OPERATIONS["media.publish"].state, BLUESKY_WEB_OPERATIONS["media.publish"].reason),
+  "media.publish": contract("bluesky", "media.publish", BLUESKY_WEB_OPERATIONS["media.publish"].risk, BLUESKY_WEB_OPERATIONS["media.publish"].state, BLUESKY_WEB_OPERATIONS["media.publish"].reason, BLUESKY_WEB_OPERATIONS["media.publish"].contractVersion),
   "media.read": contract("bluesky", "media.read", BLUESKY_WEB_OPERATIONS["media.read"].risk, BLUESKY_WEB_OPERATIONS["media.read"].state, BLUESKY_WEB_OPERATIONS["media.read"].reason),
   "messaging.list": contract("bluesky", "messaging.list", BLUESKY_WEB_OPERATIONS["messaging.list"].risk, BLUESKY_WEB_OPERATIONS["messaging.list"].state, BLUESKY_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("bluesky", "messaging.read", BLUESKY_WEB_OPERATIONS["messaging.read"].risk, BLUESKY_WEB_OPERATIONS["messaging.read"].state, BLUESKY_WEB_OPERATIONS["messaging.read"].reason),

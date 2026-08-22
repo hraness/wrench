@@ -42,10 +42,12 @@ import {
   BLUESKY_APP_ORIGIN,
   BLUESKY_CHAT_PROXY,
   BLUESKY_NOTIFICATION_PROXY,
+  BLUESKY_VIDEO_SERVICE_ORIGIN,
   BLUESKY_WEB_OPERATIONS,
   BLUESKY_WEB_OPERATION_NAMES,
   BLUESKY_XRPC_METHODS,
   assertBlueskyText,
+  authorizeBlueskyVideoRequest,
   authorizeBlueskyXrpcRequest,
   blueskyCid,
   blueskyDid,
@@ -59,7 +61,10 @@ import {
   parseBlueskyRecordNotFoundResponse,
   parseBlueskyRefreshSessionResponse,
   parseBlueskySessionResponse,
+  parseBlueskyServiceAuthResponse,
   parseBlueskyUploadBlobResponse,
+  parseBlueskyVideoJobStatusResponse,
+  parseBlueskyVideoUploadResponse,
   projectBlueskyBookmarks,
   projectBlueskyConvo,
   projectBlueskyConvoList,
@@ -75,17 +80,41 @@ import {
   type BlueskyRequestBinding,
   type BlueskySessionMaterial,
   type BlueskyStrongRef,
+  type BlueskyVideoJobStatus,
   type BlueskyWebOperationName,
   type BlueskyXrpcMethod,
 } from "./bluesky-web";
+import { isoBmffVideoDimensions } from "./iso-bmff";
 
 const MAX_BOOTSTRAP_BYTES = 64 * 1024;
 const MAX_READ_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 2_000_000;
+const MAX_VIDEO_BYTES = 100_000_000;
 const BLUESKY_PUBLIC_APPVIEW_ORIGIN = "https://public.api.bsky.app";
 const DEFAULT_LIMIT = 25;
 const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
 const PUBLISH_READBACK_DELAYS_MS = Object.freeze([0, 250, 750, 1_500]);
+const VIDEO_PROCESSING_DELAYS_MS = Object.freeze([
+  1_000,
+  1_000,
+  2_000,
+  2_000,
+  4_000,
+  4_000,
+  8_000,
+  8_000,
+  10_000,
+  10_000,
+  15_000,
+  15_000,
+  20_000,
+  20_000,
+  30_000,
+  30_000,
+  30_000,
+  30_000,
+  30_000,
+] as const);
 const BLUESKY_RECORD_NOT_FOUND = Symbol("bluesky-record-not-found");
 
 type JsonRecord = Record<string, unknown>;
@@ -824,6 +853,93 @@ async function xrpc(
   }
 }
 
+async function videoServiceJson(
+  client: BlueskyClient,
+  input:
+    | {
+        readonly kind: "job-status";
+        readonly jobId: string;
+      }
+    | {
+        readonly kind: "upload";
+        readonly bytes: Uint8Array;
+        readonly token: string;
+      },
+): Promise<unknown> {
+  const url = new URL(
+    input.kind === "upload"
+      ? "/xrpc/app.bsky.video.uploadVideo"
+      : "/xrpc/app.bsky.video.getJobStatus",
+    BLUESKY_VIDEO_SERVICE_ORIGIN,
+  );
+  if (input.kind === "upload") {
+    url.searchParams.set("did", client.session.did);
+    url.searchParams.set("name", "wrench-video.mp4");
+  } else {
+    url.searchParams.set("jobId", input.jobId);
+  }
+  const method = input.kind === "upload" ? "POST" : "GET";
+  authorizeBlueskyVideoRequest({
+    kind: input.kind,
+    url,
+    method,
+    ...(input.kind === "upload"
+      ? { did: client.session.did }
+      : { jobId: input.jobId }),
+  });
+  const headers = new Headers({ accept: "application/json" });
+  let body: Uint8Array | undefined;
+  if (input.kind === "upload") {
+    headers.set("authorization", `Bearer ${input.token}`);
+    headers.set("content-type", "video/mp4");
+    headers.set("content-length", String(input.bytes.byteLength));
+    body = new Uint8Array(input.bytes);
+  }
+  const operationDeadline = client.operationDeadline;
+  const controller = operationDeadline === undefined
+    ? new AbortController()
+    : undefined;
+  const timeoutMs = remainingTimeoutMs(client.timeoutMs, operationDeadline);
+  const timeout = controller === undefined
+    ? undefined
+    : setTimeout(() => controller.abort(), timeoutMs);
+  const signal = operationDeadline?.signal ?? controller?.signal;
+  if (signal === undefined) {
+    throw new Error("Bluesky video request signal was not initialized");
+  }
+  let response: Response | undefined;
+  try {
+    const request = () => client.fetch(url, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body }),
+      redirect: "error",
+      signal,
+    });
+    try {
+      response = operationDeadline === undefined
+        ? await request()
+        : await operationDeadline.run(request, WEB_SESSION_OPERATION_LABEL);
+    } catch (error) {
+      throw new Error("Bluesky video service failed before a reviewed response was received", {
+        cause: error,
+      });
+    }
+    if (response.status !== 200) {
+      response.body?.cancel().catch(() => undefined);
+      throw new Error(`Bluesky video service returned unreviewed status ${response.status}`);
+    }
+    const bytes = await boundedBytes(response, 512 * 1024, operationDeadline);
+    if (!jsonContentType(response)) {
+      throw new Error("Bluesky video service returned an unreviewed content type");
+    }
+    return parseJson(bytes);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    if (signal.aborted) void response?.body?.cancel().catch(() => undefined);
+  }
+}
+
 function clientFor(
   session: BlueskySessionMaterial,
   timeoutMs: number,
@@ -1079,11 +1195,20 @@ type BlueskyPublishedMutationTarget = {
   readonly uri: string;
   readonly cid: string;
   readonly createdAt: string;
-  readonly media: null | {
-    readonly cid: string;
-    readonly mediaType: "image/jpeg" | "image/png" | "image/webp";
-    readonly size: number;
-  };
+  readonly media: null
+    | {
+        readonly cid: string;
+        readonly mediaType: "image/jpeg" | "image/png" | "image/webp";
+        readonly size: number;
+      }
+    | {
+        readonly cid: string;
+        readonly height: number;
+        readonly jobId: string;
+        readonly mediaType: "video/mp4";
+        readonly size: number;
+        readonly width: number;
+      };
 };
 
 function parseBlueskyPublishedMutationTarget(
@@ -1123,28 +1248,55 @@ function parseBlueskyPublishedMutationTarget(
       target.media,
       "Bluesky provider-accepted post target media",
     );
-    if (Object.keys(rawMedia).sort().join(",") !== "cid,mediaType,size") {
-      throw new Error("Bluesky provider-accepted post target media contained unsupported fields");
+    const cid = typeof rawMedia.cid === "string"
+      && /^b[a-z2-7]{10,200}$/u.test(rawMedia.cid)
+      ? rawMedia.cid
+      : null;
+    if (rawMedia.mediaType === "video/mp4") {
+      if (
+        Object.keys(rawMedia).sort().join(",") !== "cid,height,jobId,mediaType,size,width"
+        || cid === null
+        || typeof rawMedia.jobId !== "string"
+        || rawMedia.jobId.length < 1
+        || rawMedia.jobId.length > 1_024
+        || /[\0\r]/u.test(rawMedia.jobId)
+        || !Number.isSafeInteger(rawMedia.size)
+        || (rawMedia.size as number) < 1
+        || (rawMedia.size as number) > MAX_VIDEO_BYTES
+        || !Number.isSafeInteger(rawMedia.width)
+        || (rawMedia.width as number) < 1
+        || (rawMedia.width as number) > 20_000
+        || !Number.isSafeInteger(rawMedia.height)
+        || (rawMedia.height as number) < 1
+        || (rawMedia.height as number) > 20_000
+      ) throw new Error("Bluesky provider-accepted video target is malformed");
+      media = Object.freeze({
+        cid,
+        height: rawMedia.height as number,
+        jobId: rawMedia.jobId,
+        mediaType: "video/mp4",
+        size: rawMedia.size as number,
+        width: rawMedia.width as number,
+      });
+    } else {
+      if (
+        Object.keys(rawMedia).sort().join(",") !== "cid,mediaType,size"
+        || cid === null
+        || (
+          rawMedia.mediaType !== "image/jpeg"
+          && rawMedia.mediaType !== "image/png"
+          && rawMedia.mediaType !== "image/webp"
+        )
+        || !Number.isSafeInteger(rawMedia.size)
+        || (rawMedia.size as number) < 1
+        || (rawMedia.size as number) > MAX_IMAGE_BYTES
+      ) throw new Error("Bluesky provider-accepted post target media is malformed");
+      media = Object.freeze({
+        cid,
+        mediaType: rawMedia.mediaType,
+        size: rawMedia.size as number,
+      });
     }
-    if (
-      typeof rawMedia.cid !== "string"
-      || !/^b[a-z2-7]{10,200}$/u.test(rawMedia.cid)
-      || (
-        rawMedia.mediaType !== "image/jpeg"
-        && rawMedia.mediaType !== "image/png"
-        && rawMedia.mediaType !== "image/webp"
-      )
-      || !Number.isSafeInteger(rawMedia.size)
-      || (rawMedia.size as number) < 1
-      || (rawMedia.size as number) > MAX_IMAGE_BYTES
-    ) {
-      throw new Error("Bluesky provider-accepted post target media is malformed");
-    }
-    media = Object.freeze({
-      cid: rawMedia.cid,
-      mediaType: rawMedia.mediaType,
-      size: rawMedia.size as number,
-    });
   }
   const parsed = Object.freeze({
     uri: strongRef.uri,
@@ -1173,10 +1325,12 @@ export async function readBlueskyWebPublishedMutationTarget(
 ): Promise<{ readonly present: true; readonly uri: string; readonly cid: string }> {
   if (
     recipe.site !== "bluesky"
-    || recipe.action !== "posts.publish"
-    || recipe.contractVersion !== 3
+    || !(
+      (recipe.action === "posts.publish" && recipe.contractVersion === 3)
+      || (recipe.action === "media.publish" && recipe.contractVersion === 2)
+    )
   ) {
-    throw new Error("Bluesky publish recovery supports only posts.publish@3");
+    throw new Error("Bluesky publish recovery supports only posts.publish@3 or media.publish@2");
   }
   const target = parseBlueskyPublishedMutationTarget(identifier);
   const body = assertBlueskyText(input.body, "input.body", 280, 3_000);
@@ -1188,11 +1342,15 @@ export async function readBlueskyWebPublishedMutationTarget(
       : (() => {
           throw new Error("input.alt must be bounded text");
         })();
+  const expectsVideo = recipe.action === "media.publish";
   if (
     (input.media === undefined) !== (target.media === null)
-    || (target.media === null
-      ? input.media_type !== undefined || input.alt !== undefined
-      : input.media_type !== target.media.mediaType)
+    || (expectsVideo
+      ? target.media?.mediaType !== "video/mp4" || input.media_type !== undefined
+      : target.media === null
+        ? input.media_type !== undefined || input.alt !== undefined
+        : target.media.mediaType === "video/mp4"
+          || input.media_type !== target.media.mediaType)
   ) {
     throw new Error("Bluesky provider-accepted post target did not bind the confirmed attachment shape");
   }
@@ -1202,7 +1360,24 @@ export async function readBlueskyWebPublishedMutationTarget(
     createdAt: target.createdAt,
     ...(target.media === null
       ? {}
-      : {
+      : target.media.mediaType === "video/mp4"
+        ? {
+            embed: {
+              $type: "app.bsky.embed.video",
+              video: {
+                $type: "blob",
+                ref: { $link: target.media.cid },
+                mimeType: target.media.mediaType,
+                size: target.media.size,
+              },
+              alt,
+              aspectRatio: {
+                width: target.media.width,
+                height: target.media.height,
+              },
+            },
+          }
+        : {
           embed: {
             $type: "app.bsky.embed.images",
             images: [{
@@ -1235,7 +1410,13 @@ export async function readBlueskyWebPublishedMutationTarget(
     text: body,
     reply: null,
     quote: null,
-    mediaAlt: target.media === null ? null : alt,
+    attachment: target.media === null
+      ? null
+      : {
+          alt,
+          cid: target.media.mediaType === "video/mp4" ? target.media.cid : null,
+          kind: target.media.mediaType === "video/mp4" ? "video" : "image",
+        },
   });
   return Object.freeze({ present: true, uri: target.uri, cid: target.cid });
 }
@@ -2051,6 +2232,98 @@ async function readBoundMedia(
   }
 }
 
+type BoundBlueskyVideo = Readonly<{
+  alt: string;
+  bytes: Uint8Array;
+  height: number;
+  mediaType: "video/mp4";
+  width: number;
+}>;
+
+async function readBoundVideo(
+  input: OperationInput,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<BoundBlueskyVideo> {
+  if (input.media === undefined) {
+    throw new Error("Bluesky video publishing requires input.media");
+  }
+  if (input.media_type !== undefined) {
+    throw new Error("Bluesky video publishing does not accept input.media_type");
+  }
+  if (fileResolver === undefined) {
+    throw new Error("Bluesky video upload requires the plan-bound file resolver");
+  }
+  const media = fileInput(input.media);
+  const rawAlt = input.alt;
+  const alt = rawAlt === undefined
+    ? ""
+    : typeof rawAlt === "string" && rawAlt.length <= 10_000 && !/[\0\r]/u.test(rawAlt)
+      ? rawAlt
+      : (() => {
+          throw new Error("input.alt must be bounded text");
+        })();
+  const paths = operationDeadline === undefined
+    ? await fileResolver([media])
+    : await operationDeadline.run(
+        () => fileResolver([media]),
+        WEB_SESSION_OPERATION_LABEL,
+      );
+  operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+  if (paths.length !== 1 || typeof paths[0] !== "string") {
+    throw new Error("Bluesky file resolver did not return one exact video path");
+  }
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = operationDeadline === undefined
+    ? await open(paths[0], constants.O_RDONLY | noFollow)
+    : await operationDeadline.run(
+        () => open(paths[0]!, constants.O_RDONLY | noFollow),
+        WEB_SESSION_OPERATION_LABEL,
+      );
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          WEB_SESSION_OPERATION_LABEL,
+        );
+    if (!before.isFile() || before.size < 24 || before.size > MAX_VIDEO_BYTES) {
+      throw new Error("Bluesky video must be a regular MP4 no larger than 100,000,000 bytes");
+    }
+    const fileBytes = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(
+          () => handle.readFile(),
+          WEB_SESSION_OPERATION_LABEL,
+        );
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          WEB_SESSION_OPERATION_LABEL,
+        );
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || fileBytes.byteLength !== before.size
+    ) throw new Error("Bluesky video changed while it was materialized");
+    const bytes = new Uint8Array(fileBytes);
+    const dimensions = isoBmffVideoDimensions(bytes, "Bluesky video");
+    return Object.freeze({
+      alt,
+      bytes,
+      height: dimensions.height,
+      mediaType: "video/mp4",
+      width: dimensions.width,
+    });
+  } finally {
+    await handle.close();
+  }
+}
+
 async function uploadImage(
   client: BlueskyClient,
   media: NonNullable<Awaited<ReturnType<typeof readBoundMedia>>>,
@@ -2063,6 +2336,71 @@ async function uploadImage(
     media.mediaType,
     media.bytes.byteLength,
   );
+}
+
+async function uploadVideo(
+  client: BlueskyClient,
+  media: BoundBlueskyVideo,
+  options: {
+    readonly now: () => number;
+    readonly sleep: (milliseconds: number) => Promise<void>;
+  },
+): Promise<Readonly<{ blob: BlueskyBlobRef; jobId: string }>> {
+  const nowSeconds = Math.floor(options.now() / 1_000);
+  const expiresAt = nowSeconds + 1_800;
+  const audience = `did:web:${new URL(client.session.pdsOrigin).hostname}`;
+  const lxm = "com.atproto.repo.uploadBlob";
+  const token = parseBlueskyServiceAuthResponse(
+    await xrpc(client, "com.atproto.server.getServiceAuth", {
+      query: {
+        aud: [audience],
+        exp: [String(expiresAt)],
+        lxm: [lxm],
+      },
+      maximumBytes: 64 * 1024,
+    }),
+    {
+      did: client.session.did,
+      audience,
+      lxm,
+      expiresAt,
+      nowSeconds,
+    },
+  );
+  let status = parseBlueskyVideoUploadResponse(
+    await videoServiceJson(client, {
+      kind: "upload",
+      bytes: media.bytes,
+      token,
+    }),
+    client.session.did,
+  );
+  const completed = (candidate: BlueskyVideoJobStatus): BlueskyBlobRef | null => {
+    if (candidate.state === "JOB_STATE_FAILED") {
+      throw new Error("Bluesky video processing reported a terminal failure");
+    }
+    return candidate.state === "JOB_STATE_COMPLETED" ? candidate.blob : null;
+  };
+  let blob = completed(status);
+  for (const delay of VIDEO_PROCESSING_DELAYS_MS) {
+    if (blob !== null) break;
+    const pause = () => options.sleep(delay);
+    if (client.operationDeadline === undefined) await pause();
+    else await client.operationDeadline.run(pause, WEB_SESSION_OPERATION_LABEL);
+    status = parseBlueskyVideoJobStatusResponse(
+      await videoServiceJson(client, {
+        kind: "job-status",
+        jobId: status.jobId,
+      }),
+      client.session.did,
+      status.jobId,
+    );
+    blob = completed(status);
+  }
+  if (blob === null) {
+    throw new Error("Bluesky video processing did not complete within the reviewed poll bound");
+  }
+  return Object.freeze({ blob, jobId: status.jobId });
 }
 
 function publishTexts(
@@ -2087,7 +2425,11 @@ function assertPublishedPost(
     readonly text: string;
     readonly reply: { readonly root: BlueskyStrongRef; readonly parent: BlueskyStrongRef } | null;
     readonly quote: BlueskyStrongRef | null;
-    readonly mediaAlt: string | null;
+    readonly attachment: null | Readonly<{
+      alt: string;
+      cid: string | null;
+      kind: "image" | "video";
+    }>;
   },
 ): void {
   if (post.author.did !== expected.actorDid || post.text !== expected.text) {
@@ -2099,12 +2441,17 @@ function assertPublishedPost(
   if (JSON.stringify(post.quote) !== JSON.stringify(expected.quote)) {
     throw new Error("Bluesky post readback did not bind the confirmed quoted record");
   }
-  if (expected.mediaAlt !== null) {
+  if (expected.attachment !== null) {
+    const attachment = post.attachments[0];
     if (
       post.attachments.length !== 1
-      || post.attachments[0]?.kind !== "image"
-      || post.attachments[0].alt !== expected.mediaAlt
-    ) throw new Error("Bluesky post readback did not bind the confirmed image attachment");
+      || attachment?.kind !== expected.attachment.kind
+      || attachment.alt !== expected.attachment.alt
+      || (
+        expected.attachment.cid !== null
+        && attachment.cid !== expected.attachment.cid
+      )
+    ) throw new Error("Bluesky post readback did not bind the confirmed attachment");
   }
 }
 
@@ -2147,15 +2494,22 @@ async function executePublish(
     if (
       recipe.action !== "posts.publish"
       && recipe.action !== "replies.create"
+      && recipe.action !== "media.publish"
       && input.media !== undefined
-    ) throw new Error("Bluesky media is supported only for a post or reply");
-    const media = recipe.action === "posts.publish" || recipe.action === "replies.create"
-      ? await readBoundMedia(
+    ) throw new Error("Bluesky media is supported only for a post, reply, or video post");
+    const media = recipe.action === "media.publish"
+      ? await readBoundVideo(
           input,
           options.fileResolver,
           client.operationDeadline,
         )
-      : null;
+      : recipe.action === "posts.publish" || recipe.action === "replies.create"
+        ? await readBoundMedia(
+            input,
+            options.fileResolver,
+            client.operationDeadline,
+          )
+        : null;
     let reply: { readonly root: BlueskyStrongRef; readonly parent: BlueskyStrongRef } | null = null;
     let quote: BlueskyStrongRef | null = null;
     if (recipe.action === "replies.create") {
@@ -2181,7 +2535,20 @@ async function executePublish(
         });
       }
       failureStage = "media-upload";
-      const blob = media === null || offset > 0 ? null : await uploadImage(client, media);
+      let blob: BlueskyBlobRef | null = null;
+      let videoJobId: string | null = null;
+      if (media !== null && offset === 0) {
+        if (media.mediaType === "video/mp4") {
+          const uploaded = await uploadVideo(client, media, {
+            now: options.now,
+            sleep: options.sleep,
+          });
+          blob = uploaded.blob;
+          videoJobId = uploaded.jobId;
+        } else {
+          blob = await uploadImage(client, media);
+        }
+      }
       failureStage = "record-preparation";
       const createdAt = new Date(options.now()).toISOString();
       const record = Object.freeze({
@@ -2199,7 +2566,19 @@ async function executePublish(
             }),
         ...(blob === null
           ? {}
-          : {
+          : media?.mediaType === "video/mp4"
+            ? {
+                embed: {
+                  $type: "app.bsky.embed.video",
+                  video: blob,
+                  alt: media.alt,
+                  aspectRatio: {
+                    width: media.width,
+                    height: media.height,
+                  },
+                },
+              }
+            : {
               embed: {
                 $type: "app.bsky.embed.images",
                 images: [{ image: blob, alt: media!.alt }],
@@ -2231,11 +2610,20 @@ async function executePublish(
             createdAt,
             media: blob === null
               ? null
-              : {
-                  cid: blob.ref.$link,
-                  mediaType: blob.mimeType,
-                  size: blob.size,
-                },
+              : media?.mediaType === "video/mp4"
+                ? {
+                    cid: blob.ref.$link,
+                    height: media.height,
+                    jobId: videoJobId,
+                    mediaType: blob.mimeType,
+                    size: blob.size,
+                    width: media.width,
+                  }
+                : {
+                    cid: blob.ref.$link,
+                    mediaType: blob.mimeType,
+                    size: blob.size,
+                  },
           }),
         },
       });
@@ -2255,7 +2643,13 @@ async function executePublish(
         text,
         reply,
         quote,
-        mediaAlt: blob === null ? null : media!.alt,
+        attachment: blob === null
+          ? null
+          : {
+              alt: media!.alt,
+              cid: media?.mediaType === "video/mp4" ? blob.ref.$link : null,
+              kind: media?.mediaType === "video/mp4" ? "video" : "image",
+            },
       });
       posts.push(created);
       verified = index;
@@ -2387,7 +2781,9 @@ export async function executeBlueskyWebOperation(
   ) throw new Error("Bluesky authenticated web recipe is not installed");
   const expectedContractVersion = recipe.action === "posts.publish"
     ? 3
-    : recipe.action === "profiles.read" ? 2 : 1;
+    : recipe.action === "media.publish"
+      ? 2
+      : recipe.action === "profiles.read" ? 2 : 1;
   if (recipe.contractVersion !== expectedContractVersion) {
     throw new Error(
       `Bluesky authenticated web operation ${recipe.action} contract version ${recipe.contractVersion} is not installed`,
@@ -2447,6 +2843,7 @@ export async function executeBlueskyWebOperation(
   }
   if (
     recipe.action === "posts.publish"
+    || recipe.action === "media.publish"
     || recipe.action === "replies.create"
     || recipe.action === "posts.quote"
     || recipe.action === "threads.publish"

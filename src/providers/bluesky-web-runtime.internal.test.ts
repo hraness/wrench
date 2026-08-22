@@ -37,6 +37,60 @@ function token(exp: number): string {
 const ACCESS_TOKEN = token(4_000_000_000);
 const REFRESH_TOKEN = token(5_000_000_000);
 
+function serviceToken(): string {
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  return `${encode({ alg: "ES256K", typ: "JWT" })}.${encode({
+    aud: "did:web:morel.us-east.host.bsky.network",
+    exp: 2_000_001_800,
+    iss: VIEWER_DID,
+    lxm: "com.atproto.repo.uploadBlob",
+  })}.synthetic-service-signature`;
+}
+
+function isoBox(type: string, ...payloads: readonly Uint8Array[]): Buffer {
+  const payloadBytes = payloads.reduce(
+    (total, payload) => total + payload.byteLength,
+    0,
+  );
+  const bytes = Buffer.alloc(8 + payloadBytes);
+  bytes.writeUInt32BE(bytes.byteLength, 0);
+  bytes.write(type, 4, 4, "ascii");
+  let offset = 8;
+  for (const payload of payloads) {
+    Buffer.from(payload).copy(bytes, offset);
+    offset += payload.byteLength;
+  }
+  return bytes;
+}
+
+function mp4Fixture(width: number, height: number): Buffer {
+  const ftypPayload = Buffer.alloc(16);
+  ftypPayload.write("isom", 0, 4, "ascii");
+  ftypPayload.writeUInt32BE(0x200, 4);
+  ftypPayload.write("isomiso2", 8, 8, "ascii");
+  const trackHeader = Buffer.alloc(84);
+  trackHeader.writeUInt32BE(0x0001_0000, 40);
+  trackHeader.writeUInt32BE(0x0001_0000, 56);
+  trackHeader.writeUInt32BE(0x4000_0000, 72);
+  trackHeader.writeUInt32BE(width * 65_536, 76);
+  trackHeader.writeUInt32BE(height * 65_536, 80);
+  const handler = Buffer.alloc(12);
+  handler.write("vide", 8, 4, "ascii");
+  return Buffer.concat([
+    isoBox("ftyp", ftypPayload),
+    isoBox(
+      "moov",
+      isoBox(
+        "trak",
+        isoBox("tkhd", trackHeader),
+        isoBox("mdia", isoBox("hdlr", handler)),
+      ),
+    ),
+    isoBox("mdat", Buffer.from([1, 2, 3, 4])),
+  ]);
+}
+
 const blueskyAuth = {
   schemaVersion: 1,
   id: "bluesky-test",
@@ -185,7 +239,9 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
     action,
     contractVersion: action === "posts.publish"
       ? 3
-      : action === "profiles.read" ? 2 : 1,
+      : action === "media.publish"
+        ? 2
+        : action === "profiles.read" ? 2 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 8 * 1024 * 1024,
   };
@@ -1165,6 +1221,460 @@ describe("Bluesky authenticated XRPC runtime", () => {
     }
   });
 
+  test("uploads one plan-bound MP4, polls its exact job, and binds the video post readback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-video-publish-"));
+    chmodSync(root, 0o700);
+    const videoPath = join(root, "fixture.mp4");
+    const videoBytes = mp4Fixture(640, 360);
+    writeFileSync(videoPath, videoBytes, { mode: 0o600 });
+    const text = "Disposable Bluesky video fixture";
+    const alt = "Eight-second synthetic verification clip";
+    const createdAt = new Date(2_000_000_000_000).toISOString();
+    const createdUri = `at://${VIEWER_DID}/app.bsky.feed.post/3lvideofixture`;
+    const createdCid = `b${"e".repeat(40)}`;
+    const blobCid = `b${"f".repeat(40)}`;
+    const jobId = "video-job-1";
+    const blob = {
+      $type: "blob",
+      ref: { $link: blobCid },
+      mimeType: "video/mp4",
+      size: videoBytes.byteLength,
+    };
+    const expectedRecord = {
+      $type: "app.bsky.feed.post",
+      text,
+      createdAt,
+      embed: {
+        $type: "app.bsky.embed.video",
+        video: blob,
+        alt,
+        aspectRatio: { width: 640, height: 360 },
+      },
+    };
+    const calls: CapturedRequest[] = [];
+    const events: string[] = [];
+    const accepted: unknown[] = [];
+    try {
+      const result = await executeBlueskyWebOperation(
+        recipe("media.publish"),
+        {
+          body: text,
+          media: { kind: "file", reference: "fixture" },
+          alt,
+        },
+        blueskyAuth,
+        {
+          fileResolver: () => Promise.resolve([videoPath]),
+          beforeDispatch: (event) => {
+            events.push(`before ${event.progress.started}`);
+            return Promise.resolve();
+          },
+          afterProviderAcceptedMutationTarget: (event) => {
+            accepted.push(event);
+            return Promise.resolve();
+          },
+          afterDispatchVerified: (event) => {
+            events.push(`after ${event.progress.verified}`);
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            events.push(`${request.method} ${nsid(request)}`);
+            switch (nsid(request)) {
+              case "com.atproto.server.getSession":
+                return jsonResponse(sessionResponse());
+              case "com.atproto.server.getServiceAuth":
+                expect(request.url.origin).toBe(PDS_ORIGIN);
+                expect(Object.fromEntries(request.url.searchParams)).toEqual({
+                  aud: "did:web:morel.us-east.host.bsky.network",
+                  exp: "2000001800",
+                  lxm: "com.atproto.repo.uploadBlob",
+                });
+                return jsonResponse({ token: serviceToken() });
+              case "app.bsky.video.uploadVideo":
+                expect(request.url.origin).toBe("https://video.bsky.app");
+                expect(request.method).toBe("POST");
+                expect(Object.fromEntries(request.url.searchParams)).toEqual({
+                  did: VIEWER_DID,
+                  name: "wrench-video.mp4",
+                });
+                expect(request.headers.get("authorization")).toBe(`Bearer ${serviceToken()}`);
+                expect(request.headers.get("content-type")).toBe("video/mp4");
+                expect(request.headers.get("content-length")).toBe(String(videoBytes.byteLength));
+                expect(request.body).toEqual(videoBytes);
+                return jsonResponse({
+                  jobId,
+                  did: VIEWER_DID,
+                  state: "JOB_STATE_CREATED",
+                  progress: 0,
+                });
+              case "app.bsky.video.getJobStatus":
+                expect(request.url.origin).toBe("https://video.bsky.app");
+                expect(request.method).toBe("GET");
+                expect(request.headers.get("authorization")).toBeNull();
+                expect(request.url.searchParams.get("jobId")).toBe(jobId);
+                return jsonResponse({
+                  jobStatus: {
+                    jobId,
+                    did: VIEWER_DID,
+                    state: "JOB_STATE_COMPLETED",
+                    progress: 100,
+                    blob,
+                  },
+                });
+              case "com.atproto.repo.createRecord":
+                expect(JSON.parse(String(request.body))).toEqual({
+                  repo: VIEWER_DID,
+                  collection: "app.bsky.feed.post",
+                  record: expectedRecord,
+                });
+                return jsonResponse({ uri: createdUri, cid: createdCid });
+              case "com.atproto.repo.getRecord":
+                return jsonResponse({
+                  uri: createdUri,
+                  cid: createdCid,
+                  value: expectedRecord,
+                });
+              case "app.bsky.feed.getPosts":
+                return jsonResponse({
+                  posts: [{
+                    uri: createdUri,
+                    cid: createdCid,
+                    author: {
+                      did: VIEWER_DID,
+                      handle: "viewer.test",
+                      displayName: "Synthetic viewer",
+                    },
+                    record: expectedRecord,
+                    embed: {
+                      $type: "app.bsky.embed.video#view",
+                      cid: blobCid,
+                      playlist: "https://video.bsky.app/watch/synthetic.m3u8",
+                      alt,
+                      aspectRatio: { width: 640, height: 360 },
+                    },
+                    indexedAt: createdAt,
+                    replyCount: 0,
+                    repostCount: 0,
+                    likeCount: 0,
+                    quoteCount: 0,
+                    viewer: {},
+                  }],
+                });
+              default:
+                throw new Error(`unexpected Bluesky video publish request ${nsid(request)}`);
+            }
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "succeeded",
+        output: { posts: [{ uri: createdUri, cid: createdCid }] },
+        finalUrl: `https://bsky.app/profile/${VIEWER_DID}/post/3lvideofixture`,
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 1 },
+      });
+      expect(events).toEqual([
+        "GET com.atproto.server.getSession",
+        "GET com.atproto.server.getServiceAuth",
+        "POST app.bsky.video.uploadVideo",
+        "GET app.bsky.video.getJobStatus",
+        "GET com.atproto.server.getSession",
+        "before 0",
+        "POST com.atproto.repo.createRecord",
+        "GET com.atproto.repo.getRecord",
+        "GET app.bsky.feed.getPosts",
+        "after 1",
+      ]);
+      expect(accepted).toEqual([{
+        id: "media.publish",
+        index: 1,
+        target: {
+          schemaVersion: 1,
+          identifier: canonicalJson({
+            uri: createdUri,
+            cid: createdCid,
+            createdAt,
+            media: {
+              cid: blobCid,
+              height: 360,
+              jobId,
+              mediaType: "video/mp4",
+              size: videoBytes.byteLength,
+              width: 640,
+            },
+          }),
+        },
+      }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps terminal Bluesky video processing failure before durable createRecord admission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-video-terminal-failure-"));
+    chmodSync(root, 0o700);
+    const videoPath = join(root, "fixture.mp4");
+    writeFileSync(videoPath, mp4Fixture(640, 360), { mode: 0o600 });
+    const calls: CapturedRequest[] = [];
+    let beforeDispatch = 0;
+    let providerAccepted = 0;
+    try {
+      const result = await executeBlueskyWebOperation(
+        recipe("media.publish"),
+        {
+          body: "Terminal processing failure stays pre-dispatch",
+          media: { kind: "file", reference: "fixture" },
+        },
+        blueskyAuth,
+        {
+          fileResolver: () => Promise.resolve([videoPath]),
+          beforeDispatch: () => {
+            beforeDispatch += 1;
+            return Promise.resolve();
+          },
+          afterProviderAcceptedMutationTarget: () => {
+            providerAccepted += 1;
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            switch (nsid(request)) {
+              case "com.atproto.server.getSession":
+                return jsonResponse(sessionResponse());
+              case "com.atproto.server.getServiceAuth":
+                return jsonResponse({ token: serviceToken() });
+              case "app.bsky.video.uploadVideo":
+                return jsonResponse({
+                  jobId: "video-job-failed",
+                  did: VIEWER_DID,
+                  state: "JOB_STATE_CREATED",
+                  progress: 0,
+                });
+              case "app.bsky.video.getJobStatus":
+                return jsonResponse({
+                  jobStatus: {
+                    jobId: "video-job-failed",
+                    did: VIEWER_DID,
+                    state: "JOB_STATE_FAILED",
+                    progress: 100,
+                    error: "synthetic processing failure",
+                    failureCode: "synthetic_failure",
+                  },
+                });
+              case "com.atproto.repo.createRecord":
+                throw new Error("createRecord must not run after terminal video failure");
+              default:
+                throw new Error(`unexpected request after terminal video failure: ${nsid(request)}`);
+            }
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "Bluesky post preparation failed before public record submission; failure stage: media-upload; retry with a fresh confirmed plan",
+      });
+      expect(beforeDispatch).toBe(0);
+      expect(providerAccepted).toBe(0);
+      expect(calls.map(nsid)).toEqual([
+        "com.atproto.server.getSession",
+        "com.atproto.server.getServiceAuth",
+        "app.bsky.video.uploadVideo",
+        "app.bsky.video.getJobStatus",
+      ]);
+      expect(calls.some((request) => nsid(request) === "com.atproto.repo.createRecord")).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      name: "job",
+      jobId: "video-job-switched",
+      did: VIEWER_DID,
+    },
+    {
+      name: "account",
+      jobId: "video-job-bound",
+      did: AUTHOR_DID,
+    },
+  ])("rejects a Bluesky video $name switch before durable createRecord admission", async ({ jobId, did }) => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-video-binding-switch-"));
+    chmodSync(root, 0o700);
+    const videoPath = join(root, "fixture.mp4");
+    writeFileSync(videoPath, mp4Fixture(640, 360), { mode: 0o600 });
+    const calls: CapturedRequest[] = [];
+    let beforeDispatch = 0;
+    let providerAccepted = 0;
+    try {
+      const result = await executeBlueskyWebOperation(
+        recipe("media.publish"),
+        {
+          body: "Video job identity stays bound",
+          media: { kind: "file", reference: "fixture" },
+        },
+        blueskyAuth,
+        {
+          fileResolver: () => Promise.resolve([videoPath]),
+          beforeDispatch: () => {
+            beforeDispatch += 1;
+            return Promise.resolve();
+          },
+          afterProviderAcceptedMutationTarget: () => {
+            providerAccepted += 1;
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            switch (nsid(request)) {
+              case "com.atproto.server.getSession":
+                return jsonResponse(sessionResponse());
+              case "com.atproto.server.getServiceAuth":
+                return jsonResponse({ token: serviceToken() });
+              case "app.bsky.video.uploadVideo":
+                return jsonResponse({
+                  jobId: "video-job-bound",
+                  did: VIEWER_DID,
+                  state: "JOB_STATE_CREATED",
+                  progress: 0,
+                });
+              case "app.bsky.video.getJobStatus":
+                return jsonResponse({
+                  jobStatus: {
+                    jobId,
+                    did,
+                    state: "JOB_STATE_ENCODING",
+                    progress: 25,
+                  },
+                });
+              case "com.atproto.repo.createRecord":
+                throw new Error("createRecord must not run after video job identity drift");
+              default:
+                throw new Error(`unexpected request after video job identity drift: ${nsid(request)}`);
+            }
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "Bluesky post preparation failed before public record submission; failure stage: media-upload; retry with a fresh confirmed plan",
+      });
+      expect(beforeDispatch).toBe(0);
+      expect(providerAccepted).toBe(0);
+      expect(calls.map(nsid)).toEqual([
+        "com.atproto.server.getSession",
+        "com.atproto.server.getServiceAuth",
+        "app.bsky.video.uploadVideo",
+        "app.bsky.video.getJobStatus",
+      ]);
+      expect(calls.some((request) => nsid(request) === "com.atproto.repo.createRecord")).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("exhausts the bounded Bluesky video poll schedule before durable createRecord admission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-bluesky-video-poll-exhaustion-"));
+    chmodSync(root, 0o700);
+    const videoPath = join(root, "fixture.mp4");
+    writeFileSync(videoPath, mp4Fixture(640, 360), { mode: 0o600 });
+    const calls: CapturedRequest[] = [];
+    const pauses: number[] = [];
+    let beforeDispatch = 0;
+    let providerAccepted = 0;
+    const baseDependencies = dependencies(calls, (request) => {
+      switch (nsid(request)) {
+        case "com.atproto.server.getSession":
+          return jsonResponse(sessionResponse());
+        case "com.atproto.server.getServiceAuth":
+          return jsonResponse({ token: serviceToken() });
+        case "app.bsky.video.uploadVideo":
+          return jsonResponse({
+            jobId: "video-job-never-completes",
+            did: VIEWER_DID,
+            state: "JOB_STATE_CREATED",
+            progress: 0,
+          });
+        case "app.bsky.video.getJobStatus":
+          return jsonResponse({
+            jobStatus: {
+              jobId: "video-job-never-completes",
+              did: VIEWER_DID,
+              state: "JOB_STATE_ENCODING",
+              progress: 50,
+            },
+          });
+        case "com.atproto.repo.createRecord":
+          throw new Error("createRecord must not run after video poll exhaustion");
+        default:
+          throw new Error(`unexpected request after video poll exhaustion: ${nsid(request)}`);
+      }
+    });
+    try {
+      const result = await executeBlueskyWebOperation(
+        recipe("media.publish"),
+        {
+          body: "Bounded video polling does not publish early",
+          media: { kind: "file", reference: "fixture" },
+        },
+        blueskyAuth,
+        {
+          fileResolver: () => Promise.resolve([videoPath]),
+          beforeDispatch: () => {
+            beforeDispatch += 1;
+            return Promise.resolve();
+          },
+          afterProviderAcceptedMutationTarget: () => {
+            providerAccepted += 1;
+            return Promise.resolve();
+          },
+          dependencies: {
+            ...baseDependencies,
+            sleep: (milliseconds) => {
+              pauses.push(milliseconds);
+              return Promise.resolve();
+            },
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "Bluesky post preparation failed before public record submission; failure stage: media-upload; retry with a fresh confirmed plan",
+      });
+      expect(beforeDispatch).toBe(0);
+      expect(providerAccepted).toBe(0);
+      expect(pauses).toEqual([
+        1_000,
+        1_000,
+        2_000,
+        2_000,
+        4_000,
+        4_000,
+        8_000,
+        8_000,
+        10_000,
+        10_000,
+        15_000,
+        15_000,
+        20_000,
+        20_000,
+        30_000,
+        30_000,
+        30_000,
+        30_000,
+        30_000,
+      ]);
+      expect(calls.filter((request) => nsid(request) === "app.bsky.video.getJobStatus")).toHaveLength(pauses.length);
+      expect(calls.some((request) => nsid(request) === "com.atproto.repo.createRecord")).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("polls the exact response-bound URI when the public Bluesky projection settles late", async () => {
     const text = "Late Bluesky projection";
     const createdAt = new Date(2_000_000_000_000).toISOString();
@@ -1289,6 +1799,88 @@ describe("Bluesky authenticated XRPC runtime", () => {
       blueskyAuth,
       `${identifier} `,
     )).rejects.toThrow("not canonical");
+  });
+
+  test("reconciles one exact accepted Bluesky video target without another upload", async () => {
+    const text = "Reconciled Bluesky video";
+    const alt = "Synthetic video alt";
+    const createdAt = "2026-08-18T12:00:00.000Z";
+    const uri = `at://${VIEWER_DID}/app.bsky.feed.post/3lvideoreconcile`;
+    const cid = `b${"c".repeat(40)}`;
+    const blobCid = `b${"d".repeat(40)}`;
+    const media = {
+      cid: blobCid,
+      height: 360,
+      jobId: "video-job-reconcile",
+      mediaType: "video/mp4" as const,
+      size: 123_456,
+      width: 640,
+    };
+    const record = {
+      $type: "app.bsky.feed.post",
+      text,
+      createdAt,
+      embed: {
+        $type: "app.bsky.embed.video",
+        video: {
+          $type: "blob",
+          ref: { $link: blobCid },
+          mimeType: "video/mp4",
+          size: media.size,
+        },
+        alt,
+        aspectRatio: { width: media.width, height: media.height },
+      },
+    };
+    const identifier = canonicalJson({ uri, cid, createdAt, media });
+    const calls: CapturedRequest[] = [];
+    const result = await readBlueskyWebPublishedMutationTarget(
+      recipe("media.publish"),
+      { body: text, media: { kind: "file", reference: "fixture" }, alt },
+      blueskyAuth,
+      identifier,
+      {
+        dependencies: dependencies(calls, (request) => {
+          switch (nsid(request)) {
+            case "com.atproto.server.getSession":
+              return jsonResponse(sessionResponse());
+            case "com.atproto.repo.getRecord":
+              return jsonResponse({ uri, cid, value: record });
+            case "app.bsky.feed.getPosts":
+              return jsonResponse({
+                posts: [{
+                  uri,
+                  cid,
+                  author: { did: VIEWER_DID, handle: "viewer.test" },
+                  record,
+                  embed: {
+                    $type: "app.bsky.embed.video#view",
+                    cid: blobCid,
+                    playlist: "https://video.bsky.app/watch/reconcile.m3u8",
+                    alt,
+                    aspectRatio: { width: media.width, height: media.height },
+                  },
+                  indexedAt: createdAt,
+                  replyCount: 0,
+                  repostCount: 0,
+                  likeCount: 0,
+                  quoteCount: 0,
+                  viewer: {},
+                }],
+              });
+            default:
+              throw new Error(`unexpected Bluesky video reconciliation request ${nsid(request)}`);
+          }
+        }),
+      },
+    );
+    expect(result).toEqual({ present: true, uri, cid });
+    expect(calls.every((request) => request.method === "GET")).toBeTrue();
+    expect(calls.map(nsid)).toEqual([
+      "com.atproto.server.getSession",
+      "com.atproto.repo.getRecord",
+      "app.bsky.feed.getPosts",
+    ]);
   });
 
   test("keeps an image upload failure before durable createRecord admission", async () => {

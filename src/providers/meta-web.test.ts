@@ -11,6 +11,7 @@ import threadsManifest from "../assets/adapters/threads/wrench-web-adapter.json"
 import threadsV1Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.0.0.json";
 import threadsV12Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.2.0.json";
 import threadsV14Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.4.0.json";
+import threadsV15Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.5.0.json";
 import { metaWebPlugin } from "../plugins/meta-web/plugin";
 import {
   META_WEB_OPERATIONS,
@@ -30,6 +31,7 @@ import {
   normalizeInstagramProfileStats,
   normalizeThreadsFeedHtml,
   normalizeThreadsPostHtml,
+  normalizeThreadsVideoPostHtml,
   normalizeThreadsProfileStats,
   normalizeThreadsRecentViewsAvailability,
   parseFacebookViewerId,
@@ -411,6 +413,10 @@ describe("Meta consumer-web policy", () => {
       state: "observed",
       contractVersion: 4,
     });
+    expect(META_WEB_OPERATIONS.threads["media.publish"]).toMatchObject({
+      state: "observed",
+      contractVersion: 1,
+    });
     expect(META_WEB_OPERATIONS.instagram["likes.set"]).toMatchObject({ state: "capture-required" });
     expect(META_WEB_OPERATIONS.instagram["messaging.send"]?.reason).toContain("E2EE");
     expect(META_WEB_OPERATIONS.threads["messaging.list"]).toMatchObject({ state: "capture-required" });
@@ -452,7 +458,7 @@ describe("Meta consumer-web policy", () => {
 
     expect(instagramManifest.version).toBe("1.3.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
-    expect(threadsManifest.version).toBe("1.5.0");
+    expect(threadsManifest.version).toBe("1.6.0");
     expect(threadsV1Manifest.version).toBe("1.0.0");
 
     for (const [site, operation, current, prior] of affected) {
@@ -488,6 +494,21 @@ describe("Meta consumer-web policy", () => {
       sideEffect: "none",
       input: { required: ["profile"] },
     });
+  });
+
+  test("preserves the capture-required Threads video predecessor", () => {
+    expect(threadsV15Manifest.version).toBe("1.5.0");
+    expect(threadsV15Manifest.operations["media.publish"].description).toContain(
+      "Capture-required",
+    );
+    expect(threadsManifest.operations["media.publish"]).toMatchObject({
+      risk: "R3",
+      input: { required: ["body", "media", "audience"] },
+      webSession: { contractVersion: 1 },
+    });
+    expect(threadsManifest.operations["media.publish"].input.properties).not.toHaveProperty(
+      "alt_text",
+    );
   });
 
   test("versions locator-bound Threads publication while preserving reviewed predecessors", () => {
@@ -1132,6 +1153,75 @@ describe("Meta consumer-web policy", () => {
       expected.caption.text,
       { width: 959, height: 1022 },
     )).toThrow("omitted an exact original-dimension image candidate");
+  });
+
+  test("requires one exact response-bound Threads video in permalink readback", () => {
+    const expected = {
+      pk: "987654322_12345",
+      code: "VideoABC",
+      canonical_url: "https://www.threads.com/@person/post/VideoABC",
+      caption: { text: "disposable video fixture" },
+      user: { pk: "12345", username: "person" },
+      media_type: 2,
+      original_width: 640,
+      original_height: 360,
+      video_duration: 8.04,
+      has_audio: true,
+      video_versions: [{
+        width: 640,
+        height: 360,
+        url: "https://scontent.cdninstagram.com/threads-fixture.mp4",
+      }],
+    };
+    expect(normalizeThreadsVideoPostHtml(
+      `${threadsHtml}${html({ post: expected })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      { width: 640, height: 360 },
+    )).toMatchObject({
+      id: expected.pk,
+      video: {
+        candidateCount: 1,
+        durationSeconds: 8.04,
+        hasAudio: true,
+        height: 360,
+        mediaId: expected.pk,
+        mediaType: 2,
+        width: 640,
+      },
+    });
+
+    expect(() => normalizeThreadsVideoPostHtml(
+      `${threadsHtml}${html({
+        post: {
+          ...expected,
+          video_versions: [{
+            width: 320,
+            height: 180,
+            url: "https://scontent.cdninstagram.com/wrong-video.mp4",
+          }],
+        },
+      })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      { width: 640, height: 360 },
+    )).toThrow("omitted an exact original-dimension video candidate");
+
+    expect(() => normalizeThreadsVideoPostHtml(
+      `${threadsHtml}${html({ post: expected }, { duplicate: expected })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      { width: 640, height: 360 },
+    )).toThrow("ambiguous exact post");
   });
 
   test("accepts Facebook Stories only from one error-free reviewed news-feed root", () => {

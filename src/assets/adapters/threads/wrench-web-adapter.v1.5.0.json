@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "threads-web",
-  "version": "1.6.0",
+  "version": "1.5.0",
   "displayName": "Threads (Authenticated Internal API)",
   "surfaceId": "threads",
   "origins": [
@@ -245,7 +245,7 @@
       }
     },
     "media.publish": {
-      "description": "Publish one confirmed Threads MP4 through the reviewed single-request video upload and exact post-create contract, then verify the exact actor, text, dimensions, media identity, and permalink independently.",
+      "description": "Capture-required contract reservation: publish one confirmed Threads video only after exact resumable upload, processing completion, viewer and audience binding, created locator retention, and independent exact permalink actor/text/video readback are reviewed.",
       "risk": "R3",
       "sideEffect": "Uploads one video and publishes one externally visible Threads post with the exact confirmed body and audience.",
       "idempotency": "local-at-most-once",
@@ -265,6 +265,12 @@
             "mediaTypes": [
               "video/mp4"
             ]
+          },
+          "alt_text": {
+            "type": "string",
+            "description": "Optional exact video accessibility text",
+            "minLength": 1,
+            "maxLength": 1000
           },
           "audience": {
             "type": "string",

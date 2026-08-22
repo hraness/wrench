@@ -91,10 +91,10 @@ export const BLUESKY_WEB_OPERATIONS = Object.freeze({
     "R1",
     "fixed getPosts XRPC reads project attachment metadata without returning media URLs",
   ),
-  "media.publish": captureRequired(
+  "media.publish": observed(
     "write",
     "R3",
-    "the video-service upload job, bounded processing poll, response-bound blob, repository record, and authoritative record plus AppView readback need an authorized fixture",
+    "the fixed legacy video-service upload, bounded public job poll, response-bound blob, repository record, durable accepted target, and authoritative record plus AppView readback are implemented from the current first-party protocol and verified fixture",
   ),
   "messaging.list": captureRequired(
     "read",
@@ -166,6 +166,7 @@ export const BLUESKY_WEB_OPERATIONS = Object.freeze({
 >);
 
 export const BLUESKY_APP_ORIGIN = "https://bsky.app";
+export const BLUESKY_VIDEO_SERVICE_ORIGIN = "https://video.bsky.app";
 export const BLUESKY_APPVIEW_PROXY =
   "did:web:api.bsky.app#bsky_appview";
 export const BLUESKY_NOTIFICATION_PROXY =
@@ -334,7 +335,7 @@ function exactHttpsOrigin(value: unknown, label: string): string {
   return url.origin;
 }
 
-function decodeJwtPayload(token: string, label: "access" | "refresh"): JsonRecord {
+function decodeJwtPayload(token: string, label: string): JsonRecord {
   const parts = token.split(".");
   if (
     parts.length !== 3
@@ -483,6 +484,7 @@ export function parseBlueskyRefreshSessionResponse(
 export const BLUESKY_XRPC_METHODS = Object.freeze({
   "com.atproto.server.getSession": "GET",
   "com.atproto.server.refreshSession": "POST",
+  "com.atproto.server.getServiceAuth": "GET",
   "app.bsky.feed.getTimeline": "GET",
   "app.bsky.feed.getPosts": "GET",
   "app.bsky.feed.getPostThread": "GET",
@@ -518,6 +520,7 @@ export type BlueskyRequestBinding = {
 const BLUESKY_XRPC_PROXIES = Object.freeze({
   "com.atproto.server.getSession": null,
   "com.atproto.server.refreshSession": null,
+  "com.atproto.server.getServiceAuth": null,
   "app.bsky.feed.getTimeline": BLUESKY_APPVIEW_PROXY,
   "app.bsky.feed.getPosts": BLUESKY_APPVIEW_PROXY,
   "app.bsky.feed.getPostThread": BLUESKY_APPVIEW_PROXY,
@@ -592,6 +595,112 @@ export function authorizeBlueskyXrpcRequest(input: {
     queryNames: Object.freeze(expectedNames),
     proxy: input.proxy,
   });
+}
+
+export type BlueskyVideoRequestBinding = Readonly<{
+  method: "GET" | "POST";
+  path:
+    | "/xrpc/app.bsky.video.getJobStatus"
+    | "/xrpc/app.bsky.video.uploadVideo";
+  queryNames: readonly string[];
+}>;
+
+/** Restrict video-service traffic to the two exact routes used by publishing. */
+export function authorizeBlueskyVideoRequest(input: {
+  readonly kind: "job-status" | "upload";
+  readonly url: string | URL;
+  readonly method: string;
+  readonly did?: string;
+  readonly jobId?: string;
+}): BlueskyVideoRequestBinding {
+  const url = input.url instanceof URL ? new URL(input.url.href) : new URL(input.url);
+  if (
+    url.origin !== BLUESKY_VIDEO_SERVICE_ORIGIN
+    || url.username !== ""
+    || url.password !== ""
+    || url.hash !== ""
+  ) throw new Error("Bluesky video request escaped its exact reviewed service origin");
+  const expected: Readonly<{
+    method: "GET" | "POST";
+    path: BlueskyVideoRequestBinding["path"];
+    query: Readonly<Record<string, readonly string[]>>;
+  }> = input.kind === "upload"
+    ? {
+        method: "POST" as const,
+        path: "/xrpc/app.bsky.video.uploadVideo" as const,
+        query: Object.freeze({
+          did: [blueskyDid(input.did, "Bluesky video upload DID")],
+          name: ["wrench-video.mp4"],
+        }),
+      }
+    : {
+        method: "GET" as const,
+        path: "/xrpc/app.bsky.video.getJobStatus" as const,
+        query: Object.freeze({
+          jobId: [string(input.jobId, "Bluesky video job ID", 1_024)],
+        }),
+      };
+  const method = input.method.toUpperCase();
+  if (method !== expected.method || url.pathname !== expected.path) {
+    throw new Error("Bluesky video request changed from its reviewed route");
+  }
+  const actual = new Map<string, string[]>();
+  for (const [name, value] of url.searchParams) {
+    const values = actual.get(name) ?? [];
+    values.push(value);
+    actual.set(name, values);
+  }
+  const expectedNames = Object.keys(expected.query).sort();
+  if ([...actual.keys()].sort().join("\0") !== expectedNames.join("\0")) {
+    throw new Error("Bluesky video request query names changed from their reviewed contract");
+  }
+  for (const name of expectedNames) {
+    const expectedValues = expected.query[name] ?? [];
+    const actualValues = actual.get(name) ?? [];
+    if (
+      expectedValues.length !== actualValues.length
+      || expectedValues.some((value, index) => actualValues[index] !== value)
+    ) throw new Error(`Bluesky video request query value ${name} changed from its reviewed contract`);
+  }
+  return Object.freeze({
+    method,
+    path: expected.path,
+    queryNames: Object.freeze(expectedNames),
+  });
+}
+
+/** Parse a PDS-minted, method-bound service token before it leaves the PDS realm. */
+export function parseBlueskyServiceAuthResponse(
+  value: unknown,
+  expected: {
+    readonly did: string;
+    readonly audience: string;
+    readonly lxm: string;
+    readonly expiresAt: number;
+    readonly nowSeconds: number;
+  },
+): string {
+  const response = record(value, "Bluesky service-auth response");
+  exactKeys(response, ["token"], [], "Bluesky service-auth response");
+  const token = string(response.token, "Bluesky service-auth token", 24_576);
+  if (/\s/u.test(token)) throw new Error("Bluesky service-auth token is invalid");
+  const claims = decodeJwtPayload(token, "service-auth");
+  const did = blueskyDid(expected.did, "Bluesky service-auth expected issuer");
+  const audience = blueskyDid(expected.audience, "Bluesky service-auth expected audience");
+  if (
+    claims.iss !== did
+    || claims.aud !== audience
+    || claims.lxm !== expected.lxm
+  ) throw new Error("Bluesky service-auth token changed its exact issuer, audience, or method binding");
+  if (
+    !Number.isSafeInteger(expected.nowSeconds)
+    || !Number.isSafeInteger(expected.expiresAt)
+    || expected.nowSeconds < 0
+    || expected.expiresAt <= expected.nowSeconds
+    || expected.expiresAt - expected.nowSeconds > 1_800
+    || claims.exp !== expected.expiresAt
+  ) throw new Error("Bluesky service-auth token changed its reviewed expiry");
+  return token;
 }
 
 export type BlueskyStrongRef = {
@@ -1350,25 +1459,145 @@ export type BlueskyBlobRef = {
   readonly size: number;
 };
 
+function blueskyBlobRef(
+  value: unknown,
+  label: string,
+  expectedMimeType: string,
+  maximumSize: number,
+  expectedSize?: number,
+): BlueskyBlobRef {
+  const blob = record(value, label);
+  exactKeys(blob, ["$type", "ref", "mimeType", "size"], [], label);
+  if (blob.$type !== "blob") throw new Error(`${label} had an unexpected type`);
+  const ref = record(blob.ref, `${label} reference`);
+  exactKeys(ref, ["$link"], [], `${label} reference`);
+  const mimeType = string(blob.mimeType, `${label} media type`, 128);
+  const size = integer(blob.size, `${label} size`, 1, maximumSize);
+  if (
+    mimeType !== expectedMimeType
+    || (expectedSize !== undefined && size !== expectedSize)
+  ) throw new Error(`${label} did not match the confirmed file`);
+  return Object.freeze({
+    $type: "blob",
+    ref: Object.freeze({ $link: blueskyCid(ref.$link, `${label} CID`) }),
+    mimeType,
+    size,
+  });
+}
+
 export function parseBlueskyUploadBlobResponse(
   value: unknown,
   expectedMimeType: string,
   expectedSize: number,
 ): BlueskyBlobRef {
   const response = record(value, "Bluesky uploadBlob response");
-  const blob = record(response.blob, "Bluesky uploaded blob");
-  const ref = record(blob.ref, "Bluesky uploaded blob reference");
-  const mimeType = string(blob.mimeType, "Bluesky uploaded blob media type", 128);
-  const size = integer(blob.size, "Bluesky uploaded blob size", 1, 100 * 1024 * 1024);
-  if (mimeType !== expectedMimeType || size !== expectedSize) {
-    throw new Error("Bluesky uploaded blob did not match the confirmed file");
+  exactKeys(response, ["blob"], [], "Bluesky uploadBlob response");
+  return blueskyBlobRef(
+    response.blob,
+    "Bluesky uploaded blob",
+    expectedMimeType,
+    100 * 1024 * 1024,
+    expectedSize,
+  );
+}
+
+const BLUESKY_VIDEO_JOB_STATES = Object.freeze([
+  "JOB_STATE_CREATED",
+  "JOB_STATE_ENCODING",
+  "JOB_STATE_ENCODED",
+  "JOB_STATE_SCANNING",
+  "JOB_STATE_SCANNED",
+  "JOB_STATE_UPLOADING",
+  "JOB_STATE_UPLOADED",
+  "JOB_STATE_COMPLETED",
+  "JOB_STATE_FAILED",
+] as const);
+
+export type BlueskyVideoJobStatus = Readonly<{
+  jobId: string;
+  did: string;
+  state: (typeof BLUESKY_VIDEO_JOB_STATES)[number];
+  progress: number | null;
+  blob: BlueskyBlobRef | null;
+  error: string | null;
+  failureCode: string | null;
+  message: string | null;
+}>;
+
+function blueskyVideoJobStatus(
+  value: unknown,
+  expectedDid: string,
+  expectedJobId?: string,
+): BlueskyVideoJobStatus {
+  const status = record(value, "Bluesky video job status");
+  exactKeys(
+    status,
+    ["jobId", "did", "state"],
+    ["progress", "blob", "error", "failureCode", "message"],
+    "Bluesky video job status",
+  );
+  const jobId = string(status.jobId, "Bluesky video job ID", 1_024);
+  if (expectedJobId !== undefined && jobId !== expectedJobId) {
+    throw new Error("Bluesky video job response switched jobs");
+  }
+  const did = blueskyDid(status.did, "Bluesky video job DID");
+  if (did !== blueskyDid(expectedDid, "Bluesky expected video job DID")) {
+    throw new Error("Bluesky video job response switched accounts");
+  }
+  const rawState = string(status.state, "Bluesky video job state", 64);
+  if (!(BLUESKY_VIDEO_JOB_STATES as readonly string[]).includes(rawState)) {
+    throw new Error("Bluesky video job returned an unreviewed state");
+  }
+  const state = rawState as BlueskyVideoJobStatus["state"];
+  const progress = status.progress === undefined
+    ? null
+    : integer(status.progress, "Bluesky video job progress", 0, 100);
+  const blob = status.blob === undefined
+    ? null
+    : blueskyBlobRef(
+        status.blob,
+        "Bluesky processed video blob",
+        "video/mp4",
+        100_000_000,
+      );
+  if ((state === "JOB_STATE_COMPLETED") !== (blob !== null)) {
+    throw new Error("Bluesky video job completion did not bind one processed blob");
   }
   return Object.freeze({
-    $type: "blob",
-    ref: Object.freeze({ $link: blueskyCid(ref.$link, "Bluesky uploaded blob CID") }),
-    mimeType,
-    size,
+    jobId,
+    did,
+    state,
+    progress,
+    blob,
+    error: status.error === undefined
+      ? null
+      : string(status.error, "Bluesky video job error", 2_048),
+    failureCode: status.failureCode === undefined
+      ? null
+      : string(status.failureCode, "Bluesky video job failure code", 256),
+    message: status.message === undefined
+      ? null
+      : string(status.message, "Bluesky video job message", 2_048),
   });
+}
+
+/** The current first-party legacy upload returns a direct JobStatus object. */
+export function parseBlueskyVideoUploadResponse(
+  value: unknown,
+  expectedDid: string,
+): BlueskyVideoJobStatus {
+  return blueskyVideoJobStatus(value, expectedDid);
+}
+
+/** The public getJobStatus lexicon wraps the exact job status. */
+export function parseBlueskyVideoJobStatusResponse(
+  value: unknown,
+  expectedDid: string,
+  expectedJobId: string,
+): BlueskyVideoJobStatus {
+  const response = record(value, "Bluesky video getJobStatus response");
+  exactKeys(response, ["jobStatus"], [], "Bluesky video getJobStatus response");
+  return blueskyVideoJobStatus(response.jobStatus, expectedDid, expectedJobId);
 }
 
 export function assertBlueskyText(

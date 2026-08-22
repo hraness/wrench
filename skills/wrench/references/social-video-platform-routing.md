@@ -10,11 +10,11 @@ are authoritative and may change.
 | X | `x` | `posts.publish` when the installed schema accepts `video/mp4` | Official OAuth post. Already schemas MP4. |
 | LinkedIn | `linkedin` | video-capable `posts.publish` | Observed official OAuth member or explicitly bound organization post. |
 | LinkedIn | `linkedin-web` | `media.publish` when observed | Consumer-web member video; currently a separate capture-required route so image `posts.publish` remains unchanged. |
-| Bluesky | `bluesky-web` | `media.publish` when observed | AT Protocol video feed post; image `posts.publish` is a separate observed contract. |
+| Bluesky | `bluesky-web` | `media.publish` | Observed AT Protocol video feed post; image `posts.publish` remains a separate observed contract. |
 | Substack | `substack-web` | `media.publish` when observed | Public Substack Note, not an article or newsletter. |
 | TikTok | `tiktok-web` | `media.publish` when observed | Native TikTok video |
 | Instagram | `meta-web` on the Instagram surface | `media.publish` when observed | Instagram video or Reel only when the schema says so. |
-| Threads | `meta-web` on the Threads surface | `media.publish` when observed | Threads video post; image `posts.publish` is a separate observed contract. |
+| Threads | `meta-web` on the Threads surface | `media.publish` | Observed single-MP4 Threads video post; image `posts.publish` remains a separate contract. |
 | YouTube Shorts | `youtube-web` | `media.publish` when observed | Studio video upload. Community `posts.publish` is not a Short. |
 | Reddit | `reddit-web` | `media.publish` when observed | One video post in one exact confirmed subreddit. |
 
@@ -22,11 +22,17 @@ At the 2026-08-22 reference revision, `x-web` `posts.publish` is observed
 for one plan-bound `image/png` or one plan-bound `video/mp4`. Official `x`
 and official `linkedin` already observe MP4 post contracts. `reddit-web`
 `media.publish@9` observes one plan-bound MP4 plus a required plan-bound
-PNG/JPEG poster and explicit NSFW, spoiler, and reply declarations. LinkedIn
-web, Bluesky, Substack Notes, TikTok, Instagram, Threads, and YouTube expose
-bounded video `media.publish` reservations. Those routes stay
-`capture-required` until their exact upload, processing, request, response,
-actor/target, and independent readback contracts are implemented and proven.
+PNG/JPEG poster and explicit NSFW, spoiler, and reply declarations. Threads
+`media.publish@1` observes one plan-bound ISO BMFF MP4, exact dimensions, its
+single-request video upload, durable created-post identity, and independent
+permalink actor/text/video readback. Bluesky `media.publish@2` observes one
+plan-bound ISO BMFF MP4, the fixed first-party legacy upload and response-bound
+processing job, processed blob, exact repository record, durable accepted
+target, and authoritative PDS plus public AppView readbacks. LinkedIn web,
+Substack Notes, TikTok, Instagram, and YouTube expose bounded video `media.publish`
+reservations. Those routes stay `capture-required` until their exact upload,
+processing, request, response, actor/target, and independent readback contracts
+are implemented and proven.
 Treat them as unavailable until the installed capability independently says
 `observed`.
 
