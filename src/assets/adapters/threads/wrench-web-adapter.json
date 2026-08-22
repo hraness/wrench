@@ -244,6 +244,56 @@
         "maxOutputBytes": 8388608
       }
     },
+    "media.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed Threads video only after exact resumable upload, processing completion, viewer and audience binding, created locator retention, and independent exact permalink actor/text/video readback are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Uploads one video and publishes one externally visible Threads post with the exact confirmed body and audience.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact post body",
+            "minLength": 1,
+            "maxLength": 450
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact plan-bound Threads MP4",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          },
+          "alt_text": {
+            "type": "string",
+            "description": "Optional exact video accessibility text",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "audience": {
+            "type": "string",
+            "description": "Explicit audience",
+            "enum": [
+              "default"
+            ]
+          }
+        },
+        "required": [
+          "body",
+          "media",
+          "audience"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "media.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
     "messaging.list": {
       "description": "Capture-required contract reservation: Threads inbox uses Lightspeed/Msys state and may acknowledge or update presence; Relay setup metadata is not message-list authority.",
       "risk": "R1",

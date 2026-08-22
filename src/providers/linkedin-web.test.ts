@@ -66,6 +66,7 @@ describe("LinkedIn internal-web operation registry", () => {
       "messaging.list",
       "messaging.read",
       "messaging.send",
+      "media.publish",
       "posts.read",
       "posts.publish",
       "posts.repost",

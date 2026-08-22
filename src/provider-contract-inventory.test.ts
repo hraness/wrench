@@ -4,17 +4,19 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "7f8ac8c38b92c72e4f3e28bd7b835d08050dbc2457e6c28d702e925a434b5aad";
+  "a45327d02ce6b65d178c64e9d2a8419c6b68f1d1c5363f559a508343b504e297";
 const predecessorLegacyInventorySha256 = [
-  "9a085d5f6af43034aa91127032e3751a26e3e1363a039904c9e3329c336b9344",
-  "1be8c98a560ba7091821a2612b3d82a541e7cb6c43ac879b09cf0e98be805d1d",
-  "784de748796cce1df1ef703324fa04aabab04bebbd06e0d491f9e5f145c983a3",
-  "d9b44e0529a5a687e85ac8241aef5eba5704576e617ca3f19f0b6c296aa5b355",
-  "37df836b17aaa982f314fea93cb093185df1666cc3cf9838d9f9bac709ae6004",
-  "eb0bd07e5221cf32340126c662f193965d778234241db06ace15dcf88bccf738",
-  "2d97048f2e98d9e6d3f14740001221ec2d4610c58a3cf5c106172a54051d83fd",
-  "862a71fa6e72f7015f93d1f8d33b546a4fa761dc6a186a7a6f6dc1e041ac23a8",
-  "8f79a4538ca0bc217ff3c5aa449d39946770a83e909b5cc73a557cfa9368b16c",
+  "a05af2ab437e6be673751772b7c05b760d7e20ec59ea19b9f472abbcd6e0f63b",
+  "8c22749bf89775d544889ae42ce82f949fe23b5b4b125726c7979d2a83928f21",
+  "9fd678ea50981a097e95e84c0367d26e96731c36e0abb921f59294116a6ffcec",
+  "472c1ddcbc24a242a3e7d16cffcab928203d6266f4ad1cd4ac2eb20d7f36b9b3",
+  "41762fae84335551671ca1ad0e65ea05fca26b21887a4c6c4d1192d34600855a",
+  "8ff7a9394daffc6377335b219976a97e7cbd476178d955f7523a8f77e5e04626",
+  "f0a2cb0919313de2b837062ea0075556a628eaa0701532774d7683b99aa68802",
+  "945a0008c9cfe3643691511766dcbb2bd00dd299eb8db7d029b536c930060c1e",
+  "c3a5799cfd0484fc500f9e167343147c2f7626adb034f590e2e11886918a30ff",
+  "25bb7f467fd40e044764c82de8be108405ec66e275a5c02d0682bd1ee058b4f8",
+  "5e0b6f9d4265074dee0b125772f39ac8457bb4b5db703dee1e4457d30828fef0",
 ];
 
 const moduleUrl = (name: string) => pathToFileURL(
@@ -205,11 +207,11 @@ describe("durable provider contract inventory", () => {
       "staging",
     ] as const) {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
-        rows: 292,
+        rows: 307,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 7,
         currentOnlySha256: "ee4f714b977e75d55f85d41582267eb61b5eed6eb60ed1272739541aa3191c1a",
-        legacyRows: [292, 292, 292, 292, 292, 292, 292, 170, 22],
+        legacyRows: [307, 307, 307, 307, 307, 307, 307, 174, 44, 23, 23],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,
         rejectedUnknown: true,

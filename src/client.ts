@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { types as nodeTypes } from "node:util";
 
-import { canonicalJson } from "./canonical-json";
+import { canonicalJson, sha256 } from "./canonical-json";
 import type {
   CapabilityReadRequest,
   ReadCapabilityOptions,
@@ -55,9 +55,46 @@ type JsonSnapshot =
 type PreparedRequest = {
   readonly adapterId: string;
   readonly operationId: string;
-  readonly authId: string;
+  readonly authId?: string;
   readonly input: string;
 };
+
+const PUBLIC_WEB_SESSION_AUTHORITY_KIND = "public-web-session";
+
+type PublicWebSessionAuthority = {
+  readonly schemaVersion: 1;
+  readonly id: string;
+  readonly kind: typeof PUBLIC_WEB_SESSION_AUTHORITY_KIND;
+  readonly subject: string;
+};
+
+function publicWebSessionAuthority(
+  request: Pick<PreparedRequest, "adapterId" | "operationId">,
+): PublicWebSessionAuthority {
+  const coordinate = Object.freeze({
+    adapter: request.adapterId,
+    operation: request.operationId,
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    id: `public-${sha256(canonicalJson(coordinate)).slice(0, 32)}`,
+    kind: PUBLIC_WEB_SESSION_AUTHORITY_KIND,
+    subject: `public:${request.adapterId}:${request.operationId}`,
+  });
+}
+
+function expectedRequestAuthId(
+  request: PreparedRequest,
+  authKind: string,
+): string {
+  if (authKind === PUBLIC_WEB_SESSION_AUTHORITY_KIND) {
+    if (request.authId !== undefined) {
+      throw new Error("Wrench public invocation unexpectedly accepted an auth locator");
+    }
+    return publicWebSessionAuthority(request).id;
+  }
+  return request.authId ?? request.adapterId;
+}
 
 type PreparedCommand = {
   readonly arguments: readonly string[];
@@ -540,7 +577,7 @@ function prepareRequest(requestValue: CapabilityReadRequest): PreparedRequest {
   );
   const authId = Object.hasOwn(request, "authId")
     ? safeString(request.authId, "Wrench client auth ID", 64)
-    : adapterId;
+    : undefined;
   const rawInput = Object.hasOwn(request, "input") ? request.input : {};
   if (!isRecord(rawInput)) throw new Error("input must be a JSON object");
   const input = canonicalJson(rawInput);
@@ -550,7 +587,7 @@ function prepareRequest(requestValue: CapabilityReadRequest): PreparedRequest {
   return Object.freeze({
     adapterId,
     operationId,
-    authId,
+    ...(authId === undefined ? {} : { authId }),
     input,
   });
 }
@@ -572,8 +609,7 @@ function preparedCommand(
       request.operationId,
       "--input",
       "-",
-      "--auth",
-      request.authId,
+      ...(request.authId === undefined ? [] : ["--auth", request.authId]),
       ...(options.cacheOnly ? ["--cache-only"] : []),
       ...(options.projectionIdentityOnly
         ? ["--projection-identity-only"]
@@ -863,9 +899,14 @@ function parseExecutionPreview(
   if (adapter.id !== request.adapterId || operation !== request.operationId) {
     throw new Error("Wrench execution identity preview route is malformed");
   }
+  const authKind = safeString(
+    auth.kind,
+    "Wrench execution identity preview auth kind",
+    64,
+  );
   if (
     safeString(auth.id, "Wrench execution identity preview auth ID", 64)
-      !== request.authId
+      !== expectedRequestAuthId(request, authKind)
   ) throw new Error("Wrench execution identity preview auth is malformed");
   const realmFingerprint = safeString(
     auth.realmFingerprint,
@@ -875,7 +916,22 @@ function parseExecutionPreview(
   if (!/^[a-f0-9]{16}$/u.test(realmFingerprint)) {
     throw new Error("Wrench execution identity preview auth fingerprint is malformed");
   }
-  safeString(auth.kind, "Wrench execution identity preview auth kind", 64);
+  if (authKind === PUBLIC_WEB_SESSION_AUTHORITY_KIND) {
+    const authority = publicWebSessionAuthority(request);
+    if (
+      value.transport !== "web-session-api"
+      || realmFingerprint
+        !== sha256(canonicalJson(authority)).slice(0, 16)
+      || binding.status !== "public"
+      || binding.subject !== authority.subject
+      || binding.accountActor !== null
+      || binding.requestedActor !== null
+    ) {
+      throw new Error(
+        "Wrench execution identity preview public authority is malformed",
+      );
+    }
+  }
   safeString(
     value.sideEffect,
     "Wrench execution identity preview side effect",
@@ -1603,6 +1659,7 @@ function parseLiveReceipt(
     && authKind !== "cookies-file"
     && authKind !== "linked-device-store"
     && authKind !== "oauth-token-file"
+    && authKind !== PUBLIC_WEB_SESSION_AUTHORITY_KIND
   ) throw new Error("Wrench live receipt auth kind is malformed");
   if (receipt.dispatchStarted !== false) {
     throw new Error("Wrench live receipt dispatch state is malformed");
@@ -1679,8 +1736,20 @@ function parseLiveReceipt(
     common.adapter.id !== request.adapterId
     || common.operation !== request.operationId
   ) throw new Error("Wrench live receipt route does not match its request");
-  if (common.auth.id !== request.authId) {
+  if (
+    common.auth.id !== expectedRequestAuthId(request, common.auth.kind)
+  ) {
     throw new Error("Wrench live receipt auth does not match its request");
+  }
+  if (common.auth.kind === PUBLIC_WEB_SESSION_AUTHORITY_KIND) {
+    const authority = publicWebSessionAuthority(request);
+    if (
+      receipt.schemaVersion !== 4
+      || receipt.transport !== "web-session-api"
+      || common.auth.hash !== sha256(canonicalJson(authority))
+    ) {
+      throw new Error("Wrench live receipt public authority is malformed");
+    }
   }
   if (common.inputHash !== expectedInputHash) {
     throw new Error("Wrench live receipt input does not match its request");

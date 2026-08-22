@@ -10,6 +10,7 @@ import {
 import {
   createWebSessionClient,
   fetchPublicWebAsset,
+  uploadPublicWebAsset,
   type WebSessionCookieRotationState,
   type WebSessionNetworkDependencies,
 } from "./web-session-client";
@@ -201,6 +202,76 @@ describe("authenticated web-session client deadlines", () => {
       },
     ))).toContain("deadline");
     expect(stalled.signal()?.aborted).toBeTrue();
+  });
+});
+
+describe("public web asset upload transport", () => {
+  test("posts exact bytes without acquiring cookies and ignores a success Location host", async () => {
+    const body = new TextEncoder().encode("bounded signed-form payload");
+    let cookieAcquisitions = 0;
+    let observed: RequestInit | undefined;
+    expect(await uploadPublicWebAsset(
+      new URL("https://uploads.example.test/"),
+      {
+        allowedOrigin: "https://uploads.example.test",
+        body,
+        contentType: "multipart/form-data; boundary=wrench-test",
+        expectedStatus: 201,
+        maxBytes: 1_024,
+        timeoutMs: 1_000,
+        userAgent: "wrench/test",
+        dependencies: {
+          acquireCookies: () => {
+            cookieAcquisitions += 1;
+            return Promise.resolve({ cookies, warnings: [] });
+          },
+          fetch: (_value, init) => {
+            observed = init;
+            return Promise.resolve(new Response(null, {
+              status: 201,
+              headers: {
+                location: "https://regional-storage.example.test/object",
+              },
+            }));
+          },
+        },
+      },
+    )).toEqual({ status: 201 });
+    expect(cookieAcquisitions).toBe(0);
+    expect(observed?.method).toBe("POST");
+    expect(observed?.body).toBe(body);
+    expect(observed?.redirect).toBe("error");
+    const headers = new Headers(observed?.headers);
+    expect(headers.get("content-type")).toBe("multipart/form-data; boundary=wrench-test");
+    expect(headers.get("user-agent")).toBe("wrench/test");
+    expect(headers.has("cookie")).toBeFalse();
+    expect(headers.has("authorization")).toBeFalse();
+  });
+
+  test("rejects escaped origins, oversized bodies, and unreviewed statuses", async () => {
+    const base = {
+      allowedOrigin: "https://uploads.example.test",
+      body: new Uint8Array([1]),
+      contentType: "application/octet-stream",
+      expectedStatus: 201,
+      maxBytes: 1,
+      timeoutMs: 1_000,
+      dependencies: {
+        fetch: () => Promise.resolve(new Response(null, { status: 204 })),
+      },
+    } as const;
+    expect(await rejectionMessage(uploadPublicWebAsset(
+      new URL("https://other.example.test/"),
+      base,
+    ))).toContain("escaped its reviewed origin");
+    expect(await rejectionMessage(uploadPublicWebAsset(
+      new URL("https://uploads.example.test/"),
+      { ...base, body: new Uint8Array([1, 2]) },
+    ))).toContain("byte limit");
+    expect(await rejectionMessage(uploadPublicWebAsset(
+      new URL("https://uploads.example.test/"),
+      base,
+    ))).toBe("public web asset upload returned unreviewed status 204");
   });
 });
 

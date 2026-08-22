@@ -848,6 +848,15 @@ describe("provider plugin definition and registry", () => {
       ...base,
       bindings: [{
         ...binding,
+        operations: [{ ...operation("profiles.read"), access: "public" }],
+      }],
+    })).toThrow(
+      "public access requires an observed dispatch-free built-in web-session R1 operation",
+    );
+    expect(() => defineProviderPlugin({
+      ...base,
+      bindings: [{
+        ...binding,
         operations: [operation("raw-http")],
       }],
     })).toThrow("bounded dotted semantic name");

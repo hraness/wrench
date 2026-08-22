@@ -96,7 +96,7 @@ const commonActionContracts = {
     commenting: ["R1", "R3", "R3"],
     posting: ["R1", "R3"],
     liking: ["not-applicable", "R2"],
-    media: ["R1", "unsupported"],
+    media: ["R1", "R3"],
   },
   x: {
     messaging: ["R1", "R3"],
@@ -110,7 +110,7 @@ const commonActionContracts = {
     commenting: ["R1", "R3", "R3"],
     posting: ["R1", "R3"],
     liking: ["not-applicable", "R2"],
-    media: ["R1", "unsupported"],
+    media: ["R1", "R3"],
   },
   "hacker-news": {
     messaging: ["not-applicable", "not-applicable"],
@@ -131,7 +131,7 @@ const commonActionContracts = {
     commenting: ["R1", "R3", "R3"],
     posting: ["R1", "R3"],
     liking: ["R2", "not-applicable"],
-    media: ["R1", "unsupported"],
+    media: ["R1", "R3"],
   },
   instagram: {
     messaging: ["R1", "R3"],
@@ -145,7 +145,7 @@ const commonActionContracts = {
     commenting: ["R1", "not-applicable", "R3"],
     posting: ["R1", "R3"],
     liking: ["R2", "not-applicable"],
-    media: ["R1", "unsupported"],
+    media: ["R1", "R3"],
   },
   facebook: {
     messaging: ["R1", "R3"],
@@ -194,26 +194,26 @@ const commonActionContracts = {
     commenting: ["R1", "not-applicable", "R3"],
     posting: ["R1", "R3"],
     liking: ["R2", "not-applicable"],
-    media: ["R1", "unsupported"],
+    media: ["R1", "R3"],
   },
 } as const satisfies Readonly<Record<PlatformSurfaceId, CommonActionContract>>;
 
 const binaryAttachmentCompositions = {
-  linkedin: ["message", "post", "article"],
+  linkedin: ["message", "post", "media", "article"],
   x: ["message", "reply", "post", "article"],
-  reddit: ["post"],
+  reddit: ["post", "media"],
   "hacker-news": [],
   whatsapp: ["message"],
-  substack: ["post", "article"],
+  substack: ["post", "media", "article"],
   instagram: ["message", "media"],
-  threads: ["message", "reply", "post"],
+  threads: ["message", "reply", "post", "media"],
   facebook: ["message", "post", "media"],
   "facebook-page": ["message", "post", "media"],
   "facebook-group": ["post", "media"],
   "facebook-marketplace": ["listing"],
   tiktok: ["message", "media"],
   youtube: ["post", "media"],
-  bluesky: ["reply", "post"],
+  bluesky: ["reply", "post", "media"],
 } as const satisfies Readonly<Record<PlatformSurfaceId, readonly CompositionName[]>>;
 
 const expandedExecutableOperationNames = [
@@ -246,7 +246,7 @@ const expandedExecutableContracts = {
   },
   reddit: {
     R2: ["relationships.follow.set", "content.save", "communities.membership.set"],
-    R3: ["posts.repost", "content.share", "content.edit"],
+    R3: ["posts.repost", "content.share", "content.edit", "content.delete"],
   },
   "hacker-news": { R2: ["content.save"], R3: ["content.edit"] },
   whatsapp: { R2: ["content.save"], R3: ["content.share", "content.edit"] },
@@ -464,7 +464,7 @@ describe("social platform catalog", () => {
         expect(surface.operations[operationName].state).not.toBe("adapter-eligible");
       }
       expect(surface.operations["content.delete"]).toMatchObject(
-        surfaceId === "x" || surfaceId === "bluesky"
+        surfaceId === "x" || surfaceId === "bluesky" || surfaceId === "reddit"
           ? { state: "adapter-eligible", risk: "R3" }
           : { state: "R4", risk: "R4" },
       );

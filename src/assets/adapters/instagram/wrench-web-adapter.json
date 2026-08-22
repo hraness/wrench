@@ -277,7 +277,7 @@
       }
     },
     "media.publish": {
-      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "description": "Capture-required contract reservation: publish one exact JPEG, PNG, WebP, MP4, or QuickTime item only after actor, audience, attachment transport, processing, dispatch response, and independent publication readback are reviewed with an authorized fixture.",
       "risk": "R3",
       "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
@@ -289,8 +289,11 @@
             "description": "Exact media file",
             "maxBytes": 1073741824,
             "mediaTypes": [
-              "image/*",
-              "video/*"
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+              "video/mp4",
+              "video/quicktime"
             ]
           },
           "caption": {
@@ -308,14 +311,15 @@
           }
         },
         "required": [
-          "media"
+          "media",
+          "audience"
         ]
       },
       "webSession": {
         "site": "instagram",
         "action": "media.publish",
         "contractVersion": 1,
-        "timeoutMs": 60000,
+        "timeoutMs": 600000,
         "maxOutputBytes": 8388608
       }
     },

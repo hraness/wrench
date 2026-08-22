@@ -14,7 +14,9 @@ Use this as routing guidance only. Always inspect `wrench capabilities <adapter>
 
 Cleanup is capability-driven too. At this reference revision, `bluesky-web`
 exposes observed `content.delete@1` only for one current-account post URI plus
-its exact confirmed CID. `x-web` reserves `content.delete@1` as
+its exact confirmed CID. `reddit-web` exposes observed `content.delete@1` only
+for one exact current-account post fullname plus its confirmed title, followed
+by independent absence readback. `x-web` reserves `content.delete@1` as
 `capture-required`; LinkedIn, Substack, and Threads deletion remain unavailable
 unless their installed canonical capability independently says otherwise.
 

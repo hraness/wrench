@@ -15,7 +15,7 @@ Do not use Wrench as an AI agent, hosted HTTP API, OpenAPI surface, OAuth develo
 - [Install the Wrench CLI and TypeScript SDK](https://wrench.rip/getting-started/): pin {{WRENCH_RELEASE}}, synchronize bundled adapters, run the doctor, and capture a first URL
 - [Install the Wrench Agent Skill](https://wrench.rip/): `npx skills add hraness/wrench` adds the capture, archive, provider, and publishing guide to a command-capable agent
 - [Capture URLs and create verified media archives](https://wrench.rip/capture-and-archives/): choose inspection, durable Markdown, or one finite media archive
-- [Provider capability reference](https://wrench.rip/provider-capabilities/): current contact, Gmail, inbox, and message coverage with explicit limits
+- [Provider capability attestation](https://wrench.rip/provider-capabilities/): every bundled adapter operation with its reviewed completeness and limit
 - [Security and local custody](https://wrench.rip/security/): account binding, encrypted snapshots, risk levels, and fail-closed drift
 - [Author and verify provider plugins](https://wrench.rip/plugins/): create, check, test, pack, trust, and install one content-addressed bundle
 - [Wrench source repository]({{WRENCH_REPOSITORY}}): public source, issues, and GitHub private vulnerability reporting

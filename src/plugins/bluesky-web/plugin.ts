@@ -22,8 +22,9 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(blueskyContracts),
-  "5694b7feec976a94fa6e32fd8e2a4d4ee8ef4b3b8eb27297fddce6de2eb10d83",
+  "ef24c9bb7bf7ef86b9f6ca6852a3cfff9c68f3c8529fccaf0ecfdaee7fab4c0a",
   {
+    "profiles.read": [1],
     "posts.publish": [2],
   },
   {
@@ -37,6 +38,12 @@ const operations = webSessionContractOperations(
     },
   },
 ).map((operation) => {
+  if (operation.name === "profiles.read") {
+    return Object.freeze({
+      ...operation,
+      access: "public" as const,
+    });
+  }
   if (operation.name === "posts.publish") {
     return Object.freeze({
       ...operation,
@@ -78,8 +85,8 @@ const operations = webSessionContractOperations(
 export const blueskyWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "bluesky-web",
-  version: "1.1.0",
-  displayName: "Bluesky Authenticated API",
+  version: "1.2.0",
+  displayName: "Bluesky Web API",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
     ["kernel/browser.ts", "../../browser.ts"],
@@ -102,6 +109,13 @@ export const blueskyWebPlugin = defineProviderPlugin({
       const runtime = await import("../../providers/bluesky-web-runtime");
       return {
         probe: runtime.probeBlueskyWebSubject,
+        executePublic: (_manifest, recipe, input, options) =>
+          runtime.executeBlueskyPublicProfileRead(
+            recipe,
+            input,
+            undefined,
+            options.operationDeadline,
+          ),
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeBlueskyWebOperation(recipe, input, auth, options),
         reconcile: async (operation, input, auth, context) => {

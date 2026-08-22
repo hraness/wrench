@@ -111,8 +111,8 @@ const historicalVersions = Object.freeze({
 >);
 
 const contractSemanticIdentities = Object.freeze({
-  instagram: "a39a376d27641ac8b8166a508791c0fb633194b17697e222730d15bc9142bb7d",
-  threads: "3db473425b841754dcb9ed15c790a1a0a5bac470b42a3cf55939bf4b4c9d0daa",
+  instagram: "3e2f5a7d655030588754ffe64141f4108e76c57f227fe903549ba192f1735c68",
+  threads: "a3fa86e547220c60d9b886007d0f366a4415408cc65e718948460e8d5a172b60",
   facebook: "f4724c9619794070da784d03fdaef5889cc4f3d237f9f402e9d5a53f7c156184",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
   "facebook-group": "30717a546b60658ecc2e199a14babb4fa2b46afd1e8d9113044a1b7afda3d376",

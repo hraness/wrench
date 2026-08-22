@@ -18,8 +18,21 @@ const auth = {
 } as const satisfies WrenchAuth;
 
 describe("Reddit provider plugin", () => {
-  test("declares boolean reconciliation only for saved state", async () => {
+  test("declares exact desired-state and accepted-target reconciliation", async () => {
     const save = binding.operations.find((operation) => operation.name === "content.save");
+    const deletion = binding.operations.find((operation) => operation.name === "content.delete");
+    const media = binding.operations.find((operation) =>
+      operation.name === "media.publish" && operation.contractVersion === 9
+    );
+    const archivedMedia = binding.operations.find((operation) =>
+      operation.name === "media.publish" && operation.contractVersion === 1
+    );
+    const archivedMediaV2 = binding.operations.find((operation) =>
+      operation.name === "media.publish" && operation.contractVersion === 2
+    );
+    const archivedMediaV3 = binding.operations.find((operation) =>
+      operation.name === "media.publish" && operation.contractVersion === 3
+    );
     const reaction = binding.operations.find((operation) => operation.name === "reactions.set");
     expect(save?.state).toBe("capture-required");
     const reconciliation = save?.reconciliation;
@@ -31,9 +44,35 @@ describe("Reddit provider plugin", () => {
       .toThrow("requires boolean input.saved");
     expect(reaction?.state).toBe("capture-required");
     expect(reaction?.reconciliation).toBeUndefined();
+    expect(deletion?.reconciliation?.kind).toBe("boolean-desired-state");
+    if (deletion?.reconciliation?.kind !== "boolean-desired-state") {
+      throw new Error("expected boolean Reddit deletion reconciliation");
+    }
+    expect(deletion.reconciliation.desiredState({})).toBeFalse();
+    expect(media?.reconciliation).toEqual({ kind: "provider-accepted-target-presence" });
+    expect(media).toMatchObject({ contractVersion: 9, state: "observed" });
+    expect(archivedMedia).toMatchObject({
+      contractVersion: 1,
+      state: "capture-required",
+    });
+    expect(archivedMedia?.reconciliation).toBeUndefined();
+    expect(archivedMediaV2).toMatchObject({
+      contractVersion: 2,
+      state: "capture-required",
+    });
+    expect(archivedMediaV2?.reconciliation).toBeUndefined();
+    expect(archivedMediaV3).toMatchObject({
+      contractVersion: 3,
+      state: "capture-required",
+    });
+    expect(archivedMediaV3?.reconciliation).toBeUndefined();
     expect(binding.operations
       .filter((operation) => operation.reconciliation !== undefined)
-      .map((operation) => operation.name)).toEqual(["content.save"]);
+      .map((operation) => operation.name)).toEqual([
+        "content.delete",
+        "content.save",
+        "media.publish",
+      ]);
 
     const runtime = await binding.loadRuntime();
     expect(runtime.reconcile).toBeFunction();

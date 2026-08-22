@@ -1,7 +1,14 @@
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+
 import type { WrenchAuth } from "../auth";
-import type { OperationInput, WebSessionRecipe } from "../model";
+import type { BrowserFileResolver } from "../browser";
+import { canonicalJson } from "../canonical-json";
+import type { FileInputValue, OperationInput, WebSessionRecipe } from "../model";
 import {
   createWebSessionClient,
+  uploadPublicWebAsset,
   webSessionAuthSubject,
   type WebSessionClient,
   type WebSessionNetworkDependencies,
@@ -10,6 +17,7 @@ import type {
   WebSessionDispatchEvent,
   WebSessionExecution,
   WebSessionOperationDeadline,
+  WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
 import {
   REDDIT_WEB_OPERATION_NAMES,
@@ -20,25 +28,45 @@ import {
   normalizeRedditFeedResponse,
   normalizeRedditMessageListing,
   normalizeRedditPostResponse,
+  parseRedditAuthoredPostPresence,
+  parseRedditMediaLeaseResponse,
   parseRedditProfileContributionPage,
+  parseRedditVideoPostPresence,
+  parseRedditVideoSubmitResponse,
+  parseRedditVideoWebSocketMessage,
   parseRedditThingState,
   parseRedditWebProfileResponse,
   parseRedditWebViewerResponse,
+  redditCommunity,
   redditFullname,
+  redditMediaAssetUrl,
   redditPostId,
+  type RedditMediaLease,
+  type RedditMediaType,
   type RedditWebOperationName,
   type RedditWebViewer,
 } from "./reddit-web";
 
 const REDDIT_ORIGIN = "https://www.reddit.com";
+const REDDIT_LEASE_ORIGIN = "https://old.reddit.com";
 const REDDIT_USER_AGENT = "wrench/1.0 (local authenticated web client)";
 const MAX_VIEWER_BYTES = 512 * 1024;
 const MAX_READ_BYTES = 4 * 1024 * 1024;
 const DEFAULT_LIMIT = 25;
 const MAX_PROFILE_OVERVIEW_PAGES = 10;
 
+const REDDIT_VIDEO_MAX_BYTES = 512 * 1024 * 1024;
+const REDDIT_POSTER_MAX_BYTES = 20 * 1024 * 1024;
+const REDDIT_UPLOAD_RESPONSE_BYTES = 2 * 1024 * 1024;
+const REDDIT_VIDEO_FILENAME = "wrench-video.mp4";
+
 export type RedditWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
   readonly now?: () => number;
+  readonly sleep?: (milliseconds: number) => Promise<void>;
+  readonly waitForWebSocketMessage?: (
+    url: string,
+    options: Readonly<{ timeoutMs: number; signal?: AbortSignal }>,
+  ) => Promise<unknown>;
 };
 
 export type RedditWebDesiredStatePreparation =
@@ -112,6 +140,166 @@ function optionalStringInput(
   return stringInput(input, name, maximum);
 }
 
+function optionalBodyInput(
+  input: OperationInput,
+  name: string,
+  maximum: number,
+): string | undefined {
+  const value = input[name];
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > maximum
+    || /[\0\r]/u.test(value)
+  ) throw new Error(`input.${name} must be bounded text`);
+  return value;
+}
+
+function fileInput(value: unknown, label: string): FileInputValue {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== "kind,reference"
+    || (value as { readonly kind?: unknown }).kind !== "file"
+    || typeof (value as { readonly reference?: unknown }).reference !== "string"
+    || (value as { readonly reference: string }).reference.length < 1
+    || (value as { readonly reference: string }).reference.length > 1_024
+  ) throw new Error(`${label} must be one plan-bound file`);
+  return value as FileInputValue;
+}
+
+async function stableFileBytes(
+  path: string,
+  maximumBytes: number,
+  label: string,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<Uint8Array> {
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = await open(path, constants.O_RDONLY | noFollow);
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (!before.isFile() || before.size < 1 || before.size > maximumBytes) {
+      throw new Error(`${label} must be a regular file within its reviewed byte bound`);
+    }
+    const bytes = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(
+          () => handle.readFile(),
+          "authenticated web operation deadline",
+        );
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (
+      after.dev !== before.dev
+      || after.ino !== before.ino
+      || after.size !== before.size
+      || bytes.byteLength !== before.size
+    ) throw new Error(`${label} changed while it was materialized`);
+    return bytes;
+  } finally {
+    await handle.close();
+  }
+}
+
+type RedditBoundMedia = Readonly<{
+  video: Uint8Array;
+  poster: Uint8Array;
+  posterType: "image/jpeg" | "image/png";
+  posterFilename: "wrench-poster.jpg" | "wrench-poster.png";
+}>;
+
+function assertMp4(bytes: Uint8Array): void {
+  if (
+    bytes.byteLength < 16
+    || bytes[4] !== 0x66
+    || bytes[5] !== 0x74
+    || bytes[6] !== 0x79
+    || bytes[7] !== 0x70
+  ) throw new Error("Reddit video must be one bounded ISO BMFF MP4");
+  const firstBoxSize = (
+    ((bytes[0] ?? 0) << 24)
+    | ((bytes[1] ?? 0) << 16)
+    | ((bytes[2] ?? 0) << 8)
+    | (bytes[3] ?? 0)
+  ) >>> 0;
+  if (firstBoxSize < 16 || firstBoxSize > bytes.byteLength) {
+    throw new Error("Reddit video MP4 file-type box changed shape");
+  }
+}
+
+function posterType(bytes: Uint8Array): RedditBoundMedia["posterType"] {
+  if (
+    bytes.byteLength >= 8
+    && bytes[0] === 0x89
+    && bytes[1] === 0x50
+    && bytes[2] === 0x4e
+    && bytes[3] === 0x47
+    && bytes[4] === 0x0d
+    && bytes[5] === 0x0a
+    && bytes[6] === 0x1a
+    && bytes[7] === 0x0a
+  ) return "image/png";
+  if (
+    bytes.byteLength >= 4
+    && bytes[0] === 0xff
+    && bytes[1] === 0xd8
+    && bytes[2] === 0xff
+  ) return "image/jpeg";
+  throw new Error("Reddit video poster must be one bounded PNG or JPEG");
+}
+
+async function readBoundRedditMedia(
+  input: OperationInput,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<RedditBoundMedia> {
+  const videoInput = fileInput(input.media, "input.media");
+  const posterInput = fileInput(input.thumbnail, "input.thumbnail");
+  if (fileResolver === undefined) {
+    throw new Error("Reddit video upload requires the plan-bound file resolver");
+  }
+  const resolve = () => fileResolver([videoInput, posterInput]);
+  const paths = operationDeadline === undefined
+    ? await resolve()
+    : await operationDeadline.run(resolve, "authenticated web operation deadline");
+  if (
+    paths.length !== 2
+    || typeof paths[0] !== "string"
+    || typeof paths[1] !== "string"
+  ) throw new Error("Reddit media resolver did not return the exact video and poster files");
+  const video = await stableFileBytes(
+    paths[0],
+    REDDIT_VIDEO_MAX_BYTES,
+    "Reddit video",
+    operationDeadline,
+  );
+  const poster = await stableFileBytes(
+    paths[1],
+    REDDIT_POSTER_MAX_BYTES,
+    "Reddit video poster",
+    operationDeadline,
+  );
+  assertMp4(video);
+  const type = posterType(poster);
+  return Object.freeze({
+    video,
+    poster,
+    posterType: type,
+    posterFilename: type === "image/png" ? "wrench-poster.png" : "wrench-poster.jpg",
+  });
+}
+
 function exactReadHeaders(): Readonly<Record<string, string>> {
   return Object.freeze({
     accept: "application/json",
@@ -127,6 +315,142 @@ function exactMutationHeaders(): Readonly<Record<string, string>> {
     origin: REDDIT_ORIGIN,
     referer: `${REDDIT_ORIGIN}/`,
     "user-agent": REDDIT_USER_AGENT,
+  });
+}
+
+function exactLeaseHeaders(
+  community: string,
+  modhash: string,
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    accept: "application/json",
+    "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+    origin: REDDIT_LEASE_ORIGIN,
+    referer: `${REDDIT_LEASE_ORIGIN}/r/${redditCommunity(community)}/submit`,
+    "user-agent": REDDIT_USER_AGENT,
+    "x-modhash": modhash,
+    "x-requested-with": "XMLHttpRequest",
+  });
+}
+
+function redditMultipartUpload(
+  lease: RedditMediaLease,
+  bytes: Uint8Array,
+  filename: string,
+  mediaType: RedditMediaType,
+): Readonly<{ body: Uint8Array; contentType: string }> {
+  const digest = createHash("sha256")
+    .update(bytes)
+    .update(filename)
+    .digest("hex")
+    .slice(0, 32);
+  const fieldText = lease.fields.map(({ name, value }) => `${name}\0${value}`).join("\0");
+  for (let suffix = 0; suffix < 16; suffix += 1) {
+    const boundary = `wrench-reddit-upload-${digest}-${suffix}`;
+    if (
+      Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+        .includes(Buffer.from(boundary, "ascii"))
+      || fieldText.includes(boundary)
+    ) continue;
+    const chunks: Buffer[] = [];
+    for (const field of lease.fields) {
+      chunks.push(Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${field.name}"\r\n\r\n${field.value}\r\n`,
+        "utf8",
+      ));
+    }
+    chunks.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mediaType}\r\n\r\n`,
+      "utf8",
+    ));
+    chunks.push(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    chunks.push(Buffer.from(`\r\n--${boundary}--\r\n`, "ascii"));
+    return Object.freeze({
+      body: new Uint8Array(Buffer.concat(chunks)),
+      contentType: `multipart/form-data; boundary=${boundary}`,
+    });
+  }
+  throw new Error("Reddit media could not bind an unambiguous multipart boundary");
+}
+
+async function uploadRedditMedia(
+  recipe: WebSessionRecipe,
+  lease: RedditMediaLease,
+  bytes: Uint8Array,
+  filename: string,
+  mediaType: RedditMediaType,
+  dependencies: RedditWebRuntimeDependencies | undefined,
+  operationDeadline: WebSessionOperationDeadline | undefined,
+): Promise<string> {
+  const multipart = redditMultipartUpload(lease, bytes, filename, mediaType);
+  await uploadPublicWebAsset(new URL("/", lease.uploadOrigin), {
+    allowedOrigin: lease.uploadOrigin,
+    body: multipart.body,
+    contentType: multipart.contentType,
+    expectedStatus: 201,
+    maxBytes: mediaType === "video/mp4"
+      ? REDDIT_VIDEO_MAX_BYTES + 1024 * 1024
+      : REDDIT_POSTER_MAX_BYTES + 1024 * 1024,
+    timeoutMs: recipe.timeoutMs,
+    userAgent: REDDIT_USER_AGENT,
+    ...(operationDeadline === undefined ? {} : { operationDeadline }),
+    ...(dependencies === undefined ? {} : { dependencies }),
+  });
+  return redditMediaAssetUrl(lease);
+}
+
+function safeRedditPreparationFailure(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  const message = error.message;
+  if (
+    /^public web asset upload returned unreviewed status [1-5][0-9]{2}$/u.test(message)
+    || message === "public web asset upload failed before a reviewed response was received"
+  ) return message;
+  return null;
+}
+
+async function defaultWaitForWebSocketMessage(
+  url: string,
+  options: Readonly<{ timeoutMs: number; signal?: AbortSignal }>,
+): Promise<unknown> {
+  if (
+    !Number.isSafeInteger(options.timeoutMs)
+    || options.timeoutMs < 1_000
+    || options.timeoutMs > 180_000
+  ) throw new Error("Reddit video websocket timeout is outside its reviewed bound");
+  return new Promise<unknown>((resolve, reject) => {
+    let settled = false;
+    let socket: WebSocket;
+    const finish = (result: { readonly ok: true; readonly value: unknown } | { readonly ok: false }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(1000);
+      }
+      if (result.ok) resolve(result.value);
+      else reject(new Error("Reddit video processing websocket ended without a reviewed result"));
+    };
+    const abort = (): void => finish({ ok: false });
+    const timer = setTimeout(() => finish({ ok: false }), options.timeoutMs);
+    try {
+      socket = new WebSocket(url);
+    } catch {
+      clearTimeout(timer);
+      reject(new Error("Reddit video processing websocket could not be opened"));
+      return;
+    }
+    options.signal?.addEventListener("abort", abort, { once: true });
+    socket.onmessage = (event): void => {
+      if (typeof event.data !== "string" || Buffer.byteLength(event.data, "utf8") > 64 * 1024) {
+        finish({ ok: false });
+        return;
+      }
+      finish({ ok: true, value: event.data });
+    };
+    socket.onerror = (): void => finish({ ok: false });
+    socket.onclose = (): void => finish({ ok: false });
   });
 }
 
@@ -488,6 +812,478 @@ async function readThingState(
   return parseRedditThingState(response, targetId);
 }
 
+async function readPostPresenceValue(
+  client: WebSessionClient,
+  targetId: string,
+  maximumBytes: number,
+): Promise<unknown> {
+  const url = new URL("/api/info.json", REDDIT_ORIGIN);
+  url.searchParams.set("id", redditPostId(targetId));
+  url.searchParams.set("raw_json", "1");
+  authorizeRedditWebRequest({
+    operation: "state.readback",
+    url,
+    method: "GET",
+    targetId,
+  });
+  return client.requestJson({
+    url,
+    method: "GET",
+    headers: exactReadHeaders(),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: Math.min(maximumBytes, MAX_READ_BYTES),
+  });
+}
+
+async function requestRedditMediaLease(
+  client: WebSessionClient,
+  community: string,
+  modhash: string,
+  mediaType: RedditMediaType,
+  filename: string,
+): Promise<unknown> {
+  const url = new URL(
+    mediaType === "video/mp4"
+      ? "/api/video_upload_s3.json"
+      : "/api/image_upload_s3.json",
+    REDDIT_LEASE_ORIGIN,
+  );
+  const form = new URLSearchParams();
+  form.set("filepath", filename);
+  form.set("mimetype", mediaType);
+  form.set("raw_json", "1");
+  const body = form.toString();
+  authorizeRedditWebRequest({
+    operation: "media.lease",
+    url,
+    method: "POST",
+    body,
+    mediaType,
+    filename,
+  });
+  return client.requestJson({
+    url,
+    method: "POST",
+    headers: exactLeaseHeaders(community, modhash),
+    body,
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: REDDIT_UPLOAD_RESPONSE_BYTES,
+  });
+}
+
+async function waitForRedditVideoReadback(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  postId: string,
+  sleep: (milliseconds: number) => Promise<void>,
+) {
+  const delays = [0, 1_000, 2_000, 3_000, 5_000] as const;
+  for (const delay of delays) {
+    if (delay > 0) await sleep(delay);
+    const readback = parseRedditVideoPostPresence(
+      await readPostPresenceValue(client, postId, recipe.maxOutputBytes),
+      postId,
+    );
+    if (readback !== null) return readback;
+  }
+  throw new Error("Reddit video post did not appear within the bounded readback window");
+}
+
+function assertRedditVideoBinding(
+  readback: NonNullable<ReturnType<typeof parseRedditVideoPostPresence>>,
+  expected: Readonly<{
+    viewer: RedditWebViewer;
+    community: string;
+    title: string;
+    body: string;
+    nsfw: boolean;
+    spoiler: boolean;
+    notBeforeSeconds: number;
+    nowSeconds: number;
+  }>,
+): void {
+  if (
+    readback.post.author !== expected.viewer.username
+    || (readback.authorFullname !== null && readback.authorFullname !== expected.viewer.id)
+  ) throw new Error("Reddit video post readback did not bind the confirmed actor");
+  if (
+    readback.post.subreddit.toLowerCase() !== expected.community.toLowerCase()
+    || readback.post.title !== expected.title
+    || readback.post.body !== expected.body
+    || readback.nsfw !== expected.nsfw
+    || readback.spoiler !== expected.spoiler
+  ) throw new Error("Reddit video post readback did not bind the confirmed content and declarations");
+  if (
+    readback.post.createdUtc === null
+    || readback.post.createdUtc < expected.notBeforeSeconds - 300
+    || readback.post.createdUtc > expected.nowSeconds + 300
+  ) throw new Error("Reddit video post readback escaped the confirmed dispatch window");
+}
+
+function acceptedRedditPostId(value: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("Reddit provider-accepted post target is not canonical JSON");
+  }
+  if (
+    typeof parsed !== "object"
+    || parsed === null
+    || Array.isArray(parsed)
+    || Object.keys(parsed).join(",") !== "postId"
+  ) throw new Error("Reddit provider-accepted post target changed shape");
+  const postId = redditPostId(
+    (parsed as { readonly postId?: unknown }).postId,
+    "Reddit provider-accepted post target ID",
+  );
+  if (canonicalJson({ postId }) !== value) {
+    throw new Error("Reddit provider-accepted post target is not canonical");
+  }
+  return postId;
+}
+
+async function executeMediaPublish(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly fileResolver?: BrowserFileResolver;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly dependencies?: RedditWebRuntimeDependencies;
+  },
+): Promise<WebSessionExecution> {
+  const community = redditCommunity(stringInput(input, "community", 21), "input.community");
+  const title = stringInput(input, "title", 280);
+  const body = optionalBodyInput(input, "body", 10_000) ?? "";
+  const nsfw = booleanInput(input, "nsfw");
+  const spoiler = booleanInput(input, "spoiler");
+  const sendReplies = booleanInput(input, "send_replies");
+  const viewer = await requireBoundViewer(client, auth);
+  const media = await readBoundRedditMedia(
+    input,
+    options.fileResolver,
+    options.operationDeadline,
+  );
+  const leaseClient = await createWebSessionClient(REDDIT_LEASE_ORIGIN, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+  });
+  let started = 0;
+  let verified = 0;
+  let stage = "video-lease-request";
+  let finalUrl: string | null = null;
+  try {
+    const videoLeaseResponse = await requestRedditMediaLease(
+      leaseClient,
+      community,
+      viewer.modhash,
+      "video/mp4",
+      REDDIT_VIDEO_FILENAME,
+    );
+    stage = "video-lease-parse";
+    const videoLease = parseRedditMediaLeaseResponse(videoLeaseResponse, {
+      mediaType: "video/mp4",
+      filename: REDDIT_VIDEO_FILENAME,
+    });
+    stage = "poster-lease-request";
+    const posterLeaseResponse = await requestRedditMediaLease(
+      leaseClient,
+      community,
+      viewer.modhash,
+      media.posterType,
+      media.posterFilename,
+    );
+    stage = "poster-lease-parse";
+    const posterLease = parseRedditMediaLeaseResponse(posterLeaseResponse, {
+      mediaType: media.posterType,
+      filename: media.posterFilename,
+    });
+    stage = "video-upload";
+    const videoUrl = await uploadRedditMedia(
+      recipe,
+      videoLease,
+      media.video,
+      REDDIT_VIDEO_FILENAME,
+      "video/mp4",
+      options.dependencies,
+      options.operationDeadline,
+    );
+    stage = "poster-upload";
+    const posterUrl = await uploadRedditMedia(
+      recipe,
+      posterLease,
+      media.poster,
+      media.posterFilename,
+      media.posterType,
+      options.dependencies,
+      options.operationDeadline,
+    );
+    stage = "viewer-rebinding";
+    const rebound = await currentViewer(client);
+    assertBoundViewer(auth, rebound);
+    if (rebound.id !== viewer.id) throw new Error("Reddit viewer changed during video upload");
+    const url = new URL("/api/submit", REDDIT_ORIGIN);
+    url.searchParams.set("raw_json", "1");
+    const form = new URLSearchParams();
+    form.set("api_type", "json");
+    form.set("kind", "video");
+    form.set("nsfw", String(nsfw));
+    form.set("resubmit", "false");
+    form.set("sendreplies", String(sendReplies));
+    form.set("spoiler", String(spoiler));
+    form.set("sr", community);
+    form.set("title", title);
+    form.set("uh", rebound.modhash);
+    form.set("url", videoUrl);
+    form.set("validate_on_submit", "true");
+    form.set("video_poster_url", posterUrl);
+    if (body !== "") form.set("text", body);
+    const submitBody = form.toString();
+    authorizeRedditWebRequest({
+      operation: "media.publish",
+      url,
+      method: "POST",
+      body: submitBody,
+      community,
+      title,
+      ...(body === "" ? {} : { text: body }),
+      nsfw,
+      spoiler,
+      sendReplies,
+      mediaUrl: videoUrl,
+      posterUrl,
+    });
+    stage = "dispatch-admission";
+    await options.beforeDispatch?.(dispatchEvent(recipe.action, 0, 0));
+    started = 1;
+    const notBeforeSeconds = Math.floor((options.dependencies?.now ?? Date.now)() / 1_000);
+    stage = "submit-response";
+    const websocketUrl = parseRedditVideoSubmitResponse(
+      await client.requestJson({
+        url,
+        method: "POST",
+        headers: exactMutationHeaders(),
+        body: submitBody,
+        expectedStatuses: [200],
+        expectedContentTypes: ["application/json"],
+        maxBytes: REDDIT_UPLOAD_RESPONSE_BYTES,
+      }),
+    );
+    stage = "processing-websocket";
+    const waitForWebSocket = options.dependencies?.waitForWebSocketMessage
+      ?? defaultWaitForWebSocketMessage;
+    const remaining = options.operationDeadline?.remainingTimeMs() ?? 180_000;
+    const message = await waitForWebSocket(websocketUrl, {
+      timeoutMs: Math.max(1_000, Math.min(180_000, remaining)),
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { signal: options.operationDeadline.signal }),
+    });
+    const accepted = parseRedditVideoWebSocketMessage(message, community);
+    finalUrl = accepted.url;
+    stage = "accepted-target-recording";
+    await options.afterProviderAcceptedMutationTarget?.({
+      id: recipe.action,
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: canonicalJson({ postId: accepted.postId }),
+      },
+    });
+    stage = "independent-readback";
+    const sleep = options.dependencies?.sleep
+      ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+    const readback = await waitForRedditVideoReadback(
+      client,
+      recipe,
+      accepted.postId,
+      sleep,
+    );
+    const nowSeconds = Math.floor((options.dependencies?.now ?? Date.now)() / 1_000);
+    assertRedditVideoBinding(readback, {
+      viewer,
+      community,
+      title,
+      body,
+      nsfw,
+      spoiler,
+      notBeforeSeconds,
+      nowSeconds,
+    });
+    verified = 1;
+    stage = "verification-recording";
+    await options.afterDispatchVerified?.(dispatchEvent(recipe.action, 1, 1));
+    return {
+      status: "succeeded",
+      output: Object.freeze({
+        postId: accepted.postId,
+        url: accepted.url,
+        community,
+        title,
+        video: Object.freeze({
+          durationSeconds: readback.durationSeconds,
+          width: readback.width,
+          height: readback.height,
+        }),
+      }),
+      finalUrl: accepted.url,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch (error) {
+    const preparationFailure = safeRedditPreparationFailure(error);
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? `Reddit may have published the confirmed video, but ${stage} was not verified; reconcile before retrying`
+        : `Reddit video preparation failed at ${stage} before public submission${
+          preparationFailure === null ? "" : `; reason: ${preparationFailure}`
+        }`,
+    };
+  }
+}
+
+async function readDeletionPresence(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  postId: string,
+) {
+  return parseRedditAuthoredPostPresence(
+    await readPostPresenceValue(client, postId, recipe.maxOutputBytes),
+    postId,
+  );
+}
+
+function assertDeletionTarget(
+  presence: Awaited<ReturnType<typeof readDeletionPresence>>,
+  viewer: RedditWebViewer,
+  expectedTitle: string,
+): void {
+  if (!presence.present || presence.post === null) return;
+  if (
+    presence.post.author !== viewer.username
+    || (presence.authorFullname !== null && presence.authorFullname !== viewer.id)
+  ) throw new Error("Reddit delete target was not authored by the bound viewer");
+  if (presence.post.title !== expectedTitle) {
+    throw new Error("Reddit delete target title changed after confirmation");
+  }
+}
+
+async function executeContentDelete(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly dependencies?: RedditWebRuntimeDependencies;
+  },
+): Promise<WebSessionExecution> {
+  const postId = redditPostId(stringInput(input, "post_id", 40), "input.post_id");
+  const expectedTitle = stringInput(input, "expected_title", 280);
+  const viewer = await requireBoundViewer(client, auth);
+  const before = await readDeletionPresence(client, recipe, postId);
+  if (!before.present) {
+    return {
+      status: "succeeded",
+      output: Object.freeze({ postId, deleted: true, noOp: true }),
+      finalUrl: `${REDDIT_ORIGIN}/comments/${postId.slice(3)}/`,
+      noOp: true,
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+    };
+  }
+  assertDeletionTarget(before, viewer, expectedTitle);
+  let started = 0;
+  let verified = 0;
+  try {
+    const rebound = await currentViewer(client);
+    assertBoundViewer(auth, rebound);
+    if (rebound.id !== viewer.id) throw new Error("Reddit viewer changed during delete preparation");
+    const freshTarget = await readDeletionPresence(client, recipe, postId);
+    if (!freshTarget.present) {
+      return {
+        status: "succeeded",
+        output: Object.freeze({ postId, deleted: true, noOp: true }),
+        finalUrl: `${REDDIT_ORIGIN}/comments/${postId.slice(3)}/`,
+        noOp: true,
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+      };
+    }
+    assertDeletionTarget(freshTarget, rebound, expectedTitle);
+    const url = new URL("/api/del", REDDIT_ORIGIN);
+    const form = new URLSearchParams();
+    form.set("id", postId);
+    form.set("uh", rebound.modhash);
+    const body = form.toString();
+    authorizeRedditWebRequest({
+      operation: "content.delete",
+      url,
+      method: "POST",
+      body,
+      targetId: postId,
+    });
+    await options.beforeDispatch?.(dispatchEvent(recipe.action, 0, 0));
+    started = 1;
+    assertRedditMutationSuccess(await client.requestJson({
+      url,
+      method: "POST",
+      headers: exactMutationHeaders(),
+      body,
+      expectedStatuses: [200],
+      expectedContentTypes: ["application/json"],
+      maxBytes: 512 * 1024,
+    }));
+    const sleep = options.dependencies?.sleep
+      ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+    let after = await readDeletionPresence(client, recipe, postId);
+    for (const delay of [500, 1_000, 2_000] as const) {
+      if (!after.present) break;
+      await sleep(delay);
+      after = await readDeletionPresence(client, recipe, postId);
+    }
+    if (after.present) throw new Error("Reddit exact delete readback still returned the authored post");
+    verified = 1;
+    await options.afterDispatchVerified?.(dispatchEvent(recipe.action, 1, 1));
+    return {
+      status: "succeeded",
+      output: Object.freeze({ postId, deleted: true, noOp: false }),
+      finalUrl: `${REDDIT_ORIGIN}/comments/${postId.slice(3)}/`,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: `${REDDIT_ORIGIN}/comments/${postId.slice(3)}/`,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? "Reddit may have deleted the exact post, but absence was not verified; reconcile before retrying"
+        : "Reddit delete dispatch failed before submission",
+    };
+  }
+}
+
 function dispatchEvent(
   id: string,
   started: number,
@@ -641,6 +1437,79 @@ export async function readRedditWebDesiredState(
   });
 }
 
+export async function readRedditWebContentDeleteDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly dependencies?: RedditWebRuntimeDependencies;
+  } = {},
+): Promise<Readonly<{ present: boolean; postId: string }>> {
+  if (
+    recipe.site !== "reddit"
+    || recipe.action !== "content.delete"
+    || recipe.contractVersion !== 1
+  ) throw new Error("Reddit deletion recovery supports only content.delete@1");
+  const postId = redditPostId(stringInput(input, "post_id", 40), "input.post_id");
+  const expectedTitle = stringInput(input, "expected_title", 280);
+  const client = await createWebSessionClient(REDDIT_ORIGIN, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+  });
+  const viewer = await requireBoundViewer(client, auth);
+  const presence = await readDeletionPresence(client, recipe, postId);
+  assertDeletionTarget(presence, viewer, expectedTitle);
+  return Object.freeze({ present: presence.present, postId });
+}
+
+export async function readRedditWebPublishedMutationTarget(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  identifier: string,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly dependencies?: RedditWebRuntimeDependencies;
+  } = {},
+): Promise<Readonly<{ present: boolean; postId: string }>> {
+  if (
+    recipe.site !== "reddit"
+    || recipe.action !== "media.publish"
+    || recipe.contractVersion !== 9
+  ) throw new Error("Reddit video-publish recovery supports only media.publish@9");
+  const postId = acceptedRedditPostId(identifier);
+  const community = redditCommunity(stringInput(input, "community", 21), "input.community");
+  const title = stringInput(input, "title", 280);
+  const body = optionalBodyInput(input, "body", 10_000) ?? "";
+  const nsfw = booleanInput(input, "nsfw");
+  const spoiler = booleanInput(input, "spoiler");
+  const client = await createWebSessionClient(REDDIT_ORIGIN, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+  });
+  const viewer = await requireBoundViewer(client, auth);
+  const readback = parseRedditVideoPostPresence(
+    await readPostPresenceValue(client, postId, recipe.maxOutputBytes),
+    postId,
+  );
+  if (readback === null) return Object.freeze({ present: false, postId });
+  const nowSeconds = Math.floor((options.dependencies?.now ?? Date.now)() / 1_000);
+  assertRedditVideoBinding(readback, {
+    viewer,
+    community,
+    title,
+    body,
+    nsfw,
+    spoiler,
+    notBeforeSeconds: 0,
+    nowSeconds,
+  });
+  return Object.freeze({ present: true, postId });
+}
+
 function desiredStateNoOp(
   preparation: RedditWebDesiredStatePreparation,
 ): WebSessionExecution {
@@ -763,14 +1632,22 @@ export async function executeRedditWebOperation(
   input: OperationInput,
   auth: WrenchAuth,
   options: {
+    readonly fileResolver?: BrowserFileResolver;
     readonly signal?: AbortSignal;
     readonly operationDeadline?: WebSessionOperationDeadline;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: RedditWebRuntimeDependencies;
   } = {},
 ): Promise<WebSessionExecution> {
-  if (recipe.site !== "reddit" || recipe.contractVersion !== 1 || !isRedditOperation(recipe.action)) {
+  if (
+    recipe.site !== "reddit"
+    || !isRedditOperation(recipe.action)
+    || recipe.contractVersion !== (recipe.action === "media.publish" ? 9 : 1)
+  ) {
     throw new Error("Reddit authenticated web recipe is not installed");
   }
   const contract = REDDIT_WEB_OPERATIONS[recipe.action];
@@ -785,6 +1662,12 @@ export async function executeRedditWebOperation(
       : { operationDeadline: options.operationDeadline }),
     ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
   });
+  if (recipe.action === "media.publish") {
+    return executeMediaPublish(client, recipe, input, auth, options);
+  }
+  if (recipe.action === "content.delete") {
+    return executeContentDelete(client, recipe, input, auth, options);
+  }
   if (recipe.action === "reactions.set" || recipe.action === "content.save") {
     return executeDesiredState(client, recipe, input, auth, options);
   }

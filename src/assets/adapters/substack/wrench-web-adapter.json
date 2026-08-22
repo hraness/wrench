@@ -174,6 +174,42 @@
         "maxOutputBytes": 8388608
       }
     },
+    "media.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed Substack Note with one MP4 only after exact upload initialization, byte transfer, processing, viewer binding, public Note creation, returned-entity attachment binding, and independent exact-Note readback are reviewed; this is not article or newsletter publication.",
+      "risk": "R3",
+      "sideEffect": "Uploads one video and publishes one externally visible Substack Note with the exact confirmed body.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact Note body",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact plan-bound Substack Note MP4",
+            "maxBytes": 536870912,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          }
+        },
+        "required": [
+          "body",
+          "media"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "media.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
     "messaging.list": {
       "description": "Observed contract: list one bounded Substack inbox tab without sending read acknowledgements, presence, or typing state.",
       "risk": "R1",

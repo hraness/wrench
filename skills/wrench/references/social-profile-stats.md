@@ -2,7 +2,7 @@
 
 Use this workflow for a scheduled, read-only collection of exact counters from
 explicitly selected social profiles, owned publications, and organization
-pages. Wrench owns authenticated acquisition and target binding. The consumer
+pages. Wrench owns acquisition, invocation authority, and target binding. The consumer
 owns history, public field selection, presentation, and delivery.
 
 ## Preconditions
@@ -29,10 +29,10 @@ credentials. Wrench probes and binds each authenticated provider subject.
 | --- | --- | --- | --- | --- |
 | `x-hraness` | `x-web profiles.read` | `x-chrome` | `{"handle":"hraness"}` | followers, following |
 | `x-hrawdog` | `x-web profiles.read` | `x-chrome` | `{"handle":"hrawdog"}` | followers, following |
-| `linkedin-personal` | `linkedin-web profiles.read` | `linkedin-chrome` | `{"profile_url":"https://www.linkedin.com/in/0thernet","include_connections":true}` | followers, connections |
+| `linkedin-personal` | `linkedin-web profiles.read` | `linkedin-chrome` | `{"profile_url":"https://www.linkedin.com/in/hraness","include_connections":true}` | followers, connections |
 | `linkedin-company-hraness` | `linkedin-web organizations.read` | `linkedin-chrome` | `{"organization_url":"https://www.linkedin.com/company/hraness"}` | followers |
 | `youtube-hraness` | `youtube-web profiles.read` | `youtube-chrome` | `{"profile":"@hraness"}` | subscribers, videos, views |
-| `bluesky-hraness` | `bluesky-web profiles.read` | `bluesky-chromium` | `{"handle":"hraness.bsky.social"}` | followers, following, posts |
+| `bluesky-hraness` | `bluesky-web profiles.read` | public | `{"handle":"hraness.bsky.social"}` | followers, following, posts |
 | `instagram-hraness` | `instagram-web profiles.read` | `instagram-chrome` | `{"profile":"hraness"}` | followers, following, posts |
 | `threads-hraness` | `threads-web profiles.read` | `threads-chrome` | `{"profile":"hraness"}` | followers, recentViews |
 | `substack-hraness` | `substack-web profiles.read` | `substack-chrome` | `{"profile":"hraness"}` | followers |
@@ -40,12 +40,10 @@ credentials. Wrench probes and binds each authenticated provider subject.
 | `tiktok-hraness` | `tiktok-web profiles.read` | `tiktok-chrome` | `{"profile":"hraness"}` | followers, following, likes |
 | `reddit-bgdotjpg` | `reddit-web profiles.read` | `reddit-chrome` | `{"profile":"bgdotjpg"}` | followers, karma, contributions |
 
-Bluesky profile statistics come from the public target-bound AppView API. The
-current invocation kernel still requires an admitted `bluesky-chromium`
-locator, but the operation does not use that locator's cookies or claim a
-realm-bound result. A cleanup-unsafe Bluesky locator therefore creates only a
-Bluesky gap; recover it with reboot plus `wrench doctor --json` rather than
-deleting state manually.
+Bluesky profile statistics come from the public target-bound AppView API.
+Invoke this row without `--auth`. Wrench assigns the reviewed operation a
+deterministic public authority for receipts and exact R1 caching. Supplying an
+auth locator is an error.
 
 Keep the two X calls sequential, both LinkedIn calls sequential, and both
 Substack calls sequential because each pair shares one authenticated realm.
@@ -63,6 +61,13 @@ Invoke each row with bounded stdin and exact JSON output:
 ```sh
 printf '%s' '<input-json>' \
   | wrench invoke <adapter> <operation> --input - --auth <auth-id> --json
+```
+
+For the public Bluesky row, omit the auth option:
+
+```sh
+printf '%s' '{"handle":"hraness.bsky.social"}' \
+  | wrench invoke bluesky-web profiles.read --input - --json
 ```
 
 Do not put an auth ID, provider receipt, cache key, run ID, subject identifier,

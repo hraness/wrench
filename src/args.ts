@@ -201,7 +201,7 @@ export type WrenchArguments =
       readonly adapterId: string;
       readonly operationId: string;
       readonly inputSource: string;
-      readonly authId: string;
+      readonly authId?: string;
       readonly duplicateRiskOf: readonly string[];
       readonly preview: boolean;
       readonly cacheOnly: boolean;
@@ -1331,7 +1331,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       }
       const fixtureSources = parsed.repeatedValues["--fixture"] ?? [];
       if (fixtureSources.length > 20 || fixtureSources.some((value) => value.length > 4_096 || value.includes("\u0000"))) {
-        return { ok: false, message: "derive start accepts at most 20 bounded --fixture image paths" };
+        return { ok: false, message: "derive start accepts at most 20 bounded --fixture media paths" };
       }
       if (fixtureSources.length > 0 && !parsed.booleans.has("--allow-remote-actions")) {
         return { ok: false, message: "derive start --fixture requires --allow-remote-actions" };
@@ -1530,7 +1530,9 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         adapterId,
         operationId,
         inputSource: parsed.values["--input"] ?? "{}",
-        authId: parsed.values["--auth"] ?? adapterId,
+        ...(parsed.values["--auth"] === undefined
+          ? {}
+          : { authId: parsed.values["--auth"] }),
         duplicateRiskOf,
         preview: parsed.booleans.has("--preview"),
         cacheOnly: parsed.booleans.has("--cache-only"),

@@ -38,7 +38,7 @@ wrench derive start linkedin-web https://www.linkedin.com/feed/ \
   --headed
 ```
 
-For an authorized image-bearing mutation, bind each image before browser
+For an authorized image- or video-bearing mutation, bind each media file before browser
 startup with a repeated `--fixture` option and enable remote actions:
 
 ```sh
@@ -50,7 +50,7 @@ wrench derive start example-web https://example.com/feed/ \
   --headed
 ```
 
-Wrench copies at most 20 PNG, JPEG, GIF, or WebP images into the mode-private
+Wrench copies at most 20 PNG, JPEG, GIF, WebP, or MP4 files into the mode-private
 derivation directory, records only their byte counts, detected media types,
 SHA-256 hashes, and `fixture:<n>` references, and never retains their original
 paths. Upload only a start-bound reference to a current snapshot file input:
@@ -67,6 +67,19 @@ selector:
 ```sh
 wrench derive browser <id> -- upload @single-file-input fixture:1
 ```
+
+When a site keeps its file input behind a closed native chooser, bind the
+visible upload control from a fresh snapshot and let Wrench attach only the
+staged fixture through its code-owned chooser bridge:
+
+```bash
+wrench derive browser <id> -- choose-upload @e5 fixture:1
+```
+
+This command accepts no selector, path, script, cookie, or caller-selected
+request. It suppresses the native picker, attaches only the start-bound fixture,
+then disables interception and closes the private CDP connection before
+returning.
 
 If the composer contains multiple file inputs but exactly one advertises an
 image accept type, use the fixed `@single-image-input` reference. Wrench proves

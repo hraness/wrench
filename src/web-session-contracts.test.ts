@@ -65,7 +65,7 @@ describe("authenticated web-session contract identity", () => {
       "1c79b86a2133354878d44483e5a78efa9560f8c7f8f2c1014a20d0c998c0024f",
     );
     expect(webSessionContractHash(linkedinFeed)).toBe(
-      "8d0fe6ccf29d0ae29cc22bf03f2f61b022950b6a12de98dfd481bb618f7de106",
+      "d6d8e040fb46910e1da836205013d023e367b8878381f74048daf1b4e175671d",
     );
     expect(webSessionContractHash(facebookFeed)).toBe(
       "cb0e4de0914f571021d53285160bdbe6da7b1709edd5c3d7057a727c8f133d31",

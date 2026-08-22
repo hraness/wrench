@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "reddit-web",
-  "version": "1.1.0",
+  "version": "1.10.0",
   "displayName": "Reddit (Authenticated Web API)",
   "surfaceId": "reddit",
   "origins": [
@@ -286,6 +286,40 @@
         "maxOutputBytes": 2097152
       }
     },
+    "content.delete": {
+      "description": "Observed contract: delete one exact current-account Reddit post only after an authored-post pre-read binds its confirmed title, then independently verify exact-target absence.",
+      "risk": "R3",
+      "sideEffect": "Permanently deletes the exact confirmed Reddit post authored by the authenticated account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 2592000000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact t3_ Reddit post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "expected_title": {
+            "type": "string",
+            "description": "Exact current post title used for pre-delete confirmation",
+            "minLength": 1,
+            "maxLength": 280
+          }
+        },
+        "required": [
+          "post_id",
+          "expected_title"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "content.delete",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
     "communities.membership.set": {
       "description": "Capture-required contract reservation: subscribe to or unsubscribe from one exact subreddit only after form variants, actor binding, and independent membership readback are reviewed.",
       "risk": "R2",
@@ -375,6 +409,80 @@
         "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 4194304
+      }
+    },
+    "media.publish": {
+      "description": "Observed contract: publish one exact MP4 plus PNG/JPEG poster through captured old-Reddit cookie-authenticated leases bound to the current modhash, same-origin AJAX marker, and one permutation-safe exact thirteen-name S3 field set with media-type-specific fixed bucket declarations, cookie-free pinned S3 transfers, explicit post declarations, response-websocket target binding, and independent hosted-video readback.",
+      "risk": "R3",
+      "sideEffect": "Uploads one video and publishes one externally visible Reddit post in the exact confirmed community.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "community": {
+            "type": "string",
+            "description": "Exact destination subreddit name",
+            "minLength": 2,
+            "maxLength": 21
+          },
+          "title": {
+            "type": "string",
+            "description": "Exact video-post title",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional exact video-post body",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact plan-bound Reddit MP4",
+            "maxBytes": 536870912,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          },
+          "thumbnail": {
+            "type": "file",
+            "description": "Exact plan-bound PNG or JPEG poster for the native video",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png"
+            ]
+          },
+          "nsfw": {
+            "type": "boolean",
+            "description": "Explicit adult-content declaration"
+          },
+          "spoiler": {
+            "type": "boolean",
+            "description": "Explicit spoiler declaration"
+          },
+          "send_replies": {
+            "type": "boolean",
+            "description": "Explicit reply-notification choice"
+          }
+        },
+        "required": [
+          "community",
+          "title",
+          "media",
+          "thumbnail",
+          "nsfw",
+          "spoiler",
+          "send_replies"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "media.publish",
+        "contractVersion": 9,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
       }
     },
     "comments.create": {

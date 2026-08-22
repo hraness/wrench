@@ -30,6 +30,7 @@ export const LINKEDIN_WEB_OPERATION_NAMES = Object.freeze([
   "messaging.list",
   "messaging.read",
   "messaging.send",
+  "media.publish",
   "posts.read",
   "posts.publish",
   "posts.repost",
@@ -154,6 +155,13 @@ export const LINKEDIN_WEB_OPERATIONS = {
     requests: [],
   },
   "messaging.send": {
+    effect: "write",
+    risk: "R3",
+    state: "capture-required",
+    evidence: "none",
+    requests: [],
+  },
+  "media.publish": {
     effect: "write",
     risk: "R3",
     state: "capture-required",

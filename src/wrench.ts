@@ -22,6 +22,10 @@ import {
   saveAuth,
   type WrenchAuth,
 } from "./auth";
+import {
+  isPublicWebSessionInvocationAuthority,
+  type InvocationAuthority,
+} from "./web-session-authentication-policy";
 import { parseWrenchArguments, wrenchUsage, type WrenchArguments } from "./args";
 import type * as BeeperMessageLikeMeCliRuntimeModule from "./beeper-message-like-me-cli";
 import type { BeeperMessageLikeMeProgress } from "./beeper-message-like-me-source";
@@ -1465,9 +1469,17 @@ function confirmationContractView(plan: ReturnType<typeof createInvocationPlan>[
 function identityBindingView(
   operation: WrenchOperation,
   input: OperationInput,
-  auth: WrenchAuth,
+  auth: InvocationAuthority,
 ): Record<string, unknown> {
   const subject = auth.subject ?? null;
+  if (isPublicWebSessionInvocationAuthority(auth)) {
+    return {
+      status: "public",
+      subject,
+      accountActor: null,
+      requestedActor: null,
+    };
+  }
   const requestedActor = isProviderOperation(operation) && (operation.risk === "R2" || operation.risk === "R3")
     ? typeof input.actor === "string"
       ? input.actor

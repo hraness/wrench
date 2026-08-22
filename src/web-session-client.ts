@@ -861,3 +861,108 @@ export async function fetchPublicWebAsset(
     }
   });
 }
+
+/**
+ * Transfer one bounded byte asset to an exact reviewed public origin without
+ * acquiring or attaching browser cookies. This is for provider-issued signed
+ * upload forms whose body itself carries the narrowly scoped authorization;
+ * it is not an authenticated provider API transport.
+ */
+export async function uploadPublicWebAsset(
+  url: URL,
+  options: {
+    readonly allowedOrigin: string;
+    readonly body: Uint8Array;
+    readonly contentType: string;
+    readonly expectedStatus: number;
+    readonly maxBytes: number;
+    readonly timeoutMs: number;
+    readonly userAgent?: string;
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: Partial<WebSessionNetworkDependencies>;
+  },
+): Promise<Readonly<{ status: number }>> {
+  const parsedOrigin = new URL(options.allowedOrigin);
+  if (
+    parsedOrigin.protocol !== "https:"
+    || parsedOrigin.origin !== options.allowedOrigin
+    || parsedOrigin.pathname !== "/"
+    || parsedOrigin.search !== ""
+    || parsedOrigin.hash !== ""
+    || url.origin !== options.allowedOrigin
+    || url.username !== ""
+    || url.password !== ""
+    || url.hash !== ""
+  ) throw new Error("public web asset upload escaped its reviewed origin");
+  if (
+    !(options.body instanceof Uint8Array)
+    || !Number.isSafeInteger(options.maxBytes)
+    || options.maxBytes < 1
+    || options.maxBytes > 513 * 1024 * 1024
+    || options.body.byteLength < 1
+    || options.body.byteLength > options.maxBytes
+  ) throw new Error("public web asset upload exceeded its reviewed byte limit");
+  if (
+    typeof options.contentType !== "string"
+    || options.contentType.length < 1
+    || options.contentType.length > 512
+    || /[\0\r\n]/u.test(options.contentType)
+  ) throw new Error("public web asset upload content type is invalid");
+  if (
+    !Number.isSafeInteger(options.expectedStatus)
+    || options.expectedStatus < 200
+    || options.expectedStatus > 299
+  ) throw new Error("public web asset upload expected status is invalid");
+  if (
+    options.userAgent !== undefined
+    && (
+      options.userAgent.length < 1
+      || options.userAgent.length > 512
+      || /[\0\r\n]/u.test(options.userAgent)
+    )
+  ) throw new Error("public web asset upload user agent is invalid");
+  const dependencies = networkDependencies(options.dependencies);
+  return withWebSessionDeadline(options, async (deadline) => {
+    let response: Response | undefined;
+    try {
+      const headers = new Headers({
+        accept: "application/xml",
+        "content-type": options.contentType,
+        ...(options.userAgent === undefined ? {} : { "user-agent": options.userAgent }),
+      });
+      try {
+        response = await deadline.run(
+          () => dependencies.fetch(
+            url,
+            {
+              method: "POST",
+              headers,
+              body: options.body,
+              redirect: "error",
+              signal: deadline.signal,
+            },
+            remainingRequestTimeMs(deadline),
+          ),
+          WEB_SESSION_OPERATION_LABEL,
+        );
+      } catch (error) {
+        throw new Error(
+          "public web asset upload failed before a reviewed response was received",
+          { cause: error },
+        );
+      }
+      if (response.status !== options.expectedStatus) {
+        response.body?.cancel().catch(() => undefined);
+        throw new Error(`public web asset upload returned unreviewed status ${response.status}`);
+      }
+      void response.body?.cancel().catch(() => undefined);
+      deadline.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+      return Object.freeze({ status: response.status });
+    } finally {
+      if (deadline.signal.aborted) {
+        void response?.body?.cancel().catch(() => undefined);
+      }
+    }
+  });
+}

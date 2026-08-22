@@ -363,6 +363,7 @@ const BLUESKY_WEB_OPERATIONS = operationPolicies("bluesky", [
   "posts.read",
   "profiles.read",
 ], {
+  "profiles.read": 2,
   "posts.publish": 3,
 });
 const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
@@ -381,12 +382,16 @@ const HACKER_NEWS_WEB_OPERATIONS = operationPolicies("hacker-news", [
 ]);
 const REDDIT_WEB_OPERATIONS = operationPolicies("reddit", [
   "comments.read",
+  "content.delete",
   "feeds.read",
+  "media.publish",
   "messaging.list",
   "messaging.read",
   "posts.read",
   "profiles.read",
-]);
+], {
+  "media.publish": 8,
+});
 const BEEPER_LOCAL_OPERATIONS = operationPolicies("beeper", [
   "contacts.list",
   "messaging.list",
@@ -518,6 +523,7 @@ const bluesky = {
   "content.share": contract("bluesky", "content.share", BLUESKY_WEB_OPERATIONS["content.share"].risk, BLUESKY_WEB_OPERATIONS["content.share"].state, BLUESKY_WEB_OPERATIONS["content.share"].reason),
   "feeds.read": contract("bluesky", "feeds.read", BLUESKY_WEB_OPERATIONS["feeds.read"].risk, BLUESKY_WEB_OPERATIONS["feeds.read"].state, BLUESKY_WEB_OPERATIONS["feeds.read"].reason),
   "likes.set": contract("bluesky", "likes.set", BLUESKY_WEB_OPERATIONS["likes.set"].risk, BLUESKY_WEB_OPERATIONS["likes.set"].state, BLUESKY_WEB_OPERATIONS["likes.set"].reason),
+  "media.publish": contract("bluesky", "media.publish", BLUESKY_WEB_OPERATIONS["media.publish"].risk, BLUESKY_WEB_OPERATIONS["media.publish"].state, BLUESKY_WEB_OPERATIONS["media.publish"].reason),
   "media.read": contract("bluesky", "media.read", BLUESKY_WEB_OPERATIONS["media.read"].risk, BLUESKY_WEB_OPERATIONS["media.read"].state, BLUESKY_WEB_OPERATIONS["media.read"].reason),
   "messaging.list": contract("bluesky", "messaging.list", BLUESKY_WEB_OPERATIONS["messaging.list"].risk, BLUESKY_WEB_OPERATIONS["messaging.list"].state, BLUESKY_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("bluesky", "messaging.read", BLUESKY_WEB_OPERATIONS["messaging.read"].risk, BLUESKY_WEB_OPERATIONS["messaging.read"].state, BLUESKY_WEB_OPERATIONS["messaging.read"].reason),
@@ -526,7 +532,7 @@ const bluesky = {
   "posts.quote": contract("bluesky", "posts.quote", BLUESKY_WEB_OPERATIONS["posts.quote"].risk, BLUESKY_WEB_OPERATIONS["posts.quote"].state, BLUESKY_WEB_OPERATIONS["posts.quote"].reason),
   "posts.read": contract("bluesky", "posts.read", BLUESKY_WEB_OPERATIONS["posts.read"].risk, BLUESKY_WEB_OPERATIONS["posts.read"].state, BLUESKY_WEB_OPERATIONS["posts.read"].reason),
   "posts.repost": contract("bluesky", "posts.repost", BLUESKY_WEB_OPERATIONS["posts.repost"].risk, BLUESKY_WEB_OPERATIONS["posts.repost"].state, BLUESKY_WEB_OPERATIONS["posts.repost"].reason),
-  "profiles.read": contract("bluesky", "profiles.read", BLUESKY_WEB_OPERATIONS["profiles.read"].risk, BLUESKY_WEB_OPERATIONS["profiles.read"].state, BLUESKY_WEB_OPERATIONS["profiles.read"].reason),
+  "profiles.read": contract("bluesky", "profiles.read", BLUESKY_WEB_OPERATIONS["profiles.read"].risk, BLUESKY_WEB_OPERATIONS["profiles.read"].state, BLUESKY_WEB_OPERATIONS["profiles.read"].reason, BLUESKY_WEB_OPERATIONS["profiles.read"].contractVersion),
   "relationships.follow.set": contract("bluesky", "relationships.follow.set", BLUESKY_WEB_OPERATIONS["relationships.follow.set"].risk, BLUESKY_WEB_OPERATIONS["relationships.follow.set"].state, BLUESKY_WEB_OPERATIONS["relationships.follow.set"].reason),
   "replies.create": contract("bluesky", "replies.create", BLUESKY_WEB_OPERATIONS["replies.create"].risk, BLUESKY_WEB_OPERATIONS["replies.create"].state, BLUESKY_WEB_OPERATIONS["replies.create"].reason),
   "threads.publish": contract("bluesky", "threads.publish", BLUESKY_WEB_OPERATIONS["threads.publish"].risk, BLUESKY_WEB_OPERATIONS["threads.publish"].state, BLUESKY_WEB_OPERATIONS["threads.publish"].reason),
@@ -552,6 +558,7 @@ const linkedin = {
   "posts.read": contract("linkedin", "posts.read", "R1", "capture-required", "exact consumer-web post read requires a reviewed capture"),
   "comments.read": contract("linkedin", "comments.read", "R1", "capture-required", "exact comment collection requires a reviewed capture"),
   "messaging.send": contract("linkedin", "messaging.send", "R3", "capture-required", "createMessage mutation requires a reviewed capture and response binding"),
+  "media.publish": contract("linkedin", "media.publish", "R3", "capture-required", "member video upload registration, contiguous signed transfer, processing/finalization, audience and actor binding, created-share response, and independent exact-share readback require an authorized fixture"),
   "posts.publish": contract(
     "linkedin",
     "posts.publish",
@@ -606,10 +613,12 @@ const reddit = {
   "comments.create": contract("reddit", "comments.create", REDDIT_WEB_OPERATIONS["comments.create"].risk, REDDIT_WEB_OPERATIONS["comments.create"].state, REDDIT_WEB_OPERATIONS["comments.create"].reason),
   "comments.read": contract("reddit", "comments.read", REDDIT_WEB_OPERATIONS["comments.read"].risk, REDDIT_WEB_OPERATIONS["comments.read"].state, REDDIT_WEB_OPERATIONS["comments.read"].reason),
   "communities.membership.set": contract("reddit", "communities.membership.set", REDDIT_WEB_OPERATIONS["communities.membership.set"].risk, REDDIT_WEB_OPERATIONS["communities.membership.set"].state, REDDIT_WEB_OPERATIONS["communities.membership.set"].reason),
+  "content.delete": contract("reddit", "content.delete", REDDIT_WEB_OPERATIONS["content.delete"].risk, REDDIT_WEB_OPERATIONS["content.delete"].state, REDDIT_WEB_OPERATIONS["content.delete"].reason),
   "content.edit": contract("reddit", "content.edit", REDDIT_WEB_OPERATIONS["content.edit"].risk, REDDIT_WEB_OPERATIONS["content.edit"].state, REDDIT_WEB_OPERATIONS["content.edit"].reason),
   "content.save": contract("reddit", "content.save", REDDIT_WEB_OPERATIONS["content.save"].risk, REDDIT_WEB_OPERATIONS["content.save"].state, REDDIT_WEB_OPERATIONS["content.save"].reason),
   "feeds.read": contract("reddit", "feeds.read", REDDIT_WEB_OPERATIONS["feeds.read"].risk, REDDIT_WEB_OPERATIONS["feeds.read"].state, REDDIT_WEB_OPERATIONS["feeds.read"].reason),
   "media.read": contract("reddit", "media.read", REDDIT_WEB_OPERATIONS["media.read"].risk, REDDIT_WEB_OPERATIONS["media.read"].state, REDDIT_WEB_OPERATIONS["media.read"].reason),
+  "media.publish": contract("reddit", "media.publish", REDDIT_WEB_OPERATIONS["media.publish"].risk, REDDIT_WEB_OPERATIONS["media.publish"].state, REDDIT_WEB_OPERATIONS["media.publish"].reason, 9),
   "messaging.list": contract("reddit", "messaging.list", REDDIT_WEB_OPERATIONS["messaging.list"].risk, REDDIT_WEB_OPERATIONS["messaging.list"].state, REDDIT_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("reddit", "messaging.read", REDDIT_WEB_OPERATIONS["messaging.read"].risk, REDDIT_WEB_OPERATIONS["messaging.read"].state, REDDIT_WEB_OPERATIONS["messaging.read"].reason),
   "messaging.send": contract("reddit", "messaging.send", REDDIT_WEB_OPERATIONS["messaging.send"].risk, REDDIT_WEB_OPERATIONS["messaging.send"].state, REDDIT_WEB_OPERATIONS["messaging.send"].reason),
@@ -651,6 +660,7 @@ const substack = {
   "content.share": contract("substack", "content.share", SUBSTACK_WEB_OPERATIONS["content.share"].risk, SUBSTACK_WEB_OPERATIONS["content.share"].state, SUBSTACK_WEB_OPERATIONS["content.share"].reason),
   "feeds.read": contract("substack", "feeds.read", SUBSTACK_WEB_OPERATIONS["feeds.read"].risk, SUBSTACK_WEB_OPERATIONS["feeds.read"].state, SUBSTACK_WEB_OPERATIONS["feeds.read"].reason),
   "likes.set": contract("substack", "likes.set", SUBSTACK_WEB_OPERATIONS["likes.set"].risk, SUBSTACK_WEB_OPERATIONS["likes.set"].state, SUBSTACK_WEB_OPERATIONS["likes.set"].reason),
+  "media.publish": contract("substack", "media.publish", SUBSTACK_WEB_OPERATIONS["media.publish"].risk, SUBSTACK_WEB_OPERATIONS["media.publish"].state, SUBSTACK_WEB_OPERATIONS["media.publish"].reason),
   "media.read": contract("substack", "media.read", SUBSTACK_WEB_OPERATIONS["media.read"].risk, SUBSTACK_WEB_OPERATIONS["media.read"].state, SUBSTACK_WEB_OPERATIONS["media.read"].reason),
   "messaging.list": contract("substack", "messaging.list", SUBSTACK_WEB_OPERATIONS["messaging.list"].risk, SUBSTACK_WEB_OPERATIONS["messaging.list"].state, SUBSTACK_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("substack", "messaging.read", SUBSTACK_WEB_OPERATIONS["messaging.read"].risk, SUBSTACK_WEB_OPERATIONS["messaging.read"].state, SUBSTACK_WEB_OPERATIONS["messaging.read"].reason),

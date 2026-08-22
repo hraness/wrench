@@ -49,6 +49,7 @@ import {
 } from "./storage";
 import type { ReconcileRunResult } from "./web-session-recovery";
 import { getWebSessionContract, webSessionContractHash } from "./web-session-contracts";
+import { isPublicWebSessionInvocationAuthority } from "./web-session-authentication-policy";
 
 const installManifest = (
   manifest: Parameters<typeof installManifestWithRegistry>[0],
@@ -152,7 +153,7 @@ function xProviderManifest(): WrenchManifest {
   )) as WrenchManifest;
 }
 
-function bundledWebManifest(site: "linkedin" | "x"): WrenchManifest {
+function bundledWebManifest(site: "bluesky" | "linkedin" | "x"): WrenchManifest {
   return JSON.parse(readFileSync(
     join(import.meta.dir, "assets", "adapters", site, "wrench-web-adapter.json"),
     "utf8",
@@ -1885,6 +1886,7 @@ describe("doctor authenticated API readiness", () => {
           "comments.read",
           "contacts.list",
           "feeds.read",
+          "media.publish",
           "messaging.list",
           "messaging.read",
           "messaging.send",
@@ -3359,6 +3361,103 @@ describe("CLI previews and exit semantics", () => {
       expect(wrench.stdout()).toContain("\\u202e");
       expect(wrench.stdout()).toContain("\\u0085");
       expect(wrench.stderr()).toBe("");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("invokes the reviewed Bluesky public profile read without --auth and rejects an explicit locator", async () => {
+    const testState = state();
+    try {
+      installManifest(bundledWebManifest("bluesky"), {
+        force: false,
+        environment: testState.environment,
+      });
+      const wrench = capture();
+      expect(await main([
+        "invoke",
+        "bluesky-web",
+        "profiles.read",
+        "--input",
+        '{"handle":"hraness.bsky.social"}',
+        "--json",
+      ], testState.environment, wrench.output, {
+        revalidatePreparedCapability: (invocation) => {
+          expect(isPublicWebSessionInvocationAuthority(invocation.auth))
+            .toBeTrue();
+          const live: InvocationResult = {
+            receipt: {
+              schemaVersion: 4,
+              runId: "00000000-0000-4000-8000-000000000104",
+              planDigest: null,
+              adapter: {
+                id: invocation.manifest.id,
+                version: invocation.manifest.version,
+                hash: "a".repeat(64),
+              },
+              operation: invocation.operationId,
+              risk: "R1",
+              inputHash: "b".repeat(64),
+              auth: {
+                id: invocation.auth.id,
+                hash: sha256(canonicalJson(invocation.auth)),
+                kind: "public-web-session",
+              },
+              transport: "web-session-api",
+              webSessionContractHash: "c".repeat(64),
+              status: "succeeded",
+              dispatchStarted: false,
+              dispatch: { planned: 0, started: 0, verified: 0 },
+              startedAt: "2026-08-22T15:00:00.000Z",
+              finishedAt: "2026-08-22T15:00:01.000Z",
+              finalOrigin: "https://bsky.app",
+              error: null,
+            },
+            output: { metrics: { followers: { value: 52 } } },
+            replayed: false,
+            privateArtifactsPreserved: false,
+          };
+          return Promise.resolve({
+            cachedBefore: { status: "miss", key: "d".repeat(64) },
+            live,
+            cache: {
+              status: "stored",
+              publication: {
+                key: "d".repeat(64),
+                dataRevision: "e".repeat(64),
+                validatedAt: live.receipt.finishedAt,
+                dataChangedAt: live.receipt.finishedAt,
+                disposition: "created",
+              },
+            },
+          });
+        },
+      })).toBe(0);
+      expect(JSON.parse(wrench.stdout())).toMatchObject({
+        ok: true,
+        status: "succeeded",
+        output: { metrics: { followers: { value: 52 } } },
+      });
+      expect(wrench.stderr()).toBe("");
+
+      const explicit = capture();
+      expect(await main([
+        "invoke",
+        "bluesky-web",
+        "profiles.read",
+        "--input",
+        '{"handle":"hraness.bsky.social"}',
+        "--auth",
+        "bluesky-main",
+        "--json",
+      ], testState.environment, explicit.output, {
+        revalidatePreparedCapability: () => {
+          throw new Error("explicit auth must fail before execution");
+        },
+      })).toBe(3);
+      expect(explicit.stderr()).toContain(
+        "is public and does not accept an auth locator",
+      );
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

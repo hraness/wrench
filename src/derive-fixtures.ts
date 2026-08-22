@@ -29,6 +29,7 @@ const mediaTypeExtensions = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
   "image/webp": ".webp",
+  "video/mp4": ".mp4",
 } as const;
 
 export type DerivationFixtureMediaType = keyof typeof mediaTypeExtensions;
@@ -100,7 +101,7 @@ function stageOneFixture(
     const before = fstatSync(input, { bigint: true });
     const maximum = Math.min(MAX_DERIVATION_FIXTURE_BYTES, remainingBytes);
     if (!before.isFile() || before.isSymbolicLink() || before.size < 1n || before.size > BigInt(maximum)) {
-      throw fixtureError(`must be a non-empty regular image no larger than ${maximum} bytes`);
+      throw fixtureError(`must be a non-empty regular supported media file no larger than ${maximum} bytes`);
     }
     try {
       output = openSync(
@@ -154,7 +155,7 @@ function stageOneFixture(
 
     const detected = detectMediaType(prefix.subarray(0, prefixBytes));
     if (!isFixtureMediaType(detected)) {
-      throw fixtureError("content type must be PNG, JPEG, GIF, or WebP");
+      throw fixtureError("content type must be PNG, JPEG, GIF, WebP, or MP4");
     }
     const fileName = fixedFileName(index, detected);
     try {

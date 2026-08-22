@@ -1,0 +1,713 @@
+{
+  "schemaVersion": 4,
+  "id": "reddit-web",
+  "version": "1.7.0",
+  "displayName": "Reddit (Authenticated Web API)",
+  "surfaceId": "reddit",
+  "origins": [
+    "https://www.reddit.com"
+  ],
+  "browserDomains": [
+    "www.reddit.com"
+  ],
+  "operations": {
+    "profiles.read": {
+      "description": "Observed contract: read exact follower and karma counts for the viewer-bound current Reddit profile, then count the complete visible overview listing for the contributions metric.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Exact Reddit profile handle without u/",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "feeds.read": {
+      "description": "Observed contract: read one bounded signed-in Reddit home Listing through the exact JSON endpoint with explicit raw JSON and fullname pagination.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Exact reviewed Reddit feed",
+            "enum": [
+              "home"
+            ]
+          },
+          "after": {
+            "type": "string",
+            "description": "Fullname cursor returned by the preceding Listing",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum posts in the complete Listing page",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.read": {
+      "description": "Observed contract: read one exact Reddit post from the root of its target-bound comments Listing.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact t3_ Reddit post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "comments.read": {
+      "description": "Observed contract: read one bounded Reddit comment tree through the exact target-bound comments Listing without acknowledgement traffic.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact t3_ Reddit post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected comments",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.list": {
+      "description": "Observed contract: list one bounded legacy Reddit inbox, unread, or sent Listing with mark=false and no expanded replies.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Exact legacy Reddit message folder",
+            "enum": [
+              "inbox",
+              "unread",
+              "sent"
+            ]
+          },
+          "after": {
+            "type": "string",
+            "description": "Fullname cursor returned by the preceding Listing",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum messages or notifications in the Listing",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.read": {
+      "description": "Observed contract: read one exact legacy Reddit message thread through the selected Listing folder's mid filter with mark=false.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Exact legacy Reddit message folder containing the target",
+            "enum": [
+              "inbox",
+              "unread",
+              "sent"
+            ]
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact t4_ Reddit message fullname",
+            "minLength": 4,
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "folder",
+          "message_id"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "reactions.set": {
+      "description": "Capture-required contract reservation: the exact /api/vote implementation and independent target readback are deterministic-test proven, but an authorized low-stakes live fixture is still required.",
+      "risk": "R2",
+      "sideEffect": "Casts one human-confirmed vote direction on the exact Reddit link or comment; Reddit requires votes to proxy a human action one-for-one.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "thing_id": {
+            "type": "string",
+            "description": "Exact t1_ comment or t3_ post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "direction": {
+            "type": "number",
+            "description": "Exact desired vote direction: -1 down, 0 neutral, or 1 up",
+            "enum": [
+              -1,
+              0,
+              1
+            ]
+          }
+        },
+        "required": [
+          "thing_id",
+          "direction"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "reactions.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: the exact /api/save and /api/unsave implementation and independent target readback are deterministic-test proven, but an authorized low-stakes live fixture is still required.",
+      "risk": "R2",
+      "sideEffect": "Saves or unsaves the exact confirmed Reddit post or comment for the authenticated account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "thing_id": {
+            "type": "string",
+            "description": "Exact t1_ comment or t3_ post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired saved state"
+          }
+        },
+        "required": [
+          "thing_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.delete": {
+      "description": "Observed contract: delete one exact current-account Reddit post only after an authored-post pre-read binds its confirmed title, then independently verify exact-target absence.",
+      "risk": "R3",
+      "sideEffect": "Permanently deletes the exact confirmed Reddit post authored by the authenticated account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 2592000000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact t3_ Reddit post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "expected_title": {
+            "type": "string",
+            "description": "Exact current post title used for pre-delete confirmation",
+            "minLength": 1,
+            "maxLength": 280
+          }
+        },
+        "required": [
+          "post_id",
+          "expected_title"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "content.delete",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "communities.membership.set": {
+      "description": "Capture-required contract reservation: subscribe to or unsubscribe from one exact subreddit only after form variants, actor binding, and independent membership readback are reviewed.",
+      "risk": "R2",
+      "sideEffect": "Joins or leaves the exact confirmed Reddit community for the authenticated account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "community_id": {
+            "type": "string",
+            "description": "Exact t5_ subreddit fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "joined": {
+            "type": "boolean",
+            "description": "Exact desired community membership state"
+          }
+        },
+        "required": [
+          "community_id",
+          "joined"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "communities.membership.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "relationships.follow.set": {
+      "description": "Capture-required contract reservation: follow or unfollow one exact Reddit target only after the target class, mutation, and independent relationship readback are reviewed.",
+      "risk": "R2",
+      "sideEffect": "Sets the authenticated Reddit account's follow state for the exact confirmed target.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "description": "Exact reviewed Reddit target fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "followed": {
+            "type": "boolean",
+            "description": "Exact desired follow state"
+          }
+        },
+        "required": [
+          "target_id",
+          "followed"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "relationships.follow.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "media.read": {
+      "description": "Capture-required contract reservation: project bounded media metadata for one exact Reddit post without retaining expiring playback credentials.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact t3_ Reddit post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "media.publish": {
+      "description": "Observed contract: publish one exact MP4 plus PNG/JPEG poster through captured old-Reddit cookie-authenticated leases bound to the current modhash, same-origin AJAX marker, and exact ordered thirteen-field S3 declaration including its fixed bucket, exact S3 transfers, explicit post declarations, response-websocket target binding, and independent hosted-video readback.",
+      "risk": "R3",
+      "sideEffect": "Uploads one video and publishes one externally visible Reddit post in the exact confirmed community.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "community": {
+            "type": "string",
+            "description": "Exact destination subreddit name",
+            "minLength": 2,
+            "maxLength": 21
+          },
+          "title": {
+            "type": "string",
+            "description": "Exact video-post title",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional exact video-post body",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact plan-bound Reddit MP4",
+            "maxBytes": 536870912,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          },
+          "thumbnail": {
+            "type": "file",
+            "description": "Exact plan-bound PNG or JPEG poster for the native video",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png"
+            ]
+          },
+          "nsfw": {
+            "type": "boolean",
+            "description": "Explicit adult-content declaration"
+          },
+          "spoiler": {
+            "type": "boolean",
+            "description": "Explicit spoiler declaration"
+          },
+          "send_replies": {
+            "type": "boolean",
+            "description": "Explicit reply-notification choice"
+          }
+        },
+        "required": [
+          "community",
+          "title",
+          "media",
+          "thumbnail",
+          "nsfw",
+          "spoiler",
+          "send_replies"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "media.publish",
+        "contractVersion": 6,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "comments.create": {
+      "description": "Capture-required contract reservation: publish one top-level Reddit comment only after an authorized actor/root-bound fixture is reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible comment on the exact confirmed Reddit post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact t3_ Reddit post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact comment body",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "comments.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: publish one Reddit comment or legacy-message reply only after an authorized actor/root/parent-bound fixture is reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible reply to the exact confirmed Reddit parent.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "parent_id": {
+            "type": "string",
+            "description": "Exact t1_ comment or t4_ legacy-message parent fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact reply body",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "parent_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.edit": {
+      "description": "Capture-required contract reservation: edit one exact authored Reddit post or comment only after response and independent content readback are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Edits the externally visible body of the exact confirmed authored Reddit post or comment.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "thing_id": {
+            "type": "string",
+            "description": "Exact authored t1_ comment or t3_ post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact replacement body",
+            "minLength": 1,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "thing_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "content.edit",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: send one legacy private message or Reddit Chat message only through its separately reviewed transport and recipient binding.",
+      "risk": "R3",
+      "sideEffect": "Sends one externally visible message to the exact confirmed Reddit recipient.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "recipient": {
+            "type": "string",
+            "description": "Exact Reddit username",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "subject": {
+            "type": "string",
+            "description": "Exact legacy-message subject when applicable",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact message body",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "recipient",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.publish": {
+      "description": "Capture-required contract reservation: publish one Reddit self, link, image, or video post only after its exact submission and media workflow is reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible post in the exact confirmed Reddit community.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "community": {
+            "type": "string",
+            "description": "Exact destination subreddit name",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "title": {
+            "type": "string",
+            "description": "Exact post title",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact self-post body",
+            "minLength": 1,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "community",
+          "title"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "posts.publish",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.repost": {
+      "description": "Capture-required contract reservation: crosspost one exact Reddit post only after source, destination, actor, response, and independent readback are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible crosspost in the exact confirmed Reddit community.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact source t3_ Reddit post fullname",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "community": {
+            "type": "string",
+            "description": "Exact destination subreddit name",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "title": {
+            "type": "string",
+            "description": "Exact crosspost title",
+            "minLength": 1,
+            "maxLength": 280
+          }
+        },
+        "required": [
+          "post_id",
+          "community",
+          "title"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    }
+  }
+}
+

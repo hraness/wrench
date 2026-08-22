@@ -48,7 +48,7 @@ export const META_WEB_OPERATION_NAMES = Object.freeze({
   ] as const),
   threads: Object.freeze([
     "comments.read", "content.edit", "content.save", "content.share", "feeds.read",
-    "likes.set", "media.read", "messaging.list", "messaging.read", "messaging.send",
+    "likes.set", "media.publish", "media.read", "messaging.list", "messaging.read", "messaging.send",
     "posts.publish", "posts.quote", "posts.read", "posts.repost", "profiles.read",
     "relationships.follow.set", "replies.create", "threads.publish",
   ] as const),

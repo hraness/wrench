@@ -29,6 +29,7 @@ import {
   LinkedInPostCreateResponseError,
   type LinkedInPostBrowserTransport,
 } from "./linkedin-web-post-browser";
+import type { LinkedInProfileBrowserTransport } from "./linkedin-web-profile-browser";
 
 const MEMBER_ID = "123456789";
 const MEMBER_URN = `urn:li:fsd_profile:${MEMBER_ID}`;
@@ -1015,6 +1016,233 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       dispatchStarted: false,
     });
     expect(calls.map((call) => call.url.pathname)).toEqual(["/voyager/api/me"]);
+  });
+
+  test("restarts the whole personal stats read in one contained browser after only a direct current-member 401", async () => {
+    const directCalls: CapturedRequest[] = [];
+    const browserCalls: string[] = [];
+    const cleanupBarriers: Promise<void>[] = [];
+    const cleanupPublisher = () => undefined;
+    let closed = false;
+    const transport: LinkedInProfileBrowserTransport = {
+      currentIdentityResponse: () => {
+        browserCalls.push("identity");
+        return Promise.resolve(currentIdentityResponse());
+      },
+      readProfileHtml: (url) => {
+        browserCalls.push(`profile:${url}`);
+        return Promise.resolve(
+          '<a href="/mynetwork/network-manager/people-follow/followers"><span>7,553</span> followers</a>',
+        );
+      },
+      readConnectionsHtml: (url) => {
+        browserCalls.push(`connections:${url}`);
+        return Promise.resolve("<h1><span>4,877</span> connections</h1><button>Sort by:</button><label>Search with filters</label>");
+      },
+      readOrganizationHtml: () => Promise.reject(
+        new Error("personal read must not request a company page"),
+      ),
+      close: () => {
+        closed = true;
+        return Promise.resolve();
+      },
+    };
+    const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+      profile_url: "https://www.linkedin.com/in/0thernet",
+      include_connections: true,
+    }, linkedinAuth, {
+      dependencies: {
+        ...dependencies(directCalls, () => jsonResponse(
+          { error: "private-response-must-not-leak" },
+          401,
+        )),
+        now: () => Date.parse("2026-08-21T15:00:00.000Z"),
+        createProfileBrowserTransport: (_auth, options) => {
+          expect(options).toMatchObject({
+            maxOutputBytes: 4 * 1024 * 1024,
+            publishCleanupResource: cleanupPublisher,
+            timeoutMs: 1_000,
+          });
+          return Promise.resolve(transport);
+        },
+      },
+      registerCleanupBarrier: (barrier) => {
+        cleanupBarriers.push(barrier);
+        return cleanupPublisher;
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        target: { id: MEMBER_URN, url: "https://www.linkedin.com/in/0thernet/" },
+        metrics: {
+          followers: { value: 7553, precision: "exact" },
+          connections: { value: 4877, precision: "exact" },
+        },
+      },
+    });
+    expect(directCalls.map((call) => call.url.pathname)).toEqual([
+      "/voyager/api/me",
+    ]);
+    expect(browserCalls).toEqual([
+      "identity",
+      "profile:https://www.linkedin.com/in/0thernet/",
+      "connections:https://www.linkedin.com/in/0thernet/",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("private-response-must-not-leak");
+    expect(closed).toBeTrue();
+    expect(cleanupBarriers).toHaveLength(1);
+    await Promise.all(cleanupBarriers);
+  });
+
+  test("restarts the whole organization stats read in one contained browser after a direct current-member redirect", async () => {
+    const directCalls: CapturedRequest[] = [];
+    const browserCalls: string[] = [];
+    let closed = false;
+    const transport: LinkedInProfileBrowserTransport = {
+      currentIdentityResponse: () => {
+        browserCalls.push("identity");
+        return Promise.resolve(currentIdentityResponse());
+      },
+      readProfileHtml: () => Promise.reject(new Error("organization read crossed profile route")),
+      readConnectionsHtml: () => Promise.reject(new Error("organization read crossed connections route")),
+      readOrganizationHtml: (url) => {
+        browserCalls.push(`organization:${url}`);
+        return Promise.resolve(linkedInOrganizationStatsHtml());
+      },
+      close: () => {
+        closed = true;
+        return Promise.resolve();
+      },
+    };
+    const result = await executeLinkedInWebOperation(organizationRecipe(), {
+      organization_url: "https://www.linkedin.com/company/hraness",
+    }, linkedinAuth, {
+      dependencies: {
+        ...dependencies(directCalls, () => new Response(null, {
+          status: 302,
+          headers: {
+            "content-type": "text/html",
+            location: "https://www.linkedin.com/login",
+          },
+        })),
+        now: () => Date.parse("2026-08-21T15:00:00.000Z"),
+        createProfileBrowserTransport: () => Promise.resolve(transport),
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        target: {
+          id: "urn:li:fsd_company:123",
+          url: "https://www.linkedin.com/company/hraness/",
+        },
+        metrics: { followers: { value: 6, precision: "exact" } },
+      },
+    });
+    expect(directCalls.map((call) => call.url.pathname)).toEqual([
+      "/voyager/api/me",
+    ]);
+    expect(browserCalls).toEqual([
+      "identity",
+      "organization:https://www.linkedin.com/company/hraness/",
+    ]);
+    expect(closed).toBeTrue();
+  });
+
+  test("never opens the fallback target page for a crossed browser-bound personal slug", async () => {
+    const directCalls: CapturedRequest[] = [];
+    const browserCalls: string[] = [];
+    let closed = false;
+    const transport: LinkedInProfileBrowserTransport = {
+      currentIdentityResponse: () => {
+        browserCalls.push("identity");
+        return Promise.resolve(currentIdentityResponse());
+      },
+      readProfileHtml: () => Promise.reject(new Error("crossed slug reached profile page")),
+      readConnectionsHtml: () => Promise.reject(new Error("crossed slug reached connections page")),
+      readOrganizationHtml: () => Promise.reject(new Error("crossed slug reached organization page")),
+      close: () => {
+        closed = true;
+        return Promise.resolve();
+      },
+    };
+    const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+      profile_url: "https://www.linkedin.com/in/crossed-target",
+      include_connections: true,
+    }, linkedinAuth, {
+      dependencies: {
+        ...dependencies(directCalls, () => jsonResponse({}, 403)),
+        createProfileBrowserTransport: () => Promise.resolve(transport),
+      },
+    });
+
+    expect(result).toMatchObject({ status: "failed", output: null });
+    expect(directCalls.map((call) => call.url.pathname)).toEqual([
+      "/voyager/api/me",
+    ]);
+    expect(browserCalls).toEqual(["identity"]);
+    expect(closed).toBeTrue();
+  });
+
+  test("does not browser-fallback on identity-shape drift or on a later target-page rejection", async () => {
+    for (const mode of ["identity-shape", "target-page"] as const) {
+      const calls: CapturedRequest[] = [];
+      let browserCreates = 0;
+      const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+        profile_url: "https://www.linkedin.com/in/0thernet",
+        include_connections: true,
+      }, linkedinAuth, {
+        dependencies: {
+          ...dependencies(calls, (request) => {
+            if (request.url.pathname === "/voyager/api/me") {
+              return jsonResponse(mode === "identity-shape"
+                ? { data: { plainId: MEMBER_ID }, included: [] }
+                : currentIdentityResponse());
+            }
+            return jsonResponse({ secret: "later-private-response" }, 401);
+          }),
+          createProfileBrowserTransport: () => {
+            browserCreates += 1;
+            return Promise.reject(new Error("browser fallback was not allowed"));
+          },
+        },
+      });
+      expect(result).toMatchObject({ status: "failed", output: null });
+      expect(browserCreates).toBe(0);
+      expect(calls.map((call) => call.url.pathname)).toEqual(
+        mode === "identity-shape"
+          ? ["/voyager/api/me"]
+          : ["/voyager/api/me", "/in/0thernet/"],
+      );
+      expect(JSON.stringify(result)).not.toContain("later-private-response");
+    }
+  });
+
+  test("propagates contained-browser cleanup failure instead of publishing a successful stats result", async () => {
+    const calls: CapturedRequest[] = [];
+    const transport: LinkedInProfileBrowserTransport = {
+      currentIdentityResponse: () => Promise.resolve(currentIdentityResponse()),
+      readProfileHtml: () => Promise.resolve(
+        '<span>7,553</span> followers <a href="/mynetwork/network-manager/people-follow/followers">followers</a>',
+      ),
+      readConnectionsHtml: () => Promise.resolve(
+        "<h1><span>4,877</span> connections</h1><button>Sort by:</button><label>Search with filters</label>",
+      ),
+      readOrganizationHtml: () => Promise.reject(new Error("unexpected organization read")),
+      close: () => Promise.reject(new Error("contained cleanup failed")),
+    };
+    await expect(executeLinkedInWebOperation(personalProfileRecipe(), {
+      profile_url: "https://www.linkedin.com/in/0thernet",
+      include_connections: true,
+    }, linkedinAuth, {
+      dependencies: {
+        ...dependencies(calls, () => jsonResponse({}, 401)),
+        createProfileBrowserTransport: () => Promise.resolve(transport),
+      },
+    })).rejects.toThrow("contained cleanup failed");
   });
 
   test("creates one private linked Article draft, verifies exact unpublished readback, and never publishes", async () => {

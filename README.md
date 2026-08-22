@@ -224,7 +224,7 @@ snapshot of the exact validated query and bounded provider output. The same
 query can be returned later without opening a browser or provider connection:
 
 ```sh
-wrench auth bind reddit-main --site reddit-web
+wrench auth bind reddit-main --site reddit
 wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","limit":25}' --json
 wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","limit":25}' --cache-only --json
 ```
@@ -243,6 +243,15 @@ never erases the last good snapshot. Inputs, account subjects, cursors, private
 IDs, and provider output remain inside authenticated local ciphertext.
 Replacing or removing an auth locator rotates its local lifetime identity, so
 old projection and provider-session ciphertext cannot revive after recreation.
+
+For social video, inspect the exact installed schema before planning. Current
+source observes MP4 publication through `x-web posts.publish`, the official
+OAuth `x` and `linkedin` post contracts, and `reddit-web media.publish@9`.
+Reddit's route requires one plan-bound MP4, one plan-bound PNG/JPEG poster, and
+explicit post declarations. Bluesky, LinkedIn web, Substack Notes, TikTok,
+Instagram, Threads, and YouTube expose bounded `media.publish` reservations,
+but those routes remain network-inert while their provider-specific upload,
+processing, and independent readback contracts are `capture-required`.
 
 UI clients can render the current snapshot before awaiting revalidation:
 
