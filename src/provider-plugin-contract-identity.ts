@@ -85,9 +85,14 @@ const identities = Object.freeze({
   },
   "linkedin-web": {
     schemaVersion: 1,
-    pluginVersion: "1.2.0",
-    implementationSha256: "4fd6c293984be688a9273acb09bccea64a75134daca745b322fa8d33dfe9f97c",
+    pluginVersion: "1.3.0",
+    implementationSha256: "baa96307587140a460e39274dd2f0f0aab8bee125c34c62231038d0401a7e737",
     legacyCurrentReadImplementationSha256: [
+      "65d95a47f238acf3fac02116a1c671c7a9659dab766bd8081ccf69d4495dccda",
+      "dbda2aee2075a0a3726241fd24932113ae6c2d139ae1f7036ea827a335f7344c",
+      "9acb34f9ef5f59dd46b249766af236a3876a4975e0797e330f2975b3fd4ed643",
+      "951102310bd87f93ce0863c1a444371d62f412934cc805f82c9981f82edfe50e",
+      "4fd6c293984be688a9273acb09bccea64a75134daca745b322fa8d33dfe9f97c",
       "624e146839f4d20d361a949c3ddb726f0c6b741f4d094e873e82185cf3f03175",
       "9e2baa00763f311fbb4c651c513793a356021f8a703f08e06f52437c01d02089",
       "a3a61f60dce97960a35d131b603a9543db02d43407ded4403675b729205fa256",
@@ -248,7 +253,7 @@ const identities = Object.freeze({
 } as const satisfies Readonly<Record<string, ReviewedBuiltInContractIdentityV1>>);
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const MAXIMUM_LATER_CURRENT_IDENTITIES = 8;
+const MAXIMUM_LATER_CURRENT_IDENTITIES = 9;
 
 for (const [pluginId, identity] of Object.entries(identities)) {
   if (!SHA256_PATTERN.test(identity.implementationSha256)) {

@@ -10,6 +10,8 @@ import {
 } from "../browser";
 import {
   createLinkedInProfileBrowserTransport,
+  LinkedInProfileBrowserFailure,
+  LinkedInProfileBrowserResponseRejectedError,
 } from "./linkedin-web-profile-browser";
 
 const MEMBER_ID = "123456789";
@@ -23,6 +25,15 @@ const auth = {
   profile: "Persistent LinkedIn",
   browserExecutable: "/Applications/Chromium.app/Contents/MacOS/Chromium",
   trustUnfilteredEgress: true,
+  subject: `urn:li:fsd_profile:${MEMBER_ID}`,
+} as const satisfies WrenchAuth;
+
+const cookieSourceAuth = {
+  schemaVersion: 1,
+  id: "linkedin-profile-cookie-source-test",
+  kind: "cookie-source",
+  source: "chrome",
+  profile: "Profile 9",
   subject: `urn:li:fsd_profile:${MEMBER_ID}`,
 } as const satisfies WrenchAuth;
 
@@ -76,6 +87,26 @@ function browserBodyRecord(
             ?? createHash("sha256").update(bytes).digest("hex"),
         contentType,
         status: options.status ?? 200,
+      },
+    },
+  };
+}
+
+function browserRejectionRecord(
+  status: number,
+  contentType: string,
+): Readonly<Record<string, unknown>> {
+  return {
+    success: true,
+    result: {
+      origin: "https://www.linkedin.com/feed/",
+      result: {
+        authWall: false,
+        bodyBase64: null,
+        bodyBytes: 0,
+        bodySha256: null,
+        contentType,
+        status,
       },
     },
   };
@@ -186,10 +217,7 @@ describe("LinkedIn profile stats contained-browser transport", () => {
         referrer: PROFILE_URL,
       },
     ]);
-    expect(bootstrapCommands).toEqual([
-      ["open", "https://www.linkedin.com/robots.txt"],
-      ["wait", "2000"],
-    ]);
+    expect(bootstrapCommands).toEqual([]);
     const encodedBound = Math.ceil(1_024 / 3) * 4 + 64 * 1_024;
     expect(sessionOptions).not.toBeNull();
     expect((sessionOptions as unknown as CreateBrowserSessionOptions).maxOutputBytes)
@@ -243,6 +271,7 @@ describe("LinkedIn profile stats contained-browser transport", () => {
         response: browserBodyRecord(body, "application/json", {
           origin: "https://example.com/feed/",
         }),
+        category: "response-envelope",
         message: "LinkedIn stats browser returned a malformed evaluation envelope",
       },
       {
@@ -250,6 +279,7 @@ describe("LinkedIn profile stats contained-browser transport", () => {
         response: browserBodyRecord(body, "application/json", {
           bodyBase64: "not-base64!",
         }),
+        category: "body-envelope",
         message: "LinkedIn stats browser body envelope changed shape",
       },
       {
@@ -257,6 +287,7 @@ describe("LinkedIn profile stats contained-browser transport", () => {
         response: browserBodyRecord(body, "application/json", {
           bodyBytes: Buffer.byteLength(body) + 1,
         }),
+        category: "body-envelope",
         message: "LinkedIn stats browser body envelope failed integrity verification",
       },
       {
@@ -264,7 +295,24 @@ describe("LinkedIn profile stats contained-browser transport", () => {
         response: browserBodyRecord(body, "application/json", {
           bodySha256: "0".repeat(64),
         }),
+        category: "body-envelope",
         message: "LinkedIn stats browser body envelope failed integrity verification",
+      },
+      {
+        name: "impossible JSON authwall",
+        response: browserBodyRecord(body, "application/json", {
+          authWall: true,
+        }),
+        category: "response-envelope",
+        message: "LinkedIn stats browser returned a malformed authwall envelope",
+      },
+      {
+        name: "body-bearing provider rejection",
+        response: browserBodyRecord("private-token", "text/html", {
+          status: 401,
+        }),
+        category: "response-envelope",
+        message: "LinkedIn stats browser returned a malformed rejection envelope",
       },
     ] as const;
 
@@ -288,43 +336,53 @@ describe("LinkedIn profile stats contained-browser transport", () => {
         maxOutputBytes: 2 * 1024 * 1024,
         dependencies: { createBrowserSession: () => Promise.resolve(session) },
       });
-      const message = await transport.currentIdentityResponse().then(
-        () => "resolved",
-        (error: unknown) => error instanceof Error ? error.message : String(error),
+      const error = await transport.currentIdentityResponse().then(
+        () => null,
+        (failure: unknown) => failure,
       );
-      expect(message).toBe(fixture.message);
+      expect(error).toBeInstanceOf(LinkedInProfileBrowserFailure);
+      expect(error).toMatchObject({
+        category: fixture.category,
+        message: fixture.message,
+      });
       await transport.close();
     }
   });
 
-  test("retries one context-settlement failure but never retries a provider rejection or authwall", async () => {
+  test("never retries post-cookie context, origin, provider, or authwall failures", async () => {
     let evaluations = 0;
-    let contextWaits = 0;
-    let mode: "context" | "status" | "authwall" = "context";
+    let mode: "authwall" | "content-type" | "context" | "fetch" | "origin" | "session-cookie" | "status" = "context";
     const session: BrowserSession = {
       runBatch: (commands) => {
         const command = commands[0];
-        if (command?.[0] === "open") {
-          return Promise.resolve([{ success: true, result: {} }]);
-        }
-        if (command?.[0] === "wait") {
-          if (command[1] === "2000" && evaluations > 0) contextWaits += 1;
-          return Promise.resolve([{ success: true, result: {} }]);
-        }
         if (command?.[0] !== "eval" || command[1] === undefined) {
           throw new Error("unexpected LinkedIn retry browser command");
         }
         requestBinding(command[1]);
         evaluations += 1;
         if (mode === "context" && evaluations === 1) {
-          return Promise.reject(new Error("no default execution context"));
+          return Promise.reject(new Error("Cannot find default execution context"));
+        }
+        if (mode === "origin") {
+          return Promise.reject(new Error("unexpected LinkedIn origin"));
+        }
+        if (mode === "session-cookie") {
+          return Promise.reject(new Error(
+            "agent-browser batch failed with exit code 1: missing LinkedIn browser CSRF cookie",
+          ));
+        }
+        if (mode === "fetch") {
+          return Promise.reject(new Error(
+            "agent-browser batch failed with exit code 1: page.evaluate: TypeError: Failed to fetch",
+          ));
         }
         if (mode === "status") {
-          return Promise.resolve([browserBodyRecord("private-token", "text/html", {
-            status: 401,
-          })]);
+          return Promise.resolve([browserRejectionRecord(401, "text/html")]);
         }
-        if (mode === "authwall") {
+        if (mode === "content-type") {
+          return Promise.resolve([browserRejectionRecord(200, "text/html")]);
+        }
+        if (mode === "authwall" && evaluations > 1) {
           return Promise.resolve([browserBodyRecord("private-token", "text/html", {
             authWall: true,
           })]);
@@ -340,10 +398,26 @@ describe("LinkedIn profile stats contained-browser transport", () => {
       maxOutputBytes: 2 * 1024 * 1024,
       dependencies: { createBrowserSession: () => Promise.resolve(session) },
     });
-    await first.currentIdentityResponse();
-    expect(evaluations).toBe(2);
-    expect(contextWaits).toBe(1);
+    const contextError = await first.currentIdentityResponse()
+      .then(() => null, (error: unknown) => error);
+    expect(contextError).toBeInstanceOf(LinkedInProfileBrowserFailure);
+    expect(contextError).toMatchObject({ category: "execution-context" });
+    expect(evaluations).toBe(1);
     await first.close();
+
+    mode = "origin";
+    evaluations = 0;
+    const originRejected = await createLinkedInProfileBrowserTransport(auth, {
+      timeoutMs: 1_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      dependencies: { createBrowserSession: () => Promise.resolve(session) },
+    });
+    const originError = await originRejected.currentIdentityResponse()
+      .then(() => null, (error: unknown) => error);
+    expect(originError).toBeInstanceOf(LinkedInProfileBrowserFailure);
+    expect(originError).toMatchObject({ category: "bootstrap" });
+    expect(evaluations).toBe(1);
+    await originRejected.close();
 
     mode = "status";
     evaluations = 0;
@@ -352,14 +426,47 @@ describe("LinkedIn profile stats contained-browser transport", () => {
       maxOutputBytes: 2 * 1024 * 1024,
       dependencies: { createBrowserSession: () => Promise.resolve(session) },
     });
-    const statusMessage = await rejected.currentIdentityResponse()
-      .then(() => "resolved", (error: unknown) => error instanceof Error ? error.message : String(error));
-    expect(statusMessage).toBe(
-      "LinkedIn stats browser request returned an unreviewed status",
-    );
-    expect(statusMessage).not.toContain("private-token");
+    const statusError = await rejected.currentIdentityResponse()
+      .then(() => null, (error: unknown) => error);
+    expect(statusError).toBeInstanceOf(LinkedInProfileBrowserResponseRejectedError);
+    expect(statusError).toMatchObject({ status: 401, contentType: "text/html" });
+    expect(String(statusError)).not.toContain("private-token");
     expect(evaluations).toBe(1);
     await rejected.close();
+
+    mode = "content-type";
+    evaluations = 0;
+    const wrongContentType = await createLinkedInProfileBrowserTransport(auth, {
+      timeoutMs: 1_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      dependencies: { createBrowserSession: () => Promise.resolve(session) },
+    });
+    const contentTypeError = await wrongContentType.currentIdentityResponse()
+      .then(() => null, (error: unknown) => error);
+    expect(contentTypeError).toBeInstanceOf(LinkedInProfileBrowserResponseRejectedError);
+    expect(contentTypeError).toMatchObject({ status: 200, contentType: "text/html" });
+    expect(String(contentTypeError)).not.toContain("private-token");
+    expect(evaluations).toBe(1);
+    await wrongContentType.close();
+
+    for (const item of [
+      { mode: "session-cookie", category: "session-cookie" },
+      { mode: "fetch", category: "provider-fetch" },
+    ] as const) {
+      mode = item.mode;
+      evaluations = 0;
+      const commandRejected = await createLinkedInProfileBrowserTransport(auth, {
+        timeoutMs: 1_000,
+        maxOutputBytes: 2 * 1024 * 1024,
+        dependencies: { createBrowserSession: () => Promise.resolve(session) },
+      });
+      const commandError = await commandRejected.currentIdentityResponse()
+        .then(() => null, (error: unknown) => error);
+      expect(commandError).toBeInstanceOf(LinkedInProfileBrowserFailure);
+      expect(commandError).toMatchObject({ category: item.category });
+      expect(evaluations).toBe(1);
+      await commandRejected.close();
+    }
 
     mode = "authwall";
     evaluations = 0;
@@ -368,17 +475,18 @@ describe("LinkedIn profile stats contained-browser transport", () => {
       maxOutputBytes: 2 * 1024 * 1024,
       dependencies: { createBrowserSession: () => Promise.resolve(session) },
     });
-    const authwallMessage = await authwall.currentIdentityResponse()
+    await authwall.currentIdentityResponse();
+    const authwallMessage = await authwall.readProfileHtml(PROFILE_URL)
       .then(() => "resolved", (error: unknown) => error instanceof Error ? error.message : String(error));
     expect(authwallMessage).toBe(
       "LinkedIn stats browser reached the signed-out authwall",
     );
     expect(authwallMessage).not.toContain("private-token");
-    expect(evaluations).toBe(1);
+    expect(evaluations).toBe(2);
     await authwall.close();
   });
 
-  test("rewrites only the exact initial LinkedIn root batch before command execution", async () => {
+  test("rewrites only the auth-kind-specific initial batch before command execution", async () => {
     type CommandRunner = NonNullable<
       NonNullable<CreateBrowserSessionOptions["dependencies"]>["runCommand"]
     >;
@@ -391,7 +499,7 @@ describe("LinkedIn profile stats contained-browser transport", () => {
       calls.push({ command, options });
       return Promise.resolve({ exitCode: 0, stderr: "", stdout: "{}" });
     };
-    const createWrapped = async (): Promise<{
+    const createWrapped = async (browserAuth: WrenchAuth): Promise<{
       readonly close: () => Promise<void>;
       readonly run: CommandRunner;
     }> => {
@@ -401,7 +509,7 @@ describe("LinkedIn profile stats contained-browser transport", () => {
         close: () => Promise.resolve(),
         cleanup: () => Promise.resolve(),
       };
-      const transport = await createLinkedInProfileBrowserTransport(auth, {
+      const transport = await createLinkedInProfileBrowserTransport(browserAuth, {
         timeoutMs: 1_000,
         maxOutputBytes: 2 * 1024 * 1024,
         dependencies: {
@@ -425,21 +533,38 @@ describe("LinkedIn profile stats contained-browser transport", () => {
       maxOutputBytes: 1_024,
     });
 
-    const exact = await createWrapped();
+    const profile = await createWrapped(auth);
+    const exactBlankOptions = Object.freeze({
+      ...baseOptions,
+      stdin: '[["open","about:blank"]]',
+    });
+    await profile.run(command, exactBlankOptions);
+    expect(calls[0]?.command).toBe(command);
+    expect(calls[0]?.options).toEqual({
+      ...exactBlankOptions,
+      stdin: '[["open","https://www.linkedin.com/robots.txt"]]',
+    });
+    expect(calls[0]?.options).not.toBe(exactBlankOptions);
+
+    await profile.run(command, exactBlankOptions);
+    expect(calls[1]?.options).toBe(exactBlankOptions);
+    await profile.close();
+
+    const exact = await createWrapped(cookieSourceAuth);
     const exactRootOptions = Object.freeze({
       ...baseOptions,
       stdin: '[["open","https://www.linkedin.com"]]',
     });
     await exact.run(command, exactRootOptions);
-    expect(calls[0]?.command).toBe(command);
-    expect(calls[0]?.options).toEqual({
+    expect(calls[2]?.command).toBe(command);
+    expect(calls[2]?.options).toEqual({
       ...exactRootOptions,
       stdin: '[["open","https://www.linkedin.com/robots.txt"]]',
     });
-    expect(calls[0]?.options).not.toBe(exactRootOptions);
+    expect(calls[2]?.options).not.toBe(exactRootOptions);
 
     await exact.run(command, exactRootOptions);
-    expect(calls[1]?.options).toBe(exactRootOptions);
+    expect(calls[3]?.options).toBe(exactRootOptions);
     const cookieOptions = Object.freeze({
       ...baseOptions,
       stdin: '[["cookies","set","li_at","fixture","--url","https://www.linkedin.com"]]',
@@ -450,21 +575,21 @@ describe("LinkedIn profile stats contained-browser transport", () => {
     });
     await exact.run(command, cookieOptions);
     await exact.run(command, evaluationOptions);
-    expect(calls[2]?.options).toBe(cookieOptions);
-    expect(calls[3]?.options).toBe(evaluationOptions);
+    expect(calls[4]?.options).toBe(cookieOptions);
+    expect(calls[5]?.options).toBe(evaluationOptions);
     await exact.close();
 
-    const nonExact = await createWrapped();
+    const nonExact = await createWrapped(cookieSourceAuth);
     const whitespaceVariant = Object.freeze({
       ...baseOptions,
       stdin: '[[ "open", "https://www.linkedin.com" ]]',
     });
     await nonExact.run(command, whitespaceVariant);
-    expect(calls[4]?.options).toBe(whitespaceVariant);
+    expect(calls[6]?.options).toBe(whitespaceVariant);
     await nonExact.close();
   });
 
-  test("retries only one fixed pre-identity command after agent-browser reports a missing default context", async () => {
+  test("retries only the cookie-source root and never the browser-profile blank navigation", async () => {
     let capturedOptions: CreateBrowserSessionOptions | null = null;
     let commandCalls = 0;
     let settlements = 0;
@@ -484,7 +609,7 @@ describe("LinkedIn profile stats contained-browser transport", () => {
       close: () => Promise.resolve(),
       cleanup: () => Promise.resolve(),
     };
-    const transport = await createLinkedInProfileBrowserTransport(auth, {
+    const transport = await createLinkedInProfileBrowserTransport(cookieSourceAuth, {
       timeoutMs: 1_000,
       maxOutputBytes: 2 * 1024 * 1024,
       dependencies: {
@@ -508,7 +633,7 @@ describe("LinkedIn profile stats contained-browser transport", () => {
       environment: {},
       timeoutMs: 1_000,
       maxOutputBytes: 1_024,
-      stdin: JSON.stringify([["wait", "2000"]]),
+      stdin: JSON.stringify([["open", "https://www.linkedin.com"]]),
     } as const;
     expect(await wrapped(["agent-browser", "batch"], commandOptions))
       .toEqual({ exitCode: 0, stderr: "", stdout: "{}" });
@@ -522,6 +647,38 @@ describe("LinkedIn profile stats contained-browser transport", () => {
     expect(commandCalls).toBe(3);
     expect(settlements).toBe(1);
     await transport.close();
+
+    let profileOptions: CreateBrowserSessionOptions | null = null;
+    let profileCalls = 0;
+    let profileSettlements = 0;
+    const profileTransport = await createLinkedInProfileBrowserTransport(auth, {
+      timeoutMs: 1_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      dependencies: {
+        createBrowserSession: (_manifest, _auth, options) => {
+          profileOptions = options;
+          return Promise.resolve(session);
+        },
+        runCommand: () => {
+          profileCalls += 1;
+          return Promise.resolve(contextFailure);
+        },
+        settleContext: () => {
+          profileSettlements += 1;
+          return Promise.resolve();
+        },
+      },
+    });
+    const profileWrapped = (profileOptions as unknown as CreateBrowserSessionOptions)
+      .dependencies?.runCommand;
+    if (profileWrapped === undefined) throw new Error("missing LinkedIn profile command wrapper");
+    expect(await profileWrapped(["agent-browser", "batch"], {
+      ...commandOptions,
+      stdin: JSON.stringify([["open", "about:blank"]]),
+    })).toEqual(contextFailure);
+    expect(profileCalls).toBe(1);
+    expect(profileSettlements).toBe(0);
+    await profileTransport.close();
   });
 
   test("fails cleanup closed when private browser artifact removal is not verified", async () => {

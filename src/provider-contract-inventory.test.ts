@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "a45327d02ce6b65d178c64e9d2a8419c6b68f1d1c5363f559a508343b504e297";
+  "83d6b42f7e3b239e231bda2bae42598344878a4db68a8eb599e2fb2281f092fc";
 const predecessorLegacyInventorySha256 = [
   "a05af2ab437e6be673751772b7c05b760d7e20ec59ea19b9f472abbcd6e0f63b",
   "8c22749bf89775d544889ae42ce82f949fe23b5b4b125726c7979d2a83928f21",
@@ -13,8 +13,13 @@ const predecessorLegacyInventorySha256 = [
   "41762fae84335551671ca1ad0e65ea05fca26b21887a4c6c4d1192d34600855a",
   "8ff7a9394daffc6377335b219976a97e7cbd476178d955f7523a8f77e5e04626",
   "f0a2cb0919313de2b837062ea0075556a628eaa0701532774d7683b99aa68802",
-  "945a0008c9cfe3643691511766dcbb2bd00dd299eb8db7d029b536c930060c1e",
-  "c3a5799cfd0484fc500f9e167343147c2f7626adb034f590e2e11886918a30ff",
+  "960c43b683e98d1a04a43e9bfd4f9d154aee9de79c62623d0db17fe74e9353eb",
+  "970e31a5a0ab0f93a267b5859683cabaea58b2a73cfb7bfddf1a132aaa5d8070",
+  "dfa6917ce22b65bee2a7faa31db7e33d9a07da6882f8247cf7a0657bde673400",
+  "7dd48dd60e8c9b5e2c609409bf33d0e8ebbc62d8c2c500d7ea25c83bbfbbc48e",
+  "9fbec27b0fc78e6881092336d5c18501125c9c9cd7c123d8258ac99bb374f217",
+  "f9f0feaf7f6bd5a11df12421e7517e44365238ba1508faa707ab24f60bc2558f",
+  "ced281b781c1f73af8315245a68dfb5ea9fee9f737671e18fe1cd3ee5015ed20",
   "25bb7f467fd40e044764c82de8be108405ec66e275a5c02d0682bd1ee058b4f8",
   "5e0b6f9d4265074dee0b125772f39ac8457bb4b5db703dee1e4457d30828fef0",
 ];
@@ -210,7 +215,7 @@ describe("durable provider contract inventory", () => {
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 4,
         currentOnlySha256: "b68a0e0f8f9be77f46d4ae7a5aa3a75de2ee6e420e8dc588247390bd1600553c",
-        legacyRows: [307, 307, 307, 307, 307, 307, 307, 174, 44, 23, 23],
+        legacyRows: [307, 307, 307, 307, 307, 307, 307, 174, 44, 23, 23, 23, 23, 23, 23, 23],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,
         rejectedUnknown: true,

@@ -6,7 +6,12 @@ import { join } from "node:path";
 import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
 import type { WrenchAuth } from "../auth";
+import { PreservedBrowserArtifactsError } from "../browser";
 import type { WebSessionRecipe } from "../model";
+import {
+  listWebSessionCleanupAdmissions,
+  withWebSessionCleanupAdmission,
+} from "../web-session-cleanup-admission";
 import { canonicalJson } from "../canonical-json";
 import {
   buildLinkedInArticleContent,
@@ -29,7 +34,11 @@ import {
   LinkedInPostCreateResponseError,
   type LinkedInPostBrowserTransport,
 } from "./linkedin-web-post-browser";
-import type { LinkedInProfileBrowserTransport } from "./linkedin-web-profile-browser";
+import {
+  LinkedInProfileBrowserFailure,
+  LinkedInProfileBrowserResponseRejectedError,
+  type LinkedInProfileBrowserTransport,
+} from "./linkedin-web-profile-browser";
 
 const MEMBER_ID = "123456789";
 const MEMBER_URN = `urn:li:fsd_profile:${MEMBER_ID}`;
@@ -1150,6 +1159,187 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       "organization:https://www.linkedin.com/company/hraness/",
     ]);
     expect(closed).toBeTrue();
+  });
+
+  test("propagates preserved profile-browser artifacts through cleanup admission for both readers", async () => {
+    const cases = [
+      {
+        label: "personal",
+        recipe: personalProfileRecipe(),
+        input: {
+          profile_url: "https://www.linkedin.com/in/0thernet",
+          include_connections: true,
+        },
+      },
+      {
+        label: "organization",
+        recipe: organizationRecipe(),
+        input: {
+          organization_url: "https://www.linkedin.com/company/hraness",
+        },
+      },
+    ] as const;
+    const root = mkdtempSync(join(tmpdir(), "wrench-linkedin-profile-cleanup-"));
+    const environment = {
+      WRENCH_STATE_HOME: join(root, "wrench-home"),
+      HOME: root,
+    };
+    try {
+      for (const [index, item] of cases.entries()) {
+        const directCalls: CapturedRequest[] = [];
+        const failure = new PreservedBrowserArtifactsError(
+          `private ${item.label} browser artifact detail`,
+          `synthetic-${item.label}-recovery-handle`,
+          new Error(`private ${item.label} cleanup cause`),
+        );
+        let browserCreates = 0;
+        const authId = `linkedin-${item.label}-cleanup`;
+        const operation = withWebSessionCleanupAdmission({
+          runId: `00000000-0000-4000-8000-00000000000${index + 1}`,
+          pluginId: "linkedin-web",
+          pluginVersion: "1.3.0",
+          pluginImplementationHash: "a".repeat(64),
+          adapterId: "linkedin-web",
+          adapterHash: "b".repeat(64),
+          surfaceId: "linkedin",
+          authId,
+          authHash: "c".repeat(64),
+        }, environment, (registerCleanupBarrier) =>
+          executeLinkedInWebOperation(
+            item.recipe,
+            item.input,
+            linkedinAuth,
+            {
+              dependencies: {
+                ...dependencies(directCalls, () => jsonResponse({}, 401)),
+                createProfileBrowserTransport: (_auth, options) => {
+                  browserCreates += 1;
+                  expect(options.publishCleanupResource).toBeFunction();
+                  return Promise.reject(failure);
+                },
+              },
+              registerCleanupBarrier,
+            },
+          ));
+
+        const [operationOutcome] = await Promise.allSettled([operation]);
+        expect(operationOutcome?.status).toBe("rejected");
+        if (operationOutcome?.status !== "rejected") {
+          throw new Error(`${item.label} profile read returned a normal result`);
+        }
+        expect(operationOutcome.reason).toBe(failure);
+        expect(browserCreates).toBe(1);
+        expect(directCalls.map((call) => call.url.pathname)).toEqual([
+          "/voyager/api/me",
+        ]);
+        const admissions = listWebSessionCleanupAdmissions(environment);
+        expect(admissions).toHaveLength(index + 1);
+        expect(admissions.find((entry) =>
+          "claim" in entry && entry.claim.authId === authId))
+          .toMatchObject({
+            claim: {
+              surfaceId: "linkedin",
+              authId,
+              containment: { status: "cleanup-unsafe" },
+              resources: [{ status: "unpublished" }],
+            },
+          });
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("publishes only the typed bounded contained-browser response category", async () => {
+    const privateDiagnostic = "private-browser-response-body";
+    const directCalls: CapturedRequest[] = [];
+    let closed = false;
+    const transport: LinkedInProfileBrowserTransport = {
+      currentIdentityResponse: () => Promise.reject(
+        new LinkedInProfileBrowserResponseRejectedError(401, "text/html"),
+      ),
+      readProfileHtml: () => Promise.reject(new Error(privateDiagnostic)),
+      readConnectionsHtml: () => Promise.reject(new Error(privateDiagnostic)),
+      readOrganizationHtml: () => Promise.reject(new Error(privateDiagnostic)),
+      close: () => {
+        closed = true;
+        return Promise.resolve();
+      },
+    };
+    const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+      profile_url: "https://www.linkedin.com/in/0thernet",
+      include_connections: true,
+    }, linkedinAuth, {
+      dependencies: {
+        ...dependencies(directCalls, () => jsonResponse({}, 401)),
+        createProfileBrowserTransport: () => Promise.resolve(transport),
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+      error: expect.stringContaining("first-party page response 401/text/html"),
+    });
+    expect(JSON.stringify(result)).not.toContain(privateDiagnostic);
+    expect(closed).toBeTrue();
+  });
+
+  test("prioritizes closed contained-browser stages over legacy message heuristics", async () => {
+    const cases = [
+      {
+        expected: "contained-browser startup",
+        failure: new LinkedInProfileBrowserFailure(
+          "startup",
+          "private contained browser session detail",
+        ),
+        startup: true,
+      },
+      {
+        expected: "signed-in browser CSRF cookie",
+        failure: new LinkedInProfileBrowserFailure(
+          "session-cookie",
+          "private browser cookie detail",
+        ),
+        startup: false,
+      },
+      {
+        expected: "contained-browser origin bootstrap",
+        failure: new LinkedInProfileBrowserFailure(
+          "bootstrap",
+          "private browser realm detail",
+        ),
+        startup: false,
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const privateDiagnostic = item.failure.message;
+      const transport: LinkedInProfileBrowserTransport = {
+        currentIdentityResponse: () => Promise.reject(item.failure),
+        readProfileHtml: () => Promise.reject(new Error("must not read profile")),
+        readConnectionsHtml: () => Promise.reject(new Error("must not read connections")),
+        readOrganizationHtml: () => Promise.reject(new Error("must not read organization")),
+        close: () => Promise.resolve(),
+      };
+      const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+        profile_url: "https://www.linkedin.com/in/0thernet",
+        include_connections: true,
+      }, linkedinAuth, {
+        dependencies: {
+          ...dependencies([], () => jsonResponse({}, 401)),
+          createProfileBrowserTransport: () => item.startup
+            ? Promise.reject(item.failure)
+            : Promise.resolve(transport),
+        },
+      });
+      expect(result).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining(item.expected),
+      });
+      expect(JSON.stringify(result)).not.toContain(privateDiagnostic);
+    }
   });
 
   test("never opens the fallback target page for a crossed browser-bound personal slug", async () => {
