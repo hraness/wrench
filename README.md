@@ -75,10 +75,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.12.0` tag:
+Install the current immutable CLI release from the `v0.13.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.12.0
+bun add --global github:hraness/wrench#v0.13.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -102,7 +102,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.12.0
+bun add github:hraness/wrench#v0.13.0
 ```
 
 ```ts
@@ -368,11 +368,11 @@ moving Homebrew formula name. The command above is sufficient only while
 from the [official CLI releases](https://github.com/beeper/cli/releases)
 asset and install its `beeper` executable at
 `<WRENCH_STATE_HOME>/tools/beeper/0.6.2/beeper` (the default state home is
-`~/.local/share/wrench`). Wrench requires archive SHA-256
-`688ccde7e7d044d33980cd06474bf1ae7215ccf8ca79967262fa3bfb85a2589a`
-and executable SHA-256
-`48aa895449129c793a212ea19f69a534adc34a8adc4037ca1d7da9e648716425`;
-it rejects every other version or byte sequence before reading private data.
+`~/.local/share/wrench`). The reviewed release archive has SHA-256
+`688ccde7e7d044d33980cd06474bf1ae7215ccf8ca79967262fa3bfb85a2589a`.
+After installation, Wrench enforces executable SHA-256
+`48aa895449129c793a212ea19f69a534adc34a8adc4037ca1d7da9e648716425`
+and rejects every other executable byte sequence before reading private data.
 
 Binding hashes the stable local self-account coordinate before storing or
 printing it. The first bind or read may take longer while the pinned CLI unpacks
@@ -416,15 +416,18 @@ directory is mode 0700, and every file is mode 0600 with a canonical SHA-256
 digest.
 
 Each connected account has exactly one normalized self participant, anchored by
-the account user's stable Beeper ID. Before record allocation, Wrench makes a
-bounded hash-only pass over the selected chats. Explicit chat `isSelf` values
-and message `isSender` values establish account-local self and peer evidence.
-Later evidence applies to earlier chats, message files stay bound to their
-validated SHA-256 digests, and contradictory evidence stops the export without
-publishing. Reactions inherit a normalized participant reference while their
-raw provider tuple remains only inside a composite hash. Nonunique provider
-reaction IDs are preserved with the categorical
-`reaction-provider-id-non-unique` warning.
+the account user's stable Beeper ID. Before emitting records, Wrench proves a
+deterministic candidate chat prefix against the record, byte, and participant
+work bounds, then derives only hashed identity evidence from that prefix. If
+normalization changes the admitted prefix, Wrench discards the provisional
+state and repeats with the shorter prefix. Explicit chat `isSelf` values and
+message `isSender` values establish account-local self and peer evidence. Later
+admitted evidence applies to earlier chats, a rejected suffix cannot affect the
+retained facts, message files stay bound to their validated SHA-256 digests, and
+contradictory retained evidence stops the export without publishing. Reactions
+inherit a normalized participant reference while their raw provider tuple
+remains only inside a composite hash. Nonunique provider reaction IDs are
+preserved with the categorical `reaction-provider-id-non-unique` warning.
 
 The JSON result reports the manifest path and digest, record counts,
 completeness, and warnings. `--limit-chats` is global across the account
@@ -432,9 +435,13 @@ sequence. `--limit-messages` and `--max-participants` apply to each chat, which
 matches the official CLI flags. Reached limits are recorded as truncation.
 Wrench always passes hard ceilings of 100,000 chats and 1,000,000 messages per
 chat, and it emits a coherent truncated bundle before the 500,000-record or 512
-MiB bundle ceiling. One chat JSON file is limited to 64 MiB so foreign input
-cannot force a multi-gigabyte allocation; an oversized chat is omitted with
-explicit truncated completeness and a warning. While the official CLI is
+MiB bundle ceiling. Conversion also stops at a deterministic chat boundary
+before 250,000 participant occurrences across account anchors, rosters, message
+senders, reaction actors, and implied self insertions for direct chats. This
+bounds normalization work even when many chats repeat the same participants.
+One chat JSON file is limited to 64 MiB so foreign input cannot force a
+multi-gigabyte allocation; an oversized chat is omitted with explicit truncated
+completeness and a warning. While the official CLI is
 running, Wrench monitors the complete private working tree against a 4 GiB
 ceiling every 500 ms and independently checks that at least 2 GiB remains free
 on the filesystem. This is a monitored safety ceiling, not an operating-system
@@ -459,9 +466,10 @@ lands between the atomic rename and lease release, recovery recognizes the
 same directory at the requested output path and preserves the published
 bundle.
 
-The Beeper Desktop API MCP project is intended to expose Beeper tools to an MCP
-client. This export path uses the official CLI because Wrench needs a pinned,
-bounded, read-only file snapshot that it can validate and publish atomically.
+The [Beeper Desktop API MCP project](https://github.com/beeper/desktop-api-mcp)
+is intended to expose Beeper tools to an MCP client. This export path uses the
+official CLI because Wrench needs a pinned, bounded, read-only file snapshot
+that it can validate and publish atomically.
 
 Contact and chat lists are bounded to 200 records because CLI 0.6.2 exposes no
 continuation cursor for those commands. Message pages derive the next

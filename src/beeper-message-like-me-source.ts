@@ -83,6 +83,7 @@ const MAX_RAW_CACHE_SYMLINK_TARGET_BYTES = 512;
 const RAW_WORKING_MONITOR_INTERVAL_MS = 500;
 const RAW_WORKING_RECOVERY_GRACE_MS = 5 * 60 * 1_000;
 const DEFAULT_MAX_PARTICIPANTS = 500;
+const MAX_PARTICIPANT_OCCURRENCES = 250_000;
 const DEFAULT_TIMEOUT_MS = 6 * 60 * 60 * 1_000;
 
 type JsonRecord = Readonly<Record<string, unknown>>;
@@ -184,6 +185,10 @@ export type BeeperMessageLikeMeSourceDependencies = Readonly<{
   maxBundleBytes?: number;
   /** Test-only seam for exercising the per-chat JSON allocation cap. */
   maxMessagesJsonBytes?: number;
+  /** Test-only seam for exercising the participant-occurrence work cap. */
+  maxParticipantOccurrences?: number;
+  /** Test-only seam for mutating a fixture between bounded alias passes. */
+  onSelfAliasRefinementPass?: (pass: number) => Promise<void>;
   runCli?: (
     invocation: BeeperExportCliInvocation,
   ) => Promise<BeeperCliInvocationResult>;
@@ -207,14 +212,14 @@ type ParsedLimits = Readonly<{
   timeoutMs: number;
 }>;
 
-type ParticipantFact = {
+type ParticipantFact = Readonly<{
   readonly id: string;
   readonly accountId: string;
   readonly providerId: string;
-  displayName: string | null;
-  handle: string | null;
-  isSelf: boolean | null;
-};
+  readonly displayName: string | null;
+  readonly handle: string | null;
+  readonly isSelf: boolean | null;
+}>;
 
 type PrivateDirectoryIdentity = Readonly<{
   device: number;
@@ -231,6 +236,7 @@ type ConversationScan = Readonly<{
   messagesSha256: string;
   observedAt: string;
   participantIds: readonly string[];
+  participantFactChanges: readonly ParticipantFact[];
   participantsComplete: boolean;
   startedAt: string | null;
   lastMessageAt: string | null;
@@ -261,8 +267,13 @@ type ValidatedAccountShard = Readonly<{
 type SelfAliasPrepass = Readonly<{
   aliasesByAccount: ReadonlyMap<string, ReadonlySet<string>>;
   coveredChats: readonly ValidatedShardChat[];
+  bundleByteLimitReached: boolean;
+  bundleRecordLimitReached: boolean;
   evidenceLimitReached: boolean;
   messagesSha256ByPath: ReadonlyMap<string, string>;
+  participantOccurrenceLimitReached: boolean;
+  provisionalRecordBytes: number;
+  provisionalRecordCount: number;
 }>;
 
 type BeeperCliStoreSnapshot = Readonly<{
@@ -1852,16 +1863,14 @@ async function prepassSelfAliases(
   accounts: readonly BeeperAccountProjection[],
   accountsById: ReadonlyMap<string, BeeperAccountProjection>,
   maxMessagesJsonBytes: number,
-  maxEvidence: number,
+  maxBundleRecords: number,
+  maxBundleBytes: number,
+  maxParticipantOccurrences: number,
+  observedAtByAccount: ReadonlyMap<string, string>,
   signal: AbortSignal | undefined,
   heartbeat: () => void,
+  onRefinementPass: ((pass: number) => Promise<void>) | undefined,
 ): Promise<SelfAliasPrepass> {
-  const aliasesByAccount = new Map<string, Set<string>>();
-  const peerEvidenceByAccount = new Map<string, Set<string>>();
-  const evidenceIdsByAccount = new Map<string, Set<string>>();
-  const coveredChats: ValidatedShardChat[] = [];
-  const messagesSha256ByPath = new Map<string, string>();
-  let evidenceCount = 0;
   const evidenceSet = (
     collection: Map<string, Set<string>>,
     accountId: string,
@@ -1873,116 +1882,523 @@ async function prepassSelfAliases(
     }
     return values;
   };
-  for (const account of accounts) {
-    if (account.user.isSelf === false) {
-      return fail("Beeper account user contradicts its self identity anchor");
-    }
-    const coordinate = digest([
-      "beeper-self-alias-v1",
-      account.accountId,
-      account.user.id,
-    ]);
-    evidenceSet(aliasesByAccount, account.accountId).add(coordinate);
-    evidenceSet(evidenceIdsByAccount, account.accountId).add(coordinate);
-    evidenceCount += 1;
-  }
+  type EvidencePass = Readonly<{
+    aliasesByAccount: ReadonlyMap<string, ReadonlySet<string>>;
+    coveredChats: readonly ValidatedShardChat[];
+    evidenceLimitReached: boolean;
+    identityConflict: boolean;
+    messagesSha256ByPath: ReadonlyMap<string, string>;
+    oversizedMessagesPaths: ReadonlySet<string>;
+    participantOccurrenceLimitReached: boolean;
+  }>;
+  type BudgetPass = Readonly<{
+    admittedChats: readonly ValidatedShardChat[];
+    bundleByteLimitReached: boolean;
+    bundleRecordLimitReached: boolean;
+    provisionalRecordBytes: number;
+    provisionalRecordCount: number;
+  }>;
+  const boundMessagesSha256ByPath = new Map<string, string>();
+  const boundOversizedMessagesPaths = new Set<string>();
 
-  let evidenceLimitReached = evidenceCount > maxEvidence;
-  for (const validated of chats) {
-    if (evidenceLimitReached) break;
-    heartbeat();
-    throwIfAborted(signal);
-    const chatDocument = await readOwnedJsonDocument(
-      validated.chatPath,
-      validated.root,
-      MAX_CHAT_JSON_BYTES,
-      false,
-      signal,
-    );
-    if (chatDocument.sha256 !== validated.chatSha256) {
-      return fail("official export chat changed before self-alias prepass");
-    }
-    const chat = parseBeeperExportConversation(chatDocument.value, accounts);
-    if (
-      chat.id !== validated.chat.id
-      || chat.accountId !== validated.chat.accountId
-    ) return fail("official export chat identity changed before self-alias prepass");
-    const account = accountsById.get(chat.accountId);
-    if (account === undefined) return fail("official export chat references an unknown account");
-    const positiveEvidence = new Set<string>();
-    const peerEvidence = new Set<string>();
-    for (const participant of chat.participants.items) {
+  const collectEvidence = async (
+    candidateChats: readonly ValidatedShardChat[],
+  ): Promise<EvidencePass> => {
+    const aliasesByAccount = new Map<string, Set<string>>();
+    const peerEvidenceByAccount = new Map<string, Set<string>>();
+    const evidenceIdsByAccount = new Map<string, Set<string>>();
+    const coveredChats: ValidatedShardChat[] = [];
+    const messagesSha256ByPath = new Map<string, string>();
+    const oversizedMessagesPaths = new Set<string>();
+    let evidenceCount = 0;
+    let participantOccurrenceCount = 0;
+    for (const account of accounts) {
+      if (account.user.isSelf === false) {
+        return fail("Beeper account user contradicts its self identity anchor");
+      }
       const coordinate = digest([
         "beeper-self-alias-v1",
         account.accountId,
-        participant.id,
+        account.user.id,
       ]);
-      if (participant.isSelf === true) positiveEvidence.add(coordinate);
-      if (participant.isSelf === false) peerEvidence.add(coordinate);
+      evidenceSet(aliasesByAccount, account.accountId).add(coordinate);
+      evidenceSet(evidenceIdsByAccount, account.accountId).add(coordinate);
+      evidenceCount += 1;
+      participantOccurrenceCount += 1;
     }
-    if (await ownedFileSize(validated.messagesPath, validated.root) > maxMessagesJsonBytes) {
+    if (participantOccurrenceCount > maxParticipantOccurrences) {
+      return fail("connected Beeper accounts exceed the participant work bound");
+    }
+    let evidenceLimitReached = evidenceCount > maxBundleRecords;
+    let participantOccurrenceLimitReached = false;
+    for (const validated of candidateChats) {
+      if (evidenceLimitReached || participantOccurrenceLimitReached) break;
+      heartbeat();
+      throwIfAborted(signal);
+      const chatDocument = await readOwnedJsonDocument(
+        validated.chatPath,
+        validated.root,
+        MAX_CHAT_JSON_BYTES,
+        false,
+        signal,
+      );
+      if (chatDocument.sha256 !== validated.chatSha256) {
+        return fail("official export chat changed before self-alias prepass");
+      }
+      const chat = parseBeeperExportConversation(chatDocument.value, accounts);
+      if (
+        chat.id !== validated.chat.id
+        || chat.accountId !== validated.chat.accountId
+      ) return fail("official export chat identity changed before self-alias prepass");
+      const account = accountsById.get(chat.accountId);
+      if (account === undefined) {
+        return fail("official export chat references an unknown account");
+      }
+      const rosterOccurrences = chat.participants.items.length;
+      if (rosterOccurrences > maxParticipantOccurrences - participantOccurrenceCount) {
+        participantOccurrenceLimitReached = true;
+        break;
+      }
+      const messagesSize = await ownedFileSize(validated.messagesPath, validated.root);
+      const priorSha256 = boundMessagesSha256ByPath.get(validated.messagesPath);
+      if (messagesSize > maxMessagesJsonBytes) {
+        if (priorSha256 !== undefined) {
+          return fail("official export messages changed between self-alias passes");
+        }
+        boundOversizedMessagesPaths.add(validated.messagesPath);
+        oversizedMessagesPaths.add(validated.messagesPath);
+        participantOccurrenceCount += rosterOccurrences;
+        coveredChats.push(validated);
+        continue;
+      }
+      if (boundOversizedMessagesPaths.has(validated.messagesPath)) {
+        return fail("official export messages changed between self-alias passes");
+      }
+      const messagesDocument = await readOwnedJsonDocument(
+        validated.messagesPath,
+        validated.root,
+        maxMessagesJsonBytes,
+        false,
+        signal,
+      );
+      if (priorSha256 !== undefined && priorSha256 !== messagesDocument.sha256) {
+        return fail("official export messages changed between self-alias passes");
+      }
+      boundMessagesSha256ByPath.set(validated.messagesPath, messagesDocument.sha256);
+      const messages = parseBeeperExportMessages(
+        messagesDocument.value,
+        chat.accountId,
+        chat.id,
+        MAX_EXPORT_MESSAGES_PER_CHAT,
+      );
+      if (messages.length !== validated.expectedMessageCount) {
+        return fail("official export chat messages did not match completed state");
+      }
+      const reactionCount = messages.reduce(
+        (count, message) => count + message.reactions.length,
+        0,
+      );
+      const participantOccurrences = rosterOccurrences
+        + messages.length
+        + reactionCount
+        + (chat.type === "single" ? 1 : 0);
+      if (
+        !Number.isSafeInteger(reactionCount)
+        || !Number.isSafeInteger(participantOccurrences)
+      ) return fail("official export derived record count overflowed");
+      if (participantOccurrences > maxParticipantOccurrences - participantOccurrenceCount) {
+        participantOccurrenceLimitReached = true;
+        break;
+      }
+      const positiveEvidence = new Set<string>();
+      const peerEvidence = new Set<string>();
+      for (const participant of chat.participants.items) {
+        const coordinate = digest([
+          "beeper-self-alias-v1",
+          account.accountId,
+          participant.id,
+        ]);
+        if (participant.isSelf === true) positiveEvidence.add(coordinate);
+        if (participant.isSelf === false) peerEvidence.add(coordinate);
+      }
+      for (const message of messages) {
+        (message.isSender ? positiveEvidence : peerEvidence).add(digest([
+          "beeper-self-alias-v1",
+          account.accountId,
+          message.senderId,
+        ]));
+      }
+      const accountEvidenceIds = evidenceSet(evidenceIdsByAccount, account.accountId);
+      const candidateEvidence = new Set([...positiveEvidence, ...peerEvidence]);
+      let newEvidence = 0;
+      for (const sourceId of candidateEvidence) {
+        if (!accountEvidenceIds.has(sourceId)) newEvidence += 1;
+      }
+      if (newEvidence > maxBundleRecords - evidenceCount) {
+        evidenceLimitReached = true;
+        break;
+      }
+      const aliases = evidenceSet(aliasesByAccount, account.accountId);
+      const peers = evidenceSet(peerEvidenceByAccount, account.accountId);
+      for (const sourceId of positiveEvidence) aliases.add(sourceId);
+      for (const sourceId of peerEvidence) peers.add(sourceId);
+      for (const sourceId of candidateEvidence) accountEvidenceIds.add(sourceId);
+      evidenceCount += newEvidence;
+      participantOccurrenceCount += participantOccurrences;
+      messagesSha256ByPath.set(validated.messagesPath, messagesDocument.sha256);
       coveredChats.push(validated);
-      continue;
     }
-    const messagesDocument = await readOwnedJsonDocument(
-      validated.messagesPath,
-      validated.root,
-      maxMessagesJsonBytes,
-      false,
-      signal,
-    );
-    const messages = parseBeeperExportMessages(
-      messagesDocument.value,
-      chat.accountId,
-      chat.id,
-      MAX_EXPORT_MESSAGES_PER_CHAT,
-    );
-    if (messages.length !== validated.expectedMessageCount) {
-      return fail("official export chat messages did not match completed state");
-    }
-    for (const message of messages) {
-      (message.isSender ? positiveEvidence : peerEvidence).add(digest([
-        "beeper-self-alias-v1",
-        account.accountId,
-        message.senderId,
-      ]));
-    }
-    const accountEvidenceIds = evidenceSet(evidenceIdsByAccount, account.accountId);
-    let newEvidence = 0;
-    for (const sourceId of new Set([...positiveEvidence, ...peerEvidence])) {
-      if (!accountEvidenceIds.has(sourceId)) newEvidence += 1;
-    }
-    if (newEvidence > maxEvidence - evidenceCount) {
-      evidenceLimitReached = true;
-      break;
-    }
-    const aliases = evidenceSet(aliasesByAccount, account.accountId);
-    const peers = evidenceSet(peerEvidenceByAccount, account.accountId);
-    for (const sourceId of positiveEvidence) aliases.add(sourceId);
-    for (const sourceId of peerEvidence) peers.add(sourceId);
-    for (const sourceId of new Set([...positiveEvidence, ...peerEvidence])) {
-      accountEvidenceIds.add(sourceId);
-    }
-    evidenceCount += newEvidence;
-    messagesSha256ByPath.set(validated.messagesPath, messagesDocument.sha256);
-    coveredChats.push(validated);
-  }
-
-  for (const [accountId, peerEvidence] of peerEvidenceByAccount) {
-    const aliases = aliasesByAccount.get(accountId);
-    if (aliases === undefined) return fail("Beeper account self-alias set disappeared");
-    for (const sourceId of peerEvidence) {
-      if (aliases.has(sourceId)) {
-        return fail("official export has peer evidence for an account self alias");
+    let identityConflict = false;
+    for (const [accountId, peerEvidence] of peerEvidenceByAccount) {
+      const aliases = aliasesByAccount.get(accountId);
+      if (aliases === undefined) {
+        return fail("Beeper account self-alias set disappeared");
+      }
+      if ([...peerEvidence].some((sourceId) => aliases.has(sourceId))) {
+        identityConflict = true;
       }
     }
+    return Object.freeze({
+      aliasesByAccount,
+      coveredChats: Object.freeze(coveredChats),
+      evidenceLimitReached,
+      identityConflict,
+      messagesSha256ByPath,
+      oversizedMessagesPaths,
+      participantOccurrenceLimitReached,
+    });
+  };
+
+  const planBudget = async (evidence: EvidencePass): Promise<BudgetPass> => {
+    const participantFacts = new Map<string, ParticipantFact>();
+    const selfParticipantByAccount = new Map<string, string>();
+    let recordCount = accounts.length;
+    let recordBytes = 0;
+    for (const account of accounts) {
+      const observedAt = observedAtByAccount.get(account.accountId);
+      if (observedAt === undefined) {
+        return fail("Beeper account observation time disappeared");
+      }
+      const self = planningParticipantFact(
+        account,
+        account.user,
+        true,
+        evidence.aliasesByAccount,
+      );
+      participantFacts.set(self.id, self);
+      selfParticipantByAccount.set(account.accountId, self.id);
+      recordCount += 1;
+      const network = normalizeNetwork(account.network, account.bridge.type);
+      recordBytes += bundleRecordBytes(accountRecord(
+        account,
+        network,
+        observedAt,
+        self.id,
+      ));
+      recordBytes += bundleRecordBytes(participantRecord(
+        self,
+        account,
+        network,
+        observedAt,
+      ));
+    }
+    if (recordCount > maxBundleRecords || recordBytes > maxBundleBytes) {
+      return fail("connected Beeper accounts exceed the bounded bundle foundation");
+    }
+    const admittedChats: ValidatedShardChat[] = [];
+    for (const validated of evidence.coveredChats) {
+      heartbeat();
+      throwIfAborted(signal);
+      const messagesSha256 = evidence.messagesSha256ByPath.get(validated.messagesPath);
+      if (messagesSha256 === undefined) {
+        if (!evidence.oversizedMessagesPaths.has(validated.messagesPath)) {
+          return fail("official export message proof disappeared during bundle admission");
+        }
+        if (
+          await ownedFileSize(validated.messagesPath, validated.root)
+            <= maxMessagesJsonBytes
+        ) return fail("official export messages changed during bundle admission");
+        admittedChats.push(validated);
+        continue;
+      }
+      const chatDocument = await readOwnedJsonDocument(
+        validated.chatPath,
+        validated.root,
+        MAX_CHAT_JSON_BYTES,
+        false,
+        signal,
+      );
+      if (chatDocument.sha256 !== validated.chatSha256) {
+        return fail("official export chat changed during bundle admission");
+      }
+      const chat = parseBeeperExportConversation(chatDocument.value, accounts);
+      if (
+        chat.id !== validated.chat.id
+        || chat.accountId !== validated.chat.accountId
+      ) return fail("official export chat identity changed during bundle admission");
+      const account = accountsById.get(chat.accountId);
+      if (account === undefined) {
+        return fail("official export chat references an unknown account");
+      }
+      const messagesDocument = await readOwnedJsonDocument(
+        validated.messagesPath,
+        validated.root,
+        maxMessagesJsonBytes,
+        false,
+        signal,
+      );
+      if (messagesDocument.sha256 !== messagesSha256) {
+        return fail("official export messages changed during bundle admission");
+      }
+      const messages = parseBeeperExportMessages(
+        messagesDocument.value,
+        chat.accountId,
+        chat.id,
+        MAX_EXPORT_MESSAGES_PER_CHAT,
+      );
+      if (messages.length !== validated.expectedMessageCount) {
+        return fail("official export chat messages did not match completed state");
+      }
+      const selfParticipantId = selfParticipantByAccount.get(account.accountId);
+      const selfParticipant = selfParticipantId === undefined
+        ? undefined
+        : participantFacts.get(selfParticipantId);
+      if (selfParticipantId === undefined || selfParticipant === undefined) {
+        return fail("Beeper account self participant disappeared");
+      }
+      const scanParticipantFacts = new Map<string, ParticipantFact>([
+        [selfParticipantId, selfParticipant],
+      ]);
+      const participantIds = new Set<string>();
+      const addPlanningFact = (fact: ParticipantFact): void => {
+        scanParticipantFacts.set(
+          fact.id,
+          mergePlanningParticipantFact(scanParticipantFacts.get(fact.id), fact),
+        );
+        participantIds.add(fact.id);
+      };
+      for (const participant of chat.participants.items) {
+        addPlanningFact(planningParticipantFact(
+          account,
+          participant,
+          participant.isSelf,
+          evidence.aliasesByAccount,
+        ));
+      }
+      if (chat.type === "single") participantIds.add(selfParticipantId);
+      const messageIds = new Set(messages.map((message) => message.id));
+      for (const message of messages) {
+        addPlanningFact(planningParticipantFact(account, {
+          id: message.senderId,
+          fullName: message.senderName,
+          phoneNumber: null,
+          email: null,
+          username: null,
+        }, message.isSender, evidence.aliasesByAccount));
+        for (const reaction of message.reactions) {
+          addPlanningFact(planningParticipantFact(account, {
+            id: reaction.participantId,
+            fullName: null,
+            phoneNumber: null,
+            email: null,
+            username: null,
+          }, null, evidence.aliasesByAccount));
+        }
+      }
+      const reactionCount = messages.reduce(
+        (count, message) => count + message.reactions.length,
+        0,
+      );
+      const tombstoneCount = messages.reduce(
+        (count, message) => count + (message.isDeleted || message.isHidden ? 1 : 0),
+        0,
+      );
+      const reactionProviderIdNonUniqueGroups = messages.reduce(
+        (count, message) => count + new Set(
+          message.reactions
+            .filter((reaction) => reaction.providerIdNonUnique)
+            .map((reaction) => reaction.id),
+        ).size,
+        0,
+      );
+      const range = messageTimestampRange(messages);
+      const roster = [...participantIds].map((participantId) => {
+        const participant = scanParticipantFacts.get(participantId);
+        if (participant === undefined) {
+          return fail("Beeper conversation participant disappeared");
+        }
+        return participant;
+      });
+      const directRosterComplete = chat.type !== "single"
+        || (
+          roster.length === 2
+          && roster.filter((participant) => participant.isSelf === true).length === 1
+          && roster.filter((participant) => participant.isSelf !== true).length === 1
+        );
+      const scan: ConversationScan = Object.freeze({
+        chat: Object.freeze({
+          id: chat.id,
+          accountId: chat.accountId,
+          lastActivity: chat.lastActivity,
+          title: chat.title,
+          type: chat.type,
+        }),
+        root: validated.root,
+        messagesPath: validated.messagesPath,
+        messagesSha256: messagesDocument.sha256,
+        observedAt: validated.observedAt,
+        participantIds: Object.freeze([...participantIds].sort()),
+        participantFactChanges: Object.freeze([]),
+        participantsComplete: !chat.participants.hasMore
+          && chat.participants.items.length === chat.participants.total
+          && directRosterComplete,
+        startedAt: range.first,
+        lastMessageAt: range.last,
+        messageCount: messages.length,
+        reactionCount,
+        reactionProviderIdNonUniqueGroups,
+        tombstoneCount,
+        nonParticipantRecordBytes: 0,
+      });
+      const network = normalizeNetwork(account.network, account.bridge.type);
+      let nonParticipantBytes = bundleRecordBytes(conversationRecord(
+        scan,
+        account,
+        network,
+        validated.observedAt,
+      ));
+      for (const message of messages) {
+        nonParticipantBytes += bundleRecordBytes(messageRecord(
+          message,
+          scan,
+          messageIds,
+          account,
+          evidence.aliasesByAccount,
+          network,
+          validated.observedAt,
+        ));
+        for (const reaction of message.reactions) {
+          nonParticipantBytes += bundleRecordBytes(reactionRecord(
+            reaction,
+            message,
+            scan,
+            account,
+            evidence.aliasesByAccount,
+            network,
+            validated.observedAt,
+          ));
+        }
+        const tombstone = tombstoneRecord(
+          message,
+          scan,
+          account,
+          network,
+          validated.observedAt,
+        );
+        if (tombstone !== null) nonParticipantBytes += bundleRecordBytes(tombstone);
+      }
+      const stagedParticipantFacts = new Map<string, ParticipantFact>();
+      let addedParticipants = 0;
+      let participantByteDelta = 0;
+      for (const participantId of participantIds) {
+        const incoming = scanParticipantFacts.get(participantId);
+        if (incoming === undefined) {
+          return fail("Beeper conversation participant disappeared");
+        }
+        const current = participantFacts.get(participantId);
+        const merged = mergePlanningParticipantFact(current, incoming);
+        stagedParticipantFacts.set(participantId, merged);
+        if (current === undefined) addedParticipants += 1;
+        const mergedBytes = bundleRecordBytes(participantRecord(
+          merged,
+          account,
+          network,
+          validated.observedAt,
+        ));
+        const currentBytes = current === undefined
+          ? 0
+          : bundleRecordBytes(participantRecord(
+            current,
+            account,
+            network,
+            validated.observedAt,
+          ));
+        participantByteDelta += mergedBytes - currentBytes;
+      }
+      const candidateRecords = 1
+        + messages.length
+        + reactionCount
+        + tombstoneCount
+        + addedParticipants;
+      const candidateBytes = nonParticipantBytes + participantByteDelta;
+      if (
+        !Number.isSafeInteger(candidateRecords)
+        || !Number.isSafeInteger(candidateBytes)
+        || candidateBytes < 0
+      ) return fail("official export derived bundle budget overflowed");
+      if (candidateRecords > maxBundleRecords - recordCount) {
+        return Object.freeze({
+          admittedChats: Object.freeze(admittedChats),
+          bundleByteLimitReached: false,
+          bundleRecordLimitReached: true,
+          provisionalRecordBytes: recordBytes,
+          provisionalRecordCount: recordCount,
+        });
+      }
+      if (candidateBytes > maxBundleBytes - recordBytes) {
+        return Object.freeze({
+          admittedChats: Object.freeze(admittedChats),
+          bundleByteLimitReached: true,
+          bundleRecordLimitReached: false,
+          provisionalRecordBytes: recordBytes,
+          provisionalRecordCount: recordCount,
+        });
+      }
+      admittedChats.push(validated);
+      recordCount += candidateRecords;
+      recordBytes += candidateBytes;
+      for (const [participantId, fact] of stagedParticipantFacts) {
+        participantFacts.set(participantId, fact);
+      }
+    }
+    return Object.freeze({
+      admittedChats: Object.freeze(admittedChats),
+      bundleByteLimitReached: false,
+      bundleRecordLimitReached: false,
+      provisionalRecordBytes: recordBytes,
+      provisionalRecordCount: recordCount,
+    });
+  };
+
+  let candidateChats = chats;
+  let bundleByteLimitReached = false;
+  let bundleRecordLimitReached = false;
+  for (let pass = 0; pass < 16; pass += 1) {
+    const evidence = await collectEvidence(candidateChats);
+    const budget = await planBudget(evidence);
+    bundleByteLimitReached ||= budget.bundleByteLimitReached;
+    bundleRecordLimitReached ||= budget.bundleRecordLimitReached;
+    if (budget.admittedChats.length === evidence.coveredChats.length) {
+      if (evidence.identityConflict) {
+        return fail("official export has peer evidence for an account self alias");
+      }
+      return Object.freeze({
+        aliasesByAccount: evidence.aliasesByAccount,
+        coveredChats: evidence.coveredChats,
+        bundleByteLimitReached,
+        bundleRecordLimitReached,
+        evidenceLimitReached: evidence.evidenceLimitReached,
+        messagesSha256ByPath: evidence.messagesSha256ByPath,
+        participantOccurrenceLimitReached:
+          evidence.participantOccurrenceLimitReached,
+        provisionalRecordBytes: budget.provisionalRecordBytes,
+        provisionalRecordCount: budget.provisionalRecordCount,
+      });
+    }
+    await onRefinementPass?.(pass + 1);
+    candidateChats = budget.admittedChats;
   }
-  return Object.freeze({
-    aliasesByAccount,
-    coveredChats: Object.freeze(coveredChats),
-    evidenceLimitReached,
-    messagesSha256ByPath,
-  });
+  return fail("bounded chat prefix did not stabilize");
 }
 
 function canonicalParticipantSourceId(
@@ -2002,7 +2418,6 @@ function upsertParticipant(
   user: Pick<BeeperUserProjection, "id" | "fullName" | "phoneNumber" | "email" | "username">,
   self: boolean | null,
   aliasesByAccount: ReadonlyMap<string, ReadonlySet<string>>,
-  createdIds?: Set<string>,
 ): ParticipantFact {
   const sourceId = canonicalParticipantSourceId(account, user.id, aliasesByAccount);
   const id = localId("participant", account.accountId, sourceId);
@@ -2012,22 +2427,97 @@ function upsertParticipant(
     if (self !== null && current.isSelf !== null && current.isSelf !== self) {
       return fail("one Beeper participant has conflicting self-direction evidence");
     }
-    current.displayName ??= user.fullName;
-    current.handle ??= handle;
-    current.isSelf ??= self;
-    return current;
+    const updated = Object.freeze({
+      ...current,
+      displayName: current.displayName ?? user.fullName,
+      handle: current.handle ?? handle,
+      isSelf: current.isSelf ?? self,
+    });
+    if (
+      updated.displayName === current.displayName
+      && updated.handle === current.handle
+      && updated.isSelf === current.isSelf
+    ) return current;
+    facts.set(id, updated);
+    return updated;
   }
-  const created: ParticipantFact = {
+  const created: ParticipantFact = Object.freeze({
     id,
     accountId: localId("account", account.accountId),
     providerId: providerId("participant", account.accountId, sourceId),
     displayName: user.fullName,
     handle,
     isSelf: self,
-  };
+  });
   facts.set(id, created);
-  createdIds?.add(id);
   return created;
+}
+
+function mergeParticipantFact(
+  current: ParticipantFact | undefined,
+  incoming: ParticipantFact,
+): ParticipantFact {
+  if (current === undefined) return incoming;
+  if (
+    current.id !== incoming.id
+    || current.accountId !== incoming.accountId
+    || current.providerId !== incoming.providerId
+  ) return fail("one Beeper participant has conflicting source coordinates");
+  if (
+    current.isSelf !== null
+    && incoming.isSelf !== null
+    && current.isSelf !== incoming.isSelf
+  ) return fail("one Beeper participant has conflicting self-direction evidence");
+  const merged = Object.freeze({
+    ...current,
+    displayName: current.displayName ?? incoming.displayName,
+    handle: current.handle ?? incoming.handle,
+    isSelf: current.isSelf ?? incoming.isSelf,
+  });
+  return merged.displayName === current.displayName
+      && merged.handle === current.handle
+      && merged.isSelf === current.isSelf
+    ? current
+    : merged;
+}
+
+function planningParticipantFact(
+  account: BeeperAccountProjection,
+  user: Pick<BeeperUserProjection, "id" | "fullName" | "phoneNumber" | "email" | "username">,
+  self: boolean | null,
+  aliasesByAccount: ReadonlyMap<string, ReadonlySet<string>>,
+): ParticipantFact {
+  const sourceId = canonicalParticipantSourceId(account, user.id, aliasesByAccount);
+  return Object.freeze({
+    id: localId("participant", account.accountId, sourceId),
+    accountId: localId("account", account.accountId),
+    providerId: providerId("participant", account.accountId, sourceId),
+    displayName: user.fullName,
+    handle: user.phoneNumber ?? user.email ?? user.username,
+    isSelf: self,
+  });
+}
+
+function mergePlanningParticipantFact(
+  current: ParticipantFact | undefined,
+  incoming: ParticipantFact,
+): ParticipantFact {
+  if (current === undefined) return incoming;
+  if (
+    current.id !== incoming.id
+    || current.accountId !== incoming.accountId
+    || current.providerId !== incoming.providerId
+  ) return fail("one Beeper participant has conflicting source coordinates");
+  return Object.freeze({
+    ...current,
+    displayName: current.displayName ?? incoming.displayName,
+    handle: current.handle ?? incoming.handle,
+    isSelf: current.isSelf !== null
+        && incoming.isSelf !== null
+        && current.isSelf !== incoming.isSelf
+      ? false
+      : current.isSelf ?? incoming.isSelf,
+  });
 }
 
 function messageTimestampRange(
@@ -2447,6 +2937,14 @@ export function createBeeperMessageLikeMeSource(
           "test maxMessagesJsonBytes",
           MAX_MESSAGES_JSON_BYTES,
         );
+    const maxParticipantOccurrences =
+      request.dependencies?.maxParticipantOccurrences === undefined
+        ? MAX_PARTICIPANT_OCCURRENCES
+        : positiveInteger(
+            request.dependencies.maxParticipantOccurrences,
+            "test maxParticipantOccurrences",
+            MAX_PARTICIPANT_OCCURRENCES,
+          );
     if (!isAbsolute(binary)) return fail("Beeper CLI binary path must be absolute");
     const customCreateWorking = request.dependencies?.createWorkingDirectory;
     const customRemoveWorking = request.dependencies?.removeWorkingDirectory;
@@ -2773,8 +3271,12 @@ export function createBeeperMessageLikeMeSource(
         accountsById,
         maxMessagesJsonBytes,
         maxBundleRecords,
+        maxBundleBytes,
+        maxParticipantOccurrences,
+        accountObservedAt,
         request.signal,
         assertProgressHeartbeat,
+        request.dependencies?.onSelfAliasRefinementPass,
       );
       const aliasesByAccount = selfAliasPrepass.aliasesByAccount;
 
@@ -2798,6 +3300,7 @@ export function createBeeperMessageLikeMeSource(
       let messageLimitReached = false;
       let oversizedChatSkipped = false;
       let scannedRecordCount = accounts.length + selfParticipantByAccount.size;
+      const scannedParticipantIds = new Set(selfParticipantByAccount.values());
       let scanRecordBudgetExhausted = false;
       const listedChatEntries = selfAliasPrepass.coveredChats;
       for (const {
@@ -2868,22 +3371,29 @@ export function createBeeperMessageLikeMeSource(
           scanRecordBudgetExhausted = true;
           continue;
         }
-        const newlyCreatedParticipantIds = new Set<string>();
+        const selfParticipantId = selfParticipantByAccount.get(account.accountId);
+        if (selfParticipantId === undefined) {
+          return fail("Beeper account self participant disappeared");
+        }
+        const selfParticipant = participantFacts.get(selfParticipantId);
+        if (selfParticipant === undefined) {
+          return fail("Beeper account self participant disappeared");
+        }
+        const scanParticipantFacts = new Map<string, ParticipantFact>([
+          [selfParticipantId, selfParticipant],
+        ]);
         const participantIds = new Set<string>();
         for (const participant of chat.participants.items) {
           participantIds.add(upsertParticipant(
-            participantFacts,
+            scanParticipantFacts,
             account,
             participant,
             participant.isSelf,
             aliasesByAccount,
-            newlyCreatedParticipantIds,
           ).id);
         }
         if (chat.type === "single") {
-          const self = selfParticipantByAccount.get(account.accountId);
-          if (self === undefined) return fail("Beeper account self participant disappeared");
-          participantIds.add(self);
+          participantIds.add(selfParticipantId);
         }
         const messageIds = new Set(messages.map((message) => message.id));
         const reactionCount = messages.reduce(
@@ -2907,36 +3417,39 @@ export function createBeeperMessageLikeMeSource(
           || !Number.isSafeInteger(tombstoneCount)
         ) return fail("official export derived record count overflowed");
         for (const message of messages) {
-          participantIds.add(upsertParticipant(participantFacts, account, {
+          participantIds.add(upsertParticipant(scanParticipantFacts, account, {
             id: message.senderId,
             fullName: message.senderName,
             phoneNumber: null,
             email: null,
             username: null,
-          }, message.isSender, aliasesByAccount, newlyCreatedParticipantIds).id);
+          }, message.isSender, aliasesByAccount).id);
           for (const reaction of message.reactions) {
-            participantIds.add(upsertParticipant(participantFacts, account, {
+            participantIds.add(upsertParticipant(scanParticipantFacts, account, {
               id: reaction.participantId,
               fullName: null,
               phoneNumber: null,
               email: null,
               username: null,
-            }, null, aliasesByAccount, newlyCreatedParticipantIds).id);
+            }, null, aliasesByAccount).id);
           }
         }
+        const newlySeenParticipantIds = [...participantIds].filter(
+          (participantId) => !scannedParticipantIds.has(participantId),
+        );
         const scanRecordCount = 1
           + messages.length
           + reactionCount
           + tombstoneCount
-          + newlyCreatedParticipantIds.size;
+          + newlySeenParticipantIds.length;
         if (scanRecordCount > maxBundleRecords - scannedRecordCount) {
-          for (const participantId of newlyCreatedParticipantIds) {
-            participantFacts.delete(participantId);
-          }
           scanRecordBudgetExhausted = true;
           continue;
         }
         scannedRecordCount += scanRecordCount;
+        for (const participantId of newlySeenParticipantIds) {
+          scannedParticipantIds.add(participantId);
+        }
         const range = messageTimestampRange(messages);
         if (range.first !== null && (observedFrom === null || range.first < observedFrom)) {
           observedFrom = range.first;
@@ -2945,7 +3458,7 @@ export function createBeeperMessageLikeMeSource(
           observedThrough = range.last;
         }
         const roster = [...participantIds].map((participantId) => {
-          const participant = participantFacts.get(participantId);
+          const participant = scanParticipantFacts.get(participantId);
           if (participant === undefined) {
             return fail("Beeper conversation participant disappeared");
           }
@@ -2974,6 +3487,15 @@ export function createBeeperMessageLikeMeSource(
           messagesSha256: messagesDocument.sha256,
           observedAt,
           participantIds: Object.freeze([...participantIds].sort()),
+          participantFactChanges: Object.freeze([...participantIds]
+            .sort()
+            .map((participantId) => {
+              const fact = scanParticipantFacts.get(participantId);
+              if (fact === undefined) {
+                return fail("Beeper conversation participant disappeared");
+              }
+              return fact;
+            })),
           participantsComplete,
           startedAt: range.first,
           lastMessageAt: range.last,
@@ -3033,7 +3555,8 @@ export function createBeeperMessageLikeMeSource(
         localId("conversation", left.chat.accountId, left.chat.id).localeCompare(
           localId("conversation", right.chat.accountId, right.chat.id),
         ));
-      const selectedParticipantIds = new Set(selfParticipantByAccount.values());
+      const selectedParticipantFacts = new Map(participantFacts);
+      const selectedParticipantIds = new Set(selectedParticipantFacts.keys());
       const selectedScans: ConversationScan[] = [];
       let selectedRecordCount = accounts.length + selectedParticipantIds.size;
       let selectedRecordBytes = 0;
@@ -3058,34 +3581,56 @@ export function createBeeperMessageLikeMeSource(
           observedAtForAccount(account.accountId),
         ));
       }
-      let bundleRecordLimitReached = scanRecordBudgetExhausted;
-      let bundleByteLimitReached = false;
+      let bundleRecordLimitReached = selfAliasPrepass.bundleRecordLimitReached;
+      let bundleByteLimitReached = selfAliasPrepass.bundleByteLimitReached;
       for (const scan of orderedScans) {
-        let addedParticipants = 0;
-        let addedParticipantBytes = 0;
-        for (const participantId of scan.participantIds) {
-          if (selectedParticipantIds.has(participantId)) continue;
-          addedParticipants += 1;
-          const fact = participantFacts.get(participantId);
-          const account = fact === undefined
-            ? undefined
-            : accountsById.get(scan.chat.accountId);
-          if (fact === undefined || account === undefined) {
-            return fail("selected participant source identity disappeared");
+        const account = accountsById.get(scan.chat.accountId);
+        if (account === undefined) {
+          return fail("selected participant source identity disappeared");
+        }
+        const expectedParticipantAccountId = localId("account", account.accountId);
+        const stagedParticipantFacts = new Map<string, ParticipantFact>();
+        for (const incoming of scan.participantFactChanges) {
+          if (incoming.accountId !== expectedParticipantAccountId) {
+            return fail("selected participant source identity changed accounts");
           }
-          addedParticipantBytes += bundleRecordBytes(participantRecord(
+          const current = stagedParticipantFacts.get(incoming.id)
+            ?? selectedParticipantFacts.get(incoming.id);
+          stagedParticipantFacts.set(
+            incoming.id,
+            mergeParticipantFact(current, incoming),
+          );
+        }
+        let addedParticipants = 0;
+        let participantByteDelta = 0;
+        for (const [participantId, fact] of stagedParticipantFacts) {
+          const current = selectedParticipantFacts.get(participantId);
+          if (current === undefined) addedParticipants += 1;
+          const factBytes = bundleRecordBytes(participantRecord(
             fact,
             account,
             normalizeNetwork(account.network, account.bridge.type),
-            scan.observedAt,
+            observedAtForAccount(account.accountId),
           ));
+          const currentBytes = current === undefined
+            ? 0
+            : bundleRecordBytes(participantRecord(
+              current,
+              account,
+              normalizeNetwork(account.network, account.bridge.type),
+              observedAtForAccount(account.accountId),
+            ));
+          participantByteDelta += factBytes - currentBytes;
         }
         const scanRecords = 1
           + scan.messageCount
           + scan.reactionCount
           + scan.tombstoneCount
           + addedParticipants;
-        const scanBytes = scan.nonParticipantRecordBytes + addedParticipantBytes;
+        const scanBytes = scan.nonParticipantRecordBytes + participantByteDelta;
+        if (!Number.isSafeInteger(scanBytes) || scanBytes < 0) {
+          return fail("official export derived record bytes overflowed");
+        }
         const exceedsRecords = scanRecords > maxBundleRecords - selectedRecordCount;
         const exceedsBytes = scanBytes > maxBundleBytes - selectedRecordBytes;
         if (exceedsRecords || exceedsBytes) {
@@ -3096,10 +3641,21 @@ export function createBeeperMessageLikeMeSource(
         selectedScans.push(scan);
         selectedRecordCount += scanRecords;
         selectedRecordBytes += scanBytes;
+        for (const [participantId, fact] of stagedParticipantFacts) {
+          selectedParticipantFacts.set(participantId, fact);
+        }
         for (const participantId of scan.participantIds) {
           selectedParticipantIds.add(participantId);
         }
       }
+      if (
+        scanRecordBudgetExhausted
+        || selectedScans.length !== orderedScans.length
+      ) return fail("bounded chat prefix exceeded its conservative admission proof");
+      if (
+        selectedRecordCount > selfAliasPrepass.provisionalRecordCount
+        || selectedRecordBytes > selfAliasPrepass.provisionalRecordBytes
+      ) return fail("exact bundle exceeded its provisional admission proof");
       observedFrom = null;
       observedThrough = null;
       for (const scan of selectedScans) {
@@ -3130,7 +3686,7 @@ export function createBeeperMessageLikeMeSource(
           selfParticipantId,
         );
       }
-      for (const fact of [...participantFacts.values()]
+      for (const fact of [...selectedParticipantFacts.values()]
         .filter((candidate) => selectedParticipantIds.has(candidate.id))
         .sort((left, right) => left.id.localeCompare(right.id))) {
         const account = accounts.find((candidate) =>
@@ -3247,6 +3803,9 @@ export function createBeeperMessageLikeMeSource(
       if (selfAliasPrepass.evidenceLimitReached) {
         warnings.add("self-alias-evidence-limit-reached");
       }
+      if (selfAliasPrepass.participantOccurrenceLimitReached) {
+        warnings.add("participant-occurrence-limit-reached");
+      }
       if (emittedReactionProviderIdNonUnique) {
         warnings.add("reaction-provider-id-non-unique");
       }
@@ -3255,7 +3814,8 @@ export function createBeeperMessageLikeMeSource(
         || oversizedChatSkipped
         || bundleRecordLimitReached
         || bundleByteLimitReached
-        || selfAliasPrepass.evidenceLimitReached;
+        || selfAliasPrepass.evidenceLimitReached
+        || selfAliasPrepass.participantOccurrenceLimitReached;
       stopProgressHeartbeat();
       assertProgressHeartbeat();
       completion = Object.freeze({
@@ -3267,6 +3827,8 @@ export function createBeeperMessageLikeMeSource(
               ? "bundle-byte-limit"
               : selfAliasPrepass.evidenceLimitReached
                 ? "self-alias-evidence-limit"
+                : selfAliasPrepass.participantOccurrenceLimitReached
+                  ? "participant-occurrence-limit"
                 : oversizedChatSkipped
                   ? "oversized-chat"
                   : hardSourceLimitReached
