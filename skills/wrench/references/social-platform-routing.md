@@ -5,7 +5,7 @@ Use this as routing guidance only. Always inspect `wrench capabilities <adapter>
 | Surface | Candidate adapter | Signed-in realm | Reference post shape | Meaning |
 | --- | --- | --- | --- | --- |
 | X | `x-web` | Browser cookies/profile | `body`; optional image fields when exposed | Consumer X post |
-| X | `x` | Official OAuth | `body`, optional `media` and aligned alt-text fields | Documented API post |
+| X | `x` | Official OAuth | `body`, optional `media` and aligned alt-text fields; leave `made_with_ai` unset or `false` when the user supplied the copy | Documented API post |
 | LinkedIn | `linkedin-web` | Browser cookies/profile | `body`, `visibility`, optional image and accessibility fields | Member or explicitly bound organization post |
 | LinkedIn | `linkedin` | Official OAuth | Inspect installed schema | Documented API post |
 | Bluesky | `bluesky-web` | Profile-backed Bluesky web session | `body`, optional image, media type, and alt text | AT Protocol feed post |
@@ -27,6 +27,8 @@ unless their installed canonical capability independently says otherwise.
 - Preserve input image order. Require alt-text arrays to align one-to-one when the schema exposes them.
 - Re-check capabilities before every new preview. A plan or run remains governed by its bound contract identity when installed support later changes.
 - A provider may reject an otherwise valid image for dimensions, animation, color profile, or account entitlement. Report that provider-owned failure without converting the file unless the user asks for a derivative.
+- When the user supplied the copy, never mark the post as AI-generated on any platform. Do not add "Made with AI" or "Made with Grok" text, leave a composer disclosure toggle on, or set a provider AI-generated flag. Official `x` `posts.publish` exposes `made_with_ai`; leave it unset or `false`. `x-web` `posts.publish` has no such input field.
+- If a composer fallback is used and that label cannot be turned off, stop and report the target instead of posting with the label.
 
 ## Common invocation shape
 
