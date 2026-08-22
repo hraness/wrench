@@ -114,7 +114,8 @@ export type WrenchClientRunReceiptCommon = {
       | "cookie-source"
       | "cookies-file"
       | "linked-device-store"
-      | "oauth-token-file";
+      | "oauth-token-file"
+      | "public-web-session";
   };
   readonly status: "succeeded" | "failed";
   readonly dispatchStarted: false;

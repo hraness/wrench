@@ -91,6 +91,10 @@ import {
   LinkedInPostImagePreparationError,
   type LinkedInPostBrowserTransport,
 } from "./linkedin-web-post-browser";
+import {
+  createLinkedInProfileBrowserTransport,
+  type LinkedInProfileBrowserTransport,
+} from "./linkedin-web-profile-browser";
 
 const LINKEDIN_ORIGIN = "https://www.linkedin.com";
 const MAX_SUBJECT_BYTES = 2 * 1024 * 1024;
@@ -109,6 +113,7 @@ type JsonRecord = Record<string, unknown>;
 export type LinkedInWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
   readonly createArticleBrowserTransport?: typeof createLinkedInArticleBrowserTransport;
   readonly createPostBrowserTransport?: typeof createLinkedInPostBrowserTransport;
+  readonly createProfileBrowserTransport?: typeof createLinkedInProfileBrowserTransport;
   readonly resolveMessengerConversationsQueryId?: typeof resolveLinkedInMessengerConversationsQueryId;
   readonly now?: () => number;
   /** Test seam for the auth-hash-bound encrypted LinkedIn rotation cache. */
@@ -751,6 +756,32 @@ function linkedInProfileStatsFailure(
   return `LinkedIn ${target} profile stats failed during ${requestStage} at ${stage}; no remote write occurred`;
 }
 
+function linkedInCurrentIdentityAllowsBrowserFallback(error: unknown): boolean {
+  return error instanceof Error
+    && /^authenticated web API returned unreviewed status\/content type (?:302|401|403)\/(?:missing|[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+)$/u.test(
+      error.message,
+    );
+}
+
+async function createLinkedInStatsBrowserTransport(
+  auth: WrenchAuth,
+  recipe: WebSessionRecipe,
+  options: LinkedInWebExecutionOptions,
+): Promise<LinkedInProfileBrowserTransport> {
+  const createTransport = options.dependencies?.createProfileBrowserTransport
+    ?? createLinkedInProfileBrowserTransport;
+  return createTransport(auth, {
+    timeoutMs: recipe.timeoutMs,
+    maxOutputBytes: recipe.maxOutputBytes,
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.publishCleanupResource === undefined
+      ? {}
+      : { publishCleanupResource: options.publishCleanupResource }),
+  });
+}
+
 async function executeLinkedInPersonalProfileRead(
   recipe: WebSessionRecipe,
   input: OperationInput,
@@ -763,15 +794,27 @@ async function executeLinkedInPersonalProfileRead(
     throw new Error("input.include_connections must be boolean");
   }
   let requestStage = "signed-in identity preflight";
+  let browserTransport: LinkedInProfileBrowserTransport | null = null;
   try {
-    const client = await createLinkedInClient(
-      auth,
-      recipe.timeoutMs,
-      options.dependencies,
-      options,
+    const client = await createLinkedInClient(auth, recipe.timeoutMs, options.dependencies, options);
+    const csrf = linkedInCsrfTokenFromJSessionId(
+      webSessionCookie(client.cookies, "JSESSIONID"),
     );
-    const csrf = linkedInCsrfTokenFromJSessionId(webSessionCookie(client.cookies, "JSESSIONID"));
-    const identity = await currentIdentity(client, csrf);
+    let identity: LinkedInCurrentIdentity;
+    try {
+      identity = await currentIdentity(client, csrf);
+    } catch (error) {
+      if (!linkedInCurrentIdentityAllowsBrowserFallback(error)) throw error;
+      requestStage = "contained-browser signed-in identity preflight";
+      browserTransport = await createLinkedInStatsBrowserTransport(
+        auth,
+        recipe,
+        options,
+      );
+      identity = identityFromMeResponse(
+        await browserTransport.currentIdentityResponse(),
+      );
+    }
     const subject = boundLinkedInStatsIdentity(auth, identity);
     if (identity.publicIdentifier === null) {
       throw new Error(
@@ -783,24 +826,32 @@ async function executeLinkedInPersonalProfileRead(
         "LinkedIn current member public profile identifier does not match the requested profile URL",
       );
     }
-    requestStage = "public self-profile page read";
-    const profileHtml = await client.requestText({
-      url: new URL(target.url),
-      method: "GET",
-      headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
-      expectedContentTypes: ["text/html"],
-      maxBytes: recipe.maxOutputBytes,
-    });
-    let connectionsHtml: string | null = null;
-    if (includeConnections) {
-      requestStage = "private My Network connections page read";
-      connectionsHtml = await client.requestText({
-          url: new URL(`${LINKEDIN_ORIGIN}/mynetwork/invite-connect/connections/`),
+    requestStage = browserTransport === null
+      ? "public self-profile page read"
+      : "contained-browser public self-profile page read";
+    const profileHtml = browserTransport === null
+      ? await client.requestText({
+          url: new URL(target.url),
           method: "GET",
-          headers: linkedInHtmlHeaders(target.url),
+          headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
           expectedContentTypes: ["text/html"],
           maxBytes: recipe.maxOutputBytes,
-        });
+        })
+      : await browserTransport.readProfileHtml(target.url);
+    let connectionsHtml: string | null = null;
+    if (includeConnections) {
+      requestStage = browserTransport === null
+        ? "private My Network connections page read"
+        : "contained-browser private My Network connections page read";
+      connectionsHtml = browserTransport === null
+        ? await client.requestText({
+            url: new URL(`${LINKEDIN_ORIGIN}/mynetwork/invite-connect/connections/`),
+            method: "GET",
+            headers: linkedInHtmlHeaders(target.url),
+            expectedContentTypes: ["text/html"],
+            maxBytes: recipe.maxOutputBytes,
+          })
+        : await browserTransport.readConnectionsHtml(target.url);
     }
     requestStage = "exact metric projection";
     const output = projectLinkedInPersonalProfileStats({
@@ -827,6 +878,8 @@ async function executeLinkedInPersonalProfileRead(
       dispatch: { planned: 0, started: 0, verified: 0 },
       error: linkedInProfileStatsFailure(error, "personal", requestStage),
     };
+  } finally {
+    await browserTransport?.close();
   }
 }
 
@@ -838,23 +891,40 @@ async function executeLinkedInOrganizationRead(
 ): Promise<WebSessionExecution> {
   const target = linkedInOrganizationTarget(input.organization_url);
   let requestStage = "signed-in identity preflight";
+  let browserTransport: LinkedInProfileBrowserTransport | null = null;
   try {
-    const client = await createLinkedInClient(
-      auth,
-      recipe.timeoutMs,
-      options.dependencies,
-      options,
+    const client = await createLinkedInClient(auth, recipe.timeoutMs, options.dependencies, options);
+    const csrf = linkedInCsrfTokenFromJSessionId(
+      webSessionCookie(client.cookies, "JSESSIONID"),
     );
-    const csrf = linkedInCsrfTokenFromJSessionId(webSessionCookie(client.cookies, "JSESSIONID"));
-    boundLinkedInStatsIdentity(auth, await currentIdentity(client, csrf));
-    requestStage = "public company page read";
-    const html = await client.requestText({
-      url: new URL(target.url),
-      method: "GET",
-      headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
-      expectedContentTypes: ["text/html"],
-      maxBytes: recipe.maxOutputBytes,
-    });
+    let identity: LinkedInCurrentIdentity;
+    try {
+      identity = await currentIdentity(client, csrf);
+    } catch (error) {
+      if (!linkedInCurrentIdentityAllowsBrowserFallback(error)) throw error;
+      requestStage = "contained-browser signed-in identity preflight";
+      browserTransport = await createLinkedInStatsBrowserTransport(
+        auth,
+        recipe,
+        options,
+      );
+      identity = identityFromMeResponse(
+        await browserTransport.currentIdentityResponse(),
+      );
+    }
+    boundLinkedInStatsIdentity(auth, identity);
+    requestStage = browserTransport === null
+      ? "public company page read"
+      : "contained-browser public company page read";
+    const html = browserTransport === null
+      ? await client.requestText({
+          url: new URL(target.url),
+          method: "GET",
+          headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
+          expectedContentTypes: ["text/html"],
+          maxBytes: recipe.maxOutputBytes,
+        })
+      : await browserTransport.readOrganizationHtml(target.url);
     requestStage = "exact company metric projection";
     const output = projectLinkedInOrganizationStats({
       html,
@@ -877,6 +947,8 @@ async function executeLinkedInOrganizationRead(
       dispatch: { planned: 0, started: 0, verified: 0 },
       error: linkedInProfileStatsFailure(error, "organization", requestStage),
     };
+  } finally {
+    await browserTransport?.close();
   }
 }
 
@@ -2078,12 +2150,44 @@ export async function executeLinkedInWebOperation(
     recipe.site === "linkedin"
     && recipe.contractVersion === 1
     && recipe.action === "profiles.read"
-  ) return executeLinkedInPersonalProfileRead(recipe, input, auth, options);
+  ) {
+    return startWebSessionCleanupTrackedOperation(
+      options.registerCleanupBarrier,
+      (publishCleanupResource) => executeLinkedInPersonalProfileRead(
+        recipe,
+        input,
+        auth,
+        {
+          ...options,
+          ...(publishCleanupResource === undefined
+            ? {}
+            : { publishCleanupResource }),
+        },
+      ),
+      browserCleanupBarrier,
+    );
+  }
   if (
     recipe.site === "linkedin"
     && recipe.contractVersion === 1
     && recipe.action === "organizations.read"
-  ) return executeLinkedInOrganizationRead(recipe, input, auth, options);
+  ) {
+    return startWebSessionCleanupTrackedOperation(
+      options.registerCleanupBarrier,
+      (publishCleanupResource) => executeLinkedInOrganizationRead(
+        recipe,
+        input,
+        auth,
+        {
+          ...options,
+          ...(publishCleanupResource === undefined
+            ? {}
+            : { publishCleanupResource }),
+        },
+      ),
+      browserCleanupBarrier,
+    );
+  }
   if (
     recipe.site === "linkedin"
     && recipe.contractVersion === 7

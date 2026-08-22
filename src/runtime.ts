@@ -47,7 +47,6 @@ import {
 } from "./model";
 import {
   getProviderContract,
-  isCompatibleProviderContractHash,
   providerContractHash,
 } from "./provider-contracts";
 import {
@@ -83,7 +82,6 @@ import {
 import { providerPluginRegistry } from "./provider-plugins";
 import {
   getWebSessionContract,
-  isCompatibleWebSessionContractHash,
   webSessionContractHash,
 } from "./web-session-contracts";
 import {
@@ -93,12 +91,23 @@ import {
   type WebSessionExecutionOptions,
   type WebSessionDispatchEvent,
   type WebSessionOperationExecutor,
+  type PublicWebSessionOperationExecutor,
   type WebSessionProviderAcceptedMutationTargetEvent,
 } from "./web-session-execution";
 import {
   withWebSessionCleanupAdmission,
   type WebSessionCleanupAdmissionIdentity,
 } from "./web-session-cleanup-admission";
+import {
+  isPublicWebSessionInvocationAuthority,
+  parsePublicWebSessionInvocationAuthority,
+  persistedAuthAuthority,
+  publicWebSessionInvocationAuthority,
+  publicWebSessionAuthorityIdentityHash,
+  webSessionAuthenticationPolicy,
+  type InvocationAuthority,
+  type WebSessionAuthenticationPolicy,
+} from "./web-session-authentication-policy";
 import {
   executeReviewedTemplateOperation,
   isCookieCapableWebAuth,
@@ -272,7 +281,7 @@ type RunReceiptCommon = {
   readonly operation: string;
   readonly risk: OperationRisk;
   readonly inputHash: string;
-  readonly auth: { readonly id: string; readonly hash: string; readonly kind: WrenchAuth["kind"] };
+  readonly auth: { readonly id: string; readonly hash: string; readonly kind: InvocationAuthority["kind"] };
   readonly status: "pending" | "succeeded" | "submitted" | "failed" | "partial" | "indeterminate";
   readonly dispatchStarted: boolean;
   readonly dispatch: {
@@ -317,8 +326,12 @@ export type PreparedInvocation = {
   readonly manifest: WrenchManifest;
   readonly operationId: string;
   readonly input: OperationInput;
-  readonly auth: WrenchAuth;
-  /** Exact auth bytes plus the auth lifetime observed during preparation. */
+  /**
+   * Invocation authority. The historical property name is retained for SDK
+   * compatibility; public authorities are never persisted auth locators.
+   */
+  readonly auth: InvocationAuthority;
+  /** Exact authority identity observed during preparation. */
   readonly readProjectionAuthIdentityHash?: string;
   /** Recomputed from the selected command-scoped registry; caller input is ignored. */
   readonly portablePluginContract?: PortableOperationIdentityV1;
@@ -348,13 +361,46 @@ function resolveCodeOwnedPluginOperation(
   return null;
 }
 
+function resolvedWebSessionAuthenticationPolicy(
+  adapterId: string,
+  operationId: string,
+  operation: WrenchManifest["operations"][string],
+  resolution: ProviderPluginOperationResolutionV1 | null,
+): WebSessionAuthenticationPolicy {
+  if (!isWebSessionOperation(operation)) return Object.freeze({ kind: "required" });
+  if (resolution === null || resolution.binding.transport === "provider-api") {
+    throw new Error("authenticated session operation resolved to the wrong plugin transport");
+  }
+  return webSessionAuthenticationPolicy({
+    adapterId,
+    // Access policy belongs only to the descriptor's active contract. A
+    // historical routing alias remains readable for archive compatibility,
+    // but cannot inherit a newer public-authority/cache coordinate.
+    ...(resolution.contractVersion !== resolution.operation.contractVersion
+      || resolution.operation.access === undefined
+      ? {}
+      : { access: resolution.operation.access }),
+    operationId,
+    recipe: operation.webSession,
+    pluginSourceKind: resolution.plugin.sourceKind,
+    portable: resolution.portableIdentity !== null,
+    risk: resolution.operation.risk,
+    state: resolution.operation.state,
+    dispatch: resolution.operation.dispatch,
+  });
+}
+
 function assertCodeOwnedWriteSubject(
   operation: WrenchManifest["operations"][string],
   input: OperationInput,
-  auth: WrenchAuth,
+  authority: InvocationAuthority,
   resolution: ProviderPluginOperationResolutionV1 | null,
 ): void {
   if (operation.risk !== "R2" && operation.risk !== "R3") return;
+  const auth = persistedAuthAuthority(
+    authority,
+    "R2/R3 operations require a persisted auth locator",
+  );
   if (resolution === null || resolution.operation.state !== "observed") return;
   if (auth.subject === undefined) {
     throw new Error(
@@ -374,19 +420,22 @@ function assertCodeOwnedWriteSubject(
 }
 
 function assertInvocationTransport(
-  _manifest: WrenchManifest,
+  manifest: WrenchManifest,
   operationId: string,
   operation: WrenchManifest["operations"][string],
   input: OperationInput,
-  authValue: WrenchAuth,
+  authority: InvocationAuthority,
   registry: ProviderPluginRegistry,
 ): void {
-  const auth = parseAuth(authValue);
-  if (canonicalJson(auth) !== canonicalJson(authValue)) {
-    throw new Error("prepared authentication contains unsupported state");
-  }
   const resolution = resolveCodeOwnedPluginOperation(operation, registry);
+  const authenticationPolicy = resolvedWebSessionAuthenticationPolicy(
+    manifest.id,
+    operationId,
+    operation,
+    resolution,
+  );
   if (isProviderOperation(operation)) {
+    const auth = persistedAuthAuthority(authority);
     if (resolution === null || resolution.binding.transport !== "provider-api") {
       throw new Error("official provider operation resolved to the wrong plugin transport");
     }
@@ -420,7 +469,26 @@ function assertInvocationTransport(
     if (resolution === null || resolution.binding.transport === "provider-api") {
       throw new Error("authenticated session operation resolved to the wrong plugin transport");
     }
-    requireProviderPluginAuth(resolution.binding, auth);
+    if (authenticationPolicy.kind === "public") {
+      const publicAuthority = parsePublicWebSessionInvocationAuthority(
+        authority,
+        authenticationPolicy.authority,
+      );
+      if (
+        canonicalJson(publicAuthority)
+        !== canonicalJson(authenticationPolicy.authority)
+      ) {
+        throw new Error("public web-session invocation authority changed");
+      }
+      if (operation.risk !== "R1") {
+        throw new Error("public web-session operations must be R1 reads");
+      }
+    } else {
+      requireProviderPluginAuth(
+        resolution.binding,
+        persistedAuthAuthority(authority),
+      );
+    }
     const contract = getWebSessionContract(operation.webSession, registry);
     if (
       contract.site !== operation.webSession.site
@@ -440,6 +508,7 @@ function assertInvocationTransport(
     const inputIssues = resolution.operation.validateInput(input);
     if (inputIssues.length > 0) throw new Error(inputIssues.join("; "));
   } else if (isReviewedTemplateOperation(operation)) {
+    const auth = persistedAuthAuthority(authority);
     if (operation.reviewedTemplate.state !== "reviewed") {
       throw new Error(`${operationId} is capture-required: ${operation.reviewedTemplate.instructions}`);
     }
@@ -449,7 +518,7 @@ function assertInvocationTransport(
   } else {
     throw new Error(DOM_ACTION_TRANSPORT_DISABLED_MESSAGE);
   }
-  assertCodeOwnedWriteSubject(operation, input, auth, resolution);
+  assertCodeOwnedWriteSubject(operation, input, authority, resolution);
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -522,9 +591,21 @@ function revalidatePreparedInvocation(
   if (canonicalJson(platformInput.value) !== canonicalJson(invocation.input)) {
     throw new Error("prepared input contains unsupported or non-canonical state");
   }
-  const auth = parseAuth(invocation.auth);
+  const resolution = resolveCodeOwnedPluginOperation(operation, registry);
+  const authenticationPolicy = resolvedWebSessionAuthenticationPolicy(
+    parsedManifest.value.id,
+    invocation.operationId,
+    operation,
+    resolution,
+  );
+  const auth: InvocationAuthority = authenticationPolicy.kind === "public"
+    ? parsePublicWebSessionInvocationAuthority(
+        invocation.auth,
+        authenticationPolicy.authority,
+      )
+    : parseAuth(invocation.auth);
   if (canonicalJson(auth) !== canonicalJson(invocation.auth)) {
-    throw new Error("prepared authentication contains unsupported state");
+    throw new Error("prepared invocation authority contains unsupported state");
   }
   const readProjectionAuthIdentityHash =
     invocation.readProjectionAuthIdentityHash;
@@ -533,6 +614,16 @@ function revalidatePreparedInvocation(
     && !/^[a-f0-9]{64}$/u.test(readProjectionAuthIdentityHash)
   ) {
     throw new Error("prepared auth lifetime identity is malformed");
+  }
+  if (
+    authenticationPolicy.kind === "public"
+    && (
+      !isPublicWebSessionInvocationAuthority(auth)
+      || readProjectionAuthIdentityHash
+        !== publicWebSessionAuthorityIdentityHash(auth)
+    )
+  ) {
+    throw new Error("prepared public invocation authority identity changed");
   }
   const checkedBase: PreparedInvocation = {
     manifest: parsedManifest.value,
@@ -552,9 +643,7 @@ function revalidatePreparedInvocation(
     checkedBase.auth,
     registry,
   );
-  const portablePluginContract =
-    resolveCodeOwnedPluginOperation(operation, registry)?.portableIdentity
-    ?? null;
+  const portablePluginContract = resolution?.portableIdentity ?? null;
   const checked: PreparedInvocation = portablePluginContract === null
     ? checkedBase
     : {
@@ -951,7 +1040,7 @@ function receiptPath(runId: string, environment: Readonly<Record<string, string 
   return join(wrenchStateHome(environment), "runs", `${runId}.json`);
 }
 
-function authHash(auth: WrenchAuth): string {
+function authHash(auth: InvocationAuthority): string {
   return sha256(canonicalJson(auth));
 }
 
@@ -1006,7 +1095,7 @@ export function prepareInvocation(
   adapterId: string,
   operationId: string,
   rawInput: unknown,
-  authId: string,
+  authId?: string,
   environment: Readonly<Record<string, string | undefined>> = process.env,
   registry: ProviderPluginRegistry = providerPluginRegistry,
 ): PreparedInvocation {
@@ -1018,11 +1107,38 @@ export function prepareInvocation(
   if (!inputResult.ok) throw new Error(inputResult.issues.join("; "));
   const platformInput = validatePlatformOperationInput(manifestResult.value, operationId, inputResult.value);
   if (!platformInput.ok) throw new Error(platformInput.issues.join("; "));
+  const resolution = resolveCodeOwnedPluginOperation(operation, registry);
+  const authenticationPolicy = resolvedWebSessionAuthenticationPolicy(
+    manifestResult.value.id,
+    operationId,
+    operation,
+    resolution,
+  );
+  if (authenticationPolicy.kind === "public") {
+    if (!isWebSessionOperation(operation)) {
+      throw new Error("public invocation authority requires a web-session operation");
+    }
+    if (authId !== undefined) {
+      throw new Error(
+        `${operation.webSession.site} ${operationId} is public and does not accept an auth locator`,
+      );
+    }
+    const authority = authenticationPolicy.authority;
+    return revalidatePreparedInvocation({
+      manifest: manifestResult.value,
+      operationId,
+      input: platformInput.value,
+      auth: authority,
+      readProjectionAuthIdentityHash:
+        publicWebSessionAuthorityIdentityHash(authority),
+    }, registry).invocation;
+  }
+  const selectedAuthId = authId ?? adapterId;
   const preparedAuth = withSettledReadProjectionAuthAdmission(
-    authId,
+    selectedAuthId,
     environment,
     () => {
-      const auth = loadAuth(authId, environment);
+      const auth = loadAuth(selectedAuthId, environment);
       return Object.freeze({
         auth,
         readProjectionAuthIdentityHash: projectionAuthIdentityHash(
@@ -1069,6 +1185,7 @@ export function createReadProjectionQueryForInvocation(
   if (
     pluginResolution !== null
     && pluginResolution.operation.state === "observed"
+    && !isPublicWebSessionInvocationAuthority(checked.invocation.auth)
     && !pluginResolution.binding.subject.matches(subject)
   ) {
     throw new Error(
@@ -1140,6 +1257,10 @@ export function createInvocationPlan(
   const checked = revalidatePreparedInvocation(invocation, registry);
   invocation = checked.invocation;
   const operation = checked.operation;
+  const planAuth = persistedAuthAuthority(
+    invocation.auth,
+    "public reads do not create confirmation plans",
+  );
   if (operation.risk === "R4") throw new Error("R4 capabilities are blocked by wrench");
   if (Buffer.byteLength(canonicalJson(invocation.input), "utf8") > MAX_PLAN_INPUT_BYTES) {
     throw new Error("planned input exceeds its size bound");
@@ -1182,9 +1303,9 @@ export function createInvocationPlan(
     inputHash: sha256(canonicalJson(invocation.input)),
     dispatches,
     auth: {
-      id: invocation.auth.id,
-      hash: authHash(invocation.auth),
-      kind: invocation.auth.kind,
+      id: planAuth.id,
+      hash: authHash(planAuth),
+      kind: planAuth.kind,
     },
   };
   const portablePluginContract = pluginResolution?.portableIdentity ?? null;
@@ -2245,11 +2366,7 @@ function validateFreshPlan(
       plan.providerContract.provider !== operation.provider.provider
       || plan.providerContract.action !== operation.provider.action
       || plan.providerContract.version !== operation.provider.contractVersion
-      || !isCompatibleProviderContractHash(
-        contract,
-        plan.providerContract.hash,
-        registry,
-      )
+      || plan.providerContract.hash !== providerContractHash(contract, registry)
     ) throw new Error("official provider contract changed after preview; preview the action again");
     const issues = pluginResolution?.operation.validateInput(platformInput.value)
       ?? ["provider plugin operation disappeared after preview"];
@@ -2266,11 +2383,7 @@ function validateFreshPlan(
       plan.webSessionContract.site !== operation.webSession.site
       || plan.webSessionContract.action !== operation.webSession.action
       || plan.webSessionContract.version !== operation.webSession.contractVersion
-      || !isCompatibleWebSessionContractHash(
-        contract,
-        plan.webSessionContract.hash,
-        registry,
-      )
+      || plan.webSessionContract.hash !== webSessionContractHash(contract, registry)
     ) throw new Error("authenticated web contract changed after preview; preview the action again");
   } else if (isReviewedTemplateOperation(operation)) {
     if (plan.schemaVersion !== 5 || plan.transport !== "reviewed-template-api") {
@@ -3358,6 +3471,7 @@ type RunPreparedOptions = {
   readonly executeRecipe?: typeof executeBrowserRecipe;
   readonly executeProvider?: typeof executeProviderOperation;
   readonly executeWebSession?: WebSessionOperationExecutor;
+  readonly executePublicWebSession?: PublicWebSessionOperationExecutor;
   readonly executeReviewedTemplate?: typeof executeReviewedTemplateOperation;
   readonly fileResolver?: BrowserFileResolver;
   readonly confirmedDispatches?: readonly BrowserDispatchPlan[];
@@ -3493,6 +3607,15 @@ async function runPreparedCore(
     hash: manifestHash(invocation.manifest),
   };
   const auth = { id: invocation.auth.id, hash: authHash(invocation.auth), kind: invocation.auth.kind };
+  const durableWriteAuth = (): InvocationPlanCommon["auth"] => {
+    if (!isWrite) throw new Error("read invocation has no durable write auth");
+    const selected = persistedAuthAuthority(invocation.auth);
+    return {
+      id: selected.id,
+      hash: authHash(selected),
+      kind: selected.kind,
+    };
+  };
   const withTransport = (value: RunReceiptCommon): RunReceipt => {
     if (currentPortablePluginContract !== null) {
       return {
@@ -3581,7 +3704,7 @@ async function runPreparedCore(
         operation: invocation.operationId,
         risk: operation.risk,
         inputHash,
-        auth,
+        auth: durableWriteAuth(),
         contract: contract.transport === "portable-provider-plugin"
           ? contract
           : {
@@ -3807,7 +3930,7 @@ async function runPreparedCore(
         risk: operation.risk,
         input: invocation.input,
         inputHash,
-        auth,
+        auth: durableWriteAuth(),
         contract: recoveryContract(),
       }, options.environment);
       if (journal === null) throw new Error("remote write has no run journal");
@@ -3969,6 +4092,8 @@ async function runPreparedCore(
       ? "web-session"
       : reviewedTemplateOperation ? "reviewed-template" : "browser";
   const maxOutputBytes = executionOutputLimit(operation);
+  const publicWebSessionOperation = webSessionOperation
+    && isPublicWebSessionInvocationAuthority(invocation.auth);
   let execution: BoundedExecution;
   try {
     const rawExecution: unknown = providerOperation
@@ -3976,7 +4101,7 @@ async function runPreparedCore(
           invocation.manifest,
           operation.provider,
           invocation.input,
-          invocation.auth,
+          persistedAuthAuthority(invocation.auth),
           {
             registry,
             ...(options.fileResolver === undefined ? {} : { fileResolver: options.fileResolver }),
@@ -4008,32 +4133,44 @@ async function runPreparedCore(
                 : {}),
               afterDispatchVerified: (event) => persistDispatchProgress(event, "verified"),
             },
-            (executionOptions: WebSessionExecutionOptions) =>
-              (options.executeWebSession ?? (
-                async (manifest, recipe, input, auth, boundedOptions) => {
-                  if (
-                    pluginResolution === null
-                    || pluginResolution.binding.transport === "provider-api"
-                  ) {
-                    throw new Error(
-                      "authenticated session operation resolved to the wrong plugin transport",
-                    );
-                  }
-                  return pluginResolution.binding.execute(
-                    manifest,
-                    recipe,
-                    input,
-                    auth,
-                    boundedOptions,
+            async (executionOptions: WebSessionExecutionOptions) => {
+              if (
+                pluginResolution === null
+                || pluginResolution.binding.transport === "provider-api"
+              ) {
+                throw new Error(
+                  "authenticated session operation resolved to the wrong plugin transport",
+                );
+              }
+              if (publicWebSessionOperation) {
+                if (pluginResolution.binding.transport !== "web-session-api") {
+                  throw new Error(
+                    "public access is available only to a web-session plugin binding",
                   );
                 }
-              ))(
+                const executePublic = options.executePublicWebSession
+                  ?? pluginResolution.binding.executePublic;
+                if (executePublic === undefined) {
+                  throw new Error(
+                    "reviewed public web-session operation has no public runtime hook",
+                  );
+                }
+                return executePublic(
+                  invocation.manifest,
+                  operation.webSession,
+                  invocation.input,
+                  executionOptions,
+                );
+              }
+              return (options.executeWebSession
+                ?? pluginResolution.binding.execute)(
                 invocation.manifest,
                 operation.webSession,
                 invocation.input,
-                invocation.auth,
+                persistedAuthAuthority(invocation.auth),
                 executionOptions,
-              ),
+              );
+            },
           )
         : reviewedTemplateOperation
           ? await (options.executeReviewedTemplate ?? executeReviewedTemplateOperation)(
@@ -4041,7 +4178,7 @@ async function runPreparedCore(
               invocation.operationId,
               operation.reviewedTemplate,
               invocation.input,
-              invocation.auth,
+              persistedAuthAuthority(invocation.auth),
               {
                 beforeDispatch: (event) => persistDispatchProgress(event, "starting"),
                 afterDispatchVerified: (event) => persistDispatchProgress(event, "verified"),
@@ -4051,7 +4188,7 @@ async function runPreparedCore(
           invocation.manifest,
           operation.browser,
           invocation.input,
-          invocation.auth,
+          persistedAuthAuthority(invocation.auth),
           {
             headed: options.headed,
             ...(options.fileResolver === undefined ? {} : { fileResolver: options.fileResolver }),
@@ -4274,6 +4411,7 @@ async function runPrepared(
     if (
       isWebSessionOperation(checked.operation)
       && pluginResolution !== null
+      && !isPublicWebSessionInvocationAuthority(checked.invocation.auth)
     ) {
       const cleanupIdentity: WebSessionCleanupAdmissionIdentity = {
         runId,
@@ -4352,6 +4490,7 @@ export async function executeReadInvocation(
     readonly executeRecipe?: typeof executeBrowserRecipe;
     readonly executeProvider?: typeof executeProviderOperation;
     readonly executeWebSession?: WebSessionOperationExecutor;
+    readonly executePublicWebSession?: PublicWebSessionOperationExecutor;
     readonly executeReviewedTemplate?: typeof executeReviewedTemplateOperation;
     readonly signal?: AbortSignal;
     readonly persistReceipt?: (receipt: RunReceipt, environment: Readonly<Record<string, string | undefined>>) => void;
@@ -4366,6 +4505,9 @@ export async function executeReadInvocation(
     ...(options.executeRecipe === undefined ? {} : { executeRecipe: options.executeRecipe }),
     ...(options.executeProvider === undefined ? {} : { executeProvider: options.executeProvider }),
     ...(options.executeWebSession === undefined ? {} : { executeWebSession: options.executeWebSession }),
+    ...(options.executePublicWebSession === undefined
+      ? {}
+      : { executePublicWebSession: options.executePublicWebSession }),
     ...(options.executeReviewedTemplate === undefined ? {} : { executeReviewedTemplate: options.executeReviewedTemplate }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.persistReceipt === undefined ? {} : { persistReceipt: options.persistReceipt }),
@@ -4625,8 +4767,22 @@ function parseRunReceiptValue(runId: string, value: unknown): RunReceipt {
     || !/^[a-z][a-z0-9-]{0,47}$/u.test(auth.id)
     || typeof auth.hash !== "string"
     || !/^[a-f0-9]{64}$/u.test(auth.hash)
-    || (auth.kind !== "cookie-source" && auth.kind !== "cookies-file" && auth.kind !== "browser-profile" && auth.kind !== "oauth-token-file" && auth.kind !== "linked-device-store")
+    || (auth.kind !== "cookie-source" && auth.kind !== "cookies-file" && auth.kind !== "browser-profile" && auth.kind !== "oauth-token-file" && auth.kind !== "linked-device-store" && auth.kind !== "public-web-session")
   ) throw new Error("run receipt is malformed");
+  if (auth.kind === "public-web-session") {
+    const expected = publicWebSessionInvocationAuthority(adapter.id, operation);
+    if (
+      !webSessionReceipt
+      || risk !== "R1"
+      || planDigest !== null
+      || dispatchStarted
+      || dispatch.planned !== 0
+      || auth.id !== expected.id
+      || auth.hash !== authHash(expected)
+    ) {
+      throw new Error("run receipt public invocation authority is malformed");
+    }
+  }
   const common: RunReceiptCommon = {
     runId,
     planDigest,
@@ -4634,7 +4790,11 @@ function parseRunReceiptValue(runId: string, value: unknown): RunReceipt {
     operation,
     risk: risk as OperationRisk,
     inputHash,
-    auth: { id: auth.id, hash: auth.hash, kind: auth.kind },
+    auth: {
+      id: auth.id,
+      hash: auth.hash,
+      kind: auth.kind as InvocationAuthority["kind"],
+    },
     status,
     dispatchStarted,
     dispatch,

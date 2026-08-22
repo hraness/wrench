@@ -150,6 +150,7 @@ describe("single-process bundled adapter generation sync", () => {
       "bluesky-web@1.1.0",
       "bluesky-web@1.2.0",
       "bluesky-web@1.3.0",
+      "bluesky-web@1.4.0",
       "facebook-group-web@1.0.0",
       "facebook-marketplace-web@1.0.0",
       "facebook-marketplace-web@1.1.0",

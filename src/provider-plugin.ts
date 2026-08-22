@@ -57,6 +57,7 @@ import {
   assertKernelPortableProviderPluginBindingProjection,
 } from "./provider-plugin-portable-authority";
 import type { WebSessionOperationExecutor } from "./web-session-execution";
+import type { PublicWebSessionOperationExecutor } from "./web-session-execution";
 
 export const PROVIDER_PLUGIN_API_VERSION = 1 as const;
 
@@ -85,6 +86,8 @@ type ProviderPluginOperationDefinitionBaseV1 = {
   readonly idempotency: IdempotencyKind;
   readonly dedupeWindowMs: number;
   readonly state: ProviderPluginContractStateV1;
+  /** Built-in web-session-only marker for one reviewed public read. */
+  readonly access?: "public";
   readonly dispatch: "none" | "single" | "thread-items" | "bounded-items";
   readonly implementation: string;
   readonly planDispatches: (input: OperationInput) => readonly BrowserDispatchPlan[];
@@ -626,6 +629,7 @@ export type WebSessionPluginRuntimeV1 = {
     options?: ProviderPluginSubjectProbeOptionsV1,
   ) => Promise<string>;
   readonly execute: WebSessionOperationExecutor;
+  readonly executePublic?: PublicWebSessionOperationExecutor;
   readonly reconcile?: (
     operation: string,
     input: OperationInput,
@@ -745,6 +749,7 @@ export type WebSessionApiPluginBindingV1 = ProviderPluginBindingBaseV1 & {
   readonly operations: readonly WebSessionPluginOperationV1[];
   readonly loadRuntime: WebSessionPluginRuntimeHooksV1["loadRuntime"];
   readonly execute: WebSessionPluginRuntimeV1["execute"];
+  readonly executePublic?: NonNullable<WebSessionPluginRuntimeV1["executePublic"]>;
   readonly reconcile?: NonNullable<WebSessionPluginRuntimeV1["reconcile"]>;
 };
 
@@ -2278,6 +2283,7 @@ function hasControlCharacters(value: string): boolean {
 function freezeOperation(
   operation: ProviderPluginOperationDefinitionV1,
   transport: ProviderPluginTransport,
+  sourceKind: ProviderPluginV1["sourceKind"],
 ): ProviderPluginOperationV1 {
   const official = transport === "provider-api";
   requireExactKeys(
@@ -2299,6 +2305,7 @@ function freezeOperation(
       "validateSubjectInput",
       "reconciliation",
       "omni",
+      "access",
       ...(official ? ["requiredScopeSets", "coverage"] : []),
     ],
     "provider plugin operation",
@@ -2355,6 +2362,22 @@ function freezeOperation(
   }
   if (operation.state !== "observed" && operation.state !== "capture-required") {
     throw new Error(`provider plugin operation ${operation.name} has an invalid state`);
+  }
+  if (
+    operation.access !== undefined
+    && (
+      operation.access !== "public"
+      || official
+      || sourceKind !== "built-in"
+      || transport !== "web-session-api"
+      || operation.risk !== "R1"
+      || operation.state !== "observed"
+      || operation.dispatch !== "none"
+    )
+  ) {
+    throw new Error(
+      `provider plugin operation ${operation.name} public access requires an observed dispatch-free built-in web-session R1 operation`,
+    );
   }
   if (
     operation.dispatch !== "none"
@@ -2627,11 +2650,17 @@ function validateProviderRuntime(value: ProviderApiPluginRuntimeV1): ProviderApi
 function validateWebRuntime(value: WebSessionPluginRuntimeV1): WebSessionPluginRuntimeV1 {
   requireExactKeys(
     value,
-    ["probe", "execute", "reconcile", "linkedDeviceLifecycle"],
+    ["probe", "execute", "executePublic", "reconcile", "linkedDeviceLifecycle"],
     "web-session plugin runtime",
   );
   if (typeof value.probe !== "function" || typeof value.execute !== "function") {
     throw new Error("web-session plugin runtime must declare probe and execute");
+  }
+  if (
+    value.executePublic !== undefined
+    && typeof value.executePublic !== "function"
+  ) {
+    throw new Error("web-session plugin public runtime hook is invalid");
   }
   if (value.reconcile !== undefined && typeof value.reconcile !== "function") {
     throw new Error("web-session plugin runtime reconciliation hook is invalid");
@@ -2661,6 +2690,9 @@ function validateWebRuntime(value: WebSessionPluginRuntimeV1): WebSessionPluginR
   return Object.freeze({
     probe: value.probe,
     execute: value.execute,
+    ...(value.executePublic === undefined
+      ? {}
+      : { executePublic: value.executePublic }),
     ...(value.reconcile === undefined ? {} : { reconcile: value.reconcile }),
     ...(linkedDeviceLifecycle === undefined ? {} : { linkedDeviceLifecycle }),
   });
@@ -2753,6 +2785,7 @@ export function lazyWebSessionRuntime(
 
 function freezeBinding(
   binding: ProviderPluginBindingDefinitionV1,
+  sourceKind: ProviderPluginV1["sourceKind"],
 ): ProviderPluginBindingV1 {
   requireExactKeys(
     binding,
@@ -2966,7 +2999,7 @@ function freezeBinding(
     MAX_PROVIDER_PLUGIN_OPERATIONS_PER_BINDING,
   );
   const operations = [...binding.operations].map((operation) =>
-    freezeOperation(operation, binding.transport));
+    freezeOperation(operation, binding.transport, sourceKind));
   operations.sort((left, right) =>
     left.name.localeCompare(right.name) || left.contractVersion - right.contractVersion);
   const operationKeys = operations.map((operation) =>
@@ -3024,6 +3057,23 @@ function freezeBinding(
     auth,
     options,
   ) => (await loadRuntime()).execute(manifest, recipe, input, auth, options);
+  const hasPublicOperations = operations.some(
+    (operation) => operation.access === "public",
+  );
+  const executePublic: PublicWebSessionOperationExecutor = async (
+    manifest,
+    recipe,
+    input,
+    options,
+  ) => {
+    const runtime = await loadRuntime();
+    if (runtime.executePublic === undefined) {
+      throw new Error(
+        `provider plugin surface ${binding.surfaceId} is missing its reviewed public runtime hook`,
+      );
+    }
+    return runtime.executePublic(manifest, recipe, input, options);
+  };
   const reconciles = operations.some(
     (operation) => operation.reconciliation !== undefined,
   );
@@ -3225,6 +3275,7 @@ function freezeBinding(
       },
     }),
     execute,
+    ...(hasPublicOperations ? { executePublic } : {}),
     ...(reconciles ? { reconcile } : {}),
     ...(linkedDeviceLifecycle === undefined ? {} : { linkedDeviceLifecycle }),
   });
@@ -3331,7 +3382,8 @@ export function defineProviderPlugin(
       );
     }
   }
-  const bindings = [...plugin.bindings].map((binding) => freezeBinding(binding));
+  const bindings = [...plugin.bindings].map((binding) =>
+    freezeBinding(binding, plugin.sourceKind));
   for (const binding of bindings) {
     if (!providerPluginLazyRuntimeLoaders.has(binding.loadRuntime)) {
       throw new Error(
@@ -3487,7 +3539,7 @@ export function definePortableProviderPluginProjection(
       adapterId,
       manifest,
     );
-    const binding = freezeBinding(bindingDefinition);
+    const binding = freezeBinding(bindingDefinition, "portable");
     if (binding.operations.length > MAX_PROVIDER_PLUGIN_OPERATIONS_PER_BINDING) {
       throw new Error(
         `provider plugin surface ${binding.surfaceId} operations may contain at most ${MAX_PROVIDER_PLUGIN_OPERATIONS_PER_BINDING} items`,

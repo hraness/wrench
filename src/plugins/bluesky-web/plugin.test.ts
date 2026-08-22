@@ -19,14 +19,15 @@ const auth = {
 
 describe("Bluesky provider plugin", () => {
   test("versions the public profile-read source closure independently", () => {
-    expect(blueskyWebPlugin.version).toBe("1.1.0");
+    expect(blueskyWebPlugin.version).toBe("1.2.0");
   });
 
   test("advertises the observed exact handle-bound profile read", () => {
     const profile = binding.operations.find((operation) =>
       operation.name === "profiles.read");
     expect(profile).toMatchObject({
-      contractVersion: 1,
+      access: "public",
+      contractVersion: 2,
       risk: "R1",
       state: "observed",
       dispatch: "none",
@@ -37,6 +38,7 @@ describe("Bluesky provider plugin", () => {
         required: ["handle"],
       },
     });
+    expect(binding.executePublic).toBeFunction();
   });
 
   test("advertises exactly the runtime auth and protected hostname families", () => {

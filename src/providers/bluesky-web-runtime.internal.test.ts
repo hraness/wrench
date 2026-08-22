@@ -12,6 +12,7 @@ import { canonicalJson, type OperationInput, type WebSessionRecipe } from "../mo
 import { OperationDeadline } from "../operation-deadline";
 import { BLUESKY_APPVIEW_PROXY } from "./bluesky-web";
 import {
+  executeBlueskyPublicProfileRead,
   executeBlueskyWebOperation,
   probeBlueskyWebSubject,
   readBlueskyWebContentDeleteDesiredState,
@@ -182,7 +183,9 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "bluesky",
     action,
-    contractVersion: action === "posts.publish" ? 3 : 1,
+    contractVersion: action === "posts.publish"
+      ? 3
+      : action === "profiles.read" ? 2 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 8 * 1024 * 1024,
   };
@@ -675,12 +678,20 @@ describe("Bluesky authenticated XRPC runtime", () => {
       ["media.read", { post_uri: POST_URI }],
     ] as const;
     for (const [action, input] of inputs) {
-      const result = await executeBlueskyWebOperation(
-        recipe(action),
-        input,
-        blueskyAuth,
-        { dependencies: deps },
-      );
+      const selectedRecipe = recipe(action);
+      const result = action === "profiles.read"
+        ? await executeBlueskyPublicProfileRead(
+            selectedRecipe,
+            input,
+            deps,
+            undefined,
+          )
+        : await executeBlueskyWebOperation(
+            selectedRecipe,
+            input,
+            blueskyAuth,
+            { dependencies: deps },
+          );
       expect(result.status).toBe("succeeded");
       expect(result.dispatchStarted).toBe(false);
       expect(result.dispatch).toEqual({ planned: 0, started: 0, verified: 0 });
