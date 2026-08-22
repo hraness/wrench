@@ -18,12 +18,15 @@ import type {
 
 const LINKEDIN_ORIGIN = "https://www.linkedin.com";
 const LINKEDIN_FEED_URL = `${LINKEDIN_ORIGIN}/feed/`;
-const LINKEDIN_BROWSER_REALM_URL = `${LINKEDIN_ORIGIN}/robots.txt`;
+const LINKEDIN_PRE_COOKIE_REALM_URL = `${LINKEDIN_ORIGIN}/robots.txt`;
 const LINKEDIN_INITIAL_ROOT_BATCH = JSON.stringify([
   ["open", LINKEDIN_ORIGIN],
 ]);
+const LINKEDIN_INITIAL_BLANK_BATCH = JSON.stringify([
+  ["open", "about:blank"],
+]);
 const LINKEDIN_INITIAL_REALM_BATCH = JSON.stringify([
-  ["open", LINKEDIN_BROWSER_REALM_URL],
+  ["open", LINKEDIN_PRE_COOKIE_REALM_URL],
 ]);
 const LINKEDIN_CONNECTIONS_URL =
   `${LINKEDIN_ORIGIN}/mynetwork/invite-connect/connections/`;
@@ -64,6 +67,57 @@ type BrowserReadBinding = {
 };
 
 type BrowserReadState = "ready" | "identity" | "profile" | "complete";
+
+const LINKEDIN_RESPONSE_MEDIA_TYPE =
+  /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u;
+
+export type LinkedInProfileBrowserFailureCategory =
+  | "authwall"
+  | "body-envelope"
+  | "bootstrap"
+  | "browser-envelope"
+  | "browser-command"
+  | "execution-context"
+  | "identity-json"
+  | "output-bound"
+  | "provider-fetch"
+  | "response-envelope"
+  | "response-rejected"
+  | "session-cookie"
+  | "startup";
+
+export class LinkedInProfileBrowserFailure extends Error {
+  readonly category: LinkedInProfileBrowserFailureCategory;
+
+  constructor(category: LinkedInProfileBrowserFailureCategory, message: string) {
+    super(message);
+    this.name = "LinkedInProfileBrowserFailure";
+    this.category = category;
+  }
+}
+
+export class LinkedInProfileBrowserResponseRejectedError
+  extends LinkedInProfileBrowserFailure {
+  readonly status: number;
+  readonly contentType: string;
+
+  constructor(status: number, contentType: string) {
+    super(
+      "response-rejected",
+      "LinkedIn stats browser request returned a reviewed rejection",
+    );
+    this.name = "LinkedInProfileBrowserResponseRejectedError";
+    if (
+      !Number.isSafeInteger(status)
+      || status < 100
+      || status > 599
+      || contentType.length > 128
+      || (contentType !== "" && !LINKEDIN_RESPONSE_MEDIA_TYPE.test(contentType))
+    ) throw new Error("LinkedIn stats browser returned a malformed response category");
+    this.status = status;
+    this.contentType = contentType === "" ? "missing" : contentType;
+  }
+}
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -127,17 +181,26 @@ function decodedBody(
     || (result.bodyBytes as number) > maximumBytes
     || typeof result.bodySha256 !== "string"
     || !/^[a-f0-9]{64}$/u.test(result.bodySha256)
-  ) throw new Error("LinkedIn stats browser body envelope changed shape");
+  ) throw new LinkedInProfileBrowserFailure(
+    "body-envelope",
+    "LinkedIn stats browser body envelope changed shape",
+  );
   const bytes = Buffer.from(result.bodyBase64, "base64");
   if (
     bytes.byteLength !== result.bodyBytes
     || bytes.toString("base64") !== result.bodyBase64
     || createHash("sha256").update(bytes).digest("hex") !== result.bodySha256
-  ) throw new Error("LinkedIn stats browser body envelope failed integrity verification");
+  ) throw new LinkedInProfileBrowserFailure(
+    "body-envelope",
+    "LinkedIn stats browser body envelope failed integrity verification",
+  );
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    throw new Error("LinkedIn stats browser body was not valid UTF-8");
+    throw new LinkedInProfileBrowserFailure(
+      "body-envelope",
+      "LinkedIn stats browser body was not valid UTF-8",
+    );
   }
 }
 
@@ -146,19 +209,28 @@ function browserEvaluationResult(
 ): Readonly<Record<string, unknown>> {
   const data = browserResultData(value as Record<string, unknown>);
   if (!isRecord(data) || typeof data.origin !== "string" || !isRecord(data.result)) {
-    throw new Error("LinkedIn stats browser returned a malformed evaluation envelope");
+    throw new LinkedInProfileBrowserFailure(
+      "response-envelope",
+      "LinkedIn stats browser returned a malformed evaluation envelope",
+    );
   }
   let origin: URL;
   try {
     origin = new URL(data.origin);
   } catch {
-    throw new Error("LinkedIn stats browser returned a malformed evaluation envelope");
+    throw new LinkedInProfileBrowserFailure(
+      "response-envelope",
+      "LinkedIn stats browser returned a malformed evaluation envelope",
+    );
   }
   if (
     origin.origin !== LINKEDIN_ORIGIN
     || origin.username !== ""
     || origin.password !== ""
-  ) throw new Error("LinkedIn stats browser returned a malformed evaluation envelope");
+  ) throw new LinkedInProfileBrowserFailure(
+    "response-envelope",
+    "LinkedIn stats browser returned a malformed evaluation envelope",
+  );
   return data.result;
 }
 
@@ -167,22 +239,75 @@ function hasNoDefaultExecutionContext(error: unknown): boolean {
   for (let depth = 0; depth < 8 && current !== undefined; depth += 1) {
     if (
       current instanceof Error
-      && /no default execution context/iu.test(current.message)
+      && /(?:cannot find|no) default execution context/iu.test(current.message)
     ) return true;
     current = current instanceof Error ? current.cause : undefined;
   }
   return false;
 }
 
-function safeContextSettlementBatch(
-  options: Parameters<typeof runCommand>[1],
-): boolean {
-  return [
-    LINKEDIN_INITIAL_ROOT_BATCH,
-    LINKEDIN_INITIAL_REALM_BATCH,
-    JSON.stringify([["wait", "2000"]]),
-    JSON.stringify([["wait", "500"]]),
-  ].includes(options.stdin ?? "");
+function hasUnexpectedLinkedInOrigin(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && current !== undefined; depth += 1) {
+    if (
+      current instanceof Error
+      && /(?:^|: )unexpected LinkedIn origin(?:$|[\r\n])/u.test(current.message)
+    ) return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}
+
+function classifiedBrowserCommandFailure(
+  error: unknown,
+): LinkedInProfileBrowserFailure {
+  const message = error instanceof Error && error.message.length <= 1_500
+    ? error.message
+    : "";
+  if (
+    /(?:^|: )(?:missing|invalid) LinkedIn browser CSRF cookie$/u.test(message)
+  ) {
+    return new LinkedInProfileBrowserFailure(
+      "session-cookie",
+      "LinkedIn stats browser could not establish its reviewed CSRF cookie",
+    );
+  }
+  if (message.includes("Failed to fetch")) {
+    return new LinkedInProfileBrowserFailure(
+      "provider-fetch",
+      "LinkedIn stats browser could not complete its first-party fetch",
+    );
+  }
+  if (message.endsWith("LinkedIn stats browser response escaped its exact route")) {
+    return new LinkedInProfileBrowserFailure(
+      "response-envelope",
+      "LinkedIn stats browser response escaped its exact route",
+    );
+  }
+  if (
+    message.includes("process output exceeded")
+    || message.includes("response exceeded its reviewed byte bound")
+  ) {
+    return new LinkedInProfileBrowserFailure(
+      "output-bound",
+      "LinkedIn stats browser exceeded a reviewed output bound",
+    );
+  }
+  if (
+    message.includes("malformed batch")
+    || message.includes("malformed batch entry")
+    || message.includes("did not return JSON")
+    || message.includes("command omitted its result")
+  ) {
+    return new LinkedInProfileBrowserFailure(
+      "browser-envelope",
+      "LinkedIn stats browser command returned a malformed envelope",
+    );
+  }
+  return new LinkedInProfileBrowserFailure(
+    "browser-command",
+    "LinkedIn stats browser command failed before a reviewed response",
+  );
 }
 
 function contextSettlementRejected(result: CommandResult): boolean {
@@ -199,25 +324,30 @@ function commandWasAborted(options: Parameters<typeof runCommand>[1]): boolean {
 function linkedInProfileBrowserCommandRunner(
   execute: typeof runCommand,
   settleContext: () => Promise<void>,
+  authKind: WrenchAuth["kind"],
 ): typeof runCommand {
   let initialBatchPending = true;
   return async (command, options) => {
-    const executionOptions = initialBatchPending
-      && options.stdin === LINKEDIN_INITIAL_ROOT_BATCH
+    const rewroteInitialRoot = initialBatchPending
+      && options.stdin === LINKEDIN_INITIAL_ROOT_BATCH;
+    const rewroteInitialBlank = initialBatchPending
+      && authKind === "browser-profile"
+      && options.stdin === LINKEDIN_INITIAL_BLANK_BATCH;
+    const executionOptions = rewroteInitialRoot || rewroteInitialBlank
       ? { ...options, stdin: LINKEDIN_INITIAL_REALM_BATCH }
       : options;
     initialBatchPending = false;
     const first = await execute(command, executionOptions);
     if (
-      !safeContextSettlementBatch(executionOptions)
+      !rewroteInitialRoot
+      || authKind === "browser-profile"
       || !contextSettlementRejected(first)
       || commandWasAborted(executionOptions)
     ) return first;
-    // These are fixed navigation/settlement commands before the exact identity
-    // request is evaluated. Agent-browser can briefly observe the tab between
-    // navigation and default-context install. Retry only the rejected fixed
-    // bootstrap command once in the same contained session; cookie commands,
-    // evaluated requests, and provider response rejections are never eligible.
+    // Only a root navigation from a cookie-importing auth kind is safe to
+    // repeat: it occurs before any cookies are imported. Browser profiles may
+    // already contain cookies when their initial about:blank is rewritten, so
+    // that navigation and every later command remain single-attempt.
     await settleContext();
     if (commandWasAborted(executionOptions)) return first;
     return execute(command, executionOptions);
@@ -293,6 +423,7 @@ export async function createLinkedInProfileBrowserTransport(
       runCommand: linkedInProfileBrowserCommandRunner(
         options.dependencies?.runCommand ?? runCommand,
         options.dependencies?.settleContext ?? settleLinkedInBrowserContext,
+        auth.kind,
       ),
     },
     ...(options.operationDeadline === undefined
@@ -302,7 +433,16 @@ export async function createLinkedInProfileBrowserTransport(
       ? {}
       : { publishCleanupResource: options.publishCleanupResource }),
   };
-  const session = await createSession(profileBrowserManifest, auth, sessionOptions);
+  let session: BrowserSession;
+  try {
+    session = await createSession(profileBrowserManifest, auth, sessionOptions);
+  } catch (error) {
+    if (error instanceof PreservedBrowserArtifactsError) throw error;
+    throw new LinkedInProfileBrowserFailure(
+      "startup",
+      "LinkedIn stats browser could not start its contained session",
+    );
+  }
   let closed = false;
   let state: BrowserReadState = "ready";
 
@@ -313,79 +453,116 @@ export async function createLinkedInProfileBrowserTransport(
   ): Promise<Readonly<Record<string, unknown>>> => {
     if (closed) throw new Error("LinkedIn stats browser transport is closed");
     const source = browserReadEvaluationSource(binding);
-    let records: readonly Readonly<Record<string, unknown>>[] | null = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        records = await session.runBatch(
-          [["eval", source]],
-          remainingTimeMs(),
-          Math.min(
-            encodedBodyBound(binding.maxBytes) + BROWSER_ENVELOPE_BYTES,
-            browserOutputBytes,
-          ),
-        );
-        break;
-      } catch (error) {
-        if (attempt !== 0 || !hasNoDefaultExecutionContext(error)) throw error;
-        await session.runBatch(
-          [["wait", "2000"]],
-          Math.min(remainingTimeMs(), 5_000),
-          BROWSER_ENVELOPE_BYTES,
+    let records: readonly Readonly<Record<string, unknown>>[];
+    try {
+      records = await session.runBatch(
+        [["eval", source]],
+        remainingTimeMs(),
+        Math.min(
+          encodedBodyBound(binding.maxBytes) + BROWSER_ENVELOPE_BYTES,
+          browserOutputBytes,
+        ),
+      );
+    } catch (error) {
+      if (error instanceof LinkedInProfileBrowserFailure) throw error;
+      if (hasNoDefaultExecutionContext(error)) {
+        throw new LinkedInProfileBrowserFailure(
+          "execution-context",
+          "LinkedIn stats browser lost its reviewed execution context",
         );
       }
+      if (hasUnexpectedLinkedInOrigin(error)) {
+        throw new LinkedInProfileBrowserFailure(
+          "bootstrap",
+          "LinkedIn stats browser was not on its reviewed signed-in origin",
+        );
+      }
+      throw classifiedBrowserCommandFailure(error);
     }
-    const first = records?.[0];
+    const first = records[0];
     if (first === undefined) {
-      throw new Error("LinkedIn stats browser omitted its response");
+      throw new LinkedInProfileBrowserFailure(
+        "response-envelope",
+        "LinkedIn stats browser omitted its response",
+      );
     }
     const result = browserEvaluationResult(first);
-    exactKeys(
-      result,
-      [
-        "authWall",
-        "bodyBase64",
-        "bodyBytes",
-        "bodySha256",
-        "contentType",
-        "status",
-      ],
-      "LinkedIn stats browser request",
-    );
-    if (result.status !== 200) {
-      throw new Error("LinkedIn stats browser request returned an unreviewed status");
-    }
-    if (result.authWall !== false) {
-      throw new Error("LinkedIn stats browser reached the signed-out authwall");
+    try {
+      exactKeys(
+        result,
+        [
+          "authWall",
+          "bodyBase64",
+          "bodyBytes",
+          "bodySha256",
+          "contentType",
+          "status",
+        ],
+        "LinkedIn stats browser request",
+      );
+    } catch {
+      throw new LinkedInProfileBrowserFailure(
+        "response-envelope",
+        "LinkedIn stats browser request returned an unexpected result shape",
+      );
     }
     const expectedContentTypes = binding.kind === "json"
       ? ["application/vnd.linkedin.normalized+json+2.1", "application/json"]
       : ["text/html"];
     if (
-      typeof result.contentType !== "string"
+      typeof result.status !== "number"
+      || !Number.isSafeInteger(result.status)
+      || result.status < 100
+      || result.status > 599
+      || typeof result.contentType !== "string"
+      || result.contentType.length > 128
+      || (result.contentType !== "" && !LINKEDIN_RESPONSE_MEDIA_TYPE.test(result.contentType))
+    ) throw new LinkedInProfileBrowserFailure(
+      "response-envelope",
+      "LinkedIn stats browser returned a malformed response category",
+    );
+    if (result.authWall === true) {
+      if (
+        binding.kind !== "html"
+        || result.status !== 200
+        || result.contentType !== "text/html"
+        || result.bodyBase64 !== null
+        || result.bodyBytes !== 0
+        || result.bodySha256 !== null
+      ) throw new LinkedInProfileBrowserFailure(
+        "response-envelope",
+        "LinkedIn stats browser returned a malformed authwall envelope",
+      );
+      throw new LinkedInProfileBrowserFailure(
+        "authwall",
+        "LinkedIn stats browser reached the signed-out authwall",
+      );
+    }
+    if (result.authWall !== false) {
+      throw new LinkedInProfileBrowserFailure(
+        "response-envelope",
+        "LinkedIn stats browser returned a malformed authwall envelope",
+      );
+    }
+    if (
+      result.status !== 200
       || !expectedContentTypes.includes(result.contentType)
-    ) throw new Error("LinkedIn stats browser request returned an unreviewed content type");
+    ) {
+      if (
+        result.bodyBase64 !== null
+        || result.bodyBytes !== 0
+        || result.bodySha256 !== null
+      ) throw new LinkedInProfileBrowserFailure(
+        "response-envelope",
+        "LinkedIn stats browser returned a malformed rejection envelope",
+      );
+      throw new LinkedInProfileBrowserResponseRejectedError(
+        result.status,
+        result.contentType,
+      );
+    }
     return result;
   };
-
-  try {
-    await session.runBatch(
-      [["open", LINKEDIN_BROWSER_REALM_URL]],
-      remainingTimeMs(),
-      BROWSER_ENVELOPE_BYTES,
-    );
-    await session.runBatch(
-      [["wait", "2000"]],
-      Math.min(remainingTimeMs(), 10_000),
-      BROWSER_ENVELOPE_BYTES,
-    );
-  } catch (error) {
-    try {
-      await finalizeBrowserSession(session);
-    } catch (cleanupError) {
-      throw cleanupError;
-    }
-    throw error;
-  }
 
   return Object.freeze({
     currentIdentityResponse: async () => {
@@ -406,7 +583,10 @@ export async function createLinkedInProfileBrowserTransport(
       try {
         return JSON.parse(text) as unknown;
       } catch {
-        throw new Error("LinkedIn stats browser identity response was not valid JSON");
+        throw new LinkedInProfileBrowserFailure(
+          "identity-json",
+          "LinkedIn stats browser identity response was not valid JSON",
+        );
       }
     },
     readProfileHtml: async (profileUrl: string) => {
