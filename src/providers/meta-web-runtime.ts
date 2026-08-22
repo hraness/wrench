@@ -14,6 +14,7 @@ import {
   webSessionAuthSubject,
   webSessionCookie,
   type WebSessionClient,
+  type WebSessionCookieRotationState,
   type WebSessionNetworkDependencies,
 } from "../web-session-client";
 import { acquireWebSessionCookieRecords } from "../web-session-cookies";
@@ -40,6 +41,7 @@ import {
   normalizeInstagramProfileStats,
   normalizeThreadsFeedHtml,
   normalizeThreadsPostHtml,
+  normalizeThreadsVideoPostHtml,
   normalizeThreadsProfileStats,
   normalizeThreadsRecentViewsAvailability,
   parseFacebookViewerId,
@@ -47,11 +49,14 @@ import {
   parseMetaJsonScripts,
   parseInstagramViewerId,
   parseThreadsViewerId,
+  projectThreadsPublishVideo,
   type FacebookMarketplaceFeed,
   type MetaWebOperationContract,
   type MetaWebSite,
   type ThreadsImageProjection,
+  type ThreadsVideoProjection,
 } from "./meta-web";
+import { isoBmffVideoDimensions } from "./iso-bmff";
 import {
   bootstrapMetaComet,
   consumeMetaCometRequestProof,
@@ -91,6 +96,8 @@ const MAX_API_BYTES = 8 * 1024 * 1024;
 const MAX_META_RELAY_ASSETS = 16;
 const MAX_META_RELAY_ASSET_BYTES = 3 * 1024 * 1024;
 const MAX_THREADS_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_THREADS_VIDEO_BYTES = 1024 * 1024 * 1024;
+const MAX_THREADS_UPLOAD_ACKNOWLEDGEMENT_BYTES = 16 * 1024;
 const MARKETPLACE_CURSOR_SCOPE = "facebook-marketplace-feed";
 const THREADS_WEB_APP_ID = "238260118697367";
 const THREADS_ASBD_ID = "359341";
@@ -297,13 +304,13 @@ function threadsApiHeaders(
   });
 }
 
-function fileInput(value: OperationInput[string]): FileInputValue {
+function fileInput(value: OperationInput[string], label = "input.attachment"): FileInputValue {
   if (
     !isRecord(value)
     || value.kind !== "file"
     || typeof value.reference !== "string"
     || Object.keys(value).sort().join(",") !== "kind,reference"
-  ) throw new Error("input.attachment must be one plan-bound file");
+  ) throw new Error(`${label} must be one plan-bound file`);
   return Object.freeze({ kind: "file", reference: value.reference });
 }
 
@@ -311,6 +318,13 @@ type ThreadsImage = {
   readonly bytes: Uint8Array;
   readonly height: number;
   readonly mediaType: "image/png";
+  readonly width: number;
+};
+
+type ThreadsVideo = {
+  readonly bytes: Uint8Array;
+  readonly height: number;
+  readonly mediaType: "video/mp4";
   readonly width: number;
 };
 
@@ -384,6 +398,73 @@ async function materializeThreadsImage(
       height,
       mediaType: "image/png",
       width,
+    });
+  } finally {
+    await handle.close();
+  }
+}
+
+async function materializeThreadsVideo(
+  media: FileInputValue,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline: WebSessionOperationDeadline | undefined,
+): Promise<ThreadsVideo> {
+  if (fileResolver === undefined) {
+    throw new Error("Threads video upload requires the plan-bound file resolver");
+  }
+  const paths = operationDeadline === undefined
+    ? await fileResolver([media])
+    : await operationDeadline.run(
+        () => fileResolver([media]),
+        "authenticated web operation deadline",
+      );
+  operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
+  if (paths.length !== 1 || typeof paths[0] !== "string") {
+    throw new Error("Threads file resolver did not return one exact path");
+  }
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = operationDeadline === undefined
+    ? await open(paths[0], constants.O_RDONLY | noFollow)
+    : await operationDeadline.run(
+        () => open(paths[0]!, constants.O_RDONLY | noFollow),
+        "authenticated web operation deadline",
+      );
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (!before.isFile() || before.size < 24 || before.size > MAX_THREADS_VIDEO_BYTES) {
+      throw new Error("Threads video must be a regular MP4 no larger than 1 GiB");
+    }
+    const bytes = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(
+          () => handle.readFile(),
+          "authenticated web operation deadline",
+        );
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || bytes.byteLength !== before.size
+    ) throw new Error("Threads video changed while it was materialized");
+    const dimensions = isoBmffVideoDimensions(bytes, "Threads video");
+    return Object.freeze({
+      bytes: new Uint8Array(bytes),
+      height: dimensions.height,
+      mediaType: "video/mp4",
+      width: dimensions.width,
     });
   } finally {
     await handle.close();
@@ -569,20 +650,33 @@ function threadsUploadId(now: () => number): string {
   return uploadId;
 }
 
-type ThreadsUploadedImage = Readonly<{
+type ThreadsUploadedMedia = Readonly<{
   height: number;
   id: string;
-  mediaType: "image/png";
+  mediaType: 1 | 2;
+  sourceMediaType: "image/png" | "video/mp4";
   width: number;
 }>;
+
+function assertThreadsUploadAcknowledgement(
+  value: unknown,
+  uploadId: string,
+): void {
+  if (
+    !isRecord(value)
+    || Object.keys(value).sort().join(",") !== "status,upload_id"
+    || value.status !== "ok"
+    || value.upload_id !== uploadId
+  ) throw new Error("Threads upload acknowledgement did not bind the exact upload ID");
+}
 
 async function uploadThreadsImage(
   client: WebSessionClient,
   image: ThreadsImage,
   uploadId: string,
-): Promise<ThreadsUploadedImage> {
+): Promise<ThreadsUploadedMedia> {
   const entityName = `fb_uploader_${uploadId}`;
-  await client.requestStatus({
+  const acknowledgement = await client.requestJson({
     url: new URL(`/rupload_igphoto/${entityName}`, ORIGINS.threads),
     method: "POST",
     headers: {
@@ -606,12 +700,60 @@ async function uploadThreadsImage(
     },
     body: image.bytes,
     expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: MAX_THREADS_UPLOAD_ACKNOWLEDGEMENT_BYTES,
   });
+  assertThreadsUploadAcknowledgement(acknowledgement, uploadId);
   return Object.freeze({
     height: image.height,
     id: uploadId,
-    mediaType: image.mediaType,
+    mediaType: 1,
+    sourceMediaType: image.mediaType,
     width: image.width,
+  });
+}
+
+async function uploadThreadsVideo(
+  client: WebSessionClient,
+  video: ThreadsVideo,
+  uploadId: string,
+): Promise<ThreadsUploadedMedia> {
+  const entityName = `fb_uploader_${uploadId}`;
+  const acknowledgement = await client.requestJson({
+    url: new URL(`/rupload_igvideo/${entityName}`, ORIGINS.threads),
+    method: "POST",
+    headers: {
+      accept: "*/*",
+      "content-type": video.mediaType,
+      offset: "0",
+      origin: ORIGINS.threads,
+      referer: `${ORIGINS.threads}/`,
+      "x-entity-length": String(video.bytes.byteLength),
+      "x-entity-name": entityName,
+      "x-entity-type": video.mediaType,
+      "x-ig-app-id": THREADS_WEB_APP_ID,
+      "x-instagram-rupload-params": JSON.stringify({
+        extract_cover_frame: "1",
+        is_sidecar: "0",
+        is_threads: "1",
+        media_type: 2,
+        upload_id: uploadId,
+        upload_media_height: video.height,
+        upload_media_width: video.width,
+      }),
+    },
+    body: video.bytes,
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: MAX_THREADS_UPLOAD_ACKNOWLEDGEMENT_BYTES,
+  });
+  assertThreadsUploadAcknowledgement(acknowledgement, uploadId);
+  return Object.freeze({
+    height: video.height,
+    id: uploadId,
+    mediaType: 2,
+    sourceMediaType: video.mediaType,
+    width: video.width,
   });
 }
 
@@ -623,10 +765,10 @@ export type ThreadsPostLocator = Readonly<{
 
 type ThreadsCreatedPost = Readonly<{
   readonly locator: ThreadsPostLocator;
-  readonly image: Readonly<{
+  readonly media: Readonly<{
     readonly height: number;
     readonly mediaId: string;
-    readonly mediaType: 1;
+    readonly mediaType: 1 | 2;
     readonly width: number;
   }>;
 }>;
@@ -680,7 +822,8 @@ function threadsCreateRequestFailureCategory(error: unknown): ThreadsCreateFailu
 function threadsCreatedPost(
   value: unknown,
   viewerId: string,
-  uploaded: ThreadsUploadedImage,
+  expectedBody: string,
+  uploaded: ThreadsUploadedMedia,
 ): ThreadsCreatedPost {
   // The reviewed synchronous composer response projects only the new post
   // locator. Keep the upload dimensions locally bound, then require the
@@ -690,12 +833,46 @@ function threadsCreatedPost(
     || Object.keys(value).sort().join(",") !== "media,status"
     || value.status !== "ok"
     || !isRecord(value.media)
-    || Object.keys(value.media).sort().join(",") !== "code,permalink,pk"
   ) {
     throw new ThreadsCreateResponseError(
       "success-shape",
       "Threads create response did not match the reviewed success shape",
     );
+  }
+  const minimalLocator = Object.keys(value.media).sort().join(",") === "code,permalink,pk";
+  if (!minimalLocator && uploaded.mediaType !== 2) {
+    throw new ThreadsCreateResponseError(
+      "success-shape",
+      "Threads create response did not match the reviewed success shape",
+    );
+  }
+  if (!minimalLocator) {
+    try {
+      const projected = projectThreadsPublishVideo(
+        value.media,
+        "Threads video create response media",
+      );
+      const projectedUser = isRecord(projected.user) ? projected.user : null;
+      if (
+        projected.caption !== expectedBody
+        || projected.user === null
+        || projectedUser?.id !== viewerId
+        || projected.video === null
+        || projected.video.mediaId !== projected.id
+        || projected.video.mediaType !== uploaded.mediaType
+        || projected.video.width !== uploaded.width
+        || projected.video.height !== uploaded.height
+        || (projected.canonical_url !== null
+          && projected.canonical_url !== value.media.permalink)
+      ) {
+        throw new Error("unbound rich video response");
+      }
+    } catch {
+      throw new ThreadsCreateResponseError(
+        "success-shape",
+        "Threads video create response did not bind the confirmed actor, text, and media",
+      );
+    }
   }
   const { code, permalink, pk } = value.media;
   if (
@@ -745,10 +922,10 @@ function threadsCreatedPost(
   }
   return Object.freeze({
     locator: Object.freeze({ code, id: pk, url: url.href }),
-    image: Object.freeze({
+    media: Object.freeze({
       height: uploaded.height,
       mediaId: pk,
-      mediaType: 1,
+      mediaType: uploaded.mediaType,
       width: uploaded.width,
     }),
   });
@@ -770,8 +947,8 @@ function threadsTextPostAppInfo(body: string): string {
 async function createThreadsPost(
   client: WebSessionClient,
   viewer: BoundMetaViewer,
-  prepared: Extract<PreparedMetaRead, { readonly kind: "threads-post" }>,
-  uploaded: ThreadsUploadedImage,
+  prepared: Extract<PreparedMetaRead, { readonly kind: "threads-post" | "threads-video" }>,
+  uploaded: ThreadsUploadedMedia,
   config: ThreadsRequestConfig,
 ): Promise<ThreadsCreatedPost> {
   const csrfToken = webSessionCookie(client.cookies, "csrftoken");
@@ -813,7 +990,7 @@ async function createThreadsPost(
       { cause: error },
     );
   }
-  return threadsCreatedPost(response, viewer.id, uploaded);
+  return threadsCreatedPost(response, viewer.id, prepared.body, uploaded);
 }
 
 function metaDispatchEvent(
@@ -844,11 +1021,6 @@ async function executeThreadsPost(
     options.fileResolver,
     options.operationDeadline,
   );
-  const reboundViewer = await currentViewer("threads", client);
-  if (reboundViewer.subject !== viewer.subject) {
-    throw new Error("Threads current viewer changed before the post dispatch");
-  }
-  const config = threadsRequestConfig(reboundViewer.rootHtml);
   const uploadId = threadsUploadId(options.now);
   let started = 0;
   let verified = 0;
@@ -861,11 +1033,16 @@ async function executeThreadsPost(
     // safely retryable instead of being misclassified as an indeterminate
     // public post.
     const uploaded = await uploadThreadsImage(client, image, uploadId);
+    const dispatchViewer = await currentViewer("threads", client);
+    if (dispatchViewer.subject !== viewer.subject) {
+      throw new Error("Threads current viewer changed after the image upload");
+    }
+    const config = threadsRequestConfig(dispatchViewer.rootHtml);
     await options.beforeDispatch?.(metaDispatchEvent("posts.publish", started, verified));
     started = 1;
     failureStage = "post create response";
-    created = await createThreadsPost(client, reboundViewer, prepared, uploaded, config);
-    const createdImage = created.image;
+    created = await createThreadsPost(client, dispatchViewer, prepared, uploaded, config);
+    const createdImage = created.media;
     failureStage = "accepted target retention";
     await options.afterProviderAcceptedMutationTarget?.({
       id: "posts.publish",
@@ -893,7 +1070,7 @@ async function executeThreadsPost(
     });
     const post = normalizeThreadsPostHtml(
       readbackHtml,
-      reboundViewer.id,
+      dispatchViewer.id,
       created.locator.id,
       created.locator.code,
       created.locator.url,
@@ -942,11 +1119,132 @@ async function executeThreadsPost(
   }
 }
 
+async function executeThreadsVideo(
+  client: WebSessionClient,
+  viewer: BoundMetaViewer,
+  prepared: Extract<PreparedMetaRead, { readonly kind: "threads-video" }>,
+  options: {
+    readonly fileResolver?: BrowserFileResolver;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly now: () => number;
+  },
+): Promise<WebSessionExecution> {
+  const video = await materializeThreadsVideo(
+    prepared.media,
+    options.fileResolver,
+    options.operationDeadline,
+  );
+  const uploadId = threadsUploadId(options.now);
+  let started = 0;
+  let verified = 0;
+  let created: ThreadsCreatedPost | null = null;
+  let failureStage = "video upload confirmation";
+  try {
+    // A completed rupload is only an orphanable provider blob. The durable
+    // at-most-once boundary remains immediately before the post-creating
+    // configure request.
+    const uploaded = await uploadThreadsVideo(client, video, uploadId);
+    const dispatchViewer = await currentViewer("threads", client);
+    if (dispatchViewer.subject !== viewer.subject) {
+      throw new Error("Threads current viewer changed after the video upload");
+    }
+    const config = threadsRequestConfig(dispatchViewer.rootHtml);
+    await options.beforeDispatch?.(metaDispatchEvent("media.publish", started, verified));
+    started = 1;
+    failureStage = "post create response";
+    created = await createThreadsPost(client, dispatchViewer, prepared, uploaded, config);
+    const createdVideo = created.media;
+    if (createdVideo.mediaType !== 2) {
+      throw new Error("Threads create response changed the confirmed video media type");
+    }
+    failureStage = "accepted target retention";
+    await options.afterProviderAcceptedMutationTarget?.({
+      id: "media.publish",
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: canonicalJson({
+          code: created.locator.code,
+          height: createdVideo.height,
+          id: created.locator.id,
+          mediaType: createdVideo.mediaType,
+          remoteMediaId: createdVideo.mediaId,
+          url: created.locator.url,
+          width: createdVideo.width,
+        }),
+      },
+    });
+    failureStage = "permalink readback";
+    const readbackHtml = await client.requestText({
+      url: new URL(created.locator.url),
+      method: "GET",
+      headers: htmlHeaders(ORIGINS.threads),
+      expectedContentTypes: ["text/html"],
+      maxBytes: MAX_BOOTSTRAP_BYTES,
+    });
+    const post = normalizeThreadsVideoPostHtml(
+      readbackHtml,
+      dispatchViewer.id,
+      created.locator.id,
+      created.locator.code,
+      created.locator.url,
+      prepared.body,
+      video,
+    );
+    const remoteVideo = post.video as ThreadsVideoProjection;
+    if (
+      remoteVideo.mediaId !== createdVideo.mediaId
+      || remoteVideo.mediaType !== createdVideo.mediaType
+      || remoteVideo.width !== createdVideo.width
+      || remoteVideo.height !== createdVideo.height
+    ) throw new Error("Threads permalink readback changed the response-bound video");
+    verified = 1;
+    await options.afterDispatchVerified?.(metaDispatchEvent("media.publish", started, verified));
+    return {
+      status: "succeeded",
+      output: Object.freeze({
+        post,
+        media: Object.freeze({
+          durationSeconds: remoteVideo.durationSeconds,
+          hasAudio: remoteVideo.hasAudio,
+          height: remoteVideo.height,
+          mediaType: video.mediaType,
+          remoteMediaId: remoteVideo.mediaId,
+          verifiedBy: "permalink-readback",
+          width: remoteVideo.width,
+        }),
+      }),
+      finalUrl: created.locator.url,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch (error) {
+    const publicFailureStage = failureStage === "post create response"
+      ? `${failureStage} (${error instanceof ThreadsCreateResponseError ? error.category : "unexpected"})`
+      : failureStage;
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: created?.locator.url ?? `${ORIGINS.threads}/`,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? `Threads may have accepted the video or post but exact actor, ID, code, text, video, and permalink readback was not verified; failure stage: ${publicFailureStage}; reconcile before retrying`
+        : "Threads video upload failed before post submission; retry with a fresh confirmed plan",
+    };
+  }
+}
+
 type ThreadsPublishedMutationTarget = Readonly<{
   code: string;
   height: number;
   id: string;
-  mediaType: 1;
+  mediaType: 1 | 2;
   remoteMediaId: string;
   url: string;
   width: number;
@@ -985,8 +1283,8 @@ function parseThreadsPublishedMutationTarget(
   if (typeof value.code !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.code)) {
     throw new Error("Threads provider-accepted post target returned an invalid post code");
   }
-  if (value.mediaType !== 1) {
-    throw new Error("Threads provider-accepted post target did not identify one reviewed image");
+  if (value.mediaType !== 1 && value.mediaType !== 2) {
+    throw new Error("Threads provider-accepted post target did not identify one reviewed media item");
   }
   if (typeof value.url !== "string" || value.url.length < 1 || value.url.length > 2_048) {
     throw new Error("Threads provider-accepted post target returned an invalid permalink");
@@ -1016,7 +1314,7 @@ function parseThreadsPublishedMutationTarget(
       "Threads provider-accepted post target height",
     ),
     id: value.id,
-    mediaType: 1 as const,
+    mediaType: value.mediaType,
     remoteMediaId: value.remoteMediaId,
     url: url.href,
     width: threadsPublishedMutationTargetDimension(
@@ -1032,7 +1330,7 @@ function parseThreadsPublishedMutationTarget(
 
 /**
  * Reconcile one exact response-bound Threads post with one read of its exact
- * permalink. This never resolves or uploads the confirmed attachment.
+ * permalink. This never resolves or uploads the confirmed media file.
  */
 export async function readThreadsWebPublishedMutationTarget(
   recipe: WebSessionRecipe,
@@ -1043,15 +1341,25 @@ export async function readThreadsWebPublishedMutationTarget(
     readonly dependencies?: MetaWebRuntimeDependencies;
   } = {},
 ): Promise<{ readonly present: true; readonly postId: string }> {
-  if (
-    recipe.site !== "threads"
-    || recipe.action !== "posts.publish"
-    || recipe.contractVersion !== 4
-  ) throw new Error("Threads publish recovery supports only posts.publish@4");
+  const isImagePublish = recipe.site === "threads"
+    && recipe.action === "posts.publish"
+    && recipe.contractVersion === 4;
+  const isVideoPublish = recipe.site === "threads"
+    && recipe.action === "media.publish"
+    && recipe.contractVersion === 1;
+  if (!isImagePublish && !isVideoPublish) {
+    throw new Error("Threads publish recovery supports only posts.publish@4 or media.publish@1");
+  }
   const target = parseThreadsPublishedMutationTarget(identifier);
   const prepared = prepareMetaRead(recipe, input, auth, Object.freeze({}));
-  if (prepared.kind !== "threads-post") {
-    throw new Error("Threads publish recovery input did not match posts.publish");
+  if (
+    (isImagePublish && (prepared.kind !== "threads-post" || target.mediaType !== 1))
+    || (isVideoPublish && (prepared.kind !== "threads-video" || target.mediaType !== 2))
+  ) {
+    throw new Error("Threads publish recovery input did not match its exact media contract");
+  }
+  if (prepared.kind !== "threads-post" && prepared.kind !== "threads-video") {
+    throw new Error("Threads publish recovery input did not match its exact media contract");
   }
   const expectedSubject = expectedMetaAuthSubject("threads", auth);
   const viewerId = expectedSubject.slice("threads:".length);
@@ -1070,23 +1378,33 @@ export async function readThreadsWebPublishedMutationTarget(
     expectedContentTypes: ["text/html"],
     maxBytes: Math.min(recipe.maxOutputBytes, MAX_BOOTSTRAP_BYTES),
   });
-  const post = normalizeThreadsPostHtml(
-    html,
-    viewerId,
-    target.id,
-    target.code,
-    target.url,
-    prepared.body,
-    { height: target.height, width: target.width },
-  );
-  const image = post.image;
+  const post = prepared.kind === "threads-post"
+    ? normalizeThreadsPostHtml(
+        html,
+        viewerId,
+        target.id,
+        target.code,
+        target.url,
+        prepared.body,
+        { height: target.height, width: target.width },
+      )
+    : normalizeThreadsVideoPostHtml(
+        html,
+        viewerId,
+        target.id,
+        target.code,
+        target.url,
+        prepared.body,
+        { height: target.height, width: target.width },
+      );
+  const media = "image" in post ? post.image : post.video;
   if (
-    image === null
-    || image.mediaId !== target.remoteMediaId
-    || image.mediaType !== target.mediaType
-    || image.width !== target.width
-    || image.height !== target.height
-  ) throw new Error("Threads publish recovery readback changed the accepted image");
+    media === null
+    || media.mediaId !== target.remoteMediaId
+    || media.mediaType !== target.mediaType
+    || media.width !== target.width
+    || media.height !== target.height
+  ) throw new Error("Threads publish recovery readback changed the accepted media");
   return Object.freeze({ present: true, postId: target.id });
 }
 
@@ -1308,6 +1626,12 @@ type PreparedMetaRead =
     readonly body: string;
   }
   | {
+    readonly kind: "threads-video";
+    readonly audience: "default";
+    readonly body: string;
+    readonly media: FileInputValue;
+  }
+  | {
     readonly kind: "facebook-feed";
     readonly limit: number;
   }
@@ -1426,6 +1750,28 @@ function prepareMetaRead(
       attachment: fileInput(input.attachment),
       audience: audience as "default",
       body,
+    });
+  }
+  if (recipe.site === "threads" && recipe.action === "media.publish") {
+    requireExactInputKeys(input, ["audience", "body", "media"]);
+    const body = input.body;
+    if (
+      typeof body !== "string"
+      || body.length < 1
+      || body.length > 450
+      || /[\0\r]/u.test(body)
+    ) throw new Error("input.body must be 1 to 450 bounded UTF-16 code units");
+    if (input.media === undefined) {
+      throw new Error("reviewed Threads media.publish requires one MP4 video");
+    }
+    const audience = input.audience === undefined
+      ? "default"
+      : exactEnumInput(input, "audience", ["default"]);
+    return Object.freeze({
+      kind: "threads-video",
+      audience: audience as "default",
+      body,
+      media: fileInput(input.media, "input.media"),
     });
   }
   if (recipe.site === "facebook" && recipe.action === "feeds.read") {
@@ -1609,14 +1955,15 @@ export async function executeMetaWebOperation(
   if (contract.state !== "observed") {
     throw new Error(`${recipe.site} authenticated web operation ${recipe.action} is capture-required: ${contract.reason}`);
   }
-  const isThreadsPost = recipe.site === "threads" && recipe.action === "posts.publish";
+  const isThreadsMutation = recipe.site === "threads"
+    && (recipe.action === "posts.publish" || recipe.action === "media.publish");
   if (
-    !isThreadsPost
+    !isThreadsMutation
     && (contract.risk !== "R1" || contract.effect !== "read")
   ) {
     throw new Error(`${recipe.site} reviewed Meta runtime refuses non-read execution`);
   }
-  if (!isThreadsPost) {
+  if (!isThreadsMutation) {
     void options.beforeDispatch;
     void options.afterDispatchVerified;
   }
@@ -1631,6 +1978,10 @@ export async function executeMetaWebOperation(
     auth,
     options.dependencies,
   );
+  let threadsAccountCookieState: WebSessionCookieRotationState = Object.freeze({
+    cookies: Object.freeze([]),
+    tombstones: Object.freeze([]),
+  });
   const client = await createWebSessionClient(origin, auth, {
     timeoutMs: recipe.timeoutMs,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -1638,10 +1989,47 @@ export async function executeMetaWebOperation(
       ? {}
       : { operationDeadline: options.operationDeadline }),
     ...(dependencies === undefined ? {} : { dependencies }),
+    ...(isThreadsMutation
+      ? {
+          cookieRotation: {
+            // Account-cookie changes are retained only inside this invocation
+            // so the mandatory post-upload viewer probe observes and rejects
+            // an upload response that moved the browser session to a new user.
+            allowedNames: Object.freeze(["ds_user_id"]),
+            cachedState: threadsAccountCookieState,
+            maxCachedCookieAgeSeconds: 60,
+            tombstoneTtlSeconds: 60,
+            save: (state: WebSessionCookieRotationState) => {
+              threadsAccountCookieState = state;
+            },
+          },
+        }
+      : {}),
   });
   const viewer = await requireBoundViewer(recipe.site, client, expectedSubject);
   if (prepared.kind === "threads-post") {
     return executeThreadsPost(client, viewer, prepared, {
+      ...(options.fileResolver === undefined ? {} : { fileResolver: options.fileResolver }),
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(options.beforeDispatch === undefined
+        ? {}
+        : { beforeDispatch: options.beforeDispatch }),
+      ...(options.afterProviderAcceptedMutationTarget === undefined
+        ? {}
+        : {
+            afterProviderAcceptedMutationTarget:
+              options.afterProviderAcceptedMutationTarget,
+          }),
+      ...(options.afterDispatchVerified === undefined
+        ? {}
+        : { afterDispatchVerified: options.afterDispatchVerified }),
+      now: options.dependencies?.now ?? Date.now,
+    });
+  }
+  if (prepared.kind === "threads-video") {
+    return executeThreadsVideo(client, viewer, prepared, {
       ...(options.fileResolver === undefined ? {} : { fileResolver: options.fileResolver }),
       ...(options.operationDeadline === undefined
         ? {}

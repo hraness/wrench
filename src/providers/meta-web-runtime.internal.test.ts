@@ -159,6 +159,38 @@ function threadsImagePost(
   });
 }
 
+function threadsVideoPost(
+  postId: string,
+  postCode: string,
+  text: string,
+  options: {
+    readonly candidateHeight?: number;
+    readonly candidateWidth?: number;
+    readonly height?: number;
+    readonly width?: number;
+  } = {},
+): Readonly<Record<string, unknown>> {
+  const width = options.width ?? 640;
+  const height = options.height ?? 360;
+  return Object.freeze({
+    pk: postId,
+    code: postCode,
+    canonical_url: `https://www.threads.com/@viewer/post/${postCode}`,
+    caption: { text },
+    user: { pk: "12345", username: "viewer" },
+    media_type: 2,
+    original_width: width,
+    original_height: height,
+    video_duration: 8,
+    has_audio: true,
+    video_versions: [{
+      width: options.candidateWidth ?? width,
+      height: options.candidateHeight ?? height,
+      url: "https://scontent.cdninstagram.com/threads-fixture.mp4",
+    }],
+  });
+}
+
 function threadsCreateResponse(
   postId: string,
   postCode: string,
@@ -168,6 +200,20 @@ function threadsCreateResponse(
       code: postCode,
       permalink: `https://www.threads.com/@viewer/post/${postCode}`,
       pk: postId,
+    }),
+    status: "ok",
+  });
+}
+
+function threadsVideoCreateResponse(
+  postId: string,
+  postCode: string,
+  text: string,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    media: Object.freeze({
+      ...threadsVideoPost(postId, postCode, text),
+      permalink: `https://www.threads.com/@viewer/post/${postCode}`,
     }),
     status: "ok",
   });
@@ -432,6 +478,43 @@ function pngFixture(width: number, height: number): Buffer {
   return bytes;
 }
 
+function isoBox(type: string, ...payloads: readonly Uint8Array[]): Buffer {
+  const payloadBytes = payloads.reduce((total, payload) => total + payload.byteLength, 0);
+  const bytes = Buffer.alloc(8 + payloadBytes);
+  bytes.writeUInt32BE(bytes.byteLength, 0);
+  bytes.write(type, 4, 4, "ascii");
+  let offset = 8;
+  for (const payload of payloads) {
+    Buffer.from(payload).copy(bytes, offset);
+    offset += payload.byteLength;
+  }
+  return bytes;
+}
+
+function mp4Fixture(width: number, height: number): Buffer {
+  const ftypPayload = Buffer.alloc(16);
+  ftypPayload.write("isom", 0, 4, "ascii");
+  ftypPayload.writeUInt32BE(0x200, 4);
+  ftypPayload.write("isomiso2", 8, 8, "ascii");
+  const trackHeader = Buffer.alloc(84);
+  trackHeader[0] = 0;
+  trackHeader.writeUInt32BE(0x0001_0000, 40);
+  trackHeader.writeUInt32BE(0x0001_0000, 56);
+  trackHeader.writeUInt32BE(0x4000_0000, 72);
+  trackHeader.writeUInt32BE(width * 65_536, 76);
+  trackHeader.writeUInt32BE(height * 65_536, 80);
+  const handler = Buffer.alloc(12);
+  handler.write("vide", 8, 4, "ascii");
+  return Buffer.concat([
+    isoBox("ftyp", ftypPayload),
+    isoBox(
+      "moov",
+      isoBox("trak", isoBox("tkhd", trackHeader), isoBox("mdia", isoBox("hdlr", handler))),
+    ),
+    isoBox("mdat", Buffer.from([1, 2, 3, 4])),
+  ]);
+}
+
 const facebookMarketplaceBundle =
   "__d(\"MarketplaceCometBrowseFeedLightPaginationQuery_facebookRelayOperation\",[],"
   + "(function(a,b,c,d,e,f){\"use strict\";e.exports=\"27448592924790037\"}),null);";
@@ -652,6 +735,85 @@ async function executeThreadsCreateFixture(
     },
   );
   return { acceptedTargets, calls, result };
+}
+
+async function executeThreadsVideoUploadFixture(
+  uploadResponse: () => Response,
+  observeRoot?: (call: Call, read: number) => void,
+): Promise<{
+  readonly beforeDispatch: number;
+  readonly calls: readonly Call[];
+  readonly creates: number;
+  readonly result: Awaited<ReturnType<typeof executeMetaWebOperation>>;
+  readonly rootReads: number;
+}> {
+  const root = mkdtempSync(join(tmpdir(), "wrench-threads-video-upload-response-"));
+  chmodSync(root, 0o700);
+  stateRoots.push(root);
+  const videoPath = join(root, "fixture.mp4");
+  writeFileSync(videoPath, mp4Fixture(640, 360), { mode: 0o600 });
+  const uploadId = "1786923725481";
+  const bootstrap = threadsHtml + script({
+    require: [
+      ["SprinkleConfig", [], {
+        param_name: "jazoest",
+        version: 2,
+        should_randomize: false,
+      }, 1],
+      ["WebBloksVersioningID", [], {
+        versioningID: "a".repeat(64),
+      }, 2],
+    ],
+  });
+  const calls: Call[] = [];
+  let beforeDispatch = 0;
+  let creates = 0;
+  let rootReads = 0;
+  const result = await executeMetaWebOperation(
+    recipe("threads", "media.publish"),
+    {
+      audience: "default",
+      body: "Wrench disposable Threads video fixture",
+      media: { kind: "file", reference: "fixture" },
+    },
+    auth("threads"),
+    {
+      fileResolver: () => Promise.resolve([videoPath]),
+      beforeDispatch: () => {
+        beforeDispatch += 1;
+        return Promise.resolve();
+      },
+      dependencies: {
+        ...dependencies("threads", calls, (call) => {
+          if (call.method === "GET" && call.url.pathname === "/") {
+            rootReads += 1;
+            observeRoot?.(call, rootReads);
+            return new Response(bootstrap, {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            });
+          }
+          if (call.url.pathname === `/rupload_igvideo/fb_uploader_${uploadId}`) {
+            return uploadResponse();
+          }
+          if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
+            creates += 1;
+            return new Response(JSON.stringify(threadsVideoCreateResponse(
+              "987654322_12345",
+              "VideoABC",
+              "Wrench disposable Threads video fixture",
+            )), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          throw new Error(`unexpected Threads video upload fixture request ${call.method} ${call.url.pathname}`);
+        }, undefined, threadsMutationCookies()),
+        now: () => Number(uploadId),
+      },
+    },
+  );
+  return { beforeDispatch, calls, creates, result, rootReads };
 }
 
 async function rejectionMessage(value: Promise<unknown>): Promise<string> {
@@ -881,7 +1043,7 @@ describe("Meta authenticated internal-data runtime", () => {
     expect(threadsDispatches).toBe(0);
   });
 
-  test("uploads one plan-bound Threads PNG, dispatches once, and verifies the exact permalink readback", async () => {
+  test("uploads one plan-bound Threads PNG, rebinds fresh config, and verifies the exact permalink readback", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-threads-post-"));
     chmodSync(root, 0o700);
     stateRoots.push(root);
@@ -903,6 +1065,18 @@ describe("Meta authenticated internal-data runtime", () => {
         }, 2],
       ],
     });
+    const postUploadBootstrap = threadsHtml + script({
+      require: [
+        ["SprinkleConfig", [], {
+          param_name: "jazoest",
+          version: 3,
+          should_randomize: false,
+        }, 1],
+        ["WebBloksVersioningID", [], {
+          versioningID: "b".repeat(64),
+        }, 2],
+      ],
+    });
     const published = threadsImagePost(postId, postCode, text);
     const readback = threadsHtml + script({ post: published });
     const acceptedTargetIdentifier = canonicalJson({
@@ -916,13 +1090,15 @@ describe("Meta authenticated internal-data runtime", () => {
     });
     const calls: Call[] = [];
     const events: string[] = [];
+    let rootReads = 0;
     const network = dependencies(
       "threads",
       calls,
       (call) => {
         events.push(`${call.method} ${call.url.pathname}`);
         if (call.method === "GET" && call.url.pathname === "/") {
-          return new Response(bootstrap, {
+          rootReads += 1;
+          return new Response(rootReads === 1 ? bootstrap : postUploadBootstrap, {
             status: 200,
             headers: { "content-type": "text/html" },
           });
@@ -946,7 +1122,7 @@ describe("Meta authenticated internal-data runtime", () => {
         }
         if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
           expect(call.headers.get("x-csrftoken")).toBe("csrf-fixture");
-          expect(call.headers.get("x-bloks-version-id")).toBe("a".repeat(64));
+          expect(call.headers.get("x-bloks-version-id")).toBe("b".repeat(64));
           const form = new URLSearchParams(typeof call.body === "string" ? call.body : "");
           expect(Object.fromEntries(form)).toEqual({
             audience: "default",
@@ -963,7 +1139,7 @@ describe("Meta authenticated internal-data runtime", () => {
             }),
             upload_id: uploadId,
             web_session_id: "::wg8yw9",
-            jazoest: "21250",
+            jazoest: "31250",
           });
           return new Response(JSON.stringify(threadsCreateResponse(postId, postCode)), {
             status: 200,
@@ -1034,13 +1210,268 @@ describe("Meta authenticated internal-data runtime", () => {
     });
     expect(events).toEqual([
       "GET /",
-      "GET /",
       `POST /rupload_igphoto/fb_uploader_${uploadId}`,
+      "GET /",
       "before 0",
       "POST /api/v1/media/configure_text_post_app_feed/",
       `accepted ${acceptedTargetIdentifier}`,
       `GET /@viewer/post/${postCode}`,
       "after 1",
+    ]);
+  });
+
+  test("uploads one plan-bound Threads MP4, dispatches once, and verifies the exact permalink readback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-threads-video-"));
+    chmodSync(root, 0o700);
+    stateRoots.push(root);
+    const videoPath = join(root, "fixture.mp4");
+    const videoBytes = mp4Fixture(640, 360);
+    writeFileSync(videoPath, videoBytes, { mode: 0o600 });
+    const uploadId = "1786923725481";
+    const postId = "987654322_12345";
+    const postCode = "VideoABC";
+    const text = "Wrench disposable Threads video fixture";
+    const bootstrap = threadsHtml + script({
+      require: [
+        ["SprinkleConfig", [], {
+          param_name: "jazoest",
+          version: 2,
+          should_randomize: false,
+        }, 1],
+        ["WebBloksVersioningID", [], {
+          versioningID: "a".repeat(64),
+        }, 2],
+      ],
+    });
+    const readback = threadsHtml + script({
+      post: threadsVideoPost(postId, postCode, text),
+    });
+    const acceptedTargetIdentifier = canonicalJson({
+      code: postCode,
+      height: 360,
+      id: postId,
+      mediaType: 2,
+      remoteMediaId: postId,
+      url: `https://www.threads.com/@viewer/post/${postCode}`,
+      width: 640,
+    });
+    const calls: Call[] = [];
+    const events: string[] = [];
+    const network = dependencies(
+      "threads",
+      calls,
+      (call) => {
+        events.push(`${call.method} ${call.url.pathname}`);
+        if (call.method === "GET" && call.url.pathname === "/") {
+          return new Response(bootstrap, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        if (call.url.pathname === `/rupload_igvideo/fb_uploader_${uploadId}`) {
+          expect(call.body).toBeInstanceOf(Uint8Array);
+          expect((call.body as Uint8Array).byteLength).toBe(videoBytes.byteLength);
+          expect(call.headers.get("content-type")).toBe("video/mp4");
+          expect(call.headers.get("x-entity-length")).toBe(String(videoBytes.byteLength));
+          expect(call.headers.get("x-entity-type")).toBe("video/mp4");
+          expect(call.headers.get("x-instagram-rupload-params")).toBe(JSON.stringify({
+            extract_cover_frame: "1",
+            is_sidecar: "0",
+            is_threads: "1",
+            media_type: 2,
+            upload_id: uploadId,
+            upload_media_height: 360,
+            upload_media_width: 640,
+          }));
+          return new Response(JSON.stringify({ status: "ok", upload_id: uploadId }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
+          expect(call.headers.get("x-bloks-version-id")).toBe("a".repeat(64));
+          const form = new URLSearchParams(typeof call.body === "string" ? call.body : "");
+          expect(Object.fromEntries(form)).toEqual({
+            audience: "default",
+            caption: text,
+            creator_geo_gating_info: JSON.stringify({ whitelist_country_codes: [] }),
+            is_threads: "true",
+            should_include_permalink: "true",
+            text_post_app_info: JSON.stringify({
+              excluded_inline_media_ids: "[]",
+              is_genai_invocation_post: false,
+              is_reply_approval_enabled: false,
+              is_spoiler_media: false,
+              text_with_entities: { entities: [], text },
+            }),
+            upload_id: uploadId,
+            web_session_id: "::wg8yw9",
+            jazoest: "21250",
+          });
+          return new Response(JSON.stringify(threadsVideoCreateResponse(postId, postCode, text)), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (call.url.pathname === `/@viewer/post/${postCode}`) {
+          return new Response(readback, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        throw new Error(`unexpected Threads video test request ${call.method} ${call.url.pathname}`);
+      },
+      undefined,
+      threadsMutationCookies(),
+    );
+    const result = await executeMetaWebOperation(
+      recipe("threads", "media.publish"),
+      {
+        audience: "default",
+        body: text,
+        media: { kind: "file", reference: "fixture" },
+      },
+      auth("threads"),
+      {
+        fileResolver: () => Promise.resolve([videoPath]),
+        beforeDispatch: (event) => {
+          events.push(`before ${event.progress.started}`);
+          return Promise.resolve();
+        },
+        afterProviderAcceptedMutationTarget: (event) => {
+          events.push(`accepted ${event.target.identifier}`);
+          expect(event).toEqual({
+            id: "media.publish",
+            index: 1,
+            target: { schemaVersion: 1, identifier: acceptedTargetIdentifier },
+          });
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          events.push(`after ${event.progress.verified}`);
+          return Promise.resolve();
+        },
+        dependencies: { ...network, now: () => Number(uploadId) },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        post: {
+          id: postId,
+          caption: text,
+          user: { id: "12345" },
+          video: {
+            durationSeconds: 8,
+            hasAudio: true,
+            height: 360,
+            mediaId: postId,
+            mediaType: 2,
+            width: 640,
+          },
+        },
+        media: {
+          durationSeconds: 8,
+          hasAudio: true,
+          height: 360,
+          mediaType: "video/mp4",
+          remoteMediaId: postId,
+          verifiedBy: "permalink-readback",
+          width: 640,
+        },
+      },
+      finalUrl: `https://www.threads.com/@viewer/post/${postCode}`,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(events).toEqual([
+      "GET /",
+      `POST /rupload_igvideo/fb_uploader_${uploadId}`,
+      "GET /",
+      "before 0",
+      "POST /api/v1/media/configure_text_post_app_feed/",
+      `accepted ${acceptedTargetIdentifier}`,
+      `GET /@viewer/post/${postCode}`,
+      "after 1",
+    ]);
+  });
+
+  test("rejects every unbound Threads video upload acknowledgement before dispatch", async () => {
+    const uploadId = "1786923725481";
+    const cases = [
+      ["provider failure status", () => new Response(JSON.stringify({
+        status: "fail",
+        upload_id: uploadId,
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })],
+      ["wrong upload ID", () => new Response(JSON.stringify({
+        status: "ok",
+        upload_id: "1786923725482",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })],
+      ["malformed JSON", () => new Response("{", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })],
+      ["wrong content type", () => new Response(JSON.stringify({
+        status: "ok",
+        upload_id: uploadId,
+      }), {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      })],
+    ] as const;
+    for (const [label, response] of cases) {
+      const fixture = await executeThreadsVideoUploadFixture(response);
+      expect(fixture.result, label).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "Threads video upload failed before post submission; retry with a fresh confirmed plan",
+      });
+      expect(fixture.beforeDispatch, label).toBe(0);
+      expect(fixture.creates, label).toBe(0);
+      expect(fixture.rootReads, label).toBe(1);
+      expect(fixture.calls.map((call) => `${call.method} ${call.url.pathname}`), label).toEqual([
+        "GET /",
+        `POST /rupload_igvideo/fb_uploader_${uploadId}`,
+      ]);
+    }
+  });
+
+  test("re-probes Threads after video upload and rejects Set-Cookie account drift before dispatch", async () => {
+    const uploadId = "1786923725481";
+    const fixture = await executeThreadsVideoUploadFixture(
+      () => new Response(JSON.stringify({ status: "ok", upload_id: uploadId }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "set-cookie": "ds_user_id=99999; Path=/; Secure; HttpOnly; SameSite=Lax",
+        },
+      }),
+      (call, read) => {
+        if (read !== 2) return;
+        expect(call.headers.get("cookie")).toContain("ds_user_id=99999");
+        expect(call.headers.get("cookie")).not.toContain("ds_user_id=12345");
+      },
+    );
+    expect(fixture.result).toMatchObject({
+      status: "failed",
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+      error: "Threads video upload failed before post submission; retry with a fresh confirmed plan",
+    });
+    expect(fixture.beforeDispatch).toBe(0);
+    expect(fixture.creates).toBe(0);
+    expect(fixture.rootReads).toBe(2);
+    expect(fixture.calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual([
+      "GET /",
+      `POST /rupload_igvideo/fb_uploader_${uploadId}`,
+      "GET /",
     ]);
   });
 
@@ -1367,6 +1798,58 @@ describe("Meta authenticated internal-data runtime", () => {
       { dependencies: network },
     ))).toContain("account cookie did not match");
     expect(calls).toHaveLength(2);
+  });
+
+  test("reconciles one accepted Threads video target without resolving or uploading the file", async () => {
+    const postId = "987654322_12345";
+    const postCode = "VideoABC";
+    const text = "Wrench disposable Threads video fixture";
+    const url = `https://www.threads.com/@viewer/post/${postCode}`;
+    const identifier = canonicalJson({
+      code: postCode,
+      height: 360,
+      id: postId,
+      mediaType: 2,
+      remoteMediaId: postId,
+      url,
+      width: 640,
+    });
+    const calls: Call[] = [];
+    const network = dependencies("threads", calls, (call) => {
+      expect(call.method).toBe("GET");
+      expect(call.url.href).toBe(url);
+      return new Response(
+        `${threadsHtml}${script({ post: threadsVideoPost(postId, postCode, text) })}`,
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    });
+    expect(await readThreadsWebPublishedMutationTarget(
+      recipe("threads", "media.publish"),
+      {
+        audience: "default",
+        body: text,
+        media: { kind: "file", reference: "confirmed-fixture" },
+      },
+      auth("threads"),
+      identifier,
+      { dependencies: network },
+    )).toEqual({ present: true, postId });
+    expect(calls.map((call) => `${call.method} ${call.url.href}`)).toEqual([
+      `GET ${url}`,
+    ]);
+
+    expect(await rejectionMessage(readThreadsWebPublishedMutationTarget(
+      recipe("threads", "posts.publish"),
+      {
+        attachment: { kind: "file", reference: "confirmed-fixture" },
+        audience: "default",
+        body: text,
+      },
+      auth("threads"),
+      identifier,
+      { dependencies: network },
+    ))).toContain("did not match its exact media contract");
+    expect(calls).toHaveLength(1);
   });
 
   test("executes Instagram timeline through the exact JSON endpoint with no dispatch", async () => {

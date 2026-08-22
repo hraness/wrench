@@ -272,14 +272,20 @@ describe("provider plugin definition and registry", () => {
   test("retains a distinct prior current implementation without replacing e71 readers", () => {
     const plugin = providerPluginRegistry.get("meta-web");
     const binding = plugin?.bindings.find(({ surfaceId }) => surfaceId === "instagram");
-    expect(plugin?.version).toBe("1.1.0");
+    expect(plugin?.version).toBe("1.2.0");
     if (binding === undefined) throw new Error("Meta provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
-      .toBe("b1e997c0540283f45b3b7b0f4c5712f8592e140a840bab75e463aac40efaa805");
+      .toBe("6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994");
     const readers = providerPluginRegistry.legacyContractImplementationHashes(binding)
       .map((value) => value.toString("hex"));
     expect(readers).toContain(
       "fc6875171617dfe466f1e39308b8a208253b7b4adae3201f58634cfd43c30913",
+    );
+    expect(readers).toContain(
+      "af2d809b8a18806c8f36e86660289c219a99eb0799baa42a2afbcfbc428e37c2",
+    );
+    expect(readers).toContain(
+      "5d62645a730274c6dc86dd058886a2eb6b9a8bddf94ba888f017b7294580e452",
     );
     expect(readers).toContain(
       "2267887ca46e413fab5fded684edb1bab495b4782925f6be67153195131ad6c6",
@@ -3241,6 +3247,18 @@ describe("provider plugin definition and registry", () => {
         join(root, "bluesky", "wrench-web-adapter.v1.0.0.json"),
         [
           "authenticated web contract bluesky/posts.publish@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "bluesky", "wrench-web-adapter.v1.4.0.json"),
+        [
+          "authenticated web contract bluesky/media.publish@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "bluesky", "wrench-web-adapter.v1.5.0.json"),
+        [
+          "authenticated web contract bluesky/media.publish@1 is not installed",
         ],
       ],
       ...["1.0.0", "1.1.0"].map((version) => [

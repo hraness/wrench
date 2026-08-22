@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "bluesky-web",
-  "version": "1.6.0",
+  "version": "1.5.0",
   "displayName": "Bluesky (AT Protocol API)",
   "surfaceId": "bluesky",
   "origins": [
@@ -168,7 +168,7 @@
       }
     },
     "media.publish": {
-      "description": "Publish one confirmed Bluesky video post through a fixed first-party legacy video-service upload, bounded response-bound processing poll, repository record, durable accepted target, and authoritative record plus AppView readback.",
+      "description": "Capture-required contract reservation: publish one confirmed Bluesky video post only after the exact video-service upload job, bounded processing poll, response-bound blob, repository record, actor binding, and authoritative record plus AppView readback are reviewed.",
       "risk": "R3",
       "sideEffect": "Uploads one video and publishes one externally visible Bluesky post with the exact confirmed text and accessibility description.",
       "idempotency": "local-at-most-once",
@@ -184,7 +184,7 @@
           "media": {
             "type": "file",
             "description": "Exact plan-bound Bluesky MP4",
-            "maxBytes": 100000000,
+            "maxBytes": 104857600,
             "mediaTypes": [
               "video/mp4"
             ]
@@ -204,7 +204,7 @@
       "webSession": {
         "site": "bluesky",
         "action": "media.publish",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 600000,
         "maxOutputBytes": 8388608
       }

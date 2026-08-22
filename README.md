@@ -246,10 +246,14 @@ old projection and provider-session ciphertext cannot revive after recreation.
 
 For social video, inspect the exact installed schema before planning. Current
 source observes MP4 publication through `x-web posts.publish`, the official
-OAuth `x` and `linkedin` post contracts, and `reddit-web media.publish@9`.
+OAuth `x` and `linkedin` post contracts, `reddit-web media.publish@9`, and
+Threads `meta-web media.publish@1`, plus `bluesky-web media.publish@2`.
 Reddit's route requires one plan-bound MP4, one plan-bound PNG/JPEG poster, and
-explicit post declarations. Bluesky, LinkedIn web, Substack Notes, TikTok,
-Instagram, Threads, and YouTube expose bounded `media.publish` reservations,
+explicit post declarations. The Threads route binds MP4 dimensions, upload,
+created identity, actor, text, and exact permalink video readback. The Bluesky
+route binds the fixed video-service upload job and processed blob to the exact
+repository record, durable target, and authoritative PDS plus public AppView
+readbacks. LinkedIn web, Substack Notes, TikTok, Instagram, and YouTube expose bounded `media.publish` reservations,
 but those routes remain network-inert while their provider-specific upload,
 processing, and independent readback contracts are `capture-required`.
 

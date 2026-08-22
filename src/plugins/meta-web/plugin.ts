@@ -112,7 +112,7 @@ const historicalVersions = Object.freeze({
 
 const contractSemanticIdentities = Object.freeze({
   instagram: "3e2f5a7d655030588754ffe64141f4108e76c57f227fe903549ba192f1735c68",
-  threads: "a3fa86e547220c60d9b886007d0f366a4415408cc65e718948460e8d5a172b60",
+  threads: "435efcfab30a01e32d0b12caba7740ef17ef166b99e608d48f9d0abad98a20c2",
   facebook: "f4724c9619794070da784d03fdaef5889cc4f3d237f9f402e9d5a53f7c156184",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
   "facebook-group": "30717a546b60658ecc2e199a14babb4fa2b46afd1e8d9113044a1b7afda3d376",
@@ -122,7 +122,7 @@ const contractSemanticIdentities = Object.freeze({
 export const metaWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "meta-web",
-  version: "1.1.0",
+  version: "1.2.0",
   displayName: "Meta Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
@@ -131,6 +131,7 @@ export const metaWebPlugin = defineProviderPlugin({
     ["kernel/state-helper.ts", "../../state-helper.ts"],
     ["kernel/state-helper.bunfig.toml", "../../state-helper.bunfig.toml"],
     ["kernel/path-helper.ts", "../../path-helper.ts"],
+    ["providers/iso-bmff.ts", "../../providers/iso-bmff.ts"],
     ["providers/meta-web.ts", "../../providers/meta-web.ts"],
     ["providers/meta-web-runtime.ts", "../../providers/meta-web-runtime.ts"],
     ["providers/meta-bootstrap.ts", "../../providers/meta-bootstrap.ts"],
@@ -152,7 +153,8 @@ export const metaWebPlugin = defineProviderPlugin({
       contractSemanticIdentities[site],
       historicalVersions[site],
       metaOmniDefinitions(site),
-    ).map((operation) => site === "threads" && operation.name === "posts.publish"
+    ).map((operation) => site === "threads"
+      && (operation.name === "posts.publish" || operation.name === "media.publish")
       ? Object.freeze({
           ...operation,
           reconciliation: Object.freeze({
@@ -174,7 +176,7 @@ export const metaWebPlugin = defineProviderPlugin({
         reconcile: async (operation, input, auth, context) => {
           if (
             site !== "threads"
-            || operation !== "posts.publish"
+            || (operation !== "posts.publish" && operation !== "media.publish")
             || context?.kind !== "provider-accepted-target-presence"
           ) {
             throw new Error(`${site} ${operation} has no reconciliation hook`);
@@ -182,7 +184,7 @@ export const metaWebPlugin = defineProviderPlugin({
           const readback = await runtime.readThreadsWebPublishedMutationTarget({
             site: "threads",
             action: operation,
-            contractVersion: 4,
+            contractVersion: operation === "posts.publish" ? 4 : 1,
             timeoutMs: 60_000,
             maxOutputBytes: 2 * 1024 * 1024,
           }, input, auth, context.target.identifier);

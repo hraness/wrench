@@ -211,6 +211,11 @@ export const META_WEB_OPERATIONS = Object.freeze({
       "reviewed live single-PNG upload with synchronous 200 completion, exact minimal configure_text_post_app_feed created-locator binding, durable response-bound post identity plus completed-upload dimensions, and independent exact permalink actor/text/image readback",
       4,
     ),
+    "media.publish": observedMutation(
+      "R3",
+      "reviewed live single-MP4 rupload_igvideo transfer with synchronous 200 completion, exact configure_text_post_app_feed actor and created-locator binding, durable response-bound post identity plus completed-upload dimensions, and independent exact permalink actor/text/video readback",
+      1,
+    ),
     "profiles.read": observed(
       "live direct target-bound signed-in Threads profile HTML preload with exact current-viewer ID binding; recent views remain explicitly unavailable while this account is below the provider's Insights eligibility threshold",
     ),
@@ -1629,6 +1634,16 @@ export type ThreadsImageProjection = Readonly<{
   width: number;
 }>;
 
+export type ThreadsVideoProjection = Readonly<{
+  candidateCount: number;
+  durationSeconds: number | null;
+  hasAudio: boolean | null;
+  height: number;
+  mediaId: string;
+  mediaType: 2;
+  width: number;
+}>;
+
 export type ThreadsPostProjection = Readonly<{
   id: string;
   code: string | null;
@@ -1640,6 +1655,19 @@ export type ThreadsPostProjection = Readonly<{
   has_viewer_saved: boolean | null;
   like_count: number | null;
   image: ThreadsImageProjection | null;
+}>;
+
+export type ThreadsVideoPostProjection = Readonly<{
+  id: string;
+  code: string | null;
+  canonical_url: string | null;
+  caption: string | null;
+  user: Readonly<Record<string, unknown>> | null;
+  taken_at: number | null;
+  has_liked: boolean | null;
+  has_viewer_saved: boolean | null;
+  like_count: number | null;
+  video: ThreadsVideoProjection | null;
 }>;
 
 function positiveThreadsImageDimension(value: unknown, label: string): number {
@@ -1737,6 +1765,88 @@ function threadsImage(
   });
 }
 
+function optionalThreadsVideoDuration(value: unknown, label: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (
+    typeof value !== "number"
+    || !Number.isFinite(value)
+    || value <= 0
+    || value > 3_600
+  ) throw new Error(`${label} must be a finite duration no longer than 3600 seconds`);
+  return value;
+}
+
+function optionalThreadsVideoHasAudio(value: unknown, label: string): boolean | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "boolean") throw new Error(`${label} must be boolean when present`);
+  return value;
+}
+
+function threadsVideo(
+  post: JsonRecord,
+  mediaId: string,
+  label: string,
+): ThreadsVideoProjection | null {
+  const hasVideoFields = post.media_type !== undefined
+    || post.original_width !== undefined
+    || post.original_height !== undefined
+    || post.video_versions !== undefined;
+  if (!hasVideoFields) return null;
+  if (post.media_type !== 2) {
+    throw new Error(`${label}.media_type must identify one reviewed video`);
+  }
+  if (post.carousel_media !== undefined && post.carousel_media !== null) {
+    throw new Error(`${label} unexpectedly returned carousel media`);
+  }
+  const width = positiveThreadsImageDimension(
+    post.original_width,
+    `${label}.original_width`,
+  );
+  const height = positiveThreadsImageDimension(
+    post.original_height,
+    `${label}.original_height`,
+  );
+  if (
+    !Array.isArray(post.video_versions)
+    || post.video_versions.length < 1
+    || post.video_versions.length > 20
+  ) throw new Error(`${label}.video_versions must contain 1 to 20 videos`);
+  let originalCandidateFound = false;
+  for (const [index, candidateValue] of post.video_versions.entries()) {
+    const candidate = record(candidateValue, `${label}.video_versions[${index}]`);
+    const candidateWidth = positiveThreadsImageDimension(
+      candidate.width,
+      `${label}.video_versions[${index}].width`,
+    );
+    const candidateHeight = positiveThreadsImageDimension(
+      candidate.height,
+      `${label}.video_versions[${index}].height`,
+    );
+    threadsImageCandidateUrl(
+      candidate.url,
+      `${label}.video_versions[${index}].url`,
+    );
+    if (candidateWidth === width && candidateHeight === height) {
+      originalCandidateFound = true;
+    }
+  }
+  if (!originalCandidateFound) {
+    throw new Error(`${label} omitted an exact original-dimension video candidate`);
+  }
+  return Object.freeze({
+    candidateCount: post.video_versions.length,
+    durationSeconds: optionalThreadsVideoDuration(
+      post.video_duration,
+      `${label}.video_duration`,
+    ),
+    hasAudio: optionalThreadsVideoHasAudio(post.has_audio, `${label}.has_audio`),
+    height,
+    mediaId,
+    mediaType: 2,
+    width,
+  });
+}
+
 function threadsPost(value: unknown, label: string): Omit<ThreadsPostProjection, "image"> {
   const post = record(value, label);
   const id = boundedString(post.id ?? post.pk, `${label}.id`, 80);
@@ -1766,6 +1876,18 @@ export function projectThreadsPublishPost(
   return Object.freeze({
     ...projected,
     image: threadsImage(post, projected.id, label),
+  });
+}
+
+export function projectThreadsPublishVideo(
+  value: unknown,
+  label: string,
+): ThreadsVideoPostProjection {
+  const post = record(value, label);
+  const projected = threadsPost(post, label);
+  return Object.freeze({
+    ...projected,
+    video: threadsVideo(post, projected.id, label),
   });
 }
 
@@ -1868,6 +1990,74 @@ export function normalizeThreadsPostHtml(
     throw new Error("Threads post readback returned an ambiguous exact post");
   }
   return matches[0] as ThreadsPostProjection;
+}
+
+export function normalizeThreadsVideoPostHtml(
+  html: unknown,
+  viewerId: string,
+  expectedPostId: string,
+  expectedCode: string,
+  expectedUrl: string,
+  expectedCaption: string,
+  expectedVideo: Readonly<{ readonly height: number; readonly width: number }>,
+): ThreadsVideoPostProjection {
+  if (!/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(expectedPostId)) {
+    throw new Error("Threads video readback expected post ID is invalid");
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/u.test(expectedCode)) {
+    throw new Error("Threads video readback expected post code is invalid");
+  }
+  let locator: URL;
+  try {
+    locator = new URL(expectedUrl);
+  } catch {
+    throw new Error("Threads video readback expected permalink is invalid");
+  }
+  const locatorPath = locator.pathname.split("/");
+  if (
+    locator.origin !== "https://www.threads.com"
+    || locator.username !== ""
+    || locator.password !== ""
+    || locator.search !== ""
+    || locator.hash !== ""
+    || locatorPath.length !== 4
+    || !/^@[A-Za-z0-9._]{1,64}$/u.test(locatorPath[1] ?? "")
+    || locatorPath[2] !== "post"
+    || locatorPath[3] !== expectedCode
+  ) throw new Error("Threads video readback expected permalink is invalid");
+  if (parseThreadsViewerId(html) !== viewerId) {
+    throw new Error("Threads video post readback changed its bound viewer");
+  }
+  const matches: ThreadsVideoPostProjection[] = [];
+  walk(parseMetaJsonScripts(html), (value) => {
+    if (
+      !isRecord(value)
+      || (value.id !== expectedPostId && value.pk !== expectedPostId)
+      || value.caption === undefined
+      || value.user === undefined
+    ) return;
+    const projected = projectThreadsPublishVideo(value, "Threads video post readback");
+    const user = isRecord(projected.user) ? projected.user : null;
+    if (
+      projected.caption === expectedCaption
+      && projected.code === expectedCode
+      && projected.canonical_url === locator.href
+      && user?.id === viewerId
+      && projected.video !== null
+      && projected.video.mediaId === expectedPostId
+      && projected.video.width === expectedVideo.width
+      && projected.video.height === expectedVideo.height
+    ) matches.push(projected);
+  });
+  if (matches.length < 1) {
+    throw new Error(
+      "Threads video post readback did not bind the confirmed actor, ID, code, permalink, text, and video",
+    );
+  }
+  if (matches.length !== 1) {
+    throw new Error("Threads video post readback returned an ambiguous exact post");
+  }
+  return matches[0]!;
 }
 
 function facebookPost(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -2680,7 +2870,7 @@ export function normalizeFacebookInboxHtml(html: unknown, viewerId: string, limi
 export const metaWebEvidenceSnapshot = Object.freeze({
   schemaVersion: 1,
   role: "revision-evidence-only" as const,
-  observedOn: "2026-07-23",
+  observedOn: "2026-08-22",
   authentication: "browser-cookie-session" as const,
   operations: Object.freeze({
     instagram: Object.freeze({
@@ -2693,7 +2883,8 @@ export const metaWebEvidenceSnapshot = Object.freeze({
     threads: Object.freeze({
       viewer: "GET / HTML BarcelonaSessionInfo plus Relay viewer.user.id",
       feed: "GET / signed-in first-page Relay feedData preload without cursor continuation",
-      publish: "POST one PNG to the exact rupload entity with synchronous 200 completion, POST configure_text_post_app_feed with exact actor/text/image response binding, then GET the exact returned permalink for independent image readback",
+      publishImage: "POST one PNG to the exact rupload entity with synchronous 200 completion, POST configure_text_post_app_feed with exact actor/text/image response binding, then GET the exact returned permalink for independent image readback",
+      publishVideo: "POST one MP4 to the exact rupload_igvideo entity with synchronous 200 completion and exact dimensions, POST configure_text_post_app_feed with exact actor/text/video locator binding, then GET the exact returned permalink for independent video readback",
     }),
     facebook: Object.freeze({
       viewer: "GET / HTML CurrentUserInitialData, corroborated by c_user",

@@ -5,8 +5,10 @@ import {
   BLUESKY_APPVIEW_PROXY,
   BLUESKY_CHAT_PROXY,
   BLUESKY_NOTIFICATION_PROXY,
+  BLUESKY_VIDEO_SERVICE_ORIGIN,
   BLUESKY_WEB_OPERATIONS,
   BLUESKY_WEB_OPERATION_NAMES,
+  authorizeBlueskyVideoRequest,
   authorizeBlueskyXrpcRequest,
   parseBlueskyAtUri,
   parseBlueskyBootstrapAccount,
@@ -15,6 +17,9 @@ import {
   parseBlueskyGetRecordResponse,
   parseBlueskyRecordNotFoundResponse,
   parseBlueskyRefreshSessionResponse,
+  parseBlueskyServiceAuthResponse,
+  parseBlueskyVideoJobStatusResponse,
+  parseBlueskyVideoUploadResponse,
   projectBlueskyConvoList,
   projectBlueskyFeed,
   projectBlueskyNotifications,
@@ -37,6 +42,32 @@ function jwt(did = VIEWER_DID, exp = 4_000_000_000): string {
     exp,
     sub: did,
   })}.synthetic-signature`;
+}
+
+function serviceJwt(
+  did = VIEWER_DID,
+  audience = "did:web:bsky.social",
+  lxm = "com.atproto.repo.uploadBlob",
+  exp = 2_000_001_800,
+): string {
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  return `${encode({ alg: "ES256K", typ: "JWT" })}.${encode({
+    aud: audience,
+    exp,
+    iss: did,
+    lxm,
+  })}.synthetic-signature`;
+}
+
+function videoBlob(overrides: Readonly<Record<string, unknown>> = {}): unknown {
+  return {
+    $type: "blob",
+    ref: { $link: CID },
+    mimeType: "video/mp4",
+    size: 500_000,
+    ...overrides,
+  };
 }
 
 function postView(
@@ -84,6 +115,7 @@ describe("Bluesky authenticated API policy", () => {
       "comments.read",
       "content.delete",
       "feeds.read",
+      "media.publish",
       "media.read",
       "profiles.read",
       "posts.publish",
@@ -350,6 +382,117 @@ describe("Bluesky authenticated API policy", () => {
         proxy: BLUESKY_CHAT_PROXY,
       })
     ).toThrow("exact reviewed XRPC endpoint");
+  });
+
+  test("binds service tokens and the two fixed Bluesky video-service routes", () => {
+    const token = serviceJwt();
+    expect(parseBlueskyServiceAuthResponse({ token }, {
+      did: VIEWER_DID,
+      audience: "did:web:bsky.social",
+      lxm: "com.atproto.repo.uploadBlob",
+      expiresAt: 2_000_001_800,
+      nowSeconds: 2_000_000_000,
+    })).toBe(token);
+    expect(() => parseBlueskyServiceAuthResponse({ token }, {
+      did: VIEWER_DID,
+      audience: "did:web:morel.us-east.host.bsky.network",
+      lxm: "com.atproto.repo.uploadBlob",
+      expiresAt: 2_000_001_800,
+      nowSeconds: 2_000_000_000,
+    })).toThrow("issuer, audience, or method binding");
+    expect(() => parseBlueskyServiceAuthResponse({ token, extra: true }, {
+      did: VIEWER_DID,
+      audience: "did:web:bsky.social",
+      lxm: "com.atproto.repo.uploadBlob",
+      expiresAt: 2_000_001_800,
+      nowSeconds: 2_000_000_000,
+    })).toThrow("unsupported fields");
+
+    const upload = new URL(
+      "/xrpc/app.bsky.video.uploadVideo",
+      BLUESKY_VIDEO_SERVICE_ORIGIN,
+    );
+    upload.searchParams.set("did", VIEWER_DID);
+    upload.searchParams.set("name", "wrench-video.mp4");
+    expect(authorizeBlueskyVideoRequest({
+      kind: "upload",
+      url: upload,
+      method: "POST",
+      did: VIEWER_DID,
+    })).toEqual({
+      method: "POST",
+      path: "/xrpc/app.bsky.video.uploadVideo",
+      queryNames: ["did", "name"],
+    });
+    const status = new URL(
+      "/xrpc/app.bsky.video.getJobStatus",
+      BLUESKY_VIDEO_SERVICE_ORIGIN,
+    );
+    status.searchParams.set("jobId", "job-1");
+    expect(authorizeBlueskyVideoRequest({
+      kind: "job-status",
+      url: status,
+      method: "GET",
+      jobId: "job-1",
+    })).toEqual({
+      method: "GET",
+      path: "/xrpc/app.bsky.video.getJobStatus",
+      queryNames: ["jobId"],
+    });
+    status.searchParams.set("extra", "drift");
+    expect(() => authorizeBlueskyVideoRequest({
+      kind: "job-status",
+      url: status,
+      method: "GET",
+      jobId: "job-1",
+    })).toThrow("query names changed");
+  });
+
+  test("parses direct upload jobs and exact wrapped completed video jobs", () => {
+    const created = {
+      jobId: "job-1",
+      did: VIEWER_DID,
+      state: "JOB_STATE_CREATED",
+      progress: 0,
+    };
+    expect(parseBlueskyVideoUploadResponse(created, VIEWER_DID)).toEqual({
+      jobId: "job-1",
+      did: VIEWER_DID,
+      state: "JOB_STATE_CREATED",
+      progress: 0,
+      blob: null,
+      error: null,
+      failureCode: null,
+      message: null,
+    });
+    expect(parseBlueskyVideoJobStatusResponse({
+      jobStatus: {
+        ...created,
+        state: "JOB_STATE_COMPLETED",
+        progress: 100,
+        blob: videoBlob(),
+      },
+    }, VIEWER_DID, "job-1")).toMatchObject({
+      jobId: "job-1",
+      state: "JOB_STATE_COMPLETED",
+      progress: 100,
+      blob: {
+        $type: "blob",
+        ref: { $link: CID },
+        mimeType: "video/mp4",
+        size: 500_000,
+      },
+    });
+    expect(() => parseBlueskyVideoJobStatusResponse({
+      jobStatus: { ...created, jobId: "switched" },
+    }, VIEWER_DID, "job-1")).toThrow("switched jobs");
+    expect(() => parseBlueskyVideoJobStatusResponse({
+      jobStatus: { ...created, state: "JOB_STATE_COMPLETED" },
+    }, VIEWER_DID, "job-1")).toThrow("completion did not bind");
+    expect(() => parseBlueskyVideoUploadResponse({
+      ...created,
+      blob: videoBlob(),
+    }, VIEWER_DID)).toThrow("completion did not bind");
   });
 
   test("parses exact AT URIs and rejects actor, collection, or record-key drift", () => {
