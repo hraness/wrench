@@ -33,9 +33,16 @@ describe("Meta web plugin account subjects", () => {
   test("declares exact accepted-target reconciliation only for Threads publishing", () => {
     const threadsPublish = binding("threads").operations.find((operation) =>
       operation.name === "posts.publish");
+    const threadsVideoPublish = binding("threads").operations.find((operation) =>
+      operation.name === "media.publish");
     expect(threadsPublish?.historicalContractVersions).toEqual([1, 2, 3]);
     expect(threadsPublish?.reconciliation).toEqual({
       kind: "provider-accepted-target-presence",
+    });
+    expect(threadsVideoPublish).toMatchObject({
+      state: "observed",
+      contractVersion: 1,
+      reconciliation: { kind: "provider-accepted-target-presence" },
     });
     for (const surfaceId of [
       "instagram",

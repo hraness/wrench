@@ -57,11 +57,9 @@ describe("social video provider contracts", () => {
   test("reserves one bounded MP4 route for every remaining requested web surface", () => {
     for (const [plugin, surfaceId] of [
       [linkedinWebPlugin, "linkedin"],
-      [blueskyWebPlugin, "bluesky"],
       [substackWebPlugin, "substack"],
       [tiktokWebPlugin, "tiktok"],
       [metaWebPlugin, "instagram"],
-      [metaWebPlugin, "threads"],
       [youtubeWebPlugin, "youtube"],
     ] as const) {
       const publish = operation(plugin, surfaceId, "media.publish");
@@ -72,6 +70,32 @@ describe("social video provider contracts", () => {
       });
       expect(fileMediaTypes(publish.input.properties.media)).toContain("video/mp4");
     }
+  });
+
+  test("graduates exact Bluesky MP4 publishing without widening image posts", () => {
+    const publish = operation(blueskyWebPlugin, "bluesky", "media.publish");
+    expect(publish).toMatchObject({
+      risk: "R3",
+      state: "observed",
+      contractVersion: 2,
+      dispatch: "single",
+      reconciliation: { kind: "provider-accepted-target-presence" },
+    });
+    expect(fileMediaTypes(publish.input.properties.media)).toEqual(["video/mp4"]);
+    expect(publish.input.required).toEqual(["body", "media"]);
+  });
+
+  test("graduates exact Threads native MP4 publishing without widening image posts", () => {
+    const publish = operation(metaWebPlugin, "threads", "media.publish");
+    expect(publish).toMatchObject({
+      risk: "R3",
+      state: "observed",
+      contractVersion: 1,
+      dispatch: "single",
+      reconciliation: { kind: "provider-accepted-target-presence" },
+    });
+    expect(fileMediaTypes(publish.input.properties.media)).toEqual(["video/mp4"]);
+    expect(publish.input.required).toEqual(["body", "media", "audience"]);
   });
 
   test("graduates Reddit native MP4 publishing with an explicit poster and declarations", () => {

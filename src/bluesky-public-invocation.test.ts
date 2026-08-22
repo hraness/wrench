@@ -30,19 +30,30 @@ import { installManifest } from "./storage";
 
 function state(
   manifestFile = "wrench-web-adapter.json",
+  onlyOperation?: string,
 ): {
   readonly directory: string;
   readonly environment: Readonly<Record<string, string | undefined>>;
 } {
   const directory = mkdtempSync(join(tmpdir(), "wrench-public-bluesky-"));
   const environment = { WRENCH_STATE_HOME: directory } as const;
-  const manifest = JSON.parse(readFileSync(join(
+  let manifest = JSON.parse(readFileSync(join(
     import.meta.dir,
     "assets",
     "adapters",
     "bluesky",
     manifestFile,
   ), "utf8")) as WrenchManifest;
+  if (onlyOperation !== undefined) {
+    const operation = manifest.operations[onlyOperation];
+    if (operation === undefined) {
+      throw new Error(`Bluesky fixture operation ${onlyOperation} is unavailable`);
+    }
+    // v1.4 also carries the intentionally retired media.publish@1 route. The
+    // exact profiles.read projection remains useful for proving its own v1
+    // authentication policy without making that retired mutation executable.
+    manifest = { ...manifest, operations: { [onlyOperation]: operation } };
+  }
   installManifest(manifest, {
     force: false,
     environment,
@@ -76,7 +87,7 @@ describe("Bluesky public invocation authority", () => {
         providerPluginRegistry,
       );
       expect(query.identity).toMatchObject({
-        adapter: { id: "bluesky-web", version: "1.5.0" },
+        adapter: { id: "bluesky-web", version: "1.6.0" },
         operation: "profiles.read",
         input: { handle: "hraness.bsky.social" },
         auth: {
@@ -109,7 +120,7 @@ describe("Bluesky public invocation authority", () => {
   });
 
   test("keeps the archived profiles.read v1 route on authenticated semantics", () => {
-    const selected = state("wrench-web-adapter.v1.4.0.json");
+    const selected = state("wrench-web-adapter.v1.4.0.json", "profiles.read");
     try {
       expect(() => prepareInvocation(
         "bluesky-web",

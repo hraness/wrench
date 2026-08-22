@@ -22,7 +22,7 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(blueskyContracts),
-  "ef24c9bb7bf7ef86b9f6ca6852a3cfff9c68f3c8529fccaf0ecfdaee7fab4c0a",
+  "3a33d0a329d701207e83cd926a87abe9914e04d38c59cae0c8d8fcd24462c628",
   {
     "profiles.read": [1],
     "posts.publish": [2],
@@ -44,7 +44,7 @@ const operations = webSessionContractOperations(
       access: "public" as const,
     });
   }
-  if (operation.name === "posts.publish") {
+  if (operation.name === "posts.publish" || operation.name === "media.publish") {
     return Object.freeze({
       ...operation,
       reconciliation: Object.freeze({
@@ -85,12 +85,13 @@ const operations = webSessionContractOperations(
 export const blueskyWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "bluesky-web",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "Bluesky Web API",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
     ["kernel/browser.ts", "../../browser.ts"],
     ["kernel/session-secrets.ts", "../../session-secrets.ts"],
+    ["providers/iso-bmff.ts", "../../providers/iso-bmff.ts"],
     ["providers/bluesky-web.ts", "../../providers/bluesky-web.ts"],
     ["providers/bluesky-web-runtime.ts", "../../providers/bluesky-web-runtime.ts"],
   ]),
@@ -98,7 +99,12 @@ export const blueskyWebPlugin = defineProviderPlugin({
     transport: "web-session-api",
     surfaceId: "bluesky",
     origin: "https://bsky.app",
-    protectedHostnameFamilies: ["bsky.app", "bsky.social", "host.bsky.network"],
+    protectedHostnameFamilies: [
+      "bsky.app",
+      "bsky.social",
+      "host.bsky.network",
+      "video.bsky.app",
+    ],
     authKinds: ["browser-profile"],
     operations,
     subject: {
@@ -119,14 +125,14 @@ export const blueskyWebPlugin = defineProviderPlugin({
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeBlueskyWebOperation(recipe, input, auth, options),
         reconcile: async (operation, input, auth, context) => {
-          if (operation === "posts.publish") {
+          if (operation === "posts.publish" || operation === "media.publish") {
             if (context?.kind !== "provider-accepted-target-presence") {
-              throw new Error("Bluesky posts.publish reconciliation requires one exact accepted target");
+              throw new Error(`Bluesky ${operation} reconciliation requires one exact accepted target`);
             }
             const readback = await runtime.readBlueskyWebPublishedMutationTarget({
               site: "bluesky",
               action: operation,
-              contractVersion: 3,
+              contractVersion: operation === "posts.publish" ? 3 : 2,
               timeoutMs: 60_000,
               maxOutputBytes: 8 * 1024 * 1024,
             }, input, auth, context.target.identifier);

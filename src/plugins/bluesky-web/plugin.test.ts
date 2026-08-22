@@ -19,7 +19,7 @@ const auth = {
 
 describe("Bluesky provider plugin", () => {
   test("versions the public profile-read source closure independently", () => {
-    expect(blueskyWebPlugin.version).toBe("1.2.0");
+    expect(blueskyWebPlugin.version).toBe("1.3.0");
   });
 
   test("advertises the observed exact handle-bound profile read", () => {
@@ -47,6 +47,7 @@ describe("Bluesky provider plugin", () => {
       "bsky.app",
       "bsky.social",
       "host.bsky.network",
+      "video.bsky.app",
     ]);
   });
 
@@ -60,7 +61,12 @@ describe("Bluesky provider plugin", () => {
     expect(binding.operations
       .filter((operation) => operation.reconciliation !== undefined)
       .map((operation) => operation.name)
-      .sort()).toEqual([...Object.keys(expected), "content.delete", "posts.publish"].sort());
+      .sort()).toEqual([
+        ...Object.keys(expected),
+        "content.delete",
+        "media.publish",
+        "posts.publish",
+      ].sort());
     for (const [name, [key, value]] of Object.entries(expected)) {
       const operation = binding.operations.find((candidate) => candidate.name === name);
       expect(operation?.state).toBe("capture-required");
@@ -85,6 +91,15 @@ describe("Bluesky provider plugin", () => {
     expect(publish?.historicalContractVersions).toEqual([2]);
     expect(publish?.reconciliation).toEqual({
       kind: "provider-accepted-target-presence",
+    });
+    const video = binding.operations.find((operation) =>
+      operation.name === "media.publish");
+    expect(video).toMatchObject({
+      contractVersion: 2,
+      risk: "R3",
+      state: "observed",
+      dispatch: "single",
+      reconciliation: { kind: "provider-accepted-target-presence" },
     });
     const runtime = await binding.loadRuntime();
     expect(runtime.reconcile).toBeFunction();
