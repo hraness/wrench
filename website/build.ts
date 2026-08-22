@@ -10,6 +10,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { htmlMainToMarkdown } from "./html-to-markdown";
+import {
+  loadProviderCapabilityAttestation,
+  renderProviderCapabilityAttestationTable,
+  type ProviderCapabilityAttestation,
+} from "./provider-capability-attestation";
 
 export const SITE_ORIGIN = "https://wrench.rip" as const;
 export const SITE_TITLE = "Wrench: precise web capabilities for AI agents" as const;
@@ -49,10 +54,10 @@ export const PUBLIC_PAGES = [
   {
     canonicalPath: "/provider-capabilities/",
     description:
-      "See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.",
+      "Wrench provider capability attestation checked against bundled public adapter manifests. Each listed operation includes its reviewed completeness and current limit.",
     outputFile: "provider-capabilities/index.html",
     sourceFile: "provider-capabilities.html",
-    title: "Wrench provider capabilities for contacts, email, and messages",
+    title: "Wrench provider capability attestation",
   },
   {
     canonicalPath: "/security/",
@@ -124,6 +129,8 @@ export type PackageIdentity = Readonly<{
 
 type RenderOptions = Readonly<{
   analyticsAsset: string;
+  attestation: ProviderCapabilityAttestation;
+  attestationTable: string;
   cssAsset: string;
   packageIdentity: PackageIdentity;
   postHogHost: string;
@@ -345,6 +352,35 @@ function renderTemplate(
   }
   rendered = replaceHtmlRequired(rendered, "{{POSTHOG_HOST}}", escapeHtml(options.postHogHost));
   rendered = replaceHtmlRequired(rendered, "{{POSTHOG_KEY}}", escapeHtml(options.postHogKey));
+  if (page?.canonicalPath === "/provider-capabilities/") {
+    rendered = replaceRequired(
+      rendered,
+      "{{PROVIDER_CAPABILITY_ATTESTATION_TABLE}}",
+      options.attestationTable,
+    );
+    rendered = replaceRequired(
+      rendered,
+      "{{PROVIDER_CAPABILITY_ADAPTER_COUNT}}",
+      String(options.attestation.adapterCount),
+    );
+    rendered = replaceRequired(
+      rendered,
+      "{{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}}",
+      String(options.attestation.captureRequiredCount),
+    );
+    rendered = replaceRequired(
+      rendered,
+      "{{PROVIDER_CAPABILITY_OBSERVED_COUNT}}",
+      String(options.attestation.observedCount),
+    );
+    rendered = replaceRequired(
+      rendered,
+      "{{PROVIDER_CAPABILITY_OPERATION_COUNT}}",
+      String(options.attestation.operationCount),
+    );
+  } else if (rendered.includes("{{PROVIDER_CAPABILITY")) {
+    throw new Error("Only the provider capability page may include attestation placeholders.");
+  }
   const optionalValues = new Map([
     ["{{WRENCH_DESCRIPTION}}", identity.description],
     ["{{WRENCH_INSTALL_COMMAND}}", installCommand],
@@ -401,6 +437,7 @@ export async function buildWebsite(
     css,
     analyticsBuild,
     skillInstallBuild,
+    attestation,
   ] = await Promise.all([
     Bun.file(join(repositoryRoot, "package.json")).json(),
     Promise.all(PUBLIC_PAGES.map((page) => readFile(join(sourceRoot, page.sourceFile), "utf8"))),
@@ -422,6 +459,7 @@ export async function buildWebsite(
       sourcemap: "none",
       target: "browser",
     }),
+    loadProviderCapabilityAttestation(repositoryRoot),
   ]);
   if (!analyticsBuild.success || analyticsBuild.outputs.length !== 1) {
     const messages = analyticsBuild.logs.map((log) => log.message).join("\n");
@@ -445,6 +483,8 @@ export async function buildWebsite(
   const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
   const renderOptions = {
     analyticsAsset,
+    attestation,
+    attestationTable: renderProviderCapabilityAttestationTable(attestation),
     cssAsset,
     packageIdentity: identity,
     postHogHost: postHog.host,

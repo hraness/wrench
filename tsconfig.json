@@ -41,6 +41,10 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "examples/**/*.ts",
-    "examples/**/*.tsx"
+    "examples/**/*.tsx",
+    "website/build.ts",
+    "website/provider-capability-attestation.ts",
+    "website/provider-capability-attestation.test.ts",
+    "website/site.test.ts"
   ]
 }
