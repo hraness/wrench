@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "threads-web",
-  "version": "1.5.0",
+  "version": "1.4.0",
   "displayName": "Threads (Authenticated Internal API)",
   "surfaceId": "threads",
   "origins": [
@@ -367,9 +367,9 @@
       }
     },
     "posts.publish": {
-      "description": "Observed contract: publish one confirmed Threads post with optional reviewed PNG after exact viewer binding, optional synchronous upload completion, exact minimal created-locator binding, durable response-bound post identity plus completed-upload dimensions when an image is supplied, and independent exact permalink actor/text and optional image readback.",
+      "description": "Observed contract: publish one confirmed Threads post with one reviewed PNG after exact viewer binding, synchronous upload completion, exact minimal created-locator binding, durable upload-dimension target retention, and independent exact permalink actor/text/image readback.",
       "risk": "R3",
-      "sideEffect": "Publishes one externally visible Threads post with the exact confirmed text and optional reviewed PNG.",
+      "sideEffect": "Publishes one externally visible Threads post with the exact confirmed text and one reviewed PNG.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -382,7 +382,7 @@
           },
           "attachment": {
             "type": "file",
-            "description": "Optional exact reviewed PNG attachment",
+            "description": "One exact reviewed PNG attachment",
             "maxBytes": 20971520,
             "mediaTypes": [
               "image/png"
@@ -397,13 +397,14 @@
           }
         },
         "required": [
+          "attachment",
           "body"
         ]
       },
       "webSession": {
         "site": "threads",
         "action": "posts.publish",
-        "contractVersion": 5,
+        "contractVersion": 4,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }

@@ -181,6 +181,7 @@ describe("single-process bundled adapter generation sync", () => {
       "threads-web@1.1.0",
       "threads-web@1.2.0",
       "threads-web@1.3.0",
+      "threads-web@1.4.0",
       "whatsapp-web@1.0.0",
       "whatsapp-web@1.1.0",
       "whatsapp-web@1.2.0",
