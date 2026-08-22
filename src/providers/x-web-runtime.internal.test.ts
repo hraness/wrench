@@ -225,6 +225,7 @@ function createTweetResponse(options: {
   readonly replyTo?: string | null;
   readonly quote?: string | null;
   readonly mediaId?: string | null;
+  readonly mediaType?: "photo" | "video";
 }): unknown {
   const result = publishedTweetResult(options);
   return {
@@ -244,12 +245,13 @@ function publishedTweetResult(options: {
   readonly replyTo?: string | null;
   readonly quote?: string | null;
   readonly mediaId?: string | null;
+  readonly mediaType?: "photo" | "video";
 }): unknown {
   const media = options.mediaId === undefined || options.mediaId === null
     ? {}
     : {
-        entities: { media: [{ id_str: options.mediaId, type: "photo" }] },
-        extended_entities: { media: [{ id_str: options.mediaId, type: "photo" }] },
+        entities: { media: [{ id_str: options.mediaId, type: options.mediaType ?? "photo" }] },
+        extended_entities: { media: [{ id_str: options.mediaId, type: options.mediaType ?? "photo" }] },
       };
   return {
     rest_id: CREATED_POST_ID,
@@ -683,6 +685,39 @@ describe("X authenticated internal-API runtime", () => {
         cursorEntry("would-skip-second"),
       ));
     });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "user", user_id: VIEWER_ID, limit: 1 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toMatchObject({
+      posts: [{ id: FOCAL_POST_ID }],
+      cursor: null,
+    });
+    expect((result.output as { posts: readonly unknown[] }).posts).toHaveLength(1);
+    expect(JSON.stringify(result.output)).not.toContain("would-skip-second");
+  });
+
+  test("rejects an oversized feed page that exposes no continuation cursor", async () => {
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("UserTweets", "6r5OLCC_wFH4CpRyXKuAmQ", "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      return jsonResponse(userFeedResponse(
+        VIEWER_ID,
+        tweetEntry(FOCAL_POST_ID, "first"),
+        tweetEntry(CREATED_POST_ID, "second"),
+      ));
+    });
     const message = await rejectionMessage(executeXWebOperation(
       xRecipe("feeds.read"),
       { feed: "user", user_id: VIEWER_ID, limit: 1 },
@@ -845,14 +880,19 @@ describe("X authenticated internal-API runtime", () => {
         cursorEntry("would-skip-second-reply"),
       ));
     });
-    const message = await rejectionMessage(executeXWebOperation(
+    const result = await executeXWebOperation(
       xRecipe("comments.read"),
       { post_id: FOCAL_POST_ID, limit: 1 },
       xAuth,
       { dependencies: runtimeDependencies },
-    ));
-    expect(message).toContain("more entries than the requested limit");
-    expect(message).toContain("no continuation cursor was exposed");
+    );
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toMatchObject({
+      comments: [{ id: firstReplyId }],
+      cursor: null,
+    });
+    expect((result.output as { comments: readonly unknown[] }).comments).toHaveLength(1);
+    expect(JSON.stringify(result.output)).not.toContain("would-skip-second-reply");
   });
 
   test("requires a bound X viewer and rejects an account switch before a post read", async () => {
@@ -1667,7 +1707,7 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.href === MAIN_URL) {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-          descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+          descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
           descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
         ), { headers: { "content-type": "application/javascript" } });
       }
@@ -1684,7 +1724,7 @@ describe("X authenticated internal-API runtime", () => {
             semantic_annotation_ids: [],
           },
           features: {},
-          queryId: "hIL9XdleMYEtVXOZVbr8Bg",
+          queryId: "WXTdKnLddrQOunD6MhWi3g",
         });
         return jsonResponse(createTweetResponse({ text: body }));
       }
@@ -1763,7 +1803,7 @@ describe("X authenticated internal-API runtime", () => {
           if (request.url.href === MAIN_URL) {
             return new Response(mainBundle(
               descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-              descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+              descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
               descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
             ), { headers: { "content-type": "application/javascript" } });
           }
@@ -1832,6 +1872,39 @@ describe("X authenticated internal-API runtime", () => {
       xAuth,
       `${identifier} `,
     )).rejects.toThrow("not canonical");
+    const videoBody = "Reconciled X video post";
+    const videoId = "67890";
+    const videoIdentifier = canonicalJson({ postId: CREATED_POST_ID, mediaId: videoId });
+    const videoCalls: CapturedRequest[] = [];
+    expect(await readXWebPublishedMutationTarget(
+      xRecipe("posts.publish", 4),
+      { body: videoBody, media: { kind: "file", reference: "fixture" }, media_type: "video/mp4" },
+      xAuth,
+      videoIdentifier,
+      {
+        dependencies: dependencies(videoCalls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({
+              text: videoBody,
+              mediaId: videoId,
+              mediaType: "video",
+            }));
+          }
+          throw new Error(`unexpected X video reconciliation request ${request.url.href}`);
+        }),
+      },
+    )).toEqual({ present: true, postId: CREATED_POST_ID });
+    expect(videoCalls.every((request) => request.method === "GET")).toBeTrue();
   });
 
   test("uploads one plan-bound PNG before CreateTweet and independently binds the returned photo", async () => {
@@ -1871,7 +1944,7 @@ describe("X authenticated internal-API runtime", () => {
             if (request.url.href === MAIN_URL) {
               return new Response(mainBundle(
                 descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
                 descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
               ), { headers: { "content-type": "application/javascript" } });
             }
@@ -1934,11 +2007,251 @@ describe("X authenticated internal-API runtime", () => {
       });
       const lastUpload = events.lastIndexOf("POST upload.x.com/i/media/upload.json");
       const admitted = events.indexOf("before 0");
-      const create = events.indexOf("POST x.com/i/api/graphql/hIL9XdleMYEtVXOZVbr8Bg/CreateTweet");
+      const create = events.indexOf("POST x.com/i/api/graphql/WXTdKnLddrQOunD6MhWi3g/CreateTweet");
       expect(lastUpload).toBeGreaterThan(-1);
       expect(admitted).toBeGreaterThan(lastUpload);
       expect(create).toBeGreaterThan(admitted);
       expect(events.at(-1)).toBe("after 1");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("uploads one plan-bound MP4, polls STATUS, then independently binds the returned video", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-x-video-publish-"));
+    chmodSync(root, 0o700);
+    const videoPath = join(root, "fixture.mp4");
+    const videoBytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
+    writeFileSync(videoPath, videoBytes, { mode: 0o600 });
+    const body = "Exact X video post";
+    const mediaId = "67890";
+    const calls: CapturedRequest[] = [];
+    const events: string[] = [];
+    const pauses: number[] = [];
+    try {
+      const result = await executeXWebOperation(
+        xRecipe("posts.publish"),
+        {
+          body,
+          media: { kind: "file", reference: "fixture" },
+          media_type: "video/mp4",
+        },
+        xAuth,
+        {
+          fileResolver: () => Promise.resolve([videoPath]),
+          beforeDispatch: (event) => {
+            events.push(`before ${event.progress.started}`);
+            return Promise.resolve();
+          },
+          afterDispatchVerified: (event) => {
+            events.push(`after ${event.progress.verified}`);
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            events.push(`${request.method} ${request.url.hostname}${request.url.pathname}`);
+            if (request.url.href === "https://x.com/home") {
+              return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+            }
+            if (request.url.href === MAIN_URL) {
+              return new Response(mainBundle(
+                descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+                descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+              ), { headers: { "content-type": "application/javascript" } });
+            }
+            if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+            if (request.url.hostname === "upload.x.com") {
+              expect(request.headers.get("x-csrf-token")).toBe("csrf_token_0123456789abcdef");
+              const command = request.url.searchParams.get("command");
+              if (command === "INIT") {
+                expect(request.method).toBe("POST");
+                expect(request.url.searchParams.get("total_bytes")).toBe(String(videoBytes.byteLength));
+                expect(request.url.searchParams.get("media_type")).toBe("video/mp4");
+                expect(request.url.searchParams.get("media_category")).toBe("tweet_video");
+                return jsonResponse({
+                  expires_after_secs: 86_400,
+                  media_id: 67890,
+                  media_id_string: mediaId,
+                  media_key: `7_${mediaId}`,
+                });
+              }
+              if (command === "APPEND") {
+                expect(request.url.searchParams.get("media_id")).toBe(mediaId);
+                expect(request.url.searchParams.get("segment_index")).toBe("0");
+                expect(request.headers.get("content-type")).toMatch(
+                  /^multipart\/form-data; boundary=wrench-x-media-[a-f0-9]{32}$/u,
+                );
+                return new Response(null, { status: 204 });
+              }
+              if (command === "FINALIZE") {
+                return jsonResponse({
+                  expires_after_secs: 86_400,
+                  media_id: 67890,
+                  media_id_string: mediaId,
+                  media_key: `7_${mediaId}`,
+                  size: videoBytes.byteLength,
+                  processing_info: { state: "pending", check_after_secs: 1 },
+                });
+              }
+              if (command === "STATUS") {
+                expect(request.method).toBe("GET");
+                expect(request.url.searchParams.get("media_id")).toBe(mediaId);
+                return jsonResponse({
+                  media_id_string: mediaId,
+                  processing_info: { state: "succeeded" },
+                });
+              }
+            }
+            if (request.url.pathname.endsWith("/CreateTweet")) {
+              const payload = JSON.parse(request.body ?? "null") as {
+                readonly variables: { readonly media: unknown };
+              };
+              expect(payload.variables.media).toEqual({
+                media_entities: [{ media_id: mediaId, tagged_users: [] }],
+                possibly_sensitive: false,
+              });
+              return jsonResponse(createTweetResponse({ text: body, mediaId, mediaType: "video" }));
+            }
+            if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+              return jsonResponse(publishedTweetReadback({ text: body, mediaId, mediaType: "video" }));
+            }
+            throw new Error(`unexpected X video publish request ${request.url.href}`);
+          }, {
+            sleep: (milliseconds) => {
+              pauses.push(milliseconds);
+              return Promise.resolve();
+            },
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "succeeded",
+        output: { posts: [{ id: CREATED_POST_ID }] },
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 1 },
+      });
+      expect(pauses).toEqual([1_000]);
+      const status = events.indexOf("GET upload.x.com/i/media/upload.json");
+      const admitted = events.indexOf("before 0");
+      const create = events.indexOf("POST x.com/i/api/graphql/WXTdKnLddrQOunD6MhWi3g/CreateTweet");
+      expect(status).toBeGreaterThan(-1);
+      expect(admitted).toBeGreaterThan(status);
+      expect(create).toBeGreaterThan(admitted);
+      expect(events.at(-1)).toBe("after 1");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps an X video processing failure before public-post admission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-x-video-processing-failure-"));
+    chmodSync(root, 0o700);
+    const videoPath = join(root, "fixture.mp4");
+    writeFileSync(videoPath, new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), { mode: 0o600 });
+    const calls: CapturedRequest[] = [];
+    let admissions = 0;
+    try {
+      const result = await executeXWebOperation(
+        xRecipe("posts.publish"),
+        {
+          body: "Do not retry video",
+          media: { kind: "file", reference: "fixture" },
+          media_type: "video/mp4",
+        },
+        xAuth,
+        {
+          fileResolver: () => Promise.resolve([videoPath]),
+          beforeDispatch: () => {
+            admissions += 1;
+            return Promise.resolve();
+          },
+          dependencies: dependencies(calls, (request) => {
+            if (request.url.href === "https://x.com/home") {
+              return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+            }
+            if (request.url.href === MAIN_URL) {
+              return new Response(mainBundle(
+                descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+              ), { headers: { "content-type": "application/javascript" } });
+            }
+            if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+            if (request.url.hostname === "upload.x.com") {
+              const command = request.url.searchParams.get("command");
+              if (command === "INIT") {
+                return jsonResponse({
+                  expires_after_secs: 86_400,
+                  media_id: 67890,
+                  media_id_string: "67890",
+                  media_key: "7_67890",
+                });
+              }
+              if (command === "APPEND") return new Response(null, { status: 204 });
+              if (command === "FINALIZE") {
+                return jsonResponse({
+                  expires_after_secs: 86_400,
+                  media_id: 67890,
+                  media_id_string: "67890",
+                  media_key: "7_67890",
+                  size: 8,
+                  processing_info: { state: "failed" },
+                });
+              }
+            }
+            throw new Error(`unexpected request after X video processing failure ${request.url.href}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 1, started: 0, verified: 0 },
+        error: "X post preparation failed before public post submission; failure stage: media-upload-finalize-processing; retry with a fresh confirmed plan",
+      });
+      expect(admissions).toBe(0);
+      expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects media_type without one plan-bound file and rejects unsupported types", async () => {
+    const bootstrap = (calls: CapturedRequest[]) => dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      throw new Error(`unexpected media-type rejection request ${request.url.href}`);
+    });
+    await expect(executeXWebOperation(
+      xRecipe("posts.publish"),
+      { body: "no file", media_type: "video/mp4" },
+      xAuth,
+      { dependencies: bootstrap([]) },
+    )).rejects.toThrow("X media_type requires one plan-bound PNG or MP4");
+    const root = mkdtempSync(join(tmpdir(), "wrench-x-media-type-"));
+    chmodSync(root, 0o700);
+    const path = join(root, "fixture.bin");
+    writeFileSync(path, new Uint8Array([1, 2, 3, 4]), { mode: 0o600 });
+    try {
+      await expect(executeXWebOperation(
+        xRecipe("posts.publish"),
+        {
+          body: "jpeg is outside the reviewed pair",
+          media: { kind: "file", reference: "fixture" },
+          media_type: "image/jpeg",
+        },
+        xAuth,
+        {
+          fileResolver: () => Promise.resolve([path]),
+          dependencies: bootstrap([]),
+        },
+      )).rejects.toThrow("X reviewed media upload supports one PNG or one MP4");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1973,7 +2286,7 @@ describe("X authenticated internal-API runtime", () => {
             if (request.url.href === MAIN_URL) {
               return new Response(mainBundle(
                 descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-                descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
               ), { headers: { "content-type": "application/javascript" } });
             }
             if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -2071,7 +2384,7 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.href === MAIN_URL) {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-          descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+          descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
         ), { headers: { "content-type": "application/javascript" } });
       }
       if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -2117,7 +2430,7 @@ describe("X authenticated internal-API runtime", () => {
         if (request.url.href === MAIN_URL) {
           return new Response(mainBundle(
             descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-            descriptor("CreateTweet", "hIL9XdleMYEtVXOZVbr8Bg", "mutation"),
+            descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
           ), { headers: { "content-type": "application/javascript" } });
         }
         if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());

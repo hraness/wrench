@@ -44,7 +44,7 @@ const identities = Object.freeze({
   },
   "gmail-official": {
     schemaVersion: 1,
-    pluginVersion: "1.2.0",
+    pluginVersion: "1.3.0",
     implementationSha256: "821e81dcd0d09756253ace93bece4b906c9fca3f1ab27adcbf0108a3fb0f6702",
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,

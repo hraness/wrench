@@ -2,6 +2,8 @@
 
 [![Wrench: precise web capabilities for AI agents](https://wrench.rip/og.png)](https://wrench.rip)
 
+[![skills.sh](https://skills.sh/b/hraness/wrench)](https://skills.sh/hraness/wrench)
+
 **Give your agent a precise handle on the web.**
 
 Wrench is an open-source, bring-your-own-agent CLI and TypeScript SDK. It is the
@@ -60,6 +62,18 @@ frameworks. Those tools own interfaces, transports, models, and planning. Wrench
 owns the narrow capability boundary that can sit beneath them.
 
 ## Install
+
+Install the single Wrench Agent Skill with either runner:
+
+```sh
+npx skills add hraness/wrench
+# or
+bunx skills add hraness/wrench
+```
+
+The skill teaches Codex, Claude Code, Cursor, and other compatible coding
+agents when to use Wrench, how to preserve its trust boundaries, and how to
+install the CLI if it is missing. Start a new agent session after installation.
 
 Pin the public repository to the immutable `v0.11.0` tag:
 
@@ -429,6 +443,8 @@ wrench auth add gmail-main --oauth-provider gmail \
 wrench gmail contacts.list --auth gmail-main \
   --input '{"collection":"contacts","limit":20,"stats_scan_limit":100}' --json
 wrench gmail contacts.list --auth gmail-main \
+  --input '{"collection":"contacts","include_dates":true,"include_stats":false,"limit":20}' --json
+wrench gmail contacts.list --auth gmail-main \
   --input '{"collection":"other-contacts","limit":100,"include_stats":false}' --json
 wrench gmail contacts.list --auth gmail-main \
   --input '{"collection":"interactions","before":"2026-08-14T12:00:00.000Z","limit":100}' --json
@@ -447,7 +463,11 @@ contacts, or the mailbox-wide `interactions` projection. Paginate each
 collection independently with its returned
 `nextCursor`; the OAuth token must carry both People read scopes. Contact
 statistics are optional so bulk enumeration can avoid per-contact Gmail
-queries. When requested, they report sent and received counts plus the maximum internal
+queries. For saved contacts, `include_dates:true` adds birthdays, contact
+events, and the selected name's display, given, middle, family, prefix, and
+suffix fields. Wrench selects the sole People primary name when present and
+otherwise accepts only a single unmarked name. Other contacts and interaction
+rows do not accept this option. When requested, contact statistics report sent and received counts plus the maximum internal
 date across every bounded matched message. Count and date completeness flags
 remain explicit when the scan bound truncates a query or a message lacks a
 date. Contacts with mixed, unsupported, or absent addresses report `partial`,
@@ -689,11 +709,13 @@ does not expose a shell, package manager, ambient environment, unrestricted
 filesystem, redirect, retry, or arbitrary request primitive.
 
 Read [the plugin guide](docs/plugins.md) before replacing an inert reservation
-with an observed contract. The packaged [Wrench Agent Skill](https://github.com/hraness/wrench/blob/v0.11.0/skills/wrench/SKILL.md)
-gives coding agents the same workflow and safety boundary. The packaged
-[cross-post skill](skills/cross-post-with-wrench/SKILL.md) orchestrates exact,
-previewed posts across X, LinkedIn, Bluesky, Substack Notes, and Threads while
-preserving per-provider attachment limits and at-most-once dispatch evidence.
+with an observed contract. The repository's [Wrench Agent Skill](skills/wrench/SKILL.md)
+gives coding agents the same workflow and safety boundary. Its bundled
+[social cross-posting guidance](skills/wrench/references/cross-posting.md)
+orchestrates exact, previewed text, image, and video posts across supported
+platforms while preserving per-provider attachment limits and at-most-once
+dispatch evidence. Packages and the immutable `v0.11.0` tag carry the same
+consolidated skill.
 
 ## Risk and confirmation
 

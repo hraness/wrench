@@ -28,9 +28,10 @@ const GMAIL_INTERACTION_MESSAGE_FIELDS = "id,threadId,labelIds,internalDate,payl
 const GMAIL_THREAD_FIELDS = `id,snippet,historyId,messages(${GMAIL_MESSAGE_FIELDS})`;
 const GMAIL_ATTACHMENT_FIELDS = "attachmentId,size,data";
 const PEOPLE_CONNECTION_LIST_FIELDS = "connections(resourceName),nextPageToken,totalItems";
-const PEOPLE_PERSON_FIELDS = "metadata,names,emailAddresses,phoneNumbers,organizations,photos";
-const PEOPLE_PERSON_PROJECTION = "resourceName,etag,metadata(sources(type,id,etag,updateTime),deleted),names(displayName,givenName,familyName,metadata(primary,sourcePrimary,verified,source(type,id))),emailAddresses(value,type,metadata(primary,sourcePrimary,verified,source(type,id))),phoneNumbers(value,type,canonicalForm,metadata(primary,sourcePrimary,verified,source(type,id))),organizations(name,title,department,type,current),photos(url,default)";
-const PEOPLE_BATCH_FIELDS = `responses(requestedResourceName,httpStatusCode,status(code),person(${PEOPLE_PERSON_PROJECTION}))`;
+const PEOPLE_CORE_PERSON_FIELDS = "metadata,names,emailAddresses,phoneNumbers,organizations,photos";
+const PEOPLE_DATES_PERSON_FIELDS = `${PEOPLE_CORE_PERSON_FIELDS},birthdays,events`;
+const PEOPLE_CORE_PERSON_PROJECTION = "resourceName,etag,metadata(sources(type,id,etag,updateTime),deleted),names(displayName,givenName,familyName,metadata(primary,sourcePrimary,verified,source(type,id))),emailAddresses(value,type,metadata(primary,sourcePrimary,verified,source(type,id))),phoneNumbers(value,type,canonicalForm,metadata(primary,sourcePrimary,verified,source(type,id))),organizations(name,title,department,type,current),photos(url,default)";
+const PEOPLE_DATES_PERSON_PROJECTION = "resourceName,etag,metadata(sources(type,id,etag,updateTime),deleted),names(displayName,givenName,middleName,familyName,honorificPrefix,honorificSuffix,metadata(primary,sourcePrimary,verified,source(type,id))),emailAddresses(value,type,metadata(primary,sourcePrimary,verified,source(type,id))),phoneNumbers(value,type,canonicalForm,metadata(primary,sourcePrimary,verified,source(type,id))),organizations(name,title,department,type,current),photos(url,default),birthdays(date(year,month,day),text,metadata(primary,sourcePrimary,verified,source(type,id))),events(date(year,month,day),type,formattedType,metadata(primary,sourcePrimary,verified,source(type,id)))";
 const PEOPLE_OTHER_PERSON_PROJECTION = "resourceName,etag,metadata(sources(type,id,etag,updateTime),deleted),names(displayName,givenName,familyName,metadata(primary,sourcePrimary,verified,source(type,id))),emailAddresses(value,type,metadata(primary,sourcePrimary,verified,source(type,id))),phoneNumbers(value,type,canonicalForm,metadata(primary,sourcePrimary,verified,source(type,id))),photos(url,default)";
 const PEOPLE_OTHER_LIST_FIELDS = `otherContacts(${PEOPLE_OTHER_PERSON_PROJECTION}),nextPageToken,totalSize`;
 
@@ -203,6 +204,15 @@ export type GmailContact = Readonly<{
     sources: readonly GmailContactSource[];
   }> | null;
   displayName: string | null;
+  name?: Readonly<{
+    displayName: string | null;
+    givenName: string | null;
+    middleName: string | null;
+    familyName: string | null;
+    honorificPrefix: string | null;
+    honorificSuffix: string | null;
+    metadata: GmailContactFieldMetadata | null;
+  }> | null;
   emailAddresses: readonly Readonly<{
     /** Exact People API value retained for display and audit. */
     value: string;
@@ -225,6 +235,21 @@ export type GmailContact = Readonly<{
     current: boolean | null;
   }>[];
   photoUrl: string | null;
+  birthdays?: readonly GmailContactDate[];
+  events?: readonly Readonly<GmailContactDate & {
+    type: string | null;
+    formattedType: string | null;
+  }>[];
+}>;
+
+export type GmailContactDate = Readonly<{
+  date: Readonly<{
+    year: number;
+    month: number;
+    day: number;
+  }> | null;
+  text: string | null;
+  metadata: GmailContactFieldMetadata | null;
 }>;
 
 export type GmailContactSource = Readonly<{
@@ -248,6 +273,7 @@ export type GmailContactPage = Readonly<{
 }>;
 
 export type GmailContactCollection = "contacts" | "other-contacts";
+export type GmailContactProjection = "core" | "dates";
 
 function fail(label: string, message: string): never {
   throw new Error(`official Gmail ${label} ${message}`);
@@ -2350,6 +2376,76 @@ function parseOrganizations(value: unknown, label: string): GmailContact["organi
   }));
 }
 
+function parsePersonDate(
+  value: unknown,
+  label: string,
+): NonNullable<GmailContactDate["date"]> {
+  const source = record(value, label);
+  exactKeys(source, [], ["year", "month", "day"], label);
+  const year = source.year === undefined ? 0 : integer(source.year, `${label}.year`, 0, 9_999);
+  const month = source.month === undefined ? 0 : integer(source.month, `${label}.month`, 0, 12);
+  const day = source.day === undefined ? 0 : integer(source.day, `${label}.day`, 0, 31);
+  if (year === 0 && month === 0 && day === 0) return fail(label, "must contain a date component");
+  if (month === 0 && day !== 0) return fail(label, "cannot contain a day without a month");
+  if (year === 0 && month !== 0 && day === 0) {
+    return fail(label, "cannot contain a month without a year or day");
+  }
+  if (month !== 0 && day > calendarMonthDays(year === 0 ? 2_000 : year, month)) {
+    return fail(label, "must contain a valid Gregorian date");
+  }
+  return Object.freeze({ year, month, day });
+}
+
+function parseContactDates(
+  value: unknown,
+  label: string,
+): readonly GmailContactDate[] {
+  if (value === undefined) return Object.freeze([]);
+  return Object.freeze(array(value, label, 100).map((entry, index) => {
+    const path = `${label}[${index}]`;
+    const source = record(entry, path);
+    exactKeys(source, [], ["date", "text", "metadata"], path);
+    const date = source.date === undefined ? null : parsePersonDate(source.date, `${path}.date`);
+    const textValue = optionalPersonText(source.text, `${path}.text`, 1_024);
+    const text = textValue === "" ? null : textValue;
+    const metadata = parseFieldMetadata(source.metadata, `${path}.metadata`);
+    if (
+      date === null
+      && text === null
+      && metadata?.source?.type !== "CONTACT"
+    ) {
+      return fail(
+        path,
+        "must contain a date, text value, or exact CONTACT source-bound empty observation",
+      );
+    }
+    return Object.freeze({
+      date,
+      text,
+      metadata,
+    });
+  }));
+}
+
+function parseContactEvents(
+  value: unknown,
+  label: string,
+): NonNullable<GmailContact["events"]> {
+  if (value === undefined) return Object.freeze([]);
+  return Object.freeze(array(value, label, 100).map((entry, index) => {
+    const path = `${label}[${index}]`;
+    const source = record(entry, path);
+    exactKeys(source, ["date"], ["type", "formattedType", "metadata"], path);
+    return Object.freeze({
+      date: parsePersonDate(source.date, `${path}.date`),
+      text: null,
+      metadata: parseFieldMetadata(source.metadata, `${path}.metadata`),
+      type: optionalPersonText(source.type, `${path}.type`, 128),
+      formattedType: optionalPersonText(source.formattedType, `${path}.formattedType`, 256),
+    });
+  }));
+}
+
 function googlePhotoUrl(value: unknown, label: string): string | null {
   const raw = optionalPersonText(value, label, 8_192);
   if (raw === null || raw === "") return null;
@@ -2390,7 +2486,11 @@ function contactResourceName(value: unknown, label: string): string {
   return resourceName;
 }
 
-function parseContact(value: unknown, label: string): GmailContact {
+function parseContact(
+  value: unknown,
+  label: string,
+  projection: GmailContactProjection,
+): GmailContact {
   const source = record(value, label);
   exactKeys(source, ["resourceName"], [
     "etag",
@@ -2400,24 +2500,63 @@ function parseContact(value: unknown, label: string): GmailContact {
     "phoneNumbers",
     "organizations",
     "photos",
+    ...(projection === "dates" ? ["birthdays", "events"] : []),
   ], label);
   const resourceName = contactResourceName(source.resourceName, `${label}.resourceName`);
   let displayName: string | null = null;
+  let selectedName: NonNullable<GmailContact["name"]> | null = null;
+  const parsedNames: NonNullable<GmailContact["name"]>[] = [];
   if (source.names !== undefined) {
     const names = array(source.names, `${label}.names`, 100);
     for (const [index, entry] of names.entries()) {
       const path = `${label}.names[${index}]`;
       const name = record(entry, path);
-      exactKeys(name, [], ["displayName", "givenName", "familyName", "metadata"], path);
+      exactKeys(name, [], [
+        "displayName",
+        "givenName",
+        ...(projection === "dates" ? ["middleName"] : []),
+        "familyName",
+        ...(projection === "dates" ? ["honorificPrefix", "honorificSuffix"] : []),
+        "metadata",
+      ], path);
       const candidate = optionalPersonText(name.displayName, `${path}.displayName`, 2_048);
       const metadata = parseFieldMetadata(name.metadata, `${path}.metadata`);
-      if (name.givenName !== undefined) text(name.givenName, `${path}.givenName`, 1_024, true, true);
-      if (name.familyName !== undefined) text(name.familyName, `${path}.familyName`, 1_024, true, true);
-      if (
+      const parsedName = Object.freeze({
+        displayName: candidate === "" ? null : candidate,
+        givenName: optionalPersonText(name.givenName, `${path}.givenName`, 1_024),
+        middleName: projection === "dates"
+          ? optionalPersonText(name.middleName, `${path}.middleName`, 1_024)
+          : null,
+        familyName: optionalPersonText(name.familyName, `${path}.familyName`, 1_024),
+        honorificPrefix: projection === "dates"
+          ? optionalPersonText(name.honorificPrefix, `${path}.honorificPrefix`, 256)
+          : null,
+        honorificSuffix: projection === "dates"
+          ? optionalPersonText(name.honorificSuffix, `${path}.honorificSuffix`, 256)
+          : null,
+        metadata,
+      });
+      if (projection === "dates") parsedNames.push(parsedName);
+      else if (
         candidate !== null
         && candidate !== ""
         && (displayName === null || metadata?.primary === true)
       ) displayName = candidate;
+    }
+    if (projection === "dates") {
+      const primaryNames = parsedNames.filter((name) =>
+        name.metadata?.primary === true);
+      if (primaryNames.length > 1) {
+        return fail(`${label}.names`, "must not contain multiple primary names");
+      }
+      if (primaryNames.length === 0 && parsedNames.length > 1) {
+        return fail(
+          `${label}.names`,
+          "must contain at most one name when no primary name is marked",
+        );
+      }
+      selectedName = primaryNames[0] ?? parsedNames[0] ?? null;
+      displayName = selectedName?.displayName ?? null;
     }
   }
   let photoUrl: string | null = null;
@@ -2439,10 +2578,15 @@ function parseContact(value: unknown, label: string): GmailContact {
     etag: optionalPersonText(source.etag, `${label}.etag`, 1_024),
     metadata: parseContactMetadata(source.metadata, `${label}.metadata`),
     displayName,
+    ...(projection === "dates" ? { name: selectedName } : {}),
     emailAddresses: parseEmailAddresses(source.emailAddresses, `${label}.emailAddresses`),
     phoneNumbers: parsePhoneNumbers(source.phoneNumbers, `${label}.phoneNumbers`),
     organizations: parseOrganizations(source.organizations, `${label}.organizations`),
     photoUrl,
+    ...(projection === "dates" ? {
+      birthdays: parseContactDates(source.birthdays, `${label}.birthdays`),
+      events: parseContactEvents(source.events, `${label}.events`),
+    } : {}),
   });
 }
 
@@ -2469,6 +2613,7 @@ function parseOtherContactsPage(value: unknown, maximum: number): GmailContactPa
         const contact = parseContact(
           entry,
           `People Other contacts response.otherContacts[${index}]`,
+          "core",
         );
         if (!contact.resourceName.startsWith("otherContacts/")) {
           return fail(
@@ -2530,6 +2675,7 @@ function parseConnectionIndexPage(value: unknown, maximum: number): PeopleConnec
 function parsePeopleBatch(
   value: unknown,
   requestedResourceNames: readonly string[],
+  projection: GmailContactProjection,
 ): readonly GmailContact[] {
   const source = record(value, "People batch response");
   exactKeys(source, ["responses"], [], "People batch response");
@@ -2571,7 +2717,7 @@ function parsePeopleBatch(
     }
     if (!hasStatus) return fail(path, "must contain an exact per-person status");
     if (response.person === undefined) return fail(`${path}.person`, "is required for a successful response");
-    const contact = parseContact(response.person, `${path}.person`);
+    const contact = parseContact(response.person, `${path}.person`, projection);
     if (!contact.resourceName.startsWith("people/")) {
       return fail(`${path}.person.resourceName`, "must identify a saved contact");
     }
@@ -2598,12 +2744,20 @@ export async function fetchGmailContacts(
   client: GmailApiClient,
   input: Readonly<{
     collection: GmailContactCollection;
+    projection?: GmailContactProjection;
     limit: number;
     pageToken: string | null;
   }>,
 ): Promise<GmailContactPage> {
   const limit = integer(input.limit, "People connections limit", 1, 200);
+  const projection = input.projection ?? "core";
+  if (projection !== "core" && projection !== "dates") {
+    return fail("People contact projection", "must be core or dates");
+  }
   if (input.collection === "other-contacts") {
+    if (projection !== "core") {
+      return fail("People Other contacts projection", "does not support saved-contact dates");
+    }
     const otherUrl = peopleUrl("/v1/otherContacts");
     otherUrl.searchParams.set("pageSize", String(limit));
     otherUrl.searchParams.set(
@@ -2646,11 +2800,24 @@ export async function fetchGmailContacts(
   for (const resourceName of page.resourceNames) {
     batchUrl.searchParams.append("resourceNames", resourceName);
   }
-  batchUrl.searchParams.set("personFields", PEOPLE_PERSON_FIELDS);
+  batchUrl.searchParams.set(
+    "personFields",
+    projection === "dates" ? PEOPLE_DATES_PERSON_FIELDS : PEOPLE_CORE_PERSON_FIELDS,
+  );
   batchUrl.searchParams.set("sources", "READ_SOURCE_TYPE_CONTACT");
-  batchUrl.searchParams.set("fields", PEOPLE_BATCH_FIELDS);
+  const personProjection = projection === "dates"
+    ? PEOPLE_DATES_PERSON_PROJECTION
+    : PEOPLE_CORE_PERSON_PROJECTION;
+  batchUrl.searchParams.set(
+    "fields",
+    `responses(requestedResourceName,httpStatusCode,status(code),person(${personProjection}))`,
+  );
   return Object.freeze({
-    contacts: parsePeopleBatch(await peopleGet(client, batchUrl), page.resourceNames),
+    contacts: parsePeopleBatch(
+      await peopleGet(client, batchUrl),
+      page.resourceNames,
+      projection,
+    ),
     nextPageToken: page.nextPageToken,
     totalItems: page.totalItems,
   });

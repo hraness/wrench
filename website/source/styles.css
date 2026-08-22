@@ -77,7 +77,7 @@ a:hover {
   text-decoration-color: var(--accent);
 }
 
-:where(a, summary, [tabindex]):focus-visible {
+:where(a, button, input, summary, [tabindex]):focus-visible {
   outline: 0.16rem solid var(--focus);
   outline-offset: 0.22rem;
 }
@@ -333,6 +333,122 @@ code:not(pre code) {
   margin: 0.9rem 0 0;
   max-width: 49rem;
   text-wrap: pretty;
+}
+
+.skill-install {
+  margin-top: clamp(1.75rem, 4vw, 2.75rem);
+  max-width: 47rem;
+}
+
+.skill-install-label {
+  color: var(--dark-muted);
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  line-height: 1.45;
+  margin-bottom: 0.55rem;
+  text-transform: uppercase;
+}
+
+.skill-install-control {
+  align-items: center;
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid rgb(245 242 233 / 24%);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 18%);
+  display: flex;
+  min-height: 3.75rem;
+  overflow: hidden;
+  padding-left: 1rem;
+}
+
+.skill-install-prompt {
+  color: var(--accent-bright);
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 750;
+  margin-right: 0.65rem;
+}
+
+.skill-install-command {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--dark-foreground);
+  cursor: text;
+  display: flex;
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: clamp(0.72rem, 1.4vw, 0.9rem);
+  line-height: 1.5;
+  min-height: 3.65rem;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0;
+  user-select: all;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.skill-install-command:focus-visible {
+  outline-offset: -0.22rem;
+}
+
+.skill-install-copy {
+  align-items: center;
+  align-self: stretch;
+  background: rgb(255 255 255 / 8%);
+  border: 0;
+  border-left: 1px solid rgb(245 242 233 / 18%);
+  color: var(--dark-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 760;
+  gap: 0.45rem;
+  justify-content: center;
+  min-width: 6rem;
+  padding: 0.7rem 1rem;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.skill-install-copy[hidden] {
+  display: none;
+}
+
+.skill-install-copy:hover {
+  background: rgb(255 255 255 / 14%);
+}
+
+.skill-install-copy:disabled {
+  cursor: wait;
+  opacity: 0.78;
+}
+
+.skill-install-copy[data-copy-state="copied"] {
+  background: var(--accent-bright);
+  color: #18130b;
+}
+
+.skill-install-copy svg {
+  fill: none;
+  height: 1rem;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+  width: 1rem;
+}
+
+.skill-install-note {
+  color: var(--dark-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  margin: 0.65rem 0 0;
 }
 
 .action-row {
@@ -1064,6 +1180,28 @@ code:not(pre code) {
 }
 
 @media (max-width: 32.5rem) {
+  .skill-install-control {
+    align-items: stretch;
+    flex-wrap: wrap;
+    padding-left: 0;
+  }
+
+  .skill-install-prompt {
+    align-self: center;
+    margin-left: 1rem;
+  }
+
+  .skill-install-command {
+    width: calc(100% - 3rem);
+  }
+
+  .skill-install-copy {
+    border-left: 0;
+    border-top: 1px solid rgb(245 242 233 / 18%);
+    min-height: 3rem;
+    width: 100%;
+  }
+
   .action-row {
     align-items: stretch;
     flex-direction: column;
@@ -1103,7 +1241,9 @@ code:not(pre code) {
 
   .card,
   .command-panel,
-  .prompt-card {
+  .prompt-card,
+  .skill-install-control,
+  .skill-install-copy {
     background: Canvas;
   }
 

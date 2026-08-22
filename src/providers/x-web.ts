@@ -240,10 +240,10 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
   role: "revision-evidence-only" as const,
   observedOn: "2026-07-22",
   currentBundleResolutionRequired: true,
-  mainBundleUrl: "https://abs.twimg.com/responsive-web/client-web/main.9929b02a.js",
+  mainBundleUrl: "https://abs.twimg.com/responsive-web/client-web/main.7792f4fa.js",
   descriptors: Object.freeze([
-    { operationName: "HomeTimeline", operationType: "query", queryId: "lqfNCpeO0wydVAAXAbAU5w", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.e992705a.js" },
-    { operationName: "HomeLatestTimeline", operationType: "query", queryId: "lyhT5o5ECF6_kYqTqpUUew", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.e992705a.js" },
+    { operationName: "HomeTimeline", operationType: "query", queryId: "wp06oo3fRGU4P1sK8rECqQ", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.c12c8a9a.js", observedOn: "2026-08-20" },
+    { operationName: "HomeLatestTimeline", operationType: "query", queryId: "BLQWpfVqtgBqAqwRRJcJjA", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.c12c8a9a.js", observedOn: "2026-08-20" },
     { operationName: "ListLatestTweetsTimeline", operationType: "query", queryId: "LV64djPRhnsVhGCK76s13w", sourceChunk: "shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js" },
     { operationName: "ListRankedTweetsTimeline", operationType: "query", queryId: "dPN7GrkxeMF4SUYCo9D9YA", sourceChunk: "shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js" },
     { operationName: "Bookmarks", operationType: "query", queryId: "LoLaMO4GuHLEPJOhH9kjAw", sourceChunk: "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js" },
@@ -262,7 +262,7 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
     { operationName: "DeleteBookmark", operationType: "mutation", queryId: "Wlmlj2-xzyS1GN3a6cj-mQ", sourceChunk: "main.9929b02a.js" },
     { operationName: "CreateRetweet", operationType: "mutation", queryId: "mbRO74GrOvSfRcJnlMapnQ", sourceChunk: "main.9929b02a.js" },
     { operationName: "DeleteRetweet", operationType: "mutation", queryId: "ZyZigVsNiFO6v1dEks1eWg", sourceChunk: "main.9929b02a.js" },
-    { operationName: "CreateTweet", operationType: "mutation", queryId: "hIL9XdleMYEtVXOZVbr8Bg", sourceChunk: "main.9929b02a.js" },
+    { operationName: "CreateTweet", operationType: "mutation", queryId: "WXTdKnLddrQOunD6MhWi3g", sourceChunk: "main.7792f4fa.js", observedOn: "2026-08-20" },
     { operationName: "CreateNoteTweet", operationType: "mutation", queryId: "uGXMU9aKbNB9qxxAg4jxkA", sourceChunk: "main.9929b02a.js" },
     { operationName: "DeleteTweet", operationType: "mutation", queryId: "nxpZCY2K-I6QoFHAHeojFQ", sourceChunk: "main.9929b02a.js" },
     { operationName: "DmAllSearchSlice", operationType: "query", queryId: "zd0F6a_svKAXdlMGbCZDFg", sourceChunk: "bundle.DirectMessages.265735ba.js" },
@@ -674,7 +674,7 @@ function validateCreateTweetVariables(operationId: XWebMutationOperationId, vari
   }
   if (operationId === "posts.publish") {
     if (media.media_entities.length > 1) {
-      throw new Error("X posts.publish supports at most one reviewed image");
+      throw new Error("X posts.publish supports at most one reviewed image or video");
     }
     if (media.media_entities.length === 1) {
       const entity = record(media.media_entities[0], "X posts.publish media entity");

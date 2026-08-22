@@ -500,7 +500,7 @@ const gmailDefinitions = {
   "contacts.list": {
     provider: "gmail",
     operation: "contacts.list",
-    contractVersion: 4,
+    contractVersion: 5,
     risk: "R1",
     input: {
       properties: {
@@ -508,6 +508,7 @@ const gmailDefinitions = {
         after: string("Optional inclusive whole-second UTC lower bound for incremental interactions", { minLength: 24, maxLength: 24 }),
         before: string("Fixed whole-second UTC cutoff required only for the interactions projection", { minLength: 24, maxLength: 24 }),
         cursor: string("Opaque Google People or Gmail API next-page token", { minLength: 1, maxLength: 4_096 }),
+        include_dates: boolean("Include selected saved-contact display, given, middle, family, prefix, and suffix name fields, birthdays, and contact events; defaults to false and is unavailable for Other contacts"),
         include_stats: boolean("Compute bounded sent and received Gmail statistics; defaults to true"),
         limit: number("Bounded page count; defaults to 20 for contacts and 100 for interactions", 1, 100),
         stats_scan_limit: number("Maximum messages scanned per contact and direction when include_stats is true; defaults to 100; limit multiplied by this value cannot exceed 2000", 1, 2_000),
@@ -552,6 +553,9 @@ const gmailDefinitions = {
       "other-contacts",
       "contact-metadata",
       "contact-email-addresses",
+      "optional-saved-contact-name-components",
+      "optional-saved-contact-birthdays",
+      "optional-saved-contact-events",
       "optional-sent-counts",
       "optional-received-counts",
       "optional-last-sent-at",
@@ -567,7 +571,7 @@ const gmailDefinitions = {
       "opaque-pagination-evidence",
       "send-as-alias-exclusion",
     ],
-    implementation: "subject-bound People contacts plus Gmail interactions; saved contacts expand by batchGet; Other contacts retain their limited projection; interactions use one fixed half-open epoch window, list send-as aliases on page one, disable spam/trash, read metadata only, skip drafts/chats and lower-bound overlap, derive direction from SENT, dedupe addresses per message, expose rolling counts and undated lower bounds, emit opaque ID evidence, and never read bodies",
+    implementation: "subject-bound People contacts and Gmail interactions; saved contacts optionally batchGet selected display, given, middle, family, prefix, and suffix fields, birthdays, and events; Other contacts stay limited; interactions use a fixed half-open epoch window, list send-as aliases on page one, exclude spam/trash/drafts/chats, read metadata only, derive direction from SENT, dedupe addresses per message, expose rolling counts and explicit lower bounds, emit opaque ID evidence, and never read bodies",
   },
   "messaging.list": {
     provider: "gmail",
@@ -615,6 +619,79 @@ const gmailDefinitions = {
   },
 } as const satisfies Readonly<Record<string, ProviderContractDefinition>>;
 
+const gmailContactsListV4Definition = {
+  provider: "gmail",
+  operation: "contacts.list",
+  contractVersion: 4,
+  risk: "R1",
+  input: {
+    properties: {
+      collection: string("Google contact projection; defaults to saved contacts", { enum: ["contacts", "other-contacts", "interactions"] }),
+      after: string("Optional inclusive whole-second UTC lower bound for incremental interactions", { minLength: 24, maxLength: 24 }),
+      before: string("Fixed whole-second UTC cutoff required only for the interactions projection", { minLength: 24, maxLength: 24 }),
+      cursor: string("Opaque Google People or Gmail API next-page token", { minLength: 1, maxLength: 4_096 }),
+      include_stats: boolean("Compute bounded sent and received Gmail statistics; defaults to true"),
+      limit: number("Bounded page count; defaults to 20 for contacts and 100 for interactions", 1, 100),
+      stats_scan_limit: number("Maximum messages scanned per contact and direction when include_stats is true; defaults to 100; limit multiplied by this value cannot exceed 2000", 1, 2_000),
+    },
+    required: [],
+  },
+  requiredScopeSets: [
+    [
+      "https://www.googleapis.com/auth/contacts.readonly",
+      "https://www.googleapis.com/auth/contacts.other.readonly",
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ],
+    [
+      "https://www.googleapis.com/auth/contacts.readonly",
+      "https://www.googleapis.com/auth/contacts.other.readonly",
+      "https://www.googleapis.com/auth/gmail.modify",
+    ],
+    [
+      "https://www.googleapis.com/auth/contacts.readonly",
+      "https://www.googleapis.com/auth/contacts.other.readonly",
+      "https://mail.google.com/",
+    ],
+    [
+      "https://www.googleapis.com/auth/contacts",
+      "https://www.googleapis.com/auth/contacts.other.readonly",
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ],
+    [
+      "https://www.googleapis.com/auth/contacts",
+      "https://www.googleapis.com/auth/contacts.other.readonly",
+      "https://www.googleapis.com/auth/gmail.modify",
+    ],
+    [
+      "https://www.googleapis.com/auth/contacts",
+      "https://www.googleapis.com/auth/contacts.other.readonly",
+      "https://mail.google.com/",
+    ],
+  ],
+  dispatch: "none",
+  coverage: [
+    "contacts",
+    "other-contacts",
+    "contact-metadata",
+    "contact-email-addresses",
+    "optional-sent-counts",
+    "optional-received-counts",
+    "optional-last-sent-at",
+    "optional-last-received-at",
+    "bounded-stat-completeness",
+    "messages-in-fixed-half-open-window",
+    "spam-and-trash-excluded",
+    "draft-and-chat-excluded",
+    "sent-and-received-message-counts",
+    "first-and-last-interaction-times",
+    "30-90-365-day-counts",
+    "per-direction-completeness",
+    "opaque-pagination-evidence",
+    "send-as-alias-exclusion",
+  ],
+  implementation: "subject-bound People contacts plus Gmail interactions; saved contacts expand by batchGet; Other contacts retain their limited projection; interactions use one fixed half-open epoch window, list send-as aliases on page one, disable spam/trash, read metadata only, skip drafts/chats and lower-bound overlap, derive direction from SENT, dedupe addresses per message, expose rolling counts and undated lower bounds, emit opaque ID evidence, and never read bodies",
+} as const satisfies ProviderContractDefinition;
+
 type BoundProviderContracts<
   Definitions extends Readonly<Record<string, ProviderContractDefinition>>,
 > = {
@@ -644,8 +721,15 @@ function bindProviderSemantics<
 const linkedin = bindProviderSemantics(linkedinDefinitions);
 const x = bindProviderSemantics(xDefinitions);
 const gmail = bindProviderSemantics(gmailDefinitions);
+const gmailContactsListV4 = bindProviderSemantics({
+  "contacts.list": gmailContactsListV4Definition,
+})["contacts.list"];
 
 export const providerContractDefinitions = { gmail, linkedin, x } as const;
+export const gmailProviderContractDefinitionsV4 = Object.freeze({
+  ...gmail,
+  "contacts.list": gmailContactsListV4,
+});
 
 export { planProviderContractDispatches } from "./provider-contract-planning";
 

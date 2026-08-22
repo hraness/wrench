@@ -30,11 +30,13 @@ describe("Gmail official provider plugin", () => {
     expect(binding.authKinds).toEqual(["oauth-token-file"]);
   });
 
-  test("advertises exactly three observed R1 contracts with bounded scopes", () => {
-    expect(binding.operations.map((operation) => operation.name)).toEqual([
-      "contacts.list",
-      "messaging.list",
-      "messaging.read",
+  test("advertises four exact observed R1 contracts with bounded scopes", () => {
+    expect(binding.operations.map((operation) =>
+      `${operation.name}@${operation.contractVersion}`)).toEqual([
+      "contacts.list@4",
+      "contacts.list@5",
+      "messaging.list@1",
+      "messaging.read@1",
     ]);
     expect(binding.operations.every((operation) =>
       operation.risk === "R1"
@@ -42,9 +44,14 @@ describe("Gmail official provider plugin", () => {
       && operation.sideEffect === "none"
       && operation.dispatch === "none")).toBeTrue();
 
+    const contactsV4 = binding.operations.find((operation) =>
+      operation.name === "contacts.list" && operation.contractVersion === 4);
     const contacts = binding.operations.find((operation) =>
-      operation.name === "contacts.list");
-    expect(contacts?.contractVersion).toBe(4);
+      operation.name === "contacts.list" && operation.contractVersion === 5);
+    expect(contacts?.contractVersion).toBe(5);
+    expect(contactsV4?.historicalContractVersions).toBeUndefined();
+    expect(contacts?.historicalContractVersions).toBeUndefined();
+    expect(contactsV4?.input.properties).not.toHaveProperty("include_dates");
     expect(contacts?.requiredScopeSets).toEqual([
       [
         "https://www.googleapis.com/auth/contacts.readonly",
@@ -91,11 +98,17 @@ describe("Gmail official provider plugin", () => {
     expect(contacts?.input.properties.include_stats).toMatchObject({
       type: "boolean",
     });
+    expect(contacts?.input.properties.include_dates).toMatchObject({
+      type: "boolean",
+    });
     expect(contacts?.coverage).toEqual([
       "contacts",
       "other-contacts",
       "contact-metadata",
       "contact-email-addresses",
+      "optional-saved-contact-name-components",
+      "optional-saved-contact-birthdays",
+      "optional-saved-contact-events",
       "optional-sent-counts",
       "optional-received-counts",
       "optional-last-sent-at",
@@ -166,7 +179,7 @@ describe("Gmail official provider plugin", () => {
       "mail.google.com",
     ]);
     expect(Object.keys(manifest.operations).sort()).toEqual(
-      binding.operations.map((operation) => operation.name).sort(),
+      [...new Set(binding.operations.map((operation) => operation.name))].sort(),
     );
     expect(Object.fromEntries(Object.entries(manifest.operations).map(
       ([name, operation]) => [name, {
@@ -187,8 +200,13 @@ describe("Gmail official provider plugin", () => {
         maxOutputBytes: 10_485_760,
       },
     });
-    for (const operation of binding.operations) {
-      expect(manifest.operations[operation.name]).toMatchObject({
+    for (const [name, manifestOperation] of Object.entries(manifest.operations)) {
+      const operation = binding.operations.find((candidate) =>
+        candidate.name === name
+        && candidate.contractVersion === manifestOperation.provider.contractVersion);
+      expect(operation).toBeDefined();
+      if (operation === undefined) continue;
+      expect(manifestOperation).toMatchObject({
         risk: operation.risk,
         sideEffect: operation.sideEffect,
         provider: {
@@ -197,7 +215,7 @@ describe("Gmail official provider plugin", () => {
           contractVersion: operation.contractVersion,
         },
       });
-      expect(canonicalJson(manifest.operations[operation.name]?.input))
+      expect(canonicalJson(manifestOperation.input))
         .toBe(canonicalJson(operation.input));
     }
   });

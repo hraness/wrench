@@ -13,6 +13,8 @@ import {
   SITE_DESCRIPTION,
   SITE_ORIGIN,
   SITE_TITLE,
+  SKILL_INSTALL_COMMAND,
+  SKILL_INSTALL_COMMAND_BUNX,
 } from "./build";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -87,6 +89,22 @@ describe("wrench.rip static site", () => {
     expect(html).not.toContain('<meta name="keywords"');
     expect(html).toContain(`github:hraness/wrench#${packageIdentity.release}`);
     expect(html).toContain(`Install Wrench ${packageIdentity.release}`);
+    expect(html).toContain(`>${SKILL_INSTALL_COMMAND}</code>`);
+    expect(html).toContain(`<code>${SKILL_INSTALL_COMMAND_BUNX}</code>`);
+    expect(html).not.toContain(`value="${SKILL_INSTALL_COMMAND}"`);
+    expect(html).toContain('class="skill-install" data-skill-install');
+    expect(html).toContain("data-skill-install-copy");
+    expect(html).toMatch(/data-skill-install-copy\s+hidden/gu);
+    expect(html).toContain('aria-label="Copy Agent Skill install command"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('role="status"');
+    expect(html).toContain('/assets/skill-install-');
+    expect(html.indexOf('class="hero-statement"')).toBeLessThan(
+      html.indexOf('class="skill-install"'),
+    );
+    expect(html.indexOf('class="skill-install"')).toBeLessThan(
+      html.indexOf('class="hero-explainer"'),
+    );
     expect(html).not.toContain("{{");
     expect(html).not.toContain("@jungle/");
     expect(html).not.toContain("hraness.com/wrench");
@@ -99,6 +117,12 @@ describe("wrench.rip static site", () => {
     expect(html).toContain("Privacy: cookieless PostHog analytics");
     expect(html).toContain(`href="${PUBLISHER_URL}">Hraness GitHub organization</a>`);
     expect(notFound).toContain('<meta name="robots" content="noindex, nofollow">');
+    expect(notFound).toContain(
+      '<meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">',
+    );
+    expect(notFound).toContain(
+      '<meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">',
+    );
     expect(notFound).toContain("Privacy: this page uses cookieless, personless PostHog analytics");
     expect(notFound).not.toContain('type="application/ld+json"');
     expect(robots).toBe(`User-agent: *\nAllow: /\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`);
@@ -173,6 +197,13 @@ describe("wrench.rip static site", () => {
       expect(pageHtml).toContain(`<meta name="twitter:title" content="${definition.title}">`);
       expect(pageHtml).toContain(`<meta name="twitter:description" content="${definition.description}">`);
       expect(pageHtml).toContain('<meta name="robots" content="max-image-preview:large">');
+      expect(pageHtml).toContain(
+        '<meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">',
+      );
+      expect(pageHtml).toContain(
+        '<meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">',
+      );
+      expect(pageHtml.match(/<meta name="theme-color"/gu)).toHaveLength(2);
       expect(pageHtml.match(/<h1\b/gu)).toHaveLength(1);
       expect(pageHtml).not.toContain('<meta name="keywords"');
       expect(pageHtml).not.toContain("{{");

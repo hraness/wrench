@@ -1,4 +1,7 @@
-import { providerContractDefinitions } from "../../provider-contract-definitions";
+import {
+  gmailProviderContractDefinitionsV4,
+  providerContractDefinitions,
+} from "../../provider-contract-definitions";
 import { gmailProviderConditionalInputIssues } from "../../provider-contract-input-gmail";
 import {
   defineProviderPlugin,
@@ -42,7 +45,7 @@ const runtime = lazyProviderApiRuntime(async () => {
 export const gmailOfficialPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "gmail-official",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "Gmail Official API",
   sourceKind: "built-in",
   implementationSources,
@@ -66,11 +69,18 @@ export const gmailOfficialPlugin = defineProviderPlugin({
     ],
     authKinds: oauthTokenAuthKinds,
     operations: officialContractOperations(
-      Object.values(providerContractDefinitions.gmail),
+      Object.freeze([
+        gmailProviderContractDefinitionsV4["contacts.list"],
+        ...Object.values(providerContractDefinitions.gmail),
+      ]),
       {
-        semanticIdentity: "48c6afcb50558029ca0822b84bc91a9fc5a27f02ccf138db535a38f4f3353ddf",
+        semanticIdentity: "e7cffcefe3dd00f292a0e71cf2fa3f3286b763656b746e44dbb841eed3e61d6d",
         validateInput: (contract, input) =>
-          gmailProviderConditionalInputIssues(contract.operation, input),
+          gmailProviderConditionalInputIssues(
+            contract.operation,
+            input,
+            contract.contractVersion,
+          ),
         omni: {
           "messaging.list": {
             state: "supported",

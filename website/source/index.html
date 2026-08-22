@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <meta name="theme-color" content="#181817">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
     <title>Wrench: precise web capabilities for AI agents</title>
     <meta name="description" content="{{WRENCH_DESCRIPTION}}">
     <meta name="application-name" content="Wrench">
@@ -35,6 +36,7 @@
     <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
     <script type="application/ld+json">{{JSON_LD}}</script>
     <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+    <script type="module" src="{{WRENCH_SKILL_INSTALL_ASSET}}"></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -60,6 +62,47 @@
           <p class="eyebrow">A capability and custody layer for any command-capable agent</p>
           <h1 id="brand-name"><span>W</span>rench</h1>
           <p class="hero-statement">Give your agent a precise handle on the web.</p>
+          <div class="skill-install" data-skill-install>
+            <p class="skill-install-label" id="hero-skill-install-label">
+              Install the Agent Skill
+            </p>
+            <div class="skill-install-control">
+              <span aria-hidden="true" class="skill-install-prompt">$</span>
+              <code
+                aria-describedby="hero-skill-install-note hero-skill-install-status"
+                aria-labelledby="hero-skill-install-label"
+                class="skill-install-command"
+                data-skill-install-command
+                id="hero-skill-install-command"
+                tabindex="0"
+              >{{WRENCH_SKILL_INSTALL_COMMAND}}</code>
+              <button
+                aria-controls="hero-skill-install-command"
+                aria-label="Copy Agent Skill install command"
+                class="skill-install-copy"
+                data-skill-install-copy
+                hidden
+                type="button"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M8 8.75A2.75 2.75 0 0 1 10.75 6h6.5A2.75 2.75 0 0 1 20 8.75v6.5A2.75 2.75 0 0 1 17.25 18h-6.5A2.75 2.75 0 0 1 8 15.25z"></path>
+                  <path d="M15.75 6v-1.25A2.75 2.75 0 0 0 13 2H6.75A2.75 2.75 0 0 0 4 4.75V11a2.75 2.75 0 0 0 2.75 2.75H8"></path>
+                </svg>
+                <span data-skill-install-copy-label>Copy</span>
+              </button>
+            </div>
+            <p class="skill-install-note" id="hero-skill-install-note">
+              Add Wrench’s capture, archive, provider, and publishing guide to your agent.
+              With Bun, run <code>{{WRENCH_SKILL_INSTALL_COMMAND_BUNX}}</code> instead.
+            </p>
+            <p
+              aria-live="polite"
+              class="visually-hidden"
+              data-skill-install-status
+              id="hero-skill-install-status"
+              role="status"
+            ></p>
+          </div>
           <p class="hero-explainer">
             Wrench lets an AI capture pages, preserve media, read supported connected
             services, and invoke reviewed account operations. Each authenticated

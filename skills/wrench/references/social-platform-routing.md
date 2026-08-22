@@ -1,4 +1,4 @@
-# Platform routing
+# Social platform routing
 
 Use this as routing guidance only. Always inspect `wrench capabilities <adapter> --json`; installed adapter state and schemas are authoritative and may change.
 

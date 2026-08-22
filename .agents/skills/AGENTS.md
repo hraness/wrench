@@ -13,5 +13,6 @@
 - Keep each reusable skill self-contained with `SKILL.md`, `AGENTS.md`, matching `agents/openai.yaml` metadata, and only the references it needs.
 - Keep trigger descriptions precise and workflows portable across independently versioned repositories.
 - Keep product-specific operational skills in the repository's root `skills/` directory when that directory exists; do not merge them into this reusable baseline.
+- Mark every reusable baseline skill with `metadata.internal: true` so public `skills add hraness/wrench` discovery exposes only the product-owned `wrench` skill.
 - Update a skill's metadata and directory guide when its trigger, resources, or default invocation changes.
 - Validate changed skill folders with the installed Codex skill validator when available.

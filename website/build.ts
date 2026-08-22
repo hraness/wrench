@@ -15,6 +15,8 @@ export const SITE_DESCRIPTION =
   "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations." as const;
 export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
+export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
+export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
 export const CONTENT_REVIEWED_RELEASE = "v0.11.0" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 
@@ -96,6 +98,7 @@ type RenderOptions = Readonly<{
   packageIdentity: PackageIdentity;
   postHogHost: string;
   postHogKey: string;
+  skillInstallAsset: string;
 }>;
 
 function unknownRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -299,6 +302,9 @@ function renderTemplate(
     ["{{WRENCH_INSTALL_COMMAND}}", installCommand],
     ["{{WRENCH_RELEASE}}", identity.release],
     ["{{WRENCH_REPOSITORY}}", REPOSITORY_URL],
+    ["{{WRENCH_SKILL_INSTALL_ASSET}}", options.skillInstallAsset],
+    ["{{WRENCH_SKILL_INSTALL_COMMAND}}", SKILL_INSTALL_COMMAND],
+    ["{{WRENCH_SKILL_INSTALL_COMMAND_BUNX}}", SKILL_INSTALL_COMMAND_BUNX],
     ["{{WRENCH_VERSION}}", identity.version],
   ]);
   for (const [placeholder, value] of optionalValues) {
@@ -338,7 +344,14 @@ function postHogEnvironment(environment: Readonly<Record<string, string | undefi
 export async function buildWebsite(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<void> {
-  const [manifest, publicTemplates, notFoundTemplate, css, analyticsBuild] = await Promise.all([
+  const [
+    manifest,
+    publicTemplates,
+    notFoundTemplate,
+    css,
+    analyticsBuild,
+    skillInstallBuild,
+  ] = await Promise.all([
     Bun.file(join(repositoryRoot, "package.json")).json(),
     Promise.all(PUBLIC_PAGES.map((page) => readFile(join(sourceRoot, page.sourceFile), "utf8"))),
     readFile(join(sourceRoot, "404.html"), "utf8"),
@@ -350,12 +363,24 @@ export async function buildWebsite(
       sourcemap: "none",
       target: "browser",
     }),
+    Bun.build({
+      entrypoints: [join(sourceRoot, "skill-install-command.ts")],
+      format: "esm",
+      minify: true,
+      sourcemap: "none",
+      target: "browser",
+    }),
   ]);
   if (!analyticsBuild.success || analyticsBuild.outputs.length !== 1) {
     const messages = analyticsBuild.logs.map((log) => log.message).join("\n");
     throw new Error(`Analytics build failed: ${messages || "no browser output"}`);
   }
   const analytics = new Uint8Array(await analyticsBuild.outputs[0]!.arrayBuffer());
+  if (!skillInstallBuild.success || skillInstallBuild.outputs.length !== 1) {
+    const messages = skillInstallBuild.logs.map((log) => log.message).join("\n");
+    throw new Error(`Skill install control build failed: ${messages || "no browser output"}`);
+  }
+  const skillInstall = new Uint8Array(await skillInstallBuild.outputs[0]!.arrayBuffer());
   const identity = parsePackageIdentity(manifest);
   if (identity.release !== CONTENT_REVIEWED_RELEASE) {
     throw new Error(
@@ -365,12 +390,14 @@ export async function buildWebsite(
   const postHog = postHogEnvironment(environment);
   const cssAsset = `/assets/styles-${contentHash(css)}.css`;
   const analyticsAsset = `/assets/analytics-${contentHash(analytics)}.js`;
+  const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
   const renderOptions = {
     analyticsAsset,
     cssAsset,
     packageIdentity: identity,
     postHogHost: postHog.host,
     postHogKey: postHog.key,
+    skillInstallAsset,
   } as const;
 
   await rm(outputRoot, { force: true, recursive: true });
@@ -386,6 +413,7 @@ export async function buildWebsite(
     writeFile(join(outputRoot, "404.html"), renderTemplate(notFoundTemplate, renderOptions)),
     writeFile(join(outputRoot, cssAsset.slice(1)), css),
     writeFile(join(outputRoot, analyticsAsset.slice(1)), analytics),
+    writeFile(join(outputRoot, skillInstallAsset.slice(1)), skillInstall),
     writeFile(
       join(outputRoot, "robots.txt"),
       `User-agent: *\nAllow: /\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`,

@@ -4,6 +4,7 @@ import {
   expect,
   test,
 } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   mkdirSync,
@@ -154,6 +155,7 @@ describe("single-process bundled adapter generation sync", () => {
       "facebook-page-web@1.0.0",
       "facebook-web@1.0.0",
       "facebook-web@1.1.0",
+      "gmail@1.2.0",
       "instagram-web@1.0.0",
       "instagram-web@1.1.0",
       "linkedin@0.4.0",
@@ -192,6 +194,7 @@ describe("single-process bundled adapter generation sync", () => {
       "x-web@1.6.0",
       "x-web@1.7.0",
       "x-web@1.8.0",
+      "x-web@1.9.0",
     ]);
     expect(Object.fromEntries(discovered.flatMap((adapter) =>
       adapter.upgradeFrom.map((baseline) => [
@@ -199,10 +202,28 @@ describe("single-process bundled adapter generation sync", () => {
         baseline.sourceContentSha256,
       ]),
     ))).toMatchObject({
+      "gmail@1.2.0": "5568ac835a649f58d584867cf31ecb69baf16b16f8ac2ecd0c02363636aac3cb",
       "instagram-web@1.0.0": "bc3e17911739cc496105aac3bec522ef64b5e3b55183a2a0541850bb0f0ad18b",
       "threads-web@1.0.0": "750a6db23ea6e3e3c96f3a9086ce17d73c3c5c90066e576525e848fe4583ec41",
       "threads-web@1.3.0": "125936943ac8f0ed00e85367ee01dc953d5115c55f4849a85d8f8b68e4e286f5",
     });
+    const gmailV12 = discovered.find((adapter) => adapter.id === "gmail")
+      ?.upgradeFrom.find((baseline) => baseline.manifest.version === "1.2.0");
+    expect(gmailV12).toBeDefined();
+    expect(gmailV12 === undefined ? null : manifestHash(gmailV12.manifest)).toBe(
+      "f864c55cdeaab6293be02b58607e9dced349e45225b17652e8838047957a1273",
+    );
+    const gmailV12Bytes = readFileSync(join(
+      assetsDirectory,
+      "gmail",
+      "wrench-adapter.v1.2.0.json",
+    ));
+    expect(createHash("sha1")
+      .update(Buffer.from(`blob ${gmailV12Bytes.byteLength}\0`))
+      .update(gmailV12Bytes)
+      .digest("hex")).toBe(
+      "0b0dd8e3c1a9d0de31609abb867c3c5315702e58",
+    );
     expect(discovered.map((adapter) => adapter.id)).toEqual([
       "beeper-local",
       "bluesky-web",
