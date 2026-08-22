@@ -90,8 +90,8 @@ export type BeeperReadCommand = Readonly<{
 
 export type BeeperMessageLikeMeExportCommandOptions = Readonly<{
   outputDirectory: string;
-  limitChats: number | null;
-  limitMessages: number | null;
+  limitChats: number;
+  limitMessages: number;
   maxParticipants: number;
 }>;
 
@@ -277,16 +277,20 @@ export function planBeeperMessageLikeMeExportCommand(
     "Beeper export maxParticipants",
     2_000,
   );
-  const limitChats = options.limitChats === null
-    ? null
-    : boundedInteger(options.limitChats, "Beeper export limitChats", 100_000);
-  const limitMessages = options.limitMessages === null
-    ? null
-    : boundedInteger(
-        options.limitMessages,
-        "Beeper export limitMessages",
-        1_000_000,
-      );
+  const limitChats = boundedInteger(
+    options.limitChats,
+    "Beeper export limitChats",
+    100_000,
+  );
+  const limitMessages = boundedInteger(
+    options.limitMessages,
+    "Beeper export limitMessages",
+    1_000_000,
+  );
+  const timeoutSeconds = Math.max(
+    1,
+    Math.min(6 * 60 * 60, Math.ceil(timeoutMs / 1_000)),
+  );
   return Object.freeze([
     "export",
     "--out",
@@ -294,11 +298,16 @@ export function planBeeperMessageLikeMeExportCommand(
     "--no-attachments",
     "--max-participants",
     String(maxParticipants),
-    ...(limitChats === null ? [] : ["--limit-chats", String(limitChats)]),
-    ...(limitMessages === null
-      ? []
-      : ["--limit-messages", String(limitMessages)]),
-    ...globalArguments(timeoutMs).filter((argument) => argument !== "--json" && argument !== "--full"),
+    "--limit-chats",
+    String(limitChats),
+    "--limit-messages",
+    String(limitMessages),
+    "--read-only",
+    "--quiet",
+    "--target",
+    BEEPER_DESKTOP_TARGET,
+    "--timeout",
+    `${timeoutSeconds}s`,
   ]);
 }
 

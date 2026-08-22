@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   chmod,
+  link,
   lstat,
   mkdir,
   mkdtemp,
@@ -24,6 +25,7 @@ import {
   BEEPER_MESSAGE_LIKE_ME_GOLDEN_STARTED_AT,
   createBeeperMessageLikeMeGoldenSource,
 } from "./beeper-message-like-me-golden-fixture";
+import { recoverBeeperMessageLikeMeDirectoryLeases } from "./beeper-message-like-me-recovery";
 
 const temporaryRoots: string[] = [];
 
@@ -213,12 +215,39 @@ describe("exportBeeperMessageLikeMeBundle", () => {
       );
     }
     expect(result.manifestSha256).toBe(
-      "e46f4a524d53f849cfac594fb5bc8cf28e7a9743c138039b81a0aad4ff4830ef",
+      "dcef93293af9af0f3b0ff303992517ce2eece6d4bf0b7477e30c0b9d77a2c7f1",
     );
-    expect(result.manifest.completeness).toMatchObject({
-      kind: "truncated",
-      reason: "explicit-source-limit",
+    expect(result.manifest.source).toEqual({ id: "beeper-local", version: "1.1.0" });
+    expect(result.manifest.counts).toEqual({
+      account: 2,
+      participant: 3,
+      conversation: 1,
+      message: 2,
+      reaction: 1,
+      tombstone: 1,
     });
+    expect(result.manifest.completeness).toEqual({
+      kind: "bounded-local",
+      reason: "desktop-local-sequential-export",
+      observedFrom: "2026-08-21T15:50:00.000Z",
+      observedThrough: "2026-08-21T15:59:00.000Z",
+    });
+    expect(result.manifest.warnings).toEqual([
+      "attachments-metadata-only",
+      "connected-account-backfill-coverage-unknown",
+      "remote-history-not-claimed",
+      "sequential-account-snapshot",
+      "synthetic-golden-fixture",
+    ]);
+    const goldenAccounts = (await readFile(join(outputRoot, "accounts.ndjson"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(goldenAccounts).toHaveLength(2);
+    expect(goldenAccounts.map(({ network }) => network)).toEqual([
+      "synthetic",
+      "synthetic-secondary",
+    ]);
     const goldenMessages = (await readFile(join(outputRoot, "messages.ndjson"), "utf8"))
       .trimEnd()
       .split("\n")
@@ -241,13 +270,15 @@ describe("exportBeeperMessageLikeMeBundle", () => {
     expect(goldenReaction.reactedAt).toBeNull();
   });
 
-  test("streams a private provenance-preserving bundle and publishes its manifest last", async () => {
+  test("streams a private provenance-preserving bundle and publishes all seven files atomically", async () => {
     const parent = await privateTemporaryRoot();
     const outputRoot = join(parent, "message-like-me");
+    const progress: unknown[] = [];
     const result = await exportBeeperMessageLikeMeBundle({
       outputRoot,
       source: source(),
       clock: clock("2026-08-21T12:01:00.000Z", "2026-08-21T12:02:00.000Z"),
+      onProgress: (item) => progress.push(item),
     });
 
     expect(result.outputRoot).toBe(outputRoot);
@@ -271,6 +302,11 @@ describe("exportBeeperMessageLikeMeBundle", () => {
       providerUrls: "excluded",
       credentials: "excluded",
     });
+    expect(progress).toEqual([
+      { phase: "bundle-building", elapsedSeconds: 0, records: 1, bytes: 398 },
+      { phase: "bundle-validating", elapsedSeconds: 0, records: 7, bytes: 3_356 },
+      { phase: "bundle-publishing", elapsedSeconds: 0, records: 7, bytes: 3_356 },
+    ]);
 
     const expectedFiles = [
       "accounts.ndjson",
@@ -328,6 +364,244 @@ describe("exportBeeperMessageLikeMeBundle", () => {
     });
     expect(manifestSource).not.toContain(outputRoot);
     expect(manifestSource).not.toContain("token");
+    expect(await readdir(parent)).toEqual(["message-like-me"]);
+  });
+
+  test("keeps outputRoot absent until the complete bundle is ready", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "atomic");
+    const fixture = source();
+    const observedSource: BeeperMessageLikeMeExportSource = {
+      descriptor: fixture.descriptor,
+      records: (async function* () {
+        for (const value of records()) {
+          await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+          yield value;
+        }
+      })(),
+      completion: async () => {
+        await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+        return fixture.completion();
+      },
+    };
+
+    await exportBeeperMessageLikeMeBundle({ outputRoot, source: observedSource });
+
+    expect((await readdir(outputRoot)).sort()).toEqual([
+      "accounts.ndjson",
+      "conversations.ndjson",
+      "manifest.json",
+      "messages.ndjson",
+      "participants.ndjson",
+      "reactions.ndjson",
+      "tombstones.ndjson",
+    ]);
+    expect(await readdir(parent)).toEqual(["atomic"]);
+  });
+
+  test("atomically preserves an outputRoot claimed before publication", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "claimed");
+    const fixture = source();
+
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot,
+      source: {
+        ...fixture,
+        completion: async () => {
+          await mkdir(outputRoot, { mode: 0o700 });
+          return fixture.completion();
+        },
+      },
+    })).rejects.toThrow("outputRoot appeared before atomic publication");
+
+    expect(await readdir(outputRoot)).toEqual([]);
+    expect(await readdir(parent)).toEqual(["claimed"]);
+  });
+
+  test("disposes its source exactly once after success publication or failure cleanup", async () => {
+    const successParent = await privateTemporaryRoot();
+    const successOutput = join(successParent, "dispose-success");
+    const successCalls: boolean[] = [];
+    await exportBeeperMessageLikeMeBundle({
+      outputRoot: successOutput,
+      source: {
+        ...source(),
+        dispose: async (published) => {
+          successCalls.push(published);
+          expect(await readFile(join(successOutput, "manifest.json"), "utf8"))
+            .toContain("message-like-me.local-message-bundle");
+        },
+      },
+    });
+    expect(successCalls).toEqual([true]);
+
+    const failureParent = await privateTemporaryRoot();
+    const failureOutput = join(failureParent, "dispose-failure");
+    const failureCalls: boolean[] = [];
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot: failureOutput,
+      source: {
+        ...source(),
+        completion: async () => {
+          throw new Error("synthetic source failure");
+        },
+        dispose: async (published) => {
+          failureCalls.push(published);
+          await expect(lstat(failureOutput)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await readdir(failureParent)).toEqual([]);
+        },
+      },
+    })).rejects.toThrow("synthetic source failure");
+    expect(failureCalls).toEqual([false]);
+  });
+
+  test("rolls a verified publication back when source disposal fails", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "dispose-rollback");
+    const calls: boolean[] = [];
+
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot,
+      source: {
+        ...source(),
+        dispose: async (published) => {
+          calls.push(published);
+          expect(await readdir(outputRoot)).toContain("manifest.json");
+          throw new Error("synthetic disposal failure");
+        },
+      },
+    })).rejects.toThrow("synthetic disposal failure");
+
+    expect(calls).toEqual([true]);
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(parent)).toEqual([]);
+  });
+
+  test("preserves publication and source-disposal failures together", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "dual-failure");
+    const fixture = source();
+    let caught: unknown;
+
+    try {
+      await exportBeeperMessageLikeMeBundle({
+        outputRoot,
+        source: {
+          ...fixture,
+          completion: async () => {
+            throw new Error("synthetic publication failure");
+          },
+          dispose: async () => {
+            throw new Error("synthetic disposal failure");
+          },
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as AggregateError).errors.map((error) =>
+      error instanceof Error ? error.message : String(error))).toEqual([
+      "synthetic publication failure",
+      "synthetic disposal failure",
+    ]);
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(parent)).toEqual([]);
+  });
+
+  test("removes private staging and leaves outputRoot absent on failure and cancellation", async () => {
+    const failureParent = await privateTemporaryRoot();
+    const failureOutput = join(failureParent, "completion-failure");
+    const failureFixture = source();
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot: failureOutput,
+      source: {
+        ...failureFixture,
+        completion: async () => {
+          await expect(lstat(failureOutput)).rejects.toMatchObject({ code: "ENOENT" });
+          throw new Error("synthetic completion failure");
+        },
+      },
+    })).rejects.toThrow("synthetic completion failure");
+    await expect(lstat(failureOutput)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(failureParent)).toEqual([]);
+
+    const cancellationParent = await privateTemporaryRoot();
+    const cancellationOutput = join(cancellationParent, "cancelled");
+    const cancellation = new AbortController();
+    const cancellationFixture = source();
+    const cancellationDisposals: boolean[] = [];
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot: cancellationOutput,
+      signal: cancellation.signal,
+      source: {
+        ...cancellationFixture,
+        records: (async function* () {
+          for (const value of records()) yield value;
+          cancellation.abort();
+        })(),
+        dispose: async (published) => {
+          cancellationDisposals.push(published);
+          await expect(lstat(cancellationOutput)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      },
+    })).rejects.toThrow("export was aborted");
+    expect(cancellationDisposals).toEqual([false]);
+    await expect(lstat(cancellationOutput)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(cancellationParent)).toEqual([]);
+  });
+
+  test("re-reads staged files before publication and removes a corrupted stage", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "corrupted");
+    const fixture = source();
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot,
+      source: {
+        ...fixture,
+        completion: async () => {
+          const siblings = await readdir(parent);
+          expect(siblings).toHaveLength(1);
+          const accountsPart = join(parent, siblings[0]!, "accounts.ndjson.part");
+          const bytes = await readFile(accountsPart);
+          bytes[0] = bytes[0] === 0x7b ? 0x5b : 0x7b;
+          await Bun.write(accountsPart, bytes);
+          await chmod(accountsPart, 0o600);
+          return fixture.completion();
+        },
+      },
+    })).rejects.toThrow("accounts.ndjson changed before publication");
+
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(parent)).toEqual([]);
+  });
+
+  test("rejects a staged artifact hardlinked outside private staging", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "hardlinked");
+    const alias = join(parent, "foreign-alias.ndjson");
+    const fixture = source();
+
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot,
+      source: {
+        ...fixture,
+        completion: async () => {
+          const siblings = await readdir(parent);
+          expect(siblings).toHaveLength(1);
+          await link(
+            join(parent, siblings[0]!, "accounts.ndjson.part"),
+            alias,
+          );
+          return fixture.completion();
+        },
+      },
+    })).rejects.toThrow("accounts.ndjson changed before finalization");
+
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(alias, "utf8")).toContain("account:whatsapp:primary");
   });
 
   test("rejects foreign fields before they can introduce provider URLs", async () => {
@@ -340,8 +614,25 @@ describe("exportBeeperMessageLikeMeBundle", () => {
       source: source([account]),
     })).rejects.toThrow("must contain exactly");
 
-    expect((await lstat(outputRoot)).mode & 0o777).toBe(0o700);
-    await expect(lstat(join(outputRoot, "manifest.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(parent)).toEqual([]);
+  });
+
+  test("rejects a non-function source disposer before creating staging", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "invalid-dispose");
+    const invalid = {
+      ...source(),
+      dispose: "not-a-function",
+    } as unknown as BeeperMessageLikeMeExportSource;
+
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot,
+      source: invalid,
+    })).rejects.toThrow("optional dispose function");
+
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(parent)).toEqual([]);
   });
 
   test("enforces the async stream record bound", async () => {
@@ -359,7 +650,8 @@ describe("exportBeeperMessageLikeMeBundle", () => {
       source: source([records()[0], second]),
       limits: { maxRecords: 1 },
     })).rejects.toThrow("record stream exceeds the configured record bound");
-    await expect(lstat(join(outputRoot, "manifest.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(parent)).toEqual([]);
   });
 
   test("enforces importer-compatible bundle and connected-account bounds", async () => {
@@ -396,8 +688,8 @@ describe("exportBeeperMessageLikeMeBundle", () => {
       outputRoot: accountBoundOutput,
       source: source(accounts),
     })).rejects.toThrow("connected-account bound");
-    await expect(lstat(join(accountBoundOutput, "manifest.json")))
-      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(accountBoundOutput)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await readdir(parent)).sort()).toEqual([]);
   });
 
   test("refuses relative, existing, and symlink-traversing output roots", async () => {
@@ -415,6 +707,15 @@ describe("exportBeeperMessageLikeMeBundle", () => {
       outputRoot: existing,
       source: source([]),
     })).rejects.toThrow("already exists");
+    expect(await readFile(existing, "utf8")).toBe("owned by caller");
+
+    const existingDirectory = join(parent, "existing-directory");
+    await mkdir(existingDirectory, { mode: 0o700 });
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot: existingDirectory,
+      source: source([]),
+    })).rejects.toThrow("already exists");
+    expect(await readdir(existingDirectory)).toEqual([]);
 
     const permissive = join(parent, "permissive");
     await mkdir(permissive, { mode: 0o700 });
@@ -689,5 +990,95 @@ describe("exportBeeperMessageLikeMeBundle", () => {
         source: source(item.values),
       })).rejects.toThrow(item.message);
     }
+    });
+  });
+
+describe("Beeper Message Like Me bundle recovery", () => {
+  test("releases its durable stage claim after successful publication", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "recovery-success");
+    const stateRoot = join(parent, "state");
+    const environment = { WRENCH_STATE_HOME: stateRoot };
+
+    await exportBeeperMessageLikeMeBundle({
+      outputRoot,
+      source: source(),
+      recoveryEnvironment: environment,
+    });
+
+    expect((await readdir(parent)).sort()).toEqual([
+      "recovery-success",
+      "state",
+    ]);
+    expect(await readdir(join(
+      stateRoot,
+      "recovery",
+      "beeper-message-like-me-directory-leases",
+    ))).toEqual([]);
+    expect(await recoverBeeperMessageLikeMeDirectoryLeases({ environment }))
+      .toEqual({ recovered: 0, published: 0, active: 0, indeterminate: 0 });
+  });
+
+  test("removes its failed stage and releases its durable claim", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "recovery-failure");
+    const stateRoot = join(parent, "state");
+    const environment = { WRENCH_STATE_HOME: stateRoot };
+    const fixture = source();
+
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot,
+      source: {
+        ...fixture,
+        completion: async () => {
+          throw new Error("synthetic recovery publication failure");
+        },
+      },
+      recoveryEnvironment: environment,
+    })).rejects.toThrow("synthetic recovery publication failure");
+
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(parent)).toEqual(["state"]);
+    expect(await readdir(join(
+      stateRoot,
+      "recovery",
+      "beeper-message-like-me-directory-leases",
+    ))).toEqual([]);
+    expect(await recoverBeeperMessageLikeMeDirectoryLeases({ environment }))
+      .toEqual({ recovered: 0, published: 0, active: 0, indeterminate: 0 });
+  });
+
+  test("keeps its stage claim through a durable disposal-failure rollback", async () => {
+    const parent = await privateTemporaryRoot();
+    const outputRoot = join(parent, "recovery-disposal-rollback");
+    const stateRoot = join(parent, "state");
+    const environment = { WRENCH_STATE_HOME: stateRoot };
+
+    await expect(exportBeeperMessageLikeMeBundle({
+      outputRoot,
+      source: {
+        ...source(),
+        dispose: async () => {
+          expect((await readdir(join(
+            stateRoot,
+            "recovery",
+            "beeper-message-like-me-directory-leases",
+          ))).length).toBe(1);
+          expect(await readdir(outputRoot)).toContain("manifest.json");
+          throw new Error("synthetic recovery disposal failure");
+        },
+      },
+      recoveryEnvironment: environment,
+    })).rejects.toThrow("synthetic recovery disposal failure");
+
+    await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(parent)).toEqual(["state"]);
+    expect(await readdir(join(
+      stateRoot,
+      "recovery",
+      "beeper-message-like-me-directory-leases",
+    ))).toEqual([]);
+    expect(await recoverBeeperMessageLikeMeDirectoryLeases({ environment }))
+      .toEqual({ recovered: 0, published: 0, active: 0, indeterminate: 0 });
   });
 });

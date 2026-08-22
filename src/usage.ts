@@ -74,7 +74,7 @@ export const wrenchUsage = `Usage:
   wrench auth sync <id> --once [--json]       Explicitly connect and refresh the local projection
   wrench auth remove <id> --yes
 
-  wrench beeper export-message-like-me --auth <id> --output <absolute-empty-directory>
+  wrench beeper export-message-like-me --auth <id> --output <new-absolute-directory>
                 [--limit-chats <n>] [--limit-messages <n>]
                 [--max-participants <n>] [--json]
 

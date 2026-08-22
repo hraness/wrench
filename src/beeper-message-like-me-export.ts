@@ -2,8 +2,9 @@ import { constants } from "node:fs";
 import {
   chmod,
   lstat,
-  mkdir,
+  mkdtemp,
   open,
+  readdir,
   realpath,
   rename,
   rmdir,
@@ -11,8 +12,15 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
+import { dlopen, ptr } from "bun:ffi";
 
 import { canonicalJson, sha256 } from "./canonical-json";
+import {
+  createBeeperMessageLikeMeDirectoryLease,
+  releaseBeeperMessageLikeMeDirectoryLease,
+  type BeeperMessageLikeMeDirectoryLease,
+} from "./beeper-message-like-me-recovery";
+import { removePrivateDirectoryTree } from "./storage";
 
 export const BEEPER_MESSAGE_LIKE_ME_SCHEMA_VERSION = 1 as const;
 export const BEEPER_MESSAGE_LIKE_ME_MAX_RECORDS = 500_000 as const;
@@ -27,6 +35,17 @@ const MAX_WARNING_CODES = 128;
 const MAX_PARTICIPANTS = 10_000;
 const MAX_ATTACHMENTS = 256;
 const MAX_CONNECTED_ACCOUNTS = 128;
+const BUNDLE_HEARTBEAT_INTERVAL_MS = 30_000;
+const DARWIN_RENAME_EXCL = 0x0000_0004;
+const LINUX_RENAME_NOREPLACE = 0x0000_0001;
+const AT_FDCWD = -100;
+
+type NativeExclusiveRename = (
+  source: Uint8Array,
+  destination: Uint8Array,
+) => number;
+
+let cachedNativeExclusiveRename: NativeExclusiveRename | undefined;
 
 const HARD_LIMITS = Object.freeze({
   maxRecords: BEEPER_MESSAGE_LIKE_ME_MAX_RECORDS,
@@ -40,6 +59,30 @@ export type BeeperMessageLikeMeExportLimits = {
   readonly maxTotalBytes: number;
 };
 
+export type BeeperMessageLikeMeBundleProgress =
+  | Readonly<{
+    phase: "bundle-building";
+    elapsedSeconds: number;
+    records: number;
+    bytes: number;
+  }>
+  | Readonly<{
+    phase: "bundle-validating";
+    elapsedSeconds: number;
+    records: number;
+    bytes: number;
+  }>
+  | Readonly<{
+    phase: "bundle-publishing";
+    elapsedSeconds: number;
+    records: number;
+    bytes: number;
+  }>
+  | Readonly<{
+    phase: "private-cleanup";
+    elapsedSeconds: number;
+  }>;
+
 export type BeeperMessageLikeMeExportSource = {
   /** Parsed as foreign data before any output directory is created. */
   readonly descriptor: unknown;
@@ -47,6 +90,8 @@ export type BeeperMessageLikeMeExportSource = {
   readonly records: AsyncIterable<unknown>;
   /** Called only after the record stream ends successfully. */
   readonly completion: () => Promise<unknown>;
+  /** Called exactly once after publication or failure cleanup. */
+  readonly dispose?: (published: boolean) => Promise<void>;
 };
 
 export type BeeperMessageLikeMeExportRequest = {
@@ -54,6 +99,9 @@ export type BeeperMessageLikeMeExportRequest = {
   readonly source: BeeperMessageLikeMeExportSource;
   readonly limits?: Partial<BeeperMessageLikeMeExportLimits>;
   readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: BeeperMessageLikeMeBundleProgress) => void;
+  /** Internal CLI composition seam for durable private-stage recovery. */
+  readonly recoveryEnvironment?: Readonly<Record<string, string | undefined>>;
   /** Test seam. Production callers should omit it. */
   readonly clock?: () => Date;
 };
@@ -324,6 +372,29 @@ type ArtifactWriter = {
   records: number;
   bytes: number;
   closed: boolean;
+};
+
+type PrivateDirectoryIdentity = {
+  readonly device: number;
+  readonly inode: number;
+};
+
+type StagedManifest = {
+  readonly bytes: number;
+  readonly sha256: string;
+};
+
+type PublishedDirectory = {
+  readonly path: string;
+  readonly parent: string;
+  readonly identity: PrivateDirectoryIdentity;
+  readonly parentIdentity: PrivateDirectoryIdentity;
+};
+
+type PublishedBundle = {
+  readonly result: BeeperMessageLikeMeExportResult;
+  readonly directory: PublishedDirectory;
+  readonly directoryLease?: BeeperMessageLikeMeDirectoryLease;
 };
 
 const ARTIFACTS = Object.freeze([
@@ -1205,6 +1276,71 @@ async function assertAbsent(path: string, label: string): Promise<void> {
   fail(`${label} already exists`);
 }
 
+function nativeExclusiveRename(): NativeExclusiveRename {
+  if (cachedNativeExclusiveRename !== undefined) {
+    return cachedNativeExclusiveRename;
+  }
+  if (process.platform === "darwin") {
+    const library = dlopen("/usr/lib/libSystem.B.dylib", {
+      renamex_np: {
+        args: ["cstring", "cstring", "u32"],
+        returns: "int",
+      },
+    } as const);
+    cachedNativeExclusiveRename = (source, destination) =>
+      library.symbols.renamex_np(
+        ptr(source),
+        ptr(destination),
+        DARWIN_RENAME_EXCL,
+      );
+    return cachedNativeExclusiveRename;
+  }
+  if (process.platform === "linux") {
+    const library = dlopen("libc.so.6", {
+      renameat2: {
+        args: ["int", "cstring", "int", "cstring", "u32"],
+        returns: "int",
+      },
+    } as const);
+    cachedNativeExclusiveRename = (source, destination) =>
+      library.symbols.renameat2(
+        AT_FDCWD,
+        ptr(source),
+        AT_FDCWD,
+        ptr(destination),
+        LINUX_RENAME_NOREPLACE,
+      );
+    return cachedNativeExclusiveRename;
+  }
+  return fail("atomic no-clobber publication is unsupported on this platform");
+}
+
+async function renameDirectoryExclusive(
+  source: string,
+  destination: string,
+): Promise<void> {
+  const encodePath = (path: string): Buffer => {
+    if (path.includes("\0")) return fail("atomic publication path was invalid");
+    return Buffer.from(`${path}\0`, "utf8");
+  };
+  const result = nativeExclusiveRename()(
+    encodePath(source),
+    encodePath(destination),
+  );
+  if (result === 0) return;
+  let destinationExists = false;
+  try {
+    await lstat(destination);
+    destinationExists = true;
+  } catch (error) {
+    if (!isErrno(error, "ENOENT")) throw error;
+  }
+  if (destinationExists) {
+    return fail("outputRoot appeared before atomic publication");
+  }
+  return fail("atomic no-clobber publication failed");
+}
+
 async function validateOutputRoot(outputRoot: unknown): Promise<{
   readonly outputRoot: string;
   readonly parent: string;
@@ -1242,9 +1378,13 @@ async function validateOutputRoot(outputRoot: unknown): Promise<{
 
 async function assertParentUnchanged(snapshot: Awaited<ReturnType<typeof validateOutputRoot>>): Promise<void> {
   const current = await lstat(snapshot.parent);
+  const uid = process.getuid?.();
   if (
     !current.isDirectory()
     || current.isSymbolicLink()
+    || uid === undefined
+    || current.uid !== uid
+    || (current.mode & 0o022) !== 0
     || current.dev !== snapshot.parentDevice
     || current.ino !== snapshot.parentInode
     || await realpath(snapshot.parent) !== snapshot.parent
@@ -1253,7 +1393,10 @@ async function assertParentUnchanged(snapshot: Awaited<ReturnType<typeof validat
   }
 }
 
-async function assertPrivateDirectory(path: string): Promise<void> {
+async function assertPrivateDirectory(
+  path: string,
+  expected?: PrivateDirectoryIdentity,
+): Promise<PrivateDirectoryIdentity> {
   const uid = process.getuid?.();
   const metadata = await lstat(path);
   if (
@@ -1262,10 +1405,13 @@ async function assertPrivateDirectory(path: string): Promise<void> {
     || uid === undefined
     || metadata.uid !== uid
     || (metadata.mode & 0o777) !== PRIVATE_DIRECTORY_MODE
+    || (expected !== undefined
+      && (metadata.dev !== expected.device || metadata.ino !== expected.inode))
     || await realpath(path) !== path
   ) {
-    fail(`${path} is not the expected private physical directory`);
+    fail("private staging directory changed");
   }
+  return Object.freeze({ device: metadata.dev, inode: metadata.ino });
 }
 
 async function assertPrivateFile(path: string, expectedBytes: number): Promise<void> {
@@ -1276,10 +1422,143 @@ async function assertPrivateFile(path: string, expectedBytes: number): Promise<v
     || metadata.isSymbolicLink()
     || uid === undefined
     || metadata.uid !== uid
+    || metadata.nlink !== 1
     || (metadata.mode & 0o777) !== PRIVATE_FILE_MODE
     || metadata.size !== expectedBytes
   ) {
-    fail(`${path} is not the expected private regular file`);
+    fail("private staged artifact changed");
+  }
+}
+
+async function createPrivateStagingDirectory(
+  output: Awaited<ReturnType<typeof validateOutputRoot>>,
+): Promise<{ readonly path: string; readonly identity: PrivateDirectoryIdentity }> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await assertParentUnchanged(output);
+    const candidate = await mkdtemp(resolve(output.parent, ".message-like-me-staging-"));
+    let identity: PrivateDirectoryIdentity | undefined;
+    try {
+      await chmod(candidate, PRIVATE_DIRECTORY_MODE);
+      identity = await assertPrivateDirectory(candidate);
+      const metadata = await lstat(candidate);
+      if (dirname(candidate) !== output.parent || metadata.dev !== output.parentDevice) {
+        fail("private staging directory must share the output parent and filesystem");
+      }
+      if (candidate === output.outputRoot) {
+        await removeOwnedPrivateDirectory(candidate, identity);
+        continue;
+      }
+      return Object.freeze({ path: candidate, identity });
+    } catch (error) {
+      if (identity === undefined) {
+        try {
+          await rmdir(candidate);
+        } catch {
+          // Never recursively remove a directory whose identity was not captured.
+        }
+      } else {
+        await removeOwnedPrivateDirectory(candidate, identity);
+      }
+      throw error;
+    }
+  }
+  return fail("could not allocate a private staging directory distinct from outputRoot");
+}
+
+async function removeOwnedPrivateDirectory(
+  path: string,
+  identity: PrivateDirectoryIdentity,
+): Promise<void> {
+  try {
+    removePrivateDirectoryTree(path, Object.freeze({
+      device: String(identity.device),
+      inode: String(identity.inode),
+    }));
+  } catch {
+    return fail("private directory could not be removed from quarantine safely");
+  }
+}
+
+async function syncDirectory(
+  path: string,
+  expected: PrivateDirectoryIdentity,
+): Promise<void> {
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    const metadata = await handle.stat();
+    if (
+      !metadata.isDirectory()
+      || metadata.dev !== expected.device
+      || metadata.ino !== expected.inode
+    ) {
+      fail("directory changed before synchronization");
+    }
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function privateFileSha256(path: string, expectedBytes: number): Promise<string> {
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  try {
+    const uid = process.getuid?.();
+    const before = await handle.stat();
+    const entryBefore = await lstat(path);
+    if (
+      !before.isFile()
+      || uid === undefined
+      || before.uid !== uid
+      || before.nlink !== 1
+      || (before.mode & 0o777) !== PRIVATE_FILE_MODE
+      || before.size !== expectedBytes
+      || !entryBefore.isFile()
+      || entryBefore.isSymbolicLink()
+      || entryBefore.dev !== before.dev
+      || entryBefore.ino !== before.ino
+      || entryBefore.nlink !== 1
+    ) {
+      fail("private staged artifact changed before bundle validation");
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let offset = 0;
+    while (offset < expectedBytes) {
+      const length = Math.min(buffer.byteLength, expectedBytes - offset);
+      const { bytesRead } = await handle.read(buffer, 0, length, offset);
+      if (bytesRead === 0) fail("private staged artifact ended during bundle validation");
+      hash.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+    const after = await handle.stat();
+    const entryAfter = await lstat(path);
+    if (
+      after.dev !== before.dev
+      || after.ino !== before.ino
+      || !after.isFile()
+      || after.uid !== before.uid
+      || after.nlink !== 1
+      || after.size !== before.size
+      || after.mtimeMs !== before.mtimeMs
+      || after.ctimeMs !== before.ctimeMs
+      || (after.mode & 0o777) !== PRIVATE_FILE_MODE
+      || !entryAfter.isFile()
+      || entryAfter.isSymbolicLink()
+      || entryAfter.dev !== after.dev
+      || entryAfter.ino !== after.ino
+      || entryAfter.nlink !== 1
+    ) {
+      fail("private staged artifact changed during bundle validation");
+    }
+    return hash.digest("hex");
+  } finally {
+    await handle.close();
   }
 }
 
@@ -1293,8 +1572,15 @@ async function createWriter(staging: string, kind: RecordKind, fileName: string)
   );
   try {
     await handle.chmod(PRIVATE_FILE_MODE);
+    const uid = process.getuid?.();
     const metadata = await handle.stat();
-    if (!metadata.isFile() || (metadata.mode & 0o777) !== PRIVATE_FILE_MODE) {
+    if (
+      !metadata.isFile()
+      || uid === undefined
+      || metadata.uid !== uid
+      || metadata.nlink !== 1
+      || (metadata.mode & 0o777) !== PRIVATE_FILE_MODE
+    ) {
       fail(`could not create private staging file ${fileName}`);
     }
   } catch (error) {
@@ -1348,15 +1634,23 @@ async function closeWriter(writer: ArtifactWriter): Promise<void> {
   await writer.handle.close();
 }
 
-async function finalizeWriter(writer: ArtifactWriter, outputRoot: string): Promise<BeeperMessageLikeMeArtifact> {
+async function finalizeWriter(writer: ArtifactWriter, staging: string): Promise<BeeperMessageLikeMeArtifact> {
   await writer.handle.sync();
+  const uid = process.getuid?.();
   const opened = await writer.handle.stat();
-  if (!opened.isFile() || opened.size !== writer.bytes || (opened.mode & 0o777) !== PRIVATE_FILE_MODE) {
+  if (
+    !opened.isFile()
+    || uid === undefined
+    || opened.uid !== uid
+    || opened.nlink !== 1
+    || opened.size !== writer.bytes
+    || (opened.mode & 0o777) !== PRIVATE_FILE_MODE
+  ) {
     fail(`${writer.fileName} changed before finalization`);
   }
   await closeWriter(writer);
   await assertPrivateFile(writer.partPath, writer.bytes);
-  const finalPath = resolve(outputRoot, writer.fileName);
+  const finalPath = resolve(staging, writer.fileName);
   await assertAbsent(finalPath, writer.fileName);
   await rename(writer.partPath, finalPath);
   await assertPrivateFile(finalPath, writer.bytes);
@@ -1372,11 +1666,10 @@ async function finalizeWriter(writer: ArtifactWriter, outputRoot: string): Promi
 
 async function writeManifest(
   staging: string,
-  outputRoot: string,
   manifest: BeeperMessageLikeMeManifest,
-): Promise<string> {
+): Promise<StagedManifest> {
   const partPath = resolve(staging, "manifest.json.part");
-  const finalPath = resolve(outputRoot, "manifest.json");
+  const finalPath = resolve(staging, "manifest.json");
   const bytes = Buffer.from(`${canonicalJson(manifest)}\n`, "utf8");
   const handle = await open(
     partPath,
@@ -1387,8 +1680,16 @@ async function writeManifest(
     await handle.chmod(PRIVATE_FILE_MODE);
     await writeAll(handle, bytes);
     await handle.sync();
+    const uid = process.getuid?.();
     const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size !== bytes.byteLength || (metadata.mode & 0o777) !== PRIVATE_FILE_MODE) {
+    if (
+      !metadata.isFile()
+      || uid === undefined
+      || metadata.uid !== uid
+      || metadata.nlink !== 1
+      || metadata.size !== bytes.byteLength
+      || (metadata.mode & 0o777) !== PRIVATE_FILE_MODE
+    ) {
       fail("manifest changed before finalization");
     }
   } finally {
@@ -1398,7 +1699,42 @@ async function writeManifest(
   await assertAbsent(finalPath, "manifest.json");
   await rename(partPath, finalPath);
   await assertPrivateFile(finalPath, bytes.byteLength);
-  return sha256(bytes.toString("utf8"));
+  return Object.freeze({
+    bytes: bytes.byteLength,
+    sha256: sha256(bytes.toString("utf8")),
+  });
+}
+
+async function validateCompleteBundle(
+  root: string,
+  identity: PrivateDirectoryIdentity,
+  artifacts: readonly BeeperMessageLikeMeArtifact[],
+  manifest: StagedManifest,
+): Promise<void> {
+  await assertPrivateDirectory(root, identity);
+  const expectedNames = [
+    ...artifacts.map((artifact) => artifact.path),
+    "manifest.json",
+  ].sort();
+  const observedNames = (await readdir(root)).sort();
+  if (
+    observedNames.length !== expectedNames.length
+    || observedNames.some((name, index) => name !== expectedNames[index])
+  ) {
+    fail("private staging directory does not contain the exact complete bundle");
+  }
+  for (const artifact of artifacts) {
+    const path = resolve(root, artifact.path);
+    await assertPrivateFile(path, artifact.bytes);
+    if (await privateFileSha256(path, artifact.bytes) !== artifact.sha256) {
+      fail(`${artifact.path} changed before publication`);
+    }
+  }
+  const manifestPath = resolve(root, "manifest.json");
+  await assertPrivateFile(manifestPath, manifest.bytes);
+  if (await privateFileSha256(manifestPath, manifest.bytes) !== manifest.sha256) {
+    fail("manifest.json changed before publication");
+  }
 }
 
 function assertSource(source: BeeperMessageLikeMeExportSource): void {
@@ -1409,8 +1745,9 @@ function assertSource(source: BeeperMessageLikeMeExportSource): void {
     || typeof source.records !== "object"
     || source.records === null
     || typeof source.records[Symbol.asyncIterator] !== "function"
+    || (source.dispose !== undefined && typeof source.dispose !== "function")
   ) {
-    fail("source must expose an async record stream and completion function");
+    fail("source must expose an async record stream, completion function, and optional dispose function");
   }
 }
 
@@ -1418,35 +1755,146 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) fail("export was aborted");
 }
 
+type BundlePhaseHeartbeat = Readonly<{
+  stop: () => void;
+  assertHealthy: () => void;
+}>;
+
+function startBundlePhaseHeartbeat(
+  request: BeeperMessageLikeMeExportRequest,
+  phase: "bundle-validating" | "bundle-publishing",
+  records: number,
+  bytes: number,
+): BundlePhaseHeartbeat {
+  const startedAt = Date.now();
+  let failed = false;
+  const report = (elapsedSeconds: number): void => {
+    request.onProgress?.(Object.freeze({
+      phase,
+      elapsedSeconds,
+      records,
+      bytes,
+    }));
+  };
+  report(0);
+  const heartbeat = request.onProgress === undefined
+    ? null
+    : setInterval(() => {
+        try {
+          report(Math.max(1, Math.floor((Date.now() - startedAt) / 1_000)));
+        } catch {
+          failed = true;
+        }
+      }, BUNDLE_HEARTBEAT_INTERVAL_MS);
+  return Object.freeze({
+    stop: () => {
+      if (heartbeat !== null) clearInterval(heartbeat);
+    },
+    assertHealthy: () => {
+      if (failed) fail("export progress reporting failed");
+    },
+  });
+}
+
+function startPrivateCleanupHeartbeat(
+  request: BeeperMessageLikeMeExportRequest,
+): BundlePhaseHeartbeat {
+  const startedAt = Date.now();
+  let failed = false;
+  const report = (elapsedSeconds: number): void => {
+    request.onProgress?.(Object.freeze({
+      phase: "private-cleanup",
+      elapsedSeconds,
+    }));
+  };
+  try {
+    report(0);
+  } catch {
+    failed = true;
+  }
+  const heartbeat = request.onProgress === undefined
+    ? null
+    : setInterval(() => {
+        try {
+          report(Math.max(1, Math.floor((Date.now() - startedAt) / 1_000)));
+        } catch {
+          failed = true;
+        }
+      }, BUNDLE_HEARTBEAT_INTERVAL_MS);
+  return Object.freeze({
+    stop: () => {
+      if (heartbeat !== null) clearInterval(heartbeat);
+    },
+    assertHealthy: () => {
+      if (failed) fail("export progress reporting failed");
+    },
+  });
+}
+
 /**
  * Writes a private, local Message Like Me interchange bundle. The source owns
  * provider access; this function accepts only bounded foreign records and
  * never invokes Beeper, follows media references, or receives credentials.
  *
- * A successful bundle has `manifest.json`. A failed export deliberately leaves
- * a mode-0700 directory without a manifest so it cannot be mistaken for a
- * complete bundle or silently overwrite a later retry.
+ * The complete bundle is built and validated in a mode-0700 sibling directory
+ * on the destination filesystem. `outputRoot` remains absent until one final
+ * atomic rename publishes all seven files together. Failure and cancellation
+ * remove the owned staging directory without publishing a partial bundle.
  */
-export async function exportBeeperMessageLikeMeBundle(
+async function publishBeeperMessageLikeMeBundle(
   request: BeeperMessageLikeMeExportRequest,
-): Promise<BeeperMessageLikeMeExportResult> {
-  assertSource(request.source);
+): Promise<PublishedBundle> {
+  let published = false;
   const descriptor = parseDescriptor(request.source.descriptor);
   const limits = parseLimits(request.limits);
   throwIfAborted(request.signal);
   const startedAt = now(request.clock, "startedAt");
   const output = await validateOutputRoot(request.outputRoot);
-  await assertParentUnchanged(output);
-  await mkdir(output.outputRoot, { mode: PRIVATE_DIRECTORY_MODE });
-  await chmod(output.outputRoot, PRIVATE_DIRECTORY_MODE);
-  await assertPrivateDirectory(output.outputRoot);
+  const stagedDirectory = await createPrivateStagingDirectory(output);
+  const staging = stagedDirectory.path;
+  let directoryLease: BeeperMessageLikeMeDirectoryLease | undefined;
 
-  const staging = resolve(output.outputRoot, ".message-like-me-staging");
-  await mkdir(staging, { mode: PRIVATE_DIRECTORY_MODE });
-  await chmod(staging, PRIVATE_DIRECTORY_MODE);
-  await assertPrivateDirectory(staging);
+  if (request.recoveryEnvironment !== undefined) {
+    try {
+      const leaseCreatedAtMs = Date.now();
+      directoryLease = await createBeeperMessageLikeMeDirectoryLease({
+        role: "bundle-stage",
+        path: staging,
+        outputRoot: output.outputRoot,
+        recoverAfterMs: leaseCreatedAtMs,
+        nowMs: leaseCreatedAtMs,
+        environment: request.recoveryEnvironment,
+      });
+    } catch (leaseError) {
+      const cleanupErrors: unknown[] = [];
+      try {
+        await removeOwnedPrivateDirectory(staging, stagedDirectory.identity);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await syncDirectory(output.parent, Object.freeze({
+          device: output.parentDevice,
+          inode: output.parentInode,
+        }));
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [leaseError, ...cleanupErrors],
+          "Beeper Message Like Me export: recovery setup and cleanup both failed",
+        );
+      }
+      throw leaseError;
+    }
+  }
 
   const writers = new Map<RecordKind, ArtifactWriter>();
+  let bundlePhaseHeartbeat: BundlePhaseHeartbeat | undefined;
+  let renamed = false;
+  let operationFailed = false;
+  let operationError: unknown;
   try {
     for (const artifact of ARTIFACTS) {
       writers.set(artifact.kind, await createWriter(staging, artifact.kind, artifact.fileName));
@@ -1462,6 +1910,8 @@ export async function exportBeeperMessageLikeMeBundle(
     const referencedAccountRealms = new Map<string, { readonly network: string; readonly connectedAccountProviderId: string }>();
     let totalRecords = 0;
     let totalBytes = 0;
+    const bundleStartedAt = Date.now();
+    let lastBundleProgressAt = bundleStartedAt;
 
     for await (const candidate of request.source.records) {
       throwIfAborted(request.signal);
@@ -1528,6 +1978,22 @@ export async function exportBeeperMessageLikeMeBundle(
       const writer = writers.get(parsed.kind);
       if (writer === undefined) fail("internal artifact writer is missing");
       totalBytes = await writeRecord(writer, parsed.value, limits, totalBytes);
+      const progressAt = Date.now();
+      if (
+        totalRecords === 1
+        || progressAt - lastBundleProgressAt >= 30_000
+      ) {
+        request.onProgress?.(Object.freeze({
+          phase: "bundle-building",
+          elapsedSeconds: Math.max(
+            0,
+            Math.floor((progressAt - bundleStartedAt) / 1_000),
+          ),
+          records: totalRecords,
+          bytes: totalBytes,
+        }));
+        lastBundleProgressAt = progressAt;
+      }
     }
 
     for (const [accountId, realm] of referencedAccountRealms) {
@@ -1543,6 +2009,12 @@ export async function exportBeeperMessageLikeMeBundle(
       }
     }
 
+    bundlePhaseHeartbeat = startBundlePhaseHeartbeat(
+      request,
+      "bundle-validating",
+      totalRecords,
+      totalBytes,
+    );
     validateBundleGraph(graphInventory);
 
     throwIfAborted(request.signal);
@@ -1554,7 +2026,7 @@ export async function exportBeeperMessageLikeMeBundle(
     for (const artifact of ARTIFACTS) {
       const writer = writers.get(artifact.kind);
       if (writer === undefined) fail("internal artifact writer is missing during finalization");
-      artifacts.push(await finalizeWriter(writer, output.outputRoot));
+      artifacts.push(await finalizeWriter(writer, staging));
     }
 
     const counts = Object.freeze(Object.fromEntries(
@@ -1588,16 +2060,215 @@ export async function exportBeeperMessageLikeMeBundle(
         bundleSha256: sha256(canonicalJson(manifestProjection)),
       }),
     });
-    const manifestSha256 = await writeManifest(staging, output.outputRoot, manifest);
-    await rmdir(staging);
-    await assertPrivateDirectory(output.outputRoot);
-    return Object.freeze({
+    const stagedManifest = await writeManifest(staging, manifest);
+    await validateCompleteBundle(
+      staging,
+      stagedDirectory.identity,
+      artifacts,
+      stagedManifest,
+    );
+    await syncDirectory(staging, stagedDirectory.identity);
+    throwIfAborted(request.signal);
+    await assertParentUnchanged(output);
+    bundlePhaseHeartbeat.stop();
+    bundlePhaseHeartbeat.assertHealthy();
+    bundlePhaseHeartbeat = startBundlePhaseHeartbeat(
+      request,
+      "bundle-publishing",
+      totalRecords,
+      totalBytes,
+    );
+
+    const result = Object.freeze({
       outputRoot: output.outputRoot,
       manifestPath: resolve(output.outputRoot, "manifest.json"),
-      manifestSha256,
+      manifestSha256: stagedManifest.sha256,
       manifest,
     });
+
+    await renameDirectoryExclusive(staging, output.outputRoot);
+    renamed = true;
+    await validateCompleteBundle(
+      output.outputRoot,
+      stagedDirectory.identity,
+      artifacts,
+      stagedManifest,
+    );
+    throwIfAborted(request.signal);
+    await assertParentUnchanged(output);
+    await syncDirectory(output.parent, Object.freeze({
+      device: output.parentDevice,
+      inode: output.parentInode,
+    }));
+    bundlePhaseHeartbeat.stop();
+    bundlePhaseHeartbeat.assertHealthy();
+    bundlePhaseHeartbeat = undefined;
+    const publishedDirectory = Object.freeze({
+      path: output.outputRoot,
+      parent: output.parent,
+      identity: stagedDirectory.identity,
+      parentIdentity: Object.freeze({
+        device: output.parentDevice,
+        inode: output.parentInode,
+      }),
+    });
+    published = true;
+    return Object.freeze({
+      result,
+      directory: publishedDirectory,
+      ...(directoryLease === undefined ? {} : { directoryLease }),
+    });
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+    throw error;
   } finally {
-    await Promise.all([...writers.values()].map((writer) => closeWriter(writer)));
+    const cleanupErrors: unknown[] = [];
+    bundlePhaseHeartbeat?.stop();
+    const closeResults = await Promise.allSettled(
+      [...writers.values()].map((writer) => closeWriter(writer)),
+    );
+    for (const result of closeResults) {
+      if (result.status === "rejected") cleanupErrors.push(result.reason);
+    }
+    if (!published) {
+      let removalDurable = true;
+      try {
+        await removeOwnedPrivateDirectory(
+          renamed ? output.outputRoot : staging,
+          stagedDirectory.identity,
+        );
+      } catch (error) {
+        removalDurable = false;
+        cleanupErrors.push(error);
+      }
+      try {
+        await syncDirectory(output.parent, Object.freeze({
+          device: output.parentDevice,
+          inode: output.parentInode,
+        }));
+      } catch (error) {
+        removalDurable = false;
+        cleanupErrors.push(error);
+      }
+      if (directoryLease !== undefined && removalDurable) {
+        try {
+          releaseBeeperMessageLikeMeDirectoryLease(directoryLease);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      if (operationFailed) {
+        throw new AggregateError(
+          [operationError, ...cleanupErrors],
+          "Beeper Message Like Me export: publication and cleanup both failed",
+        );
+      }
+      if (cleanupErrors.length === 1) throw cleanupErrors[0];
+      throw new AggregateError(
+        cleanupErrors,
+        "Beeper Message Like Me export: cleanup failed",
+      );
+    }
+  }
+}
+
+export async function exportBeeperMessageLikeMeBundle(
+  request: BeeperMessageLikeMeExportRequest,
+): Promise<BeeperMessageLikeMeExportResult> {
+  assertSource(request.source);
+  let publication: PublishedBundle | undefined;
+  let publicationFailed = false;
+  let publicationError: unknown;
+  try {
+    publication = await publishBeeperMessageLikeMeBundle(request);
+    return publication.result;
+  } catch (error) {
+    publicationFailed = true;
+    publicationError = error;
+    throw error;
+  } finally {
+    const finalizationErrors: unknown[] = [];
+    const cleanupHeartbeat = request.source.dispose === undefined
+      ? undefined
+      : startPrivateCleanupHeartbeat(request);
+    try {
+      await request.source.dispose?.(publication !== undefined);
+    } catch (error) {
+      finalizationErrors.push(error);
+    }
+    let releaseAttempted = false;
+    if (
+      publication !== undefined
+      && finalizationErrors.length === 0
+      && publication.directoryLease !== undefined
+    ) {
+      releaseAttempted = true;
+      try {
+        releaseBeeperMessageLikeMeDirectoryLease(publication.directoryLease);
+      } catch (error) {
+        finalizationErrors.push(error);
+      }
+    }
+    cleanupHeartbeat?.stop();
+    try {
+      cleanupHeartbeat?.assertHealthy();
+    } catch (error) {
+      finalizationErrors.push(error);
+    }
+    if (finalizationErrors.length > 0) {
+      const errors = publicationFailed
+        ? [publicationError, ...finalizationErrors]
+        : [...finalizationErrors];
+      if (publication !== undefined) {
+        let rollbackDurable = true;
+        try {
+          await removeOwnedPrivateDirectory(
+            publication.directory.path,
+            publication.directory.identity,
+          );
+        } catch (error) {
+          rollbackDurable = false;
+          errors.push(error);
+        }
+        try {
+          await syncDirectory(
+            publication.directory.parent,
+            publication.directory.parentIdentity,
+          );
+        } catch (error) {
+          rollbackDurable = false;
+          errors.push(error);
+        }
+        if (
+          rollbackDurable
+          && !releaseAttempted
+          && publication.directoryLease !== undefined
+        ) {
+          try {
+            releaseBeeperMessageLikeMeDirectoryLease(
+              publication.directoryLease,
+            );
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length > finalizationErrors.length) {
+          throw new AggregateError(
+            errors,
+            "Beeper Message Like Me export: finalization and published output rollback failed",
+          );
+        }
+      }
+      if (errors.length === 1) throw errors[0];
+      throw new AggregateError(
+        errors,
+        publicationFailed
+          ? "Beeper Message Like Me export: publication and source disposal both failed"
+          : "Beeper Message Like Me export: finalization failed",
+      );
+    }
   }
 }
