@@ -19,7 +19,7 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.11.0" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.12.0" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 
 export const PUBLIC_PAGES = [
@@ -49,7 +49,7 @@ export const PUBLIC_PAGES = [
   {
     canonicalPath: "/provider-capabilities/",
     description:
-      "See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.",
+      "See Wrench contact, email, inbox, and message capabilities for Gmail, Beeper, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.",
     outputFile: "provider-capabilities/index.html",
     sourceFile: "provider-capabilities.html",
     title: "Wrench provider capabilities for contacts, email, and messages",
