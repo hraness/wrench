@@ -20,11 +20,10 @@ import {
   readPrivateStateFilesBatch,
   wrenchStateHome,
   writePrivateJsonIfUnchanged,
-  type PrivateDirectoryIdentity,
 } from "./storage";
 
 const CLAIM_KIND = "beeper-message-like-me-directory-lease";
-const CLAIM_SCHEMA_VERSION = 1;
+const CLAIM_SCHEMA_VERSION = 2;
 const EXPORT_ADMISSION_KIND = "beeper-message-like-me-export-admission";
 const EXPORT_ADMISSION_SCHEMA_VERSION = 1;
 const EXPORT_ADMISSION_FILE = "active.json";
@@ -58,15 +57,22 @@ export type BeeperMessageLikeMeExportAdmission = {
   released: boolean;
 };
 
+type LeaseDirectoryIdentity = Readonly<{
+  device: string;
+  inode: string;
+  /** Stable across rename and distinct across inode reuse. */
+  birthtimeNs: string;
+}>;
+
 type DirectoryLeaseClaim = Readonly<{
-  schemaVersion: 1;
+  schemaVersion: 2;
   kind: typeof CLAIM_KIND;
   id: string;
   role: LeaseRole;
   path: string;
   parentPath: string;
-  parentIdentity: PrivateDirectoryIdentity;
-  directoryIdentity: PrivateDirectoryIdentity;
+  parentIdentity: LeaseDirectoryIdentity;
+  directoryIdentity: LeaseDirectoryIdentity;
   outputRoot: string | null;
   owner: ProcessOwnerIdentity;
   childOwner: ProcessOwnerIdentity | null;
@@ -133,16 +139,22 @@ function boundedPath(value: unknown, label: string): string {
   return value;
 }
 
-function identity(value: unknown, label: string): PrivateDirectoryIdentity {
+function identity(value: unknown, label: string): LeaseDirectoryIdentity {
   const source = record(value, label);
-  exactKeys(source, ["device", "inode"], label);
+  exactKeys(source, ["birthtimeNs", "device", "inode"], label);
   if (
     typeof source.device !== "string"
     || !/^\d{1,40}$/u.test(source.device)
     || typeof source.inode !== "string"
     || !/^\d{1,40}$/u.test(source.inode)
+    || typeof source.birthtimeNs !== "string"
+    || !/^[1-9]\d{0,39}$/u.test(source.birthtimeNs)
   ) return fail(`${label} is invalid`);
-  return Object.freeze({ device: source.device, inode: source.inode });
+  return Object.freeze({
+    device: source.device,
+    inode: source.inode,
+    birthtimeNs: source.birthtimeNs,
+  });
 }
 
 function owner(value: unknown, label: string): ProcessOwnerIdentity {
@@ -239,7 +251,7 @@ function parseClaim(value: unknown): DirectoryLeaseClaim {
     || (source.phase === "running") !== (source.childOwner !== null)
   ) return fail("directory lease coordinates are inconsistent");
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: CLAIM_KIND,
     id: source.id,
     role: source.role,
@@ -430,7 +442,7 @@ export function releaseBeeperMessageLikeMeExportAdmission(
 async function physicalDirectoryIdentity(
   path: string,
   privateMode: boolean,
-): Promise<PrivateDirectoryIdentity> {
+): Promise<LeaseDirectoryIdentity> {
   const canonical = await realpath(path);
   const metadata = await lstat(path, { bigint: true });
   const uid = process.getuid?.();
@@ -440,6 +452,7 @@ async function physicalDirectoryIdentity(
     || metadata.isSymbolicLink()
     || uid === undefined
     || metadata.uid !== BigInt(uid)
+    || metadata.birthtimeNs <= 0n
     || (privateMode
       ? (metadata.mode & 0o777n) !== 0o700n
       : (metadata.mode & 0o022n) !== 0n)
@@ -447,14 +460,17 @@ async function physicalDirectoryIdentity(
   return Object.freeze({
     device: metadata.dev.toString(),
     inode: metadata.ino.toString(),
+    birthtimeNs: metadata.birthtimeNs.toString(),
   });
 }
 
 function sameIdentity(
-  left: PrivateDirectoryIdentity,
-  right: PrivateDirectoryIdentity,
+  left: LeaseDirectoryIdentity,
+  right: LeaseDirectoryIdentity,
 ): boolean {
-  return left.device === right.device && left.inode === right.inode;
+  return left.device === right.device
+    && left.inode === right.inode
+    && left.birthtimeNs === right.birthtimeNs;
 }
 
 export async function createBeeperMessageLikeMeDirectoryLease(request: Readonly<{
@@ -480,7 +496,7 @@ export async function createBeeperMessageLikeMeDirectoryLease(request: Readonly<
   ) return fail("directory lease request is invalid");
   const processIdentity = currentProcessStartIdentity();
   const claim = Object.freeze({
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     kind: CLAIM_KIND,
     id: randomUUID(),
     role: request.role,
@@ -584,7 +600,7 @@ export function releaseBeeperMessageLikeMeDirectoryLease(
   }
 }
 
-async function identityIfPresent(path: string): Promise<PrivateDirectoryIdentity | null> {
+async function identityIfPresent(path: string): Promise<LeaseDirectoryIdentity | null> {
   try {
     return await physicalDirectoryIdentity(path, true);
   } catch (error) {

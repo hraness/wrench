@@ -116,6 +116,7 @@ type Request = {
       readonly kind: "remove-directory-tree";
       readonly segments: readonly string[];
       readonly directoryExpectations: readonly DirectoryExpectation[];
+      readonly expectedTargetBirthtimeNs: string | null;
     };
 };
 
@@ -519,10 +520,28 @@ function parseRequest(value: unknown): Request {
   }
   if (
     operation.kind === "remove-directory-tree"
-    && exactKeys(operation, ["kind", "segments", "directoryExpectations"])
+    && (
+      exactKeys(operation, ["kind", "segments", "directoryExpectations"])
+      || exactKeys(operation, [
+        "kind",
+        "segments",
+        "directoryExpectations",
+        "expectedTargetBirthtimeNs",
+      ])
+    )
   ) {
     const segments = parseSegments(operation.segments);
     if (segments.length < 2) throw new Error("recursive removal target is too broad");
+    const expectedTargetBirthtimeNs = "expectedTargetBirthtimeNs" in operation
+      ? operation.expectedTargetBirthtimeNs
+      : null;
+    if (
+      expectedTargetBirthtimeNs !== null
+      && (
+        typeof expectedTargetBirthtimeNs !== "string"
+        || !/^[1-9]\d{0,39}$/u.test(expectedTargetBirthtimeNs)
+      )
+    ) throw new Error("recursive removal target birth time is invalid");
     return {
       schemaVersion: 1,
       requestId: value.requestId,
@@ -531,6 +550,7 @@ function parseRequest(value: unknown): Request {
         kind: "remove-directory-tree",
         segments,
         directoryExpectations: parseDirectoryExpectations(operation.directoryExpectations, segments.length),
+        expectedTargetBirthtimeNs,
       },
     };
   }
@@ -1039,6 +1059,7 @@ function removeDirectoryTree(
   expected: Identity,
   segments: readonly string[],
   expectations: readonly DirectoryExpectation[],
+  expectedTargetBirthtimeNs: string | null,
 ): Response {
   const actual = assertExpectedCwd(expected);
   const targetExpected = expectations.at(-1);
@@ -1101,7 +1122,13 @@ function removeDirectoryTree(
           if (hasCode(error, "ENOENT")) continue;
           throw error;
         }
-        if (!sameIdentity(identity(candidate), targetExpected)) continue;
+        if (
+          !sameIdentity(identity(candidate), targetExpected)
+          || (
+            expectedTargetBirthtimeNs !== null
+            && candidate.birthtimeNs.toString() !== expectedTargetBirthtimeNs
+          )
+        ) continue;
         if (
           candidate.isSymbolicLink()
           || !candidate.isDirectory()
@@ -1140,6 +1167,10 @@ function removeDirectoryTree(
       || !ownedByCurrentUser(target)
       || !hasPrivateDirectoryMode(target)
       || !sameIdentity(identity(target), targetExpected)
+      || (
+        expectedTargetBirthtimeNs !== null
+        && target.birthtimeNs.toString() !== expectedTargetBirthtimeNs
+      )
     ) throw new Error("recursive removal target changed identity");
   }
 
@@ -1155,6 +1186,10 @@ function removeDirectoryTree(
     || !ownedByCurrentUser(moved)
     || !hasPrivateDirectoryMode(moved)
     || !sameIdentity(identity(moved), targetExpected)
+    || (
+      expectedTargetBirthtimeNs !== null
+      && moved.birthtimeNs.toString() !== expectedTargetBirthtimeNs
+    )
   ) throw new Error("recursive removal quarantine changed identity");
   syncDirectory(".");
   pauseAfterRemoveQuarantineForTest();
@@ -1215,7 +1250,12 @@ function execute(request: Request): Response {
       operation.createOnly,
     );
   }
-  return removeDirectoryTree(request.expected, operation.segments, operation.directoryExpectations);
+  return removeDirectoryTree(
+    request.expected,
+    operation.segments,
+    operation.directoryExpectations,
+    operation.expectedTargetBirthtimeNs,
+  );
 }
 
 function main(): void {

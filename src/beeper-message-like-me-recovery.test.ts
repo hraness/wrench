@@ -7,6 +7,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, test } from "bun:test";
+
+import { canonicalJson } from "./canonical-json";
 
 import {
   acquireBeeperMessageLikeMeExportAdmission,
@@ -448,6 +451,18 @@ describe("Beeper Message Like Me directory lease recovery", () => {
     });
     rmSync(fixture.target, { recursive: true });
     mkdirSync(fixture.outputRoot, { mode: 0o700 });
+    // Model the Linux inode-reuse ABA deterministically: the replacement has
+    // the recorded device/inode coordinate but a different directory birth.
+    const output = statSync(fixture.outputRoot, { bigint: true });
+    const stored = JSON.parse(readFileSync(lease.claimPath, "utf8")) as {
+      directoryIdentity: { birthtimeNs: string; device: string; inode: string };
+    };
+    stored.directoryIdentity = {
+      device: output.dev.toString(),
+      inode: output.ino.toString(),
+      birthtimeNs: output.birthtimeNs === 1n ? "2" : "1",
+    };
+    writeFileSync(lease.claimPath, `${canonicalJson(stored)}\n`, { mode: 0o600 });
     const marker = join(fixture.outputRoot, "replacement.txt");
     writeFileSync(marker, "replacement\n", { mode: 0o600 });
 
@@ -458,6 +473,31 @@ describe("Beeper Message Like Me directory lease recovery", () => {
     })).rejects.toThrow("directory lease output changed before recovery");
 
     expect(readFileSync(marker, "utf8")).toBe("replacement\n");
+    expect(existsSync(lease.claimPath)).toBeTrue();
+  });
+
+  test("rejects a directory lease without its generation identity", async () => {
+    const fixture = recoveryFixture("missing-generation");
+    const lease = await createBeeperMessageLikeMeDirectoryLease({
+      role: "raw-working",
+      path: fixture.target,
+      recoverAfterMs: 1_000,
+      environment: fixture.environment,
+      nowMs: 1_000,
+    });
+    const stored = JSON.parse(readFileSync(lease.claimPath, "utf8")) as {
+      directoryIdentity: { birthtimeNs?: string };
+    };
+    delete stored.directoryIdentity.birthtimeNs;
+    writeFileSync(lease.claimPath, `${canonicalJson(stored)}\n`, { mode: 0o600 });
+
+    await expect(recoverBeeperMessageLikeMeDirectoryLeases({
+      environment: fixture.environment,
+      nowMs: 1_001,
+      inspectOwner: () => "different-or-dead",
+    })).rejects.toThrow("directory lease directory identity has an unsupported shape");
+
+    expect(existsSync(fixture.target)).toBeTrue();
     expect(existsSync(lease.claimPath)).toBeTrue();
   });
 
