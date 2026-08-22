@@ -27,6 +27,8 @@ import {
   type InvocationAuthority,
 } from "./web-session-authentication-policy";
 import { parseWrenchArguments, wrenchUsage, type WrenchArguments } from "./args";
+import type * as BeeperMessageLikeMeCliRuntimeModule from "./beeper-message-like-me-cli";
+import type { BeeperMessageLikeMeProgress } from "./beeper-message-like-me-source";
 import type { GmailCaptureRunner } from "./gmail-capture";
 import type * as MediaRuntimeModule from "./media";
 import {
@@ -89,6 +91,7 @@ import {
   releasePortableProviderPluginInvocationLease,
 } from "./provider-plugin-invocation-lease";
 import { requireProviderPluginAuth } from "./provider-plugin-auth";
+import { acquireReadProjectionAuthAdmission } from "./read-projection-admission";
 import {
   recoverLinkedDeviceLifecycleAdmissions,
 } from "./linked-device-lifecycle-admission";
@@ -200,6 +203,7 @@ type Output = {
 };
 
 type MediaRuntime = typeof MediaRuntimeModule;
+type BeeperMessageLikeMeCliRuntime = typeof BeeperMessageLikeMeCliRuntimeModule;
 
 /**
  * Wrench's stable boundary around the independently versioned KB doctor.
@@ -220,6 +224,8 @@ const defaultOutput: Output = {
 };
 
 const loadMediaRuntime = (): Promise<MediaRuntime> => import("./media");
+const loadBeeperMessageLikeMeCliRuntime = (): Promise<BeeperMessageLikeMeCliRuntime> =>
+  import("./beeper-message-like-me-cli");
 
 const runDefaultGmailCapture: GmailCaptureRunner = async (...arguments_) => {
   const { runGmailCapture } = await import("./gmail-capture");
@@ -251,6 +257,8 @@ export type WrenchDependencies = {
   readonly gmailCaptureMain: GmailCaptureRunner;
   readonly inspectClipEnvironment: () => Promise<WrenchClipEnvironmentInspection>;
   readonly loadMediaRuntime: () => Promise<MediaRuntime>;
+  readonly loadBeeperMessageLikeMeCliRuntime:
+    () => Promise<BeeperMessageLikeMeCliRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
   readonly probePluginSubject: (
     binding: ProviderPluginBindingV1,
@@ -303,6 +311,7 @@ const defaultDependencies: WrenchDependencies = {
   gmailCaptureMain: runDefaultGmailCapture,
   inspectClipEnvironment: inspectDefaultClipEnvironment,
   loadMediaRuntime,
+  loadBeeperMessageLikeMeCliRuntime,
   providerPluginRegistry,
   probePluginSubject: async (binding, auth, signal) => {
     requireProviderPluginAuth(binding, auth);
@@ -362,6 +371,9 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
       overrides.gmailCaptureMain ?? defaultDependencies.gmailCaptureMain,
     inspectClipEnvironment: overrides.inspectClipEnvironment ?? defaultDependencies.inspectClipEnvironment,
     loadMediaRuntime: overrides.loadMediaRuntime ?? defaultDependencies.loadMediaRuntime,
+    loadBeeperMessageLikeMeCliRuntime:
+      overrides.loadBeeperMessageLikeMeCliRuntime
+      ?? defaultDependencies.loadBeeperMessageLikeMeCliRuntime,
     providerPluginRegistry: overrides.providerPluginRegistry
       ?? defaultDependencies.providerPluginRegistry,
     probePluginSubject: overrides.probePluginSubject
@@ -431,6 +443,117 @@ function exactTerminalJson(value: unknown): string {
 
 function print(output: Output, value: unknown, json: boolean): void {
   output.stdout(json ? safeJson(value) : `${safe(typeof value === "string" ? value : JSON.stringify(value, null, 2))}\n`);
+}
+
+function beeperProgressInteger(value: number, minimum: number): number {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error("Beeper export progress was invalid");
+  }
+  return value;
+}
+
+function beeperProgressPosition(
+  progress: Readonly<{ account: number; accounts: number }>,
+): string {
+  const account = beeperProgressInteger(progress.account, 1);
+  const accounts = beeperProgressInteger(progress.accounts, 1);
+  if (account > accounts) throw new Error("Beeper export progress was invalid");
+  return `${account}/${accounts}`;
+}
+
+function plural(count: number, singular: string, plural_: string): string {
+  return count === 1 ? singular : plural_;
+}
+
+function renderBeeperMessageLikeMeProgress(
+  progress: BeeperMessageLikeMeProgress,
+): string {
+  if (progress.phase === "recovery-started") {
+    return "wrench: Beeper export: checking prior private export state\n";
+  }
+  if (progress.phase === "recovery-completed") {
+    const recovered = beeperProgressInteger(progress.recovered, 0);
+    const published = beeperProgressInteger(progress.published, 0);
+    return `wrench: Beeper export: private recovery complete; ${recovered} ${plural(recovered, "directory", "directories")} reclaimed, ${published} published ${plural(published, "bundle", "bundles")} preserved\n`;
+  }
+  if (progress.phase === "preparing") {
+    return "wrench: Beeper export: preparing pinned official CLI\n";
+  }
+  if (progress.phase === "accounts-discovered") {
+    const accounts = beeperProgressInteger(progress.accounts, 1);
+    return `wrench: Beeper export: ${accounts} ${plural(accounts, "account", "accounts")} discovered\n`;
+  }
+  if (progress.phase === "accounts-progress") {
+    if (progress.stage !== "discovering" && progress.stage !== "verifying") {
+      throw new Error("Beeper export progress was invalid");
+    }
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const action = progress.stage === "discovering"
+      ? "discovering accounts"
+      : "verifying connected accounts";
+    return `wrench: Beeper export: ${action}; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "account-started") {
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} started\n`;
+  }
+  if (progress.phase === "account-validating") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} validating; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "account-progress") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} running; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "account-skipped") {
+    if (progress.reason !== "chat-limit-reached") {
+      throw new Error("Beeper export progress was invalid");
+    }
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} skipped; chat limit reached\n`;
+  }
+  if (progress.phase === "account-completed") {
+    const chats = beeperProgressInteger(progress.chats, 0);
+    const messages = beeperProgressInteger(progress.messages, 0);
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} complete; ${chats} ${plural(chats, "chat", "chats")}, ${messages} ${plural(messages, "message", "messages")} total\n`;
+  }
+  if (progress.phase === "accounts-verifying") {
+    const accounts = beeperProgressInteger(progress.accounts, 1);
+    return `wrench: Beeper export: verifying ${accounts} connected ${plural(accounts, "account", "accounts")}\n`;
+  }
+  if (progress.phase === "conversion-started") {
+    const accounts = beeperProgressInteger(progress.accounts, 1);
+    const chats = beeperProgressInteger(progress.chats, 0);
+    const messages = beeperProgressInteger(progress.messages, 0);
+    return `wrench: Beeper export: converting ${accounts} ${plural(accounts, "account", "accounts")}; ${chats} ${plural(chats, "chat", "chats")}, ${messages} ${plural(messages, "message", "messages")} total\n`;
+  }
+  if (progress.phase === "conversion-progress") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    return `wrench: Beeper export: converting local bundle; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "bundle-building") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const records = beeperProgressInteger(progress.records, 0);
+    const bytes = beeperProgressInteger(progress.bytes, 0);
+    return `wrench: Beeper export: building local bundle; ${records} ${plural(records, "record", "records")}, ${bytes} bytes; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "bundle-validating") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const records = beeperProgressInteger(progress.records, 0);
+    const bytes = beeperProgressInteger(progress.bytes, 0);
+    return `wrench: Beeper export: validating local bundle; ${records} ${plural(records, "record", "records")}, ${bytes} bytes; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "bundle-publishing") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const records = beeperProgressInteger(progress.records, 0);
+    const bytes = beeperProgressInteger(progress.bytes, 0);
+    return `wrench: Beeper export: publishing local bundle atomically; ${records} ${plural(records, "record", "records")}, ${bytes} bytes; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "private-cleanup") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    return `wrench: Beeper export: removing private raw shards; ${elapsedSeconds}s elapsed\n`;
+  }
+  const exhaustive: never = progress;
+  void exhaustive;
+  throw new Error("Beeper export progress was invalid");
 }
 
 type PreparedCapture = {
@@ -1557,6 +1680,54 @@ async function runCommand(
       ...(signal === undefined ? {} : { signal }),
     });
   }
+  if (arguments_.command === "beeper-export-message-like-me") {
+    const admission = acquireReadProjectionAuthAdmission(
+      arguments_.authId,
+      environment,
+    );
+    try {
+      const auth = loadAuth(arguments_.authId, environment);
+      if (auth.kind !== "linked-device-store" || auth.provider !== "beeper") {
+        throw new Error(
+          "Message Like Me export requires a Beeper linked-device-store auth locator",
+        );
+      }
+      const runtime = await dependencies.loadBeeperMessageLikeMeCliRuntime();
+      const result = await runtime.exportBeeperMessageLikeMeFromAuth({
+        auth,
+        outputRoot: arguments_.output,
+        limits: {
+          ...(arguments_.limitChats === undefined
+            ? {}
+            : { limitChats: arguments_.limitChats }),
+          ...(arguments_.limitMessages === undefined
+            ? {}
+            : { limitMessages: arguments_.limitMessages }),
+          ...(arguments_.maxParticipants === undefined
+            ? {}
+            : { maxParticipants: arguments_.maxParticipants }),
+        },
+        environment,
+        onProgress: (progress) => {
+          output.stderr(renderBeeperMessageLikeMeProgress(progress));
+        },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      const summary = Object.freeze({
+        ok: true,
+        outputRoot: result.outputRoot,
+        manifestPath: result.manifestPath,
+        manifestSha256: result.manifestSha256,
+        completeness: result.manifest.completeness,
+        warnings: result.manifest.warnings,
+        counts: result.manifest.counts,
+      });
+      print(output, summary, arguments_.json);
+      return 0;
+    } finally {
+      admission.release();
+    }
+  }
   if (arguments_.command === "doctor") {
     return doctor(arguments_, environment, output, dependencies);
   }
@@ -1883,9 +2054,21 @@ async function runCommand(
     const path = saveAuth(auth, environment, { force: arguments_.force });
     output.stdout(`Saved ${safe(auth.id)} auth locator (${auth.kind}) to ${safe(path)}.\n`);
     if (auth.kind === "linked-device-store") {
-      output.stdout(
-        `Next: wrench auth pair ${safe(auth.id)} (optionally add --phone <international-number>).\n`,
+      const binding = dependencies.providerPluginRegistry.resolveSessionRoute(
+        auth.provider,
       );
+      if (
+        binding?.transport === "linked-device"
+        && binding.linkedDeviceLifecycle !== undefined
+      ) {
+        output.stdout(
+          `Next: wrench auth pair ${safe(auth.id)} (optionally add --phone <international-number>).\n`,
+        );
+      } else {
+        output.stdout(
+          `Next: wrench auth bind ${safe(auth.id)} --site ${safe(auth.provider)}.\n`,
+        );
+      }
     }
     return 0;
   }

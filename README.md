@@ -75,10 +75,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.12.1` tag:
+Install the current immutable CLI release from the `v0.13.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.12.1
+bun add --global github:hraness/wrench#v0.13.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -102,7 +102,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.12.1
+bun add github:hraness/wrench#v0.13.0
 ```
 
 ```ts
@@ -303,6 +303,7 @@ not turn missing message history into zero activity.
 | Provider | Contact collection | Directional statistics |
 | --- | --- | --- |
 | Gmail | Google People connections | Bounded Gmail message scans with explicit truncation |
+| Beeper local Desktop | One bounded account-aware page from the already-authorized local Desktop projection | Unavailable; Wrench does not scan message history while listing contacts |
 | LinkedIn official API | First-degree connections with locale-selection evidence | Unavailable; the Connections API does not expose ordinary inbox history |
 | Instagram authenticated web | Unique non-viewer participants from the reviewed first Direct inbox summary page, with explicit first-page and pagination incompleteness | Unavailable until acknowledgement-free message-history paging is reviewed |
 | WhatsApp linked device | One page of the authenticated account owner's private, quiescent Whatsmeow contact store | Unavailable; Wrench does not treat a linked-device message cache as account-owned history |
@@ -339,6 +340,145 @@ Telegram's official `getContacts` method belongs to
 Wrench will not install or expose this surface until it can bind the TDLib
 authorization lifecycle, account identity, local database, paging behavior,
 and message-history completeness without weakening the linked-device boundary.
+
+### Beeper local read-only projection
+
+The bundled `beeper-linked-device` source plugin reads an existing Beeper
+Desktop authorization through the official Beeper CLI 0.6.2. Wrench accepts
+only the exact pinned macOS arm64 binary, the fixed selected `desktop` target,
+and three JSON operations: `contacts.list`, `messaging.list`, and
+`messaging.read`. Every child command uses Beeper's read-only mode. The plugin
+does not expose raw API calls, targets, media downloads, sends, presence,
+pairing, sync, or other CLI commands.
+
+Install the official CLI and authorize it to the local Desktop app first:
+
+```sh
+brew install beeper/tap/cli
+beeper setup
+wrench adapter sync-bundled --json
+wrench auth add beeper-main --linked-device beeper \
+  --device-store "${HOME}/.beeper"
+wrench auth bind beeper-main --site beeper
+```
+
+The export integrity pin is the official macOS arm64 CLI 0.6.2, not the
+moving Homebrew formula name. The command above is sufficient only while
+`beeper version` reports 0.6.2. If the tap has advanced, use the 0.6.2 asset
+from the [official CLI releases](https://github.com/beeper/cli/releases)
+asset and install its `beeper` executable at
+`<WRENCH_STATE_HOME>/tools/beeper/0.6.2/beeper` (the default state home is
+`~/.local/share/wrench`). The reviewed release archive has SHA-256
+`688ccde7e7d044d33980cd06474bf1ae7215ccf8ca79967262fa3bfb85a2589a`.
+After installation, Wrench enforces executable SHA-256
+`48aa895449129c793a212ea19f69a534adc34a8adc4037ca1d7da9e648716425`
+and rejects every other executable byte sequence before reading private data.
+
+Binding hashes the stable local self-account coordinate before storing or
+printing it. The first bind or read may take longer while the pinned CLI unpacks
+its embedded payload into an operation-private cache. Read the local account
+and conversation identifiers, then request one exact conversation page:
+
+```sh
+wrench beeper-local messaging.list --auth beeper-main \
+  --input '{"limit":100}' --json
+wrench beeper-local messaging.read --auth beeper-main \
+  --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","limit":100}' --json
+```
+
+Create a private, agent-ready Message Like Me bundle from every connected
+account materialized by Beeper Desktop:
+
+```sh
+wrench beeper export-message-like-me --auth beeper-main \
+  --output /absolute/path/to/new-message-like-me-bundle --json
+```
+
+The command uses the pinned official CLI directly. It enumerates the connected
+account realm, then runs the official `export --no-attachments` command once per
+account in a deterministic order. Each invocation selects its account through
+an operation-private CLI config, so account identifiers never appear in command
+arguments, environment paths, or progress output. Stderr reports the account
+ordinal and cumulative validated chat and message counts. Long account,
+conversion, bundle-validation, and publication phases repeat their elapsed time
+every 30 seconds, including final private-shard cleanup. It prints the private
+recovery check before that work begins, so stale cleanup is visible too. A final
+account enumeration rejects a realm that changed while the sequential snapshot
+was running.
+
+Wrench retains each validated raw account shard until the complete sanitized
+bundle passes its graph and digest checks. It builds all six NDJSON artifacts
+and `manifest.json` in a private sibling directory, fsyncs them, and exposes the
+seven-file bundle with one atomic directory rename. The requested output path
+stays absent until that commit. Success removes the raw shards; failure or
+cancellation removes owned staging and leaves no partial output. The output
+directory is mode 0700, and every file is mode 0600 with a canonical SHA-256
+digest.
+
+Each connected account has exactly one normalized self participant, anchored by
+the account user's stable Beeper ID. Before emitting records, Wrench proves a
+deterministic candidate chat prefix against the record, byte, and participant
+work bounds, then derives only hashed identity evidence from that prefix. If
+normalization changes the admitted prefix, Wrench discards the provisional
+state and repeats with the shorter prefix. Explicit chat `isSelf` values and
+message `isSender` values establish account-local self and peer evidence. Later
+admitted evidence applies to earlier chats, a rejected suffix cannot affect the
+retained facts, message files stay bound to their validated SHA-256 digests, and
+contradictory retained evidence stops the export without publishing. Reactions
+inherit a normalized participant reference while their raw provider tuple
+remains only inside a composite hash. Nonunique provider reaction IDs are
+preserved with the categorical `reaction-provider-id-non-unique` warning.
+
+The JSON result reports the manifest path and digest, record counts,
+completeness, and warnings. `--limit-chats` is global across the account
+sequence. `--limit-messages` and `--max-participants` apply to each chat, which
+matches the official CLI flags. Reached limits are recorded as truncation.
+Wrench always passes hard ceilings of 100,000 chats and 1,000,000 messages per
+chat, and it emits a coherent truncated bundle before the 500,000-record or 512
+MiB bundle ceiling. Conversion also stops at a deterministic chat boundary
+before 250,000 participant occurrences across account anchors, rosters, message
+senders, reaction actors, and implied self insertions for direct chats. This
+bounds normalization work even when many chats repeat the same participants.
+One chat JSON file is limited to 64 MiB so foreign input cannot force a
+multi-gigabyte allocation; an oversized chat is omitted with explicit truncated
+completeness and a warning. While the official CLI is
+running, Wrench monitors the complete private working tree against a 4 GiB
+ceiling every 500 ms and independently checks that at least 2 GiB remains free
+on the filesystem. This is a monitored safety ceiling, not an operating-system
+quota. After each account validates, Wrench immediately removes the redundant
+Markdown and HTML renderings while retaining the hash-bound JSON needed for the
+final conversion. Cleanup first moves each owned directory into a private
+quarantine and verifies its filesystem identity before recursive removal.
+
+Before credentials or message bytes enter a raw working directory, Wrench
+wins one atomic export-admission claim shared across all Beeper auth IDs. A
+second invocation stops before account discovery while a live or
+uninspectable owner holds that claim. A later invocation can reclaim it only
+after proving that the exact owner is no longer running.
+
+After admission, Wrench writes a durable private lease containing the directory
+and process identities.
+The atomic bundle stage receives the same protection. A later invocation
+reclaims a stale directory only after proving that its exact owner, and any
+recorded Beeper child, is no longer running. Live or indeterminate owners are
+left untouched and the command stops with a categorical error. If a crash
+lands between the atomic rename and lease release, recovery recognizes the
+same directory at the requested output path and preserves the published
+bundle.
+
+The [Beeper Desktop API MCP project](https://github.com/beeper/desktop-api-mcp)
+is intended to expose Beeper tools to an MCP client. This export path uses the
+official CLI because Wrench needs a pinned, bounded, read-only file snapshot
+that it can validate and publish atomically.
+
+Contact and chat lists are bounded to 200 records because CLI 0.6.2 exposes no
+continuation cursor for those commands. Message pages derive the next
+before/after cursor only from the terminal returned message ID and reject
+duplicates or a non-advancing cursor at normalization. Output marks remote
+history coverage unknown, preserves account/network/reply/edit/delete and
+reaction provenance, and includes attachment metadata without media IDs,
+paths, URLs, or downloads. This is a local materialized view, not a claim that
+every connected network has finished backfilling its remote history.
 
 ### Gmail
 

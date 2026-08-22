@@ -351,6 +351,7 @@ type PathHelperOperation =
       readonly kind: "remove-directory-tree";
       readonly segments: readonly string[];
       readonly directoryExpectations: readonly StateDirectoryExpectation[];
+      readonly expectedTargetBirthtimeNs: string | null;
     };
 
 function hasCode(error: unknown, code: string): boolean {
@@ -1369,16 +1370,22 @@ function ensureBoundNonStateDirectory(path: string, requireFinalPrivate: boolean
 
 export function removePrivateDirectoryTree(
   path: string,
-  expectedTarget?: Readonly<StateRootIdentity>,
+  expectedTarget?: Readonly<StateRootIdentity> & Readonly<{ birthtimeNs?: string }>,
 ): boolean {
   const parts = genericPathParts(path);
   if (parts.segments.length < 2) throw new Error("private recursive removal target is too broad");
   const captured = [...captureGenericDirectoryExpectations(parts.root, parts.segments)];
-  if (expectedTarget !== undefined) captured[captured.length - 1] = expectedTarget;
+  if (expectedTarget !== undefined) {
+    captured[captured.length - 1] = {
+      device: expectedTarget.device,
+      inode: expectedTarget.inode,
+    };
+  }
   const response = runPathHelper(parts.root, parts.rootIdentity, {
     kind: "remove-directory-tree",
     segments: parts.segments,
     directoryExpectations: captured,
+    expectedTargetBirthtimeNs: expectedTarget?.birthtimeNs ?? null,
   });
   return response.removed === true;
 }

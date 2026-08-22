@@ -553,6 +553,7 @@ const reviewedDormantDynamicLoaderPolicy =
 const reviewedDynamicInstalledModuleIdentities =
   reviewedMetaDynamicInstalledModuleIdentities;
 const reviewedKbDynamicInstalledPluginIds = new Set([
+  "beeper-linked-device",
   "bluesky-web",
   "hacker-news-web",
   "linkedin-web",

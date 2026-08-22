@@ -81,6 +81,49 @@ describe("wrench CLI grammar", () => {
     });
   });
 
+  test("parses the bounded Beeper Message Like Me export command", () => {
+    expect(parseWrenchArguments([
+      "beeper",
+      "export-message-like-me",
+      "--auth",
+      "beeper-main",
+      "--output",
+      "/tmp/message-like-me",
+      "--limit-chats",
+      "100",
+      "--limit-messages",
+      "5000",
+      "--max-participants",
+      "250",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "beeper-export-message-like-me",
+        authId: "beeper-main",
+        output: "/tmp/message-like-me",
+        limitChats: 100,
+        limitMessages: 5000,
+        maxParticipants: 250,
+        json: true,
+      },
+    });
+    for (const raw of [
+      ["beeper", "export-message-like-me", "--auth", "beeper-main"],
+      [
+        "beeper", "export-message-like-me", "--auth", "beeper-main",
+        "--output", "relative",
+      ],
+      [
+        "beeper", "export-message-like-me", "--auth", "beeper-main",
+        "--output", "/tmp/export", "--limit-chats", "0",
+      ],
+      ["beeper", "messages"],
+    ]) {
+      expect(parseWrenchArguments(raw).ok).toBeFalse();
+    }
+  });
+
   test("parses adapter and capability management", () => {
     expect(parseWrenchArguments(["capabilities", "linkedin", "--json"])).toEqual({
       ok: true,

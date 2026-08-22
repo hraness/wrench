@@ -139,6 +139,33 @@ describe("bound path helper traversal", () => {
     }
   });
 
+  test("binds recursive removal to the directory generation as well as its inode", () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-path-helper-remove-generation-"));
+    try {
+      const parent = join(root, "parent");
+      const target = join(parent, "target");
+      mkdirSync(parent, { mode: 0o700 });
+      mkdirSync(target, { mode: 0o700 });
+      const stats = lstatSync(target, { bigint: true });
+      const expectedTarget = {
+        ...identity(stats),
+        birthtimeNs: stats.birthtimeNs.toString(),
+      };
+      const wrongGeneration = {
+        ...expectedTarget,
+        birthtimeNs: stats.birthtimeNs === 1n ? "2" : "1",
+      };
+
+      expect(() => removePrivateDirectoryTree(target, wrongGeneration))
+        .toThrow("recursive removal target changed identity");
+      expect(readdirSync(parent)).toContain("target");
+      expect(removePrivateDirectoryTree(target, expectedTarget)).toBe(true);
+      expect(readdirSync(parent)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("refuses an exact recursive-removal quarantine owned by a live helper", () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-path-helper-remove-live-"));
     try {
