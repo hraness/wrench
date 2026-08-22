@@ -19,6 +19,13 @@ export interface ReviewedBuiltInContractIdentityV1 {
 }
 
 const identities = Object.freeze({
+  "beeper-linked-device": {
+    schemaVersion: 1,
+    pluginVersion: "1.0.0",
+    implementationSha256: "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
+  },
   "bluesky-web": {
     schemaVersion: 1,
     pluginVersion: "1.0.0",

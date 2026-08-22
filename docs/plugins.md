@@ -14,6 +14,13 @@ recovery, receipts, bounds, redaction, activation, and lifecycle serialization.
 A plugin owns exact provider identity, route and operation descriptors, request
 and response contracts, account probes, execution, and reconciliation logic.
 
+A linked-device binding may either own an explicit `inspect`/`pair`/`syncOnce`
+lifecycle or attach read-only to an independently managed local source. The
+latter must omit the lifecycle declaration and all mutating surfaces. Its auth
+locator is established with `wrench auth add ... --linked-device ...
+--device-store ...`, then account-bound with `wrench auth bind`; Wrench must not
+suggest pairing or syncing a lifecycle the plugin does not declare.
+
 ## Start inert
 
 Create a portable package with one `capture-required` reservation:

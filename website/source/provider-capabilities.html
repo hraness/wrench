@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#181817">
     <title>Wrench provider capabilities for contacts, email, and messages</title>
-    <meta name="description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <meta name="description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, Beeper, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
     <meta name="robots" content="max-image-preview:large">
     <link rel="canonical" href="https://wrench.rip/provider-capabilities/">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -15,7 +15,7 @@
     <meta property="og:type" content="article">
     <meta property="og:site_name" content="Wrench">
     <meta property="og:title" content="Wrench provider capabilities for contacts, email, and messages">
-    <meta property="og:description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <meta property="og:description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, Beeper, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
     <meta property="og:url" content="https://wrench.rip/provider-capabilities/">
     <meta property="og:image" content="https://wrench.rip/og.png">
     <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
@@ -23,7 +23,7 @@
     <meta property="og:image:height" content="630">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Wrench provider capabilities for contacts, email, and messages">
-    <meta name="twitter:description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <meta name="twitter:description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, Beeper, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
     <meta name="twitter:image" content="https://wrench.rip/og.png">
     <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
     <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
@@ -60,6 +60,7 @@
               <thead><tr><th scope="col">Provider</th><th scope="col">Contacts</th><th scope="col">Inbox and messages</th><th scope="col">Important limit</th></tr></thead>
               <tbody>
                 <tr><th scope="row">Gmail official</th><td>Google People connections plus bounded directional Gmail statistics</td><td>Observed inbox or bounded search listing, exact thread read, and private thread clipping with attachments</td><td>Counts and dates expose completeness; scanning is bounded and reading does not mark mail seen</td></tr>
+                <tr><th scope="row">Beeper Desktop local</th><td>Observed account-aware page from an already-authorized local Desktop projection</td><td>Bounded conversation and message reads across connected networks, plus a private Message Like Me bundle export</td><td>Remote backfill remains unknown; full export excludes media bytes and truncates coherently at local record or byte ceilings</td></tr>
                 <tr><th scope="row">LinkedIn official</th><td>Observed first-degree connections with exact account binding and locale-selection evidence</td><td>No ordinary inbox operation through the official API; consumer-web inbox operations remain capture-required</td><td>Requires approved <code>r_1st_connections</code> and <code>r_liteprofile</code>; message statistics are unavailable</td></tr>
                 <tr><th scope="row">Instagram web</th><td>Observed unique non-viewer participants from one reviewed first Direct inbox page</td><td>Observed bounded first inbox summary page; individual thread read remains capture-required</td><td>Contact set and message statistics are explicitly incomplete; no acknowledgement or presence request is issued</td></tr>
                 <tr><th scope="row">WhatsApp linked device</th><td>Observed bounded page from the private, quiescent Whatsmeow contact store</td><td>Observed bounded local linked-device conversation list and exact conversation read</td><td>No new WhatsApp connection or acknowledgement is emitted; directional contact statistics are unavailable</td></tr>
@@ -69,6 +70,18 @@
             </table>
           </div>
           <p>This matrix covers the contact and messaging providers above. Wrench also ships other provider adapters and operations. Their current installed contract states remain discoverable through the CLI rather than being generalized from this table.</p>
+        </section>
+
+        <section aria-labelledby="beeper">
+          <h2 id="beeper">Beeper projects connected local accounts without a browser or model service</h2>
+          <p>The bundled source plugin accepts only the pinned official Beeper CLI 0.6.2, one already-authorized Desktop target, and read-only JSON operations. Wrench hashes the stable self-account coordinate before storing the auth subject. It exposes no send, raw request, media download, pairing, presence, or background-sync surface.</p>
+          <div class="command-panel"><pre><code>wrench auth add beeper-main --linked-device beeper \
+  --device-store "${HOME}/.beeper"
+wrench auth bind beeper-main --site beeper
+
+wrench beeper export-message-like-me --auth beeper-main \
+  --output /absolute/path/to/new-message-like-me-bundle --json</code></pre></div>
+          <p>The export uses Beeper's local full-export pagination with attachments disabled. Wrench validates account, roster, message, reply, edit, reaction, and tombstone provenance; removes duplicate plaintext renderings inside private staging; then writes six mode-0600 NDJSON artifacts and publishes the digested manifest last inside a mode-0700 directory. Completeness describes only the locally materialized export. A 500,000-record or 512 MiB ceiling produces a coherent truncated bundle, and any chat JSON file over the 64 MiB per-chat bound is omitted with an explicit warning.</p>
         </section>
 
         <section aria-labelledby="gmail">

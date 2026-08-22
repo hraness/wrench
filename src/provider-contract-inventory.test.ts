@@ -65,7 +65,8 @@ function legacyHash(contract, implementationHash, web) {
     .digest("hex");
 }
 function appendCurrentRow(row) {
-  if (row[0] === "provider-api" && row[1] === "gmail") {
+  if ((row[0] === "provider-api" && row[1] === "gmail")
+    || (row[0] === "linked-device" && row[1] === "beeper")) {
     currentOnlyRows.push(row);
     return;
   }
@@ -202,8 +203,8 @@ describe("durable provider contract inventory", () => {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
         rows: 282,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 3,
-        currentOnlySha256: "4f8870e2e46ea268c6a6062d6fcf06393b9aed4b7670e96bd051d5626adc852a",
+        currentOnlyRows: 6,
+        currentOnlySha256: "2791af78d2b6800bb1855e8332137c9e018f9e9d2a7bd6fe505652f73a348ca1",
         legacyRows: [282, 282, 282, 282, 282, 282, 282],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,

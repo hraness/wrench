@@ -1,4 +1,5 @@
 import { cookieSources, type CookieSource } from "@hraness/kb/clip/args";
+import { isAbsolute, resolve } from "node:path";
 import {
   normalizeAuthSubject,
   normalizeOAuthScopes,
@@ -19,6 +20,15 @@ export type WrenchArguments =
   | { readonly command: "clip"; readonly arguments: readonly string[] }
   | { readonly command: "read"; readonly arguments: readonly string[] }
   | { readonly command: "media"; readonly arguments: readonly string[] }
+  | {
+      readonly command: "beeper-export-message-like-me";
+      readonly authId: string;
+      readonly output: string;
+      readonly limitChats?: number;
+      readonly limitMessages?: number;
+      readonly maxParticipants?: number;
+      readonly json: boolean;
+    }
   | { readonly command: "doctor"; readonly json: boolean }
   | { readonly command: "capabilities"; readonly adapterId?: string; readonly json: boolean }
   | { readonly command: "plugin-list"; readonly json: boolean }
@@ -350,6 +360,25 @@ function simpleJsonOptions(raw: readonly string[], label: string): ParseWrenchRe
   return raw.includes("--json");
 }
 
+function optionalPositiveInteger(
+  value: string | undefined,
+  label: string,
+  maximum: number,
+): ParseWrenchFailure | number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[1-9][0-9]*$/u.test(value)) {
+    return { ok: false, message: `${label} must be a positive integer` };
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > maximum) {
+    return {
+      ok: false,
+      message: `${label} must not exceed ${String(maximum)}`,
+    };
+  }
+  return parsed;
+}
+
 function parsePluginScaffoldArguments(
   raw: readonly string[],
   label: "plugin scaffold" | "adapter scaffold",
@@ -610,6 +639,76 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     || first === "transcriber"
   ) {
     return { ok: true, value: { command: "media", arguments: raw } };
+  }
+  if (first === "beeper") {
+    if (raw[1] !== "export-message-like-me") {
+      return {
+        ok: false,
+        message: "beeper requires export-message-like-me",
+      };
+    }
+    const parsed = optionValues(
+      raw.slice(2),
+      [
+        "--auth",
+        "--output",
+        "--limit-chats",
+        "--limit-messages",
+        "--max-participants",
+      ],
+      ["--json"],
+    );
+    if (isFailure(parsed)) return parsed;
+    const authId = parsed.values["--auth"];
+    const output = parsed.values["--output"];
+    if (authId === undefined || validId(authId, "auth ID") !== null) {
+      return {
+        ok: false,
+        message: "beeper export-message-like-me requires --auth <lowercase-kebab-id>",
+      };
+    }
+    if (
+      output === undefined
+      || !isAbsolute(output)
+      || resolve(output) !== output
+      || Buffer.byteLength(output, "utf8") > 4_096
+      || /[\0\r\n]/u.test(output)
+    ) {
+      return {
+        ok: false,
+        message: "beeper export-message-like-me requires --output <normalized-absolute-directory>",
+      };
+    }
+    const limitChats = optionalPositiveInteger(
+      parsed.values["--limit-chats"],
+      "--limit-chats",
+      100_000,
+    );
+    if (typeof limitChats === "object") return limitChats;
+    const limitMessages = optionalPositiveInteger(
+      parsed.values["--limit-messages"],
+      "--limit-messages",
+      1_000_000,
+    );
+    if (typeof limitMessages === "object") return limitMessages;
+    const maxParticipants = optionalPositiveInteger(
+      parsed.values["--max-participants"],
+      "--max-participants",
+      2_000,
+    );
+    if (typeof maxParticipants === "object") return maxParticipants;
+    return {
+      ok: true,
+      value: {
+        command: "beeper-export-message-like-me",
+        authId,
+        output,
+        ...(limitChats === undefined ? {} : { limitChats }),
+        ...(limitMessages === undefined ? {} : { limitMessages }),
+        ...(maxParticipants === undefined ? {} : { maxParticipants }),
+        json: parsed.booleans.has("--json"),
+      },
+    };
   }
   if (first === "run") return parseWrenchArguments(["invoke", ...raw.slice(1)]);
   if (first === "doctor") {

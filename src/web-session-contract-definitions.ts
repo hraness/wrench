@@ -1,4 +1,5 @@
 import blueskyWebManifest from "./assets/adapters/bluesky/wrench-web-adapter.json";
+import beeperWebManifest from "./assets/adapters/beeper/wrench-web-adapter.json";
 import facebookGroupWebManifest from "./assets/adapters/facebook-group/wrench-web-adapter.json";
 import facebookMarketplaceWebManifest from "./assets/adapters/facebook-marketplace/wrench-web-adapter.json";
 import facebookPageWebManifest from "./assets/adapters/facebook-page/wrench-web-adapter.json";
@@ -42,6 +43,7 @@ export type WebSessionContract = {
 };
 
 const bundledManifests: Readonly<Partial<Record<WebSessionSiteId, unknown>>> = {
+  beeper: beeperWebManifest,
   bluesky: blueskyWebManifest,
   facebook: facebookWebManifest,
   "facebook-group": facebookGroupWebManifest,
@@ -381,6 +383,11 @@ const REDDIT_WEB_OPERATIONS = operationPolicies("reddit", [
   "messaging.read",
   "posts.read",
 ]);
+const BEEPER_LOCAL_OPERATIONS = operationPolicies("beeper", [
+  "contacts.list",
+  "messaging.list",
+  "messaging.read",
+]);
 const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
   "articles.read",
   "comments.read",
@@ -616,6 +623,12 @@ const whatsapp = {
   "reactions.set": contract("whatsapp", "reactions.set", WHATSAPP_WEB_OPERATIONS["reactions.set"].risk, WHATSAPP_WEB_OPERATIONS["reactions.set"].state, WHATSAPP_WEB_OPERATIONS["reactions.set"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
+const beeper = {
+  "contacts.list": contract("beeper", "contacts.list", BEEPER_LOCAL_OPERATIONS["contacts.list"].risk, BEEPER_LOCAL_OPERATIONS["contacts.list"].state, BEEPER_LOCAL_OPERATIONS["contacts.list"].reason),
+  "messaging.list": contract("beeper", "messaging.list", BEEPER_LOCAL_OPERATIONS["messaging.list"].risk, BEEPER_LOCAL_OPERATIONS["messaging.list"].state, BEEPER_LOCAL_OPERATIONS["messaging.list"].reason),
+  "messaging.read": contract("beeper", "messaging.read", BEEPER_LOCAL_OPERATIONS["messaging.read"].risk, BEEPER_LOCAL_OPERATIONS["messaging.read"].state, BEEPER_LOCAL_OPERATIONS["messaging.read"].reason),
+} as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
+
 const substack = {
   "articles.publish": contract("substack", "articles.publish", SUBSTACK_WEB_OPERATIONS["articles.publish"].risk, SUBSTACK_WEB_OPERATIONS["articles.publish"].state, SUBSTACK_WEB_OPERATIONS["articles.publish"].reason),
   "articles.read": contract("substack", "articles.read", SUBSTACK_WEB_OPERATIONS["articles.read"].risk, SUBSTACK_WEB_OPERATIONS["articles.read"].state, SUBSTACK_WEB_OPERATIONS["articles.read"].reason),
@@ -676,6 +689,7 @@ const youtube = {
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 export const webSessionContractDefinitions = {
+  beeper,
   bluesky,
   facebook,
   "facebook-group": facebookGroup,
