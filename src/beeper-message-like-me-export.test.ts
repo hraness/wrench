@@ -618,6 +618,132 @@ describe("exportBeeperMessageLikeMeBundle", () => {
     expect(await readdir(parent)).toEqual([]);
   });
 
+  test("rejects empty and ASCII-control provider revisions at every revision boundary", async () => {
+    const revisionCases: readonly {
+      readonly name: string;
+      readonly values: (revision: string) => readonly unknown[];
+    }[] = [{
+      name: "provenance",
+      values: (revision) => records().map((value, index) => {
+        if (index !== 0) return value;
+        const record = value as Record<string, unknown>;
+        return {
+          ...record,
+          provenance: {
+            ...record.provenance as Record<string, unknown>,
+            providerRevision: revision,
+          },
+        };
+      }),
+    }, {
+      name: "in-place-edit",
+      values: (revision) => records().map((value, index) => index === 3
+        ? {
+            ...value as Record<string, unknown>,
+            edit: {
+              kind: "in-place",
+              editedAt: "2026-08-21T11:59:00.000Z",
+              providerRevision: revision,
+            },
+          }
+        : value),
+    }, {
+      name: "replacement-edit",
+      values: (revision) => records().map((value, index) => index === 3
+        ? {
+            ...value as Record<string, unknown>,
+            edit: {
+              kind: "replacement",
+              replacesMessageId: null,
+              replacesProviderId: "beeper-message-old",
+              editedAt: "2026-08-21T11:59:00.000Z",
+              providerRevision: revision,
+            },
+          }
+        : value),
+    }, {
+      name: "deletion",
+      values: (revision) => records().map((value, index) => {
+        if (index !== 3) return value;
+        const record = value as Record<string, unknown>;
+        return {
+          ...record,
+          deletion: {
+            ...record.deletion as Record<string, unknown>,
+            providerRevision: revision,
+          },
+        };
+      }),
+    }, {
+      name: "tombstone",
+      values: (revision) => records().map((value, index) => index === 5
+        ? { ...value as Record<string, unknown>, providerRevision: revision }
+        : value),
+    }];
+    const invalidRevisions = [{ name: "empty", value: "" }, {
+      name: "tab",
+      value: "\t",
+    }, {
+      name: "newline",
+      value: "\n",
+    }] as const;
+
+    for (const revisionCase of revisionCases) {
+      for (const invalidRevision of invalidRevisions) {
+        const parent = await privateTemporaryRoot();
+        const outputRoot = join(parent, `${revisionCase.name}-${invalidRevision.name}`);
+        await expect(exportBeeperMessageLikeMeBundle({
+          outputRoot,
+          source: source(revisionCase.values(invalidRevision.value)),
+        })).rejects.toThrow(
+          "providerRevision must be a non-empty identifier without ASCII control characters",
+        );
+        await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await readdir(parent)).toEqual([]);
+      }
+    }
+  });
+
+  test("enforces the attachment MIME type limit in exact UTF-8 bytes", async () => {
+    const withMimeType = (mimeType: string): readonly unknown[] => records().map((value, index) => {
+      if (index !== 3) return value;
+      const record = value as Record<string, unknown>;
+      const attachment = (record.attachments as readonly Record<string, unknown>[])[0]!;
+      return {
+        ...record,
+        attachments: [{ ...attachment, mimeType }],
+      };
+    });
+    const accepted = ["a".repeat(256), "é".repeat(128)] as const;
+    const rejected = ["a".repeat(257), `${"é".repeat(128)}a`] as const;
+
+    for (const [index, mimeType] of accepted.entries()) {
+      expect(Buffer.byteLength(mimeType, "utf8")).toBe(256);
+      const parent = await privateTemporaryRoot();
+      const outputRoot = join(parent, `accepted-${String(index)}`);
+      await exportBeeperMessageLikeMeBundle({
+        outputRoot,
+        source: source(withMimeType(mimeType)),
+      });
+      const message = JSON.parse(
+        await readFile(join(outputRoot, "messages.ndjson"), "utf8"),
+      ) as { readonly attachments: readonly { readonly mimeType: string | null }[] };
+      expect(message.attachments[0]?.mimeType).toBe(mimeType);
+    }
+
+    for (const [index, mimeType] of rejected.entries()) {
+      expect(Buffer.byteLength(mimeType, "utf8")).toBe(257);
+      const parent = await privateTemporaryRoot();
+      const outputRoot = join(parent, `rejected-${String(index)}`);
+      await expect(exportBeeperMessageLikeMeBundle({
+        outputRoot,
+        source: source(withMimeType(mimeType)),
+      })).rejects.toThrow("mimeType must be a NUL-free string of at most 256 UTF-8 bytes");
+      await expect(lstat(outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readdir(parent)).toEqual([]);
+    }
+  });
+
   test("rejects a non-function source disposer before creating staging", async () => {
     const parent = await privateTemporaryRoot();
     const outputRoot = join(parent, "invalid-dispose");

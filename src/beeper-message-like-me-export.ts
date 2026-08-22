@@ -471,6 +471,10 @@ function identifier(value: unknown, label: string): string {
   return parsed;
 }
 
+function nullableIdentifier(value: unknown, label: string): string | null {
+  return value === null ? null : identifier(value, label);
+}
+
 function token(value: unknown, label: string, maximumBytes = 128): string {
   const parsed = text(value, label, maximumBytes);
   if (!/^[a-z0-9](?:[a-z0-9._+-]*[a-z0-9])?$/u.test(parsed)) {
@@ -555,7 +559,7 @@ function parseProvenance(value: unknown, label: string): ParsedProvenance {
   ], label);
   return Object.freeze({
     providerId: identifier(source.providerId, `${label}.providerId`),
-    providerRevision: nullableText(source.providerRevision, `${label}.providerRevision`, MAX_IDENTIFIER_BYTES),
+    providerRevision: nullableIdentifier(source.providerRevision, `${label}.providerRevision`),
     observedAt: timestamp(source.observedAt, `${label}.observedAt`),
     connectedAccountProviderId: identifier(
       source.connectedAccountProviderId,
@@ -713,7 +717,7 @@ function parseDeletion(value: unknown, label: string): BeeperMessageLikeMeMessag
       "revoked", "deleted-for-me", "revoked-and-deleted-for-me",
     ] as const, `${label}.state`),
     observedAt: timestamp(source.observedAt, `${label}.observedAt`),
-    providerRevision: nullableText(source.providerRevision, `${label}.providerRevision`, MAX_IDENTIFIER_BYTES),
+    providerRevision: nullableIdentifier(source.providerRevision, `${label}.providerRevision`),
   });
 }
 
@@ -840,7 +844,7 @@ function parseTombstone(source: JsonRecord, label: string): ParsedRecord {
       entityProviderId: identifier(source.entityProviderId, `${label}.entityProviderId`),
       deletedAt: timestamp(source.deletedAt, `${label}.deletedAt`),
       scope: oneOf(source.scope, ["remote", "local", "unknown"] as const, `${label}.scope`),
-      providerRevision: nullableText(source.providerRevision, `${label}.providerRevision`, MAX_IDENTIFIER_BYTES),
+      providerRevision: nullableIdentifier(source.providerRevision, `${label}.providerRevision`),
     }),
   };
 }
