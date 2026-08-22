@@ -22,7 +22,7 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(youtubeContracts),
-  "9be9492c45496da027feb1661dbbffd2e241d7647eba96e3eea2d416d148b924",
+  "91ebb7f823c31e67d3d5719b5810946ae6e8972719c24f0182ffdcdeccc40b8f",
 ).map((operation) => {
   if (!Object.hasOwn(desiredStateKeys, operation.name)) return operation;
   const stateKey = desiredStateKeys[

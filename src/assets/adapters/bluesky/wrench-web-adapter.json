@@ -167,6 +167,48 @@
         "maxOutputBytes": 8388608
       }
     },
+    "media.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed Bluesky video post only after the exact video-service upload job, bounded processing poll, response-bound blob, repository record, actor binding, and authoritative record plus AppView readback are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Uploads one video and publishes one externally visible Bluesky post with the exact confirmed text and accessibility description.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact plain-text post body",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact plan-bound Bluesky MP4",
+            "maxBytes": 104857600,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          },
+          "alt": {
+            "type": "string",
+            "description": "Optional exact video accessibility text",
+            "minLength": 0,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "body",
+          "media"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "media.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
     "messaging.list": {
       "description": "Capture-required contract reservation: list one bounded page of Bluesky conversations only after a live nonempty fixture proves exact bsky_chat proxy routing and viewer membership projection.",
       "risk": "R1",

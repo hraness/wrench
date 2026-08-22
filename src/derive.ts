@@ -47,6 +47,7 @@ import {
   stageDerivationFixtures,
   type DerivationFixture,
 } from "./derive-fixtures";
+import { localBrowserCdpUrl, uploadThroughInterceptedFileChooser } from "./derivation-file-chooser";
 import { sha256 } from "./canonical-json";
 import type { PlatformSurfaceId } from "./platform-catalog";
 import type { ProviderPluginRegistry } from "./provider-plugin-registry";
@@ -282,7 +283,11 @@ export function derivationPolicyActions(
   ];
   if (allowRemoteActions) {
     actions.push("click", "dblclick", "fill", "type", "hover", "focus", "press", "check", "uncheck", "select", "interact");
-    if (allowFixtureUpload) actions.push("upload", "count");
+    if (allowFixtureUpload) {
+      // `cdp_url` is reserved for Wrench's code-owned native chooser bridge.
+      // The public derivation grammar below never exposes the private URL.
+      actions.push("upload", "count", "cdp_url");
+    }
   }
   return actions;
 }
@@ -312,9 +317,10 @@ const allowedBrowserCommands = new Set([
   "close",
   "upload",
   "upload-and-seal",
+  "choose-upload",
 ]);
 
-const mutatingBrowserTokens = new Set(["click", "dblclick", "fill", "type", "press", "hover", "focus", "check", "uncheck", "select", "upload", "upload-and-seal"]);
+const mutatingBrowserTokens = new Set(["click", "dblclick", "fill", "type", "press", "hover", "focus", "check", "uncheck", "select", "upload", "upload-and-seal", "choose-upload"]);
 
 function commandCanMutate(command: readonly string[]): boolean {
   const action = command[0] ?? "";
@@ -2051,21 +2057,27 @@ export function validateDerivationBrowserCommand(
       throw new Error("derive browser select requires a reference and bounded values");
     }
   }
-  else if (action === "upload" || action === "upload-and-seal") {
+  else if (action === "upload" || action === "upload-and-seal" || action === "choose-upload") {
     const references = command.slice(2);
     const available = new Set((policy.fixtures ?? []).map((fixture) => fixture.reference));
     if (
       command.length < 3
       || command.length > 22
       || (
-        !isReference(command[1])
-        && command[1] !== singleFileInputReference
-        && command[1] !== singleImageInputReference
+        action === "choose-upload"
+          ? !isReference(command[1])
+          : !isReference(command[1])
+            && command[1] !== singleFileInputReference
+            && command[1] !== singleImageInputReference
       )
       || references.length !== new Set(references).size
       || references.some((reference) => !/^fixture:(?:[1-9]|1[0-9]|20)$/u.test(reference) || !available.has(reference))
     ) {
-      throw new Error(`derive browser ${action} requires a snapshot, @single-file-input, or @single-image-input reference and unique staged fixture:<n> references`);
+      throw new Error(
+        action === "choose-upload"
+          ? "derive browser choose-upload requires one snapshot upload-control reference and unique staged fixture:<n> references"
+          : `derive browser ${action} requires a snapshot, @single-file-input, or @single-image-input reference and unique staged fixture:<n> references`,
+      );
     }
   }
   else if (action === "find") validateFindCommand(command);
@@ -2150,7 +2162,8 @@ export async function runDerivationBrowserCommand(
       await assertDerivationOrigin(session);
       return { waitedMs };
     }
-    const uploadAction = command[0] === "upload" || command[0] === "upload-and-seal";
+    const chooserUploadAction = command[0] === "choose-upload";
+    const uploadAction = command[0] === "upload" || command[0] === "upload-and-seal" || chooserUploadAction;
     const requestedFixtures = uploadAction
       ? command.slice(2).map((reference) => {
           const fixture = session.fixtures.find((candidate) => candidate.reference === reference);
@@ -2169,6 +2182,29 @@ export async function runDerivationBrowserCommand(
     });
     try {
       if (commandCanMutate(command)) await assertDerivationOrigin(session);
+      if (chooserUploadAction) {
+        const currentUrl = await currentDerivationUrl(session);
+        if (currentUrl.origin !== session.targetOrigin) {
+          throw new Error(`derivation left its target origin: ${currentUrl.origin}`);
+        }
+        const [cdpRecord] = await batch(session, [["get", "cdp-url"]]);
+        const cdpData = cdpRecord === undefined ? null : browserResultData(cdpRecord);
+        const cdpUrl = typeof cdpData === "object" && cdpData !== null && !Array.isArray(cdpData)
+          ? localBrowserCdpUrl((cdpData as Record<string, unknown>).cdpUrl)
+          : localBrowserCdpUrl(null);
+        await uploadThroughInterceptedFileChooser({
+          cdpUrl,
+          click: async () => {
+            await batch(session, [["click", command[1] ?? ""]]);
+          },
+          currentUrl: currentUrl.href,
+          filePaths: fixturePaths,
+        });
+        await batch(session, [["wait", String(uploadSettlingDelayMs)]]);
+        for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
+        await assertDerivationOrigin(session);
+        return { attachedFiles: requestedFixtures.length };
+      }
       let uploadTarget = command[1] ?? "";
       const fixedInputSelector = uploadTarget === singleFileInputReference
         ? singleFileInputSelector

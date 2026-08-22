@@ -23,6 +23,12 @@ const png = Buffer.concat([
   Buffer.from("bounded fixture bytes", "utf8"),
 ]);
 
+const mp4 = Buffer.concat([
+  Buffer.from([0x00, 0x00, 0x00, 0x18]),
+  Buffer.from("ftypisom", "ascii"),
+  Buffer.from("bounded fixture bytes", "utf8"),
+]);
+
 describe("derivation fixtures", () => {
   test("copies, fingerprints, and re-verifies an image without retaining its source path", () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-derive-fixture-test-"));
@@ -47,6 +53,29 @@ describe("derivation fixtures", () => {
     }
   });
 
+  test("copies, fingerprints, and re-verifies an MP4 without retaining its source path", () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-derive-video-fixture-test-"));
+    chmodSync(root, 0o700);
+    const source = join(root, "source-private-name.mp4");
+    writeFileSync(source, mp4, { mode: 0o600 });
+    try {
+      const [fixture] = stageDerivationFixtures([source], root);
+      expect(fixture).toMatchObject({
+        reference: "fixture:1",
+        fileName: "fixture-01.mp4",
+        bytes: mp4.byteLength,
+        mediaType: "video/mp4",
+      });
+      expect(fixture?.sha256).toMatch(/^[a-f0-9]{64}$/u);
+      expect(JSON.stringify(fixture)).not.toContain("source-private-name");
+      expect(assertDerivationFixtureFile(root, fixture!)).toBe("./fixture-01.mp4");
+      expect(readFileSync(join(root, "fixture-01.mp4"))).toEqual(mp4);
+      expect(lstatSync(join(root, "fixture-01.mp4")).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects substitution after staging", () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-derive-fixture-tamper-test-"));
     chmodSync(root, 0o700);
@@ -61,7 +90,7 @@ describe("derivation fixtures", () => {
     }
   });
 
-  test("rejects symlink sources and non-image content", () => {
+  test("rejects symlink sources and unsupported content", () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-derive-fixture-kind-test-"));
     chmodSync(root, 0o700);
     const image = join(root, "image.png");

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
 import type { WrenchAuth } from "../auth";
@@ -8,7 +12,9 @@ import {
   executeRedditWebOperation,
   prepareRedditWebDesiredState,
   probeRedditWebSubject,
+  readRedditWebContentDeleteDesiredState,
   readRedditWebDesiredState,
+  readRedditWebPublishedMutationTarget,
   type RedditWebRuntimeDependencies,
 } from "./reddit-web-runtime";
 
@@ -40,7 +46,7 @@ type CapturedRequest = {
   readonly url: URL;
   readonly method: string;
   readonly headers: Headers;
-  readonly body: string | null;
+  readonly body: string | Uint8Array | null;
   readonly redirect: string | undefined;
 };
 
@@ -67,16 +73,21 @@ function dependencies(
   handler: (request: CapturedRequest) => Response | Promise<Response>,
   onAcquire?: () => void,
 ): RedditWebRuntimeDependencies {
-  const acquireCookies: CookieRecordReader = () => {
+  const acquireCookies: CookieRecordReader = (_selection, target) => {
     onAcquire?.();
-    return Promise.resolve({ cookies: [strictCookie()], warnings: [] });
+    return Promise.resolve({
+      cookies: target.hostname.endsWith("reddit.com") ? [strictCookie()] : [],
+      warnings: [],
+    });
   };
   const fetch = (async (value: string | URL | Request, init?: RequestInit) => {
     const request: CapturedRequest = {
       url: requestUrl(value),
       method: init?.method ?? "GET",
       headers: new Headers(init?.headers),
-      body: typeof init?.body === "string" ? init.body : null,
+      body: typeof init?.body === "string"
+        ? init.body
+        : init?.body instanceof Uint8Array ? init.body : null,
       redirect: typeof init?.redirect === "string" ? init.redirect : undefined,
     };
     calls.push(request);
@@ -209,11 +220,80 @@ function stateThing(
   };
 }
 
+function mediaLease(
+  mediaType: "video/mp4" | "image/png",
+): unknown {
+  const video = mediaType === "video/mp4";
+  const hostname = video
+    ? "reddit-uploaded-video.s3-accelerate.amazonaws.com"
+    : "reddit-uploaded-media.s3-accelerate.amazonaws.com";
+  const extension = video ? "mp4" : "png";
+  const assetId = video ? "videoasset1" : "posterasset1";
+  const values: Readonly<Record<string, string>> = {
+    "x-amz-algorithm": "AWS4-HMAC-SHA256",
+    key: `rte_images/${assetId}.${extension}`,
+    "x-amz-storage-class": "STANDARD",
+    success_action_status: "201",
+    bucket: video ? "reddit-uploaded-video" : "reddit-uploaded-media",
+    acl: "private",
+    "x-amz-signature": "signature",
+    "x-amz-security-token": "security-token",
+    "x-amz-date": "20260822T000000Z",
+    "x-amz-meta-ext": extension,
+    policy: "bounded-policy",
+    "x-amz-credential": "credential",
+    "Content-Type": mediaType,
+  };
+  const names = video
+    ? [
+        "x-amz-algorithm", "key", "x-amz-storage-class", "success_action_status",
+        "bucket", "acl", "x-amz-signature", "x-amz-security-token", "x-amz-date",
+        "x-amz-meta-ext", "policy", "x-amz-credential", "Content-Type",
+      ]
+    : [
+        "x-amz-algorithm", "x-amz-security-token", "x-amz-storage-class",
+        "success_action_status", "bucket", "acl", "key", "x-amz-signature",
+        "x-amz-date", "x-amz-meta-ext", "policy", "x-amz-credential", "Content-Type",
+      ];
+  return {
+    action: `//${hostname}`,
+    fields: names.map((name) => ({ name, value: values[name] })),
+  };
+}
+
+function videoPostThing(createdUtc = 1_800_000_000): unknown {
+  return postThing({
+    title: "Wrench native video verification",
+    selftext: "Verification body",
+    author: "wrench_viewer",
+    author_fullname: SUBJECT.slice("reddit:".length),
+    subreddit: "testingground4bots",
+    created_utc: createdUtc,
+    over_18: false,
+    spoiler: false,
+    is_video: true,
+    post_hint: "hosted:video",
+    domain: "v.redd.it",
+    url: "https://v.redd.it/video123",
+    permalink: "/r/testingground4bots/comments/abc123/wrench_native_video_verification/",
+    media: {
+      reddit_video: {
+        duration: 8,
+        fallback_url: "https://v.redd.it/video123/DASH_360.mp4?source=fallback",
+        height: 360,
+        is_gif: false,
+        transcoding_status: "completed",
+        width: 640,
+      },
+    },
+  });
+}
+
 function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "reddit",
     action,
-    contractVersion: 1,
+    contractVersion: action === "media.publish" ? 9 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 4 * 1024 * 1024,
   };
@@ -466,6 +546,271 @@ describe("Reddit authenticated internal API runtime", () => {
       expect(calls[0]?.url.pathname).toBe("/api/me.json");
       expect(calls).toHaveLength(2);
     }
+  });
+
+  test("publishes one plan-bound native video and records the websocket-bound target before readback", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wrench-reddit-video-test-"));
+    try {
+      const videoPath = join(directory, "fixture.mp4");
+      const posterPath = join(directory, "poster.png");
+      const video = new Uint8Array(32);
+      video.set([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+      const poster = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+      await writeFile(videoPath, video);
+      await writeFile(posterPath, poster);
+      const calls: CapturedRequest[] = [];
+      let leaseCount = 0;
+      let s3Uploads = 0;
+      let beforeDispatches = 0;
+      let verifiedDispatches = 0;
+      const acceptedTargets: unknown[] = [];
+      const now = 1_800_000_000_000;
+      const result = await executeRedditWebOperation(
+        recipe("media.publish"),
+        {
+          community: "testingground4bots",
+          title: "Wrench native video verification",
+          body: "Verification body",
+          media: { kind: "file", reference: "video" },
+          thumbnail: { kind: "file", reference: "poster" },
+          nsfw: false,
+          spoiler: false,
+          send_replies: true,
+        },
+        redditAuth,
+        {
+          fileResolver: (files) => {
+            expect(files).toHaveLength(2);
+            return Promise.resolve([videoPath, posterPath]);
+          },
+          dependencies: {
+            ...dependencies(calls, (request) => {
+              if (request.url.pathname === "/api/me.json") {
+                return jsonResponse(viewerResponse());
+              }
+              if (
+                request.url.pathname === "/api/video_upload_s3.json"
+                || request.url.pathname === "/api/image_upload_s3.json"
+              ) {
+                expect(request.method).toBe("POST");
+                expect(request.body).toBeString();
+                const form = new URLSearchParams(request.body as string);
+                expect(Object.fromEntries(form)).toEqual(leaseCount === 0
+                  ? {
+                      filepath: "wrench-video.mp4",
+                      mimetype: "video/mp4",
+                      raw_json: "1",
+                    }
+                  : {
+                      filepath: "wrench-poster.png",
+                      mimetype: "image/png",
+                      raw_json: "1",
+                    });
+                expect(request.url.origin).toBe("https://old.reddit.com");
+                expect(request.headers.get("referer")).toBe(
+                  "https://old.reddit.com/r/testingground4bots/submit",
+                );
+                expect(request.headers.get("origin")).toBe("https://old.reddit.com");
+                expect(request.headers.get("x-modhash")).toBe(FIRST_MODHASH);
+                expect(request.headers.get("x-requested-with")).toBe("XMLHttpRequest");
+                const response = leaseCount === 0
+                  ? mediaLease("video/mp4")
+                  : mediaLease("image/png");
+                leaseCount += 1;
+                return jsonResponse(response);
+              }
+              if (request.url.hostname.endsWith("amazonaws.com")) {
+                expect(request.body).toBeInstanceOf(Uint8Array);
+                expect(request.headers.get("content-type")).toStartWith("multipart/form-data; boundary=");
+                expect(request.headers.has("cookie")).toBeFalse();
+                s3Uploads += 1;
+                const key = s3Uploads === 1
+                  ? "rte_images/videoasset1.mp4"
+                  : "rte_images/posterasset1.png";
+                return new Response(null, {
+                  status: 201,
+                  headers: {
+                    location: `https://${s3Uploads === 1 ? "reddit-uploaded-video" : "reddit-uploaded-media"}.s3.amazonaws.com/${key}`,
+                  },
+                });
+              }
+              if (request.url.pathname === "/api/submit") {
+                expect(s3Uploads).toBe(2);
+                expect(request.body).toBeString();
+                const form = new URLSearchParams(request.body as string);
+                expect(Object.fromEntries(form)).toMatchObject({
+                  api_type: "json",
+                  kind: "video",
+                  nsfw: "false",
+                  sendreplies: "true",
+                  spoiler: "false",
+                  sr: "testingground4bots",
+                  title: "Wrench native video verification",
+                  text: "Verification body",
+                  validate_on_submit: "true",
+                });
+                expect(form.get("url")).toBe(
+                  "https://reddit-uploaded-video.s3-accelerate.amazonaws.com/rte_images/videoasset1.mp4",
+                );
+                return jsonResponse({
+                  json: {
+                    errors: [],
+                    data: {
+                      websocket_url: `wss://ws-test.wss.redditmedia.com/rte_images/videoasset1?m=${"b".repeat(24)}`,
+                    },
+                  },
+                });
+              }
+              if (request.url.pathname === "/api/info.json") {
+                return jsonResponse(listing([videoPostThing(now / 1_000)]));
+              }
+              throw new Error(`unexpected test request ${request.url.origin}${request.url.pathname}`);
+            }),
+            now: () => now,
+            sleep: () => Promise.resolve(),
+            waitForWebSocketMessage: (url) => {
+              expect(url).not.toContain("reddit_session");
+              return Promise.resolve({
+                payload: {
+                  redirect: "https://www.reddit.com/r/testingground4bots/comments/abc123/wrench_native_video_verification/",
+                },
+              });
+            },
+          },
+          beforeDispatch: (event) => {
+            expect(event).toMatchObject({ id: "media.publish", index: 1 });
+            expect(s3Uploads).toBe(2);
+            beforeDispatches += 1;
+            return Promise.resolve();
+          },
+          afterProviderAcceptedMutationTarget: (event) => {
+            acceptedTargets.push(event);
+            return Promise.resolve();
+          },
+          afterDispatchVerified: () => {
+            verifiedDispatches += 1;
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "succeeded",
+        output: {
+          postId: POST_ID,
+          community: "testingground4bots",
+          video: { durationSeconds: 8, width: 640, height: 360 },
+        },
+        dispatch: { planned: 1, started: 1, verified: 1 },
+      });
+      expect(beforeDispatches).toBe(1);
+      expect(verifiedDispatches).toBe(1);
+      expect(acceptedTargets).toEqual([{
+        id: "media.publish",
+        index: 1,
+        target: { schemaVersion: 1, identifier: `{"postId":"${POST_ID}"}` },
+      }]);
+      expect(calls.filter((call) => call.url.pathname === "/api/submit")).toHaveLength(1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("deletes only the exact confirmed authored post and verifies absence", async () => {
+    const calls: CapturedRequest[] = [];
+    let presenceReads = 0;
+    let beforeDispatches = 0;
+    let verifiedDispatches = 0;
+    const result = await executeRedditWebOperation(
+      recipe("content.delete"),
+      { post_id: POST_ID, expected_title: "Runtime post" },
+      redditAuth,
+      {
+        dependencies: {
+          ...dependencies(calls, (request) => {
+            if (request.url.pathname === "/api/me.json") {
+              return jsonResponse(viewerResponse());
+            }
+            if (request.url.pathname === "/api/info.json") {
+              presenceReads += 1;
+              return jsonResponse(presenceReads < 3
+                ? listing([postThing({
+                    author: "wrench_viewer",
+                    author_fullname: SUBJECT.slice("reddit:".length),
+                  })])
+                : listing([]));
+            }
+            if (request.url.pathname === "/api/del") {
+              expect(request.method).toBe("POST");
+              expect(request.body).toBeString();
+              expect(Object.fromEntries(new URLSearchParams(request.body as string))).toEqual({
+                id: POST_ID,
+                uh: FIRST_MODHASH,
+              });
+              return jsonResponse({});
+            }
+            throw new Error(`unexpected test request ${request.url.pathname}`);
+          }),
+          sleep: () => Promise.resolve(),
+        },
+        beforeDispatch: () => {
+          beforeDispatches += 1;
+          return Promise.resolve();
+        },
+        afterDispatchVerified: () => {
+          verifiedDispatches += 1;
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: { postId: POST_ID, deleted: true, noOp: false },
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(beforeDispatches).toBe(1);
+    expect(verifiedDispatches).toBe(1);
+    expect(calls.filter((call) => call.url.pathname === "/api/del")).toHaveLength(1);
+  });
+
+  test("reconciles exact Reddit publish presence and delete absence without mutation", async () => {
+    const publishedCalls: CapturedRequest[] = [];
+    const published = await readRedditWebPublishedMutationTarget(
+      recipe("media.publish"),
+      {
+        community: "testingground4bots",
+        title: "Wrench native video verification",
+        body: "Verification body",
+        nsfw: false,
+        spoiler: false,
+        send_replies: true,
+      },
+      redditAuth,
+      `{"postId":"${POST_ID}"}`,
+      {
+        dependencies: {
+          ...dependencies(publishedCalls, (request) => request.url.pathname === "/api/me.json"
+            ? jsonResponse(viewerResponse())
+            : jsonResponse(listing([videoPostThing()]))),
+          now: () => 1_800_000_000_000,
+        },
+      },
+    );
+    expect(published).toEqual({ present: true, postId: POST_ID });
+    expect(publishedCalls.every((call) => call.method === "GET")).toBeTrue();
+
+    const deleteCalls: CapturedRequest[] = [];
+    const deleted = await readRedditWebContentDeleteDesiredState(
+      recipe("content.delete"),
+      { post_id: POST_ID, expected_title: "Runtime post" },
+      redditAuth,
+      {
+        dependencies: dependencies(deleteCalls, (request) => request.url.pathname === "/api/me.json"
+          ? jsonResponse(viewerResponse())
+          : jsonResponse(listing([]))),
+      },
+    );
+    expect(deleted).toEqual({ present: false, postId: POST_ID });
+    expect(deleteCalls.every((call) => call.method === "GET")).toBeTrue();
   });
 
   test("keeps deterministic mutation implementations inert until a live fixture is authorized", () => {

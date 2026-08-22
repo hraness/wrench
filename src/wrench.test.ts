@@ -1633,6 +1633,7 @@ describe("doctor authenticated API readiness", () => {
           "comments.read",
           "contacts.list",
           "feeds.read",
+          "media.publish",
           "messaging.list",
           "messaging.read",
           "messaging.send",

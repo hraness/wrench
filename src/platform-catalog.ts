@@ -545,6 +545,7 @@ export const socialPlatformCatalog = {
         "replies.create",
         "messaging.send",
         "posts.publish",
+        "media.publish",
         "articles.publish",
         "relationships.connect",
         "posts.repost",
@@ -553,7 +554,7 @@ export const socialPlatformCatalog = {
         "content.edit",
         "content.schedule",
       ],
-      unsupported: ["media.publish", "threads.publish"],
+      unsupported: ["threads.publish"],
       notApplicable: ["likes.set", "listings.read", "listings.publish"],
       R4: [
         "content.delete",
@@ -581,6 +582,10 @@ export const socialPlatformCatalog = {
       post: {
         text: [field("body", 3_000, "utf16-code-units")],
         attachments: attachments(20, ["image", "video", "document", "link"], "Up to 20 images, or one reviewed video, document, or link card; adapters must enforce the media-kind union"),
+      },
+      media: {
+        text: [field("body", 3_000, "utf16-code-units"), field("title", 200, "utf16-code-units", false)],
+        attachments: attachments(1, ["video"], "Exactly one reviewed video upload", 1),
       },
       article: {
         text: [field("title", 150, "utf16-code-units"), field("body", 125_000, "utf16-code-units")],
@@ -669,11 +674,13 @@ export const socialPlatformCatalog = {
         "comments.create",
         "replies.create",
         "posts.publish",
+        "media.publish",
         "posts.repost",
         "content.share",
         "content.edit",
+        "content.delete",
       ],
-      unsupported: ["media.publish", "content.schedule"],
+      unsupported: ["content.schedule"],
       notApplicable: [
         "likes.set",
         "articles.read",
@@ -686,7 +693,6 @@ export const socialPlatformCatalog = {
         "threads.publish",
       ],
       R4: [
-        "content.delete",
         "content.audience.set",
         "communities.membership.manage",
         "administration.manage",
@@ -711,6 +717,10 @@ export const socialPlatformCatalog = {
       post: {
         text: [field("title", 280, "utf16-code-units"), field("body", 10_000, "utf16-code-units", false)],
         attachments: attachments(1, ["image", "video", "link"], "One reviewed post attachment"),
+      },
+      media: {
+        text: [field("title", 280, "utf16-code-units"), field("body", 10_000, "utf16-code-units", false)],
+        attachments: attachments(1, ["video"], "Exactly one reviewed video upload", 1),
       },
     },
     longForm: {
@@ -841,6 +851,7 @@ export const socialPlatformCatalog = {
         "comments.create",
         "replies.create",
         "posts.publish",
+        "media.publish",
         "articles.publish",
         "posts.repost",
         "posts.quote",
@@ -848,7 +859,7 @@ export const socialPlatformCatalog = {
         "content.edit",
         "content.schedule",
       ],
-      unsupported: ["media.publish", "articles.draft.save", "threads.publish", "communities.membership.set"],
+      unsupported: ["articles.draft.save", "threads.publish", "communities.membership.set"],
       notApplicable: ["reactions.set", "listings.read", "listings.publish", "relationships.connect"],
       R4: [
         "content.delete",
@@ -876,6 +887,10 @@ export const socialPlatformCatalog = {
       post: {
         text: [field("body", 500, "utf16-code-units")],
         attachments: attachments(1, ["image", "video", "link"], "One reviewed Note attachment"),
+      },
+      media: {
+        text: [field("body", 500, "utf16-code-units")],
+        attachments: attachments(1, ["video"], "Exactly one reviewed Note video upload", 1),
       },
       article: {
         text: [field("title", 160, "utf16-code-units"), field("body", 50_000, "utf16-code-units")],
@@ -965,13 +980,14 @@ export const socialPlatformCatalog = {
         "messaging.send",
         "replies.create",
         "posts.publish",
+        "media.publish",
         "threads.publish",
         "posts.repost",
         "posts.quote",
         "content.share",
         "content.edit",
       ],
-      unsupported: ["media.publish", "articles.read", "articles.draft.save", "articles.publish", "content.schedule"],
+      unsupported: ["articles.read", "articles.draft.save", "articles.publish", "content.schedule"],
       notApplicable: [
         "comments.create",
         "reactions.set",
@@ -996,6 +1012,10 @@ export const socialPlatformCatalog = {
       post: {
         text: [field("body", 450, "unicode-code-points")],
         attachments: attachments(1, ["image", "video", "gif", "link"], "One reviewed post attachment"),
+      },
+      media: {
+        text: [field("body", 450, "unicode-code-points")],
+        attachments: attachments(1, ["video"], "Exactly one reviewed video upload", 1),
       },
     },
     longForm: { read: UNSUPPORTED_LONG_FORM, publish: UNSUPPORTED_LONG_FORM },
@@ -1425,13 +1445,14 @@ export const socialPlatformCatalog = {
         "messaging.send",
         "replies.create",
         "posts.publish",
+        "media.publish",
         "threads.publish",
         "posts.repost",
         "posts.quote",
         "content.share",
         "content.delete",
       ],
-      unsupported: ["media.publish", "articles.read", "articles.draft.save", "articles.publish", "content.edit", "content.schedule"],
+      unsupported: ["articles.read", "articles.draft.save", "articles.publish", "content.edit", "content.schedule"],
       notApplicable: [
         "comments.create",
         "reactions.set",
@@ -1457,6 +1478,10 @@ export const socialPlatformCatalog = {
       post: {
         text: [field("body", 280, "unicode-code-points")],
         attachments: attachments(1, ["image", "video", "gif", "link"], "One reviewed post attachment"),
+      },
+      media: {
+        text: [field("body", 280, "unicode-code-points")],
+        attachments: attachments(1, ["video"], "Exactly one reviewed video upload", 1),
       },
     },
     longForm: { read: UNSUPPORTED_LONG_FORM, publish: UNSUPPORTED_LONG_FORM },

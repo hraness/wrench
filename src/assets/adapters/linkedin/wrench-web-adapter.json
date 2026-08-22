@@ -425,6 +425,57 @@
         "maxOutputBytes": 4194304
       }
     },
+    "media.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed LinkedIn member video only after the exact web-session video registration, contiguous signed byte transfers, processing/finalization, member and audience binding, created-share response, and independent exact-share readback are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Uploads one video and publishes one externally visible LinkedIn post with the exact confirmed audience and commentary.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact post commentary",
+            "minLength": 1,
+            "maxLength": 3000
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Confirmed post audience",
+            "enum": [
+              "public",
+              "connections"
+            ]
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact plan-bound LinkedIn MP4 between 75,000 bytes and 500 MiB; runtime promotion must additionally verify duration and codec processing",
+            "maxBytes": 524288000,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "Optional exact video title",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "body",
+          "visibility",
+          "media"
+        ]
+      },
+      "webSession": {
+        "site": "linkedin",
+        "action": "media.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
     "posts.publish": {
       "description": "Publish one exact confirmed LinkedIn post with text and an optional single PNG through bounded ordered page staging and the current first-party image-registration/upload and post-create contracts, durably retain the accepted share URN, then independently read it back.",
       "risk": "R3",

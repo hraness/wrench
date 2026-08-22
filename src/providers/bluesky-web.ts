@@ -16,6 +16,7 @@ export const BLUESKY_WEB_OPERATION_NAMES = Object.freeze([
   "content.share",
   "feeds.read",
   "likes.set",
+  "media.publish",
   "media.read",
   "messaging.list",
   "messaging.read",
@@ -89,6 +90,11 @@ export const BLUESKY_WEB_OPERATIONS = Object.freeze({
     "read",
     "R1",
     "fixed getPosts XRPC reads project attachment metadata without returning media URLs",
+  ),
+  "media.publish": captureRequired(
+    "write",
+    "R3",
+    "the video-service upload job, bounded processing poll, response-bound blob, repository record, and authoritative record plus AppView readback need an authorized fixture",
   ),
   "messaging.list": captureRequired(
     "read",

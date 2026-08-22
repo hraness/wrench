@@ -116,6 +116,7 @@ describe("derive browser command grammar", () => {
     expect(derivationPolicyActions(true)).not.toContain("upload");
     expect(derivationPolicyActions(true, true)).toContain("upload");
     expect(derivationPolicyActions(true, true)).toContain("count");
+    expect(derivationPolicyActions(true, true)).toContain("cdp_url");
   });
 
   test("permits only start-bound fixture references for upload", () => {
@@ -135,6 +136,18 @@ describe("derive browser command grammar", () => {
       fixtureActionPolicy,
       ["upload-and-seal", "@single-file-input", "fixture:1"],
     )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["choose-upload", "@e5", "fixture:1"],
+    )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["choose-upload", "@single-file-input", "fixture:1"],
+    )).toThrow("snapshot upload-control");
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["eval", "document.cookie"],
+    )).toThrow("does not allow eval");
     expect(() => validateDerivationBrowserCommand(
       actionPolicy,
       ["upload", "@e5", "fixture:1"],

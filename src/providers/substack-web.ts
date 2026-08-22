@@ -18,6 +18,7 @@ export const SUBSTACK_WEB_OPERATION_NAMES = Object.freeze([
   "content.share",
   "feeds.read",
   "likes.set",
+  "media.publish",
   "media.read",
   "messaging.list",
   "messaging.read",
@@ -99,6 +100,11 @@ export const SUBSTACK_WEB_OPERATIONS = Object.freeze({
   ),
   "media.read": observedRead(
     "bounded cover, podcast, video-upload, API audio-item, and exact same-publication inline audio metadata projected from an exact entitled article response",
+  ),
+  "media.publish": captureRequired(
+    "R3",
+    "first-party-bundle",
+    "Note video upload initialization, byte transfer, processing, viewer binding, returned attachment, and exact public Note readback need an authorized fixture",
   ),
   "messaging.list": observedRead(
     "acknowledgement-free inbox listing for all, people, and unread tabs",

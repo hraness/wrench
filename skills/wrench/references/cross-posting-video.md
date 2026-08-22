@@ -44,7 +44,7 @@ Encoding may use a local encoder such as ffmpeg. Posting may not.
   long marketing paragraph.
 - Add hashtags only on TikTok, Instagram, and YouTube Shorts. Put a few
   relevant tags after the caption on those platforms only.
-- Do not add hashtags on X, LinkedIn, Substack, or Bluesky.
+- Do not add hashtags on X, LinkedIn, Substack, Bluesky, Threads, or Reddit.
 
 That tag split is an explicit allowed platform-specific variant. It is not
 a license to rewrite the caption.

@@ -9,9 +9,11 @@ export const REDDIT_WEB_OPERATION_NAMES = Object.freeze([
   "comments.create",
   "comments.read",
   "communities.membership.set",
+  "content.delete",
   "content.edit",
   "content.save",
   "feeds.read",
+  "media.publish",
   "media.read",
   "messaging.list",
   "messaging.read",
@@ -114,6 +116,16 @@ export const REDDIT_WEB_OPERATIONS = Object.freeze({
     "R1",
     "media metadata and expiring playback variants need a separate bounded projection",
   ),
+  "media.publish": observed(
+    "write",
+    "R3",
+    "captured old-Reddit cookie-authenticated leases, exact S3 transfers, explicit declarations, response websocket target binding, and independent hosted-video readback",
+  ),
+  "content.delete": observed(
+    "write",
+    "R3",
+    "exact authored-post pre-read, /api/del dispatch, and independent exact-target absence readback",
+  ),
   "comments.create": captureRequired(
     "write",
     "R3",
@@ -155,6 +167,20 @@ function isRecord(value: unknown): value is JsonRecord {
 function record(value: unknown, label: string): JsonRecord {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   return value;
+}
+
+function exactObjectKeys(
+  value: JsonRecord,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): void {
+  const allowed = new Set([...required, ...optional]);
+  const keys = Object.keys(value);
+  if (
+    required.some((key) => !Object.hasOwn(value, key))
+    || keys.some((key) => !allowed.has(key))
+  ) throw new Error(`${label} changed its reviewed fields`);
 }
 
 function boundedString(
@@ -236,7 +262,19 @@ export function redditBarePostId(value: unknown, label = "Reddit post ID"): stri
   return redditPostId(value, label).slice(3);
 }
 
-function exactUrl(value: string | URL, label: string): URL {
+export function redditCommunity(value: unknown, label = "Reddit community"): string {
+  const community = boundedString(value, label, 21);
+  if (!/^[A-Za-z0-9_]{2,21}$/u.test(community)) {
+    throw new Error(`${label} must be an exact subreddit name`);
+  }
+  return community;
+}
+
+function exactUrl(
+  value: string | URL,
+  label: string,
+  expectedOrigin = "https://www.reddit.com",
+): URL {
   let url: URL;
   try {
     url = value instanceof URL ? new URL(value.href) : new URL(value);
@@ -244,11 +282,38 @@ function exactUrl(value: string | URL, label: string): URL {
     throw new Error(`${label} must be an absolute URL`);
   }
   if (
-    url.origin !== "https://www.reddit.com"
+    url.origin !== expectedOrigin
     || url.username !== ""
     || url.password !== ""
     || url.hash !== ""
-  ) throw new Error(`${label} must use the exact https://www.reddit.com origin`);
+  ) throw new Error(`${label} must use the exact ${expectedOrigin} origin`);
+  return url;
+}
+
+function exactRedditUploadUrl(
+  value: unknown,
+  hostname: "reddit-uploaded-video.s3-accelerate.amazonaws.com"
+    | "reddit-uploaded-media.s3-accelerate.amazonaws.com",
+  label: string,
+): URL {
+  const text = boundedString(value, label, 4_096);
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(`${label} must be an absolute HTTPS URL`);
+  }
+  if (
+    url.protocol !== "https:"
+    || url.hostname !== hostname
+    || url.port !== ""
+    || url.username !== ""
+    || url.password !== ""
+    || url.search !== ""
+    || url.hash !== ""
+    || !/^\/[A-Za-z0-9][A-Za-z0-9/_.-]{0,2047}$/u.test(url.pathname)
+    || url.pathname.includes("..")
+  ) throw new Error(`${label} escaped its exact reviewed Reddit upload host`);
   return url;
 }
 
@@ -315,8 +380,11 @@ export type RedditWebRequestOperation =
   | "messages.list"
   | "messages.read"
   | "state.readback"
+  | "media.lease"
+  | "media.publish"
   | "reactions.set"
-  | "content.save";
+  | "content.save"
+  | "content.delete";
 
 export type RedditWebRequestInput = {
   readonly operation: RedditWebRequestOperation;
@@ -327,6 +395,16 @@ export type RedditWebRequestInput = {
   readonly direction?: -1 | 0 | 1;
   readonly saved?: boolean;
   readonly folder?: "inbox" | "unread" | "sent";
+  readonly mediaType?: "video/mp4" | "image/jpeg" | "image/png";
+  readonly filename?: string;
+  readonly community?: string;
+  readonly title?: string;
+  readonly text?: string;
+  readonly nsfw?: boolean;
+  readonly spoiler?: boolean;
+  readonly sendReplies?: boolean;
+  readonly mediaUrl?: string;
+  readonly posterUrl?: string;
   readonly profile?: string;
 };
 
@@ -346,7 +424,13 @@ export type RedditWebRequestBinding = {
 export function authorizeRedditWebRequest(
   input: RedditWebRequestInput,
 ): RedditWebRequestBinding {
-  const url = exactUrl(input.url, "Reddit request URL");
+  const url = exactUrl(
+    input.url,
+    "Reddit request URL",
+    input.operation === "media.lease"
+      ? "https://old.reddit.com"
+      : "https://www.reddit.com",
+  );
   const method = input.method.toUpperCase();
   const query = exactParameters(url.searchParams, "Reddit request query");
   let form = new Map<string, string>();
@@ -465,6 +549,112 @@ export function authorizeRedditWebRequest(
     return finish();
   }
 
+  if (input.operation === "media.lease") {
+    if (
+      method !== "POST"
+      || input.mediaType === undefined
+      || input.filename === undefined
+    ) throw new Error("Reddit media lease request changed its reviewed exchange");
+    const expectedPath = input.mediaType === "video/mp4"
+      ? "/api/video_upload_s3.json"
+      : "/api/image_upload_s3.json";
+    if (url.pathname !== expectedPath || query.size !== 0) {
+      throw new Error("Reddit media lease request changed its reviewed exchange");
+    }
+    exactNames(
+      form,
+      ["filepath", "mimetype", "raw_json"],
+      [],
+      "Reddit media lease form",
+    );
+    requireFixed(form, "filepath", input.filename, "Reddit media lease form");
+    requireFixed(form, "mimetype", input.mediaType, "Reddit media lease form");
+    requireFixed(form, "raw_json", "1", "Reddit media lease form");
+    return finish();
+  }
+
+  if (input.operation === "media.publish") {
+    if (
+      method !== "POST"
+      || url.pathname !== "/api/submit"
+      || input.community === undefined
+      || input.title === undefined
+      || typeof input.nsfw !== "boolean"
+      || typeof input.spoiler !== "boolean"
+      || typeof input.sendReplies !== "boolean"
+      || input.mediaUrl === undefined
+      || input.posterUrl === undefined
+    ) throw new Error("Reddit video submit request changed its reviewed exchange");
+    exactNames(query, ["raw_json"], [], "Reddit video submit query");
+    requireFixed(query, "raw_json", "1", "Reddit video submit query");
+    exactNames(
+      form,
+      [
+        "api_type",
+        "kind",
+        "nsfw",
+        "resubmit",
+        "sendreplies",
+        "spoiler",
+        "sr",
+        "title",
+        "uh",
+        "url",
+        "validate_on_submit",
+        "video_poster_url",
+      ],
+      input.text === undefined ? [] : ["text"],
+      "Reddit video submit form",
+    );
+    requireFixed(form, "api_type", "json", "Reddit video submit form");
+    requireFixed(form, "kind", "video", "Reddit video submit form");
+    requireFixed(form, "nsfw", String(input.nsfw), "Reddit video submit form");
+    requireFixed(form, "resubmit", "false", "Reddit video submit form");
+    requireFixed(form, "sendreplies", String(input.sendReplies), "Reddit video submit form");
+    requireFixed(form, "spoiler", String(input.spoiler), "Reddit video submit form");
+    requireFixed(form, "sr", redditCommunity(input.community), "Reddit video submit form");
+    requireFixed(
+      form,
+      "title",
+      boundedString(input.title, "Reddit video title", 280),
+      "Reddit video submit form",
+    );
+    if (input.text !== undefined) {
+      requireFixed(
+        form,
+        "text",
+        boundedString(input.text, "Reddit video body", 10_000),
+        "Reddit video submit form",
+      );
+    }
+    const mediaUrl = exactRedditUploadUrl(
+      input.mediaUrl,
+      "reddit-uploaded-video.s3-accelerate.amazonaws.com",
+      "Reddit uploaded video URL",
+    );
+    const posterUrl = exactRedditUploadUrl(
+      input.posterUrl,
+      "reddit-uploaded-media.s3-accelerate.amazonaws.com",
+      "Reddit uploaded poster URL",
+    );
+    requireFixed(form, "url", mediaUrl.href, "Reddit video submit form");
+    requireFixed(form, "video_poster_url", posterUrl.href, "Reddit video submit form");
+    requireFixed(form, "validate_on_submit", "true", "Reddit video submit form");
+    boundedString(form.get("uh"), "Reddit video submit modhash", 256);
+    return finish();
+  }
+
+  if (input.operation === "content.delete") {
+    if (method !== "POST" || url.pathname !== "/api/del" || query.size !== 0) {
+      throw new Error("Reddit delete request changed its reviewed exchange");
+    }
+    exactNames(form, ["id", "uh"], [], "Reddit delete form");
+    const target = redditPostId(input.targetId, "Reddit delete target");
+    if (form.get("id") !== target) throw new Error("Reddit delete form did not bind its target");
+    boundedString(form.get("uh"), "Reddit delete modhash", 256);
+    return finish();
+  }
+
   if (input.operation === "reactions.set") {
     if (method !== "POST" || url.pathname !== "/api/vote" || query.size !== 0) {
       throw new Error("Reddit vote request changed its reviewed exchange");
@@ -478,7 +668,7 @@ export function authorizeRedditWebRequest(
     if (form.get("dir") !== String(input.direction)) {
       throw new Error("Reddit vote form did not bind the desired direction");
     }
-  } else {
+  } else if (input.operation === "content.save") {
     if (
       method !== "POST"
       || (url.pathname !== "/api/save" && url.pathname !== "/api/unsave")
@@ -491,7 +681,7 @@ export function authorizeRedditWebRequest(
     if (url.pathname !== (input.saved ? "/api/save" : "/api/unsave")) {
       throw new Error("Reddit save path did not bind the desired state");
     }
-  }
+  } else throw new Error("Reddit request operation is not reviewed");
   boundedString(form.get("uh"), "Reddit request modhash", 256);
   return finish();
 }
@@ -512,6 +702,211 @@ export function parseRedditWebViewerResponse(value: unknown): RedditWebViewer {
   if (!/^[A-Za-z0-9_-]{1,64}$/u.test(username)) throw new Error("Reddit viewer username is invalid");
   const modhash = boundedString(data.modhash, "Reddit viewer modhash", 256);
   return Object.freeze({ id: `t2_${rawId}`, username, modhash });
+}
+
+export type RedditMediaType = "video/mp4" | "image/jpeg" | "image/png";
+
+export type RedditMediaLease = {
+  readonly uploadOrigin: string;
+  readonly fields: readonly Readonly<{ name: string; value: string }>[];
+  readonly key: string;
+};
+
+const redditLeaseFieldNames = Object.freeze([
+  "x-amz-algorithm",
+  "x-amz-security-token",
+  "x-amz-storage-class",
+  "success_action_status",
+  "bucket",
+  "acl",
+  "key",
+  "x-amz-signature",
+  "x-amz-date",
+  "x-amz-meta-ext",
+  "policy",
+  "x-amz-credential",
+  "Content-Type",
+] as const);
+
+function checkedRedditWebSocketUrl(value: unknown, label: string): URL {
+  const text = boundedString(value, label, 8_192);
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(`${label} must be an absolute WSS URL`);
+  }
+  const query = exactParameters(url.searchParams, `${label} query`);
+  if (
+    url.protocol !== "wss:"
+    || url.username !== ""
+    || url.password !== ""
+    || url.hash !== ""
+    || !/^(?:[a-z0-9-]{1,64}\.)?wss\.redditmedia\.com$/u.test(url.hostname)
+    || !/^\/[A-Za-z0-9/_-]{1,2048}$/u.test(url.pathname)
+    || url.pathname.includes("..")
+    || query.size !== 1
+    || !query.has("m")
+    || !/^[A-Za-z0-9_-]{20,2048}$/u.test(query.get("m") ?? "")
+  ) throw new Error(`${label} escaped the reviewed Reddit websocket family`);
+  return url;
+}
+
+export function parseRedditMediaLeaseResponse(
+  value: unknown,
+  expected: {
+    readonly mediaType: RedditMediaType;
+    readonly filename: string;
+  },
+): RedditMediaLease {
+  const expectedHostname = expected.mediaType === "video/mp4"
+    ? "reddit-uploaded-video.s3-accelerate.amazonaws.com"
+    : "reddit-uploaded-media.s3-accelerate.amazonaws.com";
+  const filename = boundedString(expected.filename, "Reddit lease filename", 128);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(filename)) {
+    throw new Error("Reddit lease filename is not a safe fixed name");
+  }
+  const root = record(value, "Reddit media lease response");
+  exactObjectKeys(root, ["action", "fields"], [], "Reddit media lease response");
+  if (root.action !== `//${expectedHostname}`) {
+    throw new Error("Reddit media lease changed its exact upload host");
+  }
+  if (!Array.isArray(root.fields) || root.fields.length !== redditLeaseFieldNames.length) {
+    throw new Error("Reddit media lease changed its upload field count");
+  }
+  const allowedNames: ReadonlySet<string> = new Set(redditLeaseFieldNames);
+  const seenNames = new Set<string>();
+  const fields: { name: string; value: string }[] = [];
+  let totalValueBytes = 0;
+  for (const [index, rawField] of root.fields.entries()) {
+    const field = record(rawField, `Reddit media lease field ${index}`);
+    exactObjectKeys(field, ["name", "value"], [], `Reddit media lease field ${index}`);
+    const fieldName = boundedString(field.name, `Reddit media lease field ${index} name`, 64);
+    if (!allowedNames.has(fieldName) || seenNames.has(fieldName)) {
+      throw new Error("Reddit media lease changed its exact upload field set");
+    }
+    seenNames.add(fieldName);
+    const fieldValue = boundedString(field.value, `Reddit media lease field ${fieldName}`, 65_536);
+    if (/\n/u.test(fieldValue)) throw new Error("Reddit media lease field contained a line break");
+    totalValueBytes += new TextEncoder().encode(fieldValue).byteLength;
+    if (totalValueBytes > 160 * 1024) throw new Error("Reddit media lease fields exceeded their reviewed bound");
+    fields.push(Object.freeze({ name: fieldName, value: fieldValue }));
+  }
+  const byName = new Map(fields.map((field) => [field.name, field.value]));
+  const extension = expected.mediaType === "video/mp4"
+    ? "mp4"
+    : expected.mediaType === "image/png" ? "png" : "jpg";
+  const bucket = expected.mediaType === "video/mp4"
+    ? "reddit-uploaded-video"
+    : "reddit-uploaded-media";
+  if (
+    byName.get("acl") !== "private"
+    || byName.get("x-amz-algorithm") !== "AWS4-HMAC-SHA256"
+    || byName.get("success_action_status") !== "201"
+    || byName.get("bucket") !== bucket
+    || byName.get("Content-Type") !== expected.mediaType
+    || byName.get("x-amz-storage-class") !== "STANDARD"
+    || byName.get("x-amz-meta-ext") !== extension
+  ) throw new Error("Reddit media lease changed a fixed upload declaration");
+  const key = boundedString(byName.get("key"), "Reddit media lease key", 2_048);
+  if (!/^[A-Za-z0-9][A-Za-z0-9/_.-]{0,2047}$/u.test(key) || key.includes("..")) {
+    throw new Error("Reddit media lease key escaped its reviewed path shape");
+  }
+  return Object.freeze({
+    uploadOrigin: `https://${expectedHostname}`,
+    fields: Object.freeze(fields),
+    key,
+  });
+}
+
+export function redditMediaAssetUrl(lease: RedditMediaLease): string {
+  const origin = lease.uploadOrigin === "https://reddit-uploaded-video.s3-accelerate.amazonaws.com"
+    ? lease.uploadOrigin
+    : lease.uploadOrigin === "https://reddit-uploaded-media.s3-accelerate.amazonaws.com"
+      ? lease.uploadOrigin
+      : (() => {
+          throw new Error("Reddit media lease upload origin is not reviewed");
+        })();
+  return new URL(`/${lease.key}`, origin).href;
+}
+
+export function parseRedditVideoSubmitResponse(value: unknown): string {
+  const root = record(value, "Reddit video submit response");
+  exactObjectKeys(root, ["json"], [], "Reddit video submit response");
+  const json = record(root.json, "Reddit video submit response.json");
+  exactObjectKeys(json, ["data", "errors"], [], "Reddit video submit response.json");
+  if (!Array.isArray(json.errors) || json.errors.length !== 0) {
+    throw new Error("Reddit video submit response contained provider errors");
+  }
+  const data = record(json.data, "Reddit video submit response.json.data");
+  exactObjectKeys(
+    data,
+    ["websocket_url"],
+    ["user_submitted_page"],
+    "Reddit video submit response.json.data",
+  );
+  if (data.user_submitted_page !== undefined) {
+    const page = exactUrl(
+      boundedString(data.user_submitted_page, "Reddit submitted-page URL", 2_048),
+      "Reddit submitted-page URL",
+    );
+    if (!/^\/user\/[A-Za-z0-9_-]{1,64}\/submitted\/$/u.test(page.pathname) || page.search !== "") {
+      throw new Error("Reddit submitted-page URL changed shape");
+    }
+  }
+  return checkedRedditWebSocketUrl(
+    data.websocket_url,
+    "Reddit video submit websocket URL",
+  ).href;
+}
+
+export function parseRedditVideoWebSocketMessage(
+  value: unknown,
+  expectedCommunity: string,
+): Readonly<{ postId: string; url: string }> {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    if (new TextEncoder().encode(value).byteLength > 64 * 1024) {
+      throw new Error("Reddit video websocket message exceeded its reviewed bound");
+    }
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch {
+      throw new Error("Reddit video websocket returned malformed JSON");
+    }
+  }
+  const root = record(parsed, "Reddit video websocket message");
+  exactObjectKeys(root, ["payload"], ["type"], "Reddit video websocket message");
+  if (root.type !== undefined && root.type !== "success") {
+    throw new Error("Reddit video processing did not succeed");
+  }
+  const payload = record(root.payload, "Reddit video websocket message.payload");
+  exactObjectKeys(payload, ["redirect"], [], "Reddit video websocket message.payload");
+  const redirectText = boundedString(payload.redirect, "Reddit video redirect", 2_048);
+  let redirect: URL;
+  try {
+    redirect = new URL(redirectText);
+  } catch {
+    throw new Error("Reddit video redirect must be an absolute URL");
+  }
+  const community = redditCommunity(expectedCommunity);
+  const match = /^\/r\/([^/]+)\/comments\/([a-z0-9]{1,32})\/[^/?#]+\/$/u.exec(redirect.pathname);
+  if (
+    redirect.protocol !== "https:"
+    || (redirect.hostname !== "www.reddit.com" && redirect.hostname !== "reddit.com")
+    || redirect.username !== ""
+    || redirect.password !== ""
+    || redirect.port !== ""
+    || redirect.search !== ""
+    || redirect.hash !== ""
+    || match === null
+    || match[1]?.toLowerCase() !== community.toLowerCase()
+  ) throw new Error("Reddit video redirect escaped its confirmed community");
+  const postId = redditPostId(`t3_${match[2]}`, "Reddit video redirect post ID");
+  return Object.freeze({
+    postId,
+    url: `https://www.reddit.com${redirect.pathname}`,
+  });
 }
 
 export type RedditWebProfile = {
@@ -700,6 +1095,139 @@ function projectedPost(value: JsonRecord, label: string): RedditProjectedPost {
     saved: boolean(data.saved, `${label}.data.saved`),
     externalUrl: safeExternalUrl(data.url, `${label}.data.url`),
     permalink: permalink(data.permalink, `${label}.data.permalink`),
+  });
+}
+
+export type RedditAuthoredPostPresence = Readonly<{
+  present: boolean;
+  post: RedditProjectedPost | null;
+  authorFullname: string | null;
+}>;
+
+export function parseRedditAuthoredPostPresence(
+  value: unknown,
+  expectedPostId: string,
+): RedditAuthoredPostPresence {
+  const target = redditPostId(expectedPostId);
+  const page = listing(value, "Reddit authored-post presence Listing", 1);
+  if (page.children.length === 0) {
+    return Object.freeze({ present: false, post: null, authorFullname: null });
+  }
+  if (page.children.length !== 1) {
+    throw new Error("Reddit authored-post presence returned multiple targets");
+  }
+  const thing = page.children[0]!;
+  const data = thingData(thing, "t3", "Reddit authored-post presence");
+  const id = redditPostId(data.name, "Reddit authored-post presence ID");
+  if (id !== target) throw new Error("Reddit authored-post presence changed its exact target");
+  const rawAuthor = data.author;
+  if (rawAuthor === undefined || rawAuthor === null || rawAuthor === "[deleted]") {
+    return Object.freeze({ present: false, post: null, authorFullname: null });
+  }
+  const post = projectedPost(thing, "Reddit authored-post presence");
+  const authorFullname = data.author_fullname === undefined || data.author_fullname === null
+    ? null
+    : redditFullname(
+        data.author_fullname,
+        "Reddit authored-post presence author fullname",
+        ["t2"],
+      );
+  return Object.freeze({ present: true, post, authorFullname });
+}
+
+export type RedditVideoPostReadback = Readonly<{
+  post: RedditProjectedPost;
+  authorFullname: string | null;
+  videoUrl: string;
+  fallbackUrl: string;
+  durationSeconds: number;
+  width: number;
+  height: number;
+  nsfw: boolean;
+  spoiler: boolean;
+}>;
+
+function exactRedditVideoUrl(value: unknown, label: string): URL {
+  const text = boundedString(value, label, 4_096);
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(`${label} must be an absolute URL`);
+  }
+  if (
+    url.protocol !== "https:"
+    || url.hostname !== "v.redd.it"
+    || url.username !== ""
+    || url.password !== ""
+    || url.port !== ""
+    || url.hash !== ""
+    || !/^\/[A-Za-z0-9_-]{1,128}(?:\/[A-Za-z0-9_.-]{1,128})?$/u.test(url.pathname)
+  ) throw new Error(`${label} escaped the exact Reddit video host`);
+  return url;
+}
+
+export function parseRedditVideoPostPresence(
+  value: unknown,
+  expectedPostId: string,
+): RedditVideoPostReadback | null {
+  const target = redditPostId(expectedPostId);
+  const page = listing(value, "Reddit video-post presence Listing", 1);
+  if (page.children.length === 0) return null;
+  if (page.children.length !== 1) {
+    throw new Error("Reddit video-post presence returned multiple targets");
+  }
+  const thing = page.children[0]!;
+  const data = thingData(thing, "t3", "Reddit video-post presence");
+  if (redditPostId(data.name, "Reddit video-post presence ID") !== target) {
+    throw new Error("Reddit video-post presence changed its exact target");
+  }
+  if (data.is_video !== true || data.post_hint !== "hosted:video" || data.domain !== "v.redd.it") {
+    throw new Error("Reddit video-post readback did not contain one hosted video");
+  }
+  const post = projectedPost(thing, "Reddit video-post presence");
+  const videoUrl = exactRedditVideoUrl(data.url, "Reddit video-post URL");
+  if (videoUrl.search !== "") throw new Error("Reddit video-post URL changed shape");
+  const media = record(data.media, "Reddit video-post media");
+  const video = record(media.reddit_video, "Reddit video-post media.reddit_video");
+  if (video.is_gif !== false || video.transcoding_status !== "completed") {
+    throw new Error("Reddit video-post processing did not complete as a normal video");
+  }
+  const durationSeconds = safeInteger(
+    video.duration,
+    "Reddit video-post duration",
+    1,
+    3_600,
+  );
+  const width = safeInteger(video.width, "Reddit video-post width", 1, 16_384);
+  const height = safeInteger(video.height, "Reddit video-post height", 1, 16_384);
+  const nsfw = boolean(data.over_18, "Reddit video-post NSFW declaration");
+  const spoiler = boolean(data.spoiler, "Reddit video-post spoiler declaration");
+  const fallbackUrl = exactRedditVideoUrl(
+    video.fallback_url,
+    "Reddit video-post fallback URL",
+  );
+  const rootSegment = videoUrl.pathname.split("/")[1];
+  if (fallbackUrl.pathname.split("/")[1] !== rootSegment) {
+    throw new Error("Reddit video-post fallback URL changed the video identity");
+  }
+  const authorFullname = data.author_fullname === undefined || data.author_fullname === null
+    ? null
+    : redditFullname(
+        data.author_fullname,
+        "Reddit video-post author fullname",
+        ["t2"],
+      );
+  return Object.freeze({
+    post,
+    authorFullname,
+    videoUrl: videoUrl.href,
+    fallbackUrl: fallbackUrl.href,
+    durationSeconds,
+    width,
+    height,
+    nsfw,
+    spoiler,
   });
 }
 

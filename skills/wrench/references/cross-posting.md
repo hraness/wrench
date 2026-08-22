@@ -30,7 +30,7 @@ Map the package only as the installed schema permits: a scalar file gets one pat
 
 Prefer a target-filtered cookie locator for a signed-in web adapter. Use a profile-backed realm only when the provider contract requires browser storage and the user has accepted that exact broader egress boundary. Bind a new realm with `wrench auth bind <id> --site <surface> --json` before any preview.
 
-If support is missing and the user asked to develop it, use the packaged Wrench derivation workflow with one expressly authorized low-stakes fixture. Bind authorized capture images at derivation start with repeated `--fixture` options and upload only their returned `fixture:<n>` references. Keep the operation `capture-required` until its code-owned request, response, current-account, actor, attachment, returned-object, independent-readback, duplicate, and uncertainty contracts pass. Never post through the capture browser as the installed fallback.
+If support is missing and the user asked to develop it, use the packaged Wrench derivation workflow with one expressly authorized low-stakes fixture. Bind authorized capture images or MP4 video at derivation start with repeated `--fixture` options and upload only their returned `fixture:<n>` references. Keep the operation `capture-required` until its code-owned request, response, current-account, actor, attachment, returned-object, independent-readback, duplicate, and uncertainty contracts pass. Never post through the capture browser as the installed fallback.
 
 ## Preview the complete batch
 

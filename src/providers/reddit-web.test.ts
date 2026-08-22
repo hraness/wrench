@@ -10,8 +10,13 @@ import {
   normalizeRedditFeedResponse,
   normalizeRedditMessageListing,
   normalizeRedditPostResponse,
+  parseRedditAuthoredPostPresence,
+  parseRedditMediaLeaseResponse,
   parseRedditProfileContributionPage,
   parseRedditThingState,
+  parseRedditVideoPostPresence,
+  parseRedditVideoSubmitResponse,
+  parseRedditVideoWebSocketMessage,
   parseRedditWebProfileResponse,
   parseRedditWebViewerResponse,
   redditFullname,
@@ -31,6 +36,46 @@ function listing(children: readonly unknown[], after: string | null = null): unk
       before: null,
       children,
     },
+  };
+}
+
+function leaseResponse(
+  mediaType: "video/mp4" | "image/png" = "video/mp4",
+): unknown {
+  const video = mediaType === "video/mp4";
+  const host = video
+    ? "reddit-uploaded-video.s3-accelerate.amazonaws.com"
+    : "reddit-uploaded-media.s3-accelerate.amazonaws.com";
+  const extension = video ? "mp4" : "png";
+  const values: Readonly<Record<string, string>> = {
+    "x-amz-algorithm": "AWS4-HMAC-SHA256",
+    key: `rte_images/asset.${extension}`,
+    "x-amz-storage-class": "STANDARD",
+    success_action_status: "201",
+    bucket: video ? "reddit-uploaded-video" : "reddit-uploaded-media",
+    acl: "private",
+    "x-amz-signature": "signature",
+    "x-amz-security-token": "security-token",
+    "x-amz-date": "20260822T000000Z",
+    "x-amz-meta-ext": extension,
+    policy: "policy",
+    "x-amz-credential": "credential",
+    "Content-Type": mediaType,
+  };
+  const names = video
+    ? [
+        "x-amz-algorithm", "key", "x-amz-storage-class", "success_action_status",
+        "bucket", "acl", "x-amz-signature", "x-amz-security-token", "x-amz-date",
+        "x-amz-meta-ext", "policy", "x-amz-credential", "Content-Type",
+      ]
+    : [
+        "x-amz-algorithm", "x-amz-security-token", "x-amz-storage-class",
+        "success_action_status", "bucket", "acl", "key", "x-amz-signature",
+        "x-amz-date", "x-amz-meta-ext", "policy", "x-amz-credential", "Content-Type",
+      ];
+  return {
+    action: `//${host}`,
+    fields: names.map((name) => ({ name, value: values[name] })),
   };
 }
 
@@ -142,7 +187,7 @@ describe("Reddit internal-web operation registry", () => {
       expect(operation.webSession).toMatchObject({
         site: "reddit",
         action,
-        contractVersion: 1,
+        contractVersion: action === "media.publish" ? 9 : 1,
       });
       expect("browser" in operation).toBe(false);
       expect("provider" in operation).toBe(false);
@@ -159,7 +204,9 @@ describe("Reddit internal-web operation registry", () => {
         .sort(),
     ).toEqual([
       "comments.read",
+      "content.delete",
       "feeds.read",
+      "media.publish",
       "messaging.list",
       "messaging.read",
       "posts.read",
@@ -263,6 +310,77 @@ describe("Reddit exact request authorization", () => {
     });
     expect(save.path).toBe("/api/unsave");
     expect(JSON.stringify(save)).not.toContain(MODHASH);
+  });
+
+  test("binds exact Reddit video lease, submit, and authored-delete forms", () => {
+    const lease = new URLSearchParams({
+      filepath: "wrench-video.mp4",
+      mimetype: "video/mp4",
+      raw_json: "1",
+    }).toString();
+    expect(authorizeRedditWebRequest({
+      operation: "media.lease",
+      url: "https://old.reddit.com/api/video_upload_s3.json",
+      method: "POST",
+      body: lease,
+      mediaType: "video/mp4",
+      filename: "wrench-video.mp4",
+    })).toMatchObject({
+      path: "/api/video_upload_s3.json",
+      queryNames: [],
+      formNames: ["filepath", "mimetype", "raw_json"],
+    });
+    const videoUrl = "https://reddit-uploaded-video.s3-accelerate.amazonaws.com/rte_images/video.mp4";
+    const posterUrl = "https://reddit-uploaded-media.s3-accelerate.amazonaws.com/rte_images/poster.png";
+    const submit = new URLSearchParams({
+      api_type: "json",
+      kind: "video",
+      nsfw: "false",
+      resubmit: "false",
+      sendreplies: "true",
+      spoiler: "false",
+      sr: "testingground4bots",
+      title: "Fixture",
+      uh: MODHASH,
+      url: videoUrl,
+      validate_on_submit: "true",
+      video_poster_url: posterUrl,
+    }).toString();
+    expect(authorizeRedditWebRequest({
+      operation: "media.publish",
+      url: "https://www.reddit.com/api/submit?raw_json=1",
+      method: "POST",
+      body: submit,
+      community: "testingground4bots",
+      title: "Fixture",
+      nsfw: false,
+      spoiler: false,
+      sendReplies: true,
+      mediaUrl: videoUrl,
+      posterUrl,
+    }).formNames).toEqual([
+      "api_type",
+      "kind",
+      "nsfw",
+      "resubmit",
+      "sendreplies",
+      "spoiler",
+      "sr",
+      "title",
+      "uh",
+      "url",
+      "validate_on_submit",
+      "video_poster_url",
+    ]);
+    const deletion = authorizeRedditWebRequest({
+      operation: "content.delete",
+      url: "https://www.reddit.com/api/del",
+      method: "POST",
+      body: new URLSearchParams({ id: POST_ID, uh: MODHASH }).toString(),
+      targetId: POST_ID,
+    });
+    expect(deletion.formNames).toEqual(["id", "uh"]);
+    expect(JSON.stringify({ lease, submit, deletion })).not.toContain("private-cookie");
   });
 
   test("rejects origin, path, query, target, body, and desired-state drift", () => {
@@ -449,6 +567,111 @@ describe("Reddit bounded response normalization", () => {
     expect(() => assertRedditMutationSuccess({
       json: { errors: [["RATELIMIT", "try later", "ratelimit"]] },
     })).toThrow("provider errors");
+  });
+
+  test("strictly binds media leases, submit websocket targets, and hosted-video readback", () => {
+    const lease = parseRedditMediaLeaseResponse(leaseResponse(), {
+      mediaType: "video/mp4",
+      filename: "wrench-video.mp4",
+    });
+    expect(lease).toMatchObject({
+      uploadOrigin: "https://reddit-uploaded-video.s3-accelerate.amazonaws.com",
+      key: "rte_images/asset.mp4",
+    });
+    expect(lease.fields).toHaveLength(13);
+    for (const [mediaType, filename] of [
+      ["video/mp4", "wrench-video.mp4"],
+      ["image/png", "wrench-poster.png"],
+    ] as const) {
+      const response = leaseResponse(mediaType);
+      const fields = (response as { fields: unknown[] }).fields;
+      expect(() => parseRedditMediaLeaseResponse({
+        ...(response as Record<string, unknown>),
+        fields: [...fields].reverse(),
+      }, { mediaType, filename })).not.toThrow();
+    }
+    const websocket = parseRedditVideoSubmitResponse({
+      json: {
+        errors: [],
+        data: {
+          websocket_url: `wss://ws-test.wss.redditmedia.com/rte_images/asset?m=${"b".repeat(24)}`,
+          user_submitted_page: "https://www.reddit.com/user/viewer/submitted/",
+        },
+      },
+    });
+    expect(websocket).toStartWith("wss://ws-test.wss.redditmedia.com/");
+    expect(parseRedditVideoWebSocketMessage({
+      payload: {
+        redirect: "https://reddit.com/r/testingground4bots/comments/abc123/fixture/",
+      },
+    }, "testingground4bots")).toEqual({
+      postId: POST_ID,
+      url: "https://www.reddit.com/r/testingground4bots/comments/abc123/fixture/",
+    });
+    const readback = parseRedditVideoPostPresence(listing([postThing(POST_ID, {
+      author: "viewer",
+      author_fullname: "t2_viewer1",
+      subreddit: "testingground4bots",
+      selftext: "",
+      over_18: false,
+      spoiler: true,
+      is_video: true,
+      post_hint: "hosted:video",
+      domain: "v.redd.it",
+      url: "https://v.redd.it/video123",
+      media: {
+        reddit_video: {
+          duration: 8,
+          fallback_url: "https://v.redd.it/video123/DASH_360.mp4?source=fallback",
+          height: 360,
+          is_gif: false,
+          transcoding_status: "completed",
+          width: 640,
+        },
+      },
+    })]), POST_ID);
+    expect(readback).toMatchObject({
+      authorFullname: "t2_viewer1",
+      durationSeconds: 8,
+      width: 640,
+      height: 360,
+      nsfw: false,
+      spoiler: true,
+    });
+    expect(parseRedditAuthoredPostPresence(listing([]), POST_ID)).toEqual({
+      present: false,
+      post: null,
+      authorFullname: null,
+    });
+  });
+
+  test("rejects lease, websocket, and video-readback drift", () => {
+    const duplicateLease = leaseResponse() as { action: string; fields: unknown[] };
+    const duplicateFields = [...duplicateLease.fields];
+    duplicateFields[duplicateFields.length - 1] = duplicateFields[0];
+    expect(() => parseRedditMediaLeaseResponse({
+      ...duplicateLease,
+      fields: duplicateFields,
+    }, {
+      mediaType: "video/mp4",
+      filename: "wrench-video.mp4",
+    })).toThrow("exact upload field set");
+    expect(() => parseRedditMediaLeaseResponse({
+      ...(leaseResponse() as Record<string, unknown>),
+      extra: true,
+    }, {
+      mediaType: "video/mp4",
+      filename: "wrench-video.mp4",
+    })).toThrow("reviewed fields");
+    expect(() => parseRedditVideoSubmitResponse({
+      json: { errors: [], data: { websocket_url: "wss://attacker.example/x?m=secretsecretsecretsecret" } },
+    })).toThrow("reviewed Reddit websocket family");
+    expect(() => parseRedditVideoWebSocketMessage({
+      payload: { redirect: "https://www.reddit.com/r/other/comments/abc123/fixture/" },
+    }, "testingground4bots")).toThrow("confirmed community");
+    expect(() => parseRedditVideoPostPresence(listing([postThing(POST_ID, {
+      is_video: false,
+    })]), POST_ID)).toThrow("hosted video");
   });
 
   test("rejects invalid fullname kinds and over-limit Listing pages", () => {

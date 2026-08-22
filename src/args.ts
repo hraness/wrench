@@ -1232,7 +1232,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       }
       const fixtureSources = parsed.repeatedValues["--fixture"] ?? [];
       if (fixtureSources.length > 20 || fixtureSources.some((value) => value.length > 4_096 || value.includes("\u0000"))) {
-        return { ok: false, message: "derive start accepts at most 20 bounded --fixture image paths" };
+        return { ok: false, message: "derive start accepts at most 20 bounded --fixture media paths" };
       }
       if (fixtureSources.length > 0 && !parsed.booleans.has("--allow-remote-actions")) {
         return { ok: false, message: "derive start --fixture requires --allow-remote-actions" };

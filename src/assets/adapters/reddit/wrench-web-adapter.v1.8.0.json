@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "reddit-web",
-  "version": "1.10.0",
+  "version": "1.8.0",
   "displayName": "Reddit (Authenticated Web API)",
   "surfaceId": "reddit",
   "origins": [
@@ -412,7 +412,7 @@
       }
     },
     "media.publish": {
-      "description": "Observed contract: publish one exact MP4 plus PNG/JPEG poster through captured old-Reddit cookie-authenticated leases bound to the current modhash, same-origin AJAX marker, and one permutation-safe exact thirteen-name S3 field set with media-type-specific fixed bucket declarations, cookie-free pinned S3 transfers, explicit post declarations, response-websocket target binding, and independent hosted-video readback.",
+      "description": "Observed contract: publish one exact MP4 plus PNG/JPEG poster through captured old-Reddit cookie-authenticated leases bound to the current modhash, same-origin AJAX marker, and media-type-specific exact ordered thirteen-field S3 declarations including fixed buckets, exact S3 transfers, explicit post declarations, response-websocket target binding, and independent hosted-video readback.",
       "risk": "R3",
       "sideEffect": "Uploads one video and publishes one externally visible Reddit post in the exact confirmed community.",
       "idempotency": "local-at-most-once",
@@ -480,7 +480,7 @@
       "webSession": {
         "site": "reddit",
         "action": "media.publish",
-        "contractVersion": 9,
+        "contractVersion": 7,
         "timeoutMs": 600000,
         "maxOutputBytes": 8388608
       }
@@ -710,3 +710,4 @@
     }
   }
 }
+

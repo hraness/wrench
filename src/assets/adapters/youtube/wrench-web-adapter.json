@@ -395,11 +395,38 @@
               "video/quicktime",
               "video/webm"
             ]
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Exact initial video visibility",
+            "enum": [
+              "private",
+              "unlisted",
+              "public"
+            ]
+          },
+          "made_for_kids": {
+            "type": "boolean",
+            "description": "Exact made-for-kids declaration"
+          },
+          "notify_subscribers": {
+            "type": "boolean",
+            "description": "Exact subscriber-notification choice"
+          },
+          "category_id": {
+            "type": "string",
+            "description": "Exact provider video-category ID",
+            "minLength": 1,
+            "maxLength": 3
           }
         },
         "required": [
           "title",
-          "media"
+          "media",
+          "visibility",
+          "made_for_kids",
+          "notify_subscribers",
+          "category_id"
         ]
       },
       "webSession": {
