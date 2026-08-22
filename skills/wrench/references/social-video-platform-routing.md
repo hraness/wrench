@@ -36,6 +36,11 @@ installed capability independently says `observed`.
 - Tags are an explicit platform-specific variant only for TikTok,
   Instagram, and YouTube Shorts. Leave X, LinkedIn, Substack, and Bluesky
   tag-free.
+- When the user supplied the caption, never mark the video as AI-generated.
+  Follow [X AI disclosure](x-ai-disclosure.md). Official `x` `posts.publish`
+  exposes `made_with_ai`; leave it unset or `false` unless the user
+  explicitly asked to label attached media. Do not invent a disclosure
+  field on another adapter.
 
 ## Common invocation shape
 

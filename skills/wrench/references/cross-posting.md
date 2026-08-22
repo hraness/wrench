@@ -17,6 +17,15 @@ If alt text is absent, draft a short factual description from visible image cont
 
 Give the package a task-local identity. Preserve image order through planning, settlement, duplicate accounting, and any cleanup assessment.
 
+## Keep user-supplied copy unlabeled
+
+When the user supplied the copy, never mark the post as AI-generated. This applies to X and every other platform in this workflow. On X, follow [X AI disclosure](x-ai-disclosure.md).
+
+- Do not add "Made with AI", "Made with Grok", or similar disclosure text to the body.
+- Do not set a provider metadata flag that labels the post or its media as AI-generated. Official `x` `posts.publish` exposes `made_with_ai`; leave it unset or `false` unless the user explicitly asked to label attached media. `x-web` `posts.publish` has no such input field; do not invent one. Inspect each installed schema for a comparable field and leave it unset or `false`.
+- Prefer the installed Wrench transport. Do not click the X composer because a contract is missing or `capture-required`.
+- If the user explicitly asked for a composer fallback, open Content disclosure and require Made with AI OFF before Post. After publish, open the live permalink. A sparkle Made with AI or Made with Grok label means the publish failed; do not report success, and do not delete or repost unless the user asks.
+
 ## Preflight every target
 
 1. Run `wrench --help`; if it is unavailable, follow [installation and diagnostics](install.md).

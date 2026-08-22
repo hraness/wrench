@@ -260,6 +260,15 @@ function optionalInputBoolean(context: ProviderActionContext, name: string): boo
   return value;
 }
 
+/**
+ * Official X labels attached media only when the caller sets `made_with_ai` to
+ * true. Unset and false omit the field so a session or product default cannot
+ * inherit a Made with AI label.
+ */
+function officialMadeWithAiLabel(madeWithAi: boolean | undefined): true | undefined {
+  return madeWithAi === true ? true : undefined;
+}
+
 function inputStrings(context: ProviderActionContext, name: string): readonly string[] {
   const value = context.input[name];
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
@@ -1443,7 +1452,7 @@ async function executePostsPublish(context: ProviderActionContext): Promise<void
     }
     if (replySettings !== undefined && replySettings !== "everyone") payload.reply_settings = replySettings;
     if (communityId !== undefined) payload.community_id = communityId;
-    if (madeWithAi === true) {
+    if (officialMadeWithAiLabel(madeWithAi) === true) {
       payload.made_with_ai = true;
     }
     const response = await request(
