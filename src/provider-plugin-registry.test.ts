@@ -3217,6 +3217,7 @@ describe("provider plugin definition and registry", () => {
       .sort((left, right) => left.localeCompare(right));
 
     expect(observedContactProviderIds).toEqual([
+      "beeper-linked-device",
       "gmail-official",
       "linkedin-official",
       "meta-web",

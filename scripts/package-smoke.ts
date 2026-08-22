@@ -24,6 +24,27 @@ async function run(command: string[], cwd: string): Promise<void> {
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
 }
 
+async function runExpectingFailure(
+  command: string[],
+  cwd: string,
+  expectedExitCode: number,
+  expectedDiagnostic: string,
+): Promise<void> {
+  const child = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe" });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  if (
+    exitCode !== expectedExitCode
+    || stdout.length !== 0
+    || !stderr.includes(expectedDiagnostic)
+  ) {
+    throw new Error(`Installed CLI failure contract drifted for: ${command.join(" ")}`);
+  }
+}
+
 async function collectMarkdownFiles(root: string): Promise<readonly string[]> {
   const entries = await readdir(root, { withFileTypes: true });
   const files: string[] = [];
@@ -115,6 +136,30 @@ try {
   for (const binName of binNames) {
     await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);
   }
+  await access(join(
+    consumer,
+    "node_modules",
+    "@hraness",
+    "wrench",
+    "src",
+    "fixtures",
+    "beeper-message-like-me-v1",
+    "manifest.json",
+  ));
+  await run([
+    process.execPath,
+    "-e",
+    "await import('./node_modules/@hraness/wrench/src/beeper-message-like-me-cli.ts')",
+  ], consumer);
+  await runExpectingFailure([
+    join(consumer, "node_modules", ".bin", "wrench"),
+    "beeper",
+    "export-message-like-me",
+    "--auth",
+    "beeper-main",
+    "--output",
+    "relative",
+  ], consumer, 2, "normalized-absolute-directory");
   if (verificationPackages.length > 0) {
     await run([process.execPath, "add", ...verificationPackages, "--ignore-scripts"], consumer);
   }

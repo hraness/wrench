@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { providerPluginRegistry } from "./provider-plugins";
 
 const supported = new Set([
+  "beeper-linked-device/beeper/messaging.list",
+  "beeper-linked-device/beeper/messaging.read",
   "gmail-official/gmail/messaging.list",
   "gmail-official/gmail/messaging.read",
   "meta-web/instagram/messaging.list",
@@ -39,6 +41,7 @@ describe("provider plugin omni declarations", () => {
 
   test("provider-owned materializer files are in each supported closure", () => {
     const expectedLabels = new Map([
+      ["beeper-linked-device", "providers/beeper-omni.ts"],
       ["gmail-official", "providers/gmail-omni.ts"],
       ["meta-web", "providers/meta-omni.ts"],
       ["reddit-web", "providers/reddit-omni.ts"],

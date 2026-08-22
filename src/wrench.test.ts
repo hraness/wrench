@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { createAuth, loadAuth, saveAuth } from "./auth";
+import { createAuth, loadAuth, removeAuth, saveAuth } from "./auth";
 import { PreservedBrowserArtifactsError } from "./browser";
 import type * as MediaRuntimeModule from "./media";
 import type { DoctorReport as MediaDoctorReport } from "./media/doctor";
@@ -756,6 +756,33 @@ describe("auth CLI", () => {
     }
   });
 
+  test("guides lifecycle-free Beeper stores to subject binding instead of pairing", async () => {
+    const testState = state();
+    try {
+      const beeperStore = join(
+        realpathSync(testState.directory),
+        "beeper-cli-config",
+      );
+      const added = capture();
+      expect(await main([
+        "auth", "add", "beeper-local",
+        "--linked-device", "beeper",
+        "--device-store", beeperStore,
+      ], testState.environment, added.output)).toBe(0);
+      expect(loadAuth("beeper-local", testState.environment)).toMatchObject({
+        kind: "linked-device-store",
+        provider: "beeper",
+        path: beeperStore,
+      });
+      expect(added.stdout()).toContain(
+        "wrench auth bind beeper-local --site beeper",
+      );
+      expect(added.stdout()).not.toContain("wrench auth pair beeper-local");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("returns structured exit 5 for an indeterminate linked-device sync", async () => {
     const testState = state();
     const deviceStore = mkdtempSync(join(tmpdir(), "wrench-whatsapp-store-"));
@@ -841,6 +868,93 @@ describe("auth CLI", () => {
       expect(listed.stdout()).not.toContain("/Applications/Chromium");
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("runs the bounded Beeper Message Like Me export through the private runtime", async () => {
+    const testState = state();
+    const deviceStore = realpathSync(mkdtempSync(join(
+      tmpdir(),
+      "wrench-beeper-cli-device-store-",
+    )));
+    chmodSync(deviceStore, 0o700);
+    try {
+      const boundSubject = `beeper:local:${"a".repeat(64)}`;
+      saveAuth(createAuth("beeper-main", {
+        linkedDeviceProvider: "beeper",
+        deviceStore,
+        subject: boundSubject,
+      }), testState.environment);
+      let observed: Record<string, unknown> | undefined;
+      const wrench = capture();
+      const code = await main([
+        "beeper",
+        "export-message-like-me",
+        "--auth",
+        "beeper-main",
+        "--output",
+        "/tmp/message-like-me-fixture",
+        "--limit-chats",
+        "10",
+        "--limit-messages",
+        "500",
+        "--json",
+      ], testState.environment, wrench.output, {
+        loadBeeperMessageLikeMeCliRuntime: () => Promise.resolve({
+          exportBeeperMessageLikeMeFromAuth: (request) => {
+            observed = request as unknown as Record<string, unknown>;
+            expect(() => removeAuth("beeper-main", testState.environment))
+              .toThrow("active read projection transition");
+            return Promise.resolve({
+              outputRoot: "/tmp/message-like-me-fixture",
+              manifestPath: "/tmp/message-like-me-fixture/manifest.json",
+              manifestSha256: "b".repeat(64),
+              manifest: {
+                completeness: {
+                  kind: "bounded-local",
+                  reason: "desktop-local-export",
+                  observedFrom: null,
+                  observedThrough: null,
+                },
+                warnings: ["remote-history-not-claimed"],
+                counts: {
+                  account: 9,
+                  participant: 20,
+                  conversation: 10,
+                  message: 500,
+                  reaction: 4,
+                  tombstone: 1,
+                },
+              },
+            } as never);
+          },
+        }),
+      });
+
+      expect(code).toBe(0);
+      expect(wrench.stderr()).toBe("");
+      expect(observed).toMatchObject({
+        auth: {
+          id: "beeper-main",
+          kind: "linked-device-store",
+          provider: "beeper",
+          subject: boundSubject,
+        },
+        outputRoot: "/tmp/message-like-me-fixture",
+        limits: { limitChats: 10, limitMessages: 500 },
+      });
+      expect(JSON.parse(wrench.stdout())).toMatchObject({
+        ok: true,
+        manifestSha256: "b".repeat(64),
+        completeness: { kind: "bounded-local" },
+        warnings: ["remote-history-not-claimed"],
+        counts: { account: 9, message: 500 },
+      });
+      expect(wrench.stdout()).not.toContain(boundSubject);
+      expect(loadAuth("beeper-main", testState.environment).subject).toBe(boundSubject);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+      rmSync(deviceStore, { recursive: true, force: true });
     }
   });
 

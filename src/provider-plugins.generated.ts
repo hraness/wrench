@@ -2,19 +2,20 @@
 // Edit src/plugins/*/plugin.ts, then run `bun run src/scripts/generate-provider-plugin-catalog.ts`.
 
 import type { ProviderPluginV1 } from "./provider-plugin";
-import sourceProviderPlugin0 from "./plugins/bluesky-web/plugin";
-import sourceProviderPlugin1 from "./plugins/gmail-official/plugin";
-import sourceProviderPlugin2 from "./plugins/hacker-news-web/plugin";
-import sourceProviderPlugin3 from "./plugins/linkedin-official/plugin";
-import sourceProviderPlugin4 from "./plugins/linkedin-web/plugin";
-import sourceProviderPlugin5 from "./plugins/meta-web/plugin";
-import sourceProviderPlugin6 from "./plugins/reddit-web/plugin";
-import sourceProviderPlugin7 from "./plugins/substack-web/plugin";
-import sourceProviderPlugin8 from "./plugins/tiktok-web/plugin";
-import sourceProviderPlugin9 from "./plugins/whatsapp-linked-device/plugin";
-import sourceProviderPlugin10 from "./plugins/x-official/plugin";
-import sourceProviderPlugin11 from "./plugins/x-web/plugin";
-import sourceProviderPlugin12 from "./plugins/youtube-web/plugin";
+import sourceProviderPlugin0 from "./plugins/beeper-linked-device/plugin";
+import sourceProviderPlugin1 from "./plugins/bluesky-web/plugin";
+import sourceProviderPlugin2 from "./plugins/gmail-official/plugin";
+import sourceProviderPlugin3 from "./plugins/hacker-news-web/plugin";
+import sourceProviderPlugin4 from "./plugins/linkedin-official/plugin";
+import sourceProviderPlugin5 from "./plugins/linkedin-web/plugin";
+import sourceProviderPlugin6 from "./plugins/meta-web/plugin";
+import sourceProviderPlugin7 from "./plugins/reddit-web/plugin";
+import sourceProviderPlugin8 from "./plugins/substack-web/plugin";
+import sourceProviderPlugin9 from "./plugins/tiktok-web/plugin";
+import sourceProviderPlugin10 from "./plugins/whatsapp-linked-device/plugin";
+import sourceProviderPlugin11 from "./plugins/x-official/plugin";
+import sourceProviderPlugin12 from "./plugins/x-web/plugin";
+import sourceProviderPlugin13 from "./plugins/youtube-web/plugin";
 
 export const generatedProviderPlugins = Object.freeze([
   sourceProviderPlugin0,
@@ -30,4 +31,5 @@ export const generatedProviderPlugins = Object.freeze([
   sourceProviderPlugin10,
   sourceProviderPlugin11,
   sourceProviderPlugin12,
+  sourceProviderPlugin13,
 ] as const satisfies readonly ProviderPluginV1[]);

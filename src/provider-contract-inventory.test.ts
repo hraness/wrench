@@ -69,7 +69,8 @@ function legacyHash(contract, implementationHash, web) {
     .digest("hex");
 }
 function appendCurrentRow(row) {
-  if (row[0] === "provider-api" && row[1] === "gmail") {
+  if ((row[0] === "provider-api" && row[1] === "gmail")
+    || (row[0] === "linked-device" && row[1] === "beeper")) {
     currentOnlyRows.push(row);
     return;
   }

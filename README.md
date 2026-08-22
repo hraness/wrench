@@ -303,6 +303,7 @@ not turn missing message history into zero activity.
 | Provider | Contact collection | Directional statistics |
 | --- | --- | --- |
 | Gmail | Google People connections | Bounded Gmail message scans with explicit truncation |
+| Beeper local Desktop | One bounded account-aware page from the already-authorized local Desktop projection | Unavailable; Wrench does not scan message history while listing contacts |
 | LinkedIn official API | First-degree connections with locale-selection evidence | Unavailable; the Connections API does not expose ordinary inbox history |
 | Instagram authenticated web | Unique non-viewer participants from the reviewed first Direct inbox summary page, with explicit first-page and pagination incompleteness | Unavailable until acknowledgement-free message-history paging is reviewed |
 | WhatsApp linked device | One page of the authenticated account owner's private, quiescent Whatsmeow contact store | Unavailable; Wrench does not treat a linked-device message cache as account-owned history |
@@ -339,6 +340,68 @@ Telegram's official `getContacts` method belongs to
 Wrench will not install or expose this surface until it can bind the TDLib
 authorization lifecycle, account identity, local database, paging behavior,
 and message-history completeness without weakening the linked-device boundary.
+
+### Beeper local read-only projection
+
+The bundled `beeper-linked-device` source plugin reads an existing Beeper
+Desktop authorization through the official Beeper CLI 0.6.2. Wrench accepts
+only the exact pinned macOS arm64 binary, the fixed selected `desktop` target,
+and three JSON operations: `contacts.list`, `messaging.list`, and
+`messaging.read`. Every child command uses Beeper's read-only mode. The plugin
+does not expose raw API calls, targets, media downloads, sends, presence,
+pairing, sync, or other CLI commands.
+
+Install the official CLI and authorize it to the local Desktop app first:
+
+```sh
+brew install beeper/tap/cli
+beeper setup
+wrench adapter sync-bundled --json
+wrench auth add beeper-main --linked-device beeper \
+  --device-store "${HOME}/.beeper"
+wrench auth bind beeper-main --site beeper
+```
+
+Binding hashes the stable local self-account coordinate before storing or
+printing it. The first bind or read may take longer while the pinned CLI unpacks
+its embedded payload into an operation-private cache. Read the local account
+and conversation identifiers, then request one exact conversation page:
+
+```sh
+wrench beeper-local messaging.list --auth beeper-main \
+  --input '{"limit":100}' --json
+wrench beeper-local messaging.read --auth beeper-main \
+  --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","limit":100}' --json
+```
+
+Create a private, agent-ready Message Like Me bundle from every connected
+account materialized by Beeper Desktop:
+
+```sh
+wrench beeper export-message-like-me --auth beeper-main \
+  --output /absolute/path/to/new-message-like-me-bundle --json
+```
+
+The command uses the pinned official full export with `--no-attachments`,
+validates its complete local chat inventory, removes the duplicate Markdown and
+HTML renderings inside operation-private staging, and publishes `manifest.json`
+last. The output directory is mode 0700; its six NDJSON artifacts and manifest
+are mode 0600 and carry canonical SHA-256 digests. The JSON result reports the
+manifest path and digest, record counts, completeness, and warnings. Optional
+`--limit-chats`, `--limit-messages`, and `--max-participants` values are recorded
+as truncation when reached. Wrench also emits a coherent truncated bundle before
+the 500,000-record or 512 MiB bundle ceiling. One chat JSON file is limited to
+64 MiB so foreign input cannot force a multi-gigabyte allocation; an oversized
+chat is omitted with explicit truncated completeness and a warning.
+
+Contact and chat lists are bounded to 200 records because CLI 0.6.2 exposes no
+continuation cursor for those commands. Message pages derive the next
+before/after cursor only from the terminal returned message ID and reject
+duplicates or a non-advancing cursor at normalization. Output marks remote
+history coverage unknown, preserves account/network/reply/edit/delete and
+reaction provenance, and includes attachment metadata without media IDs,
+paths, URLs, or downloads. This is a local materialized view, not a claim that
+every connected network has finished backfilling its remote history.
 
 ### Gmail
 

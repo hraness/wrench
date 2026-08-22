@@ -69,6 +69,18 @@
           <p>The limit column repeats the public adapter description for that current contract version. Historical plugin versions that are no longer current do not appear as extra rows. Local plugins, portable bundles, and retired manifests can differ from this release snapshot.</p>
         </section>
 
+        <section aria-labelledby="beeper">
+          <h2 id="beeper">Beeper projects connected local accounts without a browser or model service</h2>
+          <p>The bundled source plugin accepts only the pinned official Beeper CLI 0.6.2, one already-authorized Desktop target, and read-only JSON operations. Wrench hashes the stable self-account coordinate before storing the auth subject. It exposes no send, raw request, media download, pairing, presence, or background-sync surface.</p>
+          <div class="command-panel"><pre><code>wrench auth add beeper-main --linked-device beeper \
+  --device-store "${HOME}/.beeper"
+wrench auth bind beeper-main --site beeper
+
+wrench beeper export-message-like-me --auth beeper-main \
+  --output /absolute/path/to/new-message-like-me-bundle --json</code></pre></div>
+          <p>The export uses Beeper's local full-export pagination with attachments disabled. Wrench validates account, roster, message, reply, edit, reaction, and tombstone provenance; removes duplicate plaintext renderings inside private staging; then writes six mode-0600 NDJSON artifacts and publishes the digested manifest last inside a mode-0700 directory. Completeness describes only the locally materialized export. A 500,000-record or 512 MiB ceiling produces a coherent truncated bundle, and any chat JSON file over the 64 MiB per-chat bound is omitted with an explicit warning.</p>
+        </section>
+
         <section aria-labelledby="gmail">
           <h2 id="gmail">Gmail contacts, inbox search, thread reads, and clips</h2>
           <p>Gmail uses the official Gmail and Google People APIs. Its auth locator must match a current-user-owned mode-0600 token document with the exact provider, subject, and sorted <code>contacts.readonly</code> and <code>gmail.readonly</code> scopes.</p>
