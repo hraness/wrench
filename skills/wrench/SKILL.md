@@ -43,6 +43,7 @@ automation.
 - Save one private native article draft, including supported plan-bound covers, inline images, and destination-safe source-post references: inspect `articles.draft.save`, then follow [native article drafts](references/article-drafts.md). Keep a provider cover outside the body document; on an exact LinkedIn replacement, omit it only to preserve the independently read existing banner. Never substitute `articles.publish`.
 - Cross-post one exact text and optional ordered-image package: inspect every installed target schema, then follow [social cross-posting](references/cross-posting.md).
 - Cross-post one exact video package: require an observed video-capable operation for every selected target, then follow [video social cross-posting](references/cross-posting-video.md).
+- When the user supplied the copy, never mark the post as AI-generated. Follow [X AI disclosure](references/x-ai-disclosure.md): leave official `x` `made_with_ai` unset or `false`, prefer a Wrench transport over the X composer, and treat a live sparkle Made with AI label as a failed publish.
 - Add a provider without changing Wrench source: author a portable plugin.
 - Derive a reviewed first-party contract from authorized HAR evidence: follow [the derivation guide](references/derivation.md).
 

@@ -80,6 +80,23 @@ async function verifyPackagedSkill(consumer: string): Promise<void> {
   if (!references.includes("references/install.md")) {
     throw new Error("Packed Wrench skill must route missing-CLI work to references/install.md.");
   }
+  if (!references.includes("references/x-ai-disclosure.md")) {
+    throw new Error("Packed Wrench skill must route X AI disclosure to references/x-ai-disclosure.md.");
+  }
+  const disclosure = await readFile(join(skillRoot, "references", "x-ai-disclosure.md"), "utf8");
+  for (const required of [
+    "Made with AI",
+    "Content disclosure",
+    "live permalink",
+    "the publish failed",
+    "Do not delete or repost unless the user asks",
+  ] as const) {
+    if (!disclosure.includes(required)) {
+      throw new Error(
+        `Packed Wrench skill must fail closed on X AI disclosure; missing ${JSON.stringify(required)}.`,
+      );
+    }
+  }
   for (const reference of references) await access(join(skillRoot, reference));
   await verifyLocalMarkdownLinks(skillRoot);
 

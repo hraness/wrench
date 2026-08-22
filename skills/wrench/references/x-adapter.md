@@ -184,6 +184,13 @@ target before readback, and polls only that exact post through
 TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
 Article publishing remain capture-required.
 
+CreateTweet sends empty `semantic_annotation_ids` and no AI or
+content-disclosure field. The reviewed GraphQL contract has no
+`made_with_ai` or `content_disclosure` input; do not invent one. Official
+OAuth `x` `posts.publish` exposes optional `made_with_ai` and sends `true`
+only when the caller explicitly asked. Leave that field unset or `false`
+for user-supplied copy. See [X AI disclosure](x-ai-disclosure.md).
+
 Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.
 
 Treat repost, like, and bookmark as desired state only when both create and delete mutations are reviewed and response-bound. A state mismatch is not permission to issue another mutation blindly.
