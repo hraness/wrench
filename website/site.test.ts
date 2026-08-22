@@ -6,6 +6,7 @@ import {
   buildWebsite,
   CONTENT_REVIEWED_RELEASE,
   DEFAULT_POSTHOG_HOST,
+  markdownSiblingPath,
   parsePackageIdentity,
   PUBLIC_PAGES,
   PUBLISHER_URL,
@@ -16,6 +17,7 @@ import {
   SKILL_INSTALL_COMMAND,
   SKILL_INSTALL_COMMAND_BUNX,
 } from "./build";
+import { handleDocumentNegotiation } from "./document-negotiation";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const websiteRoot = import.meta.dir;
@@ -63,18 +65,21 @@ describe("wrench.rip static site", () => {
       NEXT_PUBLIC_POSTHOG_HOST: DEFAULT_POSTHOG_HOST,
       NEXT_PUBLIC_POSTHOG_KEY: "phc_public_project_token",
     });
-    const [pages, notFound, robots, sitemap, indexNowKey, favicon, css, vercel] = await Promise.all([
+    const [pages, notFound, notFoundMarkdown, llms, robots, sitemap, indexNowKey, favicon, css, vercel, middleware] = await Promise.all([
       Promise.all(PUBLIC_PAGES.map(async (page) => ({
         definition: page,
         html: await readFile(join(websiteRoot, "dist", page.outputFile), "utf8"),
       }))),
       readFile(join(websiteRoot, "dist/404.html"), "utf8"),
+      readFile(join(websiteRoot, "dist/404.md"), "utf8"),
+      readFile(join(websiteRoot, "dist/llms.txt"), "utf8"),
       readFile(join(websiteRoot, "dist/robots.txt"), "utf8"),
       readFile(join(websiteRoot, "dist/sitemap.xml"), "utf8"),
       readFile(join(websiteRoot, "dist/dc84ee4863539f2fff50ef5f0a164168.txt"), "utf8"),
       readFile(join(websiteRoot, "dist/favicon.svg"), "utf8"),
       readFile(join(websiteRoot, "source/styles.css"), "utf8"),
       Bun.file(join(repositoryRoot, "vercel.json")).json(),
+      readFile(join(repositoryRoot, "middleware.ts"), "utf8"),
     ]);
     const html = pages[0]!.html;
 
@@ -124,7 +129,21 @@ describe("wrench.rip static site", () => {
       '<meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">',
     );
     expect(notFound).toContain("Privacy: this page uses cookieless, personless PostHog analytics");
+    expect(notFound).toContain('href="/llms.txt"');
+    expect(notFound).toContain('href="/sitemap.xml"');
+    expect(notFound).toContain('href="/getting-started/"');
     expect(notFound).not.toContain('type="application/ld+json"');
+    expect(notFoundMarkdown).toContain("# This handle does not exist.");
+    expect(notFoundMarkdown).toContain("https://wrench.rip/llms.txt");
+    expect(notFoundMarkdown).toContain("https://wrench.rip/sitemap.xml");
+    expect(llms).toContain("# Wrench");
+    expect(llms).toContain("## When to use Wrench");
+    expect(llms).toContain("## Wrench developer resources");
+    expect(llms).toContain("Do not use Wrench as an AI agent");
+    expect(llms).toContain(`${SITE_ORIGIN}/getting-started/`);
+    expect(llms).toContain("npx skills add hraness/wrench");
+    expect(llms).toContain("Accept: text/markdown");
+    expect(llms).not.toContain("{{");
     expect(robots).toBe(`User-agent: *\nAllow: /\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`);
     expect(sitemap.match(/<url>/gu)).toHaveLength(PUBLIC_PAGES.length);
     for (const page of PUBLIC_PAGES) {
@@ -142,6 +161,36 @@ describe("wrench.rip static site", () => {
       framework: null,
       outputDirectory: "website/dist",
     });
+    expect(vercel.rewrites).toEqual(expect.arrayContaining([
+      {
+        destination: "/index.md",
+        has: [{ key: "accept", type: "header", value: "text/markdown" }],
+        source: "/",
+      },
+      {
+        destination: "/:path.md",
+        has: [{ key: "accept", type: "header", value: "text/markdown" }],
+        source: "/:path*/",
+      },
+    ]));
+    expect(vercel.headers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        headers: expect.arrayContaining([
+          expect.objectContaining({ key: "Vary", value: "Accept" }),
+        ]),
+        source: "/(.*)",
+      }),
+      expect.objectContaining({
+        headers: expect.arrayContaining([
+          expect.objectContaining({
+            key: "Content-Type",
+            value: "text/markdown; charset=utf-8",
+          }),
+        ]),
+        source: "/(.*).md",
+      }),
+    ]));
+    expect(middleware).toContain("handleDocumentNegotiation");
     expect(vercel.redirects).toEqual(expect.arrayContaining([
       { destination: "/", permanent: true, source: "/index.html" },
       ...PUBLIC_PAGES.slice(1).map((page) => ({
@@ -197,6 +246,11 @@ describe("wrench.rip static site", () => {
       expect(pageHtml).toContain(`<meta name="twitter:title" content="${definition.title}">`);
       expect(pageHtml).toContain(`<meta name="twitter:description" content="${definition.description}">`);
       expect(pageHtml).toContain('<meta name="robots" content="max-image-preview:large">');
+      expect(pageHtml).toContain(`<link rel="alternate" type="text/markdown" title="Markdown" href="${SITE_ORIGIN}${markdownSiblingPath(definition.canonicalPath)}">`);
+      expect(pageHtml).toContain('href="/about/"');
+      expect(pageHtml).toContain('href="/contact/"');
+      expect(pageHtml).toContain('href="/privacy/"');
+      expect(pageHtml).toContain('href="/llms.txt"');
       expect(pageHtml).toContain(
         '<meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">',
       );
@@ -209,6 +263,15 @@ describe("wrench.rip static site", () => {
       expect(pageHtml).not.toContain("{{");
       expect(pageHtml).not.toContain("FAQPage");
       descriptions.add(definition.description);
+
+      const markdown = await readFile(
+        join(websiteRoot, "dist", markdownSiblingPath(definition.canonicalPath).slice(1)),
+        "utf8",
+      );
+      expect(markdown.startsWith("# ")).toBe(true);
+      expect(markdown).toContain("Wrench");
+      expect(markdown).not.toMatch(/<\/[a-z]+>/i);
+      expect(markdown.length).toBeGreaterThan(400);
 
       const jsonMatch = /<script type="application\/ld\+json">([^<]+)<\/script>/u.exec(pageHtml);
       expect(jsonMatch?.[1]).toBeDefined();
@@ -244,6 +307,33 @@ describe("wrench.rip static site", () => {
       }
     }
     expect(descriptions.size).toBe(PUBLIC_PAGES.length);
+
+    const gettingStarted = pages.find((page) => page.definition.canonicalPath === "/getting-started/");
+    expect(gettingStarted?.html).toContain("Wrench developer resources");
+    expect(gettingStarted?.html).toContain("does not publish a hosted API");
+
+    const files = new Map<string, string>();
+    for (const page of PUBLIC_PAGES) {
+      files.set(
+        markdownSiblingPath(page.canonicalPath),
+        await readFile(join(websiteRoot, "dist", markdownSiblingPath(page.canonicalPath).slice(1)), "utf8"),
+      );
+    }
+    files.set("/404.md", notFoundMarkdown);
+    const retrieve = async (url: URL): Promise<Response> => {
+      const body = files.get(url.pathname);
+      return body === undefined
+        ? new Response("missing", { status: 404 })
+        : new Response(body, { status: 200 });
+    };
+    const negotiated = await handleDocumentNegotiation(
+      new Request(`${SITE_ORIGIN}/getting-started/`, { headers: { Accept: "text/markdown" } }),
+      retrieve,
+    );
+    expect(negotiated?.status).toBe(200);
+    expect(negotiated?.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    expect(negotiated?.headers.get("vary")).toBe("Accept");
+    expect(await negotiated?.text()).toContain("# Install Wrench and capture your first URL.");
   });
 
   test("keeps every README release reference aligned with package identity", async () => {
