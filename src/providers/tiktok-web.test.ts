@@ -8,6 +8,7 @@ import {
   enforceTikTokWebHeaderSinkPolicy,
   normalizeTikTokWebCommentsResponse,
   normalizeTikTokWebFeedResponse,
+  parseTikTokWebProfileResponse,
   parseTikTokWebViewerResponse,
   tiktokWebDirectEvidenceSnapshot,
   tiktokWebHeaderSinkPolicy,
@@ -29,8 +30,19 @@ function viewerResponse(id = VIEWER_ID, secUid = VIEWER_SEC_UID): unknown {
         secUid,
         uniqueId: "wrench_test",
         nickname: "Wrench Test",
+        signature: "A bounded public profile bio",
+        bioLink: { link: "https://example.com/about" },
       },
-      stats: {},
+      stats: {
+        followerCount: 123,
+        followingCount: 45,
+        heartCount: 678,
+      },
+      statsV2: {
+        followerCount: "123",
+        followingCount: "45",
+        heartCount: "678",
+      },
     },
   };
 }
@@ -119,11 +131,11 @@ describe("TikTok internal-web operation registry", () => {
         .filter(([, contract]) => contract.state === "observed")
         .map(([operation]) => operation)
         .sort(),
-    ).toEqual(["comments.read", "feeds.read"]);
+    ).toEqual(["comments.read", "feeds.read", "profiles.read"]);
     for (const [name, contract] of Object.entries(TIKTOK_WEB_OPERATIONS)) {
       expect(Object.isFrozen(contract)).toBeTrue();
       expect(Object.isFrozen(contract.requests)).toBeTrue();
-      if (name !== "feeds.read" && name !== "comments.read") {
+      if (name !== "profiles.read" && name !== "feeds.read" && name !== "comments.read") {
         expect(contract.requests).toHaveLength(0);
       }
     }
@@ -159,13 +171,23 @@ describe("TikTok exact R1 request authorization", () => {
     expect(serialized).not.toContain("X-Bogus");
   });
 
-  test("accepts only the three fixed signer-free request families", () => {
+  test("accepts only the fixed signer-free request families", () => {
     expect(authorizeTikTokWebR1Request({
       operation: "viewer.current",
       url: "https://www.tiktok.com/api/user/detail/self/",
       method: "GET",
     })).toEqual({
       operation: "viewer.current",
+      method: "GET",
+      path: "/api/user/detail/self/",
+      query: {},
+    });
+    expect(authorizeTikTokWebR1Request({
+      operation: "profiles.current",
+      url: "https://www.tiktok.com/api/user/detail/self/",
+      method: "GET",
+    })).toEqual({
+      operation: "profiles.current",
       method: "GET",
       path: "/api/user/detail/self/",
       query: {},
@@ -234,6 +256,42 @@ describe("TikTok exact R1 request authorization", () => {
     for (const candidate of cases) {
       expect(() => authorizeTikTokWebR1Request(candidate)).toThrow();
     }
+  });
+});
+
+describe("TikTok current-profile projection", () => {
+  test("projects exact safe counts and bounded public metadata", () => {
+    expect(parseTikTokWebProfileResponse(viewerResponse())).toEqual({
+      id: VIEWER_ID,
+      secUid: VIEWER_SEC_UID,
+      handle: "wrench_test",
+      displayName: "Wrench Test",
+      bio: "A bounded public profile bio",
+      websiteUrl: "https://example.com/about",
+      followers: 123,
+      following: 45,
+      likes: 678,
+    });
+  });
+
+  test("rejects rounded, unsafe, conflicting, and unsafe-link values", () => {
+    const rounded = viewerResponse() as Record<string, unknown>;
+    const roundedInfo = (rounded.userInfo as Record<string, unknown>);
+    const roundedStats = roundedInfo.stats as Record<string, unknown>;
+    roundedStats.followerCount = "1.2K";
+    expect(() => parseTikTokWebProfileResponse(rounded)).toThrow("safe decimal integer");
+
+    const conflicting = viewerResponse() as Record<string, unknown>;
+    const conflictingInfo = conflicting.userInfo as Record<string, unknown>;
+    const conflictingStatsV2 = conflictingInfo.statsV2 as Record<string, unknown>;
+    conflictingStatsV2.heartCount = "679";
+    expect(() => parseTikTokWebProfileResponse(conflicting)).toThrow("conflicting heartCount");
+
+    const unsafe = viewerResponse() as Record<string, unknown>;
+    const unsafeInfo = unsafe.userInfo as Record<string, unknown>;
+    const unsafeUser = unsafeInfo.user as Record<string, unknown>;
+    unsafeUser.bioLink = { link: "javascript:alert(1)" };
+    expect(() => parseTikTokWebProfileResponse(unsafe)).toThrow("safe public HTTP URL");
   });
 });
 

@@ -103,6 +103,33 @@ function viewerResponse(modhash = FIRST_MODHASH, id = VIEWER_ID): unknown {
   };
 }
 
+function profileResponse(): unknown {
+  return {
+    kind: "t2",
+    data: {
+      id: VIEWER_ID,
+      name: "wrench_viewer",
+      total_karma: 4321,
+      subreddit: {
+        display_name_prefixed: "u/wrench_viewer",
+        title: "Wrench Viewer",
+        public_description: "Public profile bio",
+        subscribers: 8,
+      },
+    },
+  };
+}
+
+function contributionThing(kind: "t1" | "t3", id: string): unknown {
+  return {
+    kind,
+    data: {
+      name: id,
+      author: "wrench_viewer",
+    },
+  };
+}
+
 function listing(children: readonly unknown[], after: string | null = null): unknown {
   return {
     kind: "Listing",
@@ -212,6 +239,140 @@ describe("Reddit authenticated internal API runtime", () => {
     );
     expect(subject).toBe(SUBJECT);
     expect(calls).toHaveLength(1);
+  });
+
+  test("reads exact profile counts and a complete visible contribution window", async () => {
+    const calls: CapturedRequest[] = [];
+    let callbacks = 0;
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.pathname === "/api/me.json") return jsonResponse(viewerResponse());
+      if (request.url.pathname === "/user/wrench_viewer/about.json") {
+        expect(Object.fromEntries(request.url.searchParams)).toEqual({ raw_json: "1" });
+        return jsonResponse(profileResponse());
+      }
+      expect(request.url.pathname).toBe("/user/wrench_viewer/overview.json");
+      expect(request.url.searchParams.get("limit")).toBe("100");
+      expect(request.url.searchParams.get("raw_json")).toBe("1");
+      if (request.url.searchParams.get("after") === null) {
+        return jsonResponse(listing([
+          contributionThing("t3", "t3_first"),
+          contributionThing("t1", "t1_second"),
+        ], "t1_next"));
+      }
+      expect(request.url.searchParams.get("after")).toBe("t1_next");
+      return jsonResponse(listing([
+        contributionThing("t3", "t3_third"),
+      ]));
+    });
+    const result = await executeRedditWebOperation(
+      recipe("profiles.read"),
+      { profile: "wrench_viewer" },
+      redditAuth,
+      {
+        beforeDispatch: () => {
+          callbacks += 1;
+          return Promise.resolve();
+        },
+        afterDispatchVerified: () => {
+          callbacks += 1;
+          return Promise.resolve();
+        },
+        dependencies: {
+          ...runtimeDependencies,
+          now: () => Date.parse("2026-08-22T03:00:00.000Z"),
+        },
+      },
+    );
+    expect(result).toEqual({
+      status: "succeeded",
+      output: {
+        schemaVersion: 1,
+        provider: "reddit",
+        target: {
+          kind: "profile",
+          id: "wrench_viewer",
+          url: "https://www.reddit.com/user/wrench_viewer/",
+        },
+        observedAt: "2026-08-22T03:00:00.000Z",
+        completeness: "complete",
+        metrics: {
+          followers: { status: "available", value: 8, precision: "exact", unit: "count" },
+          karma: { status: "available", value: 4321, precision: "exact", unit: "count" },
+          contributions: {
+            status: "available",
+            value: 3,
+            precision: "exact",
+            unit: "count",
+            window: "visible-overview",
+          },
+        },
+        metadata: {
+          handle: "wrench_viewer",
+          displayName: "Wrench Viewer",
+          bio: "Public profile bio",
+          contributionDefinition:
+            "Distinct post and comment IDs in the complete authenticated profile overview listing.",
+        },
+      },
+      finalUrl: "https://www.reddit.com/user/wrench_viewer/",
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(calls.map((request) => request.url.pathname)).toEqual([
+      "/api/me.json",
+      "/user/wrench_viewer/about.json",
+      "/user/wrench_viewer/overview.json",
+      "/user/wrench_viewer/overview.json",
+    ]);
+    expect(callbacks).toBe(0);
+    expect(JSON.stringify(result)).not.toContain(VIEWER_ID);
+    expect(JSON.stringify(result)).not.toContain(FIRST_MODHASH);
+  });
+
+  test("rejects a profile handle that does not match the bound viewer", async () => {
+    const calls: CapturedRequest[] = [];
+    expect(executeRedditWebOperation(
+      recipe("profiles.read"),
+      { profile: "another_viewer" },
+      redditAuth,
+      {
+        dependencies: dependencies(calls, () => jsonResponse(viewerResponse())),
+      },
+    )).rejects.toThrow("requested profile did not match");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("bounds overview pagination and marks an unproven total unavailable", async () => {
+    const calls: CapturedRequest[] = [];
+    let page = 0;
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.pathname === "/api/me.json") return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/about.json")) return jsonResponse(profileResponse());
+      const current = page;
+      page += 1;
+      return jsonResponse(listing([
+        contributionThing("t1", `t1_item${current}`),
+      ], `t1_cursor${current}`));
+    });
+    const result = await executeRedditWebOperation(
+      recipe("profiles.read"),
+      { profile: "wrench_viewer" },
+      redditAuth,
+      {
+        dependencies: {
+          ...runtimeDependencies,
+          now: () => Date.parse("2026-08-22T03:00:00.000Z"),
+        },
+      },
+    );
+    expect(result.output).toMatchObject({
+      completeness: "partial",
+      metrics: {
+        contributions: { status: "unavailable", reason: "not-exposed" },
+      },
+    });
+    expect(page).toBe(10);
+    expect(calls).toHaveLength(12);
   });
 
   test("executes all observed R1 operations through exact target-bound requests", async () => {

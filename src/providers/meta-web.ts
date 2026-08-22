@@ -43,13 +43,13 @@ export const META_WEB_OPERATION_NAMES = Object.freeze({
   instagram: Object.freeze([
     "comments.create", "comments.read", "contacts.list", "content.edit", "content.save", "content.share",
     "feeds.read", "likes.set", "media.publish", "media.read", "messaging.list",
-    "messaging.read", "messaging.send", "posts.read", "posts.repost", "reactions.set",
+    "messaging.read", "messaging.send", "posts.read", "posts.repost", "profiles.read", "reactions.set",
     "relationships.follow.set", "replies.create",
   ] as const),
   threads: Object.freeze([
     "comments.read", "content.edit", "content.save", "content.share", "feeds.read",
     "likes.set", "media.read", "messaging.list", "messaging.read", "messaging.send",
-    "posts.publish", "posts.quote", "posts.read", "posts.repost",
+    "posts.publish", "posts.quote", "posts.read", "posts.repost", "profiles.read",
     "relationships.follow.set", "replies.create", "threads.publish",
   ] as const),
   facebook: Object.freeze([
@@ -197,6 +197,9 @@ export const META_WEB_OPERATIONS = Object.freeze({
       "messaging.send",
       "Instagram messaging is split across Direct, LS/Msys, and E2EE transports; plaintext replay is prohibited",
     ),
+    "profiles.read": observed(
+      "live direct target-bound /api/v1/users/web_profile_info JSON with exact current-viewer ID binding and exact follower, following, and post counts",
+    ),
   }),
   threads: contracts("threads", {
     "feeds.read": observed(
@@ -207,6 +210,9 @@ export const META_WEB_OPERATIONS = Object.freeze({
       "R3",
       "reviewed live single-PNG upload with synchronous 200 completion, exact minimal configure_text_post_app_feed created-locator binding, durable response-bound post identity plus completed-upload dimensions, and independent exact permalink actor/text/image readback",
       4,
+    ),
+    "profiles.read": observed(
+      "live direct target-bound signed-in Threads profile HTML preload with exact current-viewer ID binding; recent views remain explicitly unavailable while this account is below the provider's Insights eligibility threshold",
     ),
     "messaging.list": captureRequired(
       "messaging.list",
@@ -1058,6 +1064,279 @@ export function parseThreadsViewerId(html: unknown): string {
     if (user !== null) ids.push(user.id);
   });
   return oneStableId(ids, "Threads Barcelona viewer");
+}
+
+type ProfileMetric = Readonly<
+  | {
+      readonly status: "available";
+      readonly value: number;
+      readonly precision: "exact";
+      readonly unit: "count";
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason: "not-exposed" | "not-authorized" | "provider-drift";
+    }
+>;
+
+function unavailableProfileMetric(
+  reason: "not-exposed" | "not-authorized" | "provider-drift",
+): ProfileMetric {
+  return Object.freeze({ status: "unavailable", reason });
+}
+
+function exactProfileMetric(value: unknown): ProfileMetric {
+  if (value === undefined || value === null) {
+    return unavailableProfileMetric("not-exposed");
+  }
+  const candidate = typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value)
+    ? Number(value)
+    : value;
+  if (!Number.isSafeInteger(candidate) || (candidate as number) < 0) {
+    return unavailableProfileMetric("provider-drift");
+  }
+  return Object.freeze({
+    status: "available",
+    value: candidate as number,
+    precision: "exact",
+    unit: "count",
+  });
+}
+
+function exactProfileObservedAt(value: string): string {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
+    || !Number.isFinite(Date.parse(value))
+  ) throw new Error("Meta profile observation time must be one exact UTC instant");
+  return value;
+}
+
+function profileCountContainer(value: unknown): ProfileMetric {
+  if (value === undefined || value === null) {
+    return unavailableProfileMetric("not-exposed");
+  }
+  if (!isRecord(value)) return unavailableProfileMetric("provider-drift");
+  return exactProfileMetric(value.count);
+}
+
+function canonicalMetaProfileHandle(
+  value: unknown,
+  label: string,
+  maximum: number,
+): string {
+  const handle = boundedString(value, label, maximum).toLowerCase();
+  if (!/^[a-z0-9._]+$/u.test(handle)) {
+    throw new Error(`${label} must be one canonical profile handle`);
+  }
+  return handle;
+}
+
+function optionalPublicProfileUrl(value: unknown, label: string): string | null {
+  const candidate = optionalString(value, label, 2_048);
+  if (candidate === null) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error(`${label} must be an absolute public URL`);
+  }
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+    || parsed.username !== ""
+    || parsed.password !== ""
+  ) throw new Error(`${label} must be a credential-free public HTTP URL`);
+  return parsed.href;
+}
+
+function firstProfileBioLink(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || value.length > 5) {
+    throw new Error(`${label} must be a bounded array`);
+  }
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) throw new Error(`${label}[${index}] must be an object`);
+    const url = optionalPublicProfileUrl(item.url, `${label}[${index}].url`);
+    if (url !== null) return url;
+  }
+  return null;
+}
+
+/** Project the exact signed-in Instagram profile-info response. */
+export function normalizeInstagramProfileStats(
+  value: unknown,
+  expectedViewerId: string,
+  expectedProfile: string,
+  observedAt: string,
+): Readonly<Record<string, unknown>> {
+  if (!isCanonicalMetaNumericId(expectedViewerId)) {
+    throw new Error("Instagram profile expected viewer ID is invalid");
+  }
+  const profile = canonicalMetaProfileHandle(
+    expectedProfile,
+    "Instagram profile target",
+    30,
+  );
+  const root = record(value, "Instagram profile response");
+  if (root.status !== "ok") throw new Error("Instagram profile response status changed");
+  const data = record(root.data, "Instagram profile response.data");
+  const user = record(data.user, "Instagram profile response.data.user");
+  const id = boundedString(user.id ?? user.pk, "Instagram profile response user ID", 32);
+  if (!isCanonicalMetaNumericId(id) || id !== expectedViewerId) {
+    throw new Error("Instagram profile response did not bind the current viewer ID");
+  }
+  const handle = canonicalMetaProfileHandle(
+    user.username,
+    "Instagram profile response username",
+    30,
+  );
+  if (handle !== profile) {
+    throw new Error("Instagram profile response did not bind the requested handle");
+  }
+  const followers = profileCountContainer(user.edge_followed_by);
+  const following = profileCountContainer(user.edge_follow);
+  const posts = profileCountContainer(user.edge_owner_to_timeline_media);
+  const displayName = optionalString(user.full_name, "Instagram profile full_name", 256);
+  const bio = optionalString(user.biography, "Instagram profile biography", 2_048);
+  const websiteUrl = optionalPublicProfileUrl(
+    user.external_url,
+    "Instagram profile external_url",
+  );
+  const complete = [followers, following, posts]
+    .every((metric) => metric.status === "available");
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "instagram",
+    target: Object.freeze({
+      kind: "profile",
+      id,
+      url: `https://www.instagram.com/${handle}/`,
+    }),
+    observedAt: exactProfileObservedAt(observedAt),
+    completeness: complete ? "complete" : "partial",
+    metrics: Object.freeze({ followers, following, posts }),
+    metadata: Object.freeze({
+      handle,
+      ...(displayName === null ? {} : { displayName }),
+      ...(bio === null ? {} : { bio }),
+      ...(websiteUrl === null ? {} : { websiteUrl }),
+    }),
+  });
+}
+
+type ThreadsProfileCandidate = Readonly<{
+  id: string;
+  handle: string;
+  displayName: string | null;
+  bio: string | null;
+  websiteUrl: string | null;
+  followers: ProfileMetric;
+}>;
+
+function threadsProfileCandidate(
+  value: JsonRecord,
+  expectedProfile: string,
+): ThreadsProfileCandidate | null {
+  if (value.follower_count === undefined || value.username === undefined) return null;
+  const handle = canonicalMetaProfileHandle(
+    value.username,
+    "Threads profile username",
+    30,
+  );
+  if (handle !== expectedProfile) return null;
+  const id = boundedString(value.pk ?? value.id, "Threads profile ID", 32);
+  if (!isCanonicalMetaNumericId(id)) throw new Error("Threads profile ID is invalid");
+  return Object.freeze({
+    id,
+    handle,
+    displayName: optionalString(value.full_name, "Threads profile full_name", 256),
+    bio: optionalString(value.biography, "Threads profile biography", 2_048),
+    websiteUrl: firstProfileBioLink(value.bio_links, "Threads profile bio_links"),
+    followers: exactProfileMetric(value.follower_count),
+  });
+}
+
+function sameThreadsProfile(
+  left: ThreadsProfileCandidate,
+  right: ThreadsProfileCandidate,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** Project one exact signed-in Threads profile preload. */
+export function normalizeThreadsProfileStats(
+  html: unknown,
+  expectedViewerId: string,
+  expectedProfile: string,
+  recentViews: ProfileMetric,
+  observedAt: string,
+): Readonly<Record<string, unknown>> {
+  if (!isCanonicalMetaNumericId(expectedViewerId)) {
+    throw new Error("Threads profile expected viewer ID is invalid");
+  }
+  const profile = canonicalMetaProfileHandle(expectedProfile, "Threads profile target", 30);
+  if (parseThreadsViewerId(html) !== expectedViewerId) {
+    throw new Error("Threads profile response changed its bound viewer");
+  }
+  const candidates: ThreadsProfileCandidate[] = [];
+  walk(parseMetaJsonScripts(html), (candidate) => {
+    if (!isRecord(candidate)) return;
+    const projected = threadsProfileCandidate(candidate, profile);
+    if (projected !== null) candidates.push(projected);
+  });
+  if (candidates.length < 1) throw new Error("Threads profile preload omitted the requested profile");
+  const first = candidates[0]!;
+  if (candidates.some((candidate) => !sameThreadsProfile(first, candidate))) {
+    throw new Error("Threads profile preload returned conflicting profile projections");
+  }
+  if (first.id !== expectedViewerId) {
+    throw new Error("Threads profile response did not bind the current viewer ID");
+  }
+  // The signed-in Insights UI exposes the exact eligibility rule: metrics remain
+  // unavailable until the profile reaches 100 followers. The direct HTML shell
+  // can omit that client-rendered sentence, so the bound exact follower count
+  // proves the same current-account authorization state below the threshold.
+  const boundRecentViews = recentViews.status === "unavailable"
+    && recentViews.reason === "provider-drift"
+    && first.followers.status === "available"
+    && first.followers.value < 100
+    ? unavailableProfileMetric("not-authorized")
+    : recentViews;
+  const complete = first.followers.status === "available"
+    && boundRecentViews.status === "available";
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "threads",
+    target: Object.freeze({
+      kind: "profile",
+      id: first.id,
+      url: `https://www.threads.com/@${first.handle}`,
+    }),
+    observedAt: exactProfileObservedAt(observedAt),
+    completeness: complete ? "complete" : "partial",
+    metrics: Object.freeze({ followers: first.followers, recentViews: boundRecentViews }),
+    metadata: Object.freeze({
+      handle: first.handle,
+      ...(first.displayName === null ? {} : { displayName: first.displayName }),
+      ...(first.bio === null ? {} : { bio: first.bio }),
+      ...(first.websiteUrl === null ? {} : { websiteUrl: first.websiteUrl }),
+    }),
+  });
+}
+
+/** Current account-specific Threads Insights availability without DOM parsing. */
+export function normalizeThreadsRecentViewsAvailability(html: unknown): ProfileMetric {
+  const source = boundedString(html, "Threads Insights response", 12 * 1024 * 1024);
+  const normalized = source
+    .replaceAll("\\u0027", "'")
+    .replaceAll("\\u2019", "'")
+    .replaceAll("’", "'")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&apos;", "'");
+  if (normalized.includes(
+    "Check back in once you've reached 100 followers to see your insights.",
+  )) return unavailableProfileMetric("not-authorized");
+  return unavailableProfileMetric("provider-drift");
 }
 
 function instagramUser(value: unknown, label: string): Readonly<Record<string, unknown>> | null {

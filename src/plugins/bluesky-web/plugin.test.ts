@@ -18,6 +18,27 @@ const auth = {
 } as const satisfies WrenchAuth;
 
 describe("Bluesky provider plugin", () => {
+  test("versions the public profile-read source closure independently", () => {
+    expect(blueskyWebPlugin.version).toBe("1.1.0");
+  });
+
+  test("advertises the observed exact handle-bound profile read", () => {
+    const profile = binding.operations.find((operation) =>
+      operation.name === "profiles.read");
+    expect(profile).toMatchObject({
+      contractVersion: 1,
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+      input: {
+        properties: {
+          handle: { type: "string", minLength: 3, maxLength: 253 },
+        },
+        required: ["handle"],
+      },
+    });
+  });
+
   test("advertises exactly the runtime auth and protected hostname families", () => {
     expect(binding.authKinds).toEqual(["browser-profile"]);
     expect(binding.protectedHostnameFamilies).toEqual([

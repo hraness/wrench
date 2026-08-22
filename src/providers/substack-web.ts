@@ -26,6 +26,8 @@ export const SUBSTACK_WEB_OPERATION_NAMES = Object.freeze([
   "posts.quote",
   "posts.read",
   "posts.repost",
+  "profiles.read",
+  "organizations.read",
   "relationships.follow.set",
   "replies.create",
 ] as const);
@@ -104,6 +106,12 @@ export const SUBSTACK_WEB_OPERATIONS = Object.freeze({
   "messaging.read": captureRequiredRead(
     "first-party-bundle",
     "the exact DM GET is current-bundle observed, but this account has no low-stakes direct-message fixture proving acknowledgement behavior",
+  ),
+  "profiles.read": observedRead(
+    "exact target-bound /api/v1/user/{handle}/public_profile response with current-viewer ID binding and an exact follower count",
+  ),
+  "organizations.read": observedRead(
+    "exact owned-publication /api/v1/publish-dashboard/summary response with bootstrap-bound publication origin and exact total-email and paid-subscriber counts",
   ),
   "likes.set": captureRequired(
     "R2",
@@ -258,6 +266,200 @@ function exactHttpsUrl(value: unknown, label: string, maximum = 8_192): string |
     || parsed.hash !== ""
   ) throw new Error(`${label} must be a credential-free HTTPS URL`);
   return parsed.href;
+}
+
+type SubstackProfileMetric = Readonly<
+  | {
+      readonly status: "available";
+      readonly value: number;
+      readonly precision: "exact";
+      readonly unit: "count";
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason: "not-exposed" | "not-authorized" | "provider-drift";
+    }
+>;
+
+function unavailableSubstackProfileMetric(
+  reason: "not-exposed" | "not-authorized" | "provider-drift",
+): SubstackProfileMetric {
+  return Object.freeze({ status: "unavailable", reason });
+}
+
+function exactSubstackProfileMetric(value: unknown): SubstackProfileMetric {
+  if (value === undefined || value === null) {
+    return unavailableSubstackProfileMetric("not-exposed");
+  }
+  const candidate = typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value)
+    ? Number(value)
+    : value;
+  if (!Number.isSafeInteger(candidate) || (candidate as number) < 0) {
+    return unavailableSubstackProfileMetric("provider-drift");
+  }
+  return Object.freeze({
+    status: "available",
+    value: candidate as number,
+    precision: "exact",
+    unit: "count",
+  });
+}
+
+function canonicalSubstackProfileHandle(value: unknown, label: string): string {
+  const handle = boundedString(value, label, 128).toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/u.test(handle)) {
+    throw new Error(`${label} must be one canonical lowercase Substack handle`);
+  }
+  return handle;
+}
+
+function exactSubstackProfileId(value: unknown, label: string): string {
+  if (Number.isSafeInteger(value) && (value as number) > 0) return String(value);
+  if (
+    typeof value === "string"
+    && /^[1-9][0-9]{0,15}$/u.test(value)
+    && Number.isSafeInteger(Number(value))
+  ) return value;
+  throw new Error(`${label} must be one positive safe integer identifier`);
+}
+
+function exactSubstackProfileObservedAt(value: string): string {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
+    || !Number.isFinite(Date.parse(value))
+  ) throw new Error("Substack profile observation time must be one exact UTC instant");
+  return value;
+}
+
+/** Project one exact target-bound signed-in Substack public-profile response. */
+export function normalizeSubstackProfileStatsResponse(
+  value: unknown,
+  expectedViewerId: number,
+  expectedProfile: string,
+  observedAt: string,
+): Readonly<Record<string, unknown>> {
+  const source = record(value, "Substack public-profile response");
+  const handle = canonicalSubstackProfileHandle(
+    source.handle,
+    "Substack public-profile response.handle",
+  );
+  const profile = canonicalSubstackProfileHandle(
+    expectedProfile,
+    "Substack requested profile",
+  );
+  if (handle !== profile) {
+    throw new Error("Substack public-profile response did not bind the requested handle");
+  }
+  const id = exactSubstackProfileId(
+    source.id,
+    "Substack public-profile response.id",
+  );
+  if (id !== exactSubstackProfileId(expectedViewerId, "Substack expected viewer ID")) {
+    throw new Error("Substack public-profile response did not bind the current viewer ID");
+  }
+  const camelCount = exactSubstackProfileMetric(source.followerCount);
+  const snakeCount = exactSubstackProfileMetric(source.follower_count);
+  let followers = source.followerCount === undefined
+    ? snakeCount
+    : camelCount;
+  if (
+    source.followerCount !== undefined
+    && source.follower_count !== undefined
+    && JSON.stringify(camelCount) !== JSON.stringify(snakeCount)
+  ) followers = unavailableSubstackProfileMetric("provider-drift");
+  const displayName = optionalString(
+    source.name,
+    "Substack public-profile response.name",
+    512,
+  );
+  const bio = optionalString(
+    source.bio,
+    "Substack public-profile response.bio",
+    16_384,
+  );
+  const websiteUrl = exactHttpsUrl(
+    source.websiteUrl ?? source.website_url,
+    "Substack public-profile response.websiteUrl",
+    2_048,
+  );
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "substack",
+    target: Object.freeze({
+      kind: "profile",
+      id,
+      url: `https://substack.com/@${handle}`,
+    }),
+    observedAt: exactSubstackProfileObservedAt(observedAt),
+    completeness: followers.status === "available" ? "complete" : "partial",
+    metrics: Object.freeze({ followers }),
+    metadata: Object.freeze({
+      handle,
+      ...(displayName === null ? {} : { displayName }),
+      ...(bio === null ? {} : { bio }),
+      ...(websiteUrl === null ? {} : { websiteUrl }),
+    }),
+  });
+}
+
+function unavailableDerivedSubstackMetric(
+  values: readonly SubstackProfileMetric[],
+): SubstackProfileMetric {
+  if (values.some((metric) =>
+    metric.status === "unavailable" && metric.reason === "provider-drift")) {
+    return unavailableSubstackProfileMetric("provider-drift");
+  }
+  if (values.some((metric) =>
+    metric.status === "unavailable" && metric.reason === "not-authorized")) {
+    return unavailableSubstackProfileMetric("not-authorized");
+  }
+  return unavailableSubstackProfileMetric("not-exposed");
+}
+
+/** Project exact free and paid counts from one owned publication summary. */
+export function normalizeSubstackPublicationStatsResponse(
+  value: unknown,
+  expectedPublication: Readonly<{
+    id: number;
+    organization: string;
+    origin: string;
+  }>,
+  observedAt: string,
+): Readonly<Record<string, unknown>> {
+  const source = record(value, "Substack publication summary response");
+  const organization = canonicalSubstackProfileHandle(
+    expectedPublication.organization,
+    "Substack publication organization",
+  );
+  const expectedOrigin = `https://${organization}.substack.com`;
+  if (exactOrigin(expectedPublication.origin, "Substack publication origin") !== expectedOrigin) {
+    throw new Error("Substack publication origin did not bind the requested organization");
+  }
+  const total = exactSubstackProfileMetric(source.totalEmail);
+  const paidSubscribers = exactSubstackProfileMetric(source.subscribers);
+  const freeSubscribers = total.status === "available" && paidSubscribers.status === "available"
+    ? paidSubscribers.value <= total.value
+      ? exactSubstackProfileMetric(total.value - paidSubscribers.value)
+      : unavailableSubstackProfileMetric("provider-drift")
+    : unavailableDerivedSubstackMetric([total, paidSubscribers]);
+  const complete = freeSubscribers.status === "available"
+    && paidSubscribers.status === "available";
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "substack",
+    target: Object.freeze({
+      kind: "publication",
+      id: exactSubstackProfileId(
+        expectedPublication.id,
+        "Substack publication ID",
+      ),
+      url: `${expectedOrigin}/`,
+    }),
+    observedAt: exactSubstackProfileObservedAt(observedAt),
+    completeness: complete ? "complete" : "partial",
+    metrics: Object.freeze({ freeSubscribers, paidSubscribers }),
+    metadata: Object.freeze({ handle: organization }),
+  });
 }
 
 export type SubstackInlineAudioEmbed = Readonly<{
@@ -505,6 +707,37 @@ function exactSubstackUrl(value: string | URL, label: string): URL {
   return parsed;
 }
 
+function exactSubstackPublicationUrl(
+  value: string | URL,
+  organizationValue: unknown,
+  publicationOriginValue: unknown,
+): URL {
+  const organization = canonicalSubstackProfileHandle(
+    organizationValue,
+    "Substack publication organization",
+  );
+  const publicationOrigin = exactOrigin(
+    publicationOriginValue,
+    "Substack publication origin",
+  );
+  if (publicationOrigin !== `https://${organization}.substack.com`) {
+    throw new Error("Substack publication origin did not bind the requested organization");
+  }
+  let parsed: URL;
+  try {
+    parsed = value instanceof URL ? new URL(value.href) : new URL(value);
+  } catch {
+    throw new Error("Substack publication read URL must be an absolute URL");
+  }
+  if (
+    parsed.origin !== publicationOrigin
+    || parsed.username !== ""
+    || parsed.password !== ""
+    || parsed.hash !== ""
+  ) throw new Error("Substack publication read URL changed its exact owned origin");
+  return parsed;
+}
+
 function exactQuery(value: URLSearchParams, label: string): ReadonlyMap<string, string> {
   const result = new Map<string, string>();
   for (const [name, item] of value) {
@@ -553,7 +786,9 @@ export type SubstackWebReadRequestOperation =
   | "articles.read"
   | "comments.read"
   | "media.read"
-  | "messages.list";
+  | "messages.list"
+  | "profiles.read"
+  | "organizations.read";
 
 export type SubstackWebReadRequestBinding = Readonly<{
   operation: SubstackWebReadRequestOperation;
@@ -570,11 +805,20 @@ export function authorizeSubstackWebReadRequest(input: {
   readonly targetId?: number;
   readonly publicationId?: number;
   readonly folder?: "all" | "people" | "unread";
+  readonly profile?: string;
+  readonly organization?: string;
+  readonly publicationOrigin?: string;
 }): SubstackWebReadRequestBinding {
   if (input.method.toUpperCase() !== "GET" || input.body !== undefined) {
     throw new Error("Substack authenticated reads require body-free GET");
   }
-  const url = exactSubstackUrl(input.url, "Substack read URL");
+  const url = input.operation === "organizations.read"
+    ? exactSubstackPublicationUrl(
+        input.url,
+        input.organization,
+        input.publicationOrigin,
+      )
+    : exactSubstackUrl(input.url, "Substack read URL");
   const query = exactQuery(url.searchParams, "Substack read query");
 
   switch (input.operation) {
@@ -653,6 +897,23 @@ export function authorizeSubstackWebReadRequest(input: {
       boundedCursor(query.get("cursor"), "Substack message cursor");
       break;
     }
+    case "profiles.read": {
+      const profile = canonicalSubstackProfileHandle(
+        input.profile,
+        "Substack requested profile",
+      );
+      if (
+        url.pathname !== `/api/v1/user/${profile}/public_profile`
+        || query.size !== 0
+      ) throw new Error("Substack profile request did not bind the requested handle");
+      break;
+    }
+    case "organizations.read":
+      if (
+        url.pathname !== "/api/v1/publish-dashboard/summary"
+        || query.size !== 0
+      ) throw new Error("Substack publication summary request changed its reviewed exchange");
+      break;
   }
 
   return Object.freeze({

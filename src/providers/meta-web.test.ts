@@ -6,9 +6,11 @@ import facebookPageManifest from "../assets/adapters/facebook-page/wrench-web-ad
 import facebookManifest from "../assets/adapters/facebook/wrench-web-adapter.json";
 import instagramManifest from "../assets/adapters/instagram/wrench-web-adapter.json";
 import instagramV1Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.0.0.json";
+import instagramV12Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.2.0.json";
 import threadsManifest from "../assets/adapters/threads/wrench-web-adapter.json";
 import threadsV1Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.0.0.json";
 import threadsV12Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.2.0.json";
+import threadsV14Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.4.0.json";
 import { metaWebPlugin } from "../plugins/meta-web/plugin";
 import {
   META_WEB_OPERATIONS,
@@ -25,8 +27,11 @@ import {
   normalizeInstagramFeed,
   normalizeInstagramInbox,
   normalizeInstagramPost,
+  normalizeInstagramProfileStats,
   normalizeThreadsFeedHtml,
   normalizeThreadsPostHtml,
+  normalizeThreadsProfileStats,
+  normalizeThreadsRecentViewsAvailability,
   parseFacebookViewerId,
   parseInstagramViewerId,
   parseMetaJsonScripts,
@@ -445,9 +450,9 @@ describe("Meta consumer-web policy", () => {
       ["threads", "feeds.read", threadsManifest, threadsV1Manifest],
     ] as const;
 
-    expect(instagramManifest.version).toBe("1.2.0");
+    expect(instagramManifest.version).toBe("1.3.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
-    expect(threadsManifest.version).toBe("1.4.0");
+    expect(threadsManifest.version).toBe("1.5.0");
     expect(threadsV1Manifest.version).toBe("1.0.0");
 
     for (const [site, operation, current, prior] of affected) {
@@ -465,6 +470,24 @@ describe("Meta consumer-web policy", () => {
         candidate.name === operation);
       expect(descriptor?.contractVersions).toEqual([1, 2]);
     }
+  });
+
+  test("preserves the exact pre-profile Meta adapter predecessors", () => {
+    expect(instagramV12Manifest.version).toBe("1.2.0");
+    expect(instagramV12Manifest.operations).not.toHaveProperty("profiles.read");
+    expect(instagramManifest.operations["profiles.read"]).toMatchObject({
+      risk: "R1",
+      sideEffect: "none",
+      input: { required: ["profile"] },
+    });
+
+    expect(threadsV14Manifest.version).toBe("1.4.0");
+    expect(threadsV14Manifest.operations).not.toHaveProperty("profiles.read");
+    expect(threadsManifest.operations["profiles.read"]).toMatchObject({
+      risk: "R1",
+      sideEffect: "none",
+      input: { required: ["profile"] },
+    });
   });
 
   test("versions locator-bound Threads publication while preserving reviewed predecessors", () => {
@@ -553,6 +576,152 @@ describe("Meta consumer-web policy", () => {
     expect(() => parseFacebookViewerId(
       '<script type="application/json" type="application/json">{"require":[]}</script>',
     )).toThrow("duplicate element attributes");
+  });
+
+  test("projects only exact target-bound Instagram profile counts", () => {
+    const response = {
+      status: "ok",
+      data: {
+        user: {
+          id: "12345",
+          username: "viewer",
+          full_name: "Viewer",
+          biography: "Profile bio",
+          external_url: "https://example.com/profile",
+          edge_followed_by: { count: 123 },
+          edge_follow: { count: "45" },
+          edge_owner_to_timeline_media: { count: 6 },
+        },
+      },
+    };
+    expect(normalizeInstagramProfileStats(
+      response,
+      "12345",
+      "viewer",
+      "2026-08-21T15:00:00.000Z",
+    )).toEqual({
+      schemaVersion: 1,
+      provider: "instagram",
+      target: {
+        kind: "profile",
+        id: "12345",
+        url: "https://www.instagram.com/viewer/",
+      },
+      observedAt: "2026-08-21T15:00:00.000Z",
+      completeness: "complete",
+      metrics: {
+        followers: { status: "available", value: 123, precision: "exact", unit: "count" },
+        following: { status: "available", value: 45, precision: "exact", unit: "count" },
+        posts: { status: "available", value: 6, precision: "exact", unit: "count" },
+      },
+      metadata: {
+        handle: "viewer",
+        displayName: "Viewer",
+        bio: "Profile bio",
+        websiteUrl: "https://example.com/profile",
+      },
+    });
+    expect(normalizeInstagramProfileStats({
+      ...response,
+      data: {
+        user: {
+          ...response.data.user,
+          edge_followed_by: { count: "1.2K" },
+          edge_follow: null,
+        },
+      },
+    }, "12345", "viewer", "2026-08-21T15:00:00.000Z")).toMatchObject({
+      completeness: "partial",
+      metrics: {
+        followers: { status: "unavailable", reason: "provider-drift" },
+        following: { status: "unavailable", reason: "not-exposed" },
+      },
+    });
+    expect(() => normalizeInstagramProfileStats(
+      response,
+      "99999",
+      "viewer",
+      "2026-08-21T15:00:00.000Z",
+    )).toThrow("current viewer ID");
+  });
+
+  test("projects exact Threads followers and explicit Insights unavailability", () => {
+    const profileHtml = threadsHtml + html({
+      profile: {
+        pk: "12345",
+        username: "viewer",
+        full_name: "Viewer",
+        biography: "Threads bio",
+        follower_count: 88,
+        bio_links: [{ url: "https://example.com/threads" }],
+      },
+    });
+    const recentViews = normalizeThreadsRecentViewsAvailability(
+      "<main>Insights await Check back in once you've reached 100 followers to see your insights.</main>",
+    );
+    expect(normalizeThreadsProfileStats(
+      profileHtml,
+      "12345",
+      "viewer",
+      recentViews,
+      "2026-08-21T15:00:00.000Z",
+    )).toEqual({
+      schemaVersion: 1,
+      provider: "threads",
+      target: {
+        kind: "profile",
+        id: "12345",
+        url: "https://www.threads.com/@viewer",
+      },
+      observedAt: "2026-08-21T15:00:00.000Z",
+      completeness: "partial",
+      metrics: {
+        followers: { status: "available", value: 88, precision: "exact", unit: "count" },
+        recentViews: { status: "unavailable", reason: "not-authorized" },
+      },
+      metadata: {
+        handle: "viewer",
+        displayName: "Viewer",
+        bio: "Threads bio",
+        websiteUrl: "https://example.com/threads",
+      },
+    });
+    expect(normalizeThreadsRecentViewsAvailability("<main>Last 30 days</main>")).toEqual({
+      status: "unavailable",
+      reason: "provider-drift",
+    });
+    expect(normalizeThreadsRecentViewsAvailability(
+      String.raw`{"text":"Check back in once you\u0027ve reached 100 followers to see your insights."}`,
+    )).toEqual({
+      status: "unavailable",
+      reason: "not-authorized",
+    });
+    expect(normalizeThreadsRecentViewsAvailability(
+      "Check back after reaching 100 followers",
+    )).toEqual({
+      status: "unavailable",
+      reason: "provider-drift",
+    });
+
+    expect(normalizeThreadsProfileStats(
+      threadsHtml + html({
+        profile: {
+          pk: "12345",
+          username: "viewer",
+          follower_count: 99,
+        },
+      }),
+      "12345",
+      "viewer",
+      { status: "unavailable", reason: "provider-drift" },
+      "2026-08-21T15:00:00.000Z",
+    )).toMatchObject({
+      completeness: "partial",
+      metrics: {
+        followers: { status: "available", value: 99, precision: "exact" },
+        recentViews: { status: "unavailable", reason: "not-authorized" },
+      },
+    });
   });
 
   test("projects bounded Instagram timeline, post, comments, and inbox shapes", () => {

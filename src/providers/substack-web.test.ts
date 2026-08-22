@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import substackWebManifest from "../assets/adapters/substack/wrench-web-adapter.json";
+import substackWebV12Manifest from "../assets/adapters/substack/wrench-web-adapter.v1.2.0.json";
 import {
   SUBSTACK_WEB_OPERATION_NAMES,
   SUBSTACK_WEB_OPERATIONS,
@@ -11,6 +12,8 @@ import {
   normalizeSubstackMediaResponse,
   normalizeSubstackMessageInbox,
   normalizeSubstackNoteResponse,
+  normalizeSubstackPublicationStatsResponse,
+  normalizeSubstackProfileStatsResponse,
   parseSubstackInlineAudioEmbeds,
   parseSubstackLoggedInResponse,
   parseSubstackPreloadsHtml,
@@ -120,7 +123,7 @@ describe("Substack internal-web operation registry", () => {
   test("ships one schema-v4 semantic manifest entry for every provider operation", () => {
     expect(substackWebManifest.schemaVersion).toBe(4);
     expect(substackWebManifest.id).toBe("substack-web");
-    expect(substackWebManifest.version).toBe("1.2.0");
+    expect(substackWebManifest.version).toBe("1.3.0");
     expect(substackWebManifest.surfaceId).toBe("substack");
     expect(substackWebManifest.origins).toEqual(["https://substack.com"]);
     expect(Object.keys(substackWebManifest.operations).sort()).toEqual(
@@ -143,6 +146,22 @@ describe("Substack internal-web operation registry", () => {
     }
   });
 
+  test("preserves the exact pre-profile-stat Substack adapter predecessor", () => {
+    expect(substackWebV12Manifest.version).toBe("1.2.0");
+    expect(substackWebV12Manifest.operations).not.toHaveProperty("profiles.read");
+    expect(substackWebV12Manifest.operations).not.toHaveProperty("organizations.read");
+    expect(substackWebManifest.operations["profiles.read"]).toMatchObject({
+      risk: "R1",
+      sideEffect: "none",
+      input: { required: ["profile"] },
+    });
+    expect(substackWebManifest.operations["organizations.read"]).toMatchObject({
+      risk: "R1",
+      sideEffect: "none",
+      input: { required: ["organization"] },
+    });
+  });
+
   test("graduates only the direct reads and authorized Note publication proved against the current site", () => {
     expect(
       Object.entries(SUBSTACK_WEB_OPERATIONS)
@@ -155,10 +174,17 @@ describe("Substack internal-web operation registry", () => {
       "feeds.read",
       "media.read",
       "messaging.list",
+      "organizations.read",
       "posts.publish",
       "posts.read",
+      "profiles.read",
     ]);
     expect(SUBSTACK_WEB_OPERATIONS["messaging.read"].state).toBe("capture-required");
+    expect(SUBSTACK_WEB_OPERATIONS["organizations.read"]).toMatchObject({
+      state: "observed",
+      risk: "R1",
+      evidence: "live-direct",
+    });
     for (const operation of [
       "likes.set",
       "content.save",
@@ -203,6 +229,117 @@ describe("Substack exact request authorization", () => {
       method: "GET",
       folder: "people",
     }).path).toBe("/api/v1/messages/inbox");
+    expect(authorizeSubstackWebReadRequest({
+      operation: "profiles.read",
+      url: "https://substack.com/api/v1/user/wrench-reader/public_profile",
+      method: "GET",
+      profile: "wrench-reader",
+    }).path).toBe("/api/v1/user/wrench-reader/public_profile");
+    expect(authorizeSubstackWebReadRequest({
+      operation: "organizations.read",
+      url: "https://wrench-owned.substack.com/api/v1/publish-dashboard/summary",
+      method: "GET",
+      organization: "wrench-owned",
+      publicationOrigin: "https://wrench-owned.substack.com",
+    }).path).toBe("/api/v1/publish-dashboard/summary");
+  });
+
+  test("projects only exact current-viewer Substack follower counts", () => {
+    expect(normalizeSubstackProfileStatsResponse({
+      id: USER_ID,
+      handle: "wrench-reader",
+      name: "Wrench Reader",
+      bio: "Reader bio",
+      subscriberCount: 125,
+      followerCount: 178,
+      website_url: "https://example.com/profile",
+    }, USER_ID, "wrench-reader", "2026-08-21T15:00:00.000Z")).toEqual({
+      schemaVersion: 1,
+      provider: "substack",
+      target: {
+        kind: "profile",
+        id: String(USER_ID),
+        url: "https://substack.com/@wrench-reader",
+      },
+      observedAt: "2026-08-21T15:00:00.000Z",
+      completeness: "complete",
+      metrics: {
+        followers: { status: "available", value: 178, precision: "exact", unit: "count" },
+      },
+      metadata: {
+        handle: "wrench-reader",
+        displayName: "Wrench Reader",
+        bio: "Reader bio",
+        websiteUrl: "https://example.com/profile",
+      },
+    });
+    expect(normalizeSubstackProfileStatsResponse({
+      id: USER_ID,
+      handle: "wrench-reader",
+      followerCount: "1.2K",
+    }, USER_ID, "wrench-reader", "2026-08-21T15:00:00.000Z")).toMatchObject({
+      completeness: "partial",
+      metrics: {
+        followers: { status: "unavailable", reason: "provider-drift" },
+      },
+    });
+    expect(() => normalizeSubstackProfileStatsResponse({
+      id: USER_ID + 1,
+      handle: "wrench-reader",
+      followerCount: 178,
+    }, USER_ID, "wrench-reader", "2026-08-21T15:00:00.000Z")).toThrow(
+      "current viewer ID",
+    );
+    expect(normalizeSubstackProfileStatsResponse({
+      id: USER_ID,
+      handle: "wrench-reader",
+      subscriberCount: 125,
+    }, USER_ID, "wrench-reader", "2026-08-21T15:00:00.000Z")).toMatchObject({
+      completeness: "partial",
+      metrics: {
+        followers: { status: "unavailable", reason: "not-exposed" },
+      },
+    });
+  });
+
+  test("projects exact owned-publication free and paid subscriber counts", () => {
+    expect(normalizeSubstackPublicationStatsResponse({
+      totalEmail: 126,
+      subscribers: 5,
+    }, {
+      id: PUBLICATION_ID,
+      organization: "wrench-owned",
+      origin: "https://wrench-owned.substack.com",
+    }, "2026-08-21T15:00:00.000Z")).toEqual({
+      schemaVersion: 1,
+      provider: "substack",
+      target: {
+        kind: "publication",
+        id: String(PUBLICATION_ID),
+        url: "https://wrench-owned.substack.com/",
+      },
+      observedAt: "2026-08-21T15:00:00.000Z",
+      completeness: "complete",
+      metrics: {
+        freeSubscribers: { status: "available", value: 121, precision: "exact", unit: "count" },
+        paidSubscribers: { status: "available", value: 5, precision: "exact", unit: "count" },
+      },
+      metadata: { handle: "wrench-owned" },
+    });
+    expect(normalizeSubstackPublicationStatsResponse({
+      totalEmail: "126",
+      subscribers: "rounded",
+    }, {
+      id: PUBLICATION_ID,
+      organization: "wrench-owned",
+      origin: "https://wrench-owned.substack.com",
+    }, "2026-08-21T15:00:00.000Z")).toMatchObject({
+      completeness: "partial",
+      metrics: {
+        freeSubscribers: { status: "unavailable", reason: "provider-drift" },
+        paidSubscribers: { status: "unavailable", reason: "provider-drift" },
+      },
+    });
   });
 
   test("rejects origin, target, query, method, and folder drift", () => {
@@ -290,6 +427,7 @@ describe("Substack account and response projection", () => {
         primary_user_id: "42",
       }],
     }))).toThrow("positive safe integer");
+
   });
 
   test("projects reader feeds, exact Notes, articles, comments, media, and inbox threads", () => {

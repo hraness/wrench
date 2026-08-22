@@ -20,7 +20,9 @@ import {
   normalizeRedditFeedResponse,
   normalizeRedditMessageListing,
   normalizeRedditPostResponse,
+  parseRedditProfileContributionPage,
   parseRedditThingState,
+  parseRedditWebProfileResponse,
   parseRedditWebViewerResponse,
   redditFullname,
   redditPostId,
@@ -33,8 +35,11 @@ const REDDIT_USER_AGENT = "wrench/1.0 (local authenticated web client)";
 const MAX_VIEWER_BYTES = 512 * 1024;
 const MAX_READ_BYTES = 4 * 1024 * 1024;
 const DEFAULT_LIMIT = 25;
+const MAX_PROFILE_OVERVIEW_PAGES = 10;
 
-export type RedditWebRuntimeDependencies = Partial<WebSessionNetworkDependencies>;
+export type RedditWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
+  readonly now?: () => number;
+};
 
 export type RedditWebDesiredStatePreparation =
   | {
@@ -190,6 +195,145 @@ export async function probeRedditWebSubject(
 
 function boundedMaximum(recipe: WebSessionRecipe): number {
   return Math.min(recipe.maxOutputBytes, MAX_READ_BYTES);
+}
+
+function profileInput(input: OperationInput): string {
+  const value = stringInput(input, "profile", 64);
+  if (!/^[A-Za-z0-9_-]{1,64}$/u.test(value)) {
+    throw new Error("input.profile must be an exact Reddit profile handle");
+  }
+  return value;
+}
+
+function observedAt(dependencies: RedditWebRuntimeDependencies | undefined): string {
+  const now = dependencies?.now?.() ?? Date.now();
+  if (!Number.isSafeInteger(now) || now < 0 || now > 8_640_000_000_000_000) {
+    throw new Error("Reddit profile observation time is invalid");
+  }
+  return new Date(now).toISOString();
+}
+
+function exactCount(value: number, window?: string): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    status: "available",
+    value,
+    precision: "exact",
+    unit: "count",
+    ...(window === undefined ? {} : { window }),
+  });
+}
+
+const contributionUnavailable = Object.freeze({
+  status: "unavailable",
+  reason: "not-exposed",
+});
+
+async function readProfileAbout(
+  client: WebSessionClient,
+  profile: string,
+  maximumBytes: number,
+): Promise<ReturnType<typeof parseRedditWebProfileResponse>> {
+  const url = new URL(`/user/${encodeURIComponent(profile)}/about.json`, REDDIT_ORIGIN);
+  url.searchParams.set("raw_json", "1");
+  authorizeRedditWebRequest({
+    operation: "profiles.about",
+    url,
+    method: "GET",
+    profile,
+  });
+  const response = await client.requestJson({
+    url,
+    method: "GET",
+    headers: exactReadHeaders(),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: Math.min(maximumBytes, MAX_READ_BYTES),
+  });
+  return parseRedditWebProfileResponse(response, profile);
+}
+
+async function readVisibleContributionCount(
+  client: WebSessionClient,
+  profile: string,
+  maximumBytes: number,
+): Promise<number | null> {
+  const ids = new Set<string>();
+  const cursors = new Set<string>();
+  let after: string | null = null;
+  for (let pageNumber = 0; pageNumber < MAX_PROFILE_OVERVIEW_PAGES; pageNumber += 1) {
+    const url = new URL(`/user/${encodeURIComponent(profile)}/overview.json`, REDDIT_ORIGIN);
+    url.searchParams.set("limit", "100");
+    url.searchParams.set("raw_json", "1");
+    if (after !== null) url.searchParams.set("after", after);
+    authorizeRedditWebRequest({
+      operation: "profiles.overview",
+      url,
+      method: "GET",
+      profile,
+    });
+    const response = await client.requestJson({
+      url,
+      method: "GET",
+      headers: exactReadHeaders(),
+      expectedStatuses: [200],
+      expectedContentTypes: ["application/json"],
+      maxBytes: Math.min(maximumBytes, MAX_READ_BYTES),
+    });
+    const page = parseRedditProfileContributionPage(response, profile);
+    for (const id of page.ids) {
+      if (ids.has(id)) throw new Error("Reddit profile overview pagination repeated a contribution");
+      ids.add(id);
+    }
+    if (page.after === null) return ids.size;
+    if (cursors.has(page.after)) throw new Error("Reddit profile overview pagination repeated a cursor");
+    cursors.add(page.after);
+    after = page.after;
+  }
+  return null;
+}
+
+async function readProfile(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  viewer: RedditWebViewer,
+  dependencies: RedditWebRuntimeDependencies | undefined,
+): Promise<Readonly<Record<string, unknown>>> {
+  const requestedProfile = profileInput(input);
+  if (requestedProfile.toLocaleLowerCase("en-US") !== viewer.username.toLocaleLowerCase("en-US")) {
+    throw new Error("Reddit requested profile did not match the bound current account");
+  }
+  const profile = await readProfileAbout(client, requestedProfile, recipe.maxOutputBytes);
+  const contributions = await readVisibleContributionCount(
+    client,
+    requestedProfile,
+    recipe.maxOutputBytes,
+  );
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "reddit",
+    target: Object.freeze({
+      kind: "profile",
+      id: profile.username,
+      url: `${REDDIT_ORIGIN}/user/${encodeURIComponent(profile.username)}/`,
+    }),
+    observedAt: observedAt(dependencies),
+    completeness: contributions === null ? "partial" : "complete",
+    metrics: Object.freeze({
+      followers: exactCount(profile.followers),
+      karma: exactCount(profile.karma),
+      contributions: contributions === null
+        ? contributionUnavailable
+        : exactCount(contributions, "visible-overview"),
+    }),
+    metadata: Object.freeze({
+      handle: profile.username,
+      ...(profile.displayName === null ? {} : { displayName: profile.displayName }),
+      ...(profile.bio === null ? {} : { bio: profile.bio }),
+      contributionDefinition:
+        "Distinct post and comment IDs in the complete authenticated profile overview listing.",
+    }),
+  });
 }
 
 function afterQuery(input: OperationInput): string | undefined {
@@ -645,12 +789,14 @@ export async function executeRedditWebOperation(
     return executeDesiredState(client, recipe, input, auth, options);
   }
 
-  await requireBoundViewer(client, auth);
+  const viewer = await requireBoundViewer(client, auth);
   // R1 operations never enter the mutation dispatch ledger.
   void options.beforeDispatch;
   void options.afterDispatchVerified;
-  const output = recipe.action === "feeds.read"
-    ? await readFeed(client, recipe, input)
+  const output = recipe.action === "profiles.read"
+    ? await readProfile(client, recipe, input, viewer, options.dependencies)
+    : recipe.action === "feeds.read"
+      ? await readFeed(client, recipe, input)
     : recipe.action === "posts.read"
       ? await readPostOrComments(client, recipe, input, false)
       : recipe.action === "comments.read"
@@ -665,7 +811,9 @@ export async function executeRedditWebOperation(
   return {
     status: "succeeded",
     output,
-    finalUrl: recipe.action === "feeds.read"
+    finalUrl: recipe.action === "profiles.read"
+      ? `${REDDIT_ORIGIN}/user/${encodeURIComponent(profileInput(input))}/`
+      : recipe.action === "feeds.read"
       ? REDDIT_ORIGIN
       : recipe.action === "posts.read" || recipe.action === "comments.read"
         ? `${REDDIT_ORIGIN}/comments/${postInput(input).slice(3)}/`

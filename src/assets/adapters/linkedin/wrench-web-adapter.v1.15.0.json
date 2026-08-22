@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.16.0",
+  "version": "1.15.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -91,26 +91,22 @@
       }
     },
     "profiles.read": {
-      "description": "Observed contract: read one exact signed-in LinkedIn self profile page with target binding and an optional exact private My Network connection total.",
+      "description": "Capture-required contract reservation: read one exact LinkedIn member profile only after public-identifier or profile-URN lookup, viewer binding, and the bounded response projection are captured and reviewed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "profile_url": {
+          "profile": {
             "type": "string",
-            "description": "Exact public LinkedIn self profile URL",
-            "minLength": 25,
-            "maxLength": 2048
-          },
-          "include_connections": {
-            "type": "boolean",
-            "description": "Also read the signed-in account's exact private My Network connection total"
+            "description": "Exact LinkedIn public profile identifier or provider profile URN",
+            "minLength": 1,
+            "maxLength": 512
           }
         },
         "required": [
-          "profile_url"
+          "profile"
         ]
       },
       "webSession": {
@@ -118,26 +114,26 @@
         "action": "profiles.read",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 4194304
+        "maxOutputBytes": 2097152
       }
     },
     "organizations.read": {
-      "description": "Observed contract: read one exact LinkedIn company Page and bind its exact follower count through the target Company and FollowingState records embedded by the first-party server render.",
+      "description": "Capture-required contract reservation: read one exact LinkedIn organization Page only after public-identifier or organization-URN lookup, viewer binding, and the bounded response projection are captured and reviewed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "organization_url": {
+          "organization": {
             "type": "string",
-            "description": "Exact public LinkedIn company Page URL",
-            "minLength": 30,
-            "maxLength": 2048
+            "description": "Exact LinkedIn organization public identifier or provider organization URN",
+            "minLength": 1,
+            "maxLength": 512
           }
         },
         "required": [
-          "organization_url"
+          "organization"
         ]
       },
       "webSession": {
@@ -145,7 +141,7 @@
         "action": "organizations.read",
         "contractVersion": 1,
         "timeoutMs": 60000,
-        "maxOutputBytes": 8388608
+        "maxOutputBytes": 2097152
       }
     },
     "relationships.recommendations.read": {

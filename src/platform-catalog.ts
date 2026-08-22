@@ -601,7 +601,7 @@ export const socialPlatformCatalog = {
     displayName: "X",
     originPolicy: exactOrigins("https://x.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "messaging.read", "comments.read", "posts.read", "media.read", "articles.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "messaging.read", "comments.read", "posts.read", "media.read", "articles.read"],
       R2: ["likes.set", "relationships.follow.set", "content.save", "articles.draft.save", "communities.membership.set"],
       R3: [
         "messaging.send",
@@ -662,7 +662,7 @@ export const socialPlatformCatalog = {
     displayName: "Reddit",
     originPolicy: exactOrigins("https://www.reddit.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "messaging.read", "comments.read", "posts.read", "media.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "messaging.read", "comments.read", "posts.read", "media.read"],
       R2: ["reactions.set", "relationships.follow.set", "content.save", "communities.membership.set"],
       R3: [
         "messaging.send",
@@ -834,7 +834,7 @@ export const socialPlatformCatalog = {
     displayName: "Substack",
     originPolicy: publicationOrigins("https://substack.com", "https://www.substack.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "messaging.read", "comments.read", "posts.read", "media.read", "articles.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "organizations.read", "messaging.read", "comments.read", "posts.read", "media.read", "articles.read"],
       R2: ["likes.set", "relationships.follow.set", "content.save"],
       R3: [
         "messaging.send",
@@ -896,7 +896,7 @@ export const socialPlatformCatalog = {
     displayName: "Instagram",
     originPolicy: exactOrigins("https://www.instagram.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "contacts.list", "messaging.read", "comments.read", "posts.read", "media.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "contacts.list", "messaging.read", "comments.read", "posts.read", "media.read"],
       R2: ["reactions.set", "likes.set", "relationships.follow.set", "content.save"],
       R3: [
         "messaging.send",
@@ -959,7 +959,7 @@ export const socialPlatformCatalog = {
     displayName: "Threads",
     originPolicy: exactOrigins("https://www.threads.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "messaging.read", "comments.read", "posts.read", "media.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "messaging.read", "comments.read", "posts.read", "media.read"],
       R2: ["likes.set", "relationships.follow.set", "content.save"],
       R3: [
         "messaging.send",
@@ -1292,7 +1292,7 @@ export const socialPlatformCatalog = {
     displayName: "TikTok",
     originPolicy: exactOrigins("https://www.tiktok.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "messaging.read", "comments.read", "posts.read", "media.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "messaging.read", "comments.read", "posts.read", "media.read"],
       R2: ["likes.set", "relationships.follow.set", "content.save"],
       R3: [
         "messaging.send",
@@ -1360,7 +1360,7 @@ export const socialPlatformCatalog = {
     displayName: "YouTube",
     originPolicy: exactOrigins("https://www.youtube.com", "https://studio.youtube.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "comments.read", "posts.read", "media.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "comments.read", "posts.read", "media.read"],
       R2: ["likes.set", "relationships.follow.set", "content.save"],
       R3: ["comments.create", "replies.create", "posts.publish", "media.publish", "content.edit", "content.schedule"],
       unsupported: [],
@@ -1419,7 +1419,7 @@ export const socialPlatformCatalog = {
     displayName: "Bluesky",
     originPolicy: exactOrigins("https://bsky.app"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "messaging.read", "comments.read", "posts.read", "media.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "messaging.read", "comments.read", "posts.read", "media.read"],
       R2: ["likes.set", "relationships.follow.set", "content.save"],
       R3: [
         "messaging.send",

@@ -20,6 +20,7 @@ export const TIKTOK_WEB_OPERATION_NAMES = Object.freeze([
   "messaging.read",
   "messaging.send",
   "posts.publish",
+  "profiles.read",
   "posts.read",
   "posts.repost",
   "relationships.follow.set",
@@ -75,6 +76,14 @@ const noRequests = (): readonly TikTokWebReadRequestRule[] => Object.freeze([]);
  * executable. Endpoint-family knowledge is not dispatch authority.
  */
 export const TIKTOK_WEB_OPERATIONS = Object.freeze({
+  "profiles.read": Object.freeze({
+    effect: "read",
+    risk: "R1",
+    state: "observed",
+    evidence: "live-har",
+    requests: Object.freeze([VIEWER_REQUEST]),
+    reason: "exact current-profile counts from the viewer-bound first-party user detail response",
+  }),
   "feeds.read": Object.freeze({
     effect: "read",
     risk: "R1",
@@ -215,7 +224,11 @@ export const TIKTOK_WEB_OPERATIONS = Object.freeze({
 
 export const TIKTOK_WEB_VIEWER_REQUEST = VIEWER_REQUEST;
 
-export type TikTokWebR1OperationId = "viewer.current" | "feeds.for-you" | "comments.list";
+export type TikTokWebR1OperationId =
+  | "viewer.current"
+  | "profiles.current"
+  | "feeds.for-you"
+  | "comments.list";
 
 /**
  * Secret-free live evidence for the fixed direct-read boundary. No response
@@ -235,6 +248,18 @@ export const tiktokWebDirectEvidenceSnapshot = Object.freeze({
       queryNames: Object.freeze([]),
       responseBinding: Object.freeze(["userInfo.user.id", "userInfo.user.secUid"]),
     }),
+    "profiles.current": Object.freeze({
+      method: "GET" as const,
+      path: VIEWER_REQUEST.path,
+      queryNames: Object.freeze([]),
+      responseBinding: Object.freeze([
+        "userInfo.user.id",
+        "userInfo.user.uniqueId",
+        "userInfo.stats.followerCount",
+        "userInfo.stats.followingCount",
+        "userInfo.stats.heartCount",
+      ]),
+    }),
     "feeds.for-you": Object.freeze({
       method: "GET" as const,
       path: FOR_YOU_REQUEST.path,
@@ -252,6 +277,7 @@ export const tiktokWebDirectEvidenceSnapshot = Object.freeze({
 
 const R1_REQUESTS = Object.freeze({
   "viewer.current": VIEWER_REQUEST,
+  "profiles.current": VIEWER_REQUEST,
   "feeds.for-you": FOR_YOU_REQUEST,
   "comments.list": COMMENTS_REQUEST,
 } as const satisfies Readonly<Record<TikTokWebR1OperationId, TikTokWebReadRequestRule>>);
@@ -525,6 +551,14 @@ export type TikTokWebViewer = {
   readonly displayName: string;
 };
 
+export type TikTokWebProfile = TikTokWebViewer & {
+  readonly bio: string | null;
+  readonly websiteUrl: string | null;
+  readonly followers: number;
+  readonly following: number;
+  readonly likes: number;
+};
+
 export function parseTikTokWebViewerResponse(value: unknown): TikTokWebViewer {
   const root = record(value, "TikTok current-account response");
   zeroStatus(root, ["statusCode", "status_code"], "TikTok current-account response");
@@ -535,6 +569,64 @@ export function parseTikTokWebViewerResponse(value: unknown): TikTokWebViewer {
     secUid: secUid(user.secUid, "TikTok current-account user.secUid"),
     handle: requiredString(user.uniqueId, "TikTok current-account user.uniqueId", 64),
     displayName: requiredString(user.nickname, "TikTok current-account user.nickname", 128),
+  });
+}
+
+function safePublicHttpUrl(value: unknown, label: string): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  const text = requiredString(value, label, 2048);
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(`${label} must be an absolute HTTP URL`);
+  }
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:")
+    || url.username !== ""
+    || url.password !== ""
+  ) throw new Error(`${label} must be a safe public HTTP URL`);
+  return url.href;
+}
+
+function matchingExactCount(
+  primary: JsonRecord,
+  secondary: JsonRecord | null,
+  key: "followerCount" | "followingCount" | "heartCount",
+  label: string,
+): number {
+  const first = integerLike(primary[key], `${label}.${key}`);
+  if (secondary === null || secondary[key] === undefined) return first;
+  const second = integerLike(secondary[key], `${label}V2.${key}`);
+  if (first !== second) throw new Error(`TikTok profile response contained conflicting ${key} values`);
+  return first;
+}
+
+/** Project exact current-profile counts without retaining account-private IDs. */
+export function parseTikTokWebProfileResponse(value: unknown): TikTokWebProfile {
+  const viewer = parseTikTokWebViewerResponse(value);
+  const root = record(value, "TikTok current-profile response");
+  const userInfo = record(root.userInfo, "TikTok current-profile response.userInfo");
+  const user = record(userInfo.user, "TikTok current-profile response.user");
+  const stats = record(userInfo.stats, "TikTok current-profile response.stats");
+  const statsV2 = userInfo.statsV2 === undefined
+    ? null
+    : record(userInfo.statsV2, "TikTok current-profile response.statsV2");
+  const bioLink = isRecord(user.bioLink) ? user.bioLink : null;
+  return Object.freeze({
+    ...viewer,
+    bio: user.signature === undefined
+      ? null
+      : boundedText(user.signature, "TikTok current-profile response.user.signature", 4096),
+    websiteUrl: bioLink === null
+      ? null
+      : safePublicHttpUrl(
+        bioLink.link ?? bioLink.url,
+        "TikTok current-profile response.user.bioLink",
+      ),
+    followers: matchingExactCount(stats, statsV2, "followerCount", "TikTok current-profile response.stats"),
+    following: matchingExactCount(stats, statsV2, "followingCount", "TikTok current-profile response.stats"),
+    likes: matchingExactCount(stats, statsV2, "heartCount", "TikTok current-profile response.stats"),
   });
 }
 

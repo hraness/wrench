@@ -1,94 +1,35 @@
 {
   "schemaVersion": 4,
-  "id": "instagram-web",
-  "version": "1.3.0",
-  "displayName": "Instagram (Authenticated Web API)",
-  "surfaceId": "instagram",
+  "id": "threads-web",
+  "version": "1.4.0",
+  "displayName": "Threads (Authenticated Internal API)",
+  "surfaceId": "threads",
   "origins": [
-    "https://www.instagram.com"
+    "https://www.threads.com"
   ],
   "browserDomains": [
-    "www.instagram.com"
+    "www.threads.com"
   ],
   "operations": {
-    "contacts.list": {
-      "description": "List unique non-viewer participants from one bounded first page of the reviewed Instagram Direct inbox summary, with explicit contact-set and message-statistics incompleteness.",
-      "risk": "R1",
-      "sideEffect": "none",
-      "idempotency": "none",
-      "dedupeWindowMs": 0,
-      "input": {
-        "properties": {
-          "thread_limit": {
-            "type": "number",
-            "description": "Maximum first-page inbox threads inspected for participants",
-            "minimum": 1,
-            "maximum": 50
-          },
-          "contact_limit": {
-            "type": "number",
-            "description": "Maximum unique participant contacts projected",
-            "minimum": 1,
-            "maximum": 100
-          }
-        },
-        "required": []
-      },
-      "webSession": {
-        "site": "instagram",
-        "action": "contacts.list",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 8388608
-      }
-    },
-    "comments.create": {
-      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
-      "risk": "R3",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
-      "idempotency": "local-at-most-once",
-      "dedupeWindowMs": 86400000,
-      "input": {
-        "properties": {
-          "media_id": {
-            "type": "string",
-            "description": "Exact Instagram media ID",
-            "minLength": 1,
-            "maxLength": 80
-          },
-          "body": {
-            "type": "string",
-            "description": "Comment body",
-            "minLength": 1,
-            "maxLength": 500
-          }
-        },
-        "required": [
-          "media_id",
-          "body"
-        ]
-      },
-      "webSession": {
-        "site": "instagram",
-        "action": "comments.create",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 8388608
-      }
-    },
     "comments.read": {
-      "description": "Observed contract: one bounded first page from live direct /api/v1/media/{id}/comments JSON with caption/root binding and no continuation cursor accepted or exposed.",
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
           },
           "limit": {
             "type": "number",
@@ -98,13 +39,13 @@
           }
         },
         "required": [
-          "media_id"
+          "post_id"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "comments.read",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }
@@ -112,14 +53,14 @@
     "content.edit": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
           },
@@ -127,16 +68,16 @@
             "type": "string",
             "description": "Replacement text",
             "minLength": 1,
-            "maxLength": 1000
+            "maxLength": 450
           }
         },
         "required": [
-          "media_id",
+          "post_id",
           "body"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "content.edit",
         "contractVersion": 1,
         "timeoutMs": 60000,
@@ -146,14 +87,14 @@
     "content.save": {
       "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
       "risk": "R2",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
           },
@@ -163,12 +104,12 @@
           }
         },
         "required": [
-          "media_id",
+          "post_id",
           "saved"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "content.save",
         "contractVersion": 1,
         "timeoutMs": 60000,
@@ -178,14 +119,14 @@
     "content.share": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
           },
@@ -198,12 +139,12 @@
           }
         },
         "required": [
-          "media_id",
+          "post_id",
           "destination"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "content.share",
         "contractVersion": 1,
         "timeoutMs": 60000,
@@ -211,7 +152,7 @@
       }
     },
     "feeds.read": {
-      "description": "Observed contract: one bounded first page from live direct /api/v1/feed/timeline JSON with viewer binding and no continuation cursor accepted or exposed.",
+      "description": "Observed contract: one bounded first page from live direct signed-in Threads Relay preload JSON with exact Barcelona viewer binding and no continuation cursor accepted or exposed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -222,7 +163,7 @@
             "type": "string",
             "description": "Reviewed feed",
             "enum": [
-              "home"
+              "for-you"
             ]
           },
           "limit": {
@@ -237,7 +178,7 @@
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "feeds.read",
         "contractVersion": 2,
         "timeoutMs": 60000,
@@ -247,14 +188,14 @@
     "likes.set": {
       "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
       "risk": "R2",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
           },
@@ -264,82 +205,39 @@
           }
         },
         "required": [
-          "media_id",
+          "post_id",
           "liked"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "likes.set",
         "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }
     },
-    "media.publish": {
-      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
-      "risk": "R3",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
-      "idempotency": "local-at-most-once",
-      "dedupeWindowMs": 86400000,
-      "input": {
-        "properties": {
-          "media": {
-            "type": "file",
-            "description": "Exact media file",
-            "maxBytes": 1073741824,
-            "mediaTypes": [
-              "image/*",
-              "video/*"
-            ]
-          },
-          "caption": {
-            "type": "string",
-            "description": "Optional media caption",
-            "minLength": 1,
-            "maxLength": 1000
-          },
-          "audience": {
-            "type": "string",
-            "description": "Explicit audience",
-            "enum": [
-              "default"
-            ]
-          }
-        },
-        "required": [
-          "media"
-        ]
-      },
-      "webSession": {
-        "site": "instagram",
-        "action": "media.publish",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 8388608
-      }
-    },
     "media.read": {
-      "description": "Observed contract: the target-bound media-info response supplies bounded media metadata without copying credentials.",
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
           }
         },
         "required": [
-          "media_id"
+          "post_id"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "media.read",
         "contractVersion": 1,
         "timeoutMs": 60000,
@@ -347,7 +245,7 @@
       }
     },
     "messaging.list": {
-      "description": "Observed contract: one bounded first page from the live direct_v2 inbox summary GET, with no continuation cursor accepted or exposed and no seen, ack, or presence endpoint issued.",
+      "description": "Capture-required contract reservation: Threads inbox uses Lightspeed/Msys state and may acknowledge or update presence; Relay setup metadata is not message-list authority.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -361,6 +259,12 @@
               "inbox"
             ]
           },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
           "limit": {
             "type": "number",
             "description": "Maximum thread summaries",
@@ -373,15 +277,15 @@
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "messaging.list",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }
     },
     "messaging.read": {
-      "description": "Capture-required contract reservation: Direct thread reads require a reviewed no-seen/no-presence capture; listing evidence does not authorize reading messages.",
+      "description": "Capture-required contract reservation: Threads conversation reads require protocol-correct Lightspeed/Msys acknowledgement analysis.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -412,7 +316,7 @@
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "messaging.read",
         "contractVersion": 1,
         "timeoutMs": 60000,
@@ -420,9 +324,9 @@
       }
     },
     "messaging.send": {
-      "description": "Capture-required contract reservation: Instagram messaging is split across Direct, LS/Msys, and E2EE transports; plaintext replay is prohibited.",
+      "description": "Capture-required contract reservation: Threads message send requires protocol-correct Lightspeed/Msys or E2EE implementation.",
       "risk": "R3",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -455,34 +359,111 @@
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "messaging.send",
         "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }
     },
+    "posts.publish": {
+      "description": "Observed contract: publish one confirmed Threads post with one reviewed PNG after exact viewer binding, synchronous upload completion, exact minimal created-locator binding, durable upload-dimension target retention, and independent exact permalink actor/text/image readback.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible Threads post with the exact confirmed text and one reviewed PNG.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Post body",
+            "minLength": 1,
+            "maxLength": 450
+          },
+          "attachment": {
+            "type": "file",
+            "description": "One exact reviewed PNG attachment",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/png"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "description": "Explicit audience",
+            "enum": [
+              "default"
+            ]
+          }
+        },
+        "required": [
+          "attachment",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "posts.publish",
+        "contractVersion": 4,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.quote": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact Threads post ID",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "body": {
+            "type": "string",
+            "description": "Quote text",
+            "minLength": 1,
+            "maxLength": 450
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "posts.quote",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
     "posts.read": {
-      "description": "Observed contract: live direct /api/v1/media/{id}/info JSON with exact returned-media binding.",
+      "description": "Capture-required contract reservation: the exact acknowledgement-free response and target binding still require a reviewed live capture.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
       "dedupeWindowMs": 0,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
           }
         },
         "required": [
-          "media_id"
+          "post_id"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "posts.read",
         "contractVersion": 1,
         "timeoutMs": 60000,
@@ -492,14 +473,14 @@
     "posts.repost": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
           },
@@ -509,82 +490,13 @@
           }
         },
         "required": [
-          "media_id",
+          "post_id",
           "reposted"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "posts.repost",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 8388608
-      }
-    },
-    "profiles.read": {
-      "description": "Observed contract: read exact follower, following, and post counts from one target-bound signed-in Instagram profile response.",
-      "risk": "R1",
-      "sideEffect": "none",
-      "idempotency": "none",
-      "dedupeWindowMs": 0,
-      "input": {
-        "properties": {
-          "profile": {
-            "type": "string",
-            "description": "Canonical lowercase Instagram handle bound to the signed-in profile",
-            "minLength": 1,
-            "maxLength": 30
-          }
-        },
-        "required": [
-          "profile"
-        ]
-      },
-      "webSession": {
-        "site": "instagram",
-        "action": "profiles.read",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 8388608
-      }
-    },
-    "reactions.set": {
-      "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
-      "risk": "R2",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
-      "idempotency": "local-at-most-once",
-      "dedupeWindowMs": 86400000,
-      "input": {
-        "properties": {
-          "media_id": {
-            "type": "string",
-            "description": "Exact Instagram media ID",
-            "minLength": 1,
-            "maxLength": 80
-          },
-          "reaction": {
-            "type": "string",
-            "description": "Exact desired reaction",
-            "enum": [
-              "none",
-              "like",
-              "love",
-              "care",
-              "haha",
-              "wow",
-              "sad",
-              "angry"
-            ]
-          }
-        },
-        "required": [
-          "media_id",
-          "reaction"
-        ]
-      },
-      "webSession": {
-        "site": "instagram",
-        "action": "reactions.set",
         "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
@@ -593,7 +505,7 @@
     "relationships.follow.set": {
       "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
       "risk": "R2",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
@@ -615,7 +527,7 @@
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "relationships.follow.set",
         "contractVersion": 1,
         "timeoutMs": 60000,
@@ -625,14 +537,14 @@
     "replies.create": {
       "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
       "risk": "R3",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
-          "media_id": {
+          "post_id": {
             "type": "string",
-            "description": "Exact Instagram media ID",
+            "description": "Exact Threads post ID",
             "minLength": 1,
             "maxLength": 80
           },
@@ -646,18 +558,61 @@
             "type": "string",
             "description": "Reply body",
             "minLength": 1,
-            "maxLength": 500
+            "maxLength": 450
+          },
+          "attachment": {
+            "type": "file",
+            "description": "Optional exact reply attachment",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "image/*",
+              "video/*",
+              "image/gif"
+            ]
           }
         },
         "required": [
-          "media_id",
+          "post_id",
           "comment_id",
           "body"
         ]
       },
       "webSession": {
-        "site": "instagram",
+        "site": "threads",
         "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "threads.publish": {
+      "description": "Capture-required contract reservation: the exact actor, audience, attachment transport, dispatch response, and independent publication readback require an authorized fixture.",
+      "risk": "R3",
+      "sideEffect": "Changes remote threads state only after exact preview confirmation and reviewed dispatch.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "Ordered root and self-replies",
+            "minItems": 1,
+            "maxItems": 25,
+            "items": {
+              "type": "string",
+              "description": "One thread item",
+              "minLength": 1,
+              "maxLength": 450
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "webSession": {
+        "site": "threads",
+        "action": "threads.publish",
         "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608

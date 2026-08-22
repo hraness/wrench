@@ -652,9 +652,23 @@ describe("Bluesky authenticated XRPC runtime", () => {
       if (method === "app.bsky.feed.getPostThread") {
         return jsonResponse({ thread: { post: postView(), replies: [] } });
       }
+      if (method === "app.bsky.actor.getProfile") {
+        expect(request.url.origin).toBe("https://public.api.bsky.app");
+        expect(request.url.searchParams.get("actor")).toBe("hraness.bsky.social");
+        return jsonResponse({
+          did: AUTHOR_DID,
+          handle: "hraness.bsky.social",
+          displayName: "Hraness",
+          description: "Public bio",
+          followersCount: 1234,
+          followsCount: 56,
+          postsCount: 789,
+        });
+      }
       throw new Error(`unexpected XRPC method ${method}`);
     });
     const inputs = [
+      ["profiles.read", { handle: "hraness.bsky.social" }],
       ["feeds.read", { feed: "home", limit: 1 }],
       ["posts.read", { post_uri: POST_URI }],
       ["comments.read", { post_uri: POST_URI, limit: 1 }],
@@ -670,8 +684,23 @@ describe("Bluesky authenticated XRPC runtime", () => {
       expect(result.status).toBe("succeeded");
       expect(result.dispatchStarted).toBe(false);
       expect(result.dispatch).toEqual({ planned: 0, started: 0, verified: 0 });
+      if (action === "profiles.read") {
+        expect(result.output).toMatchObject({
+          provider: "bluesky",
+          target: {
+            id: AUTHOR_DID,
+            url: "https://bsky.app/profile/hraness.bsky.social",
+          },
+          metrics: {
+            followers: { value: 1234, precision: "exact" },
+            following: { value: 56, precision: "exact" },
+            posts: { value: 789, precision: "exact" },
+          },
+        });
+      }
     }
     expect(calls.map(nsid)).toEqual([
+      "app.bsky.actor.getProfile",
       "com.atproto.server.getSession",
       "app.bsky.feed.getTimeline",
       "com.atproto.server.getSession",

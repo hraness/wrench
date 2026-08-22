@@ -127,6 +127,7 @@ function currentIdentityResponse(): unknown {
     included: [{
       entityUrn: MINI_PROFILE_URN,
       objectUrn: `urn:li:member:${MEMBER_ID}`,
+      publicIdentifier: "0thernet",
     }],
   };
 }
@@ -286,6 +287,62 @@ function messagingListRecipe(): WebSessionRecipe {
     timeoutMs: 1_000,
     maxOutputBytes: 2 * 1024 * 1024,
   };
+}
+
+function personalProfileRecipe(): WebSessionRecipe {
+  return {
+    site: "linkedin",
+    action: "profiles.read",
+    contractVersion: 1,
+    timeoutMs: 1_000,
+    maxOutputBytes: 4 * 1024 * 1024,
+  };
+}
+
+function organizationRecipe(): WebSessionRecipe {
+  return {
+    site: "linkedin",
+    action: "organizations.read",
+    contractVersion: 1,
+    timeoutMs: 1_000,
+    maxOutputBytes: 8 * 1024 * 1024,
+  };
+}
+
+function htmlResponse(value: string): Response {
+  return new Response(value, {
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}
+
+function linkedInOrganizationStatsHtml(): string {
+  const companyUrn = "urn:li:fsd_company:123";
+  const followingStateUrn = "urn:li:fsd_followingState:organization-123";
+  const encoded = JSON.stringify({
+    data: {},
+    included: [{
+      $type: "com.linkedin.voyager.dash.organization.Company",
+      entityUrn: companyUrn,
+      universalName: "hraness",
+      "*followingState": followingStateUrn,
+      name: "Hraness",
+      description: "Public company description",
+      websiteUrl: "https://hraness.com",
+    }, {
+      $type: "com.linkedin.voyager.dash.feed.FollowingState",
+      entityUrn: followingStateUrn,
+      followerCount: 6,
+    }],
+  }).replace(/[&<>"=\\]/gu, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "=": "&#61;",
+    "\\": "&#92;",
+  })[character] ?? character);
+  return `<html><body><code style="display: none" id="bpr-guid-123">${encoded}</code></body></html>`;
 }
 
 function postRecipe(): WebSessionRecipe {
@@ -789,6 +846,175 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       }));
       expect(message).toContain(item.expected);
     }
+  });
+
+  test("reads exact target-bound self followers and private connections sequentially", async () => {
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = {
+      ...dependencies(calls, (request) => {
+        if (request.url.pathname === "/voyager/api/me") {
+          return jsonResponse(currentIdentityResponse());
+        }
+        if (request.url.pathname === "/in/0thernet/") {
+          expect(request.headers.get("accept")).toBe("text/html");
+          return htmlResponse('<a href="/mynetwork/network-manager/people-follow/followers"><span>7,553</span> followers</a>');
+        }
+        if (request.url.pathname === "/mynetwork/invite-connect/connections/") {
+          expect(request.headers.get("referer")).toBe("https://www.linkedin.com/in/0thernet/");
+          return htmlResponse("<h1><span>4,877</span> connections</h1><button>Sort by:</button><label>Search with filters</label>");
+        }
+        throw new Error(`unexpected LinkedIn profile-stat request ${request.url.pathname}`);
+      }),
+      now: () => Date.parse("2026-08-21T15:00:00.000Z"),
+    } satisfies LinkedInWebRuntimeDependencies;
+
+    const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+      profile_url: "https://www.linkedin.com/in/0thernet",
+      include_connections: true,
+    }, linkedinAuth, { dependencies: runtimeDependencies });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toEqual({
+      schemaVersion: 1,
+      provider: "linkedin",
+      target: {
+        kind: "profile",
+        id: MEMBER_URN,
+        url: "https://www.linkedin.com/in/0thernet/",
+      },
+      observedAt: "2026-08-21T15:00:00.000Z",
+      completeness: "complete",
+      metrics: {
+        followers: { status: "available", value: 7553, precision: "exact", unit: "count" },
+        connections: { status: "available", value: 4877, precision: "exact", unit: "count" },
+      },
+      metadata: { profileSlug: "0thernet" },
+    });
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/voyager/api/me",
+      "/in/0thernet/",
+      "/mynetwork/invite-connect/connections/",
+    ]);
+  });
+
+  test("reads one company follower total through the target company state reference", async () => {
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = {
+      ...dependencies(calls, (request) => {
+        if (request.url.pathname === "/voyager/api/me") {
+          return jsonResponse(currentIdentityResponse());
+        }
+        if (request.url.pathname === "/company/hraness/") {
+          return htmlResponse(linkedInOrganizationStatsHtml());
+        }
+        throw new Error(`unexpected LinkedIn organization-stat request ${request.url.pathname}`);
+      }),
+      now: () => Date.parse("2026-08-21T15:00:00.000Z"),
+    } satisfies LinkedInWebRuntimeDependencies;
+
+    const result = await executeLinkedInWebOperation(organizationRecipe(), {
+      organization_url: "https://www.linkedin.com/company/Hraness",
+    }, linkedinAuth, { dependencies: runtimeDependencies });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toMatchObject({
+      schemaVersion: 1,
+      provider: "linkedin",
+      target: {
+        kind: "organization",
+        id: "urn:li:fsd_company:123",
+        url: "https://www.linkedin.com/company/hraness/",
+      },
+      observedAt: "2026-08-21T15:00:00.000Z",
+      completeness: "complete",
+      metrics: {
+        followers: { status: "available", value: 6, precision: "exact", unit: "count" },
+      },
+    });
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/voyager/api/me",
+      "/company/hraness/",
+    ]);
+  });
+
+  test("rejects a crossed personal-profile slug before reading either target page", async () => {
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.pathname === "/voyager/api/me") {
+        return jsonResponse(currentIdentityResponse());
+      }
+      throw new Error("crossed personal-profile target must fail before page reads");
+    });
+
+    const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+      profile_url: "https://www.linkedin.com/in/crossed-target",
+      include_connections: true,
+    }, linkedinAuth, { dependencies: runtimeDependencies });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      dispatchStarted: false,
+    });
+    expect(calls.map((call) => call.url.pathname)).toEqual(["/voyager/api/me"]);
+  });
+
+  test("requires one valid member-bound public identifier before personal page reads", async () => {
+    const cases = [
+      {
+        body: {
+          data: { plainId: MEMBER_ID, "*miniProfile": MINI_PROFILE_URN },
+          included: [{
+            entityUrn: MINI_PROFILE_URN,
+            objectUrn: `urn:li:member:${MEMBER_ID}`,
+          }],
+        },
+      },
+      {
+        body: {
+          data: { plainId: MEMBER_ID, "*miniProfile": MINI_PROFILE_URN },
+          included: [{
+            entityUrn: MINI_PROFILE_URN,
+            objectUrn: `urn:li:member:${MEMBER_ID}`,
+            publicIdentifier: "bad/value",
+          }],
+        },
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const calls: CapturedRequest[] = [];
+      const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+        profile_url: "https://www.linkedin.com/in/0thernet",
+        include_connections: true,
+      }, linkedinAuth, {
+        dependencies: dependencies(calls, () => jsonResponse(item.body)),
+      });
+      expect(result).toMatchObject({
+        status: "failed",
+        output: null,
+        dispatchStarted: false,
+      });
+      expect(calls.map((call) => call.url.pathname)).toEqual(["/voyager/api/me"]);
+    }
+  });
+
+  test("fails closed before profile HTML reads when the bound LinkedIn member changes", async () => {
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = dependencies(calls, () => jsonResponse({
+      data: { plainId: "987654321" },
+      included: [{ entityUrn: "urn:li:fsd_profile:987654321" }],
+    }));
+    const result = await executeLinkedInWebOperation(personalProfileRecipe(), {
+      profile_url: "https://www.linkedin.com/in/0thernet",
+      include_connections: true,
+    }, linkedinAuth, { dependencies: runtimeDependencies });
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      dispatchStarted: false,
+    });
+    expect(calls.map((call) => call.url.pathname)).toEqual(["/voyager/api/me"]);
   });
 
   test("creates one private linked Article draft, verifies exact unpublished readback, and never publishes", async () => {

@@ -398,20 +398,35 @@ describe("social platform catalog", () => {
     expect(socialPlatformCatalog.x.operations["messaging.list"]).toMatchObject({ state: "adapter-eligible", risk: "R1" });
   });
 
-  test("enables LinkedIn identity discovery without overclaiming it on other surfaces", () => {
-    for (const operation of [
-      "profiles.read",
-      "organizations.read",
-      "relationships.recommendations.read",
-    ] as const) {
-      expect(socialPlatformCatalog.linkedin.operations[operation]).toMatchObject({
-        state: "adapter-eligible",
-        risk: "R1",
-      });
-      for (const surfaceId of platformSurfaceIds) {
-        if (surfaceId === "linkedin") continue;
-        expect(socialPlatformCatalog[surfaceId].operations[operation].state).toBe("unsupported");
-      }
+  test("catalogues profile and organization reads only on surfaces with bounded identity projections", () => {
+    const profileSurfaces = new Set([
+      "bluesky",
+      "instagram",
+      "linkedin",
+      "reddit",
+      "substack",
+      "threads",
+      "tiktok",
+      "x",
+      "youtube",
+    ]);
+    const organizationSurfaces = new Set(["linkedin", "substack"]);
+    for (const surfaceId of platformSurfaceIds) {
+      expect(socialPlatformCatalog[surfaceId].operations["profiles.read"]).toMatchObject(
+        profileSurfaces.has(surfaceId)
+          ? { state: "adapter-eligible", risk: "R1" }
+          : { state: "unsupported" },
+      );
+      expect(socialPlatformCatalog[surfaceId].operations["organizations.read"]).toMatchObject(
+        organizationSurfaces.has(surfaceId)
+          ? { state: "adapter-eligible", risk: "R1" }
+          : { state: "unsupported" },
+      );
+      expect(socialPlatformCatalog[surfaceId].operations["relationships.recommendations.read"]).toMatchObject(
+        surfaceId === "linkedin"
+          ? { state: "adapter-eligible", risk: "R1" }
+          : { state: "unsupported" },
+      );
     }
   });
 

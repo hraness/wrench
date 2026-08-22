@@ -2997,11 +2997,18 @@ function createProviderPluginRegistryInternal(
       .legacyReadImplementationSha256;
     const e71Legacy = reviewedBuiltInContractIdentity(plugin.id, plugin.version)
       .legacyE71ReadImplementationSha256;
-    if (legacy === null && e71Legacy === null) return Object.freeze([]);
+    const currentLegacy = reviewedBuiltInContractIdentity(plugin.id, plugin.version)
+      .legacyCurrentReadImplementationSha256;
+    if (legacy === null && e71Legacy === null && currentLegacy.length === 0) {
+      return Object.freeze([]);
+    }
     if (legacy === null || e71Legacy === null) {
-      throw new Error(
-        `built-in provider plugin ${plugin.id}@${plugin.version} has an incomplete legacy contract identity`,
-      );
+      if (legacy !== null || e71Legacy !== null) {
+        throw new Error(
+          `built-in provider plugin ${plugin.id}@${plugin.version} has an incomplete legacy contract identity`,
+        );
+      }
+      return Object.freeze(currentLegacy.map((value) => Buffer.from(value, "hex")));
     }
     return Object.freeze([
       Buffer.from(legacy.test, "hex"),
@@ -3011,6 +3018,7 @@ function createProviderPluginRegistryInternal(
       Buffer.from(e71Legacy.test, "hex"),
       Buffer.from(e71Legacy.production, "hex"),
       Buffer.from(e71Legacy.development, "hex"),
+      ...currentLegacy.map((value) => Buffer.from(value, "hex")),
     ]);
   };
   const implementationClosureHash = (
