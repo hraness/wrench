@@ -10,7 +10,7 @@ if (binding?.transport !== "web-session-api") {
 
 describe("LinkedIn web provider plugin", () => {
   test("versions the profile-stat source closure independently", () => {
-    expect(linkedinWebPlugin.version).toBe("1.2.0");
+    expect(linkedinWebPlugin.version).toBe("1.3.0");
   });
 
   test("advertises observed exact personal and organization profile reads", () => {

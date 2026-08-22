@@ -8,6 +8,7 @@ import {
 import type { WrenchAuth } from "../auth";
 import {
   browserCleanupBarrier,
+  PreservedBrowserArtifactsError,
   type BrowserFileResolver,
 } from "../browser";
 import type { FileInputValue, OperationInput, WebSessionRecipe } from "../model";
@@ -93,6 +94,8 @@ import {
 } from "./linkedin-web-post-browser";
 import {
   createLinkedInProfileBrowserTransport,
+  LinkedInProfileBrowserFailure,
+  LinkedInProfileBrowserResponseRejectedError,
   type LinkedInProfileBrowserTransport,
 } from "./linkedin-web-profile-browser";
 
@@ -733,8 +736,27 @@ function linkedInProfileStatsFailure(
   requestStage: string,
 ): string {
   const message = error instanceof Error ? error.message : "";
-  const responseShape = /status\/content type ([0-9]{3})\/([A-Za-z0-9.+-]{1,128})/u.exec(message);
-  const stage = message.includes("current member")
+  const browserFailureStage = error instanceof LinkedInProfileBrowserFailure
+    ? {
+        authwall: "signed-out authwall",
+        "body-envelope": "bounded response body envelope",
+        bootstrap: "contained-browser origin bootstrap",
+        "browser-envelope": "contained-browser command envelope",
+        "browser-command": "contained-browser command",
+        "execution-context": "contained-browser execution context",
+        "identity-json": "signed-in identity JSON",
+        "output-bound": "contained-browser output bound",
+        "provider-fetch": "contained-browser first-party fetch",
+        "response-envelope": "bounded response envelope",
+        "response-rejected": "first-party page response",
+        "session-cookie": "signed-in browser CSRF cookie",
+        startup: "contained-browser startup",
+      }[error.category]
+    : null;
+  const typedStage = error instanceof LinkedInProfileBrowserResponseRejectedError
+    ? `first-party page response ${error.status}/${error.contentType}`
+    : browserFailureStage;
+  const stage = typedStage ?? (message.includes("current member")
       || message.includes("cookie")
       || message.includes("session")
     ? "signed-in account binding"
@@ -748,19 +770,18 @@ function linkedInProfileStatsFailure(
               || message.includes("FollowingState")
               || message.includes("universal name")
             ? "target company-state projection"
-            : responseShape !== null
-              ? `first-party page response ${responseShape[1]}/${responseShape[2]}`
-              : message.includes("status") || message.includes("content type")
+            : message.includes("status") || message.includes("content type")
                 ? "first-party page response"
-              : "reviewed response projection";
+              : "reviewed response projection");
   return `LinkedIn ${target} profile stats failed during ${requestStage} at ${stage}; no remote write occurred`;
 }
 
 function linkedInCurrentIdentityAllowsBrowserFallback(error: unknown): boolean {
-  return error instanceof Error
-    && /^authenticated web API returned unreviewed status\/content type (?:302|401|403)\/(?:missing|[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+)$/u.test(
-      error.message,
-    );
+  if (!(error instanceof Error) || error.message.length > 256) return false;
+  const match = /^authenticated web API returned unreviewed status\/content type (?:302|401|403)\/(missing|[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+)$/u.exec(
+    error.message,
+  );
+  return match?.[1] !== undefined && match[1].length <= 128;
 }
 
 async function createLinkedInStatsBrowserTransport(
@@ -870,6 +891,7 @@ async function executeLinkedInPersonalProfileRead(
       dispatch: { planned: 0, started: 0, verified: 0 },
     };
   } catch (error) {
+    if (error instanceof PreservedBrowserArtifactsError) throw error;
     return {
       status: "failed",
       output: null,
@@ -939,6 +961,7 @@ async function executeLinkedInOrganizationRead(
       dispatch: { planned: 0, started: 0, verified: 0 },
     };
   } catch (error) {
+    if (error instanceof PreservedBrowserArtifactsError) throw error;
     return {
       status: "failed",
       output: null,
