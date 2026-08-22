@@ -47,10 +47,14 @@ export const LINKEDIN_WEB_OPERATION_NAMES = Object.freeze([
 export type LinkedInWebOperationName = (typeof LINKEDIN_WEB_OPERATION_NAMES)[number];
 export type LinkedInWebRisk = "R1" | "R2" | "R3";
 export type LinkedInWebContractState = "observed" | "capture-required";
-export type LinkedInWebEvidence = "live-har" | "first-party-bundle" | "none";
+export type LinkedInWebEvidence =
+  | "live-har"
+  | "live-response"
+  | "first-party-bundle"
+  | "none";
 
 type LinkedInWebReadRequestRule = {
-  readonly kind: "registered-query" | "restli-read";
+  readonly kind: "registered-query" | "restli-read" | "server-rendered-read";
   readonly method: "GET";
   readonly path: string;
   readonly queryPrefix: string | null;
@@ -101,16 +105,32 @@ export const LINKEDIN_WEB_OPERATIONS = {
   "profiles.read": {
     effect: "read",
     risk: "R1",
-    state: "capture-required",
-    evidence: "none",
-    requests: [],
+    state: "observed",
+    evidence: "live-response",
+    requests: [{
+      kind: "server-rendered-read",
+      method: "GET",
+      path: "/in/:publicIdentifier/ and /mynetwork/invite-connect/connections/",
+      queryPrefix: null,
+      allowedQueryParameters: [],
+      requiredQueryParameters: [],
+      fixedQueryParameters: [],
+    }],
   },
   "organizations.read": {
     effect: "read",
     risk: "R1",
-    state: "capture-required",
-    evidence: "none",
-    requests: [],
+    state: "observed",
+    evidence: "live-response",
+    requests: [{
+      kind: "server-rendered-read",
+      method: "GET",
+      path: "/company/:universalName/",
+      queryPrefix: null,
+      allowedQueryParameters: [],
+      requiredQueryParameters: [],
+      fixedQueryParameters: [],
+    }],
   },
   "relationships.recommendations.read": {
     effect: "read",
@@ -701,6 +721,445 @@ function linkedInUrn(value: unknown, label: string, maximum = 4_096): string {
     throw new Error(`${label} must be an exact LinkedIn URN`);
   }
   return urn;
+}
+
+type LinkedInExactCountMetric = {
+  readonly status: "available";
+  readonly value: number;
+  readonly precision: "exact";
+  readonly unit: "count";
+};
+
+type LinkedInUnavailableCountMetric = {
+  readonly status: "unavailable";
+  readonly reason: "not-authorized";
+};
+
+export type LinkedInPersonalProfileStats = {
+  readonly schemaVersion: 1;
+  readonly provider: "linkedin";
+  readonly target: {
+    readonly kind: "profile";
+    readonly id: string;
+    readonly url: string;
+  };
+  readonly observedAt: string;
+  readonly completeness: "complete" | "partial";
+  readonly metrics: {
+    readonly followers: LinkedInExactCountMetric;
+    readonly connections: LinkedInExactCountMetric | LinkedInUnavailableCountMetric;
+  };
+  readonly metadata: {
+    readonly profileSlug: string;
+  };
+};
+
+export type LinkedInOrganizationStats = {
+  readonly schemaVersion: 1;
+  readonly provider: "linkedin";
+  readonly target: {
+    readonly kind: "organization";
+    readonly id: string;
+    readonly url: string;
+  };
+  readonly observedAt: string;
+  readonly completeness: "complete";
+  readonly metrics: {
+    readonly followers: LinkedInExactCountMetric;
+  };
+  readonly metadata: {
+    readonly universalName: string;
+    readonly name: string;
+    readonly description: string | null;
+    readonly websiteUrl: string | null;
+  };
+};
+
+export type LinkedInProfileTarget = {
+  readonly slug: string;
+  readonly url: string;
+};
+
+export function linkedInPersonalProfilePublicIdentifier(
+  value: unknown,
+): string {
+  const identifier = boundedText(
+    value,
+    "LinkedIn personal profile public identifier",
+    100,
+  );
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{1,99}$/u.test(identifier)) {
+    throw new Error(
+      "LinkedIn personal profile public identifier has an unsupported format",
+    );
+  }
+  return identifier.toLowerCase();
+}
+
+function linkedInTarget(
+  value: unknown,
+  kind: "in" | "company",
+): LinkedInProfileTarget {
+  const label = kind === "in" ? "personal profile" : "organization";
+  const raw = boundedText(value, `LinkedIn ${label} URL`, 512);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`LinkedIn ${label} URL must be an absolute URL`);
+  }
+  if (
+    url.origin !== "https://www.linkedin.com"
+    || url.username !== ""
+    || url.password !== ""
+    || url.search !== ""
+    || url.hash !== ""
+  ) throw new Error(`LinkedIn ${label} URL must use the exact public LinkedIn origin`);
+  const match = new RegExp(`^/${kind}/([A-Za-z0-9][A-Za-z0-9_-]{1,99})/?$`, "u")
+    .exec(url.pathname);
+  if (match?.[1] === undefined) {
+    throw new Error(`LinkedIn ${label} URL has an unsupported path`);
+  }
+  const slug = kind === "in"
+    ? linkedInPersonalProfilePublicIdentifier(match[1])
+    : match[1].toLowerCase();
+  return Object.freeze({
+    slug,
+    url: `https://www.linkedin.com/${kind}/${slug}/`,
+  });
+}
+
+export function linkedInPersonalProfileTarget(value: unknown): LinkedInProfileTarget {
+  return linkedInTarget(value, "in");
+}
+
+export function linkedInOrganizationTarget(value: unknown): LinkedInProfileTarget {
+  return linkedInTarget(value, "company");
+}
+
+function linkedInObservationTime(value: string): string {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
+    || !Number.isFinite(Date.parse(value))
+  ) throw new Error("LinkedIn profile observedAt must be an exact UTC timestamp");
+  return value;
+}
+
+function linkedInExactCountMetric(value: unknown, label: string): LinkedInExactCountMetric {
+  return Object.freeze({
+    status: "available",
+    value: nonnegativeInteger(value, label),
+    precision: "exact",
+    unit: "count",
+  });
+}
+
+function decodeLinkedInProfileEntity(entity: string): string {
+  if (entity === "&nbsp;") return " ";
+  return decodeLinkedInArticleEntity(entity);
+}
+
+function linkedInVisibleText(value: string): string {
+  const withoutScripts = value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/giu, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, " ");
+  return withoutScripts
+    .replace(/<[^>]+>/gu, " ")
+    .replace(
+      /&(?:nbsp|quot|amp|lt|gt|apos|#(?:[xX][0-9A-Fa-f]{1,6}|[0-9]{1,7}));/gu,
+      (entity) => decodeLinkedInProfileEntity(entity),
+    )
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function exactLinkedInLabelCount(value: string, noun: "followers" | "connections"): number {
+  const match = new RegExp(`^(0|[1-9][0-9]{0,2}(?:,[0-9]{3})*) ${noun}$`, "u").exec(value);
+  if (match?.[1] === undefined) {
+    throw new Error(`LinkedIn ${noun} label was not an exact count`);
+  }
+  const count = Number(match[1].replaceAll(",", ""));
+  return nonnegativeInteger(count, `LinkedIn ${noun} count`);
+}
+
+function linkedInHtmlAttribute(value: string, name: string): string | null {
+  const matches = [...value.matchAll(
+    new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "giu"),
+  )];
+  if (matches.length === 0) return null;
+  if (matches.length !== 1) throw new Error(`LinkedIn HTML repeated ${name}`);
+  const raw = matches[0]?.[1] ?? matches[0]?.[2];
+  if (raw === undefined || raw.length > 4_096) {
+    throw new Error(`LinkedIn HTML ${name} exceeded its reviewed bound`);
+  }
+  return raw.replace(
+    /&(?:quot|amp|lt|gt|apos|#(?:[xX][0-9A-Fa-f]{1,6}|[0-9]{1,7}));/gu,
+    (entity) => decodeLinkedInProfileEntity(entity),
+  );
+}
+
+function linkedInSelfFollowerCount(html: unknown): number {
+  if (typeof html !== "string" || html.length < 1 || html.length > 8 * 1024 * 1024) {
+    throw new Error("LinkedIn personal profile exceeded its reviewed HTML bound");
+  }
+  const counts: number[] = [];
+  let anchors = 0;
+  for (const match of html.matchAll(/<a\b([^>]{0,4096})>([\s\S]{0,16384}?)<\/a>/giu)) {
+    anchors += 1;
+    if (anchors > 10_000) throw new Error("LinkedIn personal profile returned too many anchors");
+    const attributes = match[1];
+    const body = match[2];
+    if (attributes === undefined || body === undefined) continue;
+    const href = linkedInHtmlAttribute(attributes, "href");
+    if (href === null) continue;
+    let url: URL;
+    try {
+      url = new URL(href, "https://www.linkedin.com");
+    } catch {
+      continue;
+    }
+    if (
+      url.origin !== "https://www.linkedin.com"
+      || url.pathname !== "/mynetwork/network-manager/people-follow/followers"
+      || url.search !== ""
+      || url.hash !== ""
+    ) continue;
+    counts.push(exactLinkedInLabelCount(linkedInVisibleText(body), "followers"));
+  }
+  if (counts.length !== 1) {
+    throw new Error("LinkedIn personal profile did not bind one exact self follower count");
+  }
+  return counts[0]!;
+}
+
+function linkedInConnectionsCount(html: unknown): number {
+  if (typeof html !== "string" || html.length < 1 || html.length > 8 * 1024 * 1024) {
+    throw new Error("LinkedIn connections page exceeded its reviewed HTML bound");
+  }
+  const text = linkedInVisibleText(html);
+  if (!text.includes("Sort by:") || !text.includes("Search with filters")) {
+    throw new Error("LinkedIn connections page omitted its exact list controls");
+  }
+  const labels = [...text.matchAll(/\b(0|[1-9][0-9]{0,2}(?:,[0-9]{3})*) connections\b/gu)]
+    .map((match) => match[0]);
+  if (labels.length !== 1 || labels[0] === undefined) {
+    throw new Error("LinkedIn connections page did not expose one exact total");
+  }
+  return exactLinkedInLabelCount(labels[0], "connections");
+}
+
+export function projectLinkedInPersonalProfileStats(input: {
+  readonly profileHtml: unknown;
+  readonly connectionsHtml: unknown | null;
+  readonly profileUrl: unknown;
+  readonly expectedSubject: unknown;
+  readonly expectedPublicIdentifier: unknown;
+  readonly observedAt: string;
+}): LinkedInPersonalProfileStats {
+  const target = linkedInPersonalProfileTarget(input.profileUrl);
+  const subject = boundedText(input.expectedSubject, "LinkedIn personal profile subject", 512);
+  if (!/^urn:li:fsd_profile:[0-9]{1,32}$/u.test(subject)) {
+    throw new Error("LinkedIn personal profile subject has an unsupported format");
+  }
+  const publicIdentifier = linkedInPersonalProfilePublicIdentifier(
+    input.expectedPublicIdentifier,
+  );
+  if (target.slug !== publicIdentifier) {
+    throw new Error(
+      "LinkedIn personal profile URL does not match the bound current member public identifier",
+    );
+  }
+  const connections = input.connectionsHtml === null
+    ? Object.freeze({ status: "unavailable" as const, reason: "not-authorized" as const })
+    : linkedInExactCountMetric(
+        linkedInConnectionsCount(input.connectionsHtml),
+        "LinkedIn connections",
+      );
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "linkedin",
+    target: Object.freeze({ kind: "profile", id: subject, url: target.url }),
+    observedAt: linkedInObservationTime(input.observedAt),
+    completeness: input.connectionsHtml === null ? "partial" : "complete",
+    metrics: Object.freeze({
+      followers: linkedInExactCountMetric(
+        linkedInSelfFollowerCount(input.profileHtml),
+        "LinkedIn followers",
+      ),
+      connections,
+    }),
+    metadata: Object.freeze({ profileSlug: target.slug }),
+  });
+}
+
+type LinkedInEmbeddedRecord = Readonly<Record<string, unknown>>;
+
+function linkedInEmbeddedRecords(html: unknown): readonly LinkedInEmbeddedRecord[] {
+  if (typeof html !== "string" || html.length < 1 || html.length > 8 * 1024 * 1024) {
+    throw new Error("LinkedIn organization page exceeded its reviewed HTML bound");
+  }
+  const roots: unknown[] = [];
+  let codeTags = 0;
+  for (const match of html.matchAll(/<code\b([^>]{0,4096})>([\s\S]*?)<\/code>/giu)) {
+    codeTags += 1;
+    if (codeTags > 256) throw new Error("LinkedIn organization page returned too many code payloads");
+    const attributes = match[1];
+    const body = match[2];
+    if (attributes === undefined || body === undefined) continue;
+    const id = linkedInHtmlAttribute(attributes, "id");
+    if (id === null || !/^bpr-guid-[0-9]{1,12}$/u.test(id)) continue;
+    linkedInArticleCodeAttributes(attributes);
+    if (body.length < 1 || body.length > 1024 * 1024) {
+      throw new Error("LinkedIn organization bootstrap payload exceeded its reviewed bound");
+    }
+    const json = body.replace(
+      LINKEDIN_ARTICLE_HTML_ENTITY,
+      (entity) => decodeLinkedInArticleEntity(entity),
+    ).trim();
+    try {
+      roots.push(JSON.parse(json) as unknown);
+    } catch {
+      throw new Error("LinkedIn organization bootstrap payload contained malformed JSON");
+    }
+  }
+  if (roots.length < 1) throw new Error("LinkedIn organization page omitted its bootstrap payloads");
+  const records: LinkedInEmbeddedRecord[] = [];
+  const stack = roots.map((value) => ({ value, depth: 0 }));
+  let nodes = 0;
+  while (stack.length > 0) {
+    const next = stack.pop()!;
+    nodes += 1;
+    if (nodes > 500_000 || next.depth > 32) {
+      throw new Error("LinkedIn organization bootstrap exceeded its traversal bound");
+    }
+    if (Array.isArray(next.value)) {
+      if (next.value.length > 20_000) {
+        throw new Error("LinkedIn organization bootstrap array exceeded its reviewed bound");
+      }
+      for (const value of next.value) stack.push({ value, depth: next.depth + 1 });
+      continue;
+    }
+    if (!isRecord(next.value)) continue;
+    records.push(next.value);
+    for (const value of Object.values(next.value)) {
+      stack.push({ value, depth: next.depth + 1 });
+    }
+  }
+  return Object.freeze(records);
+}
+
+function oneUniqueLinkedInText(
+  values: readonly unknown[],
+  label: string,
+  maximum: number,
+  required: boolean,
+): string | null {
+  const normalized = values
+    .filter((value) => value !== undefined && value !== null && value !== "")
+    .map((value) => boundedText(value, label, maximum));
+  const unique = [...new Set(normalized)];
+  if (unique.length === 0 && !required) return null;
+  if (unique.length !== 1) throw new Error(`${label} was missing or ambiguous`);
+  return unique[0]!;
+}
+
+function safeLinkedInPublicUrl(value: string | null, label: string): string | null {
+  if (value === null) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be an absolute URL`);
+  }
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:")
+    || url.username !== ""
+    || url.password !== ""
+  ) throw new Error(`${label} must be a safe public HTTP URL`);
+  return url.href;
+}
+
+export function projectLinkedInOrganizationStats(input: {
+  readonly html: unknown;
+  readonly organizationUrl: unknown;
+  readonly observedAt: string;
+}): LinkedInOrganizationStats {
+  const target = linkedInOrganizationTarget(input.organizationUrl);
+  const records = linkedInEmbeddedRecords(input.html);
+  const companies = records.filter((record) =>
+    record.$type === "com.linkedin.voyager.dash.organization.Company"
+    && record.universalName === target.slug);
+  if (companies.length < 1) {
+    throw new Error("LinkedIn organization response did not bind the requested universal name");
+  }
+  const companyIds = new Set(companies.map((company) => {
+    const id = boundedText(company.entityUrn, "LinkedIn organization entity URN", 512);
+    if (!/^urn:li:fsd_company:[0-9]{1,32}$/u.test(id)) {
+      throw new Error("LinkedIn organization entity URN changed format");
+    }
+    return id;
+  }));
+  const followingRefs = new Set(companies.map((company) => {
+    const ref = boundedText(company["*followingState"], "LinkedIn organization following-state reference", 1_024);
+    if (!ref.startsWith("urn:li:fsd_followingState:")) {
+      throw new Error("LinkedIn organization following-state reference changed format");
+    }
+    return ref;
+  }));
+  if (companyIds.size !== 1 || followingRefs.size !== 1) {
+    throw new Error("LinkedIn organization response exposed ambiguous target identities");
+  }
+  const followingRef = followingRefs.values().next().value!;
+  const states = records.filter((record) =>
+    record.$type === "com.linkedin.voyager.dash.feed.FollowingState"
+    && record.entityUrn === followingRef);
+  const followerCounts = new Set(states.map((state) =>
+    nonnegativeInteger(state.followerCount, "LinkedIn organization followerCount")));
+  if (followerCounts.size !== 1) {
+    throw new Error("LinkedIn organization response omitted or contradicted its exact follower count");
+  }
+  const name = oneUniqueLinkedInText(
+    companies.map((company) => company.name),
+    "LinkedIn organization name",
+    1_000,
+    true,
+  );
+  if (name === null) throw new Error("LinkedIn organization name is unavailable");
+  const description = oneUniqueLinkedInText(
+    companies.map((company) => company.description),
+    "LinkedIn organization description",
+    20_000,
+    false,
+  );
+  const websiteUrl = safeLinkedInPublicUrl(oneUniqueLinkedInText(
+    companies.map((company) => company.websiteUrl),
+    "LinkedIn organization website URL",
+    2_048,
+    false,
+  ), "LinkedIn organization website URL");
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "linkedin",
+    target: Object.freeze({
+      kind: "organization",
+      id: companyIds.values().next().value!,
+      url: target.url,
+    }),
+    observedAt: linkedInObservationTime(input.observedAt),
+    completeness: "complete",
+    metrics: Object.freeze({
+      followers: linkedInExactCountMetric(
+        followerCounts.values().next().value!,
+        "LinkedIn organization followers",
+      ),
+    }),
+    metadata: Object.freeze({
+      universalName: target.slug,
+      name,
+      description,
+      websiteUrl,
+    }),
+  });
 }
 
 export function linkedInMailboxUrnFromMiniProfile(value: unknown): string {
@@ -2703,6 +3162,24 @@ export function assertLinkedInWebR1RequestAllowed(
         : (() => { throw new Error("LinkedIn messaging-list request URL is invalid"); })(),
       method: boundedText(requestValue.method, "LinkedIn messaging-list request method", 16),
     }, requestValue.mailboxUrn);
+    return;
+  }
+  if (operationValue === "profiles.read" || operationValue === "organizations.read") {
+    if (!isRecord(requestValue)) throw new Error("LinkedIn profile read request must be an object");
+    const method = boundedText(requestValue.method, "LinkedIn profile read request method", 16)
+      .toUpperCase();
+    if (method !== "GET") throw new Error("LinkedIn profile reads require GET");
+    const rawUrl = requestValue.url;
+    if (!(rawUrl instanceof URL) && typeof rawUrl !== "string") {
+      throw new Error("LinkedIn profile read request URL is invalid");
+    }
+    const url = rawUrl instanceof URL ? new URL(rawUrl.href) : new URL(rawUrl);
+    if (
+      operationValue === "profiles.read"
+      && url.href === "https://www.linkedin.com/mynetwork/invite-connect/connections/"
+    ) return;
+    if (operationValue === "profiles.read") linkedInPersonalProfileTarget(url.href);
+    else linkedInOrganizationTarget(url.href);
     return;
   }
   throw new Error("LinkedIn R1 operation has no captured request contract");

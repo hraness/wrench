@@ -151,7 +151,7 @@ function xArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "5a6d64add05fd2c5b70408ad74ff1f263d57bd1634e571d8b6800f7dac4d34a8",
+  "a2f3dc3e766c3ce33033485ec5393070ed3407bff5c729e25eb4d3d12e76379c",
   {
     "likes.set": [1],
   },
@@ -319,7 +319,7 @@ const operations = Object.freeze([
 export const xWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "x-web",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "X Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [

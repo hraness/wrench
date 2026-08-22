@@ -30,6 +30,8 @@ import {
   linkedInArticleDraftEntityUrl,
   linkedInMailboxUrnFromMiniProfile,
   linkedInMessengerConversationsUrl,
+  linkedInOrganizationTarget,
+  linkedInPersonalProfileTarget,
   linkedInPostReadbackUrl,
   linkedInWebFolderCategory,
   normalizeLinkedInGraphqlEnvelope,
@@ -41,6 +43,8 @@ import {
   normalizeLinkedInArticleImageUploadStatus,
   normalizeLinkedInMessagingList,
   normalizeLinkedInPostProjection,
+  projectLinkedInOrganizationStats,
+  projectLinkedInPersonalProfileStats,
   resolveLinkedInRegisteredQueryId,
 } from "./linkedin-web";
 
@@ -87,11 +91,20 @@ describe("LinkedIn internal-web operation registry", () => {
   });
 
   test("graduates only private native Article saving and exact post publishing", () => {
-    const observed = new Set(["articles.draft.save", "posts.publish"]);
+    const observed = new Set([
+      "articles.draft.save",
+      "organizations.read",
+      "posts.publish",
+      "profiles.read",
+    ]);
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
       expect(contract.state).toBe(observed.has(operation) ? "observed" : "capture-required");
-      expect(contract.requests).toHaveLength(operation === "posts.publish" ? 5 : 0);
+      expect(contract.requests).toHaveLength(
+        operation === "posts.publish" ? 5
+          : operation === "profiles.read" || operation === "organizations.read" ? 1
+            : 0,
+      );
     }
     expect(LINKEDIN_WEB_OPERATIONS["reactions.set"].risk).toBe("R2");
     expect(LINKEDIN_WEB_OPERATIONS["articles.draft.save"].risk).toBe("R2");
@@ -109,6 +122,175 @@ describe("LinkedIn internal-web operation registry", () => {
     ] as const) {
       expect(LINKEDIN_WEB_OPERATIONS[operation].risk).toBe("R3");
     }
+  });
+});
+
+describe("LinkedIn exact profile-stat projections", () => {
+  const observedAt = "2026-08-21T15:00:00.000Z";
+  const subject = "urn:li:fsd_profile:123456789";
+
+  function personalHtml(label = "7,553 followers"): string {
+    return `<html><body><a href="/mynetwork/network-manager/people-follow/followers"><p><span>${label.split(" ")[0]}</span> followers</p></a></body></html>`;
+  }
+
+  function connectionsHtml(label = "4,877 connections"): string {
+    return `<html><body><h1><span>${label.split(" ")[0]}</span> connections</h1><button>Sort by:</button><label>Search with filters</label></body></html>`;
+  }
+
+  function bootstrapHtml(value: unknown): string {
+    const encoded = JSON.stringify(value).replace(/[&<>"=\\]/gu, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "=": "&#61;",
+      "\\": "&#92;",
+    })[character] ?? character);
+    return `<html><body><code style="display: none" id="bpr-guid-123">${encoded}</code></body></html>`;
+  }
+
+  function organizationHtml(followerCount: unknown = 6, universalName = "hraness"): string {
+    const companyUrn = "urn:li:fsd_company:123";
+    const followingStateUrn = "urn:li:fsd_followingState:organization-123";
+    return bootstrapHtml({
+      data: {},
+      included: [
+        {
+          $type: "com.linkedin.voyager.dash.organization.Company",
+          entityUrn: companyUrn,
+          universalName,
+          "*followingState": followingStateUrn,
+          name: "Hraness",
+          description: "Public company description",
+          websiteUrl: "https://hraness.com",
+        },
+        {
+          $type: "com.linkedin.voyager.dash.feed.FollowingState",
+          entityUrn: followingStateUrn,
+          followerCount,
+        },
+      ],
+    });
+  }
+
+  test("normalizes only exact public LinkedIn profile and organization URLs", () => {
+    expect(linkedInPersonalProfileTarget("https://www.linkedin.com/in/0thernet"))
+      .toEqual({ slug: "0thernet", url: "https://www.linkedin.com/in/0thernet/" });
+    expect(linkedInOrganizationTarget("https://www.linkedin.com/company/Hraness/"))
+      .toEqual({ slug: "hraness", url: "https://www.linkedin.com/company/hraness/" });
+    expect(() => linkedInPersonalProfileTarget("https://linkedin.com/in/0thernet"))
+      .toThrow("exact public LinkedIn origin");
+    expect(() => linkedInOrganizationTarget("https://www.linkedin.com/company/hraness/?view=admin"))
+      .toThrow("exact public LinkedIn origin");
+  });
+
+  test("projects exact self followers and private connection totals", () => {
+    expect(projectLinkedInPersonalProfileStats({
+      profileHtml: personalHtml(),
+      connectionsHtml: connectionsHtml(),
+      profileUrl: "https://www.linkedin.com/in/0thernet",
+      expectedSubject: subject,
+      expectedPublicIdentifier: "0thernet",
+      observedAt,
+    })).toEqual({
+      schemaVersion: 1,
+      provider: "linkedin",
+      target: {
+        kind: "profile",
+        id: subject,
+        url: "https://www.linkedin.com/in/0thernet/",
+      },
+      observedAt,
+      completeness: "complete",
+      metrics: {
+        followers: { status: "available", value: 7553, precision: "exact", unit: "count" },
+        connections: { status: "available", value: 4877, precision: "exact", unit: "count" },
+      },
+      metadata: { profileSlug: "0thernet" },
+    });
+    expect(projectLinkedInPersonalProfileStats({
+      profileHtml: personalHtml(),
+      connectionsHtml: null,
+      profileUrl: "https://www.linkedin.com/in/0thernet",
+      expectedSubject: subject,
+      expectedPublicIdentifier: "0thernet",
+      observedAt,
+    })).toMatchObject({
+      completeness: "partial",
+      metrics: { connections: { status: "unavailable", reason: "not-authorized" } },
+    });
+  });
+
+  test("rejects rounded, ambiguous, or unbound personal counts", () => {
+    expect(() => projectLinkedInPersonalProfileStats({
+      profileHtml: personalHtml("7.5K followers"),
+      connectionsHtml: connectionsHtml(),
+      profileUrl: "https://www.linkedin.com/in/0thernet",
+      expectedSubject: subject,
+      expectedPublicIdentifier: "0thernet",
+      observedAt,
+    })).toThrow("not an exact count");
+    expect(() => projectLinkedInPersonalProfileStats({
+      profileHtml: `${personalHtml()}${personalHtml("7,554 followers")}`,
+      connectionsHtml: connectionsHtml(),
+      profileUrl: "https://www.linkedin.com/in/0thernet",
+      expectedSubject: subject,
+      expectedPublicIdentifier: "0thernet",
+      observedAt,
+    })).toThrow("one exact self follower count");
+    expect(() => projectLinkedInPersonalProfileStats({
+      profileHtml: "<html><body><span>7,553 followers</span></body></html>",
+      connectionsHtml: connectionsHtml(),
+      profileUrl: "https://www.linkedin.com/in/0thernet",
+      expectedSubject: "urn:li:fsd_profile:not-numeric",
+      expectedPublicIdentifier: "0thernet",
+      observedAt,
+    })).toThrow("unsupported format");
+    expect(() => projectLinkedInPersonalProfileStats({
+      profileHtml: personalHtml(),
+      connectionsHtml: connectionsHtml(),
+      profileUrl: "https://www.linkedin.com/in/crossed-target",
+      expectedSubject: subject,
+      expectedPublicIdentifier: "0thernet",
+      observedAt,
+    })).toThrow("does not match the bound current member public identifier");
+  });
+
+  test("binds company followerCount through the requested Company and FollowingState URNs", () => {
+    expect(projectLinkedInOrganizationStats({
+      html: organizationHtml(),
+      organizationUrl: "https://www.linkedin.com/company/hraness",
+      observedAt,
+    })).toEqual({
+      schemaVersion: 1,
+      provider: "linkedin",
+      target: {
+        kind: "organization",
+        id: "urn:li:fsd_company:123",
+        url: "https://www.linkedin.com/company/hraness/",
+      },
+      observedAt,
+      completeness: "complete",
+      metrics: {
+        followers: { status: "available", value: 6, precision: "exact", unit: "count" },
+      },
+      metadata: {
+        universalName: "hraness",
+        name: "Hraness",
+        description: "Public company description",
+        websiteUrl: "https://hraness.com/",
+      },
+    });
+    expect(() => projectLinkedInOrganizationStats({
+      html: organizationHtml(6, "other"),
+      organizationUrl: "https://www.linkedin.com/company/hraness",
+      observedAt,
+    })).toThrow("did not bind the requested universal name");
+    expect(() => projectLinkedInOrganizationStats({
+      html: organizationHtml("6 followers"),
+      organizationUrl: "https://www.linkedin.com/company/hraness",
+      observedAt,
+    })).toThrow("non-negative safe integer");
   });
 });
 
@@ -513,10 +695,11 @@ describe("LinkedIn R1 internal-request gate", () => {
     expect(LINKEDIN_WEB_OPERATIONS["messaging.list"].requests).toHaveLength(0);
   });
 
-  test("keeps every consumer-web read capture-required with no executable request rule", () => {
+  test("keeps unobserved consumer-web reads capture-required with no executable request rule", () => {
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
       if (contract.risk !== "R1" || contract.effect !== "read") continue;
+      if (operation === "profiles.read" || operation === "organizations.read") continue;
       expect(contract.requests).toHaveLength(0);
       expect(contract.state).toBe("capture-required");
       expect(() => assertLinkedInWebR1RequestAllowed(operation, {
@@ -524,6 +707,37 @@ describe("LinkedIn R1 internal-request gate", () => {
         url: "https://www.linkedin.com/voyager/api/graphql?variables=private",
       })).toThrow("LinkedIn R1 operation has no captured request contract");
     }
+  });
+
+  test("allows only exact bounded server-rendered profile targets", () => {
+    expect(LINKEDIN_WEB_OPERATIONS["profiles.read"]).toMatchObject({
+      state: "observed",
+      evidence: "live-response",
+    });
+    expect(LINKEDIN_WEB_OPERATIONS["organizations.read"]).toMatchObject({
+      state: "observed",
+      evidence: "live-response",
+    });
+    expect(() => assertLinkedInWebR1RequestAllowed("profiles.read", {
+      method: "GET",
+      url: "https://www.linkedin.com/in/0thernet/",
+    })).not.toThrow();
+    expect(() => assertLinkedInWebR1RequestAllowed("profiles.read", {
+      method: "GET",
+      url: "https://www.linkedin.com/mynetwork/invite-connect/connections/",
+    })).not.toThrow();
+    expect(() => assertLinkedInWebR1RequestAllowed("organizations.read", {
+      method: "GET",
+      url: "https://www.linkedin.com/company/hraness/",
+    })).not.toThrow();
+    expect(() => assertLinkedInWebR1RequestAllowed("profiles.read", {
+      method: "GET",
+      url: "https://www.linkedin.com/in/0thernet/?trk=unsafe",
+    })).toThrow();
+    expect(() => assertLinkedInWebR1RequestAllowed("organizations.read", {
+      method: "POST",
+      url: "https://www.linkedin.com/company/hraness/",
+    })).toThrow("LinkedIn profile reads require GET");
   });
 
   test("rejects writes and unknown operations before inspecting caller-controlled request data", () => {

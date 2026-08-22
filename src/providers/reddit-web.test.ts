@@ -10,7 +10,9 @@ import {
   normalizeRedditFeedResponse,
   normalizeRedditMessageListing,
   normalizeRedditPostResponse,
+  parseRedditProfileContributionPage,
   parseRedditThingState,
+  parseRedditWebProfileResponse,
   parseRedditWebViewerResponse,
   redditFullname,
 } from "./reddit-web";
@@ -103,6 +105,23 @@ function messageThing(
   };
 }
 
+function profileThing(username = "viewer"): unknown {
+  return {
+    kind: "t2",
+    data: {
+      id: "abc123",
+      name: username,
+      total_karma: 4321,
+      subreddit: {
+        display_name_prefixed: `u/${username}`,
+        title: "Viewer name",
+        public_description: "Public profile bio",
+        subscribers: 8,
+      },
+    },
+  };
+}
+
 describe("Reddit internal-web operation registry", () => {
   test("ships one schema-v4 semantic manifest entry for every provider operation", () => {
     expect(redditWebManifest.schemaVersion).toBe(4);
@@ -144,6 +163,7 @@ describe("Reddit internal-web operation registry", () => {
       "messaging.list",
       "messaging.read",
       "posts.read",
+      "profiles.read",
     ]);
     for (const operation of [
       "comments.create",
@@ -165,6 +185,26 @@ describe("Reddit internal-web operation registry", () => {
 
 describe("Reddit exact request authorization", () => {
   test("accepts fixed reads and returns no form values", () => {
+    expect(authorizeRedditWebRequest({
+      operation: "profiles.about",
+      url: "https://www.reddit.com/user/viewer/about.json?raw_json=1",
+      method: "GET",
+      profile: "viewer",
+    })).toMatchObject({
+      operation: "profiles.about",
+      path: "/user/viewer/about.json",
+      queryNames: ["raw_json"],
+    });
+    expect(authorizeRedditWebRequest({
+      operation: "profiles.overview",
+      url: "https://www.reddit.com/user/viewer/overview.json?after=t1_next&limit=100&raw_json=1",
+      method: "GET",
+      profile: "viewer",
+    })).toMatchObject({
+      operation: "profiles.overview",
+      path: "/user/viewer/overview.json",
+      queryNames: ["after", "limit", "raw_json"],
+    });
     expect(authorizeRedditWebRequest({
       operation: "feeds.home",
       url: "https://www.reddit.com/.json?limit=25&raw_json=1&after=t3_next",
@@ -269,6 +309,49 @@ describe("Reddit exact request authorization", () => {
     for (const candidate of candidates) {
       expect(() => authorizeRedditWebRequest(candidate)).toThrow();
     }
+  });
+});
+
+describe("Reddit profile-stat projections", () => {
+  test("projects exact follower and total-karma counts with public metadata", () => {
+    expect(parseRedditWebProfileResponse(profileThing(), "viewer")).toEqual({
+      username: "viewer",
+      displayName: "Viewer name",
+      bio: "Public profile bio",
+      followers: 8,
+      karma: 4321,
+    });
+  });
+
+  test("counts only exact target-authored post and comment things", () => {
+    expect(parseRedditProfileContributionPage(listing([
+      postThing("t3_abc123", { author: "viewer" }),
+      commentThing("t1_def456", "t3_abc123", "", { author: "viewer" }),
+    ], "t1_next"), "viewer")).toEqual({
+      ids: ["t3_abc123", "t1_def456"],
+      after: "t1_next",
+    });
+  });
+
+  test("rejects target, author, kind, duplicate, and unsafe count drift", () => {
+    expect(() => parseRedditWebProfileResponse(profileThing("other"), "viewer"))
+      .toThrow("did not bind");
+    expect(() => parseRedditProfileContributionPage(listing([
+      postThing("t3_abc123", { author: "other" }),
+    ]), "viewer")).toThrow("another author");
+    expect(() => parseRedditProfileContributionPage(listing([
+      { kind: "t5", data: { name: "t5_group", author: "viewer" } },
+    ]), "viewer")).toThrow("must be t1 or t3");
+    expect(() => parseRedditProfileContributionPage(listing([
+      postThing("t3_abc123", { author: "viewer" }),
+      postThing("t3_abc123", { author: "viewer" }),
+    ]), "viewer")).toThrow("repeated a contribution");
+
+    const unsafe = profileThing() as Record<string, unknown>;
+    const data = unsafe.data as Record<string, unknown>;
+    data.total_karma = Number.MAX_SAFE_INTEGER + 1;
+    expect(() => parseRedditWebProfileResponse(unsafe, "viewer"))
+      .toThrow("must be an integer");
   });
 });
 

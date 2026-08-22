@@ -113,7 +113,10 @@ function textResponse(value: string): Response {
   });
 }
 
-function preloadHtml(userId = USER_ID): string {
+function preloadHtml(
+  userId = USER_ID,
+  publicationOverrides: Readonly<Record<string, unknown>> = {},
+): string {
   const payload = JSON.stringify({
     user: {
       id: userId,
@@ -126,6 +129,7 @@ function preloadHtml(userId = USER_ID): string {
           primary_user_id: userId,
           can_post_notes_as_primary_user: true,
           is_publication_primary_user: true,
+          ...publicationOverrides,
         },
       ],
     },
@@ -277,11 +281,17 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   };
 }
 
-function bootstrapResponse(request: CapturedRequest, userId = USER_ID): Response | null {
+function bootstrapResponse(
+  request: CapturedRequest,
+  userId = USER_ID,
+  publicationOverrides: Readonly<Record<string, unknown>> = {},
+): Response | null {
   if (request.url.pathname === "/api/v1/am_i_logged_in") {
     return jsonResponse({ loggedIn: true, expires: "later", ageVerification: null });
   }
-  if (request.url.pathname === "/") return textResponse(preloadHtml(userId));
+  if (request.url.pathname === "/") {
+    return textResponse(preloadHtml(userId, publicationOverrides));
+  }
   return null;
 }
 
@@ -454,6 +464,43 @@ describe("Substack authenticated internal API runtime", () => {
         expectedSemanticPaths: ["/api/v1/messages/inbox"],
         verify: (output) => expect((output as { threads: readonly unknown[] }).threads).toHaveLength(1),
       },
+      {
+        action: "profiles.read",
+        input: { profile: "wrench-reader" },
+        expectedSemanticPaths: ["/api/v1/user/wrench-reader/public_profile"],
+        verify: (output) => expect(output).toMatchObject({
+          schemaVersion: 1,
+          provider: "substack",
+          target: {
+            kind: "profile",
+            id: String(USER_ID),
+            url: "https://substack.com/@wrench-reader",
+          },
+          completeness: "complete",
+          metrics: {
+            followers: { status: "available", value: 178, precision: "exact", unit: "count" },
+          },
+        }),
+      },
+      {
+        action: "organizations.read",
+        input: { organization: "wrench-owned" },
+        expectedSemanticPaths: ["/api/v1/publish-dashboard/summary"],
+        verify: (output) => expect(output).toMatchObject({
+          schemaVersion: 1,
+          provider: "substack",
+          target: {
+            kind: "publication",
+            id: String(PUBLICATION_ID),
+            url: "https://wrench-owned.substack.com/",
+          },
+          completeness: "complete",
+          metrics: {
+            freeSubscribers: { status: "available", value: 121, precision: "exact", unit: "count" },
+            paidSubscribers: { status: "available", value: 5, precision: "exact", unit: "count" },
+          },
+        }),
+      },
     ];
 
     for (const scenario of scenarios) {
@@ -520,6 +567,23 @@ describe("Substack authenticated internal API runtime", () => {
                   }],
                   more: false,
                 });
+              case "/api/v1/user/wrench-reader/public_profile":
+                return jsonResponse({
+                  id: USER_ID,
+                  handle: "wrench-reader",
+                  name: "Wrench Reader",
+                  subscriberCount: 125,
+                  followerCount: 178,
+                });
+              case "/api/v1/publish-dashboard/summary":
+                expect(request.url.origin).toBe("https://wrench-owned.substack.com");
+                expect(request.headers.get("referer")).toBe(
+                  "https://wrench-owned.substack.com/publish/home",
+                );
+                return jsonResponse({
+                  totalEmail: 126,
+                  subscribers: 5,
+                });
               default:
                 throw new Error(`unexpected ${request.url.pathname}`);
             }
@@ -536,6 +600,41 @@ describe("Substack authenticated internal API runtime", () => {
       );
       scenario.verify(result.output);
     }
+  });
+
+  test("binds the exact publication listed in the signed-in viewer dashboard", async () => {
+    const calls: CapturedRequest[] = [];
+    const result = await executeSubstackWebOperation(
+      recipe("organizations.read"),
+      { organization: "wrench-owned" },
+      boundAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          const bootstrap = bootstrapResponse(request, USER_ID, {
+            primary_user_id: null,
+            can_post_notes_as_primary_user: false,
+            is_publication_primary_user: false,
+          });
+          if (bootstrap !== null) return bootstrap;
+          if (request.url.pathname === "/api/v1/publish-dashboard/summary") {
+            return jsonResponse({ totalEmail: 126, subscribers: 5 });
+          }
+          throw new Error(`unexpected ${request.url.pathname}`);
+        }),
+      },
+    );
+    expect(result.output).toMatchObject({
+      completeness: "complete",
+      metrics: {
+        freeSubscribers: { status: "available", value: 121 },
+        paidSubscribers: { status: "available", value: 5 },
+      },
+    });
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/api/v1/am_i_logged_in",
+      "/",
+      "/api/v1/publish-dashboard/summary",
+    ]);
   });
 
   test("uploads one plan-bound PNG, publishes one Note, and verifies exact independent readback", async () => {

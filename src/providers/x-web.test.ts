@@ -12,6 +12,8 @@ import {
   extractXWebGraphQlReadResponseRoot,
   extractXWebUrtBottomCursor,
   normalizeXWebGraphQlTimelineResponse,
+  normalizeXWebProfileHandle,
+  projectXWebProfileStats,
   normalizeXWebUrtTimeline,
   resolveUniqueXWebBundleDescriptor,
   resolveXWebLegacyDmInbox,
@@ -149,6 +151,22 @@ describe("X query descriptor revision evidence", () => {
       queryId: "btD9FyMDa3_vydVp7fr87Q",
       sourceChunk: "bundle.TwitterArticles.305538ca.js",
       observedOn: "2026-08-14",
+    });
+  });
+
+  test("records the current reviewed UserByScreenName observation", () => {
+    expect(evidence("UserByScreenName")).toMatchObject({
+      queryId: "Gb-d6r0vxPOADdG62OEBpQ",
+      sourceChunk: "main.dd6a5b6a.js",
+      observedOn: "2026-08-21",
+    });
+    expect(xWebSemanticOperationRegistry["profiles.by-handle"]).toEqual({
+      semanticOperation: "profiles.read",
+      risk: "R1",
+      transport: "graphql-query",
+      operationName: "UserByScreenName",
+      operationType: "query",
+      responseRoot: ["user", "result"],
     });
   });
 
@@ -750,6 +768,121 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
     expect(() => normalizeXWebGraphQlTimelineResponse("posts.by-id", {
       data: { tweetResult: { result: {} } },
     })).toThrow("not an X URT timeline response contract");
+  });
+});
+
+describe("X exact profile projection", () => {
+  const response = (overrides: Readonly<Record<string, unknown>> = {}) => ({
+    data: {
+      user: {
+        result: {
+          __typename: "User",
+          rest_id: "123456789",
+          core: { name: "Hraness", screen_name: "Hraness" },
+          legacy: {
+            screen_name: "hraness",
+            description: "Public bio",
+            followers_count: 1234,
+            friends_count: 56,
+            entities: {
+              url: {
+                urls: [{ expanded_url: "https://hraness.com" }],
+              },
+            },
+          },
+          ...overrides,
+        },
+      },
+    },
+  });
+
+  test("normalizes handles and projects exact target-bound follower metrics", () => {
+    expect(normalizeXWebProfileHandle("Hra_ness1")).toBe("hra_ness1");
+    expect(() => normalizeXWebProfileHandle("https://x.com/hraness"))
+      .toThrow("1-15 letters, digits, or underscores");
+    expect(projectXWebProfileStats(
+      response(),
+      "hraness",
+      "2026-08-21T15:00:00.000Z",
+    )).toEqual({
+      schemaVersion: 1,
+      provider: "x",
+      target: {
+        kind: "profile",
+        id: "123456789",
+        url: "https://x.com/hraness",
+      },
+      observedAt: "2026-08-21T15:00:00.000Z",
+      completeness: "complete",
+      metrics: {
+        followers: { status: "available", value: 1234, precision: "exact", unit: "count" },
+        following: { status: "available", value: 56, precision: "exact", unit: "count" },
+      },
+      metadata: {
+        handle: "hraness",
+        displayName: "Hraness",
+        bio: "Public bio",
+        websiteUrl: "https://hraness.com/",
+      },
+    });
+  });
+
+  test("projects the current relationship-count profile shape without rounding", () => {
+    const modern = response({
+      legacy: undefined,
+      relationship_counts: { followers: 2345, following: 67 },
+      profile_bio: { description: "Current public bio\nwith another line", entities: {} },
+      website: { url: "https://hraness.com/about" },
+    });
+    expect(projectXWebProfileStats(
+      modern,
+      "hraness",
+      "2026-08-21T15:00:00.000Z",
+    )).toMatchObject({
+      metrics: {
+        followers: { status: "available", value: 2345, precision: "exact", unit: "count" },
+        following: { status: "available", value: 67, precision: "exact", unit: "count" },
+      },
+      metadata: {
+        bio: "Current public bio\nwith another line",
+        websiteUrl: "https://hraness.com/about",
+      },
+    });
+    expect(() => projectXWebProfileStats(
+      response({
+        legacy: undefined,
+        relationship_counts: { followers: "2.3K", following: 67 },
+        profile_bio: { description: "Current public bio", entities: {} },
+        website: null,
+      }),
+      "hraness",
+      "2026-08-21T15:00:00.000Z",
+    )).toThrow("exact nonnegative safe integer");
+  });
+
+  test("rejects switched targets, unavailable users, and rounded counts", () => {
+    expect(() => projectXWebProfileStats(
+      response({ core: { name: "Other", screen_name: "other" } }),
+      "hraness",
+      "2026-08-21T15:00:00.000Z",
+    )).toThrow("did not bind the requested handle");
+    expect(() => projectXWebProfileStats(
+      response({ __typename: "UserUnavailable" }),
+      "hraness",
+      "2026-08-21T15:00:00.000Z",
+    )).toThrow("did not contain one available User");
+    expect(() => projectXWebProfileStats(
+      response({
+        legacy: {
+          screen_name: "hraness",
+          description: "Public bio",
+          followers_count: "1.2K",
+          friends_count: 56,
+        },
+      }),
+      "hraness",
+      "2026-08-21T15:00:00.000Z",
+    )).toThrow("exact nonnegative safe integer");
   });
 });
 

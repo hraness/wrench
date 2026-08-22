@@ -19,6 +19,7 @@ import {
   projectBlueskyFeed,
   projectBlueskyNotifications,
   projectBlueskyPostsResponse,
+  projectBlueskyProfileStats,
   projectBlueskyThread,
 } from "./bluesky-web";
 
@@ -84,6 +85,7 @@ describe("Bluesky authenticated API policy", () => {
       "content.delete",
       "feeds.read",
       "media.read",
+      "profiles.read",
       "posts.publish",
       "posts.read",
     ]);
@@ -102,6 +104,53 @@ describe("Bluesky authenticated API policy", () => {
       expect("browser" in operation).toBe(false);
       expect("provider" in operation).toBe(false);
     }
+  });
+
+  test("projects exact target-bound profile counts and rejects rounded or switched responses", () => {
+    const response = {
+      did: AUTHOR_DID,
+      handle: "hraness.bsky.social",
+      displayName: "Hraness",
+      description: "Public bio",
+      followersCount: 1234,
+      followsCount: 56,
+      postsCount: 789,
+    };
+    expect(projectBlueskyProfileStats(
+      response,
+      "hraness.bsky.social",
+      "2026-08-21T15:00:00.000Z",
+    )).toEqual({
+      schemaVersion: 1,
+      provider: "bluesky",
+      target: {
+        kind: "profile",
+        id: AUTHOR_DID,
+        url: "https://bsky.app/profile/hraness.bsky.social",
+      },
+      observedAt: "2026-08-21T15:00:00.000Z",
+      completeness: "complete",
+      metrics: {
+        followers: { status: "available", value: 1234, precision: "exact", unit: "count" },
+        following: { status: "available", value: 56, precision: "exact", unit: "count" },
+        posts: { status: "available", value: 789, precision: "exact", unit: "count" },
+      },
+      metadata: {
+        handle: "hraness.bsky.social",
+        displayName: "Hraness",
+        bio: "Public bio",
+      },
+    });
+    expect(() => projectBlueskyProfileStats(
+      { ...response, handle: "switched.bsky.social" },
+      "hraness.bsky.social",
+      "2026-08-21T15:00:00.000Z",
+    )).toThrow("did not bind the requested handle");
+    expect(() => projectBlueskyProfileStats(
+      { ...response, followersCount: "1.2K" },
+      "hraness.bsky.social",
+      "2026-08-21T15:00:00.000Z",
+    )).toThrow("bounded integer");
   });
 
   test("strictly binds deletion pre-read, commit, and absence projections", () => {

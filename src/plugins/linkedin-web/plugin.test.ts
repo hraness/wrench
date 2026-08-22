@@ -9,6 +9,42 @@ if (binding?.transport !== "web-session-api") {
 }
 
 describe("LinkedIn web provider plugin", () => {
+  test("versions the profile-stat source closure independently", () => {
+    expect(linkedinWebPlugin.version).toBe("1.1.0");
+  });
+
+  test("advertises observed exact personal and organization profile reads", () => {
+    const profile = binding.operations.find((operation) =>
+      operation.name === "profiles.read");
+    const organization = binding.operations.find((operation) =>
+      operation.name === "organizations.read");
+    expect(profile).toMatchObject({
+      contractVersion: 1,
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+      input: {
+        properties: {
+          profile_url: { type: "string", minLength: 25, maxLength: 2048 },
+          include_connections: { type: "boolean" },
+        },
+        required: ["profile_url"],
+      },
+    });
+    expect(organization).toMatchObject({
+      contractVersion: 1,
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+      input: {
+        properties: {
+          organization_url: { type: "string", minLength: 30, maxLength: 2048 },
+        },
+        required: ["organization_url"],
+      },
+    });
+  });
+
   test("exposes exact one-dispatch post publishing with the reviewed browser source", () => {
     const operation = binding.operations.find((candidate) =>
       candidate.name === "posts.publish");

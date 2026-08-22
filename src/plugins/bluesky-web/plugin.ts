@@ -22,7 +22,7 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(blueskyContracts),
-  "e7d1cfaeb830ed769874b28541af19713ed750a9edf0f9e76f8078bc2adf8bea",
+  "5694b7feec976a94fa6e32fd8e2a4d4ee8ef4b3b8eb27297fddce6de2eb10d83",
   {
     "posts.publish": [2],
   },
@@ -78,7 +78,7 @@ const operations = webSessionContractOperations(
 export const blueskyWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "bluesky-web",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "Bluesky Authenticated API",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [

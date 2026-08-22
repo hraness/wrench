@@ -17,7 +17,7 @@ if (tiktokContracts === undefined) {
 export const tiktokWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "tiktok-web",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "TikTok Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
@@ -32,7 +32,7 @@ export const tiktokWebPlugin = defineProviderPlugin({
     authKinds: browserSessionAuthKinds,
     operations: webSessionContractOperations(
       Object.values(tiktokContracts),
-      "1d14f603853acd6c44bb2a4de17bb7a71dace303712d1ed9ca9f25c3571ee145",
+      "6ac405e86c58c8b4fc773f09f629d70b5551209abe18c953556c682948efb678",
       {},
       {
         "messaging.list": {

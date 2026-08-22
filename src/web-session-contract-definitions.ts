@@ -359,12 +359,15 @@ const BLUESKY_WEB_OPERATIONS = operationPolicies("bluesky", [
   "media.read",
   "posts.publish",
   "posts.read",
+  "profiles.read",
 ], {
   "posts.publish": 3,
 });
 const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
   "articles.draft.save",
+  "organizations.read",
   "posts.publish",
+  "profiles.read",
 ], {
   "articles.draft.save": 7,
   "posts.publish": 3,
@@ -380,6 +383,7 @@ const REDDIT_WEB_OPERATIONS = operationPolicies("reddit", [
   "messaging.list",
   "messaging.read",
   "posts.read",
+  "profiles.read",
 ]);
 const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
   "articles.read",
@@ -387,14 +391,17 @@ const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
   "feeds.read",
   "media.read",
   "messaging.list",
+  "organizations.read",
   "posts.publish",
   "posts.read",
+  "profiles.read",
 ], {
   "posts.publish": 3,
 });
 const TIKTOK_WEB_OPERATIONS = operationPolicies("tiktok", [
   "comments.read",
   "feeds.read",
+  "profiles.read",
 ]);
 const WHATSAPP_WEB_OPERATIONS = operationPolicies("whatsapp", [
   "contacts.list",
@@ -419,12 +426,13 @@ const META_WEB_OPERATIONS = Object.freeze({
     "media.read",
     "messaging.list",
     "posts.read",
+    "profiles.read",
   ], {
     "comments.read": 2,
     "feeds.read": 2,
     "messaging.list": 2,
   }),
-  threads: operationPolicies("threads", ["feeds.read", "posts.publish"], {
+  threads: operationPolicies("threads", ["feeds.read", "posts.publish", "profiles.read"], {
     "feeds.read": 2,
     "posts.publish": 4,
   }),
@@ -511,6 +519,7 @@ const bluesky = {
   "posts.quote": contract("bluesky", "posts.quote", BLUESKY_WEB_OPERATIONS["posts.quote"].risk, BLUESKY_WEB_OPERATIONS["posts.quote"].state, BLUESKY_WEB_OPERATIONS["posts.quote"].reason),
   "posts.read": contract("bluesky", "posts.read", BLUESKY_WEB_OPERATIONS["posts.read"].risk, BLUESKY_WEB_OPERATIONS["posts.read"].state, BLUESKY_WEB_OPERATIONS["posts.read"].reason),
   "posts.repost": contract("bluesky", "posts.repost", BLUESKY_WEB_OPERATIONS["posts.repost"].risk, BLUESKY_WEB_OPERATIONS["posts.repost"].state, BLUESKY_WEB_OPERATIONS["posts.repost"].reason),
+  "profiles.read": contract("bluesky", "profiles.read", BLUESKY_WEB_OPERATIONS["profiles.read"].risk, BLUESKY_WEB_OPERATIONS["profiles.read"].state, BLUESKY_WEB_OPERATIONS["profiles.read"].reason),
   "relationships.follow.set": contract("bluesky", "relationships.follow.set", BLUESKY_WEB_OPERATIONS["relationships.follow.set"].risk, BLUESKY_WEB_OPERATIONS["relationships.follow.set"].state, BLUESKY_WEB_OPERATIONS["relationships.follow.set"].reason),
   "replies.create": contract("bluesky", "replies.create", BLUESKY_WEB_OPERATIONS["replies.create"].risk, BLUESKY_WEB_OPERATIONS["replies.create"].state, BLUESKY_WEB_OPERATIONS["replies.create"].reason),
   "threads.publish": contract("bluesky", "threads.publish", BLUESKY_WEB_OPERATIONS["threads.publish"].risk, BLUESKY_WEB_OPERATIONS["threads.publish"].state, BLUESKY_WEB_OPERATIONS["threads.publish"].reason),
@@ -519,8 +528,8 @@ const bluesky = {
 const linkedin = {
   "contacts.list": contract("linkedin", "contacts.list", "R1", "capture-required", "consumer-web contact statistics require a fresh viewer-bound messaging-participant collection with real conversation and message pagination, group attribution, completeness, and acknowledgement-free behavior"),
   "feeds.read": contract("linkedin", "feeds.read", "R1", "capture-required", "the registered feed query revision is known, but its exact current value-level variables need a fresh reviewed capture"),
-  "profiles.read": contract("linkedin", "profiles.read", "R1", "capture-required", "exact public-identifier or profile-URN lookup and bounded member projection require a reviewed capture"),
-  "organizations.read": contract("linkedin", "organizations.read", "R1", "capture-required", "exact organization identifier lookup and bounded page projection require a reviewed capture"),
+  "profiles.read": contract("linkedin", "profiles.read", LINKEDIN_WEB_OPERATIONS["profiles.read"].risk, LINKEDIN_WEB_OPERATIONS["profiles.read"].state, LINKEDIN_WEB_OPERATIONS["profiles.read"].reason),
+  "organizations.read": contract("linkedin", "organizations.read", LINKEDIN_WEB_OPERATIONS["organizations.read"].risk, LINKEDIN_WEB_OPERATIONS["organizations.read"].state, LINKEDIN_WEB_OPERATIONS["organizations.read"].reason),
   "relationships.recommendations.read": contract("linkedin", "relationships.recommendations.read", "R1", "capture-required", "recommended-connection collection variables, paging, and viewer binding require a reviewed capture"),
   "messaging.list": contract("linkedin", "messaging.list", "R1", "capture-required", "the prior mailbox projection drifted; exact current normalized identity-to-mailbox binding, registered query, paging, completeness, and acknowledgement-free behavior require a new reviewed capture"),
   "messaging.read": contract("linkedin", "messaging.read", "R1", "capture-required", "message query revision is known, but exact current variables and acknowledgement-free response handling need a fresh reviewed capture"),
@@ -567,6 +576,7 @@ const hackerNews = {
 
 const x = {
   "feeds.read": contract("x", "feeds.read", "R1", "observed", "current first-party GraphQL timeline/list/search/bookmark query"),
+  "profiles.read": contract("x", "profiles.read", "R1", "observed", "current target-bound UserByScreenName first-party GraphQL query with exact follower and following counts"),
   "posts.read": contract("x", "posts.read", "R1", "observed", "current TweetDetail/UserTweets first-party GraphQL query"),
   "comments.read": contract("x", "comments.read", "R1", "observed", "current TweetDetail conversation entries"),
   "messaging.list": contract("x", "messaging.list", "R1", "capture-required", "current X Chat inbox events are encrypted and require the reviewed key-recovery runtime before plaintext listing"),
@@ -599,6 +609,7 @@ const reddit = {
   "posts.publish": contract("reddit", "posts.publish", REDDIT_WEB_OPERATIONS["posts.publish"].risk, REDDIT_WEB_OPERATIONS["posts.publish"].state, REDDIT_WEB_OPERATIONS["posts.publish"].reason),
   "posts.read": contract("reddit", "posts.read", REDDIT_WEB_OPERATIONS["posts.read"].risk, REDDIT_WEB_OPERATIONS["posts.read"].state, REDDIT_WEB_OPERATIONS["posts.read"].reason),
   "posts.repost": contract("reddit", "posts.repost", REDDIT_WEB_OPERATIONS["posts.repost"].risk, REDDIT_WEB_OPERATIONS["posts.repost"].state, REDDIT_WEB_OPERATIONS["posts.repost"].reason),
+  "profiles.read": contract("reddit", "profiles.read", REDDIT_WEB_OPERATIONS["profiles.read"].risk, REDDIT_WEB_OPERATIONS["profiles.read"].state, REDDIT_WEB_OPERATIONS["profiles.read"].reason),
   "reactions.set": contract("reddit", "reactions.set", REDDIT_WEB_OPERATIONS["reactions.set"].risk, REDDIT_WEB_OPERATIONS["reactions.set"].state, REDDIT_WEB_OPERATIONS["reactions.set"].reason),
   "relationships.follow.set": contract("reddit", "relationships.follow.set", REDDIT_WEB_OPERATIONS["relationships.follow.set"].risk, REDDIT_WEB_OPERATIONS["relationships.follow.set"].state, REDDIT_WEB_OPERATIONS["relationships.follow.set"].reason),
   "replies.create": contract("reddit", "replies.create", REDDIT_WEB_OPERATIONS["replies.create"].risk, REDDIT_WEB_OPERATIONS["replies.create"].state, REDDIT_WEB_OPERATIONS["replies.create"].reason),
@@ -631,10 +642,12 @@ const substack = {
   "messaging.list": contract("substack", "messaging.list", SUBSTACK_WEB_OPERATIONS["messaging.list"].risk, SUBSTACK_WEB_OPERATIONS["messaging.list"].state, SUBSTACK_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("substack", "messaging.read", SUBSTACK_WEB_OPERATIONS["messaging.read"].risk, SUBSTACK_WEB_OPERATIONS["messaging.read"].state, SUBSTACK_WEB_OPERATIONS["messaging.read"].reason),
   "messaging.send": contract("substack", "messaging.send", SUBSTACK_WEB_OPERATIONS["messaging.send"].risk, SUBSTACK_WEB_OPERATIONS["messaging.send"].state, SUBSTACK_WEB_OPERATIONS["messaging.send"].reason),
+  "organizations.read": contract("substack", "organizations.read", SUBSTACK_WEB_OPERATIONS["organizations.read"].risk, SUBSTACK_WEB_OPERATIONS["organizations.read"].state, SUBSTACK_WEB_OPERATIONS["organizations.read"].reason),
   "posts.publish": contract("substack", "posts.publish", SUBSTACK_WEB_OPERATIONS["posts.publish"].risk, SUBSTACK_WEB_OPERATIONS["posts.publish"].state, SUBSTACK_WEB_OPERATIONS["posts.publish"].reason, SUBSTACK_WEB_OPERATIONS["posts.publish"].contractVersion),
   "posts.quote": contract("substack", "posts.quote", SUBSTACK_WEB_OPERATIONS["posts.quote"].risk, SUBSTACK_WEB_OPERATIONS["posts.quote"].state, SUBSTACK_WEB_OPERATIONS["posts.quote"].reason),
   "posts.read": contract("substack", "posts.read", SUBSTACK_WEB_OPERATIONS["posts.read"].risk, SUBSTACK_WEB_OPERATIONS["posts.read"].state, SUBSTACK_WEB_OPERATIONS["posts.read"].reason),
   "posts.repost": contract("substack", "posts.repost", SUBSTACK_WEB_OPERATIONS["posts.repost"].risk, SUBSTACK_WEB_OPERATIONS["posts.repost"].state, SUBSTACK_WEB_OPERATIONS["posts.repost"].reason),
+  "profiles.read": contract("substack", "profiles.read", SUBSTACK_WEB_OPERATIONS["profiles.read"].risk, SUBSTACK_WEB_OPERATIONS["profiles.read"].state, SUBSTACK_WEB_OPERATIONS["profiles.read"].reason),
   "relationships.follow.set": contract("substack", "relationships.follow.set", SUBSTACK_WEB_OPERATIONS["relationships.follow.set"].risk, SUBSTACK_WEB_OPERATIONS["relationships.follow.set"].state, SUBSTACK_WEB_OPERATIONS["relationships.follow.set"].reason),
   "replies.create": contract("substack", "replies.create", SUBSTACK_WEB_OPERATIONS["replies.create"].risk, SUBSTACK_WEB_OPERATIONS["replies.create"].state, SUBSTACK_WEB_OPERATIONS["replies.create"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
@@ -655,6 +668,7 @@ const tiktok = {
   "posts.publish": contract("tiktok", "posts.publish", TIKTOK_WEB_OPERATIONS["posts.publish"].risk, TIKTOK_WEB_OPERATIONS["posts.publish"].state, TIKTOK_WEB_OPERATIONS["posts.publish"].reason),
   "posts.read": contract("tiktok", "posts.read", TIKTOK_WEB_OPERATIONS["posts.read"].risk, TIKTOK_WEB_OPERATIONS["posts.read"].state, TIKTOK_WEB_OPERATIONS["posts.read"].reason),
   "posts.repost": contract("tiktok", "posts.repost", TIKTOK_WEB_OPERATIONS["posts.repost"].risk, TIKTOK_WEB_OPERATIONS["posts.repost"].state, TIKTOK_WEB_OPERATIONS["posts.repost"].reason),
+  "profiles.read": contract("tiktok", "profiles.read", TIKTOK_WEB_OPERATIONS["profiles.read"].risk, TIKTOK_WEB_OPERATIONS["profiles.read"].state, TIKTOK_WEB_OPERATIONS["profiles.read"].reason),
   "relationships.follow.set": contract("tiktok", "relationships.follow.set", TIKTOK_WEB_OPERATIONS["relationships.follow.set"].risk, TIKTOK_WEB_OPERATIONS["relationships.follow.set"].state, TIKTOK_WEB_OPERATIONS["relationships.follow.set"].reason),
   "replies.create": contract("tiktok", "replies.create", TIKTOK_WEB_OPERATIONS["replies.create"].risk, TIKTOK_WEB_OPERATIONS["replies.create"].state, TIKTOK_WEB_OPERATIONS["replies.create"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
@@ -671,6 +685,7 @@ const youtube = {
   "media.read": contract("youtube", "media.read", "R1", "observed", "current fixed Innertube player metadata request with playback credentials omitted"),
   "posts.publish": contract("youtube", "posts.publish", "R3", "capture-required", "Community text/media publication requires current actor binding and an authorized fixture"),
   "posts.read": contract("youtube", "posts.read", "R1", "observed", "current resolve_url plus exact Community-post browse request"),
+  "profiles.read": contract("youtube", "profiles.read", "R1", "observed", "current target-bound first-party channel response with exact subscriber, video, and lifetime-view counts"),
   "relationships.follow.set": contract("youtube", "relationships.follow.set", "R2", "capture-required", "the current target-bound subscription implementation and independent browse readback are deterministic-test proven but still require an authorized low-stakes live fixture"),
   "replies.create": contract("youtube", "replies.create", "R3", "capture-required", "current reply mutation, parent binding, and an authorized live fixture remain required"),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;

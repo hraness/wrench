@@ -37,8 +37,11 @@ import {
   normalizeInstagramFeed,
   normalizeInstagramInbox,
   normalizeInstagramPost,
+  normalizeInstagramProfileStats,
   normalizeThreadsFeedHtml,
   normalizeThreadsPostHtml,
+  normalizeThreadsProfileStats,
+  normalizeThreadsRecentViewsAvailability,
   parseFacebookViewerId,
   parseMetaJsonDocuments,
   parseMetaJsonScripts,
@@ -1265,6 +1268,10 @@ function exactInstagramMediaId(input: OperationInput): string {
 
 type PreparedMetaRead =
   | {
+    readonly kind: "instagram-profile";
+    readonly profile: string;
+  }
+  | {
     readonly kind: "instagram-feed";
     readonly limit: number;
   }
@@ -1286,6 +1293,10 @@ type PreparedMetaRead =
       readonly threadLimit: number;
       readonly contactLimit: number;
     }
+  | {
+    readonly kind: "threads-profile";
+    readonly profile: string;
+  }
   | {
     readonly kind: "threads-feed";
     readonly limit: number;
@@ -1322,6 +1333,18 @@ function prepareMetaRead(
   environment: Readonly<Record<string, string | undefined>>,
 ): PreparedMetaRead {
   if (recipe.site === "instagram") {
+    if (recipe.action === "profiles.read") {
+      requireExactInputKeys(input, ["profile"]);
+      return Object.freeze({
+        kind: "instagram-profile",
+        profile: exactStringInput(
+          input,
+          "profile",
+          /^[a-z0-9._]{1,30}$/u,
+          "one canonical lowercase Instagram handle",
+        ),
+      });
+    }
     if (recipe.action === "contacts.list") {
       requireExactInputKeys(input, ["contact_limit", "thread_limit"]);
       return Object.freeze({
@@ -1362,6 +1385,18 @@ function prepareMetaRead(
         limit: integerInput(input, "limit", 20, 1, 50),
       });
     }
+  }
+  if (recipe.site === "threads" && recipe.action === "profiles.read") {
+    requireExactInputKeys(input, ["profile"]);
+    return Object.freeze({
+      kind: "threads-profile",
+      profile: exactStringInput(
+        input,
+        "profile",
+        /^[a-z0-9._]{1,30}$/u,
+        "one canonical lowercase Threads handle",
+      ),
+    });
   }
   if (recipe.site === "threads" && recipe.action === "feeds.read") {
     requireExactInputKeys(input, ["feed", "limit"]);
@@ -1454,6 +1489,7 @@ async function executeInstagramRead(
     {
       readonly kind:
         | "instagram-feed"
+        | "instagram-profile"
         | "instagram-media"
         | "instagram-comments"
         | "instagram-inbox"
@@ -1465,6 +1501,18 @@ async function executeInstagramRead(
   maximumBytes: number,
 ): Promise<unknown> {
   const maxBytes = Math.min(maximumBytes, MAX_API_BYTES);
+  if (prepared.kind === "instagram-profile") {
+    const url = new URL("/api/v1/users/web_profile_info/", ORIGINS.instagram);
+    url.searchParams.set("username", prepared.profile);
+    return client.requestJson({
+      url,
+      method: "GET",
+      headers: instagramHeaders(`${ORIGINS.instagram}/${prepared.profile}/`),
+      expectedStatuses: [200],
+      expectedContentTypes: ["application/json"],
+      maxBytes,
+    });
+  }
   if (prepared.kind === "instagram-feed") {
     const url = new URL("/api/v1/feed/timeline/", ORIGINS.instagram);
     url.searchParams.set("count", String(prepared.limit));
@@ -1616,24 +1664,48 @@ export async function executeMetaWebOperation(
   let output: unknown;
   let finalUrl = `${origin}/`;
   if (
-    prepared.kind === "instagram-feed"
+    prepared.kind === "instagram-profile"
+    || prepared.kind === "instagram-feed"
     || prepared.kind === "instagram-media"
     || prepared.kind === "instagram-comments"
     || prepared.kind === "instagram-inbox"
     || prepared.kind === "instagram-contacts"
   ) {
-    output = await executeInstagramRead(
+    const instagramResponse = await executeInstagramRead(
       prepared,
       client,
       viewer.id,
       recipe.maxOutputBytes,
     );
+    output = prepared.kind === "instagram-profile"
+      ? normalizeInstagramProfileStats(
+          instagramResponse,
+          viewer.id,
+          prepared.profile,
+          new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
+        )
+      : instagramResponse;
+    if (prepared.kind === "instagram-profile") {
+      finalUrl = `${origin}/${prepared.profile}/`;
+    }
     if (
       prepared.kind === "instagram-inbox"
       || prepared.kind === "instagram-contacts"
     ) {
       finalUrl = `${origin}/direct/inbox/`;
     }
+  } else if (prepared.kind === "threads-profile") {
+    const profilePath = `/@${encodeURIComponent(prepared.profile)}`;
+    const profileHtml = await metaHtmlPath(client, origin, profilePath);
+    const insightsHtml = await metaHtmlPath(client, origin, "/insights", profilePath);
+    output = normalizeThreadsProfileStats(
+      profileHtml,
+      viewer.id,
+      prepared.profile,
+      normalizeThreadsRecentViewsAvailability(insightsHtml),
+      new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
+    );
+    finalUrl = new URL(profilePath, origin).href;
   } else if (prepared.kind === "threads-feed") {
     output = normalizeThreadsFeedHtml(viewer.rootHtml, viewer.id, prepared.limit);
   } else if (prepared.kind === "facebook-feed") {

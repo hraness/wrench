@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.11.0",
+  "version": "1.10.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -11,33 +11,6 @@
     "x.com"
   ],
   "operations": {
-    "profiles.read": {
-      "description": "Observed contract: read one exact X profile through the current captured first-party UserByScreenName GraphQL query with target-bound exact follower and following counts.",
-      "risk": "R1",
-      "sideEffect": "none",
-      "idempotency": "none",
-      "dedupeWindowMs": 0,
-      "input": {
-        "properties": {
-          "handle": {
-            "type": "string",
-            "description": "Exact X handle without a leading @",
-            "minLength": 1,
-            "maxLength": 15
-          }
-        },
-        "required": [
-          "handle"
-        ]
-      },
-      "webSession": {
-        "site": "x",
-        "action": "profiles.read",
-        "contractVersion": 1,
-        "timeoutMs": 60000,
-        "maxOutputBytes": 2097152
-      }
-    },
     "feeds.read": {
       "description": "Observed contract: read one complete bounded X For You, Following, user, List, search, or bookmarks provider page through its current captured first-party GraphQL query; user/List responses must echo the requested identity and an over-limit page fails without exposing its end cursor.",
       "risk": "R1",

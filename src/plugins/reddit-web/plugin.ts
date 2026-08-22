@@ -20,7 +20,7 @@ if (redditContracts === undefined) {
 
 const operations = webSessionContractOperations(
   Object.values(redditContracts),
-  "3220985112930ea777c3d816304f7a8afd5fb727d6844c5da55abc8a5aa70405",
+  "cab0847ece21781f56053b82ab5f53614fa5f653035fe49b961236e4a4ed1b54",
   {},
   {
     "messaging.list": {
@@ -60,7 +60,7 @@ const operations = webSessionContractOperations(
 export const redditWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "reddit-web",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "Reddit Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [

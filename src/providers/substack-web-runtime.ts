@@ -27,6 +27,8 @@ import {
   normalizeSubstackMediaResponse,
   normalizeSubstackMessageInbox,
   normalizeSubstackNoteResponse,
+  normalizeSubstackPublicationStatsResponse,
+  normalizeSubstackProfileStatsResponse,
   parseSubstackLoggedInResponse,
   parseSubstackPreloadsHtml,
   type SubstackFeedName,
@@ -48,6 +50,7 @@ type SubstackWebSleep = (
 ) => Promise<void>;
 
 export type SubstackWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
+  readonly now?: () => number;
   readonly sleep?: SubstackWebSleep;
 };
 
@@ -108,6 +111,24 @@ function optionalStringInput(
     || value.length > maximum
     || /[\0\r\n]/u.test(value)
   ) throw new Error(`input.${name} must be bounded text`);
+  return value;
+}
+
+function substackProfileInput(input: OperationInput): string {
+  const value = input.profile;
+  if (
+    typeof value !== "string"
+    || !/^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/u.test(value)
+  ) throw new Error("input.profile must be one canonical lowercase Substack handle");
+  return value;
+}
+
+function substackOrganizationInput(input: OperationInput): string {
+  const value = input.organization;
+  if (
+    typeof value !== "string"
+    || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(value)
+  ) throw new Error("input.organization must be one canonical lowercase Substack subdomain");
   return value;
 }
 
@@ -377,6 +398,99 @@ async function readFeed(
     maxBytes: boundedMaximum(recipe),
   });
   return normalizeSubstackFeedResponse(response, feed, limit);
+}
+
+async function readProfile(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  viewer: SubstackWebViewer,
+  input: OperationInput,
+  now: () => number,
+): Promise<unknown> {
+  requireExactInputKeys(input, ["profile"]);
+  const profile = substackProfileInput(input);
+  if (viewer.handle !== profile) {
+    throw new Error("Substack requested profile does not match the signed-in viewer");
+  }
+  const url = new URL(`/api/v1/user/${profile}/public_profile`, SUBSTACK_ORIGIN);
+  authorizeSubstackWebReadRequest({
+    operation: "profiles.read",
+    url,
+    method: "GET",
+    profile,
+  });
+  const response = await client.requestJson({
+    url,
+    method: "GET",
+    headers: jsonHeaders(),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: boundedMaximum(recipe),
+  });
+  return normalizeSubstackProfileStatsResponse(
+    response,
+    viewer.id,
+    profile,
+    new Date(now()).toISOString(),
+  );
+}
+
+async function readOrganization(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  viewer: SubstackWebViewer,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: SubstackWebRuntimeDependencies;
+  },
+): Promise<unknown> {
+  requireExactInputKeys(input, ["organization"]);
+  const organization = substackOrganizationInput(input);
+  const origin = `https://${organization}.substack.com`;
+  const owned = viewer.publications.filter((publication) =>
+    publication.origin === origin);
+  if (owned.length !== 1) {
+    throw new Error("Substack requested organization is not one exact signed-in viewer-owned publication");
+  }
+  const publication = owned[0]!;
+  const client = await createWebSessionClient(origin, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+  });
+  const url = new URL("/api/v1/publish-dashboard/summary", origin);
+  authorizeSubstackWebReadRequest({
+    operation: "organizations.read",
+    url,
+    method: "GET",
+    organization,
+    publicationOrigin: publication.origin,
+  });
+  const response = await client.requestJson({
+    url,
+    method: "GET",
+    headers: Object.freeze({
+      accept: "application/json",
+      referer: `${origin}/publish/home`,
+    }),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: boundedMaximum(recipe),
+  });
+  return normalizeSubstackPublicationStatsResponse(
+    response,
+    {
+      id: publication.id,
+      organization,
+      origin: publication.origin,
+    },
+    new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
+  );
 }
 
 async function readNote(
@@ -1411,6 +1525,8 @@ export async function executeSubstackWebOperation(
     && recipe.action !== "comments.read"
     && recipe.action !== "media.read"
     && recipe.action !== "messaging.list"
+    && recipe.action !== "profiles.read"
+    && recipe.action !== "organizations.read"
     && recipe.action !== "posts.publish"
   ) throw new Error(`Substack authenticated web operation ${recipe.action} has no executable reviewed contract`);
 
@@ -1435,6 +1551,7 @@ export async function executeSubstackWebOperation(
   void options.afterDispatchVerified;
 
   let output: unknown;
+  let finalUrl = SUBSTACK_ORIGIN;
   switch (recipe.action) {
     case "feeds.read":
       output = await readFeed(client, recipe, input);
@@ -1454,11 +1571,27 @@ export async function executeSubstackWebOperation(
     case "messaging.list":
       output = await listMessages(client, recipe, input);
       break;
+    case "profiles.read": {
+      output = await readProfile(
+        client,
+        recipe,
+        viewer,
+        input,
+        options.dependencies?.now ?? Date.now,
+      );
+      finalUrl = `https://substack.com/@${substackProfileInput(input)}`;
+      break;
+    }
+    case "organizations.read": {
+      output = await readOrganization(recipe, input, auth, viewer, options);
+      finalUrl = `https://${substackOrganizationInput(input)}.substack.com/`;
+      break;
+    }
   }
   return {
     status: "succeeded",
     output,
-    finalUrl: SUBSTACK_ORIGIN,
+    finalUrl,
     dispatchStarted: false,
     dispatch: { planned: 0, started: 0, verified: 0 },
   };

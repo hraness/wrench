@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 const YOUTUBE_ORIGIN = "https://www.youtube.com";
 const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
+const MAX_PROFILE_PAGE_BYTES = 4 * 1024 * 1024;
 const MAX_WALK_NODES = 250_000;
 const MAX_WALK_DEPTH = 80;
 
@@ -60,6 +61,23 @@ export type YouTubeProjectedPost = {
   readonly attachmentKinds: readonly string[];
 };
 
+export type YouTubeProfileTarget = {
+  readonly url: string;
+  readonly handle: string | null;
+  readonly channelId: string | null;
+};
+
+export type YouTubeProjectedProfile = {
+  readonly channelId: string;
+  readonly canonicalUrl: string;
+  readonly handle: string | null;
+  readonly displayName: string;
+  readonly bio: string | null;
+  readonly subscribers: number | null;
+  readonly videos: number | null;
+  readonly views: number | null;
+};
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -97,7 +115,11 @@ function boundedIntegerString(value: unknown, label: string): string {
   throw new Error(`${label} must be an account index between 0 and 99`);
 }
 
-function balancedJsonObject(text: string, start: number): { readonly value: unknown; readonly end: number } {
+function balancedJsonObject(
+  text: string,
+  start: number,
+  maximumBytes = MAX_CONFIG_BYTES,
+): { readonly value: unknown; readonly end: number } {
   if (text[start] !== "{") throw new Error("YouTube configuration did not begin with an object");
   let depth = 0;
   let inString = false;
@@ -122,7 +144,7 @@ function balancedJsonObject(text: string, start: number): { readonly value: unkn
     if (character !== "}") continue;
     depth -= 1;
     if (depth !== 0) continue;
-    if (index - start + 1 > MAX_CONFIG_BYTES) {
+    if (index - start + 1 > maximumBytes) {
       throw new Error("YouTube configuration exceeded its reviewed byte limit");
     }
     try {
@@ -135,6 +157,42 @@ function balancedJsonObject(text: string, start: number): { readonly value: unkn
     }
   }
   throw new Error("YouTube configuration contained an unterminated object");
+}
+
+/** Parse one strict ytInitialData object without evaluating page JavaScript. */
+export function parseYouTubeInitialDataHtml(html: string): unknown {
+  if (html.length > MAX_PROFILE_PAGE_BYTES) {
+    throw new Error("YouTube profile page exceeded its reviewed byte limit");
+  }
+  const prefixes = [
+    "var ytInitialData =",
+    "window[\"ytInitialData\"] =",
+    "window['ytInitialData'] =",
+  ] as const;
+  const candidates = new Map<string, unknown>();
+  for (const prefix of prefixes) {
+    let offset = 0;
+    while (offset < html.length) {
+      const found = html.indexOf(prefix, offset);
+      if (found < 0) break;
+      const afterPrefix = found + prefix.length;
+      let start = afterPrefix;
+      while (start < html.length && /\s/u.test(html[start]!)) start += 1;
+      if (html[start] !== "{") {
+        offset = afterPrefix;
+        continue;
+      }
+      const parsed = balancedJsonObject(html, start, MAX_PROFILE_PAGE_BYTES);
+      if (isRecord(parsed.value)) {
+        candidates.set(JSON.stringify(parsed.value), parsed.value);
+      }
+      offset = parsed.end;
+    }
+  }
+  if (candidates.size !== 1) {
+    throw new Error("YouTube profile page did not contain one strict initial-data object");
+  }
+  return candidates.values().next().value!;
 }
 
 function ytcfgObjects(html: string): readonly JsonRecord[] {
@@ -438,6 +496,202 @@ export function assertYouTubeResponseSuccess(value: unknown, label: string): Jso
     if (item.type === "ERROR") throw new Error(`${label} response contained an error alert`);
   }
   return envelope;
+}
+
+function exactYouTubePublicUrl(value: unknown, _label: string): string | null {
+  if (typeof value !== "string" || value.length < 1 || value.length > 2048 || /[\0\r\n]/u.test(value)) {
+    return null;
+  }
+  const candidate = value.startsWith("https://")
+    ? value
+    : value.startsWith("www.youtube.com/") || value.startsWith("youtube.com/")
+      ? `https://${value}`
+      : value.startsWith("/") && !value.startsWith("//")
+        ? `${YOUTUBE_ORIGIN}${value}`
+        : null;
+  if (candidate === null) return null;
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return null;
+  }
+  if (
+    url.origin !== YOUTUBE_ORIGIN
+    || url.username !== ""
+    || url.password !== ""
+    || url.search !== ""
+    || url.hash !== ""
+  ) return null;
+  const path = url.pathname.replace(/\/$/u, "");
+  if (
+    !/^\/@[A-Za-z0-9._-]{2,64}$/u.test(path)
+    && !/^\/channel\/UC[A-Za-z0-9_-]{22}$/u.test(path)
+  ) return null;
+  return `${YOUTUBE_ORIGIN}${path}`;
+}
+
+export function youtubeProfileTarget(value: unknown): YouTubeProfileTarget {
+  const input = boundedString(value, "input.profile", 2048);
+  const candidate = input.startsWith("@") ? `${YOUTUBE_ORIGIN}/${input}` : input;
+  const url = exactYouTubePublicUrl(candidate, "input.profile");
+  if (url === null) {
+    throw new Error("input.profile must be an exact @handle or canonical YouTube channel URL");
+  }
+  const pathname = new URL(url).pathname;
+  const handle = pathname.startsWith("/@") ? pathname.slice(2) : null;
+  const channelId = pathname.startsWith("/channel/") ? pathname.slice("/channel/".length) : null;
+  return Object.freeze({ url, handle, channelId });
+}
+
+function youtubeHandleFromUrl(value: string): string | null {
+  const path = new URL(value).pathname;
+  return path.startsWith("/@") ? path.slice(2) : null;
+}
+
+export function youtubeProfileBrowseRequest(
+  value: unknown,
+  target: YouTubeProfileTarget,
+): Readonly<{ browseId: string }> {
+  assertYouTubeResponseSuccess(value, "YouTube profile URL resolution");
+  const candidates = new Map<string, Readonly<{ browseId: string; params: string }>>();
+  for (const item of walkRecords(value, "YouTube profile URL resolution")) {
+    const browse = isRecord(item.browseEndpoint) ? item.browseEndpoint : null;
+    const browseId = browse?.browseId;
+    if (typeof browseId !== "string" || !/^UC[A-Za-z0-9_-]{22}$/u.test(browseId)) continue;
+    const params = browse?.params;
+    if (
+      typeof params !== "string"
+      || params.length < 1
+      || params.length > 4096
+      || /[\0\r\n]/u.test(params)
+    ) continue;
+    if (target.channelId !== null) {
+      if (browseId === target.channelId) {
+        candidates.set(`${browseId}\0${params}`, Object.freeze({ browseId, params }));
+      }
+      continue;
+    }
+    // The reviewed resolve_url request body already carries the exact
+    // canonical handle URL. Its response does not echo that public URL; bind
+    // the result by requiring one and only one valid channel browse target.
+    candidates.set(`${browseId}\0${params}`, Object.freeze({ browseId, params }));
+  }
+  if (candidates.size !== 1) {
+    throw new Error("YouTube profile URL resolution did not bind one exact channel");
+  }
+  const candidate = candidates.values().next().value!;
+  return Object.freeze({ browseId: candidate.browseId });
+}
+
+function exactEnglishCount(
+  value: unknown,
+  singular: string,
+  plural: string,
+): number | null {
+  const text = simpleText(value, 128);
+  if (text === null) return null;
+  if (text === `No ${plural}`) return 0;
+  const match = new RegExp(
+    `^((?:0|[1-9][0-9]{0,2}(?:,[0-9]{3})*)) (?:${singular}|${plural})$`,
+    "u",
+  ).exec(text);
+  if (match === null) return null;
+  const number = Number(match[1]!.replaceAll(",", ""));
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
+function uniqueMetadataRenderer(
+  value: unknown,
+  expectedChannelId: string,
+): JsonRecord {
+  const candidates = walkRecords(value, "YouTube profile response").filter((item) =>
+    item.externalId === expectedChannelId
+    && typeof item.title === "string"
+    && (Object.hasOwn(item, "vanityChannelUrl") || Object.hasOwn(item, "description")));
+  const signatures = new Map(candidates.map((item) => [JSON.stringify(item), item]));
+  if (signatures.size !== 1) {
+    throw new Error("YouTube profile response did not bind one exact channel metadata renderer");
+  }
+  return signatures.values().next().value!;
+}
+
+function exactYouTubeResponsePublicUrl(value: unknown): string | null {
+  const normalized = typeof value === "string" && value.startsWith("http://www.youtube.com/")
+    ? `https://${value.slice("http://".length)}`
+    : value;
+  return exactYouTubePublicUrl(normalized, "YouTube response canonical URL");
+}
+
+function uniqueAboutViewModel(
+  value: unknown,
+  expectedChannelId: string,
+  expectedHandle: string | null,
+): JsonRecord | null {
+  const candidates = walkRecords(value, "YouTube profile response").filter((item) => {
+    if (!Object.hasOwn(item, "videoCountText") || !Object.hasOwn(item, "viewCountText")) return false;
+    if (item.channelId !== expectedChannelId) return false;
+    const modelUrl = exactYouTubeResponsePublicUrl(item.canonicalChannelUrl);
+    if (modelUrl === null) return false;
+    const modelHandle = youtubeHandleFromUrl(modelUrl);
+    return expectedHandle === null
+      || modelHandle?.toLocaleLowerCase("en-US") === expectedHandle.toLocaleLowerCase("en-US");
+  });
+  const signatures = new Map(candidates.map((item) => [JSON.stringify({
+    channelId: item.channelId,
+    canonicalChannelUrl: exactYouTubeResponsePublicUrl(item.canonicalChannelUrl),
+    subscriberCountText: simpleText(item.subscriberCountText, 128),
+    videoCountText: simpleText(item.videoCountText, 128),
+    viewCountText: simpleText(item.viewCountText, 128),
+  }), item]));
+  if (signatures.size > 1) {
+    throw new Error("YouTube profile response contained conflicting exact about statistics");
+  }
+  return signatures.size === 0 ? null : signatures.values().next().value!;
+}
+
+/** Project exact values only; rounded or omitted text remains unavailable. */
+export function projectYouTubeProfile(
+  value: unknown,
+  expectedChannelId: string,
+  expectedHandle: string | null = null,
+): YouTubeProjectedProfile {
+  assertYouTubeResponseSuccess(value, "YouTube profile");
+  if (!/^UC[A-Za-z0-9_-]{22}$/u.test(expectedChannelId)) {
+    throw new Error("Expected YouTube channel ID is invalid");
+  }
+  if (expectedHandle !== null && !/^[A-Za-z0-9._-]{2,64}$/u.test(expectedHandle)) {
+    throw new Error("Expected YouTube handle is invalid");
+  }
+  const metadata = uniqueMetadataRenderer(value, expectedChannelId);
+  const displayName = boundedString(metadata.title, "YouTube profile title", 256);
+  const metadataUrl = exactYouTubePublicUrl(
+    metadata.vanityChannelUrl,
+    "YouTube profile canonical URL",
+  );
+  const metadataHandle = metadataUrl === null ? null : youtubeHandleFromUrl(metadataUrl);
+  if (
+    expectedHandle !== null
+    && metadataHandle !== null
+    && metadataHandle.toLocaleLowerCase("en-US") !== expectedHandle.toLocaleLowerCase("en-US")
+  ) throw new Error("YouTube profile metadata did not bind the requested handle");
+  const about = uniqueAboutViewModel(value, expectedChannelId, expectedHandle);
+  const aboutUrl = about === null
+    ? null
+    : exactYouTubeResponsePublicUrl(about.canonicalChannelUrl);
+  const canonicalUrl = expectedHandle === null
+    ? metadataUrl ?? aboutUrl ?? `${YOUTUBE_ORIGIN}/channel/${expectedChannelId}`
+    : `${YOUTUBE_ORIGIN}/@${expectedHandle}`;
+  return Object.freeze({
+    channelId: expectedChannelId,
+    canonicalUrl,
+    handle: expectedHandle ?? youtubeHandleFromUrl(canonicalUrl),
+    displayName,
+    bio: optionalBoundedString(metadata.description, 4096),
+    subscribers: exactEnglishCount(about?.subscriberCountText, "subscriber", "subscribers"),
+    videos: exactEnglishCount(about?.videoCountText, "video", "videos"),
+    views: exactEnglishCount(about?.viewCountText, "view", "views"),
+  });
 }
 
 function projectionFromRenderer(renderer: JsonRecord): YouTubeProjectedItem | null {

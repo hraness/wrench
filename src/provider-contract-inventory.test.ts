@@ -4,15 +4,17 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "02708d72411b28807b6a2d08dda91bb4a21c89c589a527326bd452e94888cf3e";
+  "7f8ac8c38b92c72e4f3e28bd7b835d08050dbc2457e6c28d702e925a434b5aad";
 const predecessorLegacyInventorySha256 = [
-  "77ac36d3b7e7cc552f8e9fdf4ebc13ae63545ce2bc9c1757a0537e32b4c56661",
-  "8a51116a328059c9394f2776a1000be78f4f19a2ba7d4a182cfe0bf5ff90f8f0",
-  "4946acae29bb0f58494f66a10e47c9199bde377a62e4d27d9a2d61320b751a5b",
-  "a9cddc698de5a1bdf87fec3fbfc8fdfc3f4c7517edfd08bfe452788f919ebdc3",
-  "6f7ac531e16f2c60a44e28067cbc5de1390731a326d5166a07604abc4a54e242",
-  "69a1f62efead38c2ad564d966a4f89f1b8668a84cc13c63b178b4916d069a526",
-  "95f376424414cd6ad96558d0b20317e423cb708271143889c11882f5d4863211",
+  "9a085d5f6af43034aa91127032e3751a26e3e1363a039904c9e3329c336b9344",
+  "1be8c98a560ba7091821a2612b3d82a541e7cb6c43ac879b09cf0e98be805d1d",
+  "784de748796cce1df1ef703324fa04aabab04bebbd06e0d491f9e5f145c983a3",
+  "d9b44e0529a5a687e85ac8241aef5eba5704576e617ca3f19f0b6c296aa5b355",
+  "37df836b17aaa982f314fea93cb093185df1666cc3cf9838d9f9bac709ae6004",
+  "eb0bd07e5221cf32340126c662f193965d778234241db06ace15dcf88bccf738",
+  "2d97048f2e98d9e6d3f14740001221ec2d4610c58a3cf5c106172a54051d83fd",
+  "862a71fa6e72f7015f93d1f8d33b546a4fa761dc6a186a7a6f6dc1e041ac23a8",
+  "8f79a4538ca0bc217ff3c5aa449d39946770a83e909b5cc73a557cfa9368b16c",
 ];
 
 const moduleUrl = (name: string) => pathToFileURL(
@@ -30,7 +32,7 @@ const [{ createProviderPluginRegistry }, { generatedProviderPlugins }, providerC
 const registry = createProviderPluginRegistry(generatedProviderPlugins);
 const rows = [];
 const currentOnlyRows = [];
-const legacyRows = Array.from({ length: 7 }, () => []);
+const legacyRows = [];
 let acceptedLegacy = true;
 let rejectedUnknown = true;
 function stableJson(value) {
@@ -88,6 +90,7 @@ for (const plugin of registry.list()) {
             providerContracts.providerContractHash(contract, registry)]);
           legacyImplementations.forEach((implementationHash, index) => {
             const hash = legacyHash(contract, implementationHash, false);
+            legacyRows[index] ??= [];
             legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
             acceptedLegacy &&= providerContracts.isCompatibleProviderContractHash(contract, hash, registry);
           });
@@ -106,6 +109,7 @@ for (const plugin of registry.list()) {
             webContracts.webSessionContractHash(contract, registry)]);
           legacyImplementations.forEach((implementationHash, index) => {
             const hash = legacyHash(contract, implementationHash, true);
+            legacyRows[index] ??= [];
             legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
             acceptedLegacy &&= webContracts.isCompatibleWebSessionContractHash(contract, hash, registry);
           });
@@ -200,11 +204,11 @@ describe("durable provider contract inventory", () => {
       "staging",
     ] as const) {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
-        rows: 283,
+        rows: 292,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 4,
         currentOnlySha256: "b68a0e0f8f9be77f46d4ae7a5aa3a75de2ee6e420e8dc588247390bd1600553c",
-        legacyRows: [283, 283, 283, 283, 283, 283, 283],
+        legacyRows: [292, 292, 292, 292, 292, 292, 292, 170, 22],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,
         rejectedUnknown: true,

@@ -1620,7 +1620,12 @@ describe("doctor authenticated API readiness", () => {
       expect(linkedinReport.wrench.webSessionSites.find((site) => site.site === "linkedin")).toEqual({
         site: "linkedin",
         adapters: ["linkedin-web"],
-        observedOperations: ["articles.draft.save", "posts.publish"],
+        observedOperations: [
+          "articles.draft.save",
+          "organizations.read",
+          "posts.publish",
+          "profiles.read",
+        ],
         captureRequiredOperations: [
           "articles.publish",
           "articles.read",
@@ -1631,11 +1636,9 @@ describe("doctor authenticated API readiness", () => {
           "messaging.list",
           "messaging.read",
           "messaging.send",
-          "organizations.read",
           "posts.quote",
           "posts.read",
           "posts.repost",
-          "profiles.read",
           "reactions.set",
           "relationships.connect",
           "relationships.recommendations.read",
@@ -1655,6 +1658,7 @@ describe("doctor authenticated API readiness", () => {
           "likes.set",
           "posts.publish",
           "posts.read",
+          "profiles.read",
         ],
         accountBoundAuth: [],
         ready: false,
@@ -1686,7 +1690,12 @@ describe("doctor authenticated API readiness", () => {
       const readyLinkedIn = readyReport.wrench.webSessionSites.find((site) => site.site === "linkedin");
       expect(readyLinkedIn).toMatchObject({
         accountBoundAuth: ["linkedin-bound"],
-        observedOperations: ["articles.draft.save", "posts.publish"],
+        observedOperations: [
+          "articles.draft.save",
+          "organizations.read",
+          "posts.publish",
+          "profiles.read",
+        ],
         ready: true,
       });
       expect(readyLinkedIn?.captureRequiredOperations).toContain("messaging.list");

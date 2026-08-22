@@ -17,6 +17,7 @@ export const REDDIT_WEB_OPERATION_NAMES = Object.freeze([
   "messaging.read",
   "messaging.send",
   "posts.publish",
+  "profiles.read",
   "posts.read",
   "posts.repost",
   "reactions.set",
@@ -58,6 +59,11 @@ const captureRequired = (
 });
 
 export const REDDIT_WEB_OPERATIONS = Object.freeze({
+  "profiles.read": observed(
+    "read",
+    "R1",
+    "viewer-bound profile about JSON plus complete visible overview Listing pagination",
+  ),
   "feeds.read": observed(
     "read",
     "R1",
@@ -301,6 +307,8 @@ function requireFixed(
 
 export type RedditWebRequestOperation =
   | "viewer.current"
+  | "profiles.about"
+  | "profiles.overview"
   | "feeds.home"
   | "posts.read"
   | "comments.read"
@@ -319,6 +327,7 @@ export type RedditWebRequestInput = {
   readonly direction?: -1 | 0 | 1;
   readonly saved?: boolean;
   readonly folder?: "inbox" | "unread" | "sent";
+  readonly profile?: string;
 };
 
 export type RedditWebRequestBinding = {
@@ -359,6 +368,31 @@ export function authorizeRedditWebRequest(
     if (method !== "GET" || url.pathname !== "/api/me.json" || query.size !== 0 || form.size !== 0) {
       throw new Error("Reddit viewer request changed its reviewed exchange");
     }
+    return finish();
+  }
+
+  if (input.operation === "profiles.about" || input.operation === "profiles.overview") {
+    if (method !== "GET" || form.size !== 0 || input.profile === undefined) {
+      throw new Error("Reddit profile request changed its reviewed exchange");
+    }
+    const profile = boundedString(input.profile, "Reddit profile handle", 64);
+    if (!/^[A-Za-z0-9_-]{1,64}$/u.test(profile)) {
+      throw new Error("Reddit profile handle is invalid");
+    }
+    const expectedPath = input.operation === "profiles.about"
+      ? `/user/${encodeURIComponent(profile)}/about.json`
+      : `/user/${encodeURIComponent(profile)}/overview.json`;
+    if (url.pathname !== expectedPath) {
+      throw new Error("Reddit profile path did not bind the requested handle");
+    }
+    if (input.operation === "profiles.about") {
+      exactNames(query, ["raw_json"], [], "Reddit profile about query");
+    } else {
+      exactNames(query, ["limit", "raw_json"], ["after"], "Reddit profile overview query");
+      requireFixed(query, "limit", "100", "Reddit profile overview query");
+      optionalAfter(query, "Reddit profile overview query");
+    }
+    requireFixed(query, "raw_json", "1", "Reddit profile query");
     return finish();
   }
 
@@ -480,6 +514,62 @@ export function parseRedditWebViewerResponse(value: unknown): RedditWebViewer {
   return Object.freeze({ id: `t2_${rawId}`, username, modhash });
 }
 
+export type RedditWebProfile = {
+  readonly username: string;
+  readonly displayName: string | null;
+  readonly bio: string | null;
+  readonly followers: number;
+  readonly karma: number;
+};
+
+/** Project exact public profile counts from Reddit's target-bound about thing. */
+export function parseRedditWebProfileResponse(
+  value: unknown,
+  expectedUsername: string,
+): RedditWebProfile {
+  if (!/^[A-Za-z0-9_-]{1,64}$/u.test(expectedUsername)) {
+    throw new Error("Expected Reddit profile handle is invalid");
+  }
+  const root = record(value, "Reddit profile response");
+  if (root.kind !== "t2") throw new Error("Reddit profile response did not contain an account thing");
+  const data = record(root.data, "Reddit profile response.data");
+  const username = boundedString(data.name, "Reddit profile response.data.name", 64);
+  if (username.toLocaleLowerCase("en-US") !== expectedUsername.toLocaleLowerCase("en-US")) {
+    throw new Error("Reddit profile response did not bind the requested handle");
+  }
+  const subreddit = record(data.subreddit, "Reddit profile response.data.subreddit");
+  const prefixedName = optionalString(
+    subreddit.display_name_prefixed,
+    "Reddit profile response.data.subreddit.display_name_prefixed",
+    66,
+  );
+  if (
+    prefixedName !== null
+    && prefixedName.toLocaleLowerCase("en-US") !== `u/${username}`.toLocaleLowerCase("en-US")
+  ) throw new Error("Reddit profile subreddit did not bind the requested handle");
+  return Object.freeze({
+    username,
+    displayName: optionalString(subreddit.title, "Reddit profile response.data.subreddit.title", 256),
+    bio: optionalString(
+      subreddit.public_description,
+      "Reddit profile response.data.subreddit.public_description",
+      4096,
+    ),
+    followers: safeInteger(
+      subreddit.subscribers,
+      "Reddit profile response.data.subreddit.subscribers",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    karma: safeInteger(
+      data.total_karma,
+      "Reddit profile response.data.total_karma",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+  });
+}
+
 type RedditListing = {
   readonly children: readonly JsonRecord[];
   readonly after: string | null;
@@ -504,6 +594,44 @@ function listing(value: unknown, label: string, maximumChildren: number): Reddit
     after,
     before,
   });
+}
+
+export type RedditProfileContributionPage = {
+  readonly ids: readonly string[];
+  readonly after: string | null;
+};
+
+/**
+ * Count only distinct post and comment things authored by the requested user.
+ * Runtime pagination defines the metric window as the complete visible profile
+ * overview Listing, rather than claiming an unavailable lifetime total.
+ */
+export function parseRedditProfileContributionPage(
+  value: unknown,
+  expectedUsername: string,
+): RedditProfileContributionPage {
+  if (!/^[A-Za-z0-9_-]{1,64}$/u.test(expectedUsername)) {
+    throw new Error("Expected Reddit profile handle is invalid");
+  }
+  const page = listing(value, "Reddit profile overview response", 100);
+  const ids = page.children.map((child, index) => {
+    const label = `Reddit profile overview response.data.children[${index}]`;
+    if (child.kind !== "t1" && child.kind !== "t3") {
+      throw new Error(`${label}.kind must be t1 or t3`);
+    }
+    const data = record(child.data, `${label}.data`);
+    const id = redditFullname(data.name, `${label}.data.name`, [child.kind]);
+    const author = boundedString(data.author, `${label}.data.author`, 64);
+    if (author.toLocaleLowerCase("en-US") !== expectedUsername.toLocaleLowerCase("en-US")) {
+      throw new Error("Reddit profile overview response contained another author");
+    }
+    return id;
+  });
+  if (new Set(ids).size !== ids.length) {
+    throw new Error("Reddit profile overview response repeated a contribution");
+  }
+  if (page.after !== null) redditFullname(page.after, "Reddit profile overview response.data.after", ["t1", "t3"]);
+  return Object.freeze({ ids: Object.freeze(ids), after: page.after });
 }
 
 function thingData(
