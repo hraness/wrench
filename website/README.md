@@ -19,3 +19,5 @@ bun run website:check
 ```
 
 The Vercel project uses the repository root and serves `website/dist`.
+Root `middleware.ts` imports only `edge/negotiation.ts` for Accept q-values,
+`406`, and markdown 404 bodies.

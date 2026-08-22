@@ -17,7 +17,7 @@ import {
   SKILL_INSTALL_COMMAND,
   SKILL_INSTALL_COMMAND_BUNX,
 } from "./build";
-import { handleDocumentNegotiation } from "./document-negotiation";
+import { handleDocumentNegotiation } from "../edge/negotiation";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const websiteRoot = import.meta.dir;
@@ -191,6 +191,8 @@ describe("wrench.rip static site", () => {
       }),
     ]));
     expect(middleware).toContain("handleDocumentNegotiation");
+    expect(middleware).toContain("./edge/negotiation");
+    expect(middleware).not.toContain("website/");
     expect(vercel.redirects).toEqual(expect.arrayContaining([
       { destination: "/", permanent: true, source: "/index.html" },
       ...PUBLIC_PAGES.slice(1).map((page) => ({

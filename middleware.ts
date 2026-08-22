@@ -1,4 +1,4 @@
-import { handleDocumentNegotiation } from "./website/document-negotiation";
+import { handleDocumentNegotiation } from "./edge/negotiation";
 
 export default async function middleware(request: Request): Promise<Response | undefined> {
   return await handleDocumentNegotiation(request, (url) => fetch(url)) ?? undefined;

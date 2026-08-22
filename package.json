@@ -323,8 +323,8 @@
   ],
   "scripts": {
     "website:build": "bun run website/build.ts",
-    "website:test": "bun test ./website",
-    "website:typecheck": "tsc --noEmit --project website/tsconfig.json",
+    "website:test": "bun test ./website ./edge",
+    "website:typecheck": "tsc --noEmit --project website/tsconfig.json && tsc --noEmit --project edge/tsconfig.json",
     "website:check": "bun run website:typecheck && bun run website:test && bun run website:build",
     "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts ./src/omni-client.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",

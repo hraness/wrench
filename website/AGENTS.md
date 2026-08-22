@@ -3,9 +3,10 @@
 - `source/` – checked HTML, CSS, analytics, discovery, fallback, markdown, and llms.txt sources.
 - `public/` – checked public social assets.
 - `build.ts` – deterministic static output generation from the root package release.
-- `content-negotiation.ts`, `document-negotiation.ts`, and `html-to-markdown.ts` – Accept parsing, markdown variants, and 406/404 recovery.
+- `html-to-markdown.ts` – static markdown variants for public pages.
+- `../edge/` – Edge-safe Accept parsing and markdown, 406, and 404 negotiation.
 - `*.test.ts` – identity, SEO, accessibility, analytics-privacy, negotiation, and build regressions.
-- `../middleware.ts` – Vercel edge negotiation for `Accept: text/markdown`.
+- `../middleware.ts` – Vercel Edge entry; it imports only `../edge/`.
 - `dist/` – ignored generated deployment output.
 
 # Guidelines
