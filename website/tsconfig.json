@@ -4,6 +4,13 @@
     "lib": ["DOM", "DOM.Iterable", "ES2023"],
     "types": ["bun"]
   },
-  "include": ["./**/*.ts", "../edge/**/*.test.ts"],
+  "include": [
+    "./source/**/*.ts",
+    "./html-to-markdown.ts",
+    "./html-to-markdown.test.ts",
+    "./analytics.test.ts",
+    "./skill-install-command.test.ts",
+    "../edge/**/*.test.ts"
+  ],
   "exclude": ["./dist"]
 }

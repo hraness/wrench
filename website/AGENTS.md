@@ -3,6 +3,7 @@
 - `source/` – checked HTML, CSS, analytics, discovery, fallback, markdown, and llms.txt sources.
 - `public/` – checked public social assets.
 - `build.ts` – deterministic static output generation from the root package release.
+- `provider-capability-attestation.ts` – release-bound provider/operation/completeness table derived from built-in plugins and current bundled adapter manifests.
 - `html-to-markdown.ts` – static markdown variants for public pages.
 - `../edge/` – Edge-safe Accept parsing and markdown, 406, and 404 negotiation.
 - `*.test.ts` – identity, SEO, accessibility, analytics-privacy, negotiation, and build regressions.

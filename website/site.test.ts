@@ -18,6 +18,10 @@ import {
   SKILL_INSTALL_COMMAND_BUNX,
 } from "./build";
 import { handleDocumentNegotiation } from "../edge/negotiation";
+import {
+  loadProviderCapabilityAttestation,
+  renderProviderCapabilityAttestationTable,
+} from "./provider-capability-attestation";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const websiteRoot = import.meta.dir;
@@ -313,6 +317,38 @@ describe("wrench.rip static site", () => {
     const gettingStarted = pages.find((page) => page.definition.canonicalPath === "/getting-started/");
     expect(gettingStarted?.html).toContain("Wrench developer resources");
     expect(gettingStarted?.html).toContain("does not publish a hosted API");
+
+    const providerCapabilities = pages.find((page) =>
+      page.definition.canonicalPath === "/provider-capabilities/");
+    const attestation = await loadProviderCapabilityAttestation(repositoryRoot);
+    expect(providerCapabilities?.html).toContain(
+      `Wrench ${packageIdentity.version} provider capability attestation is checked against the bundled public adapter manifests`,
+    );
+    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Provider</th>");
+    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Operation</th>");
+    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Completeness</th>");
+    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Limit</th>");
+    expect(providerCapabilities?.html).toContain(renderProviderCapabilityAttestationTable(attestation));
+    expect(providerCapabilities?.html).toContain(`<code>gmail</code>`);
+    expect(providerCapabilities?.html).toContain(`<code>contacts.list</code>`);
+    expect(providerCapabilities?.html).toContain(`<code>observed</code>`);
+    expect(providerCapabilities?.html).toContain(`<code>capture-required</code>`);
+    expect(providerCapabilities?.html).toContain("Telegram is absent from those manifests");
+    expect(providerCapabilities?.html).not.toContain("<th scope=\"row\">Telegram</th>");
+    expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");
+    const software = (graph as ReadonlyArray<Readonly<Record<string, unknown>>>).find((node) =>
+      node["@id"] === `${SITE_ORIGIN}/#software`);
+    expect(software).toMatchObject({
+      "@type": "SoftwareApplication",
+      featureList: [
+        "Durable Markdown page capture",
+        "Verified finite-item media archives",
+        "Encrypted exact-query read snapshots",
+        "Typed and bounded provider operations",
+        "Fail-closed provider contract drift",
+      ],
+      softwareVersion: packageIdentity.version,
+    });
 
     const files = new Map<string, string>();
     for (const page of PUBLIC_PAGES) {

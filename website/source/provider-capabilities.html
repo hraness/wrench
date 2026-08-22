@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
-    <title>Wrench provider capabilities for contacts, email, and messages</title>
-    <meta name="description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <title>Wrench provider capability attestation</title>
+    <meta name="description" content="Wrench provider capability attestation checked against bundled public adapter manifests. Each listed operation includes its reviewed completeness and current limit.">
     <meta name="robots" content="max-image-preview:large">
     <link rel="canonical" href="https://wrench.rip/provider-capabilities/">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -16,16 +16,16 @@
     {{MARKDOWN_ALTERNATE}}
     <meta property="og:type" content="article">
     <meta property="og:site_name" content="Wrench">
-    <meta property="og:title" content="Wrench provider capabilities for contacts, email, and messages">
-    <meta property="og:description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <meta property="og:title" content="Wrench provider capability attestation">
+    <meta property="og:description" content="Wrench provider capability attestation checked against bundled public adapter manifests. Each listed operation includes its reviewed completeness and current limit.">
     <meta property="og:url" content="https://wrench.rip/provider-capabilities/">
     <meta property="og:image" content="https://wrench.rip/og.png">
     <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Wrench provider capabilities for contacts, email, and messages">
-    <meta name="twitter:description" content="See Wrench contact, email, inbox, and message capabilities for Gmail, LinkedIn, Instagram, WhatsApp, Facebook, and Telegram, including current limits.">
+    <meta name="twitter:title" content="Wrench provider capability attestation">
+    <meta name="twitter:description" content="Wrench provider capability attestation checked against bundled public adapter manifests. Each listed operation includes its reviewed completeness and current limit.">
     <meta name="twitter:image" content="https://wrench.rip/og.png">
     <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
     <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
@@ -49,28 +49,24 @@
       <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Provider capabilities</li></ol></nav>
       <article class="guide-article">
         <header class="guide-hero">
-          <p class="eyebrow">Provider capability reference · Wrench {{WRENCH_VERSION}}</p>
-          <h1>Contacts, email, and messages are provider-specific capabilities.</h1>
-          <p class="answer-lede">Wrench currently supports Gmail contacts, inbox search, thread reading, and private thread clipping through official Google APIs. Other contact and messaging providers expose narrower reviewed surfaces. A missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control.</p>
-          <p class="review-note">This reference describes {{WRENCH_RELEASE}} and was checked against the bundled public adapter manifests for that immutable release. Run <code>wrench capabilities --json</code> for the exact state installed on your machine.</p>
+          <p class="eyebrow">Provider capability attestation · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Wrench {{WRENCH_VERSION}} provider capability attestation.</h1>
+          <p class="answer-lede">Wrench {{WRENCH_VERSION}} provider capability attestation is checked against the bundled public adapter manifests for {{WRENCH_RELEASE}}. The table lists every current provider operation in those manifests and the reviewed completeness of that contract. A missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control.</p>
+          <p class="review-note">This page describes {{WRENCH_RELEASE}} and was generated at site build time from the release’s built-in provider plugins joined to the bundled public adapter manifests. Run <code>wrench capabilities --json</code> for the exact state installed on your machine.</p>
         </header>
 
-        <section aria-labelledby="matrix">
-          <h2 id="matrix">Current contact and messaging coverage</h2>
-          <div class="table-scroll provider-table" role="region" aria-labelledby="matrix" tabindex="0">
-            <table>
-              <thead><tr><th scope="col">Provider</th><th scope="col">Contacts</th><th scope="col">Inbox and messages</th><th scope="col">Important limit</th></tr></thead>
-              <tbody>
-                <tr><th scope="row">Gmail official</th><td>Google People connections plus bounded directional Gmail statistics</td><td>Observed inbox or bounded search listing, exact thread read, and private thread clipping with attachments</td><td>Counts and dates expose completeness; scanning is bounded and reading does not mark mail seen</td></tr>
-                <tr><th scope="row">LinkedIn official</th><td>Observed first-degree connections with exact account binding and locale-selection evidence</td><td>No ordinary inbox operation through the official API; consumer-web inbox operations remain capture-required</td><td>Requires approved <code>r_1st_connections</code> and <code>r_liteprofile</code>; message statistics are unavailable</td></tr>
-                <tr><th scope="row">Instagram web</th><td>Observed unique non-viewer participants from one reviewed first Direct inbox page</td><td>Observed bounded first inbox summary page; individual thread read remains capture-required</td><td>Contact set and message statistics are explicitly incomplete; no acknowledgement or presence request is issued</td></tr>
-                <tr><th scope="row">WhatsApp linked device</th><td>Observed bounded page from the private, quiescent Whatsmeow contact store</td><td>Observed bounded local linked-device conversation list and exact conversation read</td><td>No new WhatsApp connection or acknowledgement is emitted; directional contact statistics are unavailable</td></tr>
-                <tr><th scope="row">Facebook web</th><td>Capture-required reservation for friends or Messenger participants</td><td>Inbox listing and conversation reading are capture-required</td><td>Actor binding, paging, completeness, acknowledgement, and Messenger transport still require review</td></tr>
-                <tr><th scope="row">Telegram</th><td>Not installed</td><td>Not installed</td><td>Requires a reviewed TDLib user-session lifecycle; Wrench does not substitute the Bot API or claim contact access</td></tr>
-              </tbody>
-            </table>
+        <section aria-labelledby="attestation">
+          <h2 id="attestation">Bundled adapter operations and completeness</h2>
+          <p>This release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled public adapters. {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>. {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} remain <code>capture-required</code>. Telegram is absent from those manifests. Wrench does not install a Telegram Bot API substitute or claim Telegram contact access.</p>
+          <div class="table-scroll provider-table" role="region" aria-labelledby="attestation" tabindex="0">
+            {{PROVIDER_CAPABILITY_ATTESTATION_TABLE}}
           </div>
-          <p>This matrix covers the contact and messaging providers above. Wrench also ships other provider adapters and operations. Their current installed contract states remain discoverable through the CLI rather than being generalized from this table.</p>
+        </section>
+
+        <section aria-labelledby="completeness">
+          <h2 id="completeness">Completeness stays beside the claim</h2>
+          <p><code>observed</code> means the current contract can plan and execute after local doctor and auth checks pass. <code>capture-required</code> is an inert reservation. It cannot plan or execute until authorized evidence establishes a newly reviewed contract.</p>
+          <p>The limit column repeats the public adapter description for that current contract version. Historical plugin versions that are no longer current do not appear as extra rows. Local plugins, portable bundles, and retired manifests can differ from this release snapshot.</p>
         </section>
 
         <section aria-labelledby="gmail">

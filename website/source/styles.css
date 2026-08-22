@@ -1020,15 +1020,20 @@ code:not(pre code) {
 }
 
 .provider-table table {
-  min-width: 70rem;
+  min-width: 76rem;
 }
 
 .provider-table tbody th {
+  width: 18%;
+}
+
+.provider-table td:nth-child(2),
+.provider-table td:nth-child(3) {
   width: 14%;
 }
 
-.provider-table td {
-  width: 28.66%;
+.provider-table td:nth-child(4) {
+  width: 54%;
 }
 
 .security-levels {
