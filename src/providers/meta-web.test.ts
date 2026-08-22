@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { parseRuntimeManifest, validateOperationInput } from "../model";
+import { providerPluginRegistry } from "../provider-plugins";
 import facebookGroupManifest from "../assets/adapters/facebook-group/wrench-web-adapter.json";
 import facebookMarketplaceManifest from "../assets/adapters/facebook-marketplace/wrench-web-adapter.json";
 import facebookPageManifest from "../assets/adapters/facebook-page/wrench-web-adapter.json";
@@ -9,6 +11,7 @@ import instagramV1Manifest from "../assets/adapters/instagram/wrench-web-adapter
 import threadsManifest from "../assets/adapters/threads/wrench-web-adapter.json";
 import threadsV1Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.0.0.json";
 import threadsV12Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.2.0.json";
+import threadsV14Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.4.0.json";
 import { metaWebPlugin } from "../plugins/meta-web/plugin";
 import {
   META_WEB_OPERATIONS,
@@ -404,7 +407,7 @@ describe("Meta consumer-web policy", () => {
     });
     expect(META_WEB_OPERATIONS.threads["posts.publish"]).toMatchObject({
       state: "observed",
-      contractVersion: 4,
+      contractVersion: 5,
     });
     expect(META_WEB_OPERATIONS.instagram["likes.set"]).toMatchObject({ state: "capture-required" });
     expect(META_WEB_OPERATIONS.instagram["messaging.send"]?.reason).toContain("E2EE");
@@ -447,7 +450,7 @@ describe("Meta consumer-web policy", () => {
 
     expect(instagramManifest.version).toBe("1.2.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
-    expect(threadsManifest.version).toBe("1.4.0");
+    expect(threadsManifest.version).toBe("1.5.0");
     expect(threadsV1Manifest.version).toBe("1.0.0");
 
     for (const [site, operation, current, prior] of affected) {
@@ -469,15 +472,41 @@ describe("Meta consumer-web policy", () => {
 
   test("versions locator-bound Threads publication while preserving reviewed predecessors", () => {
     expect(threadsV12Manifest.version).toBe("1.2.0");
+    expect(threadsV14Manifest.version).toBe("1.4.0");
     expect(threadsV12Manifest.operations["posts.publish"].webSession.contractVersion).toBe(2);
-    expect(threadsManifest.operations["posts.publish"].webSession.contractVersion).toBe(4);
-    expect(threadsManifest.operations["posts.publish"].input.required).toContain("attachment");
+    expect(threadsV14Manifest.operations["posts.publish"].webSession.contractVersion).toBe(4);
+    expect(threadsV14Manifest.operations["posts.publish"].input.required).toEqual(["attachment", "body"]);
+    expect(threadsManifest.operations["posts.publish"].webSession.contractVersion).toBe(5);
+    expect(threadsManifest.operations["posts.publish"].input.required).toEqual(["body"]);
+    expect(threadsManifest.operations["posts.publish"].input.properties).toHaveProperty("attachment");
 
     const binding = metaWebPlugin.bindings.find((candidate) =>
       candidate.surfaceId === "threads");
     const descriptor = binding?.operations.find((candidate) =>
       candidate.name === "posts.publish");
-    expect(descriptor?.contractVersions).toEqual([1, 2, 3, 4]);
+    expect(descriptor?.contractVersions).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("validates Threads posts.publish for text-only and PNG inputs", () => {
+    const parsed = parseRuntimeManifest(threadsManifest, providerPluginRegistry);
+    expect(parsed.ok).toBeTrue();
+    if (!parsed.ok) throw new Error("current Threads manifest must parse");
+    const schema = parsed.value.operations["posts.publish"]?.input;
+    if (schema === undefined) throw new Error("current Threads posts.publish schema is missing");
+    expect(validateOperationInput(schema, {
+      body: "how your email finds me",
+    }, parsed.value.origins)).toMatchObject({ ok: true });
+    expect(validateOperationInput(schema, {
+      body: "how your email finds me",
+      attachment: "asset:png",
+      audience: "default",
+    }, parsed.value.origins)).toMatchObject({ ok: true });
+    expect(validateOperationInput(schema, {
+      attachment: "asset:png",
+    }, parsed.value.origins)).toMatchObject({
+      ok: false,
+      issues: ["input.body is required"],
+    });
   });
 
   test("binds each consumer surface to its exact bootstrapped viewer", () => {
@@ -917,6 +946,29 @@ describe("Meta consumer-web policy", () => {
       expected.caption.text,
       { width: 959, height: 1022 },
     )).toThrow("did not bind the confirmed actor, ID, code, permalink, text, and image");
+
+    expect(normalizeThreadsPostHtml(
+      `${threadsHtml}${html({ post: withoutImage })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      null,
+    )).toMatchObject({
+      id: expected.pk,
+      caption: expected.caption.text,
+      image: null,
+    });
+    expect(() => normalizeThreadsPostHtml(
+      `${threadsHtml}${html({ post: expected })}`,
+      "12345",
+      expected.pk,
+      expected.code,
+      expected.canonical_url,
+      expected.caption.text,
+      null,
+    )).toThrow("did not bind the confirmed actor, ID, code, permalink, and text");
 
     expect(() => normalizeThreadsPostHtml(
       `${threadsHtml}${html({
