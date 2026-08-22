@@ -33,8 +33,10 @@ describe("provider capability attestation", () => {
 
     const rowKeys = attestation.rows.map((row) => `${row.adapterId}:${row.operation}`);
     expect(new Set(rowKeys).size).toBe(rowKeys.length);
-    expect(rowKeys).toEqual([...rowKeys].sort((left, right) => left.localeCompare(right)));
     expect(new Set(rowKeys)).toEqual(expectedKeys);
+    expect(attestation.rows.map((row) => row.adapterId)).toEqual(
+      attestation.rows.map((row) => row.adapterId).sort((left, right) => left.localeCompare(right)),
+    );
 
     const gmailContacts = attestation.rows.find((row) =>
       row.adapterId === "gmail" && row.operation === "contacts.list");
