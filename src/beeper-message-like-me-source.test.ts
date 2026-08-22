@@ -352,6 +352,22 @@ function ndjson(path: string): readonly Record<string, unknown>[] {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+const MESSAGE_LIKE_ME_DATA_FILES = [
+  "accounts.ndjson",
+  "participants.ndjson",
+  "conversations.ndjson",
+  "messages.ndjson",
+  "reactions.ndjson",
+  "tombstones.ndjson",
+] as const;
+
+function messageLikeMeDataDigests(root: string): Readonly<Record<string, string>> {
+  return Object.freeze(Object.fromEntries(MESSAGE_LIKE_ME_DATA_FILES.map((file) => [
+    file,
+    createHash("sha256").update(readFileSync(join(root, file))).digest("hex"),
+  ])));
+}
+
 const SELF_ALIAS_ID = "whatsapp:private-late-self-alias";
 
 function aliasChatOrderKey(chatId: string): string {
@@ -502,6 +518,143 @@ function writeSelfAliasFixture(
     completedAt: "2026-08-21T14:00:02.000Z",
     createdAt: "2026-08-21T13:59:00.000Z",
     messageCount: 2,
+    version: 1,
+  });
+}
+
+const SHARED_METADATA_PEER_ID = "whatsapp:shared-metadata-peer";
+const EXCLUDED_METADATA_NAME = "Excluded Fixture Metadata";
+const EXCLUDED_METADATA_HANDLE = "+15550000999";
+
+function orderedParticipantMetadataChatIds(): readonly [string, string] {
+  const ordered = ["metadata-chat-alpha", "metadata-chat-omega"]
+    .sort((left, right) => aliasChatOrderKey(left).localeCompare(aliasChatOrderKey(right)));
+  const selected = ordered[0];
+  const excluded = ordered[1];
+  if (selected === undefined || excluded === undefined) {
+    throw new Error("participant metadata fixture chat order disappeared");
+  }
+  return [selected, excluded];
+}
+
+function writeParticipantMetadataFixture(
+  outputRoot: string,
+  includeExcluded: boolean,
+): void {
+  const [selectedChatId, excludedChatId] = orderedParticipantMetadataChatIds();
+  const baseChat = chat();
+  const selectedChat = {
+    ...baseChat,
+    id: selectedChatId,
+    lastActivity: "2026-08-21T14:00:01.000Z",
+    participants: {
+      hasMore: false,
+      items: [{ id: SHARED_METADATA_PEER_ID, isSelf: false }],
+      total: 1,
+    },
+    title: "Selected Metadata Fixture",
+  };
+  const excludedChat = {
+    ...baseChat,
+    id: excludedChatId,
+    lastActivity: "2026-08-21T14:00:02.000Z",
+    participants: {
+      hasMore: false,
+      items: [{
+        fullName: EXCLUDED_METADATA_NAME,
+        id: SHARED_METADATA_PEER_ID,
+        isSelf: false,
+        phoneNumber: EXCLUDED_METADATA_HANDLE,
+      }, {
+        fullName: "Excluded Self Alias",
+        id: SELF_ALIAS_ID,
+        isSelf: true,
+      }],
+      total: 2,
+    },
+    title: "Excluded Metadata Fixture",
+  };
+  const baseMessage = messages()[0] as Record<string, unknown>;
+  const selectedMessage = {
+    ...baseMessage,
+    attachments: [],
+    chatID: selectedChatId,
+    editedTimestamp: null,
+    id: "message-metadata-selected",
+    linkedMessageID: null,
+    reactions: [{
+      emoji: true,
+      id: "reaction-metadata-selected",
+      participantID: SELF_ALIAS_ID,
+      reactionKey: "👍",
+    }],
+    sortKey: "00000000000000000001",
+    text: "synthetic selected metadata body",
+    timestamp: "2026-08-21T14:00:01.000Z",
+  };
+  const excludedMessage = {
+    ...baseMessage,
+    attachments: [],
+    chatID: excludedChatId,
+    editedTimestamp: null,
+    id: "message-metadata-excluded",
+    linkedMessageID: null,
+    reactions: [{
+      emoji: true,
+      id: "reaction-metadata-excluded",
+      participantID: SHARED_METADATA_PEER_ID,
+      reactionKey: "👍",
+    }],
+    senderID: SELF_ALIAS_ID,
+    senderName: "Excluded Self Alias",
+    sortKey: "00000000000000000002",
+    text: "synthetic excluded metadata body",
+    timestamp: "2026-08-21T14:00:02.000Z",
+  };
+  const entries = includeExcluded
+    ? [[selectedChat, selectedMessage], [excludedChat, excludedMessage]] as const
+    : [[selectedChat, selectedMessage]] as const;
+  const chatsRoot = join(outputRoot, "chats");
+  rmSync(chatsRoot, { recursive: true, force: true });
+  mkdirSync(chatsRoot, { mode: 0o755 });
+  for (const [chatValue, messageValue] of entries) {
+    const chatRoot = join(chatsRoot, chatValue.id);
+    mkdirSync(join(chatRoot, "attachments"), { recursive: true, mode: 0o755 });
+    writeJson(join(chatRoot, "chat.json"), chatValue);
+    writeJson(join(chatRoot, "messages.json"), [messageValue]);
+    writeFileSync(join(chatRoot, "messages.markdown"), "private duplicate markdown\n");
+    writeFileSync(join(chatRoot, "messages.html"), "<p>private duplicate html</p>\n");
+  }
+  const chatValues = entries.map(([chatValue]) => chatValue);
+  writeJson(join(outputRoot, "chats.json"), chatValues);
+  const stateChats = Object.fromEntries(entries.map(([chatValue], index) => [
+    chatValue.id,
+    {
+      attachmentCount: 0,
+      complete: true,
+      cursor: null,
+      messageCount: 1,
+      startedAt: index === 0
+        ? "2026-08-21T13:59:00.000Z"
+        : "2026-08-21T14:00:01.000Z",
+      updatedAt: index === 0
+        ? "2026-08-21T14:00:01.000Z"
+        : "2026-08-21T14:00:02.000Z",
+    },
+  ]));
+  writeJson(join(outputRoot, ".beeper-export-state.json"), {
+    chats: stateChats,
+    completedChatIDs: entries.map(([chatValue]) => chatValue.id),
+    createdAt: "2026-08-21T13:59:00.000Z",
+    exportVersion: 1,
+  });
+  writeJson(join(outputRoot, "manifest.json"), {
+    accounts: accounts(),
+    attachmentCount: 0,
+    chatCount: entries.length,
+    completedAt: "2026-08-21T14:00:03.000Z",
+    createdAt: "2026-08-21T13:59:00.000Z",
+    messageCount: entries.length,
     version: 1,
   });
 }
@@ -1642,6 +1795,251 @@ describe("Beeper Message Like Me source", () => {
       expect(result.manifest.warnings).toContain("bundle-byte-limit-reached");
       expect(result.manifest.counts.conversation).toBe(0);
       expect(existsSync(join(output, "manifest.json"))).toBeTrue();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("does not retain participant metadata from a record-rejected chat", async () => {
+    const parent = privateDirectory("wrench-beeper-source-record-metadata-test.");
+    const prefixWorking = join(parent, "prefix-working");
+    const prefixOutput = join(parent, "prefix-bundle");
+    const working = join(parent, "working");
+    const output = join(parent, "message-like-me");
+    mkdirSync(prefixWorking, { mode: 0o700 });
+    mkdirSync(working, { mode: 0o700 });
+    try {
+      const prefixSource = createBeeperMessageLikeMeSource({
+        auth: auth(configStore(parent)),
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createWorkingDirectory: async () => prefixWorking,
+          removeWorkingDirectory: async (path) => {
+            rmSync(path, { recursive: true, force: true });
+          },
+          runCli: async (invocation) => {
+            const result = await fixtureCli(invocation);
+            const outputRoot = whatsAppOutputRoot(invocation);
+            if (outputRoot !== null) writeParticipantMetadataFixture(outputRoot, false);
+            return result;
+          },
+        },
+      });
+      await exportBeeperMessageLikeMeBundle({ outputRoot: prefixOutput, source: prefixSource });
+
+      const source = createBeeperMessageLikeMeSource({
+        auth: auth(configStore(parent)),
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createWorkingDirectory: async () => working,
+          removeWorkingDirectory: async (path) => {
+            rmSync(path, { recursive: true, force: true });
+          },
+          maxBundleRecords: 10,
+          runCli: async (invocation) => {
+            const result = await fixtureCli(invocation);
+            const outputRoot = whatsAppOutputRoot(invocation);
+            if (outputRoot !== null) writeParticipantMetadataFixture(outputRoot, true);
+            return result;
+          },
+        },
+      });
+      const result = await exportBeeperMessageLikeMeBundle({ outputRoot: output, source });
+      expect(result.manifest.warnings).toContain("bundle-record-limit-reached");
+      expect(result.manifest.counts).toMatchObject({
+        conversation: 1,
+        message: 1,
+        reaction: 1,
+      });
+      const peer = ndjson(join(output, "participants.ndjson"))
+        .find((record) => record.isSelf === false);
+      expect(peer).toMatchObject({ displayName: null, handle: null, isSelf: false });
+      const participantBytes = readFileSync(join(output, "participants.ndjson"), "utf8");
+      expect(participantBytes).not.toContain(EXCLUDED_METADATA_NAME);
+      expect(participantBytes).not.toContain(EXCLUDED_METADATA_HANDLE);
+      const selfParticipantIds = new Set(ndjson(join(output, "accounts.ndjson"))
+        .map((record) => record.selfParticipantId));
+      const reaction = ndjson(join(output, "reactions.ndjson"))[0];
+      expect(reaction).toBeDefined();
+      expect(selfParticipantIds.has(reaction!.participantId)).toBeFalse();
+      expect(messageLikeMeDataDigests(output)).toEqual(
+        messageLikeMeDataDigests(prefixOutput),
+      );
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("does not charge or retain participant metadata from a byte-rejected chat", async () => {
+    const parent = privateDirectory("wrench-beeper-source-byte-metadata-test.");
+    const prefixWorking = join(parent, "prefix-working");
+    const prefixOutput = join(parent, "prefix-bundle");
+    const working = join(parent, "working");
+    const output = join(parent, "message-like-me");
+    mkdirSync(prefixWorking, { mode: 0o700 });
+    mkdirSync(working, { mode: 0o700 });
+    try {
+      const prefixSource = createBeeperMessageLikeMeSource({
+        auth: auth(configStore(parent)),
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createWorkingDirectory: async () => prefixWorking,
+          removeWorkingDirectory: async (path) => {
+            rmSync(path, { recursive: true, force: true });
+          },
+          runCli: async (invocation) => {
+            const result = await fixtureCli(invocation);
+            const outputRoot = whatsAppOutputRoot(invocation);
+            if (outputRoot !== null) writeParticipantMetadataFixture(outputRoot, false);
+            return result;
+          },
+        },
+      });
+      await exportBeeperMessageLikeMeBundle({ outputRoot: prefixOutput, source: prefixSource });
+      const selectedPrefixBytes = MESSAGE_LIKE_ME_DATA_FILES.reduce(
+        (total, file) => total + lstatSync(join(prefixOutput, file)).size,
+        0,
+      );
+
+      const source = createBeeperMessageLikeMeSource({
+        auth: auth(configStore(parent)),
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createWorkingDirectory: async () => working,
+          removeWorkingDirectory: async (path) => {
+            rmSync(path, { recursive: true, force: true });
+          },
+          maxBundleBytes: selectedPrefixBytes,
+          runCli: async (invocation) => {
+            const result = await fixtureCli(invocation);
+            const outputRoot = whatsAppOutputRoot(invocation);
+            if (outputRoot !== null) writeParticipantMetadataFixture(outputRoot, true);
+            return result;
+          },
+        },
+      });
+      const result = await exportBeeperMessageLikeMeBundle({ outputRoot: output, source });
+      expect(result.manifest.warnings).toContain("bundle-byte-limit-reached");
+      expect(result.manifest.counts).toMatchObject({
+        conversation: 1,
+        message: 1,
+        reaction: 1,
+      });
+      const peer = ndjson(join(output, "participants.ndjson"))
+        .find((record) => record.isSelf === false);
+      expect(peer).toMatchObject({ displayName: null, handle: null, isSelf: false });
+      const participantBytes = readFileSync(join(output, "participants.ndjson"), "utf8");
+      expect(participantBytes).not.toContain(EXCLUDED_METADATA_NAME);
+      expect(participantBytes).not.toContain(EXCLUDED_METADATA_HANDLE);
+      const selfParticipantIds = new Set(ndjson(join(output, "accounts.ndjson"))
+        .map((record) => record.selfParticipantId));
+      const reaction = ndjson(join(output, "reactions.ndjson"))[0];
+      expect(reaction).toBeDefined();
+      expect(selfParticipantIds.has(reaction!.participantId)).toBeFalse();
+      expect(messageLikeMeDataDigests(output)).toEqual(
+        messageLikeMeDataDigests(prefixOutput),
+      );
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects message size-class drift between alias refinement passes", async () => {
+    const parent = privateDirectory("wrench-beeper-source-size-class-drift-test.");
+    const working = join(parent, "working");
+    const output = join(parent, "message-like-me");
+    mkdirSync(working, { mode: 0o700 });
+    let refinements = 0;
+    let removed = false;
+    try {
+      const source = createBeeperMessageLikeMeSource({
+        auth: auth(configStore(parent)),
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createWorkingDirectory: async () => working,
+          removeWorkingDirectory: async (path) => {
+            rmSync(path, { recursive: true, force: true });
+            removed = true;
+          },
+          maxBundleRecords: 10,
+          maxMessagesJsonBytes: 4_096,
+          onSelfAliasRefinementPass: async (pass) => {
+            refinements += 1;
+            expect(pass).toBe(1);
+            const [selectedChatId] = orderedParticipantMetadataChatIds();
+            const messagesPath = join(
+              working,
+              "account-shards",
+              "account-001",
+              "chats",
+              selectedChatId,
+              "messages.json",
+            );
+            const original = readFileSync(messagesPath, "utf8");
+            expect(Buffer.byteLength(original)).toBeLessThan(4_096);
+            writeFileSync(messagesPath, original.padEnd(4_097, " "));
+          },
+          runCli: async (invocation) => {
+            const result = await fixtureCli(invocation);
+            const outputRoot = whatsAppOutputRoot(invocation);
+            if (outputRoot !== null) writeParticipantMetadataFixture(outputRoot, true);
+            return result;
+          },
+        },
+      });
+      await expect(exportBeeperMessageLikeMeBundle({ outputRoot: output, source }))
+        .rejects.toThrow("official export messages changed between self-alias passes");
+      expect(refinements).toBe(1);
+      expect(removed).toBeTrue();
+      expect(existsSync(working)).toBeFalse();
+      expect(existsSync(output)).toBeFalse();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds repeated participant work before excluded alias evidence is admitted", async () => {
+    const parent = privateDirectory("wrench-beeper-source-occurrence-limit-test.");
+    const working = join(parent, "working");
+    const output = join(parent, "message-like-me");
+    mkdirSync(working, { mode: 0o700 });
+    try {
+      const source = createBeeperMessageLikeMeSource({
+        auth: auth(configStore(parent)),
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createWorkingDirectory: async () => working,
+          removeWorkingDirectory: async (path) => {
+            rmSync(path, { recursive: true, force: true });
+          },
+          maxParticipantOccurrences: 6,
+          runCli: async (invocation) => {
+            const result = await fixtureCli(invocation);
+            const outputRoot = whatsAppOutputRoot(invocation);
+            if (outputRoot !== null) writeParticipantMetadataFixture(outputRoot, true);
+            return result;
+          },
+        },
+      });
+      const result = await exportBeeperMessageLikeMeBundle({ outputRoot: output, source });
+      expect(result.manifest.completeness).toMatchObject({
+        kind: "truncated",
+        reason: "participant-occurrence-limit",
+      });
+      expect(result.manifest.warnings).toContain("participant-occurrence-limit-reached");
+      expect(result.manifest.counts).toMatchObject({
+        conversation: 1,
+        message: 1,
+        reaction: 1,
+      });
+      const selfParticipantIds = new Set(ndjson(join(output, "accounts.ndjson"))
+        .map((record) => record.selfParticipantId));
+      const reaction = ndjson(join(output, "reactions.ndjson"))[0];
+      expect(reaction).toBeDefined();
+      expect(selfParticipantIds.has(reaction!.participantId)).toBeFalse();
+      const participantBytes = readFileSync(join(output, "participants.ndjson"), "utf8");
+      expect(participantBytes).not.toContain(EXCLUDED_METADATA_NAME);
+      expect(participantBytes).not.toContain(EXCLUDED_METADATA_HANDLE);
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
