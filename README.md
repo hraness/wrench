@@ -75,10 +75,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Pin the public repository to the immutable `v0.11.0` tag:
+Install the current immutable CLI release from the `v0.12.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.11.0
+bun add --global github:hraness/wrench#v0.12.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -102,7 +102,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.11.0
+bun add github:hraness/wrench#v0.12.0
 ```
 
 ```ts
@@ -228,6 +228,14 @@ wrench auth bind reddit-main --site reddit-web
 wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","limit":25}' --json
 wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","limit":25}' --cache-only --json
 ```
+
+Observed `profiles.read` capabilities expose target-bound exact counters for X,
+Bluesky, LinkedIn, Instagram, Threads, Substack, YouTube, Reddit, and TikTok;
+Substack also exposes owned-publication subscriber totals through
+`organizations.read`. Each counter is either an exact nonnegative integer or a
+categorical unavailable value. Wrench never promotes a rounded profile label
+to an exact metric. The Agent Skill includes the bounded daily collection and
+consumer-handoff workflow.
 
 Normal invocation is the explicit revalidation step. Cache publication has a
 separate outcome from the live read, so a failed refresh or local publication
@@ -714,8 +722,8 @@ gives coding agents the same workflow and safety boundary. Its bundled
 [social cross-posting guidance](skills/wrench/references/cross-posting.md)
 orchestrates exact, previewed text, image, and video posts across supported
 platforms while preserving per-provider attachment limits and at-most-once
-dispatch evidence. Packages and the immutable `v0.11.0` tag carry the same
-consolidated skill.
+dispatch evidence. Packages built from this source carry the same consolidated
+skill as the skills CLI.
 
 ## Risk and confirmation
 

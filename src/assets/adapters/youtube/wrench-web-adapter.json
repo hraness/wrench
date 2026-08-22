@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "youtube-web",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "displayName": "YouTube (Authenticated Web API)",
   "surfaceId": "youtube",
   "origins": [
@@ -11,6 +11,33 @@
     "www.youtube.com"
   ],
   "operations": {
+    "profiles.read": {
+      "description": "Observed contract: resolve one exact YouTube channel and project exact subscriber, video, and lifetime-view counts from its target-bound first-party channel response; rounded text remains unavailable.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Exact @handle or canonical YouTube channel URL",
+            "minLength": 2,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
     "feeds.read": {
       "description": "Observed contract: read one bounded signed-in YouTube Home, Subscriptions, Library, History, Playlists, Watch Later, or Liked Videos page through the fixed first-party Innertube browse endpoint.",
       "risk": "R1",

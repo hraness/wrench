@@ -50,7 +50,9 @@ import {
   bindXWebOperationMetadataValues,
   enforceXWebHeaderSinkPolicy,
   extractXWebGraphQlReadResponseRoot,
+  normalizeXWebProfileHandle,
   normalizeXWebGraphQlTimelineResponse,
+  projectXWebProfileStats,
   resolveUniqueXWebBundleDescriptor,
   validateXWebDesiredStateMutation,
   validateXWebRichArticleContentState,
@@ -90,7 +92,10 @@ type JsonRecord = Record<string, unknown>;
 
 export type XWebRuntimeDependencies = Partial<WebSessionNetworkDependencies>
   & Pick<XTransactionBrowserDependencies, "createBrowserSession">
-  & { readonly sleep?: (milliseconds: number) => Promise<void> };
+  & {
+      readonly now?: () => number;
+      readonly sleep?: (milliseconds: number) => Promise<void>;
+    };
 
 type XBootstrap = {
   readonly auth: WrenchAuth;
@@ -962,6 +967,36 @@ async function readFeed(bootstrap: XBootstrap, input: OperationInput): Promise<u
     cursor: page.truncated ? null : normalized.cursors.bottom?.value ?? null,
     terminatedDirections: normalized.terminatedDirections,
   };
+}
+
+async function readProfile(
+  bootstrap: XBootstrap,
+  input: OperationInput,
+): Promise<ReturnType<typeof projectXWebProfileStats>> {
+  const handle = normalizeXWebProfileHandle(input.handle);
+  const descriptor = await resolveDescriptor(
+    bootstrap,
+    "UserByScreenName",
+    "query",
+  );
+  const response = await graphQl(
+    bootstrap,
+    descriptor,
+    {
+      screen_name: handle,
+      withGrokTranslatedBio: featureValue(
+        bootstrap,
+        "responsive_web_grok_bio_auto_translation_is_enabled",
+      ),
+    },
+    "GET",
+    "profiles.by-handle",
+  );
+  return projectXWebProfileStats(
+    response,
+    handle,
+    new Date(bootstrap.dependencies?.now?.() ?? Date.now()).toISOString(),
+  );
 }
 
 function tweetDetailVariables(bootstrap: XBootstrap, id: string, input: OperationInput): Readonly<Record<string, unknown>> {
@@ -3115,6 +3150,17 @@ export async function executeXWebOperation(
       status: "succeeded",
       output: await readFeed(bootstrap, input),
       finalUrl: `${X_ORIGIN}/home`,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    };
+  }
+  if (recipe.action === "profiles.read") {
+    await requireBoundViewer(bootstrap, auth);
+    const output = await readProfile(bootstrap, input);
+    return {
+      status: "succeeded",
+      output,
+      finalUrl: output.target.url,
       dispatchStarted: false,
       dispatch: { planned: 0, started: 0, verified: 0 },
     };

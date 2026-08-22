@@ -187,7 +187,7 @@ function linkedinArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(linkedinContracts),
-  "d69b72da07677df888c9de6c9632089aa4a9d84ac0a6d381b631d52f7ee877f4",
+  "04205bfc9502aa73bd1d646374ab84243c93c268ce08a2994a36e7cf47dae58c",
   {
     "posts.publish": [2],
   },
@@ -290,7 +290,7 @@ const operations = Object.freeze([
 export const linkedinWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "linkedin-web",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "LinkedIn Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [

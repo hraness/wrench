@@ -8,6 +8,27 @@ if (binding?.transport !== "web-session-api") {
 }
 
 describe("X web provider plugin", () => {
+  test("versions the profile-read source closure independently", () => {
+    expect(xWebPlugin.version).toBe("1.1.0");
+  });
+
+  test("advertises the observed exact handle-bound profile read", () => {
+    const profile = binding.operations.find((operation) =>
+      operation.name === "profiles.read");
+    expect(profile).toMatchObject({
+      contractVersion: 1,
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+      input: {
+        properties: {
+          handle: { type: "string", minLength: 1, maxLength: 15 },
+        },
+        required: ["handle"],
+      },
+    });
+  });
+
   test("declares exact accepted-target reconciliation for current post publishing", () => {
     const publish = binding.operations.filter((operation) =>
       operation.name === "posts.publish");

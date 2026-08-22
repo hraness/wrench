@@ -129,6 +129,9 @@ describe("Wrench browser analytics", () => {
       ["/provider-capabilities/", "provider_capabilities"],
       ["/security/", "security"],
       ["/plugins/", "plugin_authoring"],
+      ["/about/", "about"],
+      ["/contact/", "contact"],
+      ["/privacy/", "privacy"],
     ] as const;
 
     for (const [path, pageKind] of routes) {

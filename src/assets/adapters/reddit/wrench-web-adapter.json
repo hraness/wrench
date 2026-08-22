@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "reddit-web",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "displayName": "Reddit (Authenticated Web API)",
   "surfaceId": "reddit",
   "origins": [
@@ -11,6 +11,33 @@
     "www.reddit.com"
   ],
   "operations": {
+    "profiles.read": {
+      "description": "Observed contract: read exact follower and karma counts for the viewer-bound current Reddit profile, then count the complete visible overview listing for the contributions metric.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Exact Reddit profile handle without u/",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "webSession": {
+        "site": "reddit",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
     "feeds.read": {
       "description": "Observed contract: read one bounded signed-in Reddit home Listing through the exact JSON endpoint with explicit raw JSON and fullname pagination.",
       "risk": "R1",

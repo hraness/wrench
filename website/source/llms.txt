@@ -1,0 +1,38 @@
+# Wrench
+
+> Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations.
+
+## When to use Wrench
+
+Use Wrench when a command-capable agent or application needs a local capability and custody layer for the web. Reach for it to capture an authorized public URL as Markdown, inspect a page without saving it, archive one authorized finite media item with SHA-256 verification, read a reviewed provider capability into an encrypted snapshot, or invoke one typed account-bound operation such as `messaging.list`.
+
+Install the immutable {{WRENCH_RELEASE}} release with Bun 1.3.14, run `wrench doctor`, then ask `wrench capabilities --json` what is installed on the current machine. The same release is also a TypeScript SDK. Import `@hraness/wrench` for plugin types, `@hraness/wrench/client` for persistent reads, and `@hraness/wrench/omni` for normalized cross-provider reads. A command-capable agent can add the published Agent Skill with `npx skills add hraness/wrench` (or `bunx skills add hraness/wrench`).
+
+Do not use Wrench as an AI agent, hosted HTTP API, OpenAPI surface, OAuth developer portal, GraphQL endpoint, webhook catalog, commerce checkout, or MCP server. Those jobs stay with the caller. Wrench can sit behind an MCP tool or agent framework; it does not publish one.
+
+## Wrench developer resources
+
+- [Install the Wrench CLI and TypeScript SDK](https://wrench.rip/getting-started/): pin {{WRENCH_RELEASE}}, synchronize bundled adapters, run the doctor, and capture a first URL
+- [Install the Wrench Agent Skill](https://wrench.rip/): `npx skills add hraness/wrench` adds the capture, archive, provider, and publishing guide to a command-capable agent
+- [Capture URLs and create verified media archives](https://wrench.rip/capture-and-archives/): choose inspection, durable Markdown, or one finite media archive
+- [Provider capability reference](https://wrench.rip/provider-capabilities/): current contact, Gmail, inbox, and message coverage with explicit limits
+- [Security and local custody](https://wrench.rip/security/): account binding, encrypted snapshots, risk levels, and fail-closed drift
+- [Author and verify provider plugins](https://wrench.rip/plugins/): create, check, test, pack, trust, and install one content-addressed bundle
+- [Wrench source repository]({{WRENCH_REPOSITORY}}): public source, issues, and GitHub private vulnerability reporting
+- [Plugin protocol guide for {{WRENCH_RELEASE}}]({{WRENCH_REPOSITORY}}/blob/{{WRENCH_RELEASE}}/docs/plugins.md): complete source-side plugin contract
+
+## Main pages
+
+- [Wrench home](https://wrench.rip/)
+- [About Wrench](https://wrench.rip/about/)
+- [Contact and security reporting](https://wrench.rip/contact/)
+- [Website privacy](https://wrench.rip/privacy/)
+- [XML sitemap](https://wrench.rip/sitemap.xml)
+
+## How to read this site
+
+Public content pages serve HTML by default. Request the same URL with `Accept: text/markdown` to receive `text/markdown; charset=utf-8` and `Vary: Accept`. If no owned representation can satisfy `Accept`, the response is `406 Not Acceptable`. Unknown paths return HTTP 404 with recovery links to this file, the sitemap, and the getting-started guide.
+
+## Usage
+
+Use Wrench only with material and accounts you are authorized to access. It does not bypass login, payment, access controls, or DRM. Public page capture is the smallest first run. Authenticated providers stay unavailable until `wrench doctor` and `wrench capabilities` say they are ready.

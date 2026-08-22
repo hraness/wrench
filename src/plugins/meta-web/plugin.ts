@@ -111,8 +111,8 @@ const historicalVersions = Object.freeze({
 >);
 
 const contractSemanticIdentities = Object.freeze({
-  instagram: "7f0acb6d0e978d6579a744f724bea39dd629614a04ca9e24f2c8c6ad4fe53c9f",
-  threads: "8c04b52062e53812cb4d938968867e4b8a61d771241dc2b074e0d3d16d299f92",
+  instagram: "a39a376d27641ac8b8166a508791c0fb633194b17697e222730d15bc9142bb7d",
+  threads: "3db473425b841754dcb9ed15c790a1a0a5bac470b42a3cf55939bf4b4c9d0daa",
   facebook: "f4724c9619794070da784d03fdaef5889cc4f3d237f9f402e9d5a53f7c156184",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
   "facebook-group": "30717a546b60658ecc2e199a14babb4fa2b46afd1e8d9113044a1b7afda3d376",
@@ -122,7 +122,7 @@ const contractSemanticIdentities = Object.freeze({
 export const metaWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "meta-web",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "Meta Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [

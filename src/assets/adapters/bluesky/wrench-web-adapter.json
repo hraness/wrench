@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "bluesky-web",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "displayName": "Bluesky (Authenticated AT Protocol API)",
   "surfaceId": "bluesky",
   "origins": [
@@ -11,6 +11,33 @@
     "bsky.app"
   ],
   "operations": {
+    "profiles.read": {
+      "description": "Observed contract: read one exact Bluesky profile through the fixed public AppView getProfile query with DID and handle binding plus exact follower, following, and post counts.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "handle": {
+            "type": "string",
+            "description": "Exact fully qualified Bluesky handle",
+            "minLength": 3,
+            "maxLength": 253
+          }
+        },
+        "required": [
+          "handle"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
     "feeds.read": {
       "description": "Read one bounded authenticated Bluesky home timeline, notification feed, or private bookmark feed through fixed account-bound XRPC queries.",
       "risk": "R1",

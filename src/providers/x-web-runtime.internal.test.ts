@@ -286,6 +286,7 @@ function dependencies(
   handler: (request: CapturedRequest) => Response | Promise<Response>,
   options: {
     readonly createBrowserSession?: NonNullable<XWebRuntimeDependencies["createBrowserSession"]>;
+    readonly now?: NonNullable<XWebRuntimeDependencies["now"]>;
     readonly sleep?: NonNullable<XWebRuntimeDependencies["sleep"]>;
   } = {},
 ): XWebRuntimeDependencies {
@@ -327,6 +328,7 @@ function dependencies(
     acquireCookies,
     fetch,
     createBrowserSession: createTransactionBrowser,
+    ...(options.now === undefined ? {} : { now: options.now }),
     sleep: options.sleep ?? (() => Promise.resolve()),
   };
 }
@@ -573,6 +575,82 @@ describe("X authenticated internal-API runtime", () => {
     )).toBe("article-create-id-shape-drift");
     expect(xWebArticleImageFailureCategory(new Error("private response body")))
       .toBe("media-contract-step-failed");
+  });
+
+  test("reads exact target-bound X profile counts without accepting rounded values", async () => {
+    const profileResponse = (handle: string, followers: unknown = 1234) => ({
+      data: {
+        user: {
+          result: {
+            __typename: "User",
+            rest_id: "2244994945",
+            core: { name: "Hraness", screen_name: handle },
+            legacy: {
+              screen_name: handle,
+              description: "Public bio",
+              followers_count: followers,
+              friends_count: 56,
+              entities: { url: { urls: [{ expanded_url: "https://hraness.com" }] } },
+            },
+          },
+        },
+      },
+    });
+    for (const [returnedHandle, followers, expected] of [
+      ["hraness", 1234, "succeeded"],
+      ["switched", 1234, "did not bind the requested handle"],
+      ["hraness", "1.2K", "exact nonnegative safe integer"],
+    ] as const) {
+      const calls: CapturedRequest[] = [];
+      const runtimeDependencies = dependencies(calls, (request) => {
+        if (request.url.href === "https://x.com/home") {
+          return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+        }
+        if (request.url.href === MAIN_URL) {
+          return new Response(mainBundle(
+            descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+            descriptor("UserByScreenName", "Gb-d6r0vxPOADdG62OEBpQ", "query"),
+          ), { headers: { "content-type": "application/javascript" } });
+        }
+        if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+        if (request.url.pathname.endsWith("/UserByScreenName")) {
+          expect(JSON.parse(request.url.searchParams.get("variables") ?? "null")).toEqual({
+            screen_name: "hraness",
+            withGrokTranslatedBio: false,
+          });
+          return jsonResponse(profileResponse(returnedHandle, followers));
+        }
+        throw new Error(`unexpected test request ${request.url.href}`);
+      }, { now: () => Date.parse("2026-08-21T15:00:00.000Z") });
+      const execution = executeXWebOperation(
+        xRecipe("profiles.read"),
+        { handle: "hraness" },
+        xAuth,
+        { dependencies: runtimeDependencies },
+      );
+      if (expected === "succeeded") {
+        expect(await execution).toMatchObject({
+          status: "succeeded",
+          finalUrl: "https://x.com/hraness",
+          output: {
+            schemaVersion: 1,
+            provider: "x",
+            observedAt: "2026-08-21T15:00:00.000Z",
+            target: {
+              id: "2244994945",
+              url: "https://x.com/hraness",
+            },
+            metrics: {
+              followers: { value: 1234, precision: "exact" },
+              following: { value: 56, precision: "exact" },
+            },
+          },
+          dispatchStarted: false,
+        });
+      } else {
+        expect(await rejectionMessage(execution)).toContain(expected);
+      }
+    }
   });
 
   test("binds user-feed responses to the requested user before exposing a page", async () => {

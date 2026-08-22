@@ -18,8 +18,10 @@ import {
   enforceTikTokWebHeaderSinkPolicy,
   normalizeTikTokWebCommentsResponse,
   normalizeTikTokWebFeedResponse,
+  parseTikTokWebProfileResponse,
   parseTikTokWebViewerResponse,
   type TikTokWebOperationName,
+  type TikTokWebProfile,
   type TikTokWebViewer,
 } from "./tiktok-web";
 
@@ -29,7 +31,9 @@ const MAX_READ_BYTES = 4 * 1024 * 1024;
 const DEFAULT_FEED_LIMIT = 20;
 const DEFAULT_COMMENT_LIMIT = 20;
 
-export type TikTokWebRuntimeDependencies = Partial<WebSessionNetworkDependencies>;
+export type TikTokWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
+  readonly now?: () => number;
+};
 
 function isTikTokOperation(value: string): value is TikTokWebOperationName {
   return (TIKTOK_WEB_OPERATION_NAMES as readonly string[]).includes(value);
@@ -85,6 +89,25 @@ async function currentViewer(
   return parseTikTokWebViewerResponse(response);
 }
 
+async function currentProfile(
+  client: WebSessionClient,
+  maximumBytes = MAX_VIEWER_BYTES,
+): Promise<TikTokWebProfile> {
+  const url = new URL("/api/user/detail/self/", TIKTOK_ORIGIN);
+  authorizeTikTokWebR1Request({
+    operation: "profiles.current",
+    url,
+    method: "GET",
+  });
+  const response = await client.requestJson({
+    url,
+    method: "GET",
+    headers: exactReadHeaders("https://www.tiktok.com/"),
+    maxBytes: Math.min(maximumBytes, MAX_VIEWER_BYTES),
+  });
+  return parseTikTokWebProfileResponse(response);
+}
+
 function viewerSubject(viewer: TikTokWebViewer): string {
   return `tiktok:uid:${viewer.id}/sec:${viewer.secUid}`;
 }
@@ -110,15 +133,80 @@ async function requireBoundViewer(
   client: WebSessionClient,
   auth: WrenchAuth,
 ): Promise<TikTokWebViewer> {
+  const viewer = await currentViewer(client);
+  assertBoundViewer(auth, viewer);
+  return viewer;
+}
+
+function assertBoundViewer(auth: WrenchAuth, viewer: TikTokWebViewer): void {
   const expected = webSessionAuthSubject(auth);
   if (expected === null || !/^tiktok:uid:[0-9]{1,32}\/sec:[A-Za-z0-9._-]{16,256}$/u.test(expected)) {
     throw new Error("TikTok personalized operations require an auth locator bound to the exact viewer subject");
   }
-  const viewer = await currentViewer(client);
   if (viewerSubject(viewer) !== expected) {
     throw new Error("TikTok browser session viewer no longer matches the confirmed auth subject");
   }
-  return viewer;
+}
+
+function profileInput(input: OperationInput): string {
+  const profile = input.profile;
+  if (typeof profile !== "string" || !/^[A-Za-z0-9._]{2,24}$/u.test(profile)) {
+    throw new Error("input.profile must be an exact TikTok handle without @");
+  }
+  return profile;
+}
+
+function observedAt(dependencies: TikTokWebRuntimeDependencies | undefined): string {
+  const now = dependencies?.now?.() ?? Date.now();
+  if (!Number.isSafeInteger(now) || now < 0 || now > 8_640_000_000_000_000) {
+    throw new Error("TikTok profile observation time is invalid");
+  }
+  return new Date(now).toISOString();
+}
+
+function exactCount(value: number): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    status: "available",
+    value,
+    precision: "exact",
+    unit: "count",
+  });
+}
+
+async function readProfile(
+  client: WebSessionClient,
+  input: OperationInput,
+  auth: WrenchAuth,
+  dependencies: TikTokWebRuntimeDependencies | undefined,
+): Promise<Readonly<Record<string, unknown>>> {
+  const requestedProfile = profileInput(input);
+  const profile = await currentProfile(client);
+  assertBoundViewer(auth, profile);
+  if (profile.handle.toLocaleLowerCase("en-US") !== requestedProfile.toLocaleLowerCase("en-US")) {
+    throw new Error("TikTok requested profile did not match the bound current account");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "tiktok",
+    target: Object.freeze({
+      kind: "profile",
+      id: profile.handle,
+      url: `${TIKTOK_ORIGIN}/@${encodeURIComponent(profile.handle)}`,
+    }),
+    observedAt: observedAt(dependencies),
+    completeness: "complete",
+    metrics: Object.freeze({
+      followers: exactCount(profile.followers),
+      following: exactCount(profile.following),
+      likes: exactCount(profile.likes),
+    }),
+    metadata: Object.freeze({
+      handle: profile.handle,
+      displayName: profile.displayName,
+      ...(profile.bio === null ? {} : { bio: profile.bio }),
+      ...(profile.websiteUrl === null ? {} : { websiteUrl: profile.websiteUrl }),
+    }),
+  });
 }
 
 async function readForYou(
@@ -193,7 +281,11 @@ export async function executeTikTokWebOperation(
   if (contract.state !== "observed") {
     throw new Error(`TikTok authenticated web operation ${recipe.action} is capture-required: ${contract.reason}`);
   }
-  if (recipe.action !== "feeds.read" && recipe.action !== "comments.read") {
+  if (
+    recipe.action !== "profiles.read"
+    && recipe.action !== "feeds.read"
+    && recipe.action !== "comments.read"
+  ) {
     throw new Error(`TikTok authenticated web operation ${recipe.action} has no executable reviewed contract`);
   }
   // R1 operations never enter a dispatch ledger or invoke mutation callbacks.
@@ -207,14 +299,20 @@ export async function executeTikTokWebOperation(
       : { operationDeadline: options.operationDeadline }),
     ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
   });
-  await requireBoundViewer(client, auth);
-  const output = recipe.action === "feeds.read"
-    ? await readForYou(client, input, recipe.maxOutputBytes)
-    : await readComments(client, input, recipe.maxOutputBytes);
+  const output = recipe.action === "profiles.read"
+    ? await readProfile(client, input, auth, options.dependencies)
+    : (await (async () => {
+      await requireBoundViewer(client, auth);
+      return recipe.action === "feeds.read"
+        ? readForYou(client, input, recipe.maxOutputBytes)
+        : readComments(client, input, recipe.maxOutputBytes);
+    })());
   return {
     status: "succeeded",
     output,
-    finalUrl: recipe.action === "feeds.read"
+    finalUrl: recipe.action === "profiles.read"
+      ? `${TIKTOK_ORIGIN}/@${encodeURIComponent(profileInput(input))}`
+      : recipe.action === "feeds.read"
       ? `${TIKTOK_ORIGIN}/foryou`
       : TIKTOK_ORIGIN,
     dispatchStarted: false,

@@ -68,6 +68,7 @@ import {
   projectBlueskyNotifications,
   projectBlueskyPostsResponse,
   projectBlueskyProfile,
+  projectBlueskyProfileStats,
   projectBlueskyThread,
   type BlueskyBlobRef,
   type BlueskyProjectedPost,
@@ -81,6 +82,7 @@ import {
 const MAX_BOOTSTRAP_BYTES = 64 * 1024;
 const MAX_READ_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 2_000_000;
+const BLUESKY_PUBLIC_APPVIEW_ORIGIN = "https://public.api.bsky.app";
 const DEFAULT_LIMIT = 25;
 const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
 const PUBLISH_READBACK_DELAYS_MS = Object.freeze([0, 250, 750, 1_500]);
@@ -1403,6 +1405,67 @@ async function executeFeedRead(
   };
 }
 
+async function executePublicProfileRead(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  dependencies: BlueskyWebRuntimeDependencies | undefined,
+  operationDeadline: WebSessionOperationDeadline | undefined,
+): Promise<WebSessionExecution> {
+  const handle = inputString(input, "handle", 253).toLowerCase();
+  const url = new URL(
+    "/xrpc/app.bsky.actor.getProfile",
+    BLUESKY_PUBLIC_APPVIEW_ORIGIN,
+  );
+  url.searchParams.set("actor", handle);
+  const fetch = dependencies?.fetch ?? ((inputValue, init = {}) =>
+    pinnedHttpsFetch(
+      inputValue instanceof Request ? new URL(inputValue.url) : new URL(inputValue),
+      init,
+      remainingTimeoutMs(recipe.timeoutMs, operationDeadline),
+    ));
+  operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+  const controller = operationDeadline === undefined ? new AbortController() : null;
+  const timeout = controller === null
+    ? null
+    : setTimeout(() => controller.abort(), recipe.timeoutMs);
+  const signal = operationDeadline?.signal ?? controller?.signal;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      redirect: "error",
+      ...(signal === undefined ? {} : { signal }),
+    });
+  } finally {
+    if (timeout !== null) clearTimeout(timeout);
+  }
+  if (response.status !== 200) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error(`Bluesky public AppView returned unreviewed status ${response.status}`);
+  }
+  const bytes = await boundedBytes(
+    response,
+    Math.min(recipe.maxOutputBytes, MAX_READ_BYTES),
+    operationDeadline,
+  );
+  if (!jsonContentType(response)) {
+    throw new Error("Bluesky public AppView returned an unreviewed content type");
+  }
+  const output = projectBlueskyProfileStats(
+    parseJson(bytes),
+    handle,
+    new Date(dependencies?.now?.() ?? Date.now()).toISOString(),
+  );
+  return {
+    status: "succeeded",
+    output,
+    finalUrl: output.target.url,
+    dispatchStarted: false,
+    dispatch: { planned: 0, started: 0, verified: 0 },
+  };
+}
+
 async function executePostRead(
   client: BlueskyClient,
   input: OperationInput,
@@ -2325,6 +2388,15 @@ export async function executeBlueskyWebOperation(
   if (contract.state !== "observed") {
     throw new Error(
       `Bluesky authenticated web operation ${recipe.action} is capture-required: ${contract.reason}`,
+    );
+  }
+  // Public profile counts do not need access to the selected browser account.
+  if (recipe.action === "profiles.read") {
+    return executePublicProfileRead(
+      recipe,
+      input,
+      options.dependencies,
+      options.operationDeadline,
     );
   }
   const client = await bootstrapClient(

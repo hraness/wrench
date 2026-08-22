@@ -5,6 +5,8 @@ import {
   createYouTubeSapisidAuthorization,
   findYouTubeCommentsContinuation,
   parseYouTubeBootstrapHtml,
+  parseYouTubeInitialDataHtml,
+  projectYouTubeProfile,
   projectYouTubeComments,
   projectYouTubeItems,
   projectYouTubeMedia,
@@ -13,6 +15,8 @@ import {
   youtubeLikeMutationRequest,
   youtubeLikeState,
   youtubePostBrowseRequest,
+  youtubeProfileBrowseRequest,
+  youtubeProfileTarget,
   youtubeSubscriptionState,
   youtubeSubscriptionMutationRequest,
   youtubeWatchLaterState,
@@ -59,7 +63,7 @@ function bootstrapHtml(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("YouTube web policy primitives", () => {
-  test("ships a schema-v4 manifest with only four live-proven internal-API actions", () => {
+  test("ships a schema-v4 manifest with the live-proven internal-API actions", () => {
     expect(youtubeManifest.schemaVersion).toBe(4);
     expect(youtubeManifest.surfaceId).toBe("youtube");
     const observed = [
@@ -67,6 +71,7 @@ describe("YouTube web policy primitives", () => {
       "feeds.read",
       "media.read",
       "posts.read",
+      "profiles.read",
     ] as const;
     const captureRequired = [
       "comments.create",
@@ -94,6 +99,163 @@ describe("YouTube web policy primitives", () => {
       expect(operation.description.startsWith("Capture-required contract reservation:")).toBe(true);
       expect(operation.webSession).toMatchObject({ site: "youtube", action });
     }
+  });
+
+  test("resolves one exact channel target and projects only exact profile counts", () => {
+    const target = youtubeProfileTarget("@wrench_test");
+    expect(target).toEqual({
+      url: "https://www.youtube.com/@wrench_test",
+      handle: "wrench_test",
+      channelId: null,
+    });
+    const browse = youtubeProfileBrowseRequest({
+      responseContext: {},
+      endpoint: {
+        browseEndpoint: {
+          browseId: CHANNEL_ID,
+          canonicalBaseUrl: "/@wrench_test",
+          params: "about-tab-params",
+        },
+      },
+    }, target);
+    expect(browse).toEqual({ browseId: CHANNEL_ID });
+
+    const response = {
+      responseContext: {},
+      metadata: {
+        channelMetadataRenderer: {
+          externalId: CHANNEL_ID,
+          title: "Wrench Test",
+          description: "Public channel bio",
+          vanityChannelUrl: "https://www.youtube.com/@wrench_test",
+        },
+      },
+      engagementPanels: [{
+        engagementPanelSectionListRenderer: {
+          content: {
+            sectionListRenderer: {
+              contents: [{
+                itemSectionRenderer: {
+                  contents: [{
+                    aboutChannelRenderer: {
+                      metadata: {
+                        aboutChannelViewModel: {
+                          channelId: CHANNEL_ID,
+                          canonicalChannelUrl: "http://www.youtube.com/@wrench_test",
+                          subscriberCountText: "4 subscribers",
+                          videoCountText: "11 videos",
+                          viewCountText: "2,061 views",
+                        },
+                      },
+                    },
+                  }],
+                },
+              }],
+            },
+          },
+        },
+      }],
+    };
+    expect(projectYouTubeProfile(response, CHANNEL_ID)).toEqual({
+      channelId: CHANNEL_ID,
+      canonicalUrl: "https://www.youtube.com/@wrench_test",
+      handle: "wrench_test",
+      displayName: "Wrench Test",
+      bio: "Public channel bio",
+      subscribers: 4,
+      videos: 11,
+      views: 2061,
+    });
+
+    const rounded = structuredClone(response);
+    const about = rounded.engagementPanels[0]!.engagementPanelSectionListRenderer
+      .content.sectionListRenderer.contents[0]!.itemSectionRenderer.contents[0]!
+      .aboutChannelRenderer.metadata.aboutChannelViewModel;
+    about.subscriberCountText = "1.2K subscribers";
+    expect(projectYouTubeProfile(rounded, CHANNEL_ID)).toMatchObject({
+      subscribers: null,
+      videos: 11,
+      views: 2061,
+    });
+
+    const missingAbout = structuredClone(response);
+    missingAbout.engagementPanels = [];
+    expect(projectYouTubeProfile(missingAbout, CHANNEL_ID)).toMatchObject({
+      subscribers: null,
+      videos: null,
+      views: null,
+    });
+  });
+
+  test("binds one live-shaped handle resolution to its exact request URL", () => {
+    const target = youtubeProfileTarget("@hraness");
+    expect(youtubeProfileBrowseRequest({
+      responseContext: {},
+      endpoint: {
+        commandMetadata: {
+          webCommandMetadata: { url: "/youtubei/v1/browse" },
+        },
+        browseEndpoint: {
+          browseId: "UC1234567890123456789012",
+          params: "live-response-opaque-params",
+        },
+      },
+    }, target)).toEqual({ browseId: "UC1234567890123456789012" });
+  });
+
+  test("parses one strict profile-page initial-data object without evaluation", () => {
+    const initialData = {
+      responseContext: {},
+      metadata: {
+        channelMetadataRenderer: {
+          externalId: CHANNEL_ID,
+          title: "Wrench Test",
+        },
+      },
+    };
+    expect(parseYouTubeInitialDataHtml(
+      `<script>var ytInitialData = ${JSON.stringify(initialData)};</script>`,
+    )).toEqual(initialData);
+    expect(() => parseYouTubeInitialDataHtml(
+      `<script>var ytInitialData = {};</script><script>window["ytInitialData"] = {"other":true};</script>`,
+    )).toThrow("one strict initial-data object");
+    expect(() => parseYouTubeInitialDataHtml(
+      "<script>var ytInitialData = {notStrictJson:true};</script>",
+    )).toThrow("one strict initial-data object");
+  });
+
+  test("rejects ambiguous resolution, unbound metadata, and noncanonical profile inputs", () => {
+    expect(() => youtubeProfileTarget("https://youtube.com/@wrench_test?feature=share"))
+      .toThrow("exact @handle or canonical");
+    expect(() => youtubeProfileBrowseRequest({
+      responseContext: {},
+      endpoints: [
+        {
+          browseEndpoint: {
+            browseId: CHANNEL_ID,
+            canonicalBaseUrl: "/@wrench_test",
+            params: "first-about-tab-params",
+          },
+        },
+        {
+          browseEndpoint: {
+            browseId: OTHER_CHANNEL_ID,
+            canonicalBaseUrl: "/@wrench_test",
+            params: "second-about-tab-params",
+          },
+        },
+      ],
+    }, youtubeProfileTarget("@wrench_test"))).toThrow("one exact channel");
+    expect(() => projectYouTubeProfile({
+      responseContext: {},
+      metadata: {
+        channelMetadataRenderer: {
+          externalId: OTHER_CHANNEL_ID,
+          title: "Other",
+          description: "Other",
+        },
+      },
+    }, CHANNEL_ID)).toThrow("one exact channel metadata renderer");
   });
 
   test("parses only reviewed signed-in Innertube bootstrap fields", () => {

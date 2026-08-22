@@ -1,0 +1,465 @@
+{
+  "schemaVersion": 4,
+  "id": "youtube-web",
+  "version": "1.0.0",
+  "displayName": "YouTube (Authenticated Web API)",
+  "surfaceId": "youtube",
+  "origins": [
+    "https://www.youtube.com"
+  ],
+  "browserDomains": [
+    "www.youtube.com"
+  ],
+  "operations": {
+    "feeds.read": {
+      "description": "Observed contract: read one bounded signed-in YouTube Home, Subscriptions, Library, History, Playlists, Watch Later, or Liked Videos page through the fixed first-party Innertube browse endpoint.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Exact reviewed YouTube feed",
+            "enum": [
+              "home",
+              "subscriptions",
+              "library",
+              "history",
+              "playlists",
+              "watch-later",
+              "liked"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected feed items",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "media.read": {
+      "description": "Observed contract: read bounded metadata for one exact YouTube video through the fixed first-party Innertube player endpoint without exposing playback URLs or session material.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "description": "Exact 11-character YouTube video ID",
+            "minLength": 11,
+            "maxLength": 11
+          }
+        },
+        "required": [
+          "video_id"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.read": {
+      "description": "Observed contract: read one exact YouTube Community post through the fixed first-party Innertube browse endpoint with a bounded text and attachment-kind projection.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact YouTube Community post ID",
+            "minLength": 10,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "comments.read": {
+      "description": "Observed contract: read one bounded YouTube video-comment page through the fixed acknowledgement-free Innertube next endpoint after binding the exact video target.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "description": "Exact 11-character YouTube video ID",
+            "minLength": 11,
+            "maxLength": 11
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected comments",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "video_id"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "likes.set": {
+      "description": "Capture-required contract reservation: the fixed like implementation and independent target readback are deterministic-test proven, but an authorized low-stakes live fixture is still required.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated YouTube account's like on the exact confirmed video.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "description": "Exact 11-character YouTube video ID",
+            "minLength": 11,
+            "maxLength": 11
+          },
+          "liked": {
+            "type": "boolean",
+            "description": "Exact desired like state"
+          }
+        },
+        "required": [
+          "video_id",
+          "liked"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "likes.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: the fixed Watch Later playlist edit implementation and independent target readback are deterministic-test proven, but an authorized low-stakes live fixture is still required.",
+      "risk": "R2",
+      "sideEffect": "Adds or removes the exact confirmed YouTube video in the authenticated account's Watch Later playlist.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "description": "Exact 11-character YouTube video ID",
+            "minLength": 11,
+            "maxLength": 11
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired Watch Later state"
+          }
+        },
+        "required": [
+          "video_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "relationships.follow.set": {
+      "description": "Capture-required contract reservation: the fixed subscription implementation and independent target readback are deterministic-test proven, but an authorized low-stakes live fixture is still required.",
+      "risk": "R2",
+      "sideEffect": "Subscribes or unsubscribes the authenticated YouTube account from the exact confirmed channel.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "channel_id": {
+            "type": "string",
+            "description": "Exact 24-character YouTube channel ID beginning with UC",
+            "minLength": 24,
+            "maxLength": 24
+          },
+          "followed": {
+            "type": "boolean",
+            "description": "Exact desired subscription state"
+          }
+        },
+        "required": [
+          "channel_id",
+          "followed"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "relationships.follow.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "comments.create": {
+      "description": "Capture-required contract reservation: create one confirmed YouTube top-level comment only after its current mutation, actor/target response binding, and authorized live fixture are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible comment on the exact confirmed YouTube video.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "description": "Exact 11-character YouTube video ID",
+            "minLength": 11,
+            "maxLength": 11
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact comment body",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "video_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "comments.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: create one confirmed YouTube comment reply only after its current mutation, actor/parent response binding, and authorized live fixture are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible reply to the exact confirmed YouTube comment.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "comment_id": {
+            "type": "string",
+            "description": "Exact parent YouTube comment ID",
+            "minLength": 8,
+            "maxLength": 256
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact reply body",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "comment_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed YouTube Community post only after text/image variants, actor binding, and an authorized live fixture are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible YouTube Community post with the exact confirmed text and optional image.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact Community post body",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional reviewed Community post image",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ]
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "posts.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "media.publish": {
+      "description": "Capture-required contract reservation: upload one confirmed YouTube video only after Studio resumable upload, metadata, audience, processing, and response bindings are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Uploads one YouTube video with the exact confirmed media, title, description, and reviewed audience settings.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Exact video title",
+            "minLength": 1,
+            "maxLength": 90
+          },
+          "caption": {
+            "type": "string",
+            "description": "Optional exact video description",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact reviewed video file",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "video/mp4",
+              "video/quicktime",
+              "video/webm"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "media"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "media.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "content.edit": {
+      "description": "Capture-required contract reservation: edit one exact owned YouTube video, Community post, or comment only after each target-specific mutation and independent readback are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Edits externally visible content owned by the authenticated YouTube account on the exact confirmed target.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_kind": {
+            "type": "string",
+            "description": "Exact YouTube content kind",
+            "enum": [
+              "video",
+              "community-post",
+              "comment"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Exact target identifier",
+            "minLength": 8,
+            "maxLength": 256
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact replacement title, body, or comment text",
+            "minLength": 1,
+            "maxLength": 5000
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "content.edit",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "content.schedule": {
+      "description": "Capture-required contract reservation: schedule one owned YouTube video only after Studio visibility, timezone, audience, target binding, and independent readback are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Schedules the exact confirmed owned YouTube video to become externally visible at the confirmed time.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "description": "Exact 11-character owned YouTube video ID",
+            "minLength": 11,
+            "maxLength": 11
+          },
+          "publish_at": {
+            "type": "string",
+            "description": "Exact confirmed ISO-8601 publication instant",
+            "minLength": 20,
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "video_id",
+          "publish_at"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "content.schedule",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    }
+  }
+}

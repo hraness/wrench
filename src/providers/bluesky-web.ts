@@ -20,6 +20,7 @@ export const BLUESKY_WEB_OPERATION_NAMES = Object.freeze([
   "messaging.list",
   "messaging.read",
   "messaging.send",
+  "profiles.read",
   "posts.publish",
   "posts.quote",
   "posts.read",
@@ -64,6 +65,11 @@ const observed = (
 });
 
 export const BLUESKY_WEB_OPERATIONS = Object.freeze({
+  "profiles.read": observed(
+    "read",
+    "R1",
+    "fixed getProfile AppView read binds the exact requested handle and projects exact follower, following, and post counts",
+  ),
   "feeds.read": observed(
     "read",
     "R1",
@@ -950,6 +956,99 @@ export type BlueskyProjectedProfile = {
   readonly following: string | null;
   readonly followedBy: string | null;
 };
+
+export type BlueskyProfileStats = {
+  readonly schemaVersion: 1;
+  readonly provider: "bluesky";
+  readonly target: {
+    readonly kind: "profile";
+    readonly id: string;
+    readonly url: string;
+  };
+  readonly observedAt: string;
+  readonly completeness: "complete";
+  readonly metrics: {
+    readonly followers: {
+      readonly status: "available";
+      readonly value: number;
+      readonly precision: "exact";
+      readonly unit: "count";
+    };
+    readonly following: {
+      readonly status: "available";
+      readonly value: number;
+      readonly precision: "exact";
+      readonly unit: "count";
+    };
+    readonly posts: {
+      readonly status: "available";
+      readonly value: number;
+      readonly precision: "exact";
+      readonly unit: "count";
+    };
+  };
+  readonly metadata: {
+    readonly handle: string;
+    readonly displayName: string | null;
+    readonly bio: string | null;
+  };
+};
+
+function exactObservationTime(value: string, label: string): string {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
+    || !Number.isFinite(Date.parse(value))
+  ) throw new Error(`${label} must be an exact UTC observation time`);
+  return value;
+}
+
+function exactCountMetric(value: unknown, label: string) {
+  return Object.freeze({
+    status: "available" as const,
+    value: integer(value, label),
+    precision: "exact" as const,
+    unit: "count" as const,
+  });
+}
+
+/** Project one exact AppView profile response into the shared profile-stat envelope. */
+export function projectBlueskyProfileStats(
+  value: unknown,
+  expectedHandle: string,
+  observedAt: string,
+): BlueskyProfileStats {
+  if (!handlePattern.test(expectedHandle) || expectedHandle !== expectedHandle.toLowerCase()) {
+    throw new Error("Bluesky profile target must be one canonical lowercase handle");
+  }
+  const profile = record(value, "Bluesky profile stats");
+  const handle = string(profile.handle, "Bluesky profile stats handle", 253).toLowerCase();
+  if (!handlePattern.test(handle) || handle !== expectedHandle) {
+    throw new Error("Bluesky profile stats response did not bind the requested handle");
+  }
+  const did = blueskyDid(profile.did, "Bluesky profile stats DID");
+  const url = `https://bsky.app/profile/${handle}`;
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "bluesky",
+    target: Object.freeze({ kind: "profile", id: did, url }),
+    observedAt: exactObservationTime(observedAt, "Bluesky profile stats observedAt"),
+    completeness: "complete",
+    metrics: Object.freeze({
+      followers: exactCountMetric(profile.followersCount, "Bluesky followersCount"),
+      following: exactCountMetric(profile.followsCount, "Bluesky followsCount"),
+      posts: exactCountMetric(profile.postsCount, "Bluesky postsCount"),
+    }),
+    metadata: Object.freeze({
+      handle,
+      displayName: optionalString(
+        profile.displayName,
+        "Bluesky profile stats display name",
+        1_000,
+      ),
+      bio: optionalString(profile.description, "Bluesky profile stats description", 10_000),
+    }),
+  });
+}
 
 export function projectBlueskyProfile(
   value: unknown,

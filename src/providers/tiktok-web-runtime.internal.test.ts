@@ -72,6 +72,21 @@ function viewerResponse(viewerId = VIEWER_ID): unknown {
   };
 }
 
+function profileResponse(handle = "wrench_test"): unknown {
+  const response = viewerResponse() as Record<string, unknown>;
+  const userInfo = response.userInfo as Record<string, unknown>;
+  const user = userInfo.user as Record<string, unknown>;
+  user.uniqueId = handle;
+  user.signature = "Public profile bio";
+  user.bioLink = { link: "https://example.com/" };
+  userInfo.stats = {
+    followerCount: 123,
+    followingCount: 45,
+    heartCount: 678,
+  };
+  return response;
+}
+
 function feedResponse(): unknown {
   return {
     statusCode: 0,
@@ -194,6 +209,81 @@ describe("TikTok authenticated internal-API runtime", () => {
       }),
     });
     expect(subject).toBe(`tiktok:uid:${VIEWER_ID}/sec:${VIEWER_SEC_UID}`);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("reads exact target-bound profile counts without exposing account-private IDs", async () => {
+    const calls: CapturedRequest[] = [];
+    let callbacks = 0;
+    const runtimeDependencies = dependencies(calls, (request) => {
+      expect(request.url.href).toBe("https://www.tiktok.com/api/user/detail/self/");
+      expect(request.method).toBe("GET");
+      return jsonResponse(profileResponse());
+    });
+    const result = await executeTikTokWebOperation(
+      recipe("profiles.read"),
+      { profile: "wrench_test" },
+      boundAuth,
+      {
+        beforeDispatch: () => {
+          callbacks += 1;
+          return Promise.resolve();
+        },
+        afterDispatchVerified: () => {
+          callbacks += 1;
+          return Promise.resolve();
+        },
+        dependencies: {
+          ...runtimeDependencies,
+          now: () => Date.parse("2026-08-22T03:00:00.000Z"),
+        },
+      },
+    );
+    expect(result).toEqual({
+      status: "succeeded",
+      output: {
+        schemaVersion: 1,
+        provider: "tiktok",
+        target: {
+          kind: "profile",
+          id: "wrench_test",
+          url: "https://www.tiktok.com/@wrench_test",
+        },
+        observedAt: "2026-08-22T03:00:00.000Z",
+        completeness: "complete",
+        metrics: {
+          followers: { status: "available", value: 123, precision: "exact", unit: "count" },
+          following: { status: "available", value: 45, precision: "exact", unit: "count" },
+          likes: { status: "available", value: 678, precision: "exact", unit: "count" },
+        },
+        metadata: {
+          handle: "wrench_test",
+          displayName: "Wrench Test",
+          bio: "Public profile bio",
+          websiteUrl: "https://example.com/",
+        },
+      },
+      finalUrl: "https://www.tiktok.com/@wrench_test",
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(calls).toHaveLength(1);
+    expect(callbacks).toBe(0);
+    expect(JSON.stringify(result)).not.toContain(VIEWER_ID);
+    expect(JSON.stringify(result)).not.toContain(VIEWER_SEC_UID);
+  });
+
+  test("rejects a profile handle that does not match the bound viewer", async () => {
+    const calls: CapturedRequest[] = [];
+    const message = await rejectionMessage(executeTikTokWebOperation(
+      recipe("profiles.read"),
+      { profile: "another_profile" },
+      boundAuth,
+      {
+        dependencies: dependencies(calls, () => jsonResponse(profileResponse())),
+      },
+    ));
+    expect(message).toContain("requested profile did not match");
     expect(calls).toHaveLength(1);
   });
 

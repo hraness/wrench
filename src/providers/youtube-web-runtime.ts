@@ -17,12 +17,16 @@ import {
   assertYouTubeVideoBinding,
   createYouTubeSapisidAuthorization,
   findYouTubeCommentsContinuation,
+  parseYouTubeInitialDataHtml,
   parseYouTubeBootstrapHtml,
+  projectYouTubeProfile,
   projectYouTubeComments,
   projectYouTubeItems,
   projectYouTubeMedia,
   projectYouTubePost,
   youtubePostBrowseRequest,
+  youtubeProfileBrowseRequest,
+  youtubeProfileTarget,
   youtubeCurrentSubject,
   youtubeLikeMutationRequest,
   youtubeLikeState,
@@ -34,6 +38,7 @@ import {
 
 const YOUTUBE_ORIGIN = "https://www.youtube.com";
 const MAX_BOOTSTRAP_BYTES = 2 * 1024 * 1024;
+const MAX_PROFILE_PAGE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_LIMIT = 20;
 
 type InnertubeEndpoint =
@@ -404,6 +409,80 @@ async function executeCommentsRead(
   };
 }
 
+function exactProfileCount(value: number | null): Readonly<Record<string, unknown>> {
+  return value === null
+    ? Object.freeze({ status: "unavailable", reason: "not-exposed" })
+    : Object.freeze({
+      status: "available",
+      value,
+      precision: "exact",
+      unit: "count",
+    });
+}
+
+async function executeProfileRead(
+  bootstrap: YouTubeBootstrap,
+  input: OperationInput,
+): Promise<WebSessionExecution> {
+  requireBoundSubject(bootstrap);
+  const target = youtubeProfileTarget(input.profile);
+  const resolved = await innertube(
+    bootstrap,
+    "navigation/resolve_url",
+    { url: target.url },
+    "YouTube profile URL resolution",
+  );
+  const browse = youtubeProfileBrowseRequest(resolved, target);
+  const html = await bootstrap.client.requestText({
+    url: new URL(`${target.url}/about`),
+    headers: { accept: "text/html" },
+    expectedContentTypes: ["text/html"],
+    maxBytes: Math.min(bootstrap.maxOutputBytes, MAX_PROFILE_PAGE_BYTES),
+  });
+  const response = parseYouTubeInitialDataHtml(html);
+  const profile = projectYouTubeProfile(response, browse.browseId, target.handle);
+  if (
+    target.handle !== null
+    && profile.handle?.toLocaleLowerCase("en-US") !== target.handle.toLocaleLowerCase("en-US")
+  ) throw new Error("YouTube profile response did not bind the requested handle");
+  const observationTime = bootstrap.now();
+  if (
+    !Number.isSafeInteger(observationTime)
+    || observationTime < 0
+    || observationTime > 8_640_000_000_000_000
+  ) throw new Error("YouTube profile observation time is invalid");
+  const complete = profile.subscribers !== null
+    && profile.videos !== null
+    && profile.views !== null;
+  return {
+    status: "succeeded",
+    output: Object.freeze({
+      schemaVersion: 1,
+      provider: "youtube",
+      target: Object.freeze({
+        kind: "profile",
+        id: profile.channelId,
+        url: profile.canonicalUrl,
+      }),
+      observedAt: new Date(observationTime).toISOString(),
+      completeness: complete ? "complete" : "partial",
+      metrics: Object.freeze({
+        subscribers: exactProfileCount(profile.subscribers),
+        videos: exactProfileCount(profile.videos),
+        views: exactProfileCount(profile.views),
+      }),
+      metadata: Object.freeze({
+        ...(profile.handle === null ? {} : { handle: profile.handle }),
+        displayName: profile.displayName,
+        ...(profile.bio === null ? {} : { bio: profile.bio }),
+      }),
+    }),
+    finalUrl: profile.canonicalUrl,
+    dispatchStarted: false,
+    dispatch: { planned: 0, started: 0, verified: 0 },
+  };
+}
+
 function dispatchEvent(
   action: string,
   started: number,
@@ -718,6 +797,7 @@ export async function executeYouTubeWebOperation(
       "likes.set",
       "media.read",
       "posts.read",
+      "profiles.read",
       "relationships.follow.set",
     ].includes(recipe.action)
   ) {
@@ -735,6 +815,7 @@ export async function executeYouTubeWebOperation(
   if (recipe.action === "feeds.read") return executeFeed(bootstrap, input);
   if (recipe.action === "media.read") return executeMediaRead(bootstrap, input);
   if (recipe.action === "posts.read") return executePostRead(bootstrap, input);
+  if (recipe.action === "profiles.read") return executeProfileRead(bootstrap, input);
   if (recipe.action === "comments.read") return executeCommentsRead(bootstrap, input);
   if (
     recipe.action === "likes.set"

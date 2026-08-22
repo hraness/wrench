@@ -90,6 +90,13 @@ function htmlResponse(): Response {
   });
 }
 
+function profileHtmlResponse(value: unknown): Response {
+  return new Response(
+    `<!doctype html><script>var ytInitialData = ${JSON.stringify(value)};</script>`,
+    { status: 200, headers: { "content-type": "text/html" } },
+  );
+}
+
 function accountMenuResponse(channelId = CHANNEL_ID): unknown {
   return {
     actions: [{
@@ -379,6 +386,62 @@ describe("YouTube authenticated Innertube runtime", () => {
         }),
       },
       {
+        action: "profiles.read",
+        input: { profile: "@wrench_test" },
+        handler: (request) => endpoint(request) === "navigation/resolve_url"
+          ? jsonResponse({
+            endpoint: {
+              browseEndpoint: {
+                browseId: TARGET_CHANNEL_ID,
+                canonicalBaseUrl: "/@wrench_test",
+                params: "about-tab-params",
+              },
+            },
+          })
+          : request.url.pathname === "/@wrench_test/about"
+            ? profileHtmlResponse({
+              metadata: {
+                channelMetadataRenderer: {
+                  externalId: TARGET_CHANNEL_ID,
+                  title: "Wrench Test",
+                  description: "Public channel bio",
+                },
+              },
+              engagementPanels: [{
+                aboutChannelViewModel: {
+                  channelId: TARGET_CHANNEL_ID,
+                  canonicalChannelUrl: "http://www.youtube.com/@wrench_test",
+                  subscriberCountText: "4 subscribers",
+                  videoCountText: "11 videos",
+                  viewCountText: "2,061 views",
+                },
+              }],
+            })
+            : null,
+        expectedPaths: ["navigation/resolve_url", "/@wrench_test/about"],
+        verify: (output) => expect(output).toEqual({
+          schemaVersion: 1,
+          provider: "youtube",
+          target: {
+            kind: "profile",
+            id: TARGET_CHANNEL_ID,
+            url: "https://www.youtube.com/@wrench_test",
+          },
+          observedAt: "2023-11-14T22:13:20.000Z",
+          completeness: "complete",
+          metrics: {
+            subscribers: { status: "available", value: 4, precision: "exact", unit: "count" },
+            videos: { status: "available", value: 11, precision: "exact", unit: "count" },
+            views: { status: "available", value: 2061, precision: "exact", unit: "count" },
+          },
+          metadata: {
+            handle: "wrench_test",
+            displayName: "Wrench Test",
+            bio: "Public channel bio",
+          },
+        }),
+      },
+      {
         action: "comments.read",
         input: { video_id: VIDEO_ID, limit: 5 },
         handler: (request) => {
@@ -439,7 +502,11 @@ describe("YouTube authenticated Innertube runtime", () => {
       scenario.verify(result.output);
       const operationCalls = calls.slice(3);
       expect(operationCalls.map(endpoint)).toEqual([...scenario.expectedPaths]);
-      for (const request of calls.slice(1)) assertInnertubeEnvelope(request);
+      for (const request of calls.slice(1)) {
+        if (request.url.pathname.startsWith("/youtubei/v1/")) {
+          assertInnertubeEnvelope(request);
+        }
+      }
     }
   });
 

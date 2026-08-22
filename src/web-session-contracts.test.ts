@@ -62,22 +62,22 @@ describe("authenticated web-session contract identity", () => {
     // Writers use the exact predecessor runtime identities produced with
     // NODE_ENV unset. Runtime source closure is verified independently.
     expect(webSessionContractHash(xLike)).toBe(
-      "5aeb891f8f11efee76410533e67004780530d3aace92c3f568e33cf6adf5249d",
+      "1c79b86a2133354878d44483e5a78efa9560f8c7f8f2c1014a20d0c998c0024f",
     );
     expect(webSessionContractHash(linkedinFeed)).toBe(
-      "aaa540ac05fab3c4025804ed732b7ef27ca23239cc97a660189463700e763e5c",
+      "8d0fe6ccf29d0ae29cc22bf03f2f61b022950b6a12de98dfd481bb618f7de106",
     );
     expect(webSessionContractHash(facebookFeed)).toBe(
-      "0a8ce87112f248801d37c3e2ac9e51eb110fac2dd55ed3484c7d9e63767577c6",
+      "cb0e4de0914f571021d53285160bdbe6da7b1709edd5c3d7057a727c8f133d31",
     );
     expect(webSessionContractHash(facebookGroupFeed)).toBe(
-      "4c38d484c22a519221103a13c691a8bee19b6aa1691e9228de4b7c38fdf00477",
+      "e80d4c9932d035a8a76709bd03eaa13faa54f36b931ac69134e4bbcc6447d80e",
     );
     expect(webSessionContractHash(marketplaceFeed)).toBe(
-      "eff468a039212130bef21d454f5e013457edc79a1285f7016cf74f0f8e574337",
+      "d23fdd180adbf41c4571d84ff86f49787e34000606a6f5852db38d165a77b56f",
     );
     expect(webSessionContractHash(marketplaceListing)).toBe(
-      "477ee5c357cabaafd7762316664a0c599a2c429acbd8e2157cd7a9635bf5f28f",
+      "06186e24a8f7299df5c07da3931a5f0c5f6d48996c449ed924fc739f58072083",
     );
 
     for (const value of [
@@ -132,7 +132,7 @@ describe("authenticated web-session contract identity", () => {
       contractVersion: 1,
     });
     expect(webSessionContractHash(historicalMarketplaceFeed)).toBe(
-      "e2cbb33f532222bdb683a5c31456cbe43f712862e4f6dc27f39fba81538ce3f9",
+      "79c88540eaa000472a95eef33ea7c24e6fe52c68a03f185c59cce83d6163df14",
     );
     expect(() => contract({
       site: "facebook-marketplace",
@@ -221,11 +221,9 @@ describe("authenticated web-session contract identity", () => {
     }
   });
 
-  test("keeps LinkedIn inbox and discovery contracts inert until recapture", () => {
+  test("observes bounded LinkedIn profile reads while keeping unrelated discovery inert", () => {
     for (const action of [
       "messaging.list",
-      "profiles.read",
-      "organizations.read",
       "relationships.recommendations.read",
     ] as const) {
       expect(contract({ site: "linkedin", action, contractVersion: 1 })).toMatchObject({
@@ -233,6 +231,18 @@ describe("authenticated web-session contract identity", () => {
         operation: action,
         risk: "R1",
         state: "capture-required",
+        dispatch: "none",
+        sideEffect: "none",
+        idempotency: "none",
+      });
+    }
+
+    for (const action of ["profiles.read", "organizations.read"] as const) {
+      expect(contract({ site: "linkedin", action, contractVersion: 1 })).toMatchObject({
+        site: "linkedin",
+        operation: action,
+        risk: "R1",
+        state: "observed",
         dispatch: "none",
         sideEffect: "none",
         idempotency: "none",
@@ -252,6 +262,32 @@ describe("authenticated web-session contract identity", () => {
       idempotency: "local-at-most-once",
       dedupeWindowMs: 86_400_000,
     });
+  });
+
+  test("observes exact Meta and Substack profile-stat reads", () => {
+    for (const site of ["instagram", "threads"] as const) {
+      expect(contract({ site, action: "profiles.read", contractVersion: 1 })).toMatchObject({
+        site,
+        operation: "profiles.read",
+        risk: "R1",
+        state: "observed",
+        dispatch: "none",
+        sideEffect: "none",
+        idempotency: "none",
+      });
+    }
+
+    for (const action of ["profiles.read", "organizations.read"] as const) {
+      expect(contract({ site: "substack", action, contractVersion: 1 })).toMatchObject({
+        site: "substack",
+        operation: action,
+        risk: "R1",
+        state: "observed",
+        dispatch: "none",
+        sideEffect: "none",
+        idempotency: "none",
+      });
+    }
   });
 
   test("keeps every Marketplace mutation capture-required", () => {

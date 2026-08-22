@@ -269,6 +269,23 @@ describe("provider plugin definition and registry", () => {
     expect(providerPluginRegistry.legacyContractImplementationHashes(binding)).toEqual([]);
   });
 
+  test("retains a distinct prior current implementation without replacing e71 readers", () => {
+    const plugin = providerPluginRegistry.get("meta-web");
+    const binding = plugin?.bindings.find(({ surfaceId }) => surfaceId === "instagram");
+    expect(plugin?.version).toBe("1.1.0");
+    if (binding === undefined) throw new Error("Meta provider binding is unavailable");
+    expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
+      .toBe("b1e997c0540283f45b3b7b0f4c5712f8592e140a840bab75e463aac40efaa805");
+    const readers = providerPluginRegistry.legacyContractImplementationHashes(binding)
+      .map((value) => value.toString("hex"));
+    expect(readers).toContain(
+      "fc6875171617dfe466f1e39308b8a208253b7b4adae3201f58634cfd43c30913",
+    );
+    expect(readers).toContain(
+      "2267887ca46e413fab5fded684edb1bab495b4782925f6be67153195131ad6c6",
+    );
+  });
+
   test("freezes complete definitions and orders plugins, bindings, and operations", () => {
     const registry = createProviderPluginRegistry([
       pluginDefinition("zeta", [
@@ -3218,11 +3235,21 @@ describe("provider plugin definition and registry", () => {
           "authenticated web contract bluesky/posts.publish@1 is not installed",
         ],
       ],
-      ...["1.0.0", "1.1.0", "1.2.0", "1.3.0"].map((version) => [
+      ...["1.0.0", "1.1.0"].map((version) => [
         join(root, "linkedin", `wrench-web-adapter.v${version}.json`),
         [
           "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
           "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "authenticated web contract linkedin/posts.publish@1 is not installed",
+        ],
+      ] as const),
+      ...["1.2.0", "1.3.0"].map((version) => [
+        join(root, "linkedin", `wrench-web-adapter.v${version}.json`),
+        [
+          "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
+          "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/posts.publish@1 is not installed",
         ],
       ] as const),
@@ -3231,6 +3258,8 @@ describe("provider plugin definition and registry", () => {
         [
           "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
           "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/posts.publish@1 is not installed",
           "authenticated web contract linkedin/articles.draft.save@1 is not installed",
         ],
@@ -3240,6 +3269,8 @@ describe("provider plugin definition and registry", () => {
         [
           "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
           "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/posts.publish@1 is not installed",
           "authenticated web contract linkedin/articles.draft.save@1 is not installed",
         ],
@@ -3249,6 +3280,8 @@ describe("provider plugin definition and registry", () => {
         [
           "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
           "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/posts.publish@1 is not installed",
         ],
       ],
@@ -3258,30 +3291,47 @@ describe("provider plugin definition and registry", () => {
           "manifest.origins must exactly match provider plugin surface linkedin: https://static.licdn.com, https://www.linkedin.com",
           "manifest.browserDomains must exactly match provider plugin surface linkedin: static.licdn.com, www.linkedin.com",
           "authenticated web contract linkedin/articles.draft.save@3 is not installed",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/posts.publish@1 is not installed",
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
         ],
       ],
+      ...["1.8.0", "1.14.0", "1.15.0"].map((version) => [
+        join(root, "linkedin", `wrench-web-adapter.v${version}.json`),
+        [
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
+        ],
+      ] as const),
       ...["1.9.0", "1.10.0"].map((version) => [
         join(root, "linkedin", `wrench-web-adapter.v${version}.json`),
         [
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/articles.draft.save@3 is not installed",
         ],
       ] as const),
       [
         join(root, "linkedin", "wrench-web-adapter.v1.11.0.json"),
         [
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/articles.draft.save@4 is not installed",
         ],
       ],
       [
         join(root, "linkedin", "wrench-web-adapter.v1.12.0.json"),
         [
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/articles.draft.save@5 is not installed",
         ],
       ],
       [
         join(root, "linkedin", "wrench-web-adapter.v1.13.0.json"),
         [
+          "manifest.operations.profiles.read.input must exactly match authenticated web contract linkedin/profiles.read@1",
+          "manifest.operations.organizations.read.input must exactly match authenticated web contract linkedin/organizations.read@1",
           "authenticated web contract linkedin/articles.draft.save@6 is not installed",
         ],
       ],

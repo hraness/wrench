@@ -67,6 +67,9 @@ import {
   linkedInPostMediaUrn,
   linkedInPostText,
   linkedInPostVisibility,
+  linkedInOrganizationTarget,
+  linkedInPersonalProfilePublicIdentifier,
+  linkedInPersonalProfileTarget,
   normalizeLinkedInPostProjection,
   normalizeLinkedInArticleDraft,
   normalizeLinkedInArticleDraftMetadata,
@@ -74,6 +77,8 @@ import {
   normalizeLinkedInArticleDraftV2,
   normalizeLinkedInArticleDraftV2Metadata,
   normalizeLinkedInMessagingList,
+  projectLinkedInOrganizationStats,
+  projectLinkedInPersonalProfileStats,
 } from "./linkedin-web";
 import { resolveLinkedInMessengerConversationsQueryId } from "./linkedin-web-bootstrap";
 import {
@@ -105,6 +110,7 @@ export type LinkedInWebRuntimeDependencies = Partial<WebSessionNetworkDependenci
   readonly createArticleBrowserTransport?: typeof createLinkedInArticleBrowserTransport;
   readonly createPostBrowserTransport?: typeof createLinkedInPostBrowserTransport;
   readonly resolveMessengerConversationsQueryId?: typeof resolveLinkedInMessengerConversationsQueryId;
+  readonly now?: () => number;
   /** Test seam for the auth-hash-bound encrypted LinkedIn rotation cache. */
   readonly loadCachedCookies?: (
     auth: WrenchAuth,
@@ -569,7 +575,14 @@ type LinkedInCurrentIdentity = {
   readonly subject: string;
   readonly mailboxUrn: string | null;
   readonly profileUrn: string | null;
+  readonly publicIdentifier: string | null;
 };
+
+function optionalLinkedInPublicIdentifier(value: unknown): string | null {
+  return value === undefined || value === null
+    ? null
+    : linkedInPersonalProfilePublicIdentifier(value);
+}
 
 function identityFromMeResponse(value: unknown): LinkedInCurrentIdentity {
   const envelope = record(value, "LinkedIn /voyager/api/me response");
@@ -623,19 +636,36 @@ function identityFromMeResponse(value: unknown): LinkedInCurrentIdentity {
       subject: `urn:li:fsd_profile:${primaryId}`,
       mailboxUrn: linkedInMailboxUrnFromMiniProfile(reference),
       profileUrn: linkedInMailboxUrnFromMiniProfile(reference),
+      publicIdentifier: optionalLinkedInPublicIdentifier(
+        referenced[0]?.publicIdentifier,
+      ),
     });
   }
 
-  const corroborated = entities.some((item) =>
+  const corroboratedEntities = entities.filter((item) =>
     ["entityUrn", "backendUrn", "objectUrn", "urn"]
       .some((field) => linkedInMemberIdFromUrn(item[field]) === primaryId));
-  if (!corroborated) {
+  if (corroboratedEntities.length === 0) {
     throw new Error("LinkedIn /voyager/api/me did not corroborate its primary member subject");
+  }
+  const publicIdentifiers = new Set(
+    corroboratedEntities.flatMap((item) => {
+      const publicIdentifier = optionalLinkedInPublicIdentifier(
+        item.publicIdentifier,
+      );
+      return publicIdentifier === null ? [] : [publicIdentifier];
+    }),
+  );
+  if (publicIdentifiers.size > 1) {
+    throw new Error(
+      "LinkedIn /voyager/api/me included conflicting public profile identifiers for its primary member subject",
+    );
   }
   return Object.freeze({
     subject: `urn:li:fsd_profile:${primaryId}`,
     mailboxUrn: null,
     profileUrn: null,
+    publicIdentifier: publicIdentifiers.values().next().value ?? null,
   });
 }
 
@@ -671,6 +701,183 @@ export async function probeLinkedInWebSubject(
   );
   const csrf = linkedInCsrfTokenFromJSessionId(webSessionCookie(client.cookies, "JSESSIONID"));
   return (await currentIdentity(client, csrf)).subject;
+}
+
+function boundLinkedInStatsIdentity(
+  auth: WrenchAuth,
+  identity: LinkedInCurrentIdentity,
+): string {
+  const expected = webSessionAuthSubject(auth);
+  if (expected === null || expected !== identity.subject) {
+    throw new Error("LinkedIn current member no longer matches the bound auth subject");
+  }
+  return expected;
+}
+
+function linkedInHtmlHeaders(referer: string): Readonly<Record<string, string>> {
+  return Object.freeze({
+    accept: "text/html",
+    "accept-language": "en-US,en;q=0.9",
+    referer,
+  });
+}
+
+function linkedInProfileStatsFailure(
+  error: unknown,
+  target: "personal" | "organization",
+  requestStage: string,
+): string {
+  const message = error instanceof Error ? error.message : "";
+  const responseShape = /status\/content type ([0-9]{3})\/([A-Za-z0-9.+-]{1,128})/u.exec(message);
+  const stage = message.includes("current member")
+      || message.includes("cookie")
+      || message.includes("session")
+    ? "signed-in account binding"
+    : message.includes("byte") || message.includes("size")
+      ? "bounded page read"
+      : message.includes("follower")
+        ? "exact follower projection"
+        : message.includes("connection")
+          ? "exact connection projection"
+          : message.includes("Company")
+              || message.includes("FollowingState")
+              || message.includes("universal name")
+            ? "target company-state projection"
+            : responseShape !== null
+              ? `first-party page response ${responseShape[1]}/${responseShape[2]}`
+              : message.includes("status") || message.includes("content type")
+                ? "first-party page response"
+              : "reviewed response projection";
+  return `LinkedIn ${target} profile stats failed during ${requestStage} at ${stage}; no remote write occurred`;
+}
+
+async function executeLinkedInPersonalProfileRead(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: LinkedInWebExecutionOptions,
+): Promise<WebSessionExecution> {
+  const target = linkedInPersonalProfileTarget(input.profile_url);
+  const includeConnections = input.include_connections ?? false;
+  if (typeof includeConnections !== "boolean") {
+    throw new Error("input.include_connections must be boolean");
+  }
+  let requestStage = "signed-in identity preflight";
+  try {
+    const client = await createLinkedInClient(
+      auth,
+      recipe.timeoutMs,
+      options.dependencies,
+      options,
+    );
+    const csrf = linkedInCsrfTokenFromJSessionId(webSessionCookie(client.cookies, "JSESSIONID"));
+    const identity = await currentIdentity(client, csrf);
+    const subject = boundLinkedInStatsIdentity(auth, identity);
+    if (identity.publicIdentifier === null) {
+      throw new Error(
+        "LinkedIn current member omitted its bound public profile identifier",
+      );
+    }
+    if (identity.publicIdentifier !== target.slug) {
+      throw new Error(
+        "LinkedIn current member public profile identifier does not match the requested profile URL",
+      );
+    }
+    requestStage = "public self-profile page read";
+    const profileHtml = await client.requestText({
+      url: new URL(target.url),
+      method: "GET",
+      headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
+      expectedContentTypes: ["text/html"],
+      maxBytes: recipe.maxOutputBytes,
+    });
+    let connectionsHtml: string | null = null;
+    if (includeConnections) {
+      requestStage = "private My Network connections page read";
+      connectionsHtml = await client.requestText({
+          url: new URL(`${LINKEDIN_ORIGIN}/mynetwork/invite-connect/connections/`),
+          method: "GET",
+          headers: linkedInHtmlHeaders(target.url),
+          expectedContentTypes: ["text/html"],
+          maxBytes: recipe.maxOutputBytes,
+        });
+    }
+    requestStage = "exact metric projection";
+    const output = projectLinkedInPersonalProfileStats({
+      profileHtml,
+      connectionsHtml,
+      profileUrl: target.url,
+      expectedSubject: subject,
+      expectedPublicIdentifier: identity.publicIdentifier,
+      observedAt: new Date(options.dependencies?.now?.() ?? Date.now()).toISOString(),
+    });
+    return {
+      status: "succeeded",
+      output,
+      finalUrl: target.url,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      output: null,
+      finalUrl: target.url,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+      error: linkedInProfileStatsFailure(error, "personal", requestStage),
+    };
+  }
+}
+
+async function executeLinkedInOrganizationRead(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: LinkedInWebExecutionOptions,
+): Promise<WebSessionExecution> {
+  const target = linkedInOrganizationTarget(input.organization_url);
+  let requestStage = "signed-in identity preflight";
+  try {
+    const client = await createLinkedInClient(
+      auth,
+      recipe.timeoutMs,
+      options.dependencies,
+      options,
+    );
+    const csrf = linkedInCsrfTokenFromJSessionId(webSessionCookie(client.cookies, "JSESSIONID"));
+    boundLinkedInStatsIdentity(auth, await currentIdentity(client, csrf));
+    requestStage = "public company page read";
+    const html = await client.requestText({
+      url: new URL(target.url),
+      method: "GET",
+      headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
+      expectedContentTypes: ["text/html"],
+      maxBytes: recipe.maxOutputBytes,
+    });
+    requestStage = "exact company metric projection";
+    const output = projectLinkedInOrganizationStats({
+      html,
+      organizationUrl: target.url,
+      observedAt: new Date(options.dependencies?.now?.() ?? Date.now()).toISOString(),
+    });
+    return {
+      status: "succeeded",
+      output,
+      finalUrl: target.url,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      output: null,
+      finalUrl: target.url,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+      error: linkedInProfileStatsFailure(error, "organization", requestStage),
+    };
+  }
 }
 
 function integerInput(
@@ -1867,6 +2074,16 @@ export async function executeLinkedInWebOperation(
   auth: WrenchAuth,
   options: LinkedInWebExecutionOptions = {},
 ): Promise<WebSessionExecution> {
+  if (
+    recipe.site === "linkedin"
+    && recipe.contractVersion === 1
+    && recipe.action === "profiles.read"
+  ) return executeLinkedInPersonalProfileRead(recipe, input, auth, options);
+  if (
+    recipe.site === "linkedin"
+    && recipe.contractVersion === 1
+    && recipe.action === "organizations.read"
+  ) return executeLinkedInOrganizationRead(recipe, input, auth, options);
   if (
     recipe.site === "linkedin"
     && recipe.contractVersion === 7

@@ -741,6 +741,146 @@ describe("Meta authenticated internal-data runtime", () => {
     }
   });
 
+  test("reads exact self-profile metrics without entering the dispatch ledger", async () => {
+    const observedAt = Date.UTC(2026, 7, 21, 15, 0, 0);
+    const instagramCalls: Call[] = [];
+    let instagramDispatches = 0;
+    const instagram = await executeMetaWebOperation(
+      recipe("instagram", "profiles.read"),
+      { profile: "viewer" },
+      auth("instagram"),
+      {
+        beforeDispatch: () => {
+          instagramDispatches += 1;
+          return Promise.resolve();
+        },
+        dependencies: {
+          ...dependencies("instagram", instagramCalls, (call) => {
+            if (call.url.pathname === "/") {
+              return new Response(instagramHtml, {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              });
+            }
+            if (call.url.pathname === "/api/v1/users/web_profile_info/") {
+              expect(call.url.searchParams.get("username")).toBe("viewer");
+              expect(call.headers.get("x-ig-app-id")).toBe("936619743392459");
+              expect(call.headers.get("referer")).toBe("https://www.instagram.com/viewer/");
+              return new Response(JSON.stringify({
+                status: "ok",
+                data: {
+                  user: {
+                    id: "12345",
+                    username: "viewer",
+                    edge_followed_by: { count: 101 },
+                    edge_follow: { count: 20 },
+                    edge_owner_to_timeline_media: { count: 7 },
+                  },
+                },
+              }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              });
+            }
+            throw new Error(`unexpected Instagram profile request ${call.url.href}`);
+          }),
+          now: () => observedAt,
+        },
+      },
+    );
+    expect(instagram).toMatchObject({
+      status: "succeeded",
+      finalUrl: "https://www.instagram.com/viewer/",
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+      output: {
+        schemaVersion: 1,
+        provider: "instagram",
+        target: { kind: "profile", id: "12345" },
+        observedAt: "2026-08-21T15:00:00.000Z",
+        completeness: "complete",
+        metrics: {
+          followers: { status: "available", value: 101, precision: "exact" },
+          following: { status: "available", value: 20, precision: "exact" },
+          posts: { status: "available", value: 7, precision: "exact" },
+        },
+      },
+    });
+    expect(instagramCalls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      "/api/v1/users/web_profile_info/",
+    ]);
+    expect(instagramDispatches).toBe(0);
+
+    const threadsCalls: Call[] = [];
+    let threadsDispatches = 0;
+    const profileHtml = threadsHtml + script({
+      profile: {
+        pk: "12345",
+        username: "viewer",
+        follower_count: 99,
+      },
+    });
+    const threads = await executeMetaWebOperation(
+      recipe("threads", "profiles.read"),
+      { profile: "viewer" },
+      auth("threads"),
+      {
+        beforeDispatch: () => {
+          threadsDispatches += 1;
+          return Promise.resolve();
+        },
+        dependencies: {
+          ...dependencies("threads", threadsCalls, (call) => {
+            if (call.url.pathname === "/") {
+              return new Response(threadsHtml, {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              });
+            }
+            if (call.url.pathname === "/@viewer") {
+              return new Response(profileHtml, {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              });
+            }
+            if (call.url.pathname === "/insights") {
+              return new Response(
+                "<main>Insights await Check back in once you've reached 100 followers to see your insights.</main>",
+                { status: 200, headers: { "content-type": "text/html" } },
+              );
+            }
+            throw new Error(`unexpected Threads profile request ${call.url.href}`);
+          }),
+          now: () => observedAt,
+        },
+      },
+    );
+    expect(threads).toMatchObject({
+      status: "succeeded",
+      finalUrl: "https://www.threads.com/@viewer",
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+      output: {
+        schemaVersion: 1,
+        provider: "threads",
+        target: { kind: "profile", id: "12345" },
+        observedAt: "2026-08-21T15:00:00.000Z",
+        completeness: "partial",
+        metrics: {
+          followers: { status: "available", value: 99, precision: "exact" },
+          recentViews: { status: "unavailable", reason: "not-authorized" },
+        },
+      },
+    });
+    expect(threadsCalls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      "/@viewer",
+      "/insights",
+    ]);
+    expect(threadsDispatches).toBe(0);
+  });
+
   test("uploads one plan-bound Threads PNG, dispatches once, and verifies the exact permalink readback", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-threads-post-"));
     chmodSync(root, 0o700);

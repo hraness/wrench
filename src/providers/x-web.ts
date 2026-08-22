@@ -269,6 +269,7 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
     { operationName: "DmGroupSearchSlice", operationType: "query", queryId: "LxrvmqF3Lokl_BYZ1c83LA", sourceChunk: "bundle.DirectMessages.265735ba.js" },
     { operationName: "DmPeopleSearchSlice", operationType: "query", queryId: "c1MnRRmI-_Bggpntlq9-hQ", sourceChunk: "bundle.DirectMessages.265735ba.js" },
     { operationName: "Viewer", operationType: "query", queryId: "5XShkXk2oO2J7SYmTu6pvw", sourceChunk: "main.e4aca26a.js", observedOn: "2026-08-14" },
+    { operationName: "UserByScreenName", operationType: "query", queryId: "Gb-d6r0vxPOADdG62OEBpQ", sourceChunk: "main.dd6a5b6a.js", observedOn: "2026-08-21" },
     { operationName: "ArticleEntityDraftCreate", operationType: "mutation", queryId: "btD9FyMDa3_vydVp7fr87Q", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
     { operationName: "ArticleEntityUpdateContent", operationType: "mutation", queryId: "P5Nc3DYs9D4XqVthNrig8w", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
     { operationName: "ArticleEntityUpdateTitle", operationType: "mutation", queryId: "z_xdvTUbZjSVjt232b4D4A", sourceChunk: "bundle.TwitterArticles.305538ca.js", observedOn: "2026-08-14" },
@@ -278,7 +279,7 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
 });
 
 type XWebGraphQlReadDefinition = {
-  readonly semanticOperation: "feeds.read" | "posts.read";
+  readonly semanticOperation: "feeds.read" | "posts.read" | "profiles.read";
   readonly risk: "R1";
   readonly transport: "graphql-query";
   readonly operationName: string;
@@ -315,6 +316,7 @@ export const xWebSemanticOperationRegistry = Object.freeze({
   "feeds.bookmark-search": { semanticOperation: "feeds.read", risk: "R1", transport: "graphql-query", operationName: "BookmarkSearchTimeline", operationType: "query", responseRoot: ["bookmark_search_timeline", "timeline"] },
   "feeds.search": { semanticOperation: "feeds.read", risk: "R1", transport: "graphql-query", operationName: "SearchTimeline", operationType: "query", responseRoot: ["search_by_raw_query", "search_timeline", "timeline"] },
   "feeds.notifications": { semanticOperation: "feeds.read", risk: "R1", transport: "graphql-query", operationName: "NotificationsTimeline", operationType: "query", responseRoot: ["viewer_v2", "user_results", "result", "notification_timeline", "timeline"] },
+  "profiles.by-handle": { semanticOperation: "profiles.read", risk: "R1", transport: "graphql-query", operationName: "UserByScreenName", operationType: "query", responseRoot: ["user", "result"] },
   "posts.detail": { semanticOperation: "posts.read", risk: "R1", transport: "graphql-query", operationName: "TweetDetail", operationType: "query", responseRoot: ["threaded_conversation_with_injections_v2"] },
   "posts.by-id": { semanticOperation: "posts.read", risk: "R1", transport: "graphql-query", operationName: "TweetResultByRestId", operationType: "query", responseRoot: ["tweetResult", "result"] },
   "posts.by-ids": { semanticOperation: "posts.read", risk: "R1", transport: "graphql-query", operationName: "TweetResultsByRestIds", operationType: "query", responseRoot: ["tweetResult"] },
@@ -964,6 +966,214 @@ function responseData(value: unknown, label: string): JsonRecord {
     if (body.errors.length > 0) throw new Error(`${label} contained provider errors`);
   }
   return record(body.data, `${label}.data`);
+}
+
+export type XWebProfileStats = {
+  readonly schemaVersion: 1;
+  readonly provider: "x";
+  readonly target: {
+    readonly kind: "profile";
+    readonly id: string;
+    readonly url: string;
+  };
+  readonly observedAt: string;
+  readonly completeness: "complete";
+  readonly metrics: {
+    readonly followers: {
+      readonly status: "available";
+      readonly value: number;
+      readonly precision: "exact";
+      readonly unit: "count";
+    };
+    readonly following: {
+      readonly status: "available";
+      readonly value: number;
+      readonly precision: "exact";
+      readonly unit: "count";
+    };
+  };
+  readonly metadata: {
+    readonly handle: string;
+    readonly displayName: string;
+    readonly bio: string | null;
+    readonly websiteUrl: string | null;
+  };
+};
+
+export function normalizeXWebProfileHandle(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_]{1,15}$/u.test(value)) {
+    throw new Error("X profile handle must contain 1-15 letters, digits, or underscores");
+  }
+  return value.toLowerCase();
+}
+
+function xProfileText(
+  value: unknown,
+  label: string,
+  maximum: number,
+  optional = false,
+): string | null {
+  if (value === undefined || value === null || (optional && value === "")) return null;
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > maximum
+    || hasAsciiControl(value)
+  ) throw new Error(`${label} must be bounded public text`);
+  return value;
+}
+
+function xProfileCount(value: unknown, label: string) {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`${label} must be an exact nonnegative safe integer`);
+  }
+  return Object.freeze({
+    status: "available" as const,
+    value: value as number,
+    precision: "exact" as const,
+    unit: "count" as const,
+  });
+}
+
+function xProfileBio(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (
+    typeof value !== "string"
+    || value.length > 10_000
+    || /[\0-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(value)
+  ) throw new Error("X profile description must be bounded public text");
+  return value;
+}
+
+function xProfileWebsite(legacy: JsonRecord): string | null {
+  if (legacy.entities === undefined || legacy.entities === null) return null;
+  const entities = record(legacy.entities, "X profile legacy.entities");
+  if (entities.url === undefined || entities.url === null) return null;
+  const urlEntity = record(entities.url, "X profile legacy.entities.url");
+  if (!Array.isArray(urlEntity.urls) || urlEntity.urls.length > 10) {
+    throw new Error("X profile website URL projection exceeded its reviewed bound");
+  }
+  const expanded = urlEntity.urls.map((item, index) => {
+    const url = record(item, `X profile website URL ${index + 1}`);
+    return xProfileText(url.expanded_url, `X profile website URL ${index + 1}`, 2_048);
+  });
+  const unique = [...new Set(expanded.filter((value): value is string => value !== null))];
+  if (unique.length === 0) return null;
+  if (unique.length !== 1) throw new Error("X profile exposed ambiguous website URLs");
+  const parsed = new URL(unique[0]!);
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+    || parsed.username !== ""
+    || parsed.password !== ""
+  ) throw new Error("X profile website URL is not a safe public HTTP URL");
+  return parsed.href;
+}
+
+function xProfileModernWebsite(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const website = record(value, "X profile website");
+  const rawUrl = xProfileText(website.url, "X profile website URL", 2_048, true);
+  if (rawUrl === null) return null;
+  const parsed = new URL(rawUrl);
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+    || parsed.username !== ""
+    || parsed.password !== ""
+  ) throw new Error("X profile website URL is not a safe public HTTP URL");
+  return parsed.href;
+}
+
+function xProfileObservationTime(value: string): string {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
+    || !Number.isFinite(Date.parse(value))
+  ) throw new Error("X profile observedAt must be an exact UTC timestamp");
+  return value;
+}
+
+/** Bind and project one exact UserByScreenName response. */
+export function projectXWebProfileStats(
+  response: unknown,
+  expectedHandleValue: unknown,
+  observedAt: string,
+): XWebProfileStats {
+  const expectedHandle = normalizeXWebProfileHandle(expectedHandleValue);
+  const result = record(
+    extractXWebGraphQlReadResponseRoot("profiles.by-handle", response),
+    "X profile response result",
+  );
+  if (result.__typename !== "User") {
+    throw new Error("X profile response did not contain one available User");
+  }
+  const id = xProfileText(result.rest_id, "X profile rest_id", 19);
+  if (id === null || !/^[0-9]{1,19}$/u.test(id)) {
+    throw new Error("X profile rest_id must be an exact 1-19 digit identifier");
+  }
+  const core = record(result.core, "X profile core");
+  const handle = normalizeXWebProfileHandle(core.screen_name);
+  if (handle !== expectedHandle) {
+    throw new Error("X profile response did not bind the requested handle");
+  }
+  const displayName = xProfileText(core.name, "X profile display name", 1_000);
+  if (displayName === null) throw new Error("X profile display name is unavailable");
+  let followerValue: unknown;
+  let followingValue: unknown;
+  let bio: string | null;
+  let websiteUrl: string | null;
+  if (isRecord(result.legacy)) {
+    const legacy = result.legacy;
+    if (
+      legacy.screen_name !== undefined
+      && normalizeXWebProfileHandle(legacy.screen_name) !== expectedHandle
+    ) throw new Error("X profile legacy response changed the requested handle");
+    followerValue = legacy.followers_count;
+    followingValue = legacy.friends_count;
+    bio = xProfileBio(legacy.description);
+    websiteUrl = xProfileWebsite(legacy);
+  } else {
+    const relationships = record(
+      result.relationship_counts,
+      "X profile relationship_counts",
+    );
+    const profileBio = result.profile_bio === undefined || result.profile_bio === null
+      ? null
+      : record(result.profile_bio, "X profile profile_bio");
+    followerValue = relationships.followers;
+    followingValue = relationships.following;
+    if (
+      profileBio !== null
+      && typeof profileBio.description !== "string"
+      && profileBio.description !== null
+      && profileBio.description !== undefined
+    ) {
+      throw new Error(
+        `X profile description changed shape; fields: ${isRecord(profileBio.description) ? Object.keys(profileBio.description).sort().join(",") : typeof profileBio.description}`,
+      );
+    }
+    bio = profileBio === null ? null : xProfileBio(profileBio.description);
+    websiteUrl = xProfileModernWebsite(result.website);
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "x",
+    target: Object.freeze({
+      kind: "profile",
+      id,
+      url: `https://x.com/${handle}`,
+    }),
+    observedAt: xProfileObservationTime(observedAt),
+    completeness: "complete",
+    metrics: Object.freeze({
+      followers: xProfileCount(followerValue, "X profile followers"),
+      following: xProfileCount(followingValue, "X profile following"),
+    }),
+    metadata: Object.freeze({
+      handle,
+      displayName,
+      bio,
+      websiteUrl,
+    }),
+  });
 }
 
 /**
