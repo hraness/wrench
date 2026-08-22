@@ -78,7 +78,7 @@ wrench auth bind beeper-main --site beeper
 
 wrench beeper export-message-like-me --auth beeper-main \
   --output /absolute/path/to/new-message-like-me-bundle --json</code></pre></div>
-          <p>The export uses Beeper's local full-export pagination with attachments disabled. Wrench validates account, roster, message, reply, edit, reaction, and tombstone provenance; removes duplicate plaintext renderings inside private staging; then writes six mode-0600 NDJSON artifacts and publishes the digested manifest last inside a mode-0700 directory. Completeness describes only the locally materialized export. A 500,000-record or 512 MiB ceiling produces a coherent truncated bundle, and any chat JSON file over the 64 MiB per-chat bound is omitted with an explicit warning.</p>
+          <p>The export enumerates connected accounts, then invokes the official <code>export --no-attachments</code> command once per account in deterministic order. Wrench validates each retained raw shard and the account realm, removes redundant plaintext renderings inside private staging, builds the six mode-0600 NDJSON artifacts and manifest, then atomically renames the complete seven-file bundle into its mode-0700 destination. Completeness describes only the locally materialized sequential snapshot. A 500,000-record, 512 MiB, or 250,000-participant-occurrence ceiling produces a coherent truncated bundle, and any chat JSON file over the 64 MiB per-chat bound is omitted with an explicit warning.</p>
         </section>
 
         <section aria-labelledby="gmail">
