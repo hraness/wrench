@@ -10,7 +10,7 @@ if (binding?.transport !== "web-session-api") {
 
 describe("LinkedIn web provider plugin", () => {
   test("versions the profile-stat source closure independently", () => {
-    expect(linkedinWebPlugin.version).toBe("1.1.0");
+    expect(linkedinWebPlugin.version).toBe("1.2.0");
   });
 
   test("advertises observed exact personal and organization profile reads", () => {
@@ -67,6 +67,8 @@ describe("LinkedIn web provider plugin", () => {
     }]);
     expect(linkedinWebPlugin.implementationSources.map((source) => source.label))
       .toContain("providers/linkedin-web-post-browser.ts");
+    expect(linkedinWebPlugin.implementationSources.map((source) => source.label))
+      .toContain("providers/linkedin-web-profile-browser.ts");
   });
 
   test("requires an image whenever alternative text is supplied", () => {

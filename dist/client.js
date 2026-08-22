@@ -1,6 +1,7 @@
 // @bun
 import {
-  canonicalJson
+  canonicalJson,
+  sha256
 } from "./index-dqv16dt0.js";
 
 // src/client.ts
@@ -20,6 +21,28 @@ var abortSignalAbortedGetter = (() => {
   const getter = descriptor === undefined ? undefined : Reflect.get(descriptor, "get");
   return typeof getter !== "function" ? undefined : (value) => Reflect.apply(getter, value, []);
 })();
+var PUBLIC_WEB_SESSION_AUTHORITY_KIND = "public-web-session";
+function publicWebSessionAuthority(request) {
+  const coordinate = Object.freeze({
+    adapter: request.adapterId,
+    operation: request.operationId
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    id: `public-${sha256(canonicalJson(coordinate)).slice(0, 32)}`,
+    kind: PUBLIC_WEB_SESSION_AUTHORITY_KIND,
+    subject: `public:${request.adapterId}:${request.operationId}`
+  });
+}
+function expectedRequestAuthId(request, authKind) {
+  if (authKind === PUBLIC_WEB_SESSION_AUTHORITY_KIND) {
+    if (request.authId !== undefined) {
+      throw new Error("Wrench public invocation unexpectedly accepted an auth locator");
+    }
+    return publicWebSessionAuthority(request).id;
+  }
+  return request.authId ?? request.adapterId;
+}
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -301,7 +324,7 @@ function prepareRequest(requestValue) {
   assertExactKeys(request, ["adapterId", "operationId"], ["authId", "input"], "Wrench client request");
   const adapterId = safeString(request.adapterId, "Wrench client adapter ID", 64);
   const operationId = safeString(request.operationId, "Wrench client operation ID", 128);
-  const authId = Object.hasOwn(request, "authId") ? safeString(request.authId, "Wrench client auth ID", 64) : adapterId;
+  const authId = Object.hasOwn(request, "authId") ? safeString(request.authId, "Wrench client auth ID", 64) : undefined;
   const rawInput = Object.hasOwn(request, "input") ? request.input : {};
   if (!isRecord(rawInput))
     throw new Error("input must be a JSON object");
@@ -312,7 +335,7 @@ function prepareRequest(requestValue) {
   return Object.freeze({
     adapterId,
     operationId,
-    authId,
+    ...authId === undefined ? {} : { authId },
     input
   });
 }
@@ -325,8 +348,7 @@ function preparedCommand(request, options) {
       request.operationId,
       "--input",
       "-",
-      "--auth",
-      request.authId,
+      ...request.authId === undefined ? [] : ["--auth", request.authId],
       ...options.cacheOnly ? ["--cache-only"] : [],
       ...options.projectionIdentityOnly ? ["--projection-identity-only"] : [],
       ...options.preview === true ? ["--preview"] : [],
@@ -488,13 +510,19 @@ function parseExecutionPreview(value, request) {
   if (adapter.id !== request.adapterId || operation !== request.operationId) {
     throw new Error("Wrench execution identity preview route is malformed");
   }
-  if (safeString(auth.id, "Wrench execution identity preview auth ID", 64) !== request.authId)
+  const authKind = safeString(auth.kind, "Wrench execution identity preview auth kind", 64);
+  if (safeString(auth.id, "Wrench execution identity preview auth ID", 64) !== expectedRequestAuthId(request, authKind))
     throw new Error("Wrench execution identity preview auth is malformed");
   const realmFingerprint = safeString(auth.realmFingerprint, "Wrench execution identity preview auth fingerprint", 16);
   if (!/^[a-f0-9]{16}$/u.test(realmFingerprint)) {
     throw new Error("Wrench execution identity preview auth fingerprint is malformed");
   }
-  safeString(auth.kind, "Wrench execution identity preview auth kind", 64);
+  if (authKind === PUBLIC_WEB_SESSION_AUTHORITY_KIND) {
+    const authority = publicWebSessionAuthority(request);
+    if (value.transport !== "web-session-api" || realmFingerprint !== sha256(canonicalJson(authority)).slice(0, 16) || binding.status !== "public" || binding.subject !== authority.subject || binding.accountActor !== null || binding.requestedActor !== null) {
+      throw new Error("Wrench execution identity preview public authority is malformed");
+    }
+  }
   safeString(value.sideEffect, "Wrench execution identity preview side effect", 64);
   const transport = value.transport;
   if (transport === "portable-provider-plugin") {
@@ -945,7 +973,7 @@ function parseLiveReceipt(value, request, expectedInputHash) {
     throw new Error("Wrench live receipt risk is malformed");
   }
   const authKind = auth.kind;
-  if (authKind !== "browser-profile" && authKind !== "cookie-source" && authKind !== "cookies-file" && authKind !== "linked-device-store" && authKind !== "oauth-token-file")
+  if (authKind !== "browser-profile" && authKind !== "cookie-source" && authKind !== "cookies-file" && authKind !== "linked-device-store" && authKind !== "oauth-token-file" && authKind !== PUBLIC_WEB_SESSION_AUTHORITY_KIND)
     throw new Error("Wrench live receipt auth kind is malformed");
   if (receipt.dispatchStarted !== false) {
     throw new Error("Wrench live receipt dispatch state is malformed");
@@ -997,8 +1025,14 @@ function parseLiveReceipt(value, request, expectedInputHash) {
   });
   if (common.adapter.id !== request.adapterId || common.operation !== request.operationId)
     throw new Error("Wrench live receipt route does not match its request");
-  if (common.auth.id !== request.authId) {
+  if (common.auth.id !== expectedRequestAuthId(request, common.auth.kind)) {
     throw new Error("Wrench live receipt auth does not match its request");
+  }
+  if (common.auth.kind === PUBLIC_WEB_SESSION_AUTHORITY_KIND) {
+    const authority = publicWebSessionAuthority(request);
+    if (receipt.schemaVersion !== 4 || receipt.transport !== "web-session-api" || common.auth.hash !== sha256(canonicalJson(authority))) {
+      throw new Error("Wrench live receipt public authority is malformed");
+    }
   }
   if (common.inputHash !== expectedInputHash) {
     throw new Error("Wrench live receipt input does not match its request");

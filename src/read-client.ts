@@ -18,7 +18,12 @@ import {
   type ReadProjectionCacheResult,
   type ReadProjectionPublication,
   type ReadProjectionQuery,
+  type ReadProjectionAdmissionSettlementOptions,
 } from "./read-projections";
+import {
+  isPublicWebSessionInvocationAuthority,
+  publicWebSessionAuthorityIdentityHash,
+} from "./web-session-authentication-policy";
 import {
   createReadProjectionQueryForInvocation,
   executeReadInvocation,
@@ -102,7 +107,7 @@ function prepareCapability(
     request.adapterId,
     request.operationId,
     request.input === undefined ? {} : request.input,
-    request.authId ?? request.adapterId,
+    request.authId,
     environment,
     registry,
   );
@@ -112,6 +117,22 @@ function exactAuthHash(invocation: PreparedInvocation): string {
   return sha256(canonicalJson(invocation.auth));
 }
 
+function withInvocationAuthorityAdmission<T>(
+  invocation: PreparedInvocation,
+  environment: Environment,
+  operation: () => T,
+  options: ReadProjectionAdmissionSettlementOptions = {},
+): T {
+  return isPublicWebSessionInvocationAuthority(invocation.auth)
+    ? operation()
+    : withSettledReadProjectionAuthAdmission(
+        invocation.auth.id,
+        environment,
+        operation,
+        options,
+      );
+}
+
 type AuthRealmState = "matches" | "missing" | "changed";
 
 function authRealmState(
@@ -119,6 +140,13 @@ function authRealmState(
   query: ReadProjectionQuery | null,
   environment: Environment,
 ): AuthRealmState {
+  if (isPublicWebSessionInvocationAuthority(invocation.auth)) {
+    const expected = publicWebSessionAuthorityIdentityHash(invocation.auth);
+    return invocation.readProjectionAuthIdentityHash === expected
+      && (query === null || query.identity.auth.hash === expected)
+      ? "matches"
+      : "changed";
+  }
   const snapshot = loadAuthSnapshotIfPresent(
     invocation.auth.id,
     environment,
@@ -196,8 +224,8 @@ export function readCachedPreparedCapability(
 ): ReadProjectionCacheResult {
   const environment = options.environment ?? process.env;
   validateReadOptions(options);
-  return withSettledReadProjectionAuthAdmission(
-    invocation.auth.id,
+  return withInvocationAuthorityAdmission(
+    invocation,
     environment,
     () => {
       const query = createReadProjectionQueryForInvocation(
@@ -242,8 +270,8 @@ export async function revalidatePreparedCapability(
 ): Promise<RevalidatedCapability> {
   const environment = options.environment ?? process.env;
   validateReadOptions(options);
-  const query = withSettledReadProjectionAuthAdmission(
-    invocation.auth.id,
+  const query = withInvocationAuthorityAdmission(
+    invocation,
     environment,
     () => {
       const prepared = invocation.auth.subject === undefined
@@ -273,16 +301,16 @@ export async function revalidatePreparedCapability(
               : { freshForMs: options.freshForMs }),
           });
   } catch (error) {
-    withSettledReadProjectionAuthAdmission(
-      invocation.auth.id,
+    withInvocationAuthorityAdmission(
+      invocation,
       environment,
       () => requireCurrentAuthRealm(invocation, query, environment),
     );
     cacheReadError = error;
     cachedBefore = null;
   }
-  withSettledReadProjectionAuthAdmission(
-    invocation.auth.id,
+  withInvocationAuthorityAdmission(
+    invocation,
     environment,
     () => requireCurrentAuthRealm(invocation, query, environment),
   );
@@ -295,8 +323,8 @@ export async function revalidatePreparedCapability(
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     },
   );
-  return withSettledReadProjectionAuthAdmission(
-    invocation.auth.id,
+  return withInvocationAuthorityAdmission(
+    invocation,
     environment,
     () => {
       if (authRealmState(invocation, query, environment) !== "matches") {

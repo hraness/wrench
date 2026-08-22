@@ -1,8 +1,8 @@
 {
   "schemaVersion": 4,
   "id": "bluesky-web",
-  "version": "1.5.0",
-  "displayName": "Bluesky (AT Protocol API)",
+  "version": "1.4.0",
+  "displayName": "Bluesky (Authenticated AT Protocol API)",
   "surfaceId": "bluesky",
   "origins": [
     "https://bsky.app"
@@ -33,7 +33,7 @@
       "webSession": {
         "site": "bluesky",
         "action": "profiles.read",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 2097152
       }

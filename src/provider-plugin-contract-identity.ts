@@ -23,9 +23,10 @@ export interface ReviewedBuiltInContractIdentityV1 {
 const identities = Object.freeze({
   "bluesky-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "eb4cc4aa49296d11d2c36d798e5e3dd0b1664aa2d37e885ffd0919ad526d44d4",
+    pluginVersion: "1.2.0",
+    implementationSha256: "81344b367a11c7dcaeff83386bc0f796c41260cb373b9818527f4cb55bc80d48",
     legacyCurrentReadImplementationSha256: [
+      "eb4cc4aa49296d11d2c36d798e5e3dd0b1664aa2d37e885ffd0919ad526d44d4",
       "9bdebb45464120249abc8b9d74068f8921b19c999429a74cfef67d06b7816ccc",
     ],
     legacyReadImplementationSha256: {
@@ -84,9 +85,11 @@ const identities = Object.freeze({
   },
   "linkedin-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "9e2baa00763f311fbb4c651c513793a356021f8a703f08e06f52437c01d02089",
+    pluginVersion: "1.2.0",
+    implementationSha256: "4fd6c293984be688a9273acb09bccea64a75134daca745b322fa8d33dfe9f97c",
     legacyCurrentReadImplementationSha256: [
+      "624e146839f4d20d361a949c3ddb726f0c6b741f4d094e873e82185cf3f03175",
+      "9e2baa00763f311fbb4c651c513793a356021f8a703f08e06f52437c01d02089",
       "a3a61f60dce97960a35d131b603a9543db02d43407ded4403675b729205fa256",
       "6acaacfa89928b5d31144eda506fe94040810ac90b61c0ae642e38ec13311237",
     ],

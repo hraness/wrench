@@ -31,6 +31,7 @@ import {
   type RunReceipt,
 } from "./runtime";
 import { installManifest } from "./storage";
+import { persistedAuthAuthority } from "./web-session-authentication-policy";
 
 type TestState = {
   readonly directory: string;
@@ -673,7 +674,7 @@ describe("persistent read client", () => {
         const replacement = replacementAuth(testState, "67890");
         const replacements = cycle === "a-to-b"
           ? [replacement]
-          : [replacement, testState.invocation.auth];
+          : [replacement, persistedAuthAuthority(testState.invocation.auth)];
         const raced = await rejectedError(revalidatePreparedCapability(
           testState.invocation,
           {
@@ -815,7 +816,11 @@ describe("persistent read client", () => {
       saveAuth(replacementAuth(testState, "67890"), testState.environment, {
         force: true,
       });
-      saveAuth(testState.invocation.auth, testState.environment, { force: true });
+      saveAuth(
+        persistedAuthAuthority(testState.invocation.auth),
+        testState.environment,
+        { force: true },
+      );
       let executions = 0;
 
       const error = await rejectedError(revalidatePreparedCapability(testState.invocation, {
@@ -1079,7 +1084,10 @@ describe("persistent read client", () => {
 
       expect(removeAuth(testState.invocation.auth.id, testState.environment))
         .toBeTrue();
-      saveAuth(testState.invocation.auth, testState.environment);
+      saveAuth(
+        persistedAuthAuthority(testState.invocation.auth),
+        testState.environment,
+      );
       renameSync(orphan, realm);
 
       const recreated = prepareInvocation(

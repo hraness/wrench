@@ -53,6 +53,27 @@ describe("public client process boundary", () => {
     });
   });
 
+  test("invokes and validates one public capability without synthesizing --auth", async () => {
+    const child = Bun.spawn([
+      process.execPath,
+      join(import.meta.dir, "client-public.fixture.ts"),
+    ], {
+      cwd: import.meta.dir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const exitCode = await child.exited;
+    const [stdout, stderr] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect({ exitCode, stdout, stderr }).toEqual({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+  });
+
   test("rejects accessors without executing them", () => {
     let getterCalls = 0;
     const input: Record<string, unknown> = {};

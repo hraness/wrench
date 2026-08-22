@@ -141,6 +141,13 @@ export type WebSessionOperationExecutor = (
   options: WebSessionExecutionOptions,
 ) => Promise<WebSessionExecution>;
 
+export type PublicWebSessionOperationExecutor = (
+  manifest: WrenchManifest,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  options: WebSessionExecutionOptions,
+) => Promise<WebSessionExecution>;
+
 type TrackedWebSessionCleanupBarrier = {
   readonly promise: Promise<void>;
   readonly unsafe: (cause: unknown) => void;

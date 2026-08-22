@@ -290,7 +290,7 @@ const operations = Object.freeze([
 export const linkedinWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "linkedin-web",
-  version: "1.1.0",
+  version: "1.2.0",
   displayName: "LinkedIn Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
@@ -302,6 +302,7 @@ export const linkedinWebPlugin = defineProviderPlugin({
     ["providers/linkedin-web-bootstrap.ts", "../../providers/linkedin-web-bootstrap.ts"],
     ["providers/linkedin-web-article-browser.ts", "../../providers/linkedin-web-article-browser.ts"],
     ["providers/linkedin-web-post-browser.ts", "../../providers/linkedin-web-post-browser.ts"],
+    ["providers/linkedin-web-profile-browser.ts", "../../providers/linkedin-web-profile-browser.ts"],
     ["providers/linkedin-web-runtime.ts", "../../providers/linkedin-web-runtime.ts"],
   ]),
   bindings: [{

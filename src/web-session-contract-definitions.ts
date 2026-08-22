@@ -361,6 +361,7 @@ const BLUESKY_WEB_OPERATIONS = operationPolicies("bluesky", [
   "posts.read",
   "profiles.read",
 ], {
+  "profiles.read": 2,
   "posts.publish": 3,
 });
 const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
@@ -524,7 +525,7 @@ const bluesky = {
   "posts.quote": contract("bluesky", "posts.quote", BLUESKY_WEB_OPERATIONS["posts.quote"].risk, BLUESKY_WEB_OPERATIONS["posts.quote"].state, BLUESKY_WEB_OPERATIONS["posts.quote"].reason),
   "posts.read": contract("bluesky", "posts.read", BLUESKY_WEB_OPERATIONS["posts.read"].risk, BLUESKY_WEB_OPERATIONS["posts.read"].state, BLUESKY_WEB_OPERATIONS["posts.read"].reason),
   "posts.repost": contract("bluesky", "posts.repost", BLUESKY_WEB_OPERATIONS["posts.repost"].risk, BLUESKY_WEB_OPERATIONS["posts.repost"].state, BLUESKY_WEB_OPERATIONS["posts.repost"].reason),
-  "profiles.read": contract("bluesky", "profiles.read", BLUESKY_WEB_OPERATIONS["profiles.read"].risk, BLUESKY_WEB_OPERATIONS["profiles.read"].state, BLUESKY_WEB_OPERATIONS["profiles.read"].reason),
+  "profiles.read": contract("bluesky", "profiles.read", BLUESKY_WEB_OPERATIONS["profiles.read"].risk, BLUESKY_WEB_OPERATIONS["profiles.read"].state, BLUESKY_WEB_OPERATIONS["profiles.read"].reason, BLUESKY_WEB_OPERATIONS["profiles.read"].contractVersion),
   "relationships.follow.set": contract("bluesky", "relationships.follow.set", BLUESKY_WEB_OPERATIONS["relationships.follow.set"].risk, BLUESKY_WEB_OPERATIONS["relationships.follow.set"].state, BLUESKY_WEB_OPERATIONS["relationships.follow.set"].reason),
   "replies.create": contract("bluesky", "replies.create", BLUESKY_WEB_OPERATIONS["replies.create"].risk, BLUESKY_WEB_OPERATIONS["replies.create"].state, BLUESKY_WEB_OPERATIONS["replies.create"].reason),
   "threads.publish": contract("bluesky", "threads.publish", BLUESKY_WEB_OPERATIONS["threads.publish"].risk, BLUESKY_WEB_OPERATIONS["threads.publish"].state, BLUESKY_WEB_OPERATIONS["threads.publish"].reason),
