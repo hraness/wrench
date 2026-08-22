@@ -21,6 +21,23 @@
         {
           "key": "X-Frame-Options",
           "value": "DENY"
+        },
+        {
+          "key": "Vary",
+          "value": "Accept"
+        }
+      ]
+    },
+    {
+      "source": "/(.*).md",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "text/markdown; charset=utf-8"
+        },
+        {
+          "key": "Vary",
+          "value": "Accept"
         }
       ]
     },
@@ -36,6 +53,30 @@
   ],
   "installCommand": "bunx bun@1.3.14 install --frozen-lockfile --ignore-scripts",
   "outputDirectory": "website/dist",
+  "rewrites": [
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "header",
+          "key": "accept",
+          "value": "text/markdown"
+        }
+      ],
+      "destination": "/index.md"
+    },
+    {
+      "source": "/:path*/",
+      "has": [
+        {
+          "type": "header",
+          "key": "accept",
+          "value": "text/markdown"
+        }
+      ],
+      "destination": "/:path.md"
+    }
+  ],
   "redirects": [
     {
       "source": "/index.html",
@@ -90,6 +131,36 @@
     {
       "source": "/plugins/index.html",
       "destination": "/plugins/",
+      "permanent": true
+    },
+    {
+      "source": "/about",
+      "destination": "/about/",
+      "permanent": true
+    },
+    {
+      "source": "/about/index.html",
+      "destination": "/about/",
+      "permanent": true
+    },
+    {
+      "source": "/contact",
+      "destination": "/contact/",
+      "permanent": true
+    },
+    {
+      "source": "/contact/index.html",
+      "destination": "/contact/",
+      "permanent": true
+    },
+    {
+      "source": "/privacy",
+      "destination": "/privacy/",
+      "permanent": true
+    },
+    {
+      "source": "/privacy/index.html",
+      "destination": "/privacy/",
       "permanent": true
     }
   ]

@@ -13,6 +13,7 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="{{CSS_ASSET}}">
     <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
     <meta property="og:type" content="article">
     <meta property="og:site_name" content="Wrench">
     <meta property="og:title" content="Install Wrench: CLI and TypeScript SDK getting started guide">
@@ -106,6 +107,22 @@ const plugin = candidate satisfies ProviderPluginDefinitionV1</code></pre></div>
           <p>The package root exposes plugin types and bounded validators. <code>@hraness/wrench/client</code> exposes persistent-read helpers, while <code>@hraness/wrench/omni</code> exposes normalized cross-provider reads. Importing these entrypoints does not start the CLI or inspect local state.</p>
         </section>
 
+        <section aria-labelledby="developer-resources">
+          <h2 id="developer-resources">Wrench developer resources</h2>
+          <p>These are the current public Wrench developer resources for the CLI, TypeScript SDK, Agent Skill, and provider plugin workflow. Wrench does not publish a hosted API, OpenAPI description, OAuth developer portal, webhook catalog, or MCP server.</p>
+          <ul class="guide-list">
+            <li><a href="/getting-started/">Install the Wrench CLI and TypeScript SDK</a></li>
+            <li><a href="/">Install the Wrench Agent Skill</a> with <code>npx skills add hraness/wrench</code></li>
+            <li><a href="/capture-and-archives/">Capture URLs and create verified media archives</a></li>
+            <li><a href="/provider-capabilities/">Provider capability reference</a></li>
+            <li><a href="/security/">Security and local custody</a></li>
+            <li><a href="/plugins/">Author and verify provider plugins</a></li>
+            <li><a href="{{WRENCH_REPOSITORY}}">Source, issues, and release tags</a></li>
+            <li><a href="{{WRENCH_REPOSITORY}}/blob/{{WRENCH_RELEASE}}/docs/plugins.md">Plugin protocol guide for {{WRENCH_RELEASE}}</a></li>
+            <li><a href="/llms.txt">Agent site guide (llms.txt)</a></li>
+          </ul>
+        </section>
+
         <aside class="guide-callout" aria-labelledby="next-step">
           <h2 id="next-step">Choose the next boundary</h2>
           <p>Learn how Wrench keeps credentials opaque and provider changes visible in the <a href="/security/">security guide</a>, or start an inert integration with the <a href="/plugins/">plugin authoring guide</a>.</p>
@@ -113,7 +130,7 @@ const plugin = candidate satisfies ProviderPluginDefinitionV1</code></pre></div>
       </article>
     </main>
     <footer class="footer guide-footer">
-      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a></p>
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
       <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
     </footer>
   </body>

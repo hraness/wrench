@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+    <title>About Wrench: open-source web capabilities for AI agents</title>
+    <meta name="description" content="Wrench is an open-source CLI and TypeScript SDK that gives command-capable agents precise web capabilities with local custody.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/about/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="About Wrench: open-source web capabilities for AI agents">
+    <meta property="og:description" content="Wrench is an open-source CLI and TypeScript SDK that gives command-capable agents precise web capabilities with local custody.">
+    <meta property="og:url" content="https://wrench.rip/about/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="About Wrench: open-source web capabilities for AI agents">
+    <meta name="twitter:description" content="Wrench is an open-source CLI and TypeScript SDK that gives command-capable agents precise web capabilities with local custody.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">About</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">About · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Wrench is a local capability layer, not an agent.</h1>
+          <p class="answer-lede">Wrench is the open-source CLI and TypeScript SDK published by the <a href="https://github.com/hraness">Hraness GitHub organization</a>. It gives a command-capable agent or application precise web capabilities: page capture, verified media archives, encrypted account-bound reads, and typed provider operations.</p>
+          <p class="review-note">This page describes {{WRENCH_RELEASE}} and the public project identity that ships with that immutable release.</p>
+        </header>
+
+        <section aria-labelledby="what-wrench-is">
+          <h2 id="what-wrench-is">What Wrench is</h2>
+          <p>The caller asks for a named outcome such as <code>messaging.list</code>. Wrench binds that operation to one exact provider, transport, account realm, contract version, implementation, and risk level. If those facts drift, the operation stops. It does not silently fall back to general browser control, caller-selected HTTP, or every signed-in tab.</p>
+          <p>The package is MIT licensed. Source, issues, and release tags live in the public <a href="{{WRENCH_REPOSITORY}}">hraness/wrench</a> repository. The canonical website is <a href="https://wrench.rip/">wrench.rip</a>. Install and SDK facts are derived from the published package identity rather than copied into marketing copy.</p>
+        </section>
+
+        <section aria-labelledby="what-wrench-is-not">
+          <h2 id="what-wrench-is-not">What Wrench is not</h2>
+          <p>Wrench is not an AI agent, hosted product console, or browser application. It does not include a model, planner, approval interface, or application shell. It is not a hosted HTTP API, OpenAPI description, OAuth developer portal, GraphQL endpoint, webhook catalog, or MCP server. Those layers belong to the caller. Wrench can sit behind them.</p>
+        </section>
+
+        <section aria-labelledby="current-documents">
+          <h2 id="current-documents">Current public documents</h2>
+          <p>The <a href="/getting-started/">getting started guide</a>, <a href="/capture-and-archives/">capture guide</a>, <a href="/provider-capabilities/">provider reference</a>, <a href="/security/">security guide</a>, <a href="/plugins/">plugin guide</a>, and <a href="/llms.txt">llms.txt</a> describe the same {{WRENCH_RELEASE}} release as this page.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="about-next">
+          <h2 id="about-next">Start with the current release</h2>
+          <p>Install {{WRENCH_RELEASE}} from the <a href="/getting-started/">getting started guide</a>, then read <a href="/security/">the security boundary</a> before adding credentials.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>

@@ -10,8 +10,11 @@ const CANONICAL_ROUTES = new Map<string, Readonly<{ canonicalPath: string; pageK
     canonicalPath: "/capture-and-archives/",
     pageKind: "capture_and_archives",
   }],
+  ["/about", { canonicalPath: "/about/", pageKind: "about" }],
+  ["/contact", { canonicalPath: "/contact/", pageKind: "contact" }],
   ["/getting-started", { canonicalPath: "/getting-started/", pageKind: "getting_started" }],
   ["/plugins", { canonicalPath: "/plugins/", pageKind: "plugin_authoring" }],
+  ["/privacy", { canonicalPath: "/privacy/", pageKind: "privacy" }],
   ["/provider-capabilities", {
     canonicalPath: "/provider-capabilities/",
     pageKind: "provider_capabilities",
