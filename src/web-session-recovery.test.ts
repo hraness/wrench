@@ -194,6 +194,15 @@ function receipt(
   };
 }
 
+function authenticatedReceiptAuth(
+  auth: RunReceipt["auth"],
+): WebSessionRecoveryCapsule["auth"] {
+  if (auth.kind === "public-web-session") {
+    throw new Error("recovery fixture requires authenticated write authority");
+  }
+  return { id: auth.id, hash: auth.hash, kind: auth.kind };
+}
+
 function capsuleFor(
   selectedReceipt: Extract<RunReceipt, { readonly schemaVersion: 4 }>,
   input: OperationInput,
@@ -210,7 +219,7 @@ function capsuleFor(
     risk: "R2",
     input,
     inputHash: selectedReceipt.inputHash,
-    auth: selectedReceipt.auth,
+    auth: authenticatedReceiptAuth(selectedReceipt.auth),
     contract: {
       transport: "web-session-api",
       site: "x",
@@ -476,7 +485,7 @@ function installPresenceRun(
     risk: "R3",
     input,
     inputHash: selectedReceipt.inputHash,
-    auth: selectedReceipt.auth,
+    auth: authenticatedReceiptAuth(selectedReceipt.auth),
     contract: {
       transport: "web-session-api",
       site: "presence-test",

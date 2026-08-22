@@ -39,7 +39,13 @@ import {
   writeRecoveryCapsule,
   type RecoveryCapsule,
 } from "./recovery";
+import {
+  getProviderContract,
+  isCompatibleProviderContractHash,
+  providerContractHash,
+} from "./provider-contracts";
 import type { ProviderExecution } from "./provider";
+import { reviewedBuiltInContractIdentity } from "./provider-plugin-contract-identity";
 import type { ProviderPluginRegistry } from "./provider-plugin-registry";
 import { providerPluginRegistry } from "./provider-plugins";
 import {
@@ -69,6 +75,11 @@ import {
   acquireWebSessionCleanupAdmission,
   listWebSessionCleanupAdmissions,
 } from "./web-session-cleanup-admission";
+import {
+  getWebSessionContract,
+  isCompatibleWebSessionContractHash,
+  webSessionContractHash,
+} from "./web-session-contracts";
 import { PLAN_ASSET_GC_GRACE_MS, planAssetBundlePath } from "./plan-assets";
 import {
   ensurePrivateStateDirectory,
@@ -488,6 +499,18 @@ function providerExecutor(
     await reportProviderExecutionProgress(result, options);
     return result;
   };
+}
+
+function registryWithContractImplementationHash(
+  implementationSha256: string,
+): ProviderPluginRegistry {
+  return Object.freeze({
+    ...providerPluginRegistry,
+    contractImplementationHash: () => Buffer.from(
+      implementationSha256,
+      "hex",
+    ),
+  });
 }
 
 function allFileText(root: string): string {
@@ -1523,6 +1546,228 @@ describe("confirmation binding and consumption", () => {
         executeProvider: () => Promise.resolve(execution("succeeded", false, undefined, 0)),
       }))).toContain("adapter changed after preview");
       expect(existsSync(path)).toBeFalse();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects reader-compatible provider hashes in confirmation plans", async () => {
+    const testState = state();
+    try {
+      installFixture(testState);
+      const current = createInvocationPlan(prepared(testState));
+      if (current.plan.transport !== "provider-api") {
+        throw new Error("expected a provider confirmation plan");
+      }
+      const contract = getProviderContract({
+        provider: "x",
+        action: "posts.publish",
+        contractVersion: 1,
+        timeoutMs: 600_000,
+        maxOutputBytes: 2 * 1024 * 1024,
+      }, providerPluginRegistry);
+      const binding = providerPluginRegistry.requireRoute("provider-api", "x");
+      const currentImplementationHash = providerPluginRegistry
+        .contractImplementationHash(binding);
+      const legacyImplementationHash = providerPluginRegistry
+        .legacyContractImplementationHashes(binding)
+        .find((candidate) => !candidate.equals(currentImplementationHash));
+      if (legacyImplementationHash === undefined) {
+        throw new Error("expected a reader-compatible provider implementation hash");
+      }
+      const legacyHash = providerContractHash(
+        contract,
+        registryWithContractImplementationHash(
+          legacyImplementationHash.toString("hex"),
+        ),
+      );
+      expect(isCompatibleProviderContractHash(
+        contract,
+        legacyHash,
+        providerPluginRegistry,
+      )).toBeTrue();
+      expect(legacyHash).not.toBe(current.plan.providerContract.hash);
+
+      const legacyPlan = {
+        ...current.plan,
+        providerContract: {
+          ...current.plan.providerContract,
+          hash: legacyHash,
+        },
+      };
+      const legacyStored: StoredPlan = {
+        digest: sha256(canonicalJson(legacyPlan)),
+        plan: legacyPlan,
+      };
+      const legacyPath = saveInvocationPlan(
+        legacyStored,
+        testState.environment,
+      );
+      let executorCalls = 0;
+      expect(await rejectionMessage(confirmInvocation(legacyStored.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeProvider: providerExecutor(execution(), () => {
+          executorCalls += 1;
+        }),
+      }))).toContain("official provider contract changed after preview");
+      expect(executorCalls).toBe(0);
+      expect(existsSync(legacyPath)).toBeFalse();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts the exact current provider writer hash in confirmation plans", async () => {
+    const testState = state();
+    try {
+      installFixture(testState);
+      const current = createAndSaveInvocationPlan(
+        prepared(testState),
+        testState.environment,
+      );
+      let executorCalls = 0;
+      const result = await confirmInvocation(current.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeProvider: providerExecutor(
+          execution("failed", false, "synthetic pre-dispatch failure"),
+          () => {
+            executorCalls += 1;
+          },
+        ),
+      });
+      expect(result.receipt.status).toBe("failed");
+      expect(executorCalls).toBe(1);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a legacy-current web-session hash in confirmation plans", async () => {
+    const testState = state();
+    try {
+      const selectedManifest = linkedinWebManifest();
+      const selectedAuth = createAuth("linkedin-web-test", {
+        source: "arc",
+        profile: "Default",
+        subject: "urn:li:fsd_profile:123",
+      });
+      installManifest(selectedManifest, {
+        force: false,
+        environment: testState.environment,
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const invocation = prepareInvocation(
+        "linkedin-web",
+        "posts.publish",
+        { body: "Exact contract identity fixture", visibility: "connections" },
+        selectedAuth.id,
+        testState.environment,
+      );
+      const current = createInvocationPlan(invocation);
+      if (current.plan.transport !== "web-session-api") {
+        throw new Error("expected a web-session confirmation plan");
+      }
+      const contract = getWebSessionContract({
+        site: "linkedin",
+        action: "posts.publish",
+        contractVersion: 3,
+        timeoutMs: 600_000,
+        maxOutputBytes: 2 * 1024 * 1024,
+      }, providerPluginRegistry);
+      const plugin = providerPluginRegistry.get("linkedin-web");
+      if (plugin === undefined) throw new Error("LinkedIn web plugin is missing");
+      const legacyCurrentImplementationHash = reviewedBuiltInContractIdentity(
+        plugin.id,
+        plugin.version,
+      ).legacyCurrentReadImplementationSha256[0];
+      if (legacyCurrentImplementationHash === undefined) {
+        throw new Error("expected a legacy-current LinkedIn web identity");
+      }
+      const legacyHash = webSessionContractHash(
+        contract,
+        registryWithContractImplementationHash(
+          legacyCurrentImplementationHash,
+        ),
+      );
+      expect(isCompatibleWebSessionContractHash(
+        contract,
+        legacyHash,
+        providerPluginRegistry,
+      )).toBeTrue();
+      expect(legacyHash).not.toBe(current.plan.webSessionContract.hash);
+
+      const legacyPlan = {
+        ...current.plan,
+        webSessionContract: {
+          ...current.plan.webSessionContract,
+          hash: legacyHash,
+        },
+      };
+      const legacyStored: StoredPlan = {
+        digest: sha256(canonicalJson(legacyPlan)),
+        plan: legacyPlan,
+      };
+      const legacyPath = saveInvocationPlan(
+        legacyStored,
+        testState.environment,
+      );
+      let executorCalls = 0;
+      expect(await rejectionMessage(confirmInvocation(legacyStored.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: () => {
+          executorCalls += 1;
+          return Promise.resolve(execution());
+        },
+      }))).toContain("authenticated web contract changed after preview");
+      expect(executorCalls).toBe(0);
+      expect(existsSync(legacyPath)).toBeFalse();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts the exact current web-session writer hash in confirmation plans", async () => {
+    const testState = state();
+    try {
+      const selectedManifest = linkedinWebManifest();
+      const selectedAuth = createAuth("linkedin-web-test", {
+        source: "arc",
+        profile: "Default",
+        subject: "urn:li:fsd_profile:123",
+      });
+      installManifest(selectedManifest, {
+        force: false,
+        environment: testState.environment,
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const current = createAndSaveInvocationPlan(
+        prepareInvocation(
+          "linkedin-web",
+          "posts.publish",
+          { body: "Exact contract identity fixture", visibility: "connections" },
+          selectedAuth.id,
+          testState.environment,
+        ),
+        testState.environment,
+      );
+      let executorCalls = 0;
+      const result = await confirmInvocation(current.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: () => {
+          executorCalls += 1;
+          return Promise.resolve(execution(
+            "failed",
+            false,
+            "synthetic pre-dispatch failure",
+          ));
+        },
+      });
+      expect(result.receipt.status).toBe("failed");
+      expect(executorCalls).toBe(1);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

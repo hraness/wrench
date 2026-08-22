@@ -1405,12 +1405,19 @@ async function executeFeedRead(
   };
 }
 
-async function executePublicProfileRead(
+export async function executeBlueskyPublicProfileRead(
   recipe: WebSessionRecipe,
   input: OperationInput,
   dependencies: BlueskyWebRuntimeDependencies | undefined,
   operationDeadline: WebSessionOperationDeadline | undefined,
 ): Promise<WebSessionExecution> {
+  if (
+    recipe.site !== "bluesky"
+    || recipe.action !== "profiles.read"
+    || recipe.contractVersion !== 2
+  ) {
+    throw new Error("Bluesky public profiles.read contract is not installed");
+  }
   const handle = inputString(input, "handle", 253).toLowerCase();
   const url = new URL(
     "/xrpc/app.bsky.actor.getProfile",
@@ -2378,7 +2385,9 @@ export async function executeBlueskyWebOperation(
     recipe.site !== "bluesky"
     || !isBlueskyOperation(recipe.action)
   ) throw new Error("Bluesky authenticated web recipe is not installed");
-  const expectedContractVersion = recipe.action === "posts.publish" ? 3 : 1;
+  const expectedContractVersion = recipe.action === "posts.publish"
+    ? 3
+    : recipe.action === "profiles.read" ? 2 : 1;
   if (recipe.contractVersion !== expectedContractVersion) {
     throw new Error(
       `Bluesky authenticated web operation ${recipe.action} contract version ${recipe.contractVersion} is not installed`,
@@ -2390,13 +2399,9 @@ export async function executeBlueskyWebOperation(
       `Bluesky authenticated web operation ${recipe.action} is capture-required: ${contract.reason}`,
     );
   }
-  // Public profile counts do not need access to the selected browser account.
   if (recipe.action === "profiles.read") {
-    return executePublicProfileRead(
-      recipe,
-      input,
-      options.dependencies,
-      options.operationDeadline,
+    throw new Error(
+      "Bluesky profiles.read requires the reviewed public runtime hook",
     );
   }
   const client = await bootstrapClient(

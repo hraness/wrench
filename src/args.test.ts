@@ -956,7 +956,6 @@ describe("wrench CLI grammar", () => {
         adapterId: "linkedin",
         operationId: "messaging.send",
         inputSource: "{}",
-        authId: "linkedin",
         duplicateRiskOf: [],
         preview: false,
         cacheOnly: false,

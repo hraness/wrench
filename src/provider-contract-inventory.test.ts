@@ -4,16 +4,18 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "c84817ddbbd9ad023c50385e66a9f99a5218cb7a250053393b65ee0577ea2c02";
+  "a45327d02ce6b65d178c64e9d2a8419c6b68f1d1c5363f559a508343b504e297";
 const predecessorLegacyInventorySha256 = [
-  "8fb1403845b63ca35bf0c22bdf183abd61b66f131e3e548fb9bcd3fbf82753a8",
-  "f44335a363f5ca3f44c864cb1552cf7b5019004e4e4c91501f4748ace63eb624",
-  "6abf1069d21436274ad7230e54af8e54e72099564016962cdf5246bc4f3bf6fb",
-  "9f0f2a7dc27138f36898028fd3f4eb812643a0318774bebca0ad0da1102de8f9",
-  "25d6a0b88f653f14978bf296d65b31eeabdeb8e12071ae1bac98a0b6dae36e77",
-  "e80d91e96a32ad32a711200e920c4eafbd171a1ca516592d1becad5332eb928e",
-  "024b6810328c566703d31740b700ad5e7ab0128d3a29611c30372b2c2856efd7",
-  "d2ef4ffe7c59c48d94d6e9036d3709ce29fb682d9f3099ea1981c0e6b0d7ffc9",
+  "a05af2ab437e6be673751772b7c05b760d7e20ec59ea19b9f472abbcd6e0f63b",
+  "8c22749bf89775d544889ae42ce82f949fe23b5b4b125726c7979d2a83928f21",
+  "9fd678ea50981a097e95e84c0367d26e96731c36e0abb921f59294116a6ffcec",
+  "472c1ddcbc24a242a3e7d16cffcab928203d6266f4ad1cd4ac2eb20d7f36b9b3",
+  "41762fae84335551671ca1ad0e65ea05fca26b21887a4c6c4d1192d34600855a",
+  "8ff7a9394daffc6377335b219976a97e7cbd476178d955f7523a8f77e5e04626",
+  "f0a2cb0919313de2b837062ea0075556a628eaa0701532774d7683b99aa68802",
+  "945a0008c9cfe3643691511766dcbb2bd00dd299eb8db7d029b536c930060c1e",
+  "c3a5799cfd0484fc500f9e167343147c2f7626adb034f590e2e11886918a30ff",
+  "25bb7f467fd40e044764c82de8be108405ec66e275a5c02d0682bd1ee058b4f8",
   "5e0b6f9d4265074dee0b125772f39ac8457bb4b5db703dee1e4457d30828fef0",
 ];
 
@@ -204,11 +206,11 @@ describe("durable provider contract inventory", () => {
       "staging",
     ] as const) {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
-        rows: 306,
+        rows: 307,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 4,
         currentOnlySha256: "b68a0e0f8f9be77f46d4ae7a5aa3a75de2ee6e420e8dc588247390bd1600553c",
-        legacyRows: [306, 306, 306, 306, 306, 306, 306, 173, 23],
+        legacyRows: [307, 307, 307, 307, 307, 307, 307, 174, 44, 23, 23],
         legacySha256: predecessorLegacyInventorySha256,
         acceptedLegacy: true,
         rejectedUnknown: true,

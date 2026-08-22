@@ -191,7 +191,7 @@ export type WrenchArguments =
       readonly adapterId: string;
       readonly operationId: string;
       readonly inputSource: string;
-      readonly authId: string;
+      readonly authId?: string;
       readonly duplicateRiskOf: readonly string[];
       readonly preview: boolean;
       readonly cacheOnly: boolean;
@@ -1431,7 +1431,9 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         adapterId,
         operationId,
         inputSource: parsed.values["--input"] ?? "{}",
-        authId: parsed.values["--auth"] ?? adapterId,
+        ...(parsed.values["--auth"] === undefined
+          ? {}
+          : { authId: parsed.values["--auth"] }),
         duplicateRiskOf,
         preview: parsed.booleans.has("--preview"),
         cacheOnly: parsed.booleans.has("--cache-only"),
