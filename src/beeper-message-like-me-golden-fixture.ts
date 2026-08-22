@@ -10,18 +10,25 @@ const accountId = "account:synthetic:primary";
 const connectedAccountProviderId = "beeper-account:synthetic-primary";
 const selfParticipantId = "participant:synthetic:self";
 const peerParticipantId = "participant:synthetic:peer";
+const secondaryAccountId = "account:synthetic:secondary";
+const secondaryConnectedAccountProviderId = "beeper-account:synthetic-secondary";
+const secondarySelfParticipantId = "participant:synthetic:secondary-self";
 const conversationId = "conversation:synthetic:friend";
 const editedMessageId = "message:synthetic:edited";
 const editedMessageProviderId = "beeper-message:synthetic-edited";
 const deletedMessageId = "message:synthetic:deleted";
 const deletedMessageProviderId = "beeper-message:synthetic-deleted";
 
-function provenance(providerId: string, providerRevision: string | null) {
+function provenance(
+  providerId: string,
+  providerRevision: string | null,
+  accountProviderId = connectedAccountProviderId,
+) {
   return Object.freeze({
     providerId,
     providerRevision,
     observedAt,
-    connectedAccountProviderId,
+    connectedAccountProviderId: accountProviderId,
   });
 }
 
@@ -35,6 +42,20 @@ const records = Object.freeze([{
   displayName: "Synthetic Primary",
   handle: "+15555550100",
   selfParticipantId,
+}, {
+  schemaVersion: 1,
+  kind: "account",
+  id: secondaryAccountId,
+  accountId: secondaryAccountId,
+  network: "synthetic-secondary",
+  provenance: provenance(
+    secondaryConnectedAccountProviderId,
+    null,
+    secondaryConnectedAccountProviderId,
+  ),
+  displayName: "Synthetic Secondary",
+  handle: "synthetic-secondary@example.invalid",
+  selfParticipantId: secondarySelfParticipantId,
 }, {
   schemaVersion: 1,
   kind: "participant",
@@ -55,6 +76,20 @@ const records = Object.freeze([{
   displayName: "Synthetic Peer",
   handle: "+15555550101",
   isSelf: false,
+}, {
+  schemaVersion: 1,
+  kind: "participant",
+  id: secondarySelfParticipantId,
+  accountId: secondaryAccountId,
+  network: "synthetic-secondary",
+  provenance: provenance(
+    "beeper-participant:synthetic-secondary-self",
+    null,
+    secondaryConnectedAccountProviderId,
+  ),
+  displayName: "Synthetic Secondary Self",
+  handle: "synthetic-secondary@example.invalid",
+  isSelf: true,
 }, {
   schemaVersion: 1,
   kind: "conversation",
@@ -146,7 +181,7 @@ const records = Object.freeze([{
 export function createBeeperMessageLikeMeGoldenSource(): BeeperMessageLikeMeExportSource {
   return Object.freeze({
     descriptor: Object.freeze({
-      source: Object.freeze({ id: "beeper-local", version: "1.0.0" }),
+      source: Object.freeze({ id: "beeper-local", version: "1.1.0" }),
       provider: Object.freeze({ id: "beeper", version: "0.6.2" }),
     }),
     records: (async function* () {
@@ -154,14 +189,16 @@ export function createBeeperMessageLikeMeGoldenSource(): BeeperMessageLikeMeExpo
     })(),
     completion: () => Promise.resolve(Object.freeze({
       completeness: Object.freeze({
-        kind: "truncated",
-        reason: "explicit-source-limit",
+        kind: "bounded-local",
+        reason: "desktop-local-sequential-export",
         observedFrom: "2026-08-21T15:50:00.000Z",
         observedThrough: "2026-08-21T15:59:00.000Z",
       }),
       warnings: Object.freeze([
         "attachments-metadata-only",
+        "connected-account-backfill-coverage-unknown",
         "remote-history-not-claimed",
+        "sequential-account-snapshot",
         "synthetic-golden-fixture",
       ]),
     })),

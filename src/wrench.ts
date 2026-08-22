@@ -24,6 +24,7 @@ import {
 } from "./auth";
 import { parseWrenchArguments, wrenchUsage, type WrenchArguments } from "./args";
 import type * as BeeperMessageLikeMeCliRuntimeModule from "./beeper-message-like-me-cli";
+import type { BeeperMessageLikeMeProgress } from "./beeper-message-like-me-source";
 import type { GmailCaptureRunner } from "./gmail-capture";
 import type * as MediaRuntimeModule from "./media";
 import {
@@ -438,6 +439,117 @@ function exactTerminalJson(value: unknown): string {
 
 function print(output: Output, value: unknown, json: boolean): void {
   output.stdout(json ? safeJson(value) : `${safe(typeof value === "string" ? value : JSON.stringify(value, null, 2))}\n`);
+}
+
+function beeperProgressInteger(value: number, minimum: number): number {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error("Beeper export progress was invalid");
+  }
+  return value;
+}
+
+function beeperProgressPosition(
+  progress: Readonly<{ account: number; accounts: number }>,
+): string {
+  const account = beeperProgressInteger(progress.account, 1);
+  const accounts = beeperProgressInteger(progress.accounts, 1);
+  if (account > accounts) throw new Error("Beeper export progress was invalid");
+  return `${account}/${accounts}`;
+}
+
+function plural(count: number, singular: string, plural_: string): string {
+  return count === 1 ? singular : plural_;
+}
+
+function renderBeeperMessageLikeMeProgress(
+  progress: BeeperMessageLikeMeProgress,
+): string {
+  if (progress.phase === "recovery-started") {
+    return "wrench: Beeper export: checking prior private export state\n";
+  }
+  if (progress.phase === "recovery-completed") {
+    const recovered = beeperProgressInteger(progress.recovered, 0);
+    const published = beeperProgressInteger(progress.published, 0);
+    return `wrench: Beeper export: private recovery complete; ${recovered} ${plural(recovered, "directory", "directories")} reclaimed, ${published} published ${plural(published, "bundle", "bundles")} preserved\n`;
+  }
+  if (progress.phase === "preparing") {
+    return "wrench: Beeper export: preparing pinned official CLI\n";
+  }
+  if (progress.phase === "accounts-discovered") {
+    const accounts = beeperProgressInteger(progress.accounts, 1);
+    return `wrench: Beeper export: ${accounts} ${plural(accounts, "account", "accounts")} discovered\n`;
+  }
+  if (progress.phase === "accounts-progress") {
+    if (progress.stage !== "discovering" && progress.stage !== "verifying") {
+      throw new Error("Beeper export progress was invalid");
+    }
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const action = progress.stage === "discovering"
+      ? "discovering accounts"
+      : "verifying connected accounts";
+    return `wrench: Beeper export: ${action}; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "account-started") {
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} started\n`;
+  }
+  if (progress.phase === "account-validating") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} validating; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "account-progress") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} running; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "account-skipped") {
+    if (progress.reason !== "chat-limit-reached") {
+      throw new Error("Beeper export progress was invalid");
+    }
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} skipped; chat limit reached\n`;
+  }
+  if (progress.phase === "account-completed") {
+    const chats = beeperProgressInteger(progress.chats, 0);
+    const messages = beeperProgressInteger(progress.messages, 0);
+    return `wrench: Beeper export: account ${beeperProgressPosition(progress)} complete; ${chats} ${plural(chats, "chat", "chats")}, ${messages} ${plural(messages, "message", "messages")} total\n`;
+  }
+  if (progress.phase === "accounts-verifying") {
+    const accounts = beeperProgressInteger(progress.accounts, 1);
+    return `wrench: Beeper export: verifying ${accounts} connected ${plural(accounts, "account", "accounts")}\n`;
+  }
+  if (progress.phase === "conversion-started") {
+    const accounts = beeperProgressInteger(progress.accounts, 1);
+    const chats = beeperProgressInteger(progress.chats, 0);
+    const messages = beeperProgressInteger(progress.messages, 0);
+    return `wrench: Beeper export: converting ${accounts} ${plural(accounts, "account", "accounts")}; ${chats} ${plural(chats, "chat", "chats")}, ${messages} ${plural(messages, "message", "messages")} total\n`;
+  }
+  if (progress.phase === "conversion-progress") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    return `wrench: Beeper export: converting local bundle; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "bundle-building") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const records = beeperProgressInteger(progress.records, 0);
+    const bytes = beeperProgressInteger(progress.bytes, 0);
+    return `wrench: Beeper export: building local bundle; ${records} ${plural(records, "record", "records")}, ${bytes} bytes; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "bundle-validating") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const records = beeperProgressInteger(progress.records, 0);
+    const bytes = beeperProgressInteger(progress.bytes, 0);
+    return `wrench: Beeper export: validating local bundle; ${records} ${plural(records, "record", "records")}, ${bytes} bytes; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "bundle-publishing") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const records = beeperProgressInteger(progress.records, 0);
+    const bytes = beeperProgressInteger(progress.bytes, 0);
+    return `wrench: Beeper export: publishing local bundle atomically; ${records} ${plural(records, "record", "records")}, ${bytes} bytes; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "private-cleanup") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    return `wrench: Beeper export: removing private raw shards; ${elapsedSeconds}s elapsed\n`;
+  }
+  const exhaustive: never = progress;
+  void exhaustive;
+  throw new Error("Beeper export progress was invalid");
 }
 
 type PreparedCapture = {
@@ -1584,6 +1696,9 @@ async function runCommand(
             : { maxParticipants: arguments_.maxParticipants }),
         },
         environment,
+        onProgress: (progress) => {
+          output.stderr(renderBeeperMessageLikeMeProgress(progress));
+        },
         ...(signal === undefined ? {} : { signal }),
       });
       const summary = Object.freeze({

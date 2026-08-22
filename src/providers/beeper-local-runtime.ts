@@ -85,6 +85,11 @@ export type BeeperUserProjection = Readonly<{
 
 export type BeeperAccountProjection = Readonly<{
   accountId: string;
+  /** Pinned CLI resolver fields, intentionally non-enumerable in runtime output. */
+  selectorAliases: Readonly<{
+    displayName: string | null;
+    name: string | null;
+  }>;
   bridge: Readonly<{
     id: string;
     type: string;
@@ -151,6 +156,7 @@ export type BeeperReactionProjection = Readonly<{
   participantId: string;
   reactionKey: string;
   emoji: boolean | null;
+  providerIdNonUnique: boolean;
 }>;
 
 export type BeeperMessageProjection = Readonly<{
@@ -334,11 +340,13 @@ function parseUser(value: unknown, label: string): BeeperUserProjection {
   const source = strictRecord(value, label);
   exactKeys(source, ["id"], [
     "cannotMessage",
+    "displayName",
     "displayText",
     "email",
     "fullName",
     "imgURL",
     "isSelf",
+    "name",
     "phoneNumber",
     "username",
   ], label);
@@ -377,8 +385,17 @@ function parseAccount(value: unknown, label: string): BeeperAccountProjection {
     && provider !== "local"
     && provider !== "platform-sdk"
   ) throw new Error(`${label}.bridge.provider is unsupported`);
-  return Object.freeze({
+  const userSource = strictRecord(source.user, `${label}.user`);
+  const projection: BeeperAccountProjection = {
     accountId: boundedString(source.accountID, `${label}.accountID`, 512),
+    selectorAliases: Object.freeze({
+      displayName: nullableString(
+        userSource.displayName,
+        `${label}.user.displayName`,
+        2_048,
+      ),
+      name: nullableString(userSource.name, `${label}.user.name`, 2_048),
+    }),
     bridge: Object.freeze({
       id: boundedString(bridge.id, `${label}.bridge.id`, 512),
       type: boundedString(bridge.type, `${label}.bridge.type`, 512),
@@ -389,7 +406,9 @@ function parseAccount(value: unknown, label: string): BeeperAccountProjection {
     status: boundedString(source.status, `${label}.status`, 128),
     statusText: nullableString(source.statusText, `${label}.statusText`, 2_048),
     user: parseUser(source.user, `${label}.user`),
-  });
+  };
+  Object.defineProperty(projection, "selectorAliases", { enumerable: false });
+  return Object.freeze(projection);
 }
 
 function parseAccounts(value: unknown): readonly BeeperAccountProjection[] {
@@ -630,7 +649,50 @@ function parseReaction(value: unknown, label: string): BeeperReactionProjection 
     participantId: boundedString(source.participantID, `${label}.participantID`, 2_048),
     reactionKey: boundedString(source.reactionKey, `${label}.reactionKey`, 2_048, true),
     emoji: optionalBoolean(source.emoji, `${label}.emoji`),
+    providerIdNonUnique: false,
   });
+}
+
+function parseReactions(value: unknown, label: string): readonly BeeperReactionProjection[] {
+  const parsed = strictArray(value, label, 10_000)
+    .map((item, index) => parseReaction(item, `${label}[${index}]`));
+  const byId = new Map<string, {
+    readonly indexes: number[];
+    readonly tuplesByParticipant: Map<string, Map<string, number>>;
+  }>();
+  const result: BeeperReactionProjection[] = [];
+  for (const reaction of parsed) {
+    let group = byId.get(reaction.id);
+    if (group === undefined) {
+      group = {
+        indexes: [],
+        tuplesByParticipant: new Map(),
+      };
+      byId.set(reaction.id, group);
+    }
+    let byReactionKey = group.tuplesByParticipant.get(reaction.participantId);
+    if (byReactionKey === undefined) {
+      byReactionKey = new Map();
+      group.tuplesByParticipant.set(reaction.participantId, byReactionKey);
+    }
+    if (byReactionKey.has(reaction.reactionKey)) continue;
+    const index = result.length;
+    byReactionKey.set(reaction.reactionKey, index);
+    group.indexes.push(index);
+    result.push(reaction);
+  }
+  for (const group of byId.values()) {
+    if (group.indexes.length < 2) continue;
+    for (const index of group.indexes) {
+      const reaction = result[index];
+      if (reaction === undefined) throw new Error("Beeper reaction projection disappeared");
+      result[index] = Object.freeze({
+        ...reaction,
+        providerIdNonUnique: true,
+      });
+    }
+  }
+  return Object.freeze(result);
 }
 
 function parseSeen(
@@ -744,8 +806,7 @@ function parseMessage(
       .map((item, index) => parseAttachment(item, `${label}.attachments[${index}]`));
   const reactions = source.reactions === undefined
     ? []
-    : strictArray(source.reactions, `${label}.reactions`, 10_000)
-      .map((item, index) => parseReaction(item, `${label}.reactions[${index}]`));
+    : parseReactions(source.reactions, `${label}.reactions`);
   return Object.freeze({
     id: boundedString(source.id, `${label}.id`, 2_048),
     accountId,
@@ -893,8 +954,8 @@ export async function resolvePinnedBeeperCliBinary(
   );
 }
 
-function localDesktopBaseUrl(value: unknown, label: string): void {
-  if (value === undefined) return;
+function localDesktopBaseUrl(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
   const source = boundedString(value, label, 256);
   let url: URL;
   try {
@@ -915,6 +976,44 @@ function localDesktopBaseUrl(value: unknown, label: string): void {
     || port < 23_373
     || port > 23_392
   ) throw new Error(`${label} must be a reviewed loopback Beeper Desktop URL`);
+  return source;
+}
+
+function storedBeeperAuth(value: unknown, label: string): JsonRecord {
+  const auth = strictRecord(value, label);
+  exactKeys(auth, ["accessToken", "tokenType"], [
+    "clientID",
+    "expiresAt",
+    "scope",
+    "source",
+  ], label);
+  boundedString(auth.accessToken, `${label}.accessToken`, 64 * 1024);
+  if (auth.tokenType !== "Bearer") {
+    throw new Error(`${label}.tokenType is unsupported`);
+  }
+  if (auth.clientID !== undefined) {
+    boundedString(auth.clientID, `${label}.clientID`, 2_048);
+  }
+  if (auth.scope !== undefined) {
+    boundedString(auth.scope, `${label}.scope`, 2_048);
+  }
+  if (auth.expiresAt !== undefined) {
+    const expiresAt = boundedString(auth.expiresAt, `${label}.expiresAt`, 64);
+    if (!Number.isFinite(Date.parse(expiresAt))) {
+      throw new Error(`${label}.expiresAt must be a timestamp`);
+    }
+  }
+  if (auth.source !== undefined) {
+    const source = boundedString(auth.source, `${label}.source`, 64);
+    if (![
+      "desktop-db",
+      "desktop-cache",
+      "desktop-oauth",
+      "remote-oauth",
+      "manual",
+    ].includes(source)) throw new Error(`${label}.source is unsupported`);
+  }
+  return auth;
 }
 
 async function readPrivateJsonFile(path: string, label: string): Promise<JsonRecord | null> {
@@ -979,7 +1078,7 @@ async function readPrivateJsonFile(path: string, label: string): Promise<JsonRec
   }
 }
 
-export async function validateBeeperCliStore(path: string): Promise<string> {
+async function validateBeeperCliStoreInternal(path: string): Promise<string> {
   if (!isAbsolute(path)) throw new Error("Beeper CLI config directory must be absolute");
   const canonical = await realpath(path);
   if (canonical !== path) throw new Error("Beeper CLI config directory must be canonical");
@@ -991,9 +1090,17 @@ export async function validateBeeperCliStore(path: string): Promise<string> {
     || (stats.mode & 0o022) !== 0
   ) throw new Error("Beeper CLI config directory must be an owned non-writable-by-others directory");
   const config = await readPrivateJsonFile(join(canonical, "config.json"), "Beeper CLI config");
+  let configAuth: JsonRecord | undefined;
+  let configBaseUrl: string | undefined;
   if (config !== null) {
     exactKeys(config, [], ["auth", "baseURL", "defaultAccount", "defaultTarget"], "Beeper CLI config");
-    localDesktopBaseUrl(config.baseURL, "Beeper CLI config.baseURL");
+    configBaseUrl = localDesktopBaseUrl(config.baseURL, "Beeper CLI config.baseURL");
+    configAuth = config.auth === undefined
+      ? undefined
+      : storedBeeperAuth(config.auth, "Beeper CLI config.auth");
+    if (config.defaultAccount !== undefined) {
+      boundedString(config.defaultAccount, "Beeper CLI config.defaultAccount", 512);
+    }
     if (config.defaultTarget !== BEEPER_DESKTOP_TARGET) {
       throw new Error("Beeper CLI config must select the fixed desktop target");
     }
@@ -1016,6 +1123,8 @@ export async function validateBeeperCliStore(path: string): Promise<string> {
     join(canonicalTargets, "desktop.json"),
     "Beeper Desktop target",
   );
+  let targetAuth: JsonRecord | undefined;
+  let targetBaseUrl: string | undefined;
   if (target !== null) {
     exactKeys(target, ["id", "type", "baseURL"], [
       "auth",
@@ -1030,12 +1139,61 @@ export async function validateBeeperCliStore(path: string): Promise<string> {
     if (target.id !== "desktop" || target.type !== "desktop") {
       throw new Error("Beeper Desktop target must identify the fixed desktop realm");
     }
-    localDesktopBaseUrl(target.baseURL, "Beeper Desktop target.baseURL");
+    targetBaseUrl = localDesktopBaseUrl(target.baseURL, "Beeper Desktop target.baseURL");
+    if (
+      (target.managed !== undefined && target.managed !== false)
+      || target.dataDir !== undefined
+      || target.profile !== undefined
+      || target.serverEnv !== undefined
+    ) {
+      throw new Error("Beeper Desktop target contains an active endpoint override");
+    }
+    if (target.port !== undefined) {
+      integer(target.port, "Beeper Desktop target.port", 23_373, 23_392);
+    }
+    if (target.runtime !== undefined) {
+      const runtime = strictRecord(target.runtime, "Beeper Desktop target.runtime");
+      exactKeys(runtime, ["install", "port"], [], "Beeper Desktop target.runtime");
+      if (runtime.install !== "desktop") {
+        throw new Error("Beeper Desktop target.runtime.install is unsupported");
+      }
+      integer(
+        runtime.port,
+        "Beeper Desktop target.runtime.port",
+        23_373,
+        23_392,
+      );
+    }
+    if (target.name !== undefined) {
+      boundedString(target.name, "Beeper Desktop target.name", 2_048);
+    }
+    targetAuth = target.auth === undefined
+      ? undefined
+      : storedBeeperAuth(target.auth, "Beeper Desktop target.auth");
   }
   if (config === null || target === null) {
     throw new Error("Beeper CLI config directory has no authorized selected Desktop target");
   }
+  const effectiveAuth = targetAuth
+    ?? (configAuth !== undefined
+      && (configBaseUrl === undefined || configBaseUrl === targetBaseUrl)
+      ? configAuth
+      : undefined);
+  if (effectiveAuth === undefined) {
+    throw new Error("Beeper CLI config directory has no effective stored access token");
+  }
   return canonical;
+}
+
+export async function validateBeeperCliStore(path: string): Promise<string> {
+  try {
+    return await validateBeeperCliStoreInternal(path);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Beeper ")) {
+      throw error;
+    }
+    throw new Error("Beeper CLI config directory could not be validated safely");
+  }
 }
 
 async function readBoundedStream(

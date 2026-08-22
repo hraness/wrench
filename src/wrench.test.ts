@@ -904,6 +904,120 @@ describe("auth CLI", () => {
             observed = request as unknown as Record<string, unknown>;
             expect(() => removeAuth("beeper-main", testState.environment))
               .toThrow("active read projection transition");
+            const privateMetadata = {
+              accountId: "private-account-id",
+              accountName: "Private Account Name",
+              network: "Private Network",
+            };
+            request.onProgress?.({
+              phase: "recovery-started",
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "recovery-completed",
+              recovered: 0,
+              published: 0,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "preparing",
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "accounts-progress",
+              stage: "discovering",
+              elapsedSeconds: 30,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "accounts-discovered",
+              accounts: 3,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "account-started",
+              account: 1,
+              accounts: 3,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "account-progress",
+              account: 1,
+              accounts: 3,
+              elapsedSeconds: 30,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "account-validating",
+              account: 1,
+              accounts: 3,
+              elapsedSeconds: 0,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "account-completed",
+              account: 1,
+              accounts: 3,
+              chats: 4,
+              messages: 50,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "account-skipped",
+              account: 2,
+              accounts: 3,
+              reason: "chat-limit-reached",
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "accounts-verifying",
+              accounts: 3,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "accounts-progress",
+              stage: "verifying",
+              elapsedSeconds: 60,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "conversion-started",
+              accounts: 3,
+              chats: 10,
+              messages: 500,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "conversion-progress",
+              elapsedSeconds: 30,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "bundle-building",
+              elapsedSeconds: 30,
+              records: 50,
+              bytes: 4_096,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "bundle-validating",
+              elapsedSeconds: 0,
+              records: 100,
+              bytes: 8_192,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "bundle-publishing",
+              elapsedSeconds: 0,
+              records: 100,
+              bytes: 8_192,
+              ...privateMetadata,
+            });
+            request.onProgress?.({
+              phase: "private-cleanup",
+              elapsedSeconds: 0,
+              ...privateMetadata,
+            });
             return Promise.resolve({
               outputRoot: "/tmp/message-like-me-fixture",
               manifestPath: "/tmp/message-like-me-fixture/manifest.json",
@@ -931,7 +1045,30 @@ describe("auth CLI", () => {
       });
 
       expect(code).toBe(0);
-      expect(wrench.stderr()).toBe("");
+      expect(wrench.stderr()).toBe([
+        "wrench: Beeper export: checking prior private export state",
+        "wrench: Beeper export: private recovery complete; 0 directories reclaimed, 0 published bundles preserved",
+        "wrench: Beeper export: preparing pinned official CLI",
+        "wrench: Beeper export: discovering accounts; 30s elapsed",
+        "wrench: Beeper export: 3 accounts discovered",
+        "wrench: Beeper export: account 1/3 started",
+        "wrench: Beeper export: account 1/3 running; 30s elapsed",
+        "wrench: Beeper export: account 1/3 validating; 0s elapsed",
+        "wrench: Beeper export: account 1/3 complete; 4 chats, 50 messages total",
+        "wrench: Beeper export: account 2/3 skipped; chat limit reached",
+        "wrench: Beeper export: verifying 3 connected accounts",
+        "wrench: Beeper export: verifying connected accounts; 60s elapsed",
+        "wrench: Beeper export: converting 3 accounts; 10 chats, 500 messages total",
+        "wrench: Beeper export: converting local bundle; 30s elapsed",
+        "wrench: Beeper export: building local bundle; 50 records, 4096 bytes; 30s elapsed",
+        "wrench: Beeper export: validating local bundle; 100 records, 8192 bytes; 0s elapsed",
+        "wrench: Beeper export: publishing local bundle atomically; 100 records, 8192 bytes; 0s elapsed",
+        "wrench: Beeper export: removing private raw shards; 0s elapsed",
+        "",
+      ].join("\n"));
+      expect(wrench.stderr()).not.toContain("private-account-id");
+      expect(wrench.stderr()).not.toContain("Private Account Name");
+      expect(wrench.stderr()).not.toContain("Private Network");
       expect(observed).toMatchObject({
         auth: {
           id: "beeper-main",
@@ -941,6 +1078,7 @@ describe("auth CLI", () => {
         },
         outputRoot: "/tmp/message-like-me-fixture",
         limits: { limitChats: 10, limitMessages: 500 },
+        onProgress: expect.any(Function),
       });
       expect(JSON.parse(wrench.stdout())).toMatchObject({
         ok: true,

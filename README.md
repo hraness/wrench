@@ -349,6 +349,18 @@ wrench auth add beeper-main --linked-device beeper \
 wrench auth bind beeper-main --site beeper
 ```
 
+The export integrity pin is the official macOS arm64 CLI 0.6.2, not the
+moving Homebrew formula name. The command above is sufficient only while
+`beeper version` reports 0.6.2. If the tap has advanced, use the 0.6.2 asset
+from the [official CLI releases](https://github.com/beeper/cli/releases)
+asset and install its `beeper` executable at
+`<WRENCH_STATE_HOME>/tools/beeper/0.6.2/beeper` (the default state home is
+`~/.local/share/wrench`). Wrench requires archive SHA-256
+`688ccde7e7d044d33980cd06474bf1ae7215ccf8ca79967262fa3bfb85a2589a`
+and executable SHA-256
+`48aa895449129c793a212ea19f69a534adc34a8adc4037ca1d7da9e648716425`;
+it rejects every other version or byte sequence before reading private data.
+
 Binding hashes the stable local self-account coordinate before storing or
 printing it. The first bind or read may take longer while the pinned CLI unpacks
 its embedded payload into an operation-private cache. Read the local account
@@ -369,17 +381,74 @@ wrench beeper export-message-like-me --auth beeper-main \
   --output /absolute/path/to/new-message-like-me-bundle --json
 ```
 
-The command uses the pinned official full export with `--no-attachments`,
-validates its complete local chat inventory, removes the duplicate Markdown and
-HTML renderings inside operation-private staging, and publishes `manifest.json`
-last. The output directory is mode 0700; its six NDJSON artifacts and manifest
-are mode 0600 and carry canonical SHA-256 digests. The JSON result reports the
-manifest path and digest, record counts, completeness, and warnings. Optional
-`--limit-chats`, `--limit-messages`, and `--max-participants` values are recorded
-as truncation when reached. Wrench also emits a coherent truncated bundle before
-the 500,000-record or 512 MiB bundle ceiling. One chat JSON file is limited to
-64 MiB so foreign input cannot force a multi-gigabyte allocation; an oversized
-chat is omitted with explicit truncated completeness and a warning.
+The command uses the pinned official CLI directly. It enumerates the connected
+account realm, then runs the official `export --no-attachments` command once per
+account in a deterministic order. Each invocation selects its account through
+an operation-private CLI config, so account identifiers never appear in command
+arguments, environment paths, or progress output. Stderr reports the account
+ordinal and cumulative validated chat and message counts. Long account,
+conversion, bundle-validation, and publication phases repeat their elapsed time
+every 30 seconds, including final private-shard cleanup. It prints the private
+recovery check before that work begins, so stale cleanup is visible too. A final
+account enumeration rejects a realm that changed while the sequential snapshot
+was running.
+
+Wrench retains each validated raw account shard until the complete sanitized
+bundle passes its graph and digest checks. It builds all six NDJSON artifacts
+and `manifest.json` in a private sibling directory, fsyncs them, and exposes the
+seven-file bundle with one atomic directory rename. The requested output path
+stays absent until that commit. Success removes the raw shards; failure or
+cancellation removes owned staging and leaves no partial output. The output
+directory is mode 0700, and every file is mode 0600 with a canonical SHA-256
+digest.
+
+Each connected account has exactly one normalized self participant, anchored by
+the account user's stable Beeper ID. Before record allocation, Wrench makes a
+bounded hash-only pass over the selected chats. Explicit chat `isSelf` values
+and message `isSender` values establish account-local self and peer evidence.
+Later evidence applies to earlier chats, message files stay bound to their
+validated SHA-256 digests, and contradictory evidence stops the export without
+publishing. Reactions inherit a normalized participant reference while their
+raw provider tuple remains only inside a composite hash. Nonunique provider
+reaction IDs are preserved with the categorical
+`reaction-provider-id-non-unique` warning.
+
+The JSON result reports the manifest path and digest, record counts,
+completeness, and warnings. `--limit-chats` is global across the account
+sequence. `--limit-messages` and `--max-participants` apply to each chat, which
+matches the official CLI flags. Reached limits are recorded as truncation.
+Wrench always passes hard ceilings of 100,000 chats and 1,000,000 messages per
+chat, and it emits a coherent truncated bundle before the 500,000-record or 512
+MiB bundle ceiling. One chat JSON file is limited to 64 MiB so foreign input
+cannot force a multi-gigabyte allocation; an oversized chat is omitted with
+explicit truncated completeness and a warning. While the official CLI is
+running, Wrench monitors the complete private working tree against a 4 GiB
+ceiling every 500 ms and independently checks that at least 2 GiB remains free
+on the filesystem. This is a monitored safety ceiling, not an operating-system
+quota. After each account validates, Wrench immediately removes the redundant
+Markdown and HTML renderings while retaining the hash-bound JSON needed for the
+final conversion. Cleanup first moves each owned directory into a private
+quarantine and verifies its filesystem identity before recursive removal.
+
+Before credentials or message bytes enter a raw working directory, Wrench
+wins one atomic export-admission claim shared across all Beeper auth IDs. A
+second invocation stops before account discovery while a live or
+uninspectable owner holds that claim. A later invocation can reclaim it only
+after proving that the exact owner is no longer running.
+
+After admission, Wrench writes a durable private lease containing the directory
+and process identities.
+The atomic bundle stage receives the same protection. A later invocation
+reclaims a stale directory only after proving that its exact owner, and any
+recorded Beeper child, is no longer running. Live or indeterminate owners are
+left untouched and the command stops with a categorical error. If a crash
+lands between the atomic rename and lease release, recovery recognizes the
+same directory at the requested output path and preserves the published
+bundle.
+
+The Beeper Desktop API MCP project is intended to expose Beeper tools to an MCP
+client. This export path uses the official CLI because Wrench needs a pinned,
+bounded, read-only file snapshot that it can validate and publish atomically.
 
 Contact and chat lists are bounded to 200 records because CLI 0.6.2 exposes no
 continuation cursor for those commands. Message pages derive the next

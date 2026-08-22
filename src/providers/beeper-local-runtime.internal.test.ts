@@ -3,6 +3,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   realpathSync,
   rmSync,
@@ -23,6 +24,7 @@ import {
 } from "./beeper-omni";
 import {
   executeBeeperLocalOperation,
+  parseBeeperExportAccounts,
   parseBeeperExportMessages,
   probeBeeperLocalSubject,
   validateBeeperCliStore,
@@ -32,6 +34,7 @@ import {
 import {
   parseBeeperMessagingReadInput,
   planBeeperAccountsListCommand,
+  planBeeperMessageLikeMeExportCommand,
   planBeeperReadCommand,
 } from "./beeper-local";
 
@@ -61,12 +64,14 @@ function accounts(): readonly unknown[] {
     network: "Beeper",
     status: "CONNECTED",
     user: {
+      displayName: "Official Display Alias",
       displayText: "Fixture Self",
       email: "self@example.test",
       fullName: "Fixture Self",
       id: SELF_ID,
       imgURL: "file:///private/avatar-self",
       isSelf: true,
+      name: "Official Name Alias",
       phoneNumber: "+15550000000",
       username: "fixture-self",
     },
@@ -181,12 +186,16 @@ function privateStore(): string {
   writeFileSync(
     join(path, "targets", "desktop.json"),
     `${JSON.stringify({
-      auth: { token: "fixture-never-read-by-test-runner" },
+      auth: {
+        accessToken: "fixture-never-read-by-test-runner",
+        source: "manual",
+        tokenType: "Bearer",
+      },
       baseURL: "http://127.0.0.1:23384",
       id: "desktop",
-      managed: true,
+      managed: false,
       name: "Desktop",
-      runtime: "desktop",
+      runtime: { install: "desktop", port: 23_373 },
       type: "desktop",
     })}\n`,
     { mode: 0o600 },
@@ -253,6 +262,18 @@ async function execute(
 }
 
 describe("Beeper local read runtime", () => {
+  test("preserves the pinned CLI account selector aliases independently", () => {
+    const parsed = parseBeeperExportAccounts(accounts());
+    expect(parsed[0]?.selectorAliases).toEqual({
+      displayName: "Official Display Alias",
+      name: "Official Name Alias",
+    });
+    expect(parsed[0]?.user).toMatchObject({
+      fullName: "Fixture Self",
+    });
+    expect(Object.keys(parsed[0] ?? {})).not.toContain("selectorAliases");
+  });
+
   test("plans only fixed read commands with command paths before Oclif global flags", () => {
     expect(planBeeperAccountsListCommand(1_500).argv).toEqual([
       "accounts",
@@ -283,6 +304,62 @@ describe("Beeper local read runtime", () => {
       before_cursor: "before",
       after_cursor: "after",
     })).toThrow("only one cursor direction");
+  });
+
+  test("plans the official export without an account or diagnostic surface", () => {
+    expect(planBeeperMessageLikeMeExportCommand({
+      outputDirectory: "/private/export/account-1",
+      limitChats: 12,
+      limitMessages: 345,
+      maxParticipants: 67,
+    }, 61_001)).toEqual([
+      "export",
+      "--out",
+      "/private/export/account-1",
+      "--no-attachments",
+      "--max-participants",
+      "67",
+      "--limit-chats",
+      "12",
+      "--limit-messages",
+      "345",
+      "--read-only",
+      "--quiet",
+      "--target",
+      "desktop",
+      "--timeout",
+      "62s",
+    ]);
+    const hardBounded = planBeeperMessageLikeMeExportCommand({
+      outputDirectory: "/private/export/account-2",
+      limitChats: 100_000,
+      limitMessages: 1_000_000,
+      maxParticipants: 500,
+    }, 3_600_001);
+    expect(hardBounded).not.toContain("--account");
+    expect(hardBounded).not.toContain("--events");
+    expect(hardBounded).not.toContain("--json");
+    expect(hardBounded).not.toContain("--full");
+    expect(hardBounded).not.toContain("--debug");
+    expect(hardBounded).not.toContain("--base-url");
+    expect(hardBounded).toEqual([
+      "export",
+      "--out",
+      "/private/export/account-2",
+      "--no-attachments",
+      "--max-participants",
+      "500",
+      "--limit-chats",
+      "100000",
+      "--limit-messages",
+      "1000000",
+      "--read-only",
+      "--quiet",
+      "--target",
+      "desktop",
+      "--timeout",
+      "3601s",
+    ]);
   });
 
   test("executes contacts, chats, and messages through strict synthetic JSON", async () => {
@@ -423,6 +500,114 @@ describe("Beeper local read runtime", () => {
     }], NETWORK_ACCOUNT_ID, CHAT_ID, 1)).toThrow("attachments must be an array of at most 256 items");
   });
 
+  test("collapses retained reaction tuples regardless of dropped fields", () => {
+    const first = messages()[0] as Record<string, unknown>;
+    const original = (first.reactions as readonly Record<string, unknown>[])[0]!;
+    const distinct = {
+      emoji: false,
+      id: "reaction-distinct",
+      participantID: "signal:self",
+      reactionKey: "custom-reaction",
+    };
+    const nullableEmoji = {
+      id: "reaction-nullable-emoji",
+      participantID: "signal:ada",
+      reactionKey: "nullable-emoji-reaction",
+    };
+    const parsed = parseBeeperExportMessages([{
+      ...first,
+      reactions: [{
+        ...original,
+        imgURL: "https://media.example.test/first-token",
+      }, distinct, {
+        ...original,
+        emoji: false,
+        imgURL: "file:///private/different-ignored-reaction-image",
+      }, nullableEmoji, {
+        ...nullableEmoji,
+        emoji: true,
+      }],
+    }], NETWORK_ACCOUNT_ID, CHAT_ID, 1);
+
+    expect(parsed[0]!.reactions.map(({ id }) => id)).toEqual([
+      "reaction-private-id",
+      "reaction-distinct",
+      "reaction-nullable-emoji",
+    ]);
+    expect(parsed[0]!.reactions[0]).toEqual({
+      emoji: true,
+      id: "reaction-private-id",
+      participantId: "signal:ada",
+      providerIdNonUnique: false,
+      reactionKey: "👍",
+    });
+    expect(parsed[0]!.reactions[2]!.emoji).toBeNull();
+    expect(parsed[0]!.reactions.every((reaction) => !reaction.providerIdNonUnique))
+      .toBeTrue();
+    expect(JSON.stringify(parsed[0]!.reactions)).not.toContain("first-token");
+    expect(JSON.stringify(parsed[0]!.reactions)).not.toContain("different-ignored");
+    expect(() => parseBeeperExportMessages([{
+      ...first,
+      reactions: [original, {
+        ...original,
+        imgURL: "x".repeat(16_385),
+      }],
+    }], NETWORK_ACCOUNT_ID, CHAT_ID, 1)).toThrow("imgURL must be bounded text");
+  });
+
+  test("retains and marks every tuple in a nonunique reaction provider-ID group", () => {
+    const first = messages()[0] as Record<string, unknown>;
+    const original = (first.reactions as readonly Record<string, unknown>[])[0]!;
+    const parsed = parseBeeperExportMessages([{
+      ...first,
+      reactions: [original, {
+        ...original,
+        reactionKey: "second-private-reaction-key",
+      }, {
+        ...original,
+        participantID: "signal:second-private-participant",
+        reactionKey: "second-private-reaction-key",
+      }, {
+        ...original,
+        emoji: false,
+        imgURL: "file:///private/ignored-duplicate-image",
+      }, {
+        emoji: false,
+        id: "reaction-unique-provider-id",
+        participantID: "signal:ada",
+        reactionKey: "unique-reaction-key",
+      }],
+    }], NETWORK_ACCOUNT_ID, CHAT_ID, 1);
+
+    expect(parsed[0]!.reactions.map((reaction) => ({
+      id: reaction.id,
+      participantId: reaction.participantId,
+      reactionKey: reaction.reactionKey,
+      providerIdNonUnique: reaction.providerIdNonUnique,
+    }))).toEqual([{
+      id: "reaction-private-id",
+      participantId: "signal:ada",
+      reactionKey: "👍",
+      providerIdNonUnique: true,
+    }, {
+      id: "reaction-private-id",
+      participantId: "signal:ada",
+      reactionKey: "second-private-reaction-key",
+      providerIdNonUnique: true,
+    }, {
+      id: "reaction-private-id",
+      participantId: "signal:second-private-participant",
+      reactionKey: "second-private-reaction-key",
+      providerIdNonUnique: true,
+    }, {
+      id: "reaction-unique-provider-id",
+      participantId: "signal:ada",
+      reactionKey: "unique-reaction-key",
+      providerIdNonUnique: false,
+    }]);
+    expect(JSON.stringify(parsed[0]!.reactions)).not.toContain("ignored-duplicate-image");
+  });
+
   test("keeps first-run CLI payload extraction inside the overall probe deadline", async () => {
     const path = privateStore();
     const calls: BeeperCliInvocation[] = [];
@@ -460,6 +645,25 @@ describe("Beeper local read runtime", () => {
     const path = privateStore();
     try {
       await expect(validateBeeperCliStore(path)).resolves.toBe(path);
+      const targetPath = join(path, "targets", "desktop.json");
+      const target = JSON.parse(readFileSync(targetPath, "utf8")) as Record<string, unknown>;
+      writeFileSync(
+        targetPath,
+        `${JSON.stringify({ ...target, auth: undefined })}\n`,
+        { mode: 0o600 },
+      );
+      await expect(validateBeeperCliStore(path)).rejects.toThrow(
+        "no effective stored access token",
+      );
+      writeFileSync(
+        targetPath,
+        `${JSON.stringify({ ...target, managed: true, port: 23_392 })}\n`,
+        { mode: 0o600 },
+      );
+      await expect(validateBeeperCliStore(path)).rejects.toThrow(
+        "active endpoint override",
+      );
+      writeFileSync(targetPath, `${JSON.stringify(target)}\n`, { mode: 0o600 });
       writeFileSync(
         join(path, "config.json"),
         `${JSON.stringify({ defaultTarget: "other" })}\n`,
@@ -494,6 +698,24 @@ describe("Beeper local read runtime", () => {
       await expect(validateBeeperCliStore(path)).rejects.toThrow();
     } finally {
       rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("does not disclose a rejected config-store path in diagnostics", async () => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "wrench-beeper-private-path.")));
+    const missing = join(parent, "sensitive-account-store-name");
+    try {
+      await expect(validateBeeperCliStore(missing)).rejects.toThrow(
+        "Beeper CLI config directory could not be validated safely",
+      );
+      try {
+        await validateBeeperCliStore(missing);
+      } catch (error) {
+        expect(String(error)).not.toContain(missing);
+        expect(String(error)).not.toContain("sensitive-account-store-name");
+      }
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 });

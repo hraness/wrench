@@ -148,6 +148,7 @@
     "src/auth.ts",
     "src/beeper-message-like-me-cli.ts",
     "src/beeper-message-like-me-export.ts",
+    "src/beeper-message-like-me-recovery.ts",
     "src/beeper-message-like-me-source.ts",
     "src/fixtures/beeper-message-like-me-v1",
     "src/browser-admission.ts",
