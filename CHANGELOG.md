@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.1 - 2026-08-23
+
+- Keep Beeper account selector aliases internal while returning plain,
+  bounded-JSON-safe account projections from contact and messaging reads.
+
 ## 0.13.0 - 2026-08-22
 
 - Add a pinned, read-only Beeper Desktop provider for contacts and messaging
