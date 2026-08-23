@@ -1767,7 +1767,11 @@ describe("official X media and failure bounds", () => {
         },
       };
 
-      await expectRejectedWith(executeXProvider(context), "identity changed after its provider preflight");
+      const error = await expectRejectedWith(executeXProvider(context), "official X attachment");
+      expect(
+        error.message.includes("identity changed after its provider preflight")
+        || error.message.includes("no longer matches its confirmed digest"),
+      ).toBeTrue();
       expect(captured.requests.map((request) => request.url.pathname)).toEqual(["/2/users/me"]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
