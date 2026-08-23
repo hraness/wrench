@@ -151,7 +151,7 @@ function xArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "a2f3dc3e766c3ce33033485ec5393070ed3407bff5c729e25eb4d3d12e76379c",
+  "6a58c1120d9bd3f9db125aa40381699ff8e28ec3a3fae596914ad82ffdc063ae",
   {
     "likes.set": [1],
   },
