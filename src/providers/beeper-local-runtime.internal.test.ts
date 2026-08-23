@@ -18,6 +18,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { WrenchAuth } from "../auth";
 import type { OperationInput, WebSessionRecipe } from "../model";
+import { boundedJsonOutput } from "../runtime";
 import {
   materializeBeeperMessagingList,
   materializeBeeperMessagingRead,
@@ -461,6 +462,52 @@ describe("Beeper local read runtime", () => {
         expect(invocation.arguments.indexOf("--read-only")).toBeGreaterThan(0);
       }
       expect(calls.filter((call) => call.arguments[0] === "accounts")).toHaveLength(3);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps selector aliases internal while public projections cross bounded JSON", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    try {
+      const contactsResult = await execute(
+        path,
+        "contacts.list",
+        { account_id: NETWORK_ACCOUNT_ID, limit: 2 },
+        calls,
+      );
+      const listResult = await execute(
+        path,
+        "messaging.list",
+        { account_id: NETWORK_ACCOUNT_ID, limit: 2 },
+        calls,
+      );
+      const readResult = await execute(
+        path,
+        "messaging.read",
+        { account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, limit: 2 },
+        calls,
+      );
+
+      for (const result of [contactsResult, listResult, readResult]) {
+        expect(boundedJsonOutput(result.output, 32 * 1024 * 1024))
+          .toEqual(result.output);
+      }
+      for (const result of [contactsResult, listResult]) {
+        const output = result.output as Readonly<{
+          accounts: readonly Readonly<Record<string, unknown>>[];
+        }>;
+        expect(output.accounts).toHaveLength(2);
+        for (const account of output.accounts) {
+          expect(Reflect.ownKeys(account)).not.toContain("selectorAliases");
+          expect(Object.values(Object.getOwnPropertyDescriptors(account)).every(
+            (descriptor) => descriptor.enumerable && "value" in descriptor,
+          )).toBeTrue();
+        }
+        expect(JSON.stringify(output)).not.toContain("Official Display Alias");
+        expect(JSON.stringify(output)).not.toContain("Official Name Alias");
+      }
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
