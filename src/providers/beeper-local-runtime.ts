@@ -1456,6 +1456,43 @@ function unavailableContactStats() {
   );
 }
 
+type BeeperPublicAccountProjection = Omit<
+  BeeperAccountProjection,
+  "selectorAliases"
+>;
+
+function publicAccountProjection(
+  account: BeeperAccountProjection,
+): BeeperPublicAccountProjection {
+  return Object.freeze({
+    accountId: account.accountId,
+    bridge: Object.freeze({
+      id: account.bridge.id,
+      type: account.bridge.type,
+      provider: account.bridge.provider,
+    }),
+    network: account.network,
+    loginId: account.loginId,
+    status: account.status,
+    statusText: account.statusText,
+    user: Object.freeze({
+      id: account.user.id,
+      fullName: account.user.fullName,
+      username: account.user.username,
+      phoneNumber: account.user.phoneNumber,
+      email: account.user.email,
+      isSelf: account.user.isSelf,
+      cannotMessage: account.user.cannotMessage,
+    }),
+  });
+}
+
+function publicAccountProjections(
+  accounts: readonly BeeperAccountProjection[],
+): readonly BeeperPublicAccountProjection[] {
+  return Object.freeze(accounts.map(publicAccountProjection));
+}
+
 function contactOutput(
   accounts: readonly BeeperAccountProjection[],
   subject: string,
@@ -1478,7 +1515,7 @@ function contactOutput(
     operation: "contacts.list",
     accountSubject: subject,
     projection: "bounded-local-desktop-api",
-    accounts,
+    accounts: publicAccountProjections(accounts),
     requestedAccountId: accountId,
     contacts: Object.freeze(contacts),
     completeness: Object.freeze({
@@ -1519,7 +1556,7 @@ function conversationOutput(
     operation: "messaging.list",
     accountSubject: subject,
     projection: "bounded-local-desktop-api",
-    accounts,
+    accounts: publicAccountProjections(accounts),
     requestedAccountId: accountId,
     conversations: Object.freeze(conversations),
     completeness: Object.freeze({

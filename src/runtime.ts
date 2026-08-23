@@ -3263,7 +3263,8 @@ function foreignDataRecord(value: unknown): Record<string, unknown> | null {
   }
 }
 
-function boundedJsonOutput(value: unknown, maxBytes: number): unknown {
+/** @internal Exported only for owned runtime-boundary tests. */
+export function boundedJsonOutput(value: unknown, maxBytes: number): unknown {
   const state = { bytes: 0, nodes: 0 };
   const ancestors = new WeakSet<object>();
   const charge = (bytes: number): void => {
