@@ -14,7 +14,7 @@ are authoritative and may change.
 | Substack | `substack-web` | `media.publish` when observed | Public Substack Note, not an article or newsletter. |
 | TikTok | `tiktok-web` | `media.publish` when observed | Native TikTok video |
 | Instagram | `meta-web` on the Instagram surface | `media.publish` when observed | Instagram video or Reel only when the schema says so. |
-| Threads | `meta-web` on the Threads surface | `media.publish` | Observed single-MP4 Threads video post; image `posts.publish` remains a separate contract. |
+| Threads | `meta-web` on the Threads surface | `media.publish` | Observed single-MP4 Threads video post; text/image `posts.publish` remains a separate contract. |
 | YouTube Shorts | `youtube-web` | `media.publish` when observed | Studio video upload. Community `posts.publish` is not a Short. |
 | Reddit | `reddit-web` | `media.publish` when observed | One video post in one exact confirmed subreddit. |
 

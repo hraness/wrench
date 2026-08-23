@@ -208,8 +208,8 @@ export const META_WEB_OPERATIONS = Object.freeze({
     ),
     "posts.publish": observedMutation(
       "R3",
-      "reviewed live single-PNG upload with synchronous 200 completion, exact minimal configure_text_post_app_feed created-locator binding, durable response-bound post identity plus completed-upload dimensions, and independent exact permalink actor/text/image readback",
-      4,
+      "reviewed live configure_text_post_app_feed create with optional single-PNG upload, exact minimal created-locator binding, durable response-bound post identity plus completed-upload dimensions when an image is supplied, and independent exact permalink actor/text and optional image readback",
+      5,
     ),
     "media.publish": observedMutation(
       "R3",
@@ -1931,7 +1931,7 @@ export function normalizeThreadsPostHtml(
   expectedCode: string,
   expectedUrl: string,
   expectedCaption: string,
-  expectedImage: Readonly<{ readonly height: number; readonly width: number }>,
+  expectedImage: Readonly<{ readonly height: number; readonly width: number }> | null,
 ): ThreadsPostProjection {
   if (!/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(expectedPostId)) {
     throw new Error("Threads readback expected post ID is invalid");
@@ -1970,21 +1970,28 @@ export function normalizeThreadsPostHtml(
     ) return;
     const projected = projectThreadsPublishPost(value, "Threads post readback");
     const user = isRecord(projected.user) ? projected.user : null;
+    const imageMatches = expectedImage === null
+      ? projected.image === null
+      : projected.image !== null
+        && projected.image.mediaId === expectedPostId
+        && projected.image.width === expectedImage.width
+        && projected.image.height === expectedImage.height;
     if (
       projected.caption === expectedCaption
       && projected.code === expectedCode
       && projected.canonical_url === locator.href
       && user?.id === viewerId
-      && projected.image !== null
-      && projected.image.mediaId === expectedPostId
-      && projected.image.width === expectedImage.width
-      && projected.image.height === expectedImage.height
+      && imageMatches
     ) {
       matches.push(projected);
     }
   });
   if (matches.length < 1) {
-    throw new Error("Threads post readback did not bind the confirmed actor, ID, code, permalink, text, and image");
+    throw new Error(
+      expectedImage === null
+        ? "Threads post readback did not bind the confirmed actor, ID, code, permalink, and text"
+        : "Threads post readback did not bind the confirmed actor, ID, code, permalink, text, and image",
+    );
   }
   if (matches.length !== 1) {
     throw new Error("Threads post readback returned an ambiguous exact post");
@@ -2883,7 +2890,7 @@ export const metaWebEvidenceSnapshot = Object.freeze({
     threads: Object.freeze({
       viewer: "GET / HTML BarcelonaSessionInfo plus Relay viewer.user.id",
       feed: "GET / signed-in first-page Relay feedData preload without cursor continuation",
-      publishImage: "POST one PNG to the exact rupload entity with synchronous 200 completion, POST configure_text_post_app_feed with exact actor/text/image response binding, then GET the exact returned permalink for independent image readback",
+      publishImage: "POST configure_text_post_app_feed with exact created-locator response binding after optional PNG rupload; when an image is supplied, require synchronous 200 upload completion and completed-upload dimensions; then GET the exact returned permalink for independent actor/text and optional image readback",
       publishVideo: "POST one MP4 to the exact rupload_igvideo entity with synchronous 200 completion and exact dimensions, POST configure_text_post_app_feed with exact actor/text/video locator binding, then GET the exact returned permalink for independent video readback",
     }),
     facebook: Object.freeze({

@@ -92,7 +92,7 @@ const historicalVersions = Object.freeze({
   }),
   threads: Object.freeze({
     "feeds.read": Object.freeze([1]),
-    "posts.publish": Object.freeze([1, 2, 3]),
+    "posts.publish": Object.freeze([1, 2, 3, 4]),
   }),
   facebook: Object.freeze({
     "feeds.read": Object.freeze([1]),
@@ -112,7 +112,7 @@ const historicalVersions = Object.freeze({
 
 const contractSemanticIdentities = Object.freeze({
   instagram: "3e2f5a7d655030588754ffe64141f4108e76c57f227fe903549ba192f1735c68",
-  threads: "435efcfab30a01e32d0b12caba7740ef17ef166b99e608d48f9d0abad98a20c2",
+  threads: "04b95f200d512ef150043986fea9a106a401c5b7a2ba501cd454983edcacb00a",
   facebook: "f4724c9619794070da784d03fdaef5889cc4f3d237f9f402e9d5a53f7c156184",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
   "facebook-group": "30717a546b60658ecc2e199a14babb4fa2b46afd1e8d9113044a1b7afda3d376",
@@ -184,7 +184,7 @@ export const metaWebPlugin = defineProviderPlugin({
           const readback = await runtime.readThreadsWebPublishedMutationTarget({
             site: "threads",
             action: operation,
-            contractVersion: operation === "posts.publish" ? 4 : 1,
+            contractVersion: operation === "posts.publish" ? 5 : 1,
             timeoutMs: 60_000,
             maxOutputBytes: 2 * 1024 * 1024,
           }, input, auth, context.target.identifier);

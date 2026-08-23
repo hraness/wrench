@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Publish exact Threads text through `posts.publish@5` without requiring a
+  PNG, while preserving optional PNG publication and exact permalink readback.
+
 ## 0.13.1 - 2026-08-23
 
 - Keep Beeper account selector aliases internal while returning plain,
