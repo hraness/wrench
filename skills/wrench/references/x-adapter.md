@@ -177,12 +177,19 @@ Current `x-client-transaction-id` generation is code-owned: wrench resolves the 
 
 `likes.set` and `content.save` (`R2`) bind the exact account and post, select only the matching create/delete mutation for the confirmed desired state, validate the operation-specific `Done` response, and independently read the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. `articles.draft.save` is the separate observed private structured-text-and-inline-image contract above.
 
-`posts.publish@3` is the separate observed R3 post contract. It accepts exact
-text and at most one plan-bound PNG, binds the account and uploaded media ID,
+`posts.publish@4` is the separate observed R3 post contract. It accepts exact
+text and at most one plan-bound PNG or MP4, binds the account and uploaded media ID,
 admits one CreateTweet dispatch, durably retains the response-bound post/media
 target before readback, and polls only that exact post through
 TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
 Article publishing remain capture-required.
+
+CreateTweet sends empty `semantic_annotation_ids` and no AI or
+content-disclosure field. The reviewed GraphQL contract has no
+`made_with_ai` or `content_disclosure` input; do not invent one. Official
+OAuth `x` `posts.publish` exposes optional `made_with_ai` and sends `true`
+only when the caller explicitly asks. Leave that field unset or `false` for
+user-supplied cross-post copy. See [X AI disclosure](x-ai-disclosure.md).
 
 Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.
 

@@ -5,7 +5,7 @@ Use this as routing guidance only. Always inspect `wrench capabilities <adapter>
 | Surface | Candidate adapter | Signed-in realm | Reference post shape | Meaning |
 | --- | --- | --- | --- | --- |
 | X | `x-web` | Browser cookies/profile | `body`; optional image fields when exposed | Consumer X post |
-| X | `x` | Official OAuth | `body`, optional `media` and aligned alt-text fields | Documented API post |
+| X | `x` | Official OAuth | `body`, optional `media` and aligned alt-text fields; leave `made_with_ai` unset or `false` for user-supplied cross-post copy | Documented API post |
 | LinkedIn | `linkedin-web` | Browser cookies/profile | `body`, `visibility`, optional image and accessibility fields | Member or explicitly bound organization post |
 | LinkedIn | `linkedin` | Official OAuth | Inspect installed schema | Documented API post |
 | Bluesky | `bluesky-web` | Profile-backed Bluesky web session | `body`, optional image, media type, and alt text | AT Protocol feed post |
@@ -29,6 +29,8 @@ unless their installed canonical capability independently says otherwise.
 - Preserve input image order. Require alt-text arrays to align one-to-one when the schema exposes them.
 - Re-check capabilities before every new preview. A plan or run remains governed by its bound contract identity when installed support later changes.
 - A provider may reject an otherwise valid image for dimensions, animation, color profile, or account entitlement. Report that provider-owned failure without converting the file unless the user asks for a derivative.
+- For user-supplied cross-post copy, never mark the package as AI-generated. Follow [X AI disclosure](x-ai-disclosure.md). Leave official `x` `made_with_ai` unset or `false`. `x-web` `posts.publish` has no such input field.
+- Prefer a Wrench transport over the X composer. If the user explicitly requested a composer fallback, require Content disclosure Made with AI OFF before Post, then open the live permalink. A sparkle label means that target failed.
 
 ## Common invocation shape
 
