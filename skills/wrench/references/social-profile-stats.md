@@ -47,6 +47,15 @@ auth locator is an error.
 
 Keep the two X calls sequential, both LinkedIn calls sequential, and both
 Substack calls sequential because each pair shares one authenticated realm.
+`linkedin-chrome` must be a path-backed `browser-profile` locator over a
+private dormant Chrome snapshot, optionally overlaid with current filtered
+cookies from the selected Chrome profile. A cookie-source-only LinkedIn realm
+is not an acceptable scheduled fallback because LinkedIn invalidates the
+exported session outside its browser/device context. Before the initial
+snapshot, or after a contained identity preflight returns 401, load LinkedIn
+normally in the source Chrome profile, confirm the session is current, fully
+quit Chrome, and replace the dormant snapshot. A filtered cookie overlay does
+not revive a stale source session.
 Leave a 60-second idle interval after the LinkedIn personal read before the
 company read; current live evidence shows shorter intervals can trigger a
 temporary identity-preflight redirect even when the realm remains correctly

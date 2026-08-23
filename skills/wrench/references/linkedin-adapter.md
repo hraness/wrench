@@ -1,7 +1,10 @@
 # LinkedIn authenticated web API adapter
 
-The current `linkedin-web` schema-v4 adapter has two observed operations:
-`articles.draft.save@7` and `posts.publish@3`. The draft operation creates or replaces one private native Article
+The current `linkedin-web` schema-v4 adapter has four observed operations:
+`profiles.read@1`, `organizations.read@1`, `articles.draft.save@7`, and
+`posts.publish@3`. The two profile-stat operations bind the current member,
+then read one exact self profile or requested organization Page without DOM
+automation. The draft operation creates or replaces one private native Article
 draft for the bound current member, supports paragraphs, H1/H2 headings, native blockquotes,
 native HTTPS links, one distinct banner cover, and ordered inline images with
 required alt text and optional captions, and independently verifies the exact unpublished result
@@ -50,17 +53,40 @@ The separate `linkedin` adapter uses LinkedIn's documented OAuth API for approve
 
 ## Configure the signed-in realm
 
-Prefer target-filtered Arc or Chrome cookies:
+LinkedIn currently rejects exported session cookies outside their browser
+context. Configure profile statistics with a path-backed, dormant Chrome
+profile and the exact Chrome executable. A filtered cookie source may overlay
+fresh origin-scoped cookies when the source browser is running:
 
 ```sh
-wrench auth add linkedin-main --cookie-source arc --cookie-profile "Profile 2"
+wrench auth add linkedin-main \
+  --browser-profile /absolute/private/chrome-snapshot/Default \
+  --browser-executable "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --trust-profile-egress \
+  --cookie-source chrome \
+  --cookie-profile "Profile 2"
 wrench auth bind linkedin-main --site linkedin
 wrench auth list --json
 ```
 
-Use a private profile snapshot only when current browser storage or first-party assets are required for bootstrap. Never attach the runtime operation to a live inbox tab and never copy LinkedIn session material into an OAuth token document.
+The profile path grants its contained page scripts unfiltered public-host
+egress and may contain every signed-in session in that browser profile. Keep it
+private, outside the repository, and use it only with the user's informed
+authority. Wrench refuses to clone an active Chromium user-data root. For a
+scheduled realm, first load LinkedIn normally in the selected source profile
+and confirm that its first-party session is current. Fully quit Chrome, take
+one private snapshot, then point the auth locator at that dormant snapshot and
+use the filtered cookie overlay for current session values. The overlay can
+refresh valid cookies, but it cannot revive a source session that LinkedIn
+already rejects with 401. Never attach the runtime operation to a live inbox
+tab or copy LinkedIn session material into an OAuth token document.
 
-Bind `linkedin-main` to one stable current member/person identity before private reads or mutations. If organization operations are later added, bind the selected organization actor separately and prove that the current member can act for it. Reject account ambiguity, login changes, request-actor mismatch, and response-actor mismatch before dispatch.
+Bind `linkedin-main` to one stable current member/person identity before private
+reads or mutations. The observed organization Page read remains a
+member-authenticated view and does not select an organization actor. A future
+organization mutation must bind that actor separately and prove that the
+current member can act for it. Reject account ambiguity, login changes,
+request-actor mismatch, and response-actor mismatch before dispatch.
 
 The retained candidate parser derives a mailbox only when the current-account
 response directly names one bounded `miniProfile` reference and exactly one
@@ -68,25 +94,29 @@ included entity binds that reference to the same numeric member subject. It
 does not scan other included profile entities as a fallback. Missing,
 unbound, conflicting, or ambiguous direct bindings fail.
 
-The client can strictly review a short-lived `__cf_bm` edge-cookie
+The standalone client can strictly review a short-lived `__cf_bm` edge-cookie
 rotation: it accepts only that name, validates origin, attributes, expiry, and
 deletion semantics, and binds the encrypted cache to the auth-locator hash.
-Removing the auth locator removes that cache. Only the observed Article draft
-operation may cross the execution boundary; every capture-required operation
-still refuses before this client is created.
+Removing the auth locator removes that cache. Profile-backed statistics do not
+export their session into that standalone client. Only the four observed
+operations may cross the execution boundary; every capture-required operation
+still refuses before its provider client is created.
 
 Verification on July 23, 2026 produced a durable projection-drift failure and
 every available LinkedIn realm returned `401` at current-account preflight.
-Reauthentication alone does not re-promote the contract; a fresh low-stakes
-capture must also prove the current identity, mailbox, query, response
+That remains negative evidence for the independently capture-required inbox
+contracts, not a demotion of the separately observed profile and Page reads.
+Reauthentication alone does not promote an inbox contract; a fresh low-stakes
+capture must also prove its current identity, mailbox, query, response
 projection, and completeness semantics.
 
 ## Recapture inbox listing
 
 `messaging.list` is a capture-required reservation. Version 1.1.0 remains
 archived as historical evidence of the formerly observed bundle; version
-1.2.0 first demoted it, and the current 1.7.0 bundle remains capture-required
-and cannot execute. The intended folder input still reserves:
+1.2.0 first demoted it, and version 1.7.0 preserves that unavailable contract
+history. The current bundle remains capture-required and cannot execute. The
+intended folder input still reserves:
 
 - `focused` for the main inbox;
 - `other` for the additional inbox;
@@ -117,23 +147,43 @@ use only a reviewed message query and must not mark it read.
 
 ## Profiles, organization Pages, and connections
 
-The adapter reserves four bounded semantic operations without claiming that
-their internal requests are known:
+`profiles.read@1` is an observed R1 read for one exact signed-in self profile
+URL. It binds the current member to the requested public slug and projects the
+exact follower count. When `include_connections` is true, it also reads the
+exact private My Network connection total in the same ordered browser
+transport. `organizations.read@1` is an observed R1 read for one exact company
+Page URL. It binds the requested company record and its matching following
+state before projecting the exact follower count. Viewing a Page does not
+confer Page-actor authority.
 
-- `profiles.read` selects one exact public profile identifier or provider
-  profile URN;
-- `organizations.read` selects one exact organization public identifier or
-  organization URN and means viewing that LinkedIn Page, not acting as it;
-- `relationships.recommendations.read` selects the `all` recommended-connections
-  surface and one bounded page;
-- `relationships.connect` sends one confirmed invitation to an exact profile
-  URN, with an optional note of at most 300 characters.
+For a path-backed auth realm, Wrench starts a task-private contained clone and
+uses the browser path before any standalone cookie preflight. One code-owned
+evaluation derives the reviewed CSRF header from the unique `JSESSIONID` and
+performs exact `GET /voyager/api/me`. After binding that response to the auth
+subject and requested self slug, it reads the exact profile response and, when
+requested, the private connections response in order. The organization branch
+instead reads only the exact requested Page after the same member binding.
+Every response is bounded, same-origin, exact-route, status- and media-type
+checked before projection. Login, checkpoint, redirect, network, cookie,
+identity, target, or response drift fails closed. Wrench does not click or
+inspect LinkedIn DOM, expose a caller-selected selector or script, follow a
+redirect, or retry after an arbitrary browser failure. It closes the contained
+browser and verifies cleanup after success or failure.
 
-All four are `capture-required`. The three reads are R1; the invitation is R3
-with a 24-hour local-at-most-once window. Their presence in `wrench
-capabilities` makes the CLI shape reviewable and stable while guaranteeing that
-no request runs before a managed HAR proves the exact request, viewer scope,
-target, response, paging, completeness, and duplicate-state behavior.
+Live evidence on August 23, 2026 showed that LinkedIn returned deletion
+cookies for a valid `li_at` when the same Chrome session was replayed through a
+standalone client, even with Chrome's normal request headers. A cookie-only
+realm is therefore not the scheduled profile-stat transport. The path-backed
+browser branch preserves the browser/device context while still keeping the
+operation fixed and target-bound.
+
+`relationships.recommendations.read` and `relationships.connect` remain
+`capture-required`. The former reserves one bounded R1 page from the `all`
+recommended-connections surface. The latter reserves one R3 invitation to an
+exact profile URN, with an optional note of at most 300 characters and a
+24-hour local-at-most-once window. Neither performs a request before a managed
+HAR proves its exact request, viewer scope, target, response, paging,
+completeness, and duplicate-state behavior.
 
 Do not treat `organizations.read` as organization-actor authority. A future
 Page-authored post or comment must separately bind the current member, selected
@@ -251,7 +301,7 @@ Keep query IDs, CSRF material, cookies, variables, feature sets, and private ide
 
 The current registry keeps these unavailable until their exact first-party exchanges are captured and reviewed:
 
-- `feeds.read`, `profiles.read`, `organizations.read`, `relationships.recommendations.read`, `messaging.list`, `messaging.read`, `posts.read`, `comments.read`, and `articles.read` (`R1`);
+- `feeds.read`, `relationships.recommendations.read`, `messaging.list`, `messaging.read`, `posts.read`, `comments.read`, and `articles.read` (`R1`);
 - `messaging.send` (`R3`);
 - `posts.repost` and `posts.quote` (`R3`);
 - `comments.create` and `replies.create` (`R3`);
