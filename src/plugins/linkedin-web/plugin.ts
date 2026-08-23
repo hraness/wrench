@@ -290,7 +290,7 @@ const operations = Object.freeze([
 export const linkedinWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "linkedin-web",
-  version: "1.3.0",
+  version: "1.4.0",
   displayName: "LinkedIn Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [

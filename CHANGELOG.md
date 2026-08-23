@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.13.2 - 2026-08-23
 
 - Publish exact Threads text through `posts.publish@5` without requiring a
   PNG, while preserving optional PNG publication and exact permalink readback.
+- Restore exact LinkedIn personal and organization profile reads from a
+  path-backed signed-in Chrome realm. Wrench clones the dormant profile into a
+  private contained session, binds the current member before either target
+  read, keeps personal profile and connection reads sequential, and finalizes
+  the browser's private artifacts after every result.
 
 ## 0.13.1 - 2026-08-23
 

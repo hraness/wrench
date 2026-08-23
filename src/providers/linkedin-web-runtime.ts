@@ -27,6 +27,7 @@ import {
   type SessionSecretSnapshot,
   type SessionSecretWriteResult,
 } from "../session-secrets";
+import { OperationDeadline } from "../operation-deadline";
 import {
   createWebSessionClient,
   webSessionAuthSubject,
@@ -699,6 +700,38 @@ export async function probeLinkedInWebSubject(
     readonly signal?: AbortSignal;
   } = {},
 ): Promise<string> {
+  if (auth.kind === "browser-profile") {
+    const timeoutMs = options.timeoutMs ?? 60_000;
+    const deadline = new OperationDeadline(timeoutMs, {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    const createTransport = options.dependencies?.createProfileBrowserTransport
+      ?? createLinkedInProfileBrowserTransport;
+    let transport: LinkedInProfileBrowserTransport | null = null;
+    try {
+      deadline.throwIfUnavailable("authenticated web subject probe");
+      transport = await deadline.run(
+        () => createTransport(auth, {
+          timeoutMs,
+          maxOutputBytes: MAX_SUBJECT_BYTES,
+          operationDeadline: deadline,
+        }),
+        "authenticated web subject probe",
+      );
+      return identityFromMeResponse(
+        await deadline.run(
+          () => transport!.currentIdentityResponse(),
+          "authenticated web subject probe",
+        ),
+      ).subject;
+    } finally {
+      try {
+        await transport?.close();
+      } finally {
+        deadline.dispose();
+      }
+    }
+  }
   const client = await createLinkedInClient(
     auth,
     options.timeoutMs ?? 60_000,
@@ -814,19 +847,14 @@ async function executeLinkedInPersonalProfileRead(
   if (typeof includeConnections !== "boolean") {
     throw new Error("input.include_connections must be boolean");
   }
-  let requestStage = "signed-in identity preflight";
+  let requestStage = auth.kind === "browser-profile"
+    ? "contained-browser signed-in identity preflight"
+    : "signed-in identity preflight";
   let browserTransport: LinkedInProfileBrowserTransport | null = null;
   try {
-    const client = await createLinkedInClient(auth, recipe.timeoutMs, options.dependencies, options);
-    const csrf = linkedInCsrfTokenFromJSessionId(
-      webSessionCookie(client.cookies, "JSESSIONID"),
-    );
+    let client: WebSessionClient | null = null;
     let identity: LinkedInCurrentIdentity;
-    try {
-      identity = await currentIdentity(client, csrf);
-    } catch (error) {
-      if (!linkedInCurrentIdentityAllowsBrowserFallback(error)) throw error;
-      requestStage = "contained-browser signed-in identity preflight";
+    if (auth.kind === "browser-profile") {
       browserTransport = await createLinkedInStatsBrowserTransport(
         auth,
         recipe,
@@ -835,6 +863,25 @@ async function executeLinkedInPersonalProfileRead(
       identity = identityFromMeResponse(
         await browserTransport.currentIdentityResponse(),
       );
+    } else {
+      client = await createLinkedInClient(auth, recipe.timeoutMs, options.dependencies, options);
+      const csrf = linkedInCsrfTokenFromJSessionId(
+        webSessionCookie(client.cookies, "JSESSIONID"),
+      );
+      try {
+        identity = await currentIdentity(client, csrf);
+      } catch (error) {
+        if (!linkedInCurrentIdentityAllowsBrowserFallback(error)) throw error;
+        requestStage = "contained-browser signed-in identity preflight";
+        browserTransport = await createLinkedInStatsBrowserTransport(
+          auth,
+          recipe,
+          options,
+        );
+        identity = identityFromMeResponse(
+          await browserTransport.currentIdentityResponse(),
+        );
+      }
     }
     const subject = boundLinkedInStatsIdentity(auth, identity);
     if (identity.publicIdentifier === null) {
@@ -850,29 +897,36 @@ async function executeLinkedInPersonalProfileRead(
     requestStage = browserTransport === null
       ? "public self-profile page read"
       : "contained-browser public self-profile page read";
-    const profileHtml = browserTransport === null
-      ? await client.requestText({
-          url: new URL(target.url),
-          method: "GET",
-          headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
-          expectedContentTypes: ["text/html"],
-          maxBytes: recipe.maxOutputBytes,
-        })
-      : await browserTransport.readProfileHtml(target.url);
+    let profileHtml: string;
+    if (browserTransport !== null) {
+      profileHtml = await browserTransport.readProfileHtml(target.url);
+    } else {
+      if (client === null) throw new Error("LinkedIn direct stats client is unavailable");
+      profileHtml = await client.requestText({
+        url: new URL(target.url),
+        method: "GET",
+        headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
+        expectedContentTypes: ["text/html"],
+        maxBytes: recipe.maxOutputBytes,
+      });
+    }
     let connectionsHtml: string | null = null;
     if (includeConnections) {
       requestStage = browserTransport === null
         ? "private My Network connections page read"
         : "contained-browser private My Network connections page read";
-      connectionsHtml = browserTransport === null
-        ? await client.requestText({
-            url: new URL(`${LINKEDIN_ORIGIN}/mynetwork/invite-connect/connections/`),
-            method: "GET",
-            headers: linkedInHtmlHeaders(target.url),
-            expectedContentTypes: ["text/html"],
-            maxBytes: recipe.maxOutputBytes,
-          })
-        : await browserTransport.readConnectionsHtml(target.url);
+      if (browserTransport !== null) {
+        connectionsHtml = await browserTransport.readConnectionsHtml(target.url);
+      } else {
+        if (client === null) throw new Error("LinkedIn direct stats client is unavailable");
+        connectionsHtml = await client.requestText({
+          url: new URL(`${LINKEDIN_ORIGIN}/mynetwork/invite-connect/connections/`),
+          method: "GET",
+          headers: linkedInHtmlHeaders(target.url),
+          expectedContentTypes: ["text/html"],
+          maxBytes: recipe.maxOutputBytes,
+        });
+      }
     }
     requestStage = "exact metric projection";
     const output = projectLinkedInPersonalProfileStats({
@@ -912,19 +966,14 @@ async function executeLinkedInOrganizationRead(
   options: LinkedInWebExecutionOptions,
 ): Promise<WebSessionExecution> {
   const target = linkedInOrganizationTarget(input.organization_url);
-  let requestStage = "signed-in identity preflight";
+  let requestStage = auth.kind === "browser-profile"
+    ? "contained-browser signed-in identity preflight"
+    : "signed-in identity preflight";
   let browserTransport: LinkedInProfileBrowserTransport | null = null;
   try {
-    const client = await createLinkedInClient(auth, recipe.timeoutMs, options.dependencies, options);
-    const csrf = linkedInCsrfTokenFromJSessionId(
-      webSessionCookie(client.cookies, "JSESSIONID"),
-    );
+    let client: WebSessionClient | null = null;
     let identity: LinkedInCurrentIdentity;
-    try {
-      identity = await currentIdentity(client, csrf);
-    } catch (error) {
-      if (!linkedInCurrentIdentityAllowsBrowserFallback(error)) throw error;
-      requestStage = "contained-browser signed-in identity preflight";
+    if (auth.kind === "browser-profile") {
       browserTransport = await createLinkedInStatsBrowserTransport(
         auth,
         recipe,
@@ -933,20 +982,43 @@ async function executeLinkedInOrganizationRead(
       identity = identityFromMeResponse(
         await browserTransport.currentIdentityResponse(),
       );
+    } else {
+      client = await createLinkedInClient(auth, recipe.timeoutMs, options.dependencies, options);
+      const csrf = linkedInCsrfTokenFromJSessionId(
+        webSessionCookie(client.cookies, "JSESSIONID"),
+      );
+      try {
+        identity = await currentIdentity(client, csrf);
+      } catch (error) {
+        if (!linkedInCurrentIdentityAllowsBrowserFallback(error)) throw error;
+        requestStage = "contained-browser signed-in identity preflight";
+        browserTransport = await createLinkedInStatsBrowserTransport(
+          auth,
+          recipe,
+          options,
+        );
+        identity = identityFromMeResponse(
+          await browserTransport.currentIdentityResponse(),
+        );
+      }
     }
     boundLinkedInStatsIdentity(auth, identity);
     requestStage = browserTransport === null
       ? "public company page read"
       : "contained-browser public company page read";
-    const html = browserTransport === null
-      ? await client.requestText({
-          url: new URL(target.url),
-          method: "GET",
-          headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
-          expectedContentTypes: ["text/html"],
-          maxBytes: recipe.maxOutputBytes,
-        })
-      : await browserTransport.readOrganizationHtml(target.url);
+    let html: string;
+    if (browserTransport !== null) {
+      html = await browserTransport.readOrganizationHtml(target.url);
+    } else {
+      if (client === null) throw new Error("LinkedIn direct stats client is unavailable");
+      html = await client.requestText({
+        url: new URL(target.url),
+        method: "GET",
+        headers: linkedInHtmlHeaders(`${LINKEDIN_ORIGIN}/feed/`),
+        expectedContentTypes: ["text/html"],
+        maxBytes: recipe.maxOutputBytes,
+      });
+    }
     requestStage = "exact company metric projection";
     const output = projectLinkedInOrganizationStats({
       html,

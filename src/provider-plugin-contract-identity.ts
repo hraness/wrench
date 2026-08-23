@@ -95,9 +95,10 @@ const identities = Object.freeze({
   },
   "linkedin-web": {
     schemaVersion: 1,
-    pluginVersion: "1.3.0",
-    implementationSha256: "baa96307587140a460e39274dd2f0f0aab8bee125c34c62231038d0401a7e737",
+    pluginVersion: "1.4.0",
+    implementationSha256: "f327a0baca1831436dc98be657c72b52f4e70494ff0e90204ac8c21a17f6a0ea",
     legacyCurrentReadImplementationSha256: [
+      "baa96307587140a460e39274dd2f0f0aab8bee125c34c62231038d0401a7e737",
       "65d95a47f238acf3fac02116a1c671c7a9659dab766bd8081ccf69d4495dccda",
       "dbda2aee2075a0a3726241fd24932113ae6c2d139ae1f7036ea827a335f7344c",
       "9acb34f9ef5f59dd46b249766af236a3876a4975e0797e330f2975b3fd4ed643",
@@ -266,7 +267,7 @@ const identities = Object.freeze({
 } as const satisfies Readonly<Record<string, ReviewedBuiltInContractIdentityV1>>);
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const MAXIMUM_LATER_CURRENT_IDENTITIES = 9;
+const MAXIMUM_LATER_CURRENT_IDENTITIES = 10;
 
 for (const [pluginId, identity] of Object.entries(identities)) {
   if (!SHA256_PATTERN.test(identity.implementationSha256)) {
