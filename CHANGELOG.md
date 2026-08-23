@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Scrub JPEG and PNG provenance before X media upload, and fail closed when
+  CreateTweet or independent TweetResultByRestId readback shows a Made with AI
+  sparkle on user-supplied copy.
+
 ## 0.13.2 - 2026-08-23
 
 - Publish exact Threads text through `posts.publish@5` without requiring a

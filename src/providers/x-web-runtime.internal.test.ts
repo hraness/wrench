@@ -14,6 +14,8 @@ import type { BrowserSession } from "../browser";
 import { canonicalJson } from "../canonical-json";
 import type { WebSessionRecipe } from "../model";
 import type { WebSessionDispatchEvent } from "../web-session";
+import { embedPngChunk, encodePixelsOnlyPng, scrubXUploadImage } from "./x-image-provenance";
+import { X_UNLABELED_COPY_POLICY_ERROR } from "./x-made-with-ai";
 import {
   buildXWebRichArticleContentState,
   executeXWebOperation,
@@ -56,6 +58,7 @@ type CapturedRequest = {
   readonly method: string;
   readonly headers: Headers;
   readonly body: string | null;
+  readonly rawBody: Uint8Array | null;
 };
 
 function strictCookie(name: string, value: string): StrictCookie {
@@ -226,6 +229,7 @@ function createTweetResponse(options: {
   readonly quote?: string | null;
   readonly mediaId?: string | null;
   readonly mediaType?: "photo" | "video";
+  readonly extra?: Readonly<Record<string, unknown>>;
 }): unknown {
   const result = publishedTweetResult(options);
   return {
@@ -246,6 +250,7 @@ function publishedTweetResult(options: {
   readonly quote?: string | null;
   readonly mediaId?: string | null;
   readonly mediaType?: "photo" | "video";
+  readonly extra?: Readonly<Record<string, unknown>>;
 }): unknown {
   const media = options.mediaId === undefined || options.mediaId === null
     ? {}
@@ -266,6 +271,7 @@ function publishedTweetResult(options: {
         : { quoted_status_id_str: options.quote }),
       ...media,
     },
+    ...(options.extra ?? {}),
   };
 }
 
@@ -298,6 +304,11 @@ function dependencies(
       method: init?.method ?? "GET",
       headers: new Headers(init?.headers),
       body: typeof body === "string" ? body : null,
+      rawBody: body instanceof Uint8Array
+        ? body
+        : body instanceof ArrayBuffer
+          ? new Uint8Array(body)
+          : null,
     };
     calls.push(request);
     return handler(request);
@@ -1985,11 +1996,55 @@ describe("X authenticated internal-API runtime", () => {
     expect(videoCalls.every((request) => request.method === "GET")).toBeTrue();
   });
 
+  test("does not reconcile a labeled X post as present", async () => {
+    const calls: CapturedRequest[] = [];
+    const body = "Reconciled labeled X post";
+    const identifier = canonicalJson({ postId: CREATED_POST_ID, mediaId: null });
+    await expect(readXWebPublishedMutationTarget(
+      xRecipe("posts.publish", 3),
+      { body },
+      xAuth,
+      identifier,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({
+              text: body,
+              extra: { made_with_ai: true },
+            }));
+          }
+          throw new Error(`unexpected labeled X reconciliation request ${request.url.href}`);
+        }),
+      },
+    )).rejects.toThrow(X_UNLABELED_COPY_POLICY_ERROR);
+    expect(calls.every((request) => request.method === "GET")).toBeTrue();
+  });
+
   test("uploads one plan-bound PNG before CreateTweet and independently binds the returned photo", async () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-x-publish-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const pixels = encodePixelsOnlyPng({
+      width: 1,
+      height: 1,
+      rgba: Uint8Array.of(12, 34, 56, 255),
+    });
+    const imageBytes = embedPngChunk(
+      pixels,
+      "caBX",
+      Buffer.from("c2pa trainedAlgorithmicMedia digitalSourceType OpenAI", "utf8"),
+    );
+    const scrubbedBytes = scrubXUploadImage(imageBytes, "image/png");
     writeFileSync(imagePath, imageBytes, { mode: 0o600 });
     const body = "Exact X image post";
     const mediaId = "12345";
@@ -2031,7 +2086,7 @@ describe("X authenticated internal-API runtime", () => {
               expect(request.headers.get("x-csrf-token")).toBe("csrf_token_0123456789abcdef");
               const command = request.url.searchParams.get("command");
               if (command === "INIT") {
-                expect(request.url.searchParams.get("total_bytes")).toBe(String(imageBytes.byteLength));
+                expect(request.url.searchParams.get("total_bytes")).toBe(String(scrubbedBytes.byteLength));
                 expect(request.url.searchParams.get("media_type")).toBe("image/png");
                 expect(request.url.searchParams.get("media_category")).toBe("tweet_image");
                 return jsonResponse({
@@ -2047,6 +2102,11 @@ describe("X authenticated internal-API runtime", () => {
                 expect(request.headers.get("content-type")).toMatch(
                   /^multipart\/form-data; boundary=wrench-x-media-[a-f0-9]{32}$/u,
                 );
+                expect(request.rawBody).not.toBeNull();
+                const uploaded = Buffer.from(request.rawBody ?? []);
+                expect(uploaded.includes(Buffer.from("caBX"))).toBeFalse();
+                expect(uploaded.includes(Buffer.from("c2pa"))).toBeFalse();
+                expect(uploaded.includes(Buffer.from(scrubbedBytes))).toBeTrue();
                 return new Response(null, { status: 204 });
               }
               if (command === "FINALIZE") {
@@ -2055,7 +2115,7 @@ describe("X authenticated internal-API runtime", () => {
                   media_id: 12345,
                   media_id_string: mediaId,
                   media_key: `3_${mediaId}`,
-                  size: imageBytes.byteLength,
+                  size: scrubbedBytes.byteLength,
                   image: { h: 1, image_type: "image/png", w: 1 },
                 });
               }
@@ -2093,6 +2153,113 @@ describe("X authenticated internal-API runtime", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("rejects x-web AI disclosure inputs before CreateTweet", async () => {
+    const calls: CapturedRequest[] = [];
+    await expect(executeXWebOperation(
+      xRecipe("posts.publish"),
+      { body: "Exact post", made_with_ai: false },
+      xAuth,
+      { dependencies: dependencies(calls, () => new Response("unused")) },
+    )).rejects.toThrow("made_with_ai is outside the reviewed CreateTweet contract");
+    await expect(executeXWebOperation(
+      xRecipe("posts.publish"),
+      { body: "Exact post", content_disclosure: false },
+      xAuth,
+      { dependencies: dependencies(calls, () => new Response("unused")) },
+    )).rejects.toThrow("content_disclosure is outside the reviewed CreateTweet contract");
+    await expect(executeXWebOperation(
+      xRecipe("posts.publish"),
+      { body: "Exact post", semantic_annotation_ids: ["ai-label"] },
+      xAuth,
+      { dependencies: dependencies(calls, () => new Response("unused")) },
+    )).rejects.toThrow("semantic_annotation_ids is outside the reviewed CreateTweet contract");
+    expect(calls).toEqual([]);
+  });
+
+  test("fails closed when independent TweetResultByRestId readback shows Made with AI", async () => {
+    const calls: CapturedRequest[] = [];
+    const body = "Exact unlabeled copy";
+    const result = await executeXWebOperation(
+      xRecipe("posts.publish"),
+      { body },
+      xAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/CreateTweet")) {
+            return jsonResponse(createTweetResponse({ text: body }));
+          }
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({
+              text: body,
+              extra: { content_disclosure: { label: "Made with AI" } },
+            }));
+          }
+          throw new Error(`unexpected labeled X readback request ${request.url.href}`);
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+      error: X_UNLABELED_COPY_POLICY_ERROR,
+      output: { posts: [{ id: CREATED_POST_ID, url: `https://x.com/i/status/${CREATED_POST_ID}` }] },
+    });
+    expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeTrue();
+    expect(calls.some((call) => call.url.pathname.endsWith("/TweetResultByRestId"))).toBeTrue();
+  });
+
+  test("fails closed when CreateTweet itself returns the sparkle disclosure", async () => {
+    const calls: CapturedRequest[] = [];
+    const body = "Exact unlabeled copy";
+    const result = await executeXWebOperation(
+      xRecipe("posts.publish"),
+      { body },
+      xAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/CreateTweet")) {
+            return jsonResponse(createTweetResponse({
+              text: body,
+              extra: { tweet_interstitial: { text: { text: "Made with AI" } } },
+            }));
+          }
+          throw new Error(`unexpected labeled CreateTweet follow-up ${request.url.href}`);
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+      error: X_UNLABELED_COPY_POLICY_ERROR,
+      output: { posts: [{ id: CREATED_POST_ID, url: `https://x.com/i/status/${CREATED_POST_ID}` }] },
+    });
+    expect(calls.some((call) => call.url.pathname.endsWith("/TweetResultByRestId"))).toBeFalse();
   });
 
   test("uploads one plan-bound MP4, polls STATUS, then independently binds the returned video", async () => {
@@ -2339,7 +2506,11 @@ describe("X authenticated internal-API runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "wrench-x-upload-failure-"));
     chmodSync(root, 0o700);
     const imagePath = join(root, "fixture.png");
-    writeFileSync(imagePath, new Uint8Array([137, 80, 78, 71]), { mode: 0o600 });
+    writeFileSync(imagePath, encodePixelsOnlyPng({
+      width: 1,
+      height: 1,
+      rgba: Uint8Array.of(1, 2, 3, 255),
+    }), { mode: 0o600 });
     const calls: CapturedRequest[] = [];
     let admissions = 0;
     try {

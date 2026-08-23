@@ -111,6 +111,9 @@ async function verifyPackagedSkill(consumer: string): Promise<void> {
     "live permalink",
     "the publish failed",
     "Do not delete or repost unless the user asks",
+    "pixels-only",
+    "caBX",
+    "locked",
   ] as const) {
     if (!disclosure.includes(required)) {
       throw new Error(

@@ -39,6 +39,12 @@ import {
   type WebSessionOperationDeadline,
   type WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
+import { scrubXUploadImage } from "./x-image-provenance";
+import {
+  rejectXTweetMadeWithAiLabel,
+  X_UNLABELED_COPY_POLICY_ERROR,
+  XUnlabeledCopyPolicyError,
+} from "./x-made-with-ai";
 import {
   generateXClientTransactionId,
   type XTransactionBrowserDependencies,
@@ -1366,8 +1372,9 @@ async function readBoundXMedia(
       || after.size !== before.size
       || bytes.byteLength !== before.size
     ) throw new Error("X media changed while it was materialized");
+    const materialized = new Uint8Array(bytes);
     return Object.freeze({
-      bytes: new Uint8Array(bytes),
+      bytes: mediaType === "image/png" ? scrubXUploadImage(materialized, "image/png") : materialized,
       mediaType,
     });
   } finally {
@@ -2080,7 +2087,9 @@ function assertTweetBinding(
     (expectedMediaId === null && mediaIds.length !== 0)
     || (expectedMediaId !== null && (mediaIds.length !== 1 || mediaIds[0] !== expectedMediaId))
   ) throw new Error("X created post response did not bind the confirmed media upload");
-  return { id, url: `${X_ORIGIN}/i/status/${id}` };
+  const bound = { id, url: `${X_ORIGIN}/i/status/${id}` };
+  rejectXTweetMadeWithAiLabel(result, bound);
+  return bound;
 }
 
 function createdTweet(
@@ -2678,6 +2687,11 @@ async function publishOne(
 }
 
 function rejectUnsupportedPostBranches(input: OperationInput): void {
+  for (const field of ["made_with_ai", "content_disclosure", "ai_generated_disclosure", "semantic_annotation_ids"] as const) {
+    if (input[field] !== undefined) {
+      throw new Error(`X posts.publish ${field} is outside the reviewed CreateTweet contract`);
+    }
+  }
   if (input.root_media !== undefined) {
     throw new Error("X internal root_media upload requires a separately reviewed thread contract");
   }
@@ -2796,7 +2810,18 @@ async function executePublish(
       dispatchStarted: started > 0,
       dispatch: { planned, started, verified },
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof XUnlabeledCopyPolicyError) {
+      const labeled = error.post === undefined ? posts : [...posts, error.post];
+      return {
+        status: "indeterminate",
+        output: labeled.length === 0 ? null : { posts: labeled },
+        finalUrl: error.post?.url ?? posts.at(-1)?.url ?? null,
+        dispatchStarted: started > 0,
+        dispatch: { planned, started, verified },
+        error: X_UNLABELED_COPY_POLICY_ERROR,
+      };
+    }
     const status = started > verified ? "indeterminate" : verified > 0 ? "partial" : "failed";
     return {
       status,
@@ -3141,6 +3166,14 @@ export async function executeXWebOperation(
     readonly dependencies?: XWebRuntimeDependencies;
   } = {},
 ): Promise<WebSessionExecution> {
+  if (
+    recipe.action === "posts.publish"
+    || recipe.action === "threads.publish"
+    || recipe.action === "replies.create"
+    || recipe.action === "posts.quote"
+  ) {
+    rejectUnsupportedPostBranches(input);
+  }
   const bootstrap = await bootstrapX(
     auth,
     recipe,

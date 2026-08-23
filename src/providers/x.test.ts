@@ -17,6 +17,8 @@ import type { ProviderContract } from "../provider-contract-definitions";
 import { xProviderContractDefinitions } from "../provider-contract-definitions-x";
 import { ProviderHttpClient, type OAuthTokenAuth, type ProviderFetch } from "../provider-http";
 import { executeXProvider } from "./x";
+import { embedPngChunk, encodePixelsOnlyPng, minimalPngBytes, scrubXUploadImage } from "./x-image-provenance";
+import { X_UNLABELED_COPY_POLICY_ERROR } from "./x-made-with-ai";
 
 type XAction = (typeof xProviderContractDefinitions)[number]["operation"];
 
@@ -1210,7 +1212,7 @@ describe("official X media and failure bounds", () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-image-unlabeled-"));
     try {
       const path = join(directory, "image.png");
-      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path, minimalPngBytes());
       const file = fixtureFile(path, "image/png");
       for (const madeWithAi of [undefined, false] as const) {
         const captured = captureFetch([
@@ -1236,11 +1238,53 @@ describe("official X media and failure bounds", () => {
     }
   });
 
+  test("scrubs C2PA PNG provenance before official media upload and fails a labeled create", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wrench-x-image-scrub-"));
+    try {
+      const path = join(directory, "image.png");
+      const tainted = embedPngChunk(
+        encodePixelsOnlyPng({
+          width: 1,
+          height: 1,
+          rgba: Uint8Array.of(9, 8, 7, 255),
+        }),
+        "caBX",
+        Buffer.from("c2pa trainedAlgorithmicMedia", "utf8"),
+      );
+      const scrubbed = scrubXUploadImage(tainted, "image/png");
+      writeFileSync(path, tainted);
+      const file = fixtureFile(path, "image/png");
+      const captured = captureFetch([
+        json({ data: { id: "42", username: "me" } }),
+        json({ data: { id: "961", media_key: "3_961" } }),
+        json({ data: { id: "962", text: "scrubbed", made_with_ai: true } }, 201),
+      ]);
+      const harness = createHarness("posts.publish", {
+        body: "scrubbed",
+        media: [{ kind: "file", reference: "test-fixture" }],
+      }, captured.fetch, { files: { media: [file] }, subject: "42" });
+
+      await expectRejectedWith(executeXProvider(harness.context), X_UNLABELED_COPY_POLICY_ERROR);
+
+      const multipart = requestMultipartText(captured.requests[1] as RequestCapture);
+      expect(multipart).not.toContain("caBX");
+      expect(multipart).not.toContain("c2pa");
+      expect(Buffer.from(multipart, "latin1").includes(Buffer.from(scrubbed))).toBeTrue();
+      expect(captured.requests.map((request) => request.url.pathname)).toEqual([
+        "/2/users/me",
+        "/2/media/upload",
+        "/2/tweets",
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("uploads static images once, requests media.write, and never leaks local filenames", async () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-image-"));
     try {
       const path = join(directory, "private-user-photo.png");
-      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path, minimalPngBytes());
       const file = fixtureFile(path, "image/png");
       const captured = captureFetch([
         json({ data: { id: "42", username: "me" } }),
@@ -1289,7 +1333,7 @@ describe("official X media and failure bounds", () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-image-poll-"));
     try {
       const path = join(directory, "image.png");
-      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path, minimalPngBytes());
       const file = fixtureFile(path, "image/png");
       const captured = captureFetch([
         json({ data: { id: "42", username: "me" } }),
@@ -1321,7 +1365,7 @@ describe("official X media and failure bounds", () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-processing-state-"));
     try {
       const path = join(directory, "image.png");
-      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path, minimalPngBytes());
       const file = fixtureFile(path, "image/png");
       const values: readonly { readonly processingInfo: unknown; readonly message: string }[] = [
         { processingInfo: [], message: "invalid processing_info" },
@@ -1350,7 +1394,7 @@ describe("official X media and failure bounds", () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-processing-deadline-"));
     try {
       const path = join(directory, "image.png");
-      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path, minimalPngBytes());
       const file = fixtureFile(path, "image/png");
       const captured = captureFetch([
         json({ data: { id: "42", username: "me" } }),
@@ -1375,7 +1419,7 @@ describe("official X media and failure bounds", () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-dm-media-"));
     try {
       const path = join(directory, "message.png");
-      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path, minimalPngBytes());
       const file = fixtureFile(path, "image/png");
       const captured = captureFetch([
         json({ data: { id: "42", username: "me" } }),
@@ -1473,7 +1517,7 @@ describe("official X media and failure bounds", () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-thread-media-"));
     try {
       const path = join(directory, "second.png");
-      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path, minimalPngBytes());
       const file = fixtureFile(path, "image/png");
       const captured = captureFetch([
         json({ data: { id: "42", username: "me" } }),
@@ -1549,7 +1593,7 @@ describe("official X media and failure bounds", () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-alt-identity-"));
     try {
       const path = join(directory, "image.png");
-      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path, minimalPngBytes());
       const file = fixtureFile(path, "image/png");
       const captured = captureFetch([
         json({ data: { id: "42", username: "me" } }),
