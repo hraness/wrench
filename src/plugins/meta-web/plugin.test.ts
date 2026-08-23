@@ -35,7 +35,7 @@ describe("Meta web plugin account subjects", () => {
       operation.name === "posts.publish");
     const threadsVideoPublish = binding("threads").operations.find((operation) =>
       operation.name === "media.publish");
-    expect(threadsPublish?.historicalContractVersions).toEqual([1, 2, 3]);
+    expect(threadsPublish?.historicalContractVersions).toEqual([1, 2, 3, 4]);
     expect(threadsPublish?.reconciliation).toEqual({
       kind: "provider-accepted-target-presence",
     });

@@ -658,7 +658,7 @@ function recipe(
   )
     ? 2
     : site === "threads" && action === "posts.publish"
-      ? 4
+      ? 5
     : 1,
 ): WebSessionRecipe {
   return {
@@ -1211,6 +1211,136 @@ describe("Meta authenticated internal-data runtime", () => {
     expect(events).toEqual([
       "GET /",
       `POST /rupload_igphoto/fb_uploader_${uploadId}`,
+      "GET /",
+      "before 0",
+      "POST /api/v1/media/configure_text_post_app_feed/",
+      `accepted ${acceptedTargetIdentifier}`,
+      `GET /@viewer/post/${postCode}`,
+      "after 1",
+    ]);
+  });
+
+  test("publishes one text-only Threads post without rupload and verifies permalink readback", async () => {
+    const uploadId = "1786923725481";
+    const postId = "987654321_12345";
+    const postCode = "CodeABC";
+    const text = "how your email finds me";
+    const bootstrap = threadsHtml + script({
+      require: [
+        ["SprinkleConfig", [], {
+          param_name: "jazoest",
+          version: 2,
+          should_randomize: false,
+        }, 1],
+        ["WebBloksVersioningID", [], {
+          versioningID: "a".repeat(64),
+        }, 2],
+      ],
+    });
+    const published = threadsImagePost(postId, postCode, text, { includeImage: false });
+    const readback = threadsHtml + script({ post: published });
+    const acceptedTargetIdentifier = canonicalJson({
+      code: postCode,
+      id: postId,
+      url: `https://www.threads.com/@viewer/post/${postCode}`,
+    });
+    const calls: Call[] = [];
+    const events: string[] = [];
+    const network = dependencies(
+      "threads",
+      calls,
+      (call) => {
+        events.push(`${call.method} ${call.url.pathname}`);
+        if (call.method === "GET" && call.url.pathname === "/") {
+          return new Response(bootstrap, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        if (call.url.pathname.startsWith("/rupload_igphoto/")) {
+          throw new Error("text-only Threads publish must not rupload");
+        }
+        if (call.url.pathname === "/api/v1/media/configure_text_post_app_feed/") {
+          expect(call.headers.get("x-csrftoken")).toBe("csrf-fixture");
+          const form = new URLSearchParams(typeof call.body === "string" ? call.body : "");
+          expect(Object.fromEntries(form)).toEqual({
+            audience: "default",
+            caption: text,
+            creator_geo_gating_info: JSON.stringify({ whitelist_country_codes: [] }),
+            is_threads: "true",
+            should_include_permalink: "true",
+            text_post_app_info: JSON.stringify({
+              excluded_inline_media_ids: "[]",
+              is_genai_invocation_post: false,
+              is_reply_approval_enabled: false,
+              is_spoiler_media: false,
+              text_with_entities: { entities: [], text },
+            }),
+            upload_id: uploadId,
+            web_session_id: "::wg8yw9",
+            jazoest: "21250",
+          });
+          return new Response(JSON.stringify(threadsCreateResponse(postId, postCode)), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (call.url.pathname === `/@viewer/post/${postCode}`) {
+          return new Response(readback, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        throw new Error(`unexpected Threads test request ${call.method} ${call.url.pathname}`);
+      },
+      undefined,
+      threadsMutationCookies(),
+    );
+    const result = await executeMetaWebOperation(
+      recipe("threads", "posts.publish"),
+      {
+        audience: "default",
+        body: text,
+      },
+      auth("threads"),
+      {
+        beforeDispatch: (event) => {
+          events.push(`before ${event.progress.started}`);
+          return Promise.resolve();
+        },
+        afterProviderAcceptedMutationTarget: (event) => {
+          events.push(`accepted ${event.target.identifier}`);
+          expect(event).toEqual({
+            id: "posts.publish",
+            index: 1,
+            target: { schemaVersion: 1, identifier: acceptedTargetIdentifier },
+          });
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          events.push(`after ${event.progress.verified}`);
+          return Promise.resolve();
+        },
+        dependencies: { ...network, now: () => Number(uploadId) },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: {
+        post: {
+          id: postId,
+          caption: text,
+          user: { id: "12345" },
+          image: null,
+        },
+      },
+      finalUrl: `https://www.threads.com/@viewer/post/${postCode}`,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(result.output).not.toHaveProperty("attachment");
+    expect(events).toEqual([
+      "GET /",
       "GET /",
       "before 0",
       "POST /api/v1/media/configure_text_post_app_feed/",
@@ -1798,6 +1928,60 @@ describe("Meta authenticated internal-data runtime", () => {
       { dependencies: network },
     ))).toContain("account cookie did not match");
     expect(calls).toHaveLength(2);
+
+    expect(await readThreadsWebPublishedMutationTarget(
+      recipe("threads", "posts.publish", 4),
+      input,
+      auth("threads"),
+      identifier,
+      { dependencies: network },
+    )).toEqual({ present: true, postId });
+    expect(calls).toHaveLength(3);
+  });
+
+  test("reconciles one accepted text-only Threads target with its exact permalink GET only", async () => {
+    const postId = "987654321_12345";
+    const postCode = "CodeABC";
+    const text = "how your email finds me";
+    const url = `https://www.threads.com/@viewer/post/${postCode}`;
+    const identifier = canonicalJson({
+      code: postCode,
+      id: postId,
+      url,
+    });
+    const input = {
+      audience: "default",
+      body: text,
+    } as const;
+    const calls: Call[] = [];
+    const network = dependencies("threads", calls, (call) => {
+      expect(call.method).toBe("GET");
+      expect(call.url.href).toBe(url);
+      return new Response(
+        `${threadsHtml}${script({
+          post: threadsImagePost(postId, postCode, text, { includeImage: false }),
+        })}`,
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    });
+    expect(await readThreadsWebPublishedMutationTarget(
+      recipe("threads", "posts.publish"),
+      input,
+      auth("threads"),
+      identifier,
+      { dependencies: network },
+    )).toEqual({ present: true, postId });
+    expect(calls.map((call) => `${call.method} ${call.url.href}`)).toEqual([
+      `GET ${url}`,
+    ]);
+    expect(await rejectionMessage(readThreadsWebPublishedMutationTarget(
+      recipe("threads", "posts.publish"),
+      { ...input, attachment: { kind: "file", reference: "confirmed-fixture" } },
+      auth("threads"),
+      identifier,
+      { dependencies: network },
+    ))).toContain("did not bind the confirmed media input");
+    expect(calls).toHaveLength(1);
   });
 
   test("reconciles one accepted Threads video target without resolving or uploading the file", async () => {
@@ -1848,7 +2032,7 @@ describe("Meta authenticated internal-data runtime", () => {
       auth("threads"),
       identifier,
       { dependencies: network },
-    ))).toContain("did not match its exact media contract");
+    ))).toContain("did not bind the confirmed media input");
     expect(calls).toHaveLength(1);
   });
 

@@ -53,7 +53,6 @@ import {
   type FacebookMarketplaceFeed,
   type MetaWebOperationContract,
   type MetaWebSite,
-  type ThreadsImageProjection,
   type ThreadsVideoProjection,
 } from "./meta-web";
 import { isoBmffVideoDimensions } from "./iso-bmff";
@@ -770,7 +769,7 @@ type ThreadsCreatedPost = Readonly<{
     readonly mediaId: string;
     readonly mediaType: 1 | 2;
     readonly width: number;
-  }>;
+  }> | null;
 }>;
 
 type ThreadsCreateFailureCategory =
@@ -823,7 +822,7 @@ function threadsCreatedPost(
   value: unknown,
   viewerId: string,
   expectedBody: string,
-  uploaded: ThreadsUploadedMedia,
+  uploaded: ThreadsUploadedMedia | null,
 ): ThreadsCreatedPost {
   // The reviewed synchronous composer response projects only the new post
   // locator. Keep the upload dimensions locally bound, then require the
@@ -840,7 +839,7 @@ function threadsCreatedPost(
     );
   }
   const minimalLocator = Object.keys(value.media).sort().join(",") === "code,permalink,pk";
-  if (!minimalLocator && uploaded.mediaType !== 2) {
+  if (!minimalLocator && uploaded?.mediaType !== 2) {
     throw new ThreadsCreateResponseError(
       "success-shape",
       "Threads create response did not match the reviewed success shape",
@@ -859,6 +858,7 @@ function threadsCreatedPost(
         || projectedUser?.id !== viewerId
         || projected.video === null
         || projected.video.mediaId !== projected.id
+        || uploaded === null
         || projected.video.mediaType !== uploaded.mediaType
         || projected.video.width !== uploaded.width
         || projected.video.height !== uploaded.height
@@ -922,12 +922,14 @@ function threadsCreatedPost(
   }
   return Object.freeze({
     locator: Object.freeze({ code, id: pk, url: url.href }),
-    media: Object.freeze({
-      height: uploaded.height,
-      mediaId: pk,
-      mediaType: uploaded.mediaType,
-      width: uploaded.width,
-    }),
+    media: uploaded === null
+      ? null
+      : Object.freeze({
+          height: uploaded.height,
+          mediaId: pk,
+          mediaType: uploaded.mediaType,
+          width: uploaded.width,
+        }),
   });
 }
 
@@ -948,11 +950,11 @@ async function createThreadsPost(
   client: WebSessionClient,
   viewer: BoundMetaViewer,
   prepared: Extract<PreparedMetaRead, { readonly kind: "threads-post" | "threads-video" }>,
-  uploaded: ThreadsUploadedMedia,
+  uploaded: ThreadsUploadedMedia | null,
   config: ThreadsRequestConfig,
+  uploadId: string,
 ): Promise<ThreadsCreatedPost> {
   const csrfToken = webSessionCookie(client.cookies, "csrftoken");
-  const uploadId = uploaded.id;
   const webSessionId = threadsWebSessionId(uploadId);
   const form = new URLSearchParams();
   form.set("audience", prepared.audience);
@@ -1016,32 +1018,47 @@ async function executeThreadsPost(
     readonly now: () => number;
   },
 ): Promise<WebSessionExecution> {
-  const image = await materializeThreadsImage(
-    prepared.attachment,
-    options.fileResolver,
-    options.operationDeadline,
-  );
+  const image = prepared.attachment === undefined
+    ? null
+    : await materializeThreadsImage(
+        prepared.attachment,
+        options.fileResolver,
+        options.operationDeadline,
+      );
   const uploadId = threadsUploadId(options.now);
   let started = 0;
   let verified = 0;
   let created: ThreadsCreatedPost | null = null;
-  let failureStage = "image upload confirmation";
+  let failureStage = image === null ? "post create admission" : "image upload confirmation";
   try {
     // Rupload can accept an orphaned provider blob, but it cannot publish a
     // Threads post. Keep the durable post-dispatch boundary immediately in
     // front of configure_text_post_app_feed so an upload transport failure is
     // safely retryable instead of being misclassified as an indeterminate
-    // public post.
-    const uploaded = await uploadThreadsImage(client, image, uploadId);
+    // public post. Text-only posts skip rupload and use the same create form.
+    const uploaded = image === null
+      ? null
+      : await uploadThreadsImage(client, image, uploadId);
     const dispatchViewer = await currentViewer("threads", client);
     if (dispatchViewer.subject !== viewer.subject) {
-      throw new Error("Threads current viewer changed after the image upload");
+      throw new Error(
+        image === null
+          ? "Threads current viewer changed before the post dispatch"
+          : "Threads current viewer changed after the image upload",
+      );
     }
     const config = threadsRequestConfig(dispatchViewer.rootHtml);
     await options.beforeDispatch?.(metaDispatchEvent("posts.publish", started, verified));
     started = 1;
     failureStage = "post create response";
-    created = await createThreadsPost(client, dispatchViewer, prepared, uploaded, config);
+    created = await createThreadsPost(
+      client,
+      dispatchViewer,
+      prepared,
+      uploaded,
+      config,
+      uploadId,
+    );
     const createdImage = created.media;
     failureStage = "accepted target retention";
     await options.afterProviderAcceptedMutationTarget?.({
@@ -1049,15 +1066,21 @@ async function executeThreadsPost(
       index: 1,
       target: {
         schemaVersion: 1,
-        identifier: canonicalJson({
-          code: created.locator.code,
-          height: createdImage.height,
-          id: created.locator.id,
-          mediaType: createdImage.mediaType,
-          remoteMediaId: createdImage.mediaId,
-          url: created.locator.url,
-          width: createdImage.width,
-        }),
+        identifier: createdImage === null
+          ? canonicalJson({
+              code: created.locator.code,
+              id: created.locator.id,
+              url: created.locator.url,
+            })
+          : canonicalJson({
+              code: created.locator.code,
+              height: createdImage.height,
+              id: created.locator.id,
+              mediaType: createdImage.mediaType,
+              remoteMediaId: createdImage.mediaId,
+              url: created.locator.url,
+              width: createdImage.width,
+            }),
       },
     });
     failureStage = "permalink readback";
@@ -1075,29 +1098,40 @@ async function executeThreadsPost(
       created.locator.code,
       created.locator.url,
       prepared.body,
-      image,
+      createdImage === null
+        ? null
+        : { height: createdImage.height, width: createdImage.width },
     );
-    const remoteImage = post.image as ThreadsImageProjection;
-    if (
-      remoteImage.mediaId !== createdImage.mediaId
-      || remoteImage.mediaType !== createdImage.mediaType
-      || remoteImage.width !== createdImage.width
-      || remoteImage.height !== createdImage.height
-    ) throw new Error("Threads permalink readback changed the response-bound image");
+    if (createdImage === null) {
+      if (post.image !== null) {
+        throw new Error("Threads permalink readback introduced an unconfirmed image");
+      }
+    } else {
+      const remoteImage = post.image;
+      if (
+        remoteImage === null
+        || remoteImage.mediaId !== createdImage.mediaId
+        || remoteImage.mediaType !== createdImage.mediaType
+        || remoteImage.width !== createdImage.width
+        || remoteImage.height !== createdImage.height
+      ) throw new Error("Threads permalink readback changed the response-bound image");
+    }
     verified = 1;
     await options.afterDispatchVerified?.(metaDispatchEvent("posts.publish", started, verified));
     return {
       status: "succeeded",
-      output: Object.freeze({
-        post,
-        attachment: Object.freeze({
-          height: remoteImage.height,
-          mediaType: image.mediaType,
-          remoteMediaId: remoteImage.mediaId,
-          verifiedBy: "permalink-readback",
-          width: remoteImage.width,
-        }),
-      }),
+      output: createdImage === null || post.image === null
+        ? Object.freeze({ post })
+        : Object.freeze({
+            post,
+            attachment: Object.freeze({
+              height: post.image.height,
+              mediaType: "image/png" as const,
+              remoteMediaId: post.image.mediaId,
+              verifiedBy: "permalink-readback",
+              width: post.image.width,
+            }),
+          }),
       finalUrl: created.locator.url,
       dispatchStarted: true,
       dispatch: { planned: 1, started, verified },
@@ -1106,6 +1140,9 @@ async function executeThreadsPost(
     const publicFailureStage = failureStage === "post create response"
       ? `${failureStage} (${error instanceof ThreadsCreateResponseError ? error.category : "unexpected"})`
       : failureStage;
+    const verifiedSurfaces = image === null
+      ? "exact actor, ID, code, text, and permalink readback"
+      : "exact actor, ID, code, text, image, and permalink readback";
     return {
       status: started > 0 ? "indeterminate" : "failed",
       output: null,
@@ -1113,8 +1150,10 @@ async function executeThreadsPost(
       dispatchStarted: started > 0,
       dispatch: { planned: 1, started, verified },
       error: started > 0
-        ? `Threads may have accepted the image upload or post but exact actor, ID, code, text, image, and permalink readback was not verified; failure stage: ${publicFailureStage}; reconcile before retrying`
-        : "Threads image upload failed before post submission; retry with a fresh confirmed plan",
+        ? `Threads may have accepted the ${image === null ? "post" : "image upload or post"} but ${verifiedSurfaces} was not verified; failure stage: ${publicFailureStage}; reconcile before retrying`
+        : image === null
+          ? "Threads post create failed before submission; retry with a fresh confirmed plan"
+          : "Threads image upload failed before post submission; retry with a fresh confirmed plan",
     };
   }
 }
@@ -1157,9 +1196,16 @@ async function executeThreadsVideo(
     await options.beforeDispatch?.(metaDispatchEvent("media.publish", started, verified));
     started = 1;
     failureStage = "post create response";
-    created = await createThreadsPost(client, dispatchViewer, prepared, uploaded, config);
+    created = await createThreadsPost(
+      client,
+      dispatchViewer,
+      prepared,
+      uploaded,
+      config,
+      uploadId,
+    );
     const createdVideo = created.media;
-    if (createdVideo.mediaType !== 2) {
+    if (createdVideo === null || createdVideo.mediaType !== 2) {
       throw new Error("Threads create response changed the confirmed video media type");
     }
     failureStage = "accepted target retention";
@@ -1240,7 +1286,7 @@ async function executeThreadsVideo(
   }
 }
 
-type ThreadsPublishedMutationTarget = Readonly<{
+type ThreadsPublishedMediaMutationTarget = Readonly<{
   code: string;
   height: number;
   id: string;
@@ -1249,6 +1295,22 @@ type ThreadsPublishedMutationTarget = Readonly<{
   url: string;
   width: number;
 }>;
+
+type ThreadsPublishedTextMutationTarget = Readonly<{
+  code: string;
+  id: string;
+  url: string;
+}>;
+
+type ThreadsPublishedMutationTarget =
+  | ThreadsPublishedMediaMutationTarget
+  | ThreadsPublishedTextMutationTarget;
+
+function isThreadsPublishedMediaTarget(
+  target: ThreadsPublishedMutationTarget,
+): target is ThreadsPublishedMediaMutationTarget {
+  return "mediaType" in target;
+}
 
 function threadsPublishedMutationTargetDimension(
   value: unknown,
@@ -1260,38 +1322,13 @@ function threadsPublishedMutationTargetDimension(
   return value as number;
 }
 
-function parseThreadsPublishedMutationTarget(
-  identifier: string,
-): ThreadsPublishedMutationTarget {
-  let value: unknown;
-  try {
-    value = JSON.parse(identifier);
-  } catch {
-    throw new Error("Threads provider-accepted post target is not canonical JSON");
-  }
-  if (
-    !isRecord(value)
-    || Object.keys(value).sort().join(",")
-      !== "code,height,id,mediaType,remoteMediaId,url,width"
-  ) throw new Error("Threads provider-accepted post target contained unsupported fields");
-  if (
-    typeof value.id !== "string"
-    || !/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(value.id)
-    || typeof value.remoteMediaId !== "string"
-    || value.remoteMediaId !== value.id
-  ) throw new Error("Threads provider-accepted post target returned invalid media identifiers");
-  if (typeof value.code !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.code)) {
-    throw new Error("Threads provider-accepted post target returned an invalid post code");
-  }
-  if (value.mediaType !== 1 && value.mediaType !== 2) {
-    throw new Error("Threads provider-accepted post target did not identify one reviewed media item");
-  }
-  if (typeof value.url !== "string" || value.url.length < 1 || value.url.length > 2_048) {
+function parseThreadsPublishedPermalink(value: unknown, code: string): URL {
+  if (typeof value !== "string" || value.length < 1 || value.length > 2_048) {
     throw new Error("Threads provider-accepted post target returned an invalid permalink");
   }
   let url: URL;
   try {
-    url = new URL(value.url);
+    url = new URL(value);
   } catch {
     throw new Error("Threads provider-accepted post target returned an invalid permalink");
   }
@@ -1305,8 +1342,47 @@ function parseThreadsPublishedMutationTarget(
     || path.length !== 4
     || !/^@[A-Za-z0-9._]{1,64}$/u.test(path[1] ?? "")
     || path[2] !== "post"
-    || path[3] !== value.code
+    || path[3] !== code
   ) throw new Error("Threads provider-accepted post target returned an invalid permalink");
+  return url;
+}
+
+function parseThreadsPublishedMutationTarget(
+  identifier: string,
+): ThreadsPublishedMutationTarget {
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier);
+  } catch {
+    throw new Error("Threads provider-accepted post target is not canonical JSON");
+  }
+  if (!isRecord(value)) {
+    throw new Error("Threads provider-accepted post target contained unsupported fields");
+  }
+  if (typeof value.id !== "string" || !/^[0-9]{1,32}(?:_[0-9]{1,32})?$/u.test(value.id)) {
+    throw new Error("Threads provider-accepted post target returned invalid media identifiers");
+  }
+  if (typeof value.code !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(value.code)) {
+    throw new Error("Threads provider-accepted post target returned an invalid post code");
+  }
+  const keys = Object.keys(value).sort().join(",");
+  const url = parseThreadsPublishedPermalink(value.url, value.code);
+  if (keys === "code,id,url") {
+    const parsed = Object.freeze({ code: value.code, id: value.id, url: url.href });
+    if (canonicalJson(parsed) !== identifier) {
+      throw new Error("Threads provider-accepted post target is not canonical");
+    }
+    return parsed;
+  }
+  if (keys !== "code,height,id,mediaType,remoteMediaId,url,width") {
+    throw new Error("Threads provider-accepted post target contained unsupported fields");
+  }
+  if (typeof value.remoteMediaId !== "string" || value.remoteMediaId !== value.id) {
+    throw new Error("Threads provider-accepted post target returned invalid media identifiers");
+  }
+  if (value.mediaType !== 1 && value.mediaType !== 2) {
+    throw new Error("Threads provider-accepted post target did not identify one reviewed media item");
+  }
   const parsed = Object.freeze({
     code: value.code,
     height: threadsPublishedMutationTargetDimension(
@@ -1341,25 +1417,41 @@ export async function readThreadsWebPublishedMutationTarget(
     readonly dependencies?: MetaWebRuntimeDependencies;
   } = {},
 ): Promise<{ readonly present: true; readonly postId: string }> {
-  const isImagePublish = recipe.site === "threads"
+  const isPostPublish = recipe.site === "threads"
     && recipe.action === "posts.publish"
-    && recipe.contractVersion === 4;
+    && (recipe.contractVersion === 4 || recipe.contractVersion === 5);
   const isVideoPublish = recipe.site === "threads"
     && recipe.action === "media.publish"
     && recipe.contractVersion === 1;
-  if (!isImagePublish && !isVideoPublish) {
-    throw new Error("Threads publish recovery supports only posts.publish@4 or media.publish@1");
+  if (!isPostPublish && !isVideoPublish) {
+    throw new Error(
+      "Threads publish recovery supports only posts.publish@4, posts.publish@5, or media.publish@1",
+    );
   }
   const target = parseThreadsPublishedMutationTarget(identifier);
   const prepared = prepareMetaRead(recipe, input, auth, Object.freeze({}));
   if (
-    (isImagePublish && (prepared.kind !== "threads-post" || target.mediaType !== 1))
-    || (isVideoPublish && (prepared.kind !== "threads-video" || target.mediaType !== 2))
+    (isPostPublish && prepared.kind !== "threads-post")
+    || (isVideoPublish && prepared.kind !== "threads-video")
   ) {
     throw new Error("Threads publish recovery input did not match its exact media contract");
   }
   if (prepared.kind !== "threads-post" && prepared.kind !== "threads-video") {
     throw new Error("Threads publish recovery input did not match its exact media contract");
+  }
+  const mediaTarget = isThreadsPublishedMediaTarget(target) ? target : null;
+  if (prepared.kind === "threads-post" && (
+    (recipe.contractVersion === 4 && prepared.attachment === undefined)
+    || (prepared.attachment !== undefined) !== (mediaTarget !== null)
+    || (mediaTarget !== null && mediaTarget.mediaType !== 1)
+  )) {
+    throw new Error("Threads publish recovery target did not bind the confirmed media input");
+  }
+  if (
+    prepared.kind === "threads-video"
+    && (mediaTarget === null || mediaTarget.mediaType !== 2)
+  ) {
+    throw new Error("Threads publish recovery target did not bind the confirmed media input");
   }
   const expectedSubject = expectedMetaAuthSubject("threads", auth);
   const viewerId = expectedSubject.slice("threads:".length);
@@ -1378,33 +1470,52 @@ export async function readThreadsWebPublishedMutationTarget(
     expectedContentTypes: ["text/html"],
     maxBytes: Math.min(recipe.maxOutputBytes, MAX_BOOTSTRAP_BYTES),
   });
-  const post = prepared.kind === "threads-post"
-    ? normalizeThreadsPostHtml(
-        html,
-        viewerId,
-        target.id,
-        target.code,
-        target.url,
-        prepared.body,
-        { height: target.height, width: target.width },
-      )
-    : normalizeThreadsVideoPostHtml(
-        html,
-        viewerId,
-        target.id,
-        target.code,
-        target.url,
-        prepared.body,
-        { height: target.height, width: target.width },
-      );
-  const media = "image" in post ? post.image : post.video;
-  if (
-    media === null
-    || media.mediaId !== target.remoteMediaId
-    || media.mediaType !== target.mediaType
-    || media.width !== target.width
-    || media.height !== target.height
-  ) throw new Error("Threads publish recovery readback changed the accepted media");
+  if (prepared.kind === "threads-video") {
+    if (mediaTarget === null || mediaTarget.mediaType !== 2) {
+      throw new Error("Threads publish recovery target did not bind the confirmed media input");
+    }
+    const post = normalizeThreadsVideoPostHtml(
+      html,
+      viewerId,
+      target.id,
+      target.code,
+      target.url,
+      prepared.body,
+      { height: mediaTarget.height, width: mediaTarget.width },
+    );
+    const media = post.video;
+    if (
+      media === null
+      || media.mediaId !== mediaTarget.remoteMediaId
+      || media.mediaType !== mediaTarget.mediaType
+      || media.width !== mediaTarget.width
+      || media.height !== mediaTarget.height
+    ) throw new Error("Threads publish recovery readback changed the accepted media");
+  } else {
+    const post = normalizeThreadsPostHtml(
+      html,
+      viewerId,
+      target.id,
+      target.code,
+      target.url,
+      prepared.body,
+      mediaTarget === null
+        ? null
+        : { height: mediaTarget.height, width: mediaTarget.width },
+    );
+    const media = post.image;
+    if (mediaTarget !== null) {
+      if (
+        media === null
+        || media.mediaId !== mediaTarget.remoteMediaId
+        || media.mediaType !== mediaTarget.mediaType
+        || media.width !== mediaTarget.width
+        || media.height !== mediaTarget.height
+      ) throw new Error("Threads publish recovery readback changed the accepted media");
+    } else if (media !== null) {
+      throw new Error("Threads publish recovery readback introduced unconfirmed media");
+    }
+  }
   return Object.freeze({ present: true, postId: target.id });
 }
 
@@ -1621,7 +1732,7 @@ type PreparedMetaRead =
   }
   | {
     readonly kind: "threads-post";
-    readonly attachment: FileInputValue;
+    readonly attachment?: FileInputValue;
     readonly audience: "default";
     readonly body: string;
   }
@@ -1739,15 +1850,12 @@ function prepareMetaRead(
       || body.length > 450
       || /[\0\r]/u.test(body)
     ) throw new Error("input.body must be 1 to 450 bounded UTF-16 code units");
-    if (input.attachment === undefined) {
-      throw new Error("reviewed Threads posts.publish currently requires one PNG attachment");
-    }
     const audience = input.audience === undefined
       ? "default"
       : exactEnumInput(input, "audience", ["default"]);
     return Object.freeze({
       kind: "threads-post",
-      attachment: fileInput(input.attachment),
+      ...(input.attachment === undefined ? {} : { attachment: fileInput(input.attachment) }),
       audience: audience as "default",
       body,
     });

@@ -10,7 +10,7 @@ Use this as routing guidance only. Always inspect `wrench capabilities <adapter>
 | LinkedIn | `linkedin` | Official OAuth | Inspect installed schema | Documented API post |
 | Bluesky | `bluesky-web` | Profile-backed Bluesky web session | `body`, optional image, media type, and alt text | AT Protocol feed post |
 | Substack | `substack-web` | Browser cookies/profile | `body`, optional Note media | Public Substack Note, not an article/newsletter |
-| Threads | `meta-web` | Browser cookies/profile | Image `posts.publish`: `body`, audience, one PNG. Video `media.publish`: `body`, audience, one MP4. | Threads post |
+| Threads | `meta-web` | Browser cookies/profile | Text/image `posts.publish`: `body`, audience, optional one PNG. Video `media.publish`: `body`, audience, one MP4. | Threads post |
 
 Cleanup is capability-driven too. At this reference revision, `bluesky-web`
 exposes observed `content.delete@1` only for one current-account post URI plus
@@ -59,5 +59,5 @@ Do not place credentials in the input file. Delete task input files after planni
 - If the ordered image set exceeds one platform's bound, request a smaller shared set or an explicit per-platform set. Do not manufacture a collage.
 - If LinkedIn requires visibility and the user requested a public cross-post, use `public`; otherwise obtain the user's audience choice.
 - If Threads requires `audience` and the user requested ordinary posting, use the installed schema's ordinary/default audience only when that meaning is explicit in the capability description.
-- At this reference revision, reviewed Threads image publication requires exactly one PNG and reviewed video publication requires exactly one MP4. Treat text-only Threads publication as unavailable unless the installed schema says otherwise.
+- At this reference revision, reviewed Threads text/image publication accepts no attachment or exactly one PNG, and reviewed video publication requires exactly one MP4. A dummy PNG, collage, or composer click-path changes the package and is not an installed fallback. JPEG and other image types remain unavailable unless the installed schema independently lists them.
 - If image alt text is supported on only some targets, preserve the same factual description on every target that accepts it; unsupported alt text is not a reason to alter the visible post.
