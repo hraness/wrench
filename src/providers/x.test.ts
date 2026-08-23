@@ -820,6 +820,21 @@ describe("official X writes", () => {
     expect(harness.dispatches()).toBe(0);
   });
 
+  test("omits made_with_ai unless the caller explicitly sets true", async () => {
+    for (const input of [
+      { body: "Unlabeled by default" },
+      { body: "Explicitly unlabeled", made_with_ai: false },
+    ] as const) {
+      const captured = captureFetch([
+        json({ data: { id: "42", username: "me" } }),
+        json({ data: { id: "404", text: input.body } }, 201),
+      ]);
+      const harness = createHarness("posts.publish", input, captured.fetch, { subject: "42" });
+      await executeXProvider(harness.context);
+      expect(requestJson(captured.requests[1] as RequestCapture)).toEqual({ text: input.body });
+    }
+  });
+
   test("requires both automated-reply attestations before dispatch", async () => {
     const captured = captureFetch([]);
     const harness = createHarness("replies.create", {
@@ -1191,6 +1206,36 @@ describe("official X writes", () => {
 });
 
 describe("official X media and failure bounds", () => {
+  test("omits made_with_ai on reviewed media unless the caller explicitly sets true", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wrench-x-image-unlabeled-"));
+    try {
+      const path = join(directory, "image.png");
+      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      const file = fixtureFile(path, "image/png");
+      for (const madeWithAi of [undefined, false] as const) {
+        const captured = captureFetch([
+          json({ data: { id: "42", username: "me" } }),
+          json({ data: { id: "911", media_key: "3_911" } }),
+          json({ data: { id: "912", text: "unlabeled image" } }, 201),
+        ]);
+        const harness = createHarness("posts.publish", {
+          body: "unlabeled image",
+          media: [{ kind: "file", reference: "test-fixture" }],
+          ...(madeWithAi === undefined ? {} : { made_with_ai: madeWithAi }),
+        }, captured.fetch, { files: { media: [file] }, subject: "42" });
+
+        await executeXProvider(harness.context);
+
+        expect(requestJson(captured.requests[2] as RequestCapture)).toEqual({
+          text: "unlabeled image",
+          media: { media_ids: ["911"] },
+        });
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("uploads static images once, requests media.write, and never leaks local filenames", async () => {
     const directory = mkdtempSync(join(tmpdir(), "wrench-x-image-"));
     try {

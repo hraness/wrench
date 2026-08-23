@@ -2113,6 +2113,9 @@ function createTweetVariables(
   quote: string | null,
   mediaId: string | null,
 ): Readonly<Record<string, unknown>> {
+  // The reviewed CreateTweet contract has no made_with_ai or content_disclosure
+  // input. Keep semantic_annotation_ids empty so the Wrench-owned transport
+  // cannot inherit a composer AI annotation.
   return {
     tweet_text: text,
     dark_request: false,
