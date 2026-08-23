@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.13.1 - 2026-08-23
+## Unreleased
 
 - Keep Beeper account selector aliases internal while returning plain,
   bounded-JSON-safe account projections from contact and messaging reads.
