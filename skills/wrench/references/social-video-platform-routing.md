@@ -49,6 +49,10 @@ Treat them as unavailable until the installed capability independently says
 - Tags are an explicit platform-specific variant only for TikTok,
   Instagram, and YouTube Shorts. Leave X, LinkedIn, Substack, Bluesky,
   Threads, and Reddit tag-free.
+- For a user-supplied cross-post caption, never mark the video as AI-generated.
+  Follow [X AI disclosure](x-ai-disclosure.md). Official `x` `posts.publish`
+  exposes `made_with_ai`; leave it unset or `false` for this workflow. Do not
+  invent a disclosure field on another adapter.
 
 ## Common invocation shape
 

@@ -558,6 +558,43 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
     })).toThrow("text-only");
   });
 
+  test("rejects CreateTweet AI or content-disclosure fields and nonempty annotations", () => {
+    const resolved = descriptor("CreateTweet");
+    const features = Object.fromEntries(resolved.metadata.featureSwitches.map((name) => [name, false]));
+    const fieldToggles = Object.fromEntries(resolved.metadata.fieldToggles.map((name) => [name, false]));
+    const body = (variables: Readonly<Record<string, unknown>>) => ({
+      variables: {
+        tweet_text: "Exact post",
+        dark_request: false,
+        media: { media_entities: [], possibly_sensitive: false },
+        semantic_annotation_ids: [],
+        ...variables,
+      },
+      features,
+      ...(resolved.metadata.fieldToggles.length === 0 ? {} : { fieldToggles }),
+      queryId: resolved.queryId,
+    });
+    const request = (variables: Readonly<Record<string, unknown>>) =>
+      authorizeXWebMutationRequest("posts.publish", {
+        method: "POST",
+        url: graphqlUrl(resolved),
+        descriptor: resolved,
+        body: body(variables),
+      });
+    expect(() => request({ made_with_ai: false })).toThrow(
+      "made_with_ai is outside the reviewed CreateTweet contract",
+    );
+    expect(() => request({ content_disclosure: false })).toThrow(
+      "content_disclosure is outside the reviewed CreateTweet contract",
+    );
+    expect(() => request({ ai_generated_disclosure: false })).toThrow(
+      "ai_generated_disclosure is outside the reviewed CreateTweet contract",
+    );
+    expect(() => request({ semantic_annotation_ids: ["ai-label"] })).toThrow(
+      "semantic annotations are outside the reviewed contract",
+    );
+  });
+
   test("authorizes exact native Article links, styles, and inline MEDIA entities", () => {
     const contentState = {
       blocks: [

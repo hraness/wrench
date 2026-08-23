@@ -658,7 +658,27 @@ function exactMutationText(value: unknown): void {
   }
 }
 
+const CREATE_TWEET_AI_DISCLOSURE_FIELDS = [
+  "made_with_ai",
+  "content_disclosure",
+  "ai_generated_disclosure",
+] as const;
+
+function rejectCreateTweetAiDisclosureFields(
+  variables: JsonRecord,
+  operationId: XWebMutationOperationId,
+): void {
+  for (const field of CREATE_TWEET_AI_DISCLOSURE_FIELDS) {
+    if (Object.hasOwn(variables, field)) {
+      throw new Error(
+        `X ${operationId} ${field} is outside the reviewed CreateTweet contract`,
+      );
+    }
+  }
+}
+
 function validateCreateTweetVariables(operationId: XWebMutationOperationId, variables: JsonRecord): void {
+  rejectCreateTweetAiDisclosureFields(variables, operationId);
   const relationKey = operationId === "replies.create" || operationId === "threads.reply"
     ? "reply"
     : operationId === "posts.quote" ? "attachment_url" : null;
