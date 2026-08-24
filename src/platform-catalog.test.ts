@@ -112,6 +112,13 @@ const commonActionContracts = {
     liking: ["not-applicable", "R2"],
     media: ["R1", "R3"],
   },
+  github: {
+    messaging: ["unsupported", "unsupported"],
+    commenting: ["unsupported", "unsupported", "unsupported"],
+    posting: ["unsupported", "unsupported"],
+    liking: ["unsupported", "unsupported"],
+    media: ["unsupported", "unsupported"],
+  },
   "hacker-news": {
     messaging: ["not-applicable", "not-applicable"],
     commenting: ["R1", "R3", "R3"],
@@ -202,6 +209,7 @@ const binaryAttachmentCompositions = {
   linkedin: ["message", "post", "media", "article"],
   x: ["message", "reply", "post", "article"],
   reddit: ["post", "media"],
+  github: [],
   "hacker-news": [],
   whatsapp: ["message"],
   substack: ["post", "media", "article"],
@@ -248,6 +256,7 @@ const expandedExecutableContracts = {
     R2: ["relationships.follow.set", "content.save", "communities.membership.set"],
     R3: ["posts.repost", "content.share", "content.edit", "content.delete"],
   },
+  github: { R2: [], R3: [] },
   "hacker-news": { R2: ["content.save"], R3: ["content.edit"] },
   whatsapp: { R2: ["content.save"], R3: ["content.share", "content.edit"] },
   substack: {
@@ -401,6 +410,7 @@ describe("social platform catalog", () => {
   test("catalogues profile and organization reads only on surfaces with bounded identity projections", () => {
     const profileSurfaces = new Set([
       "bluesky",
+      "github",
       "instagram",
       "linkedin",
       "reddit",

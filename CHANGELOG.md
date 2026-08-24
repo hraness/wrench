@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.3 - 2026-08-24
+
+- Add a credential-free, target-bound GitHub profile read through the fixed
+  public REST user endpoint, projecting exact follower, following, and public
+  repository counts.
+- Add GitHub to the package-owned Hraness social-profile-statistics workflow.
+
 ## 0.13.2 - 2026-08-23
 
 - Publish exact Threads text through `posts.publish@5` without requiring a
