@@ -5,6 +5,8 @@
 - Scrub JPEG and PNG provenance before X media upload, and fail closed when
   CreateTweet or independent TweetResultByRestId readback shows a Made with AI
   sparkle on user-supplied copy.
+- Treat a mid-read optional admission rewrite after live I/O as an auth-changed
+  discard so the live result cannot be published.
 
 ## 0.13.2 - 2026-08-23
 
