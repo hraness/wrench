@@ -555,6 +555,7 @@ const reviewedDynamicInstalledModuleIdentities =
 const reviewedKbDynamicInstalledPluginIds = new Set([
   "beeper-linked-device",
   "bluesky-web",
+  "github-web",
   "hacker-news-web",
   "linkedin-web",
   "meta-web",

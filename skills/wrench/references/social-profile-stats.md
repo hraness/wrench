@@ -37,11 +37,12 @@ credentials. Wrench probes and binds each authenticated provider subject.
 | `threads-hraness` | `threads-web profiles.read` | `threads-chrome` | `{"profile":"hraness"}` | followers, recentViews |
 | `substack-hraness` | `substack-web profiles.read` | `substack-chrome` | `{"profile":"hraness"}` | followers |
 | `substack-hraness` | `substack-web organizations.read` | `substack-chrome` | `{"organization":"hraness"}` | freeSubscribers, paidSubscribers |
+| `github-0thernet` | `github-web profiles.read` | public | `{"username":"0thernet"}` | followers, following, publicRepositories |
 | `tiktok-hraness` | `tiktok-web profiles.read` | `tiktok-chrome` | `{"profile":"hraness"}` | followers, following, likes |
 | `reddit-bgdotjpg` | `reddit-web profiles.read` | `reddit-chrome` | `{"profile":"bgdotjpg"}` | followers, karma, contributions |
 
-Bluesky profile statistics come from the public target-bound AppView API.
-Invoke this row without `--auth`. Wrench assigns the reviewed operation a
+Bluesky and GitHub profile statistics come from public target-bound APIs.
+Invoke these rows without `--auth`. Wrench assigns each reviewed operation a
 deterministic public authority for receipts and exact R1 caching. Supplying an
 auth locator is an error.
 
@@ -72,11 +73,13 @@ printf '%s' '<input-json>' \
   | wrench invoke <adapter> <operation> --input - --auth <auth-id> --json
 ```
 
-For the public Bluesky row, omit the auth option:
+For the public Bluesky and GitHub rows, omit the auth option:
 
 ```sh
 printf '%s' '{"handle":"hraness.bsky.social"}' \
   | wrench invoke bluesky-web profiles.read --input - --json
+printf '%s' '{"username":"0thernet"}' \
+  | wrench invoke github-web profiles.read --input - --json
 ```
 
 Do not put an auth ID, provider receipt, cache key, run ID, subject identifier,

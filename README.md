@@ -75,10 +75,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.13.2` tag:
+Install the current immutable CLI release from the `v0.13.3` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.13.2
+bun add --global github:hraness/wrench#v0.13.3
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -102,7 +102,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.13.2
+bun add github:hraness/wrench#v0.13.3
 ```
 
 ```ts
@@ -230,7 +230,7 @@ wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","
 ```
 
 Observed `profiles.read` capabilities expose target-bound exact counters for X,
-Bluesky, LinkedIn, Instagram, Threads, Substack, YouTube, Reddit, and TikTok;
+Bluesky, GitHub, LinkedIn, Instagram, Threads, Substack, YouTube, Reddit, and TikTok;
 Substack also exposes owned-publication subscriber totals through
 `organizations.read`. Each counter is either an exact nonnegative integer or a
 categorical unavailable value. Wrench never promotes a rounded profile label

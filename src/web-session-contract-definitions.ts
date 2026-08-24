@@ -4,6 +4,7 @@ import facebookGroupWebManifest from "./assets/adapters/facebook-group/wrench-we
 import facebookMarketplaceWebManifest from "./assets/adapters/facebook-marketplace/wrench-web-adapter.json";
 import facebookPageWebManifest from "./assets/adapters/facebook-page/wrench-web-adapter.json";
 import facebookWebManifest from "./assets/adapters/facebook/wrench-web-adapter.json";
+import githubWebManifest from "./assets/adapters/github/wrench-web-adapter.json";
 import hackerNewsWebManifest from "./assets/adapters/hacker-news/wrench-web-adapter.json";
 import instagramWebManifest from "./assets/adapters/instagram/wrench-web-adapter.json";
 import linkedinWebManifest from "./assets/adapters/linkedin/wrench-web-adapter.json";
@@ -49,6 +50,7 @@ const bundledManifests: Readonly<Partial<Record<WebSessionSiteId, unknown>>> = {
   "facebook-group": facebookGroupWebManifest,
   "facebook-marketplace": facebookMarketplaceWebManifest,
   "facebook-page": facebookPageWebManifest,
+  github: githubWebManifest,
   "hacker-news": hackerNewsWebManifest,
   instagram: instagramWebManifest,
   linkedin: linkedinWebManifest,
@@ -377,6 +379,9 @@ const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
   "articles.draft.save": 7,
   "posts.publish": 3,
 });
+const GITHUB_WEB_OPERATIONS = operationPolicies("github", [
+  "profiles.read",
+]);
 const HACKER_NEWS_WEB_OPERATIONS = operationPolicies("hacker-news", [
   "comments.read",
   "feeds.read",
@@ -595,6 +600,16 @@ const hackerNews = {
   "replies.create": contract("hacker-news", "replies.create", HACKER_NEWS_WEB_OPERATIONS["replies.create"].risk, HACKER_NEWS_WEB_OPERATIONS["replies.create"].state, HACKER_NEWS_WEB_OPERATIONS["replies.create"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
+const github = {
+  "profiles.read": contract(
+    "github",
+    "profiles.read",
+    GITHUB_WEB_OPERATIONS["profiles.read"].risk,
+    GITHUB_WEB_OPERATIONS["profiles.read"].state,
+    GITHUB_WEB_OPERATIONS["profiles.read"].reason,
+  ),
+} as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
+
 const x = {
   "feeds.read": contract("x", "feeds.read", "R1", "observed", "current first-party GraphQL timeline/list/search/bookmark query"),
   "profiles.read": contract("x", "profiles.read", "R1", "observed", "current target-bound UserByScreenName first-party GraphQL query with exact follower and following counts"),
@@ -730,6 +745,7 @@ export const webSessionContractDefinitions = {
   "facebook-group": facebookGroup,
   "facebook-marketplace": facebookMarketplace,
   "facebook-page": facebookPage,
+  github,
   "hacker-news": hackerNews,
   instagram,
   linkedin,

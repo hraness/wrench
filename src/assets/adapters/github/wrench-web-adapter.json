@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 4,
+  "id": "github-web",
+  "version": "1.0.0",
+  "displayName": "GitHub (Public REST API)",
+  "surfaceId": "github",
+  "origins": [
+    "https://github.com"
+  ],
+  "browserDomains": [
+    "github.com"
+  ],
+  "operations": {
+    "profiles.read": {
+      "description": "Read one exact public GitHub user through the fixed REST user endpoint with login, immutable numeric account ID, canonical profile URL, and exact follower, following, and public repository counts.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "Exact GitHub username",
+            "minLength": 1,
+            "maxLength": 39
+          }
+        },
+        "required": [
+          "username"
+        ]
+      },
+      "webSession": {
+        "site": "github",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}
