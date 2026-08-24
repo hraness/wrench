@@ -18,7 +18,7 @@ are authoritative and may change.
 | YouTube Shorts | `youtube-web` | `media.publish` when observed | Studio video upload. Community `posts.publish` is not a Short. |
 | Reddit | `reddit-web` | `media.publish` when observed | One video post in one exact confirmed subreddit. |
 
-At the 2026-08-22 reference revision, `x-web` `posts.publish` is observed
+At the 2026-08-23 reference revision, `x-web` `posts.publish` is observed
 for one plan-bound `image/png` or one plan-bound `video/mp4`. Official `x`
 and official `linkedin` already observe MP4 post contracts. `reddit-web`
 `media.publish@9` observes one plan-bound MP4 plus a required plan-bound
@@ -33,6 +33,12 @@ Substack Notes, TikTok, Instagram, and YouTube expose bounded video `media.publi
 reservations. Those routes stay `capture-required` until their exact upload,
 processing, request, response, actor/target, and independent readback contracts
 are implemented and proven.
+For Substack specifically, an authorized profile-backed fixture proved 200
+initialization, ordered raw multipart transfer, transcode, status polling, and
+video-attachment creation. The final Note create returned 403 twice, including
+one Wrench-native attempt, so there is no provider-created video Note or exact
+readback to graduate. `content.delete@1` is independently observed for cleanup
+of an exact authored personal Note; that does not imply video publication.
 Treat them as unavailable until the installed capability independently says
 `observed`.
 
@@ -49,10 +55,11 @@ Treat them as unavailable until the installed capability independently says
 - Tags are an explicit platform-specific variant only for TikTok,
   Instagram, and YouTube Shorts. Leave X, LinkedIn, Substack, Bluesky,
   Threads, and Reddit tag-free.
-- For a user-supplied cross-post caption, never mark the video as AI-generated.
-  Follow [X AI disclosure](x-ai-disclosure.md). Official `x` `posts.publish`
-  exposes `made_with_ai`; leave it unset or `false` for this workflow. Do not
-  invent a disclosure field on another adapter.
+- Set each supported synthetic-media or AI declaration explicitly and
+  truthfully from the actual video's provenance; caption authorship does not
+  determine the media declaration. Follow [X AI disclosure](x-ai-disclosure.md)
+  for the official `x` `made_with_ai` choice, and do not invent a disclosure
+  field on an adapter whose installed schema does not expose one.
 
 ## Common invocation shape
 

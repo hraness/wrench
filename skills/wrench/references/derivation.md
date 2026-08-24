@@ -89,6 +89,15 @@ that the current page contains exactly one matching image input before upload:
 wrench derive browser <id> -- upload @single-image-input fixture:1
 ```
 
+If the composer contains multiple file inputs but exactly one advertises a
+video accept type, use the fixed `@single-video-input` reference. Wrench proves
+that the current page contains exactly one matching
+`input[type=file][accept*='video']` before upload:
+
+```sh
+wrench derive browser <id> -- upload @single-video-input fixture:1
+```
+
 Raw paths, arbitrary selectors, and unstaged references are rejected. Wrench
 re-verifies the private copy immediately before and after upload and resolves
 only that Wrench-owned copy for the persistent browser daemon; finish/discard
@@ -123,7 +132,72 @@ runtime contract.
 
 Save the derivation ID. Use `wrench derive list` to recover it after an interruption. wrench serializes every lifecycle command for that ID from preflight through cleanup. A session becomes executable only after its create-only readiness marker binds the final session metadata; interrupted initialization remains visible as `ready: false`, `recoverable: true`. `socketAvailable` distinguishes a live helper from state left after a reboot.
 
+Each new cookie-backed contained session launches with a deterministic,
+task-private MV3 request guard and a task-private CONNECT proxy. The extension
+blocks HTTP, HTTPS, WS, and WSS by default and admits HTTPS/WSS only for the
+session's exact validated `--domains`; the proxy independently resolves every
+CONNECT target, rejects private or reserved answers, and pins the public
+address used for the connection while leaving TLS end to end. Wrench verifies
+the exact extension files, enabled ruleset, regex support, match outcomes,
+proxy policy, helper identity, and private control channel before the first
+provider navigation and again before each later browser batch. Each DNR check
+starts the extension's exact MV3 background service worker through a private
+CDP session, evaluates the fixed readiness function and exact loaded-policy
+SHA-256 there, detaches exactly,
+and proves that the complete pre-check page target ID/URL set did not change. Missing,
+disabled, replaced, or tampered guard state fails closed. Legacy contained
+sessions without this boundary are non-executable and may only be listed or
+discarded. Path-backed profile sessions remain the separately disclosed,
+unfiltered-egress boundary described below.
+
+After that private readiness check, Wrench binds the requested batch to a
+second, code-derived agent-browser session that connects only through the exact
+verified loopback CDP WebSocket GUID. The owner session retains the guarded
+Chrome process; the pin carries every provider navigation, snapshot reference,
+HAR command, cookie command, staged upload, and native-chooser click. Every pin
+invocation includes that exact private CDP URL, and Wrench rejects caller CDP or
+session arguments. It also requires every returned command lifecycle to retain
+one losslessly parsed Chrome `u64` launch identity, exactly one page, and no
+browser launch, relaunch, or background restart.
+
+Every mutating pin command is sent alone and must first return agent-browser's
+exact pending-confirmation envelope. Wrench then binds the unchanged daemon
+PID, boot identity, process-start identity, browser identity, page URL, and DNR
+worker before issuing a bare `confirm` command with no CDP or other launch
+arguments. A fixed launch-mutator tripwire is explicitly denied by the action
+policy, so recursive confirmation cannot recreate a dead Chrome. The exact
+nested confirmed result is required; a lost or ambiguous confirmation response
+is surfaced as a dedicated `mutation may have applied; do not retry` error and
+is never retried. The one pending slot is protected by the
+derivation lifecycle gate and private code-derived session. A hostile process
+running as the same OS user and writing directly to agent-browser's private
+socket remains outside this ordinary-failure containment boundary.
+
+If Chrome dies or is replaced after readiness verification, the old WebSocket
+GUID cannot attach to the replacement and the tripwire refuses implicit launch
+before provider dispatch. The owner and pin daemon identities are published in
+immutable private markers before use. Close and discard never rerun readiness,
+create a pin, or issue a launch-capable command: they inspect only nonlaunching
+session state, terminate the exact pin first and owner second, prove both
+inactive, require three consecutive numeric-loopback TCP refusals for the
+stored CDP endpoint, and only then close the network boundary. Missing,
+replaced, or indeterminate ownership evidence preserves the private session.
+An automatic `about:blank` launch is never accepted as continuity.
+
 Agent-browser may navigate, snapshot, and exercise the chosen fixture while recording. Those actions exist only to generate evidence. Do not translate snapshot references, accessible labels, element order, or click sequences into the installed capability.
+
+When a custom text editor appends through the ordinary semantic `fill` action,
+clear only a current snapshot textbox reference before entering the exact fixture
+text:
+
+```sh
+wrench derive browser <id> -- cleartext @e5
+```
+
+`cleartext` accepts one snapshot reference and runs one fixed, bounded erase
+batch. It accepts no selector, script, or caller-selected key count. Use it only
+for capture setup; never translate the reference or erase sequence into a
+provider contract.
 
 For authenticated LinkedIn capture, use a path-backed `browser-profile` auth
 locator stored with `--trust-profile-egress`, an exact

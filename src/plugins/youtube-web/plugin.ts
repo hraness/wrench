@@ -22,7 +22,10 @@ const desiredStateKeys = Object.freeze({
 
 const operations = webSessionContractOperations(
   Object.values(youtubeContracts),
-  "91ebb7f823c31e67d3d5719b5810946ae6e8972719c24f0182ffdcdeccc40b8f",
+  "01eed7386edd0d5122f89667f389d26e5589816096d9f49f72e5871673aaf983",
+  {
+    "media.publish": [1],
+  },
 ).map((operation) => {
   if (!Object.hasOwn(desiredStateKeys, operation.name)) return operation;
   const stateKey = desiredStateKeys[
@@ -48,10 +51,11 @@ const operations = webSessionContractOperations(
 export const youtubeWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "youtube-web",
-  version: "1.1.0",
+  version: "1.2.0",
   displayName: "YouTube Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/iso-bmff.ts", "../../providers/iso-bmff.ts"],
     ["providers/youtube-web.ts", "../../providers/youtube-web.ts"],
     ["providers/youtube-web-runtime.ts", "../../providers/youtube-web-runtime.ts"],
   ]),

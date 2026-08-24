@@ -2516,6 +2516,7 @@ async function runCommand(
         allowRemoteActions: arguments_.allowRemoteActions,
         contentMode: arguments_.contentMode,
         browserDomains: arguments_.browserDomains,
+        cookieOrigins: arguments_.cookieOrigins,
         fixtureSources: arguments_.fixtureSources,
         headed: arguments_.headed,
         environment,

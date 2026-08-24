@@ -402,6 +402,7 @@ const BEEPER_LOCAL_OPERATIONS = operationPolicies("beeper", [
 const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
   "articles.read",
   "comments.read",
+  "content.delete",
   "feeds.read",
   "media.read",
   "messaging.list",
@@ -416,7 +417,9 @@ const TIKTOK_WEB_OPERATIONS = operationPolicies("tiktok", [
   "comments.read",
   "feeds.read",
   "profiles.read",
-]);
+], {
+  "media.publish": 2,
+});
 const WHATSAPP_WEB_OPERATIONS = operationPolicies("whatsapp", [
   "contacts.list",
   "media.read",
@@ -444,6 +447,7 @@ const META_WEB_OPERATIONS = Object.freeze({
   ], {
     "comments.read": 2,
     "feeds.read": 2,
+    "media.publish": 2,
     "messaging.list": 2,
   }),
   threads: operationPolicies("threads", ["feeds.read", "media.publish", "posts.publish", "profiles.read"], {
@@ -657,6 +661,7 @@ const substack = {
   "articles.read": contract("substack", "articles.read", SUBSTACK_WEB_OPERATIONS["articles.read"].risk, SUBSTACK_WEB_OPERATIONS["articles.read"].state, SUBSTACK_WEB_OPERATIONS["articles.read"].reason),
   "comments.create": contract("substack", "comments.create", SUBSTACK_WEB_OPERATIONS["comments.create"].risk, SUBSTACK_WEB_OPERATIONS["comments.create"].state, SUBSTACK_WEB_OPERATIONS["comments.create"].reason),
   "comments.read": contract("substack", "comments.read", SUBSTACK_WEB_OPERATIONS["comments.read"].risk, SUBSTACK_WEB_OPERATIONS["comments.read"].state, SUBSTACK_WEB_OPERATIONS["comments.read"].reason),
+  "content.delete": contract("substack", "content.delete", SUBSTACK_WEB_OPERATIONS["content.delete"].risk, SUBSTACK_WEB_OPERATIONS["content.delete"].state, SUBSTACK_WEB_OPERATIONS["content.delete"].reason),
   "content.edit": contract("substack", "content.edit", SUBSTACK_WEB_OPERATIONS["content.edit"].risk, SUBSTACK_WEB_OPERATIONS["content.edit"].state, SUBSTACK_WEB_OPERATIONS["content.edit"].reason),
   "content.save": contract("substack", "content.save", SUBSTACK_WEB_OPERATIONS["content.save"].risk, SUBSTACK_WEB_OPERATIONS["content.save"].state, SUBSTACK_WEB_OPERATIONS["content.save"].reason),
   "content.schedule": contract("substack", "content.schedule", SUBSTACK_WEB_OPERATIONS["content.schedule"].risk, SUBSTACK_WEB_OPERATIONS["content.schedule"].state, SUBSTACK_WEB_OPERATIONS["content.schedule"].reason),
@@ -681,12 +686,13 @@ const substack = {
 const tiktok = {
   "comments.create": contract("tiktok", "comments.create", TIKTOK_WEB_OPERATIONS["comments.create"].risk, TIKTOK_WEB_OPERATIONS["comments.create"].state, TIKTOK_WEB_OPERATIONS["comments.create"].reason),
   "comments.read": contract("tiktok", "comments.read", TIKTOK_WEB_OPERATIONS["comments.read"].risk, TIKTOK_WEB_OPERATIONS["comments.read"].state, TIKTOK_WEB_OPERATIONS["comments.read"].reason),
+  "content.delete": contract("tiktok", "content.delete", TIKTOK_WEB_OPERATIONS["content.delete"].risk, TIKTOK_WEB_OPERATIONS["content.delete"].state, TIKTOK_WEB_OPERATIONS["content.delete"].reason),
   "content.save": contract("tiktok", "content.save", TIKTOK_WEB_OPERATIONS["content.save"].risk, TIKTOK_WEB_OPERATIONS["content.save"].state, TIKTOK_WEB_OPERATIONS["content.save"].reason),
   "content.schedule": contract("tiktok", "content.schedule", TIKTOK_WEB_OPERATIONS["content.schedule"].risk, TIKTOK_WEB_OPERATIONS["content.schedule"].state, TIKTOK_WEB_OPERATIONS["content.schedule"].reason),
   "content.share": contract("tiktok", "content.share", TIKTOK_WEB_OPERATIONS["content.share"].risk, TIKTOK_WEB_OPERATIONS["content.share"].state, TIKTOK_WEB_OPERATIONS["content.share"].reason),
   "feeds.read": contract("tiktok", "feeds.read", TIKTOK_WEB_OPERATIONS["feeds.read"].risk, TIKTOK_WEB_OPERATIONS["feeds.read"].state, TIKTOK_WEB_OPERATIONS["feeds.read"].reason),
   "likes.set": contract("tiktok", "likes.set", TIKTOK_WEB_OPERATIONS["likes.set"].risk, TIKTOK_WEB_OPERATIONS["likes.set"].state, TIKTOK_WEB_OPERATIONS["likes.set"].reason),
-  "media.publish": contract("tiktok", "media.publish", TIKTOK_WEB_OPERATIONS["media.publish"].risk, TIKTOK_WEB_OPERATIONS["media.publish"].state, TIKTOK_WEB_OPERATIONS["media.publish"].reason),
+  "media.publish": contract("tiktok", "media.publish", TIKTOK_WEB_OPERATIONS["media.publish"].risk, TIKTOK_WEB_OPERATIONS["media.publish"].state, TIKTOK_WEB_OPERATIONS["media.publish"].reason, TIKTOK_WEB_OPERATIONS["media.publish"].contractVersion),
   "media.read": contract("tiktok", "media.read", TIKTOK_WEB_OPERATIONS["media.read"].risk, TIKTOK_WEB_OPERATIONS["media.read"].state, TIKTOK_WEB_OPERATIONS["media.read"].reason),
   "messaging.list": contract("tiktok", "messaging.list", TIKTOK_WEB_OPERATIONS["messaging.list"].risk, TIKTOK_WEB_OPERATIONS["messaging.list"].state, TIKTOK_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("tiktok", "messaging.read", TIKTOK_WEB_OPERATIONS["messaging.read"].risk, TIKTOK_WEB_OPERATIONS["messaging.read"].state, TIKTOK_WEB_OPERATIONS["messaging.read"].reason),
@@ -702,12 +708,13 @@ const tiktok = {
 const youtube = {
   "comments.create": contract("youtube", "comments.create", "R3", "capture-required", "current comment mutation, actor/target response binding, and an authorized live fixture remain required"),
   "comments.read": contract("youtube", "comments.read", "R1", "observed", "current acknowledgement-free Innertube next/continuation requests with exact video binding"),
+  "content.delete": contract("youtube", "content.delete", "R3", "capture-required", "cleanup only discarded the stalled incomplete Studio draft; no uploaded-video authored pre-read, accepted video/delete response, or exact-target absence readback was observed"),
   "content.edit": contract("youtube", "content.edit", "R3", "capture-required", "video, Community-post, and comment edit mutations require separate reviewed contracts"),
   "content.save": contract("youtube", "content.save", "R2", "capture-required", "the current Watch Later playlist edit implementation and target-bound readback are deterministic-test proven but still require an authorized low-stakes live fixture"),
   "content.schedule": contract("youtube", "content.schedule", "R3", "capture-required", "Studio scheduling requires current multi-origin visibility, timezone, audience, and processing contracts"),
   "feeds.read": contract("youtube", "feeds.read", "R1", "observed", "current signed-in fixed Innertube browse feeds"),
   "likes.set": contract("youtube", "likes.set", "R2", "capture-required", "the current target-bound like implementation and independent readback are deterministic-test proven but still require an authorized low-stakes live fixture"),
-  "media.publish": contract("youtube", "media.publish", "R3", "capture-required", "Studio resumable upload, byte transfer, metadata, audience, processing, and publication require an authorized fixture"),
+  "media.publish": contract("youtube", "media.publish", "R3", "capture-required", "the signed-in Studio capture reached metadata JSON responses, but the selected MP4 remained at 0%; resumable initiation, byte-transfer acceptance, finalization, processing, and exact current-account readback remain unproved", 2),
   "media.read": contract("youtube", "media.read", "R1", "observed", "current fixed Innertube player metadata request with playback credentials omitted"),
   "posts.publish": contract("youtube", "posts.publish", "R3", "capture-required", "Community text/media publication requires current actor binding and an authorized fixture"),
   "posts.read": contract("youtube", "posts.read", "R1", "observed", "current resolve_url plus exact Community-post browse request"),

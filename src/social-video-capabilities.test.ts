@@ -23,7 +23,7 @@ function binding(plugin: { readonly bindings: readonly { readonly surfaceId: str
 function operation(
   plugin: { readonly bindings: readonly { readonly surfaceId: string; readonly operations: readonly Operation[] }[] },
   surfaceId: string,
-  name: "media.publish" | "posts.publish",
+  name: "content.delete" | "media.publish" | "posts.publish",
 ): Operation {
   const matches = binding(plugin, surfaceId).operations.filter((candidate) =>
     candidate.name === name);
@@ -70,6 +70,32 @@ describe("social video provider contracts", () => {
       });
       expect(fileMediaTypes(publish.input.properties.media)).toContain("video/mp4");
     }
+  });
+
+  test("reserves exact authored Instagram video deletion without network authority", () => {
+    const publish = operation(metaWebPlugin, "instagram", "media.publish");
+    expect(publish).toMatchObject({
+      contractVersion: 2,
+      risk: "R3",
+      state: "capture-required",
+      dispatch: "single",
+    });
+    expect(fileMediaTypes(publish.input.properties.media)).toEqual(["video/mp4"]);
+    expect(publish.input.required).toEqual(["media", "caption", "audience"]);
+
+    const deletion = operation(metaWebPlugin, "instagram", "content.delete");
+    expect(deletion).toMatchObject({
+      contractVersion: 1,
+      risk: "R3",
+      state: "capture-required",
+      dispatch: "single",
+    });
+    expect(deletion).not.toHaveProperty("reconciliation");
+    expect(deletion.input.required).toEqual([
+      "media_id",
+      "expected_caption",
+      "expected_media_kind",
+    ]);
   });
 
   test("graduates exact Bluesky MP4 publishing without widening image posts", () => {
@@ -137,6 +163,12 @@ describe("social video provider contracts", () => {
 
   test("requires explicit YouTube publication declarations", () => {
     const publish = operation(youtubeWebPlugin, "youtube", "media.publish");
+    expect(publish).toMatchObject({
+      contractVersion: 2,
+      risk: "R3",
+      state: "capture-required",
+    });
+    expect(fileMediaTypes(publish.input.properties.media)).toEqual(["video/mp4"]);
     expect(publish.input.required).toEqual([
       "title",
       "media",
@@ -144,6 +176,79 @@ describe("social video provider contracts", () => {
       "made_for_kids",
       "notify_subscribers",
       "category_id",
+      "contains_synthetic_media",
+      "age_restricted",
+    ]);
+    expect(publish.input.properties.visibility).toMatchObject({
+      enum: ["private", "unlisted", "public"],
+    });
+  });
+
+  test("narrows TikTok Studio publishing to one explicit MP4 plan", () => {
+    const publish = operation(tiktokWebPlugin, "tiktok", "media.publish");
+    expect(publish).toMatchObject({
+      contractVersion: 2,
+      risk: "R3",
+      state: "capture-required",
+      dispatch: "single",
+    });
+    expect(fileMediaTypes(publish.input.properties.media)).toEqual(["video/mp4"]);
+    expect(publish.input.required).toEqual([
+      "media",
+      "audience",
+      "allow_comments",
+      "allow_duet",
+      "allow_stitch",
+      "allow_content_reuse",
+      "allow_ai_remix",
+      "contains_synthetic_media",
+      "commercial_content",
+    ]);
+  });
+
+  test("reserves only exact authored-post TikTok deletion", () => {
+    const deletion = operation(tiktokWebPlugin, "tiktok", "content.delete");
+    expect(deletion).toMatchObject({
+      contractVersion: 1,
+      risk: "R3",
+      state: "capture-required",
+      dispatch: "single",
+    });
+    expect(deletion.input.required).toEqual(["post_id", "expected_caption"]);
+    expect(Object.keys(deletion.input.properties).sort()).toEqual([
+      "expected_caption",
+      "post_id",
+    ]);
+  });
+
+  test("reserves only exact authored-video YouTube deletion", () => {
+    const deletion = operation(youtubeWebPlugin, "youtube", "content.delete");
+    expect(deletion).toMatchObject({
+      contractVersion: 1,
+      risk: "R3",
+      state: "capture-required",
+      dispatch: "single",
+    });
+    expect(deletion.input.required).toEqual(["video_id", "expected_title"]);
+    expect(Object.keys(deletion.input.properties).sort()).toEqual([
+      "expected_title",
+      "video_id",
+    ]);
+  });
+
+  test("observes exact authored personal-Note Substack deletion", () => {
+    const deletion = operation(substackWebPlugin, "substack", "content.delete");
+    expect(deletion).toMatchObject({
+      contractVersion: 1,
+      risk: "R3",
+      state: "observed",
+      dispatch: "single",
+      reconciliation: { kind: "boolean-desired-state" },
+    });
+    expect(deletion.input.required).toEqual(["note_id", "expected_body"]);
+    expect(Object.keys(deletion.input.properties).sort()).toEqual([
+      "expected_body",
+      "note_id",
     ]);
   });
 });

@@ -110,14 +110,15 @@ describe("TikTok internal-web operation registry", () => {
     expect(Object.keys(tiktokWebManifest.operations).sort()).toEqual([...TIKTOK_WEB_OPERATION_NAMES].sort());
     for (const operation of TIKTOK_WEB_OPERATION_NAMES) {
       const manifestOperation = tiktokWebManifest.operations[operation];
+      const codeContract = TIKTOK_WEB_OPERATIONS[operation];
       expect(manifestOperation.webSession).toEqual({
         site: "tiktok",
         action: operation,
-        contractVersion: 1,
+        contractVersion: "contractVersion" in codeContract ? codeContract.contractVersion : 1,
         timeoutMs: manifestOperation.webSession.timeoutMs,
         maxOutputBytes: manifestOperation.webSession.maxOutputBytes,
       });
-      expect(manifestOperation.risk).toBe(TIKTOK_WEB_OPERATIONS[operation].risk);
+      expect(manifestOperation.risk).toBe(codeContract.risk);
     }
   });
 

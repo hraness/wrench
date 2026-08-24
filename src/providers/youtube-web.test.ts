@@ -19,6 +19,7 @@ import {
   youtubeProfileTarget,
   youtubeSubscriptionState,
   youtubeSubscriptionMutationRequest,
+  youtubeVideoDeleteRequest,
   youtubeWatchLaterState,
 } from "./youtube-web";
 
@@ -75,6 +76,7 @@ describe("YouTube web policy primitives", () => {
     ] as const;
     const captureRequired = [
       "comments.create",
+      "content.delete",
       "content.save",
       "content.edit",
       "content.schedule",
@@ -99,6 +101,24 @@ describe("YouTube web policy primitives", () => {
       expect(operation.description.startsWith("Capture-required contract reservation:")).toBe(true);
       expect(operation.webSession).toMatchObject({ site: "youtube", action });
     }
+  });
+
+  test("builds only the public-bundle-proven inert video-delete envelope", () => {
+    const config = parseYouTubeBootstrapHtml(bootstrapHtml());
+    expect(youtubeVideoDeleteRequest(config, VIDEO_ID)).toEqual({
+      body: { context: config.context, videoId: VIDEO_ID },
+      endpoint: "video/delete",
+      method: "POST",
+    });
+    expect(() => youtubeVideoDeleteRequest(config, "not/a/video"))
+      .toThrow("YouTube delete video ID must be exact");
+    expect(() => youtubeVideoDeleteRequest({
+      ...config,
+      context: {
+        ...config.context,
+        client: { ...config.context.client, clientVersion: "drifted" },
+      },
+    }, VIDEO_ID)).toThrow("context did not match its reviewed bootstrap");
   });
 
   test("resolves one exact channel target and projects only exact profile counts", () => {

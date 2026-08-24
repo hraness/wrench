@@ -17,8 +17,11 @@ exposes observed `content.delete@1` only for one current-account post URI plus
 its exact confirmed CID. `reddit-web` exposes observed `content.delete@1` only
 for one exact current-account post fullname plus its confirmed title, followed
 by independent absence readback. `x-web` reserves `content.delete@1` as
-`capture-required`; LinkedIn, Substack, and Threads deletion remain unavailable
-unless their installed canonical capability independently says otherwise.
+`capture-required`; `substack-web content.delete@1` is observed for one exact
+authored personal Note with exact actor/body pre-read and independent 404
+absence. LinkedIn and Threads
+deletion remain unavailable unless their installed canonical capability
+independently says otherwise.
 
 ## Selection rules
 

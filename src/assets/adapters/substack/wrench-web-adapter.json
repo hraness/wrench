@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "substack-web",
-  "version": "1.3.0",
+  "version": "1.6.0",
   "displayName": "Substack (Authenticated Web API)",
   "surfaceId": "substack",
   "origins": [
@@ -191,7 +191,7 @@
           "media": {
             "type": "file",
             "description": "Exact plan-bound Substack Note MP4",
-            "maxBytes": 536870912,
+            "maxBytes": 134217728,
             "mediaTypes": [
               "video/mp4"
             ]
@@ -791,6 +791,40 @@
         "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 4194304
+      }
+    },
+    "content.delete": {
+      "description": "Observed contract: delete one exact current-account personal Note only after an exact authored-target and body pre-read, rebind the current viewer, dispatch one bodyless target-bound DELETE, durably retain the accepted target, and verify the exact Note independently returns 404.",
+      "risk": "R3",
+      "sideEffect": "Deletes one externally visible personal Substack Note authored by the exact bound current account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "note_id": {
+            "type": "number",
+            "description": "Exact positive personal Note ID independently pre-read as authored by the bound current account",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expected_body": {
+            "type": "string",
+            "description": "Exact current Note body independently matched before deletion",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "note_id",
+          "expected_body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "content.delete",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
       }
     },
     "articles.publish": {

@@ -9,12 +9,46 @@ import {
 } from "node:fs";
 import { isAbsolute } from "node:path";
 
-import { agentBrowserCommand, isolatedEnvironment, runCommand } from "./browser";
-import { derivationPolicyActions } from "./derive";
+import {
+  agentBrowserCommand,
+  isolatedEnvironment,
+  parseLastJsonWithExactLaunchHashes,
+  runCommand,
+} from "./browser";
+import {
+  derivationActionPolicy,
+  derivationBrowserConfig,
+  derivationConfirmedPolicyActions,
+} from "./derive";
+import {
+  processOwnerStatus,
+  type ProcessOwnerIdentity,
+} from "./process-identity";
 
 const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
+const maximumU64 = (1n << 64n) - 1n;
 
 type Identity = { readonly device: string; readonly inode: string };
+export type BrowserIdentity = {
+  readonly engine: "chrome";
+  readonly launchHash: string;
+};
+
+export type BrowserPin = {
+  readonly sessionName: string;
+  readonly cdpUrl: string;
+  readonly browserIdentity: BrowserIdentity | null;
+  readonly confirmationAction: string | null;
+  readonly daemonOwner: ProcessOwnerIdentity | null;
+};
+
+type CodeOwnedBrowserRequest =
+  | "none"
+  | "initial-contained-launch"
+  | "readiness-context"
+  | "pin-context"
+  | "pinned-batch"
+  | "pinned-confirm";
 
 type Request = {
   readonly schemaVersion: 1;
@@ -22,8 +56,12 @@ type Request = {
   readonly expectedDirectory: Identity;
   readonly socketDirectory: string;
   readonly expectedSocketDirectory: Identity;
+  readonly ownerSessionName: string;
   readonly allowRemoteActions: boolean;
   readonly allowFixtureUpload: boolean;
+  readonly guardedBrowserConfig: boolean;
+  readonly codeOwnedBrowserRequest: CodeOwnedBrowserRequest;
+  readonly browserPin: BrowserPin | null;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   readonly arguments: readonly string[];
@@ -52,6 +90,111 @@ function parseIdentity(value: unknown): Identity {
   return { device: value.device, inode: value.inode };
 }
 
+function parseBrowserIdentity(value: unknown): BrowserIdentity {
+  if (
+    !isRecord(value)
+    || !exactKeys(value, ["engine", "launchHash"])
+    || value.engine !== "chrome"
+    || typeof value.launchHash !== "string"
+    || !/^(?:0|[1-9][0-9]{0,19})$/u.test(value.launchHash)
+    || BigInt(value.launchHash) > maximumU64
+  ) throw new Error("pinned derivation browser identity is invalid");
+  return { engine: "chrome", launchHash: value.launchHash };
+}
+
+function parseDaemonOwner(value: unknown): ProcessOwnerIdentity {
+  if (
+    !isRecord(value)
+    || !exactKeys(value, ["bootId", "pid", "processStartId"])
+    || !Number.isSafeInteger(value.pid)
+    || (value.pid as number) < 1
+    || typeof value.bootId !== "string"
+    || value.bootId.length < 1
+    || value.bootId.length > 512
+    || /[\u0000-\u001f\u007f]/u.test(value.bootId)
+    || typeof value.processStartId !== "string"
+    || value.processStartId.length < 1
+    || value.processStartId.length > 512
+    || /[\u0000-\u001f\u007f]/u.test(value.processStartId)
+  ) throw new Error("pinned derivation daemon owner is invalid");
+  return {
+    pid: value.pid as number,
+    bootId: value.bootId,
+    processStartId: value.processStartId,
+  };
+}
+
+function parseBrowserPin(value: unknown): BrowserPin {
+  if (
+    !isRecord(value)
+    || !exactKeys(value, ["browserIdentity", "cdpUrl", "confirmationAction", "daemonOwner", "sessionName"])
+    || typeof value.sessionName !== "string"
+    || !/^io-derive-pin-[0-9a-f]{12}$/u.test(value.sessionName)
+    || typeof value.cdpUrl !== "string"
+    || value.cdpUrl.length > 4_096
+  ) throw new Error("pinned derivation browser descriptor is invalid");
+  let cdpUrl: URL;
+  try {
+    cdpUrl = new URL(value.cdpUrl);
+  } catch {
+    throw new Error("pinned derivation browser descriptor is invalid");
+  }
+  if (
+    cdpUrl.protocol !== "ws:"
+    || (cdpUrl.hostname !== "127.0.0.1" && cdpUrl.hostname !== "[::1]" && cdpUrl.hostname !== "localhost")
+    || cdpUrl.port === ""
+    || cdpUrl.username !== ""
+    || cdpUrl.password !== ""
+    || cdpUrl.search !== ""
+    || cdpUrl.hash !== ""
+    || !/^\/devtools\/browser\/[A-Za-z0-9_-]{1,256}$/u.test(cdpUrl.pathname)
+  ) throw new Error("pinned derivation browser descriptor is invalid");
+  return {
+    sessionName: value.sessionName,
+    cdpUrl: cdpUrl.href,
+    browserIdentity: value.browserIdentity === null ? null : parseBrowserIdentity(value.browserIdentity),
+    confirmationAction: value.confirmationAction === null
+      ? null
+      : typeof value.confirmationAction === "string"
+          && derivationConfirmedPolicyActions.includes(
+            value.confirmationAction as (typeof derivationConfirmedPolicyActions)[number],
+          )
+        ? value.confirmationAction
+        : (() => { throw new Error("pinned derivation confirmation action is invalid"); })(),
+    daemonOwner: value.daemonOwner === null ? null : parseDaemonOwner(value.daemonOwner),
+  };
+}
+
+function pinnedBrowserStdin(kind: CodeOwnedBrowserRequest): string | null {
+  if (kind === "none") return null;
+  if (kind === "initial-contained-launch") return JSON.stringify([["open", "about:blank"]]);
+  if (kind === "readiness-context") return JSON.stringify([["get", "cdp-url"], ["get", "url"]]);
+  if (kind === "pin-context") return JSON.stringify([["get", "cdp-url"], ["get", "url"]]);
+  return null;
+}
+
+function parsePinnedCommands(value: string | null): readonly (readonly string[])[] {
+  if (value === null) throw new Error("pinned derivation browser commands are invalid");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("pinned derivation browser commands are invalid");
+  }
+  if (
+    !Array.isArray(parsed)
+    || parsed.length < 1
+    || parsed.length > 500
+    || parsed.some((command) => (
+      !Array.isArray(command)
+      || command.length < 1
+      || command.length > 100
+      || command.some((argument) => typeof argument !== "string")
+    ))
+  ) throw new Error("pinned derivation browser commands are invalid");
+  return parsed as readonly (readonly string[])[];
+}
+
 function parseRequest(value: unknown): Request {
   if (
     !isRecord(value)
@@ -61,8 +204,12 @@ function parseRequest(value: unknown): Request {
       "expectedDirectory",
       "socketDirectory",
       "expectedSocketDirectory",
+      "ownerSessionName",
       "allowRemoteActions",
       "allowFixtureUpload",
+      "guardedBrowserConfig",
+      "codeOwnedBrowserRequest",
+      "browserPin",
       "timeoutMs",
       "maxOutputBytes",
       "arguments",
@@ -75,9 +222,15 @@ function parseRequest(value: unknown): Request {
     || !isAbsolute(value.socketDirectory)
     || value.socketDirectory.length > 4_096
     || value.socketDirectory.includes("\u0000")
+    || typeof value.ownerSessionName !== "string"
+    || !/^io-derive-[a-f0-9]{12}$/u.test(value.ownerSessionName)
     || typeof value.allowRemoteActions !== "boolean"
     || typeof value.allowFixtureUpload !== "boolean"
+    || typeof value.guardedBrowserConfig !== "boolean"
     || (value.allowFixtureUpload && !value.allowRemoteActions)
+    || !["none", "initial-contained-launch", "readiness-context", "pin-context", "pinned-batch", "pinned-confirm"].includes(
+      typeof value.codeOwnedBrowserRequest === "string" ? value.codeOwnedBrowserRequest : "",
+    )
     || typeof value.timeoutMs !== "number"
     || !Number.isSafeInteger(value.timeoutMs)
     || value.timeoutMs < 1
@@ -99,6 +252,73 @@ function parseRequest(value: unknown): Request {
       || argument.startsWith("--action-policy=")
     ))
     || (value.browserStdin !== null && (typeof value.browserStdin !== "string" || Buffer.byteLength(value.browserStdin, "utf8") > 5 * 1024 * 1024))
+    || (
+      value.codeOwnedBrowserRequest !== "none"
+      && value.codeOwnedBrowserRequest !== "pinned-confirm"
+      && (
+        (
+          value.codeOwnedBrowserRequest !== "pinned-batch"
+          && value.browserStdin !== pinnedBrowserStdin(value.codeOwnedBrowserRequest as CodeOwnedBrowserRequest)
+        )
+        || value.arguments.length < 3
+        || value.arguments.at(-3) !== "batch"
+        || value.arguments.at(-2) !== "--bail"
+        || value.arguments.at(-1) !== "--json"
+      )
+    )
+  ) throw new Error("derivation command request is invalid");
+  const codeOwnedBrowserRequest = value.codeOwnedBrowserRequest as CodeOwnedBrowserRequest;
+  const browserPin = value.browserPin === null ? null : parseBrowserPin(value.browserPin);
+  if (
+    (codeOwnedBrowserRequest === "initial-contained-launch" && value.guardedBrowserConfig)
+    || (["readiness-context", "pin-context", "pinned-batch", "pinned-confirm"].includes(codeOwnedBrowserRequest) && !value.guardedBrowserConfig)
+    || (
+      codeOwnedBrowserRequest === "readiness-context"
+      && JSON.stringify(value.arguments) !== JSON.stringify([
+        "--session",
+        value.ownerSessionName,
+        "--content-boundaries",
+        "--max-output",
+        String(5 * 1024 * 1024),
+        "batch",
+        "--bail",
+        "--json",
+      ])
+    )
+    || (["pin-context", "pinned-batch", "pinned-confirm"].includes(codeOwnedBrowserRequest)) !== (browserPin !== null)
+    || (
+      browserPin !== null
+      && browserPin.sessionName !== value.ownerSessionName.replace(
+        /^io-derive-/u,
+        "io-derive-pin-",
+      )
+    )
+    || (codeOwnedBrowserRequest === "pin-context" && (browserPin === null || browserPin.browserIdentity !== null || browserPin.confirmationAction !== null || browserPin.daemonOwner !== null))
+    || (codeOwnedBrowserRequest === "pinned-batch" && (browserPin === null || browserPin.browserIdentity === null || browserPin.confirmationAction !== null || browserPin.daemonOwner !== null))
+    || (codeOwnedBrowserRequest === "pinned-batch" && value.browserStdin === null)
+    || (codeOwnedBrowserRequest === "pinned-batch" && parsePinnedCommands(value.browserStdin).length !== 1)
+    || (codeOwnedBrowserRequest === "pinned-confirm" && (browserPin === null || browserPin.browserIdentity === null || browserPin.confirmationAction === null || browserPin.daemonOwner === null))
+    || (
+      codeOwnedBrowserRequest === "pinned-confirm"
+      && (
+        value.browserStdin !== null
+        || value.arguments.length !== 3
+        || value.arguments[0] !== "confirm"
+        || typeof value.arguments[1] !== "string"
+        || !/^r\d{1,6}$/u.test(value.arguments[1])
+        || value.arguments[2] !== "--json"
+      )
+    )
+    || (
+      browserPin !== null
+      && codeOwnedBrowserRequest !== "pinned-confirm"
+      && (
+        value.arguments.length !== 3
+        || value.arguments[0] !== "batch"
+        || value.arguments[1] !== "--bail"
+        || value.arguments[2] !== "--json"
+      )
+    )
   ) throw new Error("derivation command request is invalid");
   return {
     schemaVersion: 1,
@@ -106,13 +326,171 @@ function parseRequest(value: unknown): Request {
     expectedDirectory: parseIdentity(value.expectedDirectory),
     socketDirectory: value.socketDirectory,
     expectedSocketDirectory: parseIdentity(value.expectedSocketDirectory),
+    ownerSessionName: value.ownerSessionName,
     allowRemoteActions: value.allowRemoteActions,
     allowFixtureUpload: value.allowFixtureUpload,
+    guardedBrowserConfig: value.guardedBrowserConfig,
+    codeOwnedBrowserRequest,
+    browserPin,
     timeoutMs: value.timeoutMs,
     maxOutputBytes: value.maxOutputBytes,
     arguments: value.arguments.map((argument) => String(argument)),
     browserStdin: value.browserStdin,
   };
+}
+
+function pinnedLifecycle(
+  value: unknown,
+  expected: BrowserIdentity | null,
+): BrowserIdentity {
+  if (!isRecord(value) || !exactKeys(value, [
+    "effectiveLaunch",
+    "launched",
+    "relaunchedBrowser",
+    "restartedBackground",
+    "restoreStatus",
+    "reused",
+    "saveStatus",
+  ])) throw new Error("pinned derivation browser lifecycle changed shape");
+  const effectiveLaunch = value.effectiveLaunch;
+  if (
+    !isRecord(effectiveLaunch)
+    || !exactKeys(effectiveLaunch, ["browserLaunched", "engine", "launchHash"])
+  ) throw new Error("pinned derivation browser lifecycle changed shape");
+  const identity = parseBrowserIdentity({
+    engine: effectiveLaunch.engine,
+    launchHash: effectiveLaunch.launchHash,
+  });
+  if (
+    effectiveLaunch.browserLaunched !== true
+    || value.launched !== false
+    || value.relaunchedBrowser !== false
+    || value.restartedBackground !== false
+    || value.restoreStatus !== "not_configured"
+    || typeof value.reused !== "boolean"
+    || value.saveStatus !== "not_attempted"
+    || (
+      expected !== null
+      && (identity.engine !== expected.engine || identity.launchHash !== expected.launchHash)
+    )
+  ) throw new Error("pinned derivation browser lifecycle changed identity or was relaunched");
+  return identity;
+}
+
+export function validatePinnedDerivationBrowserOutput(
+  value: unknown,
+  commands: readonly (readonly string[])[],
+  pin: BrowserPin,
+): BrowserIdentity {
+  if (!Array.isArray(value) || value.length !== commands.length) {
+    throw new Error("pinned derivation browser result changed shape");
+  }
+  let observed: BrowserIdentity | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index];
+    const command = commands[index];
+    if (
+      !isRecord(entry)
+      || !exactKeys(entry, ["command", "error", "result", "success"])
+      || JSON.stringify(entry.command) !== JSON.stringify(command)
+      || entry.success !== true
+      || entry.error !== null
+      || !isRecord(entry.result)
+      || !("lifecycle" in entry.result)
+    ) throw new Error("pinned derivation browser result changed shape");
+    const identity = pinnedLifecycle(entry.result.lifecycle, pin.browserIdentity);
+    if (
+      observed !== null
+      && (observed.engine !== identity.engine || observed.launchHash !== identity.launchHash)
+    ) throw new Error("pinned derivation browser lifecycle changed within its batch");
+    observed = identity;
+    if (
+      command?.length === 2
+      && command[0] === "get"
+      && command[1] === "cdp-url"
+      && entry.result.cdpUrl !== pin.cdpUrl
+    ) throw new Error("pinned derivation browser returned a different private CDP URL");
+  }
+  if (observed === null) throw new Error("pinned derivation browser result changed shape");
+  return observed;
+}
+
+export type PinnedDerivationConfirmation = {
+  readonly action: string;
+  readonly confirmationId: string;
+};
+
+export function parsePinnedDerivationConfirmation(
+  value: unknown,
+  command: readonly string[],
+): PinnedDerivationConfirmation | null {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new Error("pinned derivation browser result changed shape");
+  }
+  const entry = value[0];
+  if (
+    !isRecord(entry)
+    || !exactKeys(entry, ["command", "error", "result", "success"])
+    || JSON.stringify(entry.command) !== JSON.stringify(command)
+    || entry.success !== true
+    || entry.error !== null
+    || !isRecord(entry.result)
+  ) throw new Error("pinned derivation browser result changed shape");
+  if ("lifecycle" in entry.result) return null;
+  if (
+    !exactKeys(entry.result, ["action", "confirmation_id", "confirmation_required"])
+    || entry.result.confirmation_required !== true
+    || typeof entry.result.confirmation_id !== "string"
+    || !/^r\d{1,6}$/u.test(entry.result.confirmation_id)
+    || typeof entry.result.action !== "string"
+    || !derivationConfirmedPolicyActions.includes(
+      entry.result.action as (typeof derivationConfirmedPolicyActions)[number],
+    )
+  ) throw new Error("pinned derivation browser confirmation changed shape");
+  return {
+    action: entry.result.action,
+    confirmationId: entry.result.confirmation_id,
+  };
+}
+
+export function parsePinnedDerivationConfirmationResult(
+  value: unknown,
+  confirmation: PinnedDerivationConfirmation,
+  pin: BrowserPin & {
+    readonly browserIdentity: BrowserIdentity;
+    readonly daemonOwner: ProcessOwnerIdentity;
+  },
+): Record<string, unknown> {
+  if (
+    !isRecord(value)
+    || !exactKeys(value, ["_boundary", "data", "error", "success"])
+    || value.success !== true
+    || value.error !== null
+    || !isRecord(value._boundary)
+    || !exactKeys(value._boundary, ["nonce", "origin"])
+    || typeof value._boundary.nonce !== "string"
+    || !/^[a-f0-9]{32}$/u.test(value._boundary.nonce)
+    || value._boundary.origin !== "unknown"
+    || !isRecord(value.data)
+    || !exactKeys(value.data, ["action", "confirmed", "lifecycle", "result"])
+    || value.data.confirmed !== true
+    || value.data.action !== confirmation.action
+    || !isRecord(value.data.result)
+    || !exactKeys(value.data.result, ["data", "id", "success"])
+    || value.data.result.id !== confirmation.confirmationId
+    || value.data.result.success !== true
+    || !isRecord(value.data.result.data)
+  ) throw new Error("pinned derivation browser confirmation result changed shape");
+  const confirmedData = value.data.result.data;
+  if (
+    !("lifecycle" in confirmedData)
+    || ["confirmation_required", "confirmation_id", "confirmed", "denied"].some(
+      (key) => key in confirmedData,
+    )
+  ) throw new Error("pinned derivation browser confirmation result changed shape");
+  pinnedLifecycle(value.data.lifecycle, pin.browserIdentity);
+  pinnedLifecycle(confirmedData.lifecycle, pin.browserIdentity);
+  return confirmedData;
 }
 
 function readBoundedStdin(): string {
@@ -203,15 +581,46 @@ async function main(): Promise<void> {
   assertBoundDirectory(request.expectedDirectory);
   const config = "agent-browser.json";
   const policy = "action-policy.json";
-  assertPrivateFile(config, "{}\n");
-  assertPrivateFile(policy, `${JSON.stringify({
-    allow: derivationPolicyActions(request.allowRemoteActions, request.allowFixtureUpload),
-    default: "deny",
-  })}\n`);
+  assertPrivateFile(
+    config,
+    `${JSON.stringify(derivationBrowserConfig(request.guardedBrowserConfig))}\n`,
+  );
+  assertPrivateFile(
+    policy,
+    `${JSON.stringify(derivationActionPolicy(
+      request.allowRemoteActions,
+      request.allowFixtureUpload,
+    ))}\n`,
+  );
   assertBoundDirectory(request.expectedDirectory);
   assertPrivateDirectoryPath(request.socketDirectory, request.expectedSocketDirectory);
+  const arguments_ = request.browserPin === null
+    ? request.arguments
+    : request.codeOwnedBrowserRequest === "pinned-confirm"
+      ? [
+          "--session",
+          request.browserPin.sessionName,
+          "--content-boundaries",
+          "--max-output",
+          String(5 * 1024 * 1024),
+          ...request.arguments,
+        ]
+    : [
+        "--session",
+        request.browserPin.sessionName,
+        "--cdp",
+        request.browserPin.cdpUrl,
+        "--content-boundaries",
+        "--max-output",
+        String(5 * 1024 * 1024),
+        ...request.arguments,
+      ];
+  if (
+    request.codeOwnedBrowserRequest === "pinned-confirm"
+    && processOwnerStatus(request.browserPin?.daemonOwner as ProcessOwnerIdentity) !== "exact-live-owner"
+  ) throw new Error("pinned derivation daemon changed before confirmation");
   const result = await runCommand(
-    [...agentBrowserCommand(), "--config", config, "--action-policy", policy, ...request.arguments],
+    [...agentBrowserCommand(), "--config", config, "--action-policy", policy, ...arguments_],
     {
       cwd: ".",
       environment: isolatedEnvironment(request.socketDirectory),
@@ -220,6 +629,32 @@ async function main(): Promise<void> {
       ...(request.browserStdin === null ? {} : { stdin: request.browserStdin }),
     },
   );
+  if (
+    request.codeOwnedBrowserRequest === "pinned-confirm"
+    && processOwnerStatus(request.browserPin?.daemonOwner as ProcessOwnerIdentity) !== "exact-live-owner"
+  ) throw new Error("pinned derivation daemon changed during confirmation");
+  if (request.browserPin !== null && result.exitCode === 0) {
+    const parsed = parseLastJsonWithExactLaunchHashes(result.stdout);
+    if (request.codeOwnedBrowserRequest === "pinned-confirm") {
+      parsePinnedDerivationConfirmationResult(
+        parsed,
+        {
+          action: request.browserPin.confirmationAction as string,
+          confirmationId: request.arguments[1] as string,
+        },
+        request.browserPin as BrowserPin & {
+          readonly browserIdentity: BrowserIdentity;
+          readonly daemonOwner: ProcessOwnerIdentity;
+        },
+      );
+    } else {
+      const commands = parsePinnedCommands(request.browserStdin);
+      if (
+        request.codeOwnedBrowserRequest !== "pinned-batch"
+        || parsePinnedDerivationConfirmation(parsed, commands[0] ?? []) === null
+      ) validatePinnedDerivationBrowserOutput(parsed, commands, request.browserPin);
+    }
+  }
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;

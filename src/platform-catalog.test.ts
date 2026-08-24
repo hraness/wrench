@@ -252,11 +252,11 @@ const expandedExecutableContracts = {
   whatsapp: { R2: ["content.save"], R3: ["content.share", "content.edit"] },
   substack: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["posts.repost", "posts.quote", "content.share", "content.edit", "content.schedule"],
+    R3: ["posts.repost", "posts.quote", "content.share", "content.edit", "content.delete", "content.schedule"],
   },
   instagram: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["posts.repost", "content.share", "content.edit"],
+    R3: ["posts.repost", "content.share", "content.edit", "content.delete"],
   },
   threads: {
     R2: ["relationships.follow.set", "content.save"],
@@ -277,11 +277,11 @@ const expandedExecutableContracts = {
   "facebook-marketplace": { R2: ["content.save"], R3: ["content.share", "content.edit"] },
   tiktok: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["posts.repost", "content.share", "content.schedule"],
+    R3: ["posts.repost", "content.share", "content.delete", "content.schedule"],
   },
   youtube: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["content.edit", "content.schedule"],
+    R3: ["content.edit", "content.delete", "content.schedule"],
   },
   bluesky: {
     R2: ["relationships.follow.set", "content.save"],
@@ -464,7 +464,7 @@ describe("social platform catalog", () => {
         expect(surface.operations[operationName].state).not.toBe("adapter-eligible");
       }
       expect(surface.operations["content.delete"]).toMatchObject(
-        surfaceId === "x" || surfaceId === "bluesky" || surfaceId === "reddit"
+        surfaceId === "x" || surfaceId === "bluesky" || surfaceId === "reddit" || surfaceId === "substack" || surfaceId === "instagram" || surfaceId === "tiktok" || surfaceId === "youtube"
           ? { state: "adapter-eligible", risk: "R3" }
           : { state: "R4", risk: "R4" },
       );

@@ -18,6 +18,47 @@ const auth = {
 } as const satisfies WrenchAuth;
 
 describe("YouTube provider plugin", () => {
+  test("versions the narrowed MP4 and authored-video delete reservations", () => {
+    expect(youtubeWebPlugin.version).toBe("1.2.0");
+    const videoPublish = binding.operations.find((operation) =>
+      operation.name === "media.publish");
+    expect(videoPublish?.contractVersion).toBe(2);
+    expect(videoPublish?.risk).toBe("R3");
+    expect(videoPublish?.state).toBe("capture-required");
+    expect(videoPublish?.implementation).toContain("selected MP4 remained at 0%");
+    const videoMedia = videoPublish?.input.properties.media;
+    if (videoMedia?.type !== "file") {
+      throw new Error("YouTube video publishing media input is unavailable");
+    }
+    expect(videoMedia.maxBytes).toBe(128 * 1024 * 1024);
+    const videoMediaTypes = videoMedia.mediaTypes;
+    if (videoMediaTypes === undefined) {
+      throw new Error("YouTube video publishing media types are unavailable");
+    }
+    expect(videoMediaTypes).toHaveLength(1);
+    expect(videoMediaTypes[0]).toBe("video/mp4");
+
+    const postMedia = binding.operations.find((operation) =>
+      operation.name === "posts.publish")?.input.properties.media;
+    if (postMedia?.type !== "file") {
+      throw new Error("YouTube post publishing media input is unavailable");
+    }
+    expect(postMedia.maxBytes).toBe(20 * 1024 * 1024);
+
+    const contentDelete = binding.operations.find((operation) =>
+      operation.name === "content.delete");
+    expect(contentDelete?.contractVersion).toBe(1);
+    expect(contentDelete?.risk).toBe("R3");
+    expect(contentDelete?.state).toBe("capture-required");
+    expect(contentDelete?.implementation).toContain(
+      "discarded the stalled incomplete Studio draft",
+    );
+    expect(Object.isFrozen(videoPublish)).toBeTrue();
+    expect(Object.isFrozen(videoMedia)).toBeTrue();
+    expect(Object.isFrozen(postMedia)).toBeTrue();
+    expect(Object.isFrozen(contentDelete)).toBeTrue();
+  });
+
   test("keeps all three boolean reconciliations capture-required", async () => {
     const expected = {
       "likes.set": ["liked", true],

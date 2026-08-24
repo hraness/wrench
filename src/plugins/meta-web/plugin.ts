@@ -88,6 +88,7 @@ const historicalVersions = Object.freeze({
   instagram: Object.freeze({
     "comments.read": Object.freeze([1]),
     "feeds.read": Object.freeze([1]),
+    "media.publish": Object.freeze([1]),
     "messaging.list": Object.freeze([1]),
   }),
   threads: Object.freeze({
@@ -111,7 +112,7 @@ const historicalVersions = Object.freeze({
 >);
 
 const contractSemanticIdentities = Object.freeze({
-  instagram: "3e2f5a7d655030588754ffe64141f4108e76c57f227fe903549ba192f1735c68",
+  instagram: "fa50f3b2b32782f779ccb3a6e10a964ce92e1e1ba0c860b305ad8313e4a4d2e6",
   threads: "04b95f200d512ef150043986fea9a106a401c5b7a2ba501cd454983edcacb00a",
   facebook: "f4724c9619794070da784d03fdaef5889cc4f3d237f9f402e9d5a53f7c156184",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
@@ -132,6 +133,7 @@ export const metaWebPlugin = defineProviderPlugin({
     ["kernel/state-helper.bunfig.toml", "../../state-helper.bunfig.toml"],
     ["kernel/path-helper.ts", "../../path-helper.ts"],
     ["providers/iso-bmff.ts", "../../providers/iso-bmff.ts"],
+    ["providers/instagram-video-foundations.ts", "../../providers/instagram-video-foundations.ts"],
     ["providers/meta-web.ts", "../../providers/meta-web.ts"],
     ["providers/meta-web-runtime.ts", "../../providers/meta-web-runtime.ts"],
     ["providers/meta-bootstrap.ts", "../../providers/meta-bootstrap.ts"],

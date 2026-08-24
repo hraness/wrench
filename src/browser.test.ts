@@ -27,8 +27,12 @@ import {
   createBrowserSession,
   executeBrowserRecipe,
   isolatedEnvironment,
+  ownedBrowserProxyArguments,
+  ownedChromeLaunchArguments,
+  ownedDerivationGuardBrowserArguments,
   parseBrowserRecoveryHandle,
   parseLastJson,
+  parseLastJsonWithExactLaunchHashes,
   PreservedBrowserArtifactsError,
   profilePath,
   runCommand,
@@ -255,6 +259,57 @@ describe("browser process isolation helpers", () => {
     expect(runtimeBrowserPolicyActions).not.toContain("evaluate");
   });
 
+  test("pins owned Chrome onboarding suppression inside the single proxy launch-argument value", () => {
+    const arguments_ = ownedBrowserProxyArguments(
+      "http://127.0.0.1:43124",
+      "Default",
+    );
+    expect(arguments_.filter((argument) => argument === "--args")).toHaveLength(1);
+    const launchArguments = arguments_[arguments_.indexOf("--args") + 1]?.split("\n") ?? [];
+    expect(launchArguments).toContain("--profile-directory=Default");
+    expect(launchArguments).toContain("--no-first-run");
+    expect(launchArguments).toContain("--no-default-browser-check");
+    expect(arguments_.slice(0, 2)).toEqual([
+      "--proxy",
+      "http://127.0.0.1:43124",
+    ]);
+    expect(() => ownedChromeLaunchArguments(["--user-data-dir=/private/profile"])).toThrow("not reviewed");
+    expect(() => ownedChromeLaunchArguments(["--flag,hidden-override"])).toThrow("not reviewed");
+    expect(() => ownedChromeLaunchArguments(["--flag\n--hidden-override"])).toThrow("not reviewed");
+  });
+
+  test("loads only the exact private MV3 derivation guard beside the hardened proxy", () => {
+    const extension = "/private/wrench/derivation/network-guard-extension";
+    const arguments_ = ownedDerivationGuardBrowserArguments(
+      "http://127.0.0.1:43124",
+      extension,
+    );
+    expect(arguments_.slice(0, 2)).toEqual(["--proxy", "http://127.0.0.1:43124"]);
+    expect(arguments_.filter((value) => value === "--args")).toHaveLength(1);
+    const chromeArguments = arguments_[3]?.split("\n") ?? [];
+    for (const required of [
+      "--disable-quic",
+      "--disable-dns-prefetch",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-default-apps",
+      "--disable-sync",
+      "--disable-features=AsyncDns",
+      "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+      "--proxy-bypass-list=<-loopback>",
+      `--disable-extensions-except=${extension}`,
+      `--load-extension=${extension}`,
+    ]) expect(chromeArguments).toContain(required);
+    expect(() => ownedDerivationGuardBrowserArguments(
+      "http://127.0.0.1:43124",
+      "/private/wrench/derivation/other-extension",
+    )).toThrow("invalid");
+    expect(() => ownedDerivationGuardBrowserArguments(
+      "http://127.0.0.1:43124",
+      "/private/wrench,other/network-guard-extension",
+    )).toThrow("invalid");
+  });
+
   test("treats a permission-denied process-group probe as live", () => {
     expect(classifyBrowserProcessGroupProbe(
       1,
@@ -426,6 +481,60 @@ describe("browser process isolation helpers", () => {
   test("parses only the last valid JSON diagnostic line", () => {
     expect(parseLastJson("diagnostic\n{not json}\n{\"success\":true}\nignored-after\n")).toEqual({ success: true });
     expect(() => parseLastJson("diagnostic only\n")).toThrow("did not return JSON");
+  });
+
+  test("preserves every nested launchHash as an exact canonical decimal string", () => {
+    expect(parseLastJsonWithExactLaunchHashes([
+      "diagnostic",
+      "{not json}",
+      JSON.stringify({ ignored: true }),
+      "{\"launchHash\":18446744073709551615,\"nested\":[{\"launch\\u0048ash\":9007199254740993},{\"launchHash\":0}],\"ordinary\":42}",
+      "ignored-after",
+      "",
+    ].join("\n"))).toEqual({
+      launchHash: "18446744073709551615",
+      nested: [
+        { launchHash: "9007199254740993" },
+        { launchHash: "0" },
+      ],
+      ordinary: 42,
+    });
+  });
+
+  test("rejects non-u64 launchHash values instead of rounding or coercing them", () => {
+    const invalid = [
+      "18446744073709551616",
+      "-1",
+      "1.0",
+      "1e0",
+      "true",
+      "\"1\"",
+      "{}",
+      "[]",
+    ];
+    for (const value of invalid) {
+      expect(() => parseLastJsonWithExactLaunchHashes(
+        `{\"success\":true}\n{\"launchHash\":${value}}\n`,
+      )).toThrow("launchHash");
+    }
+    expect(parseLastJsonWithExactLaunchHashes(
+      "{\"browserLaunched\":false,\"launchHash\":null}\n",
+    )).toEqual({ browserLaunched: false, launchHash: null });
+  });
+
+  test("rejects duplicate decoded launchHash fields without parser ambiguity", () => {
+    expect(() => parseLastJsonWithExactLaunchHashes(
+      "{\"launchHash\":1,\"launch\\u0048ash\":18446744073709551616}\n",
+    )).toThrow("duplicate launchHash");
+    expect(() => parseLastJsonWithExactLaunchHashes(
+      "{\"launchHash\":1,\"launch\\u0048ash\":2}\n",
+    )).toThrow("duplicate launchHash");
+    expect(parseLastJsonWithExactLaunchHashes(
+      "{\"notLaunchHash\":18446744073709551615,\"launchHashSuffix\":18446744073709551615}\n",
+    )).toEqual({
+      notLaunchHash: 18_446_744_073_709_552_000,
+      launchHashSuffix: 18_446_744_073_709_552_000,
+    });
   });
 
   test("reads pinned batch result envelopes and rejects missing results", () => {
@@ -667,6 +776,8 @@ describe("browser process isolation helpers", () => {
       );
       const browserArgumentsIndex = launch?.command.indexOf("--args") ?? -1;
       expect(browserArgumentsIndex < 0 ? "" : launch?.command[browserArgumentsIndex + 1]).toContain("--profile-directory=Default");
+      expect(browserArgumentsIndex < 0 ? "" : launch?.command[browserArgumentsIndex + 1]).toContain("--no-first-run");
+      expect(browserArgumentsIndex < 0 ? "" : launch?.command[browserArgumentsIndex + 1]).toContain("--no-default-browser-check");
       expect(privateProfile === undefined ? false : existsSync(join(privateProfile, "Default", "Local Storage", "state"))).toBeTrue();
       expect(privateProfile === undefined ? false : existsSync(join(privateProfile, "Local State"))).toBeTrue();
       expect(cookieSelections).toEqual([{

@@ -275,9 +275,15 @@ describe("provider plugin definition and registry", () => {
     expect(plugin?.version).toBe("1.2.0");
     if (binding === undefined) throw new Error("Meta provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
-      .toBe("6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994");
+      .toBe("8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101");
     const readers = providerPluginRegistry.legacyContractImplementationHashes(binding)
       .map((value) => value.toString("hex"));
+    expect(readers).toContain(
+      "5690d4ba2d37bce7aed32f12a44a2ed6066cb01c319674d37521f011122c9da7",
+    );
+    expect(readers).toContain(
+      "6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994",
+    );
     expect(readers).toContain(
       "fc6875171617dfe466f1e39308b8a208253b7b4adae3201f58634cfd43c30913",
     );

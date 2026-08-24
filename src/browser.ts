@@ -432,6 +432,101 @@ export function agentBrowserCommand(): readonly string[] {
   return packageAgentBrowserCommand();
 }
 
+export const ownedChromeOnboardingArguments = Object.freeze([
+  "--no-first-run",
+  "--no-default-browser-check",
+] as const);
+
+const reviewedOwnedChromeArguments = new Set([
+  "--profile-directory=Default",
+  "--disable-quic",
+  "--disable-dns-prefetch",
+  "--disable-background-networking",
+  "--disable-component-update",
+  "--disable-default-apps",
+  "--disable-sync",
+  "--disable-features=AsyncDns",
+  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+  "--proxy-bypass-list=<-loopback>",
+]);
+
+/**
+ * Build one pinned --args value for a Wrench-owned fresh or cloned Chrome.
+ * Callers supply only code-owned arguments; Wrench never accepts raw launch
+ * arguments from manifests, operation input, auth locators, or the CLI.
+ */
+export function ownedChromeLaunchArguments(
+  additional: readonly string[] = [],
+): string {
+  if (
+    additional.some((argument) =>
+      !reviewedOwnedChromeArguments.has(argument)
+      || /[\0\r\n,]/u.test(argument))
+  ) {
+    throw new Error("owned Chrome launch arguments are not reviewed");
+  }
+  return [...new Set([
+    ...additional,
+    ...ownedChromeOnboardingArguments,
+  ])].join("\n");
+}
+
+export function ownedBrowserProxyArguments(
+  proxyUrl: string,
+  profileDirectory?: "Default",
+): readonly string[] {
+  const generated = browserProxyArguments(proxyUrl, profileDirectory);
+  if (
+    generated.length !== 4
+    || generated[0] !== "--proxy"
+    || generated[1] !== proxyUrl
+    || generated[2] !== "--args"
+    || typeof generated[3] !== "string"
+  ) {
+    throw new Error("pinned browser proxy arguments are malformed");
+  }
+  return Object.freeze([
+    "--proxy",
+    proxyUrl,
+    "--args",
+    ownedChromeLaunchArguments(generated[3].split("\n")),
+  ]);
+}
+
+/**
+ * Add the one Wrench-owned MV3 guard to the already reviewed proxy launch.
+ * The path is derived from a private derivation root; caller-selected Chrome
+ * arguments remain impossible.
+ */
+export function ownedDerivationGuardBrowserArguments(
+  proxyUrl: string,
+  extensionDirectory: string,
+): readonly string[] {
+  if (
+    !isAbsolute(extensionDirectory)
+    || basename(extensionDirectory) !== "network-guard-extension"
+    || /[\0\r\n,]/u.test(extensionDirectory)
+  ) throw new Error("owned derivation guard extension path is invalid");
+  const base = ownedBrowserProxyArguments(proxyUrl);
+  if (base.length !== 4 || base[0] !== "--proxy" || base[2] !== "--args") {
+    throw new Error("owned derivation proxy arguments changed shape");
+  }
+  const chromeArguments = base[3];
+  if (typeof chromeArguments !== "string") {
+    throw new Error("owned derivation proxy arguments changed shape");
+  }
+  return Object.freeze([
+    base[0],
+    base[1] as string,
+    base[2],
+    [
+      chromeArguments,
+      `--disable-extensions-except=${extensionDirectory}`,
+      `--load-extension=${extensionDirectory}`,
+    ].join("\n"),
+  ]);
+}
+
 export function isolatedEnvironment(
   socketDirectory: string,
   inheritedEnvironment: Readonly<Record<string, string | undefined>> = process.env,
@@ -720,6 +815,265 @@ export function parseLastJson(output: string): unknown {
       } catch {
         // Continue past diagnostics emitted before the JSON result.
       }
+    }
+  }
+  throw new Error("agent-browser did not return JSON");
+}
+
+const maximumAgentBrowserLaunchHash = (1n << 64n) - 1n;
+const maximumAgentBrowserJsonNesting = 256;
+
+class AgentBrowserLaunchHashParseError extends Error {}
+
+type JsonTextReplacement = {
+  readonly start: number;
+  readonly end: number;
+  readonly value: string;
+};
+
+/**
+ * Rewrites only object values whose decoded key is exactly `launchHash`.
+ * The surrounding JSON is parsed normally after every u64 token has become
+ * a quoted canonical decimal string, avoiding JavaScript Number rounding.
+ */
+class AgentBrowserLaunchHashRewriter {
+  readonly #input: string;
+  readonly #replacements: JsonTextReplacement[] = [];
+  #index = 0;
+
+  constructor(input: string) {
+    this.#input = input;
+  }
+
+  rewrite(): string {
+    this.#parseValue(false, 0);
+    this.#skipWhitespace();
+    if (this.#index !== this.#input.length) {
+      throw new AgentBrowserLaunchHashParseError("agent-browser JSON is malformed");
+    }
+    let rewritten = this.#input;
+    for (const replacement of this.#replacements.toReversed()) {
+      rewritten = `${rewritten.slice(0, replacement.start)}${replacement.value}${rewritten.slice(replacement.end)}`;
+    }
+    return rewritten;
+  }
+
+  #parseValue(launchHash: boolean, depth: number): void {
+    this.#skipWhitespace();
+    if (launchHash) {
+      if (this.#input.startsWith("null", this.#index)) {
+        this.#parseLiteral("null");
+        return;
+      }
+      this.#parseLaunchHash();
+      return;
+    }
+    const token = this.#input[this.#index];
+    if (token === "{") {
+      this.#parseObject(depth + 1);
+      return;
+    }
+    if (token === "[") {
+      this.#parseArray(depth + 1);
+      return;
+    }
+    if (token === '"') {
+      this.#parseString();
+      return;
+    }
+    if (token === "t") {
+      this.#parseLiteral("true");
+      return;
+    }
+    if (token === "f") {
+      this.#parseLiteral("false");
+      return;
+    }
+    if (token === "n") {
+      this.#parseLiteral("null");
+      return;
+    }
+    this.#parseNumber();
+  }
+
+  #parseObject(depth: number): void {
+    this.#assertNesting(depth);
+    let sawLaunchHash = false;
+    this.#index += 1;
+    this.#skipWhitespace();
+    if (this.#input[this.#index] === "}") {
+      this.#index += 1;
+      return;
+    }
+    for (;;) {
+      this.#skipWhitespace();
+      const key = this.#parseString();
+      if (key === "launchHash") {
+        if (sawLaunchHash) {
+          throw new AgentBrowserLaunchHashParseError(
+            "agent-browser JSON contains a duplicate launchHash field",
+          );
+        }
+        sawLaunchHash = true;
+      }
+      this.#skipWhitespace();
+      if (this.#input[this.#index] !== ":") {
+        throw new AgentBrowserLaunchHashParseError("agent-browser JSON is malformed");
+      }
+      this.#index += 1;
+      this.#parseValue(key === "launchHash", depth);
+      this.#skipWhitespace();
+      const separator = this.#input[this.#index];
+      if (separator === "}") {
+        this.#index += 1;
+        return;
+      }
+      if (separator !== ",") {
+        throw new AgentBrowserLaunchHashParseError("agent-browser JSON is malformed");
+      }
+      this.#index += 1;
+    }
+  }
+
+  #parseArray(depth: number): void {
+    this.#assertNesting(depth);
+    this.#index += 1;
+    this.#skipWhitespace();
+    if (this.#input[this.#index] === "]") {
+      this.#index += 1;
+      return;
+    }
+    for (;;) {
+      this.#parseValue(false, depth);
+      this.#skipWhitespace();
+      const separator = this.#input[this.#index];
+      if (separator === "]") {
+        this.#index += 1;
+        return;
+      }
+      if (separator !== ",") {
+        throw new AgentBrowserLaunchHashParseError("agent-browser JSON is malformed");
+      }
+      this.#index += 1;
+    }
+  }
+
+  #parseString(): string {
+    const start = this.#index;
+    if (this.#input[this.#index] !== '"') {
+      throw new AgentBrowserLaunchHashParseError("agent-browser JSON is malformed");
+    }
+    this.#index += 1;
+    for (;;) {
+      const token = this.#input[this.#index];
+      if (token === undefined) {
+        throw new AgentBrowserLaunchHashParseError("agent-browser JSON is malformed");
+      }
+      if (token === '"') {
+        this.#index += 1;
+        return JSON.parse(this.#input.slice(start, this.#index)) as string;
+      }
+      if (token === "\\") {
+        this.#index += 2;
+      } else {
+        this.#index += 1;
+      }
+    }
+  }
+
+  #parseLiteral(literal: "true" | "false" | "null"): void {
+    if (!this.#input.startsWith(literal, this.#index)) {
+      throw new AgentBrowserLaunchHashParseError("agent-browser JSON is malformed");
+    }
+    this.#index += literal.length;
+  }
+
+  #parseNumber(): void {
+    const match = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/u.exec(
+      this.#input.slice(this.#index),
+    );
+    if (match === null) {
+      throw new AgentBrowserLaunchHashParseError("agent-browser JSON is malformed");
+    }
+    this.#index += match[0].length;
+  }
+
+  #parseLaunchHash(): void {
+    const start = this.#index;
+    const match = /^(?:0|[1-9][0-9]*)/u.exec(this.#input.slice(start));
+    if (match === null) {
+      throw new AgentBrowserLaunchHashParseError(
+        "agent-browser launchHash is not an unsigned 64-bit integer",
+      );
+    }
+    const value = match[0];
+    this.#index += value.length;
+    const following = this.#input[this.#index];
+    if (
+      following !== undefined
+      && following !== ","
+      && following !== "}"
+      && following !== "]"
+      && following !== " "
+      && following !== "\t"
+      && following !== "\r"
+      && following !== "\n"
+    ) {
+      throw new AgentBrowserLaunchHashParseError(
+        "agent-browser launchHash is not an unsigned 64-bit integer",
+      );
+    }
+    if (BigInt(value) > maximumAgentBrowserLaunchHash) {
+      throw new AgentBrowserLaunchHashParseError(
+        "agent-browser launchHash exceeds an unsigned 64-bit integer",
+      );
+    }
+    this.#replacements.push({
+      start,
+      end: this.#index,
+      value: JSON.stringify(value),
+    });
+  }
+
+  #skipWhitespace(): void {
+    while (
+      this.#input[this.#index] === " "
+      || this.#input[this.#index] === "\t"
+      || this.#input[this.#index] === "\r"
+      || this.#input[this.#index] === "\n"
+    ) this.#index += 1;
+  }
+
+  #assertNesting(depth: number): void {
+    if (depth > maximumAgentBrowserJsonNesting) {
+      throw new AgentBrowserLaunchHashParseError(
+        "agent-browser JSON exceeds its nesting bound",
+      );
+    }
+  }
+}
+
+/**
+ * Parse the last valid JSON output line without rounding agent-browser's u64
+ * launch identities. Every object field decoded as `launchHash` is returned
+ * as its exact canonical decimal string, while a disconnected browser's
+ * `launchHash: null` remains null; every other JSON value is unchanged.
+ */
+export function parseLastJsonWithExactLaunchHashes(output: string): unknown {
+  let lineEnd = output.length;
+  while (lineEnd >= 0) {
+    const newline = output.lastIndexOf("\n", lineEnd - 1);
+    const line = output.slice(newline + 1, lineEnd).trim();
+    lineEnd = newline;
+    if (line.startsWith("[") || line.startsWith("{")) {
+      try {
+        JSON.parse(line);
+      } catch {
+        // Continue past diagnostics emitted before the JSON result.
+        continue;
+      }
+      const rewritten = new AgentBrowserLaunchHashRewriter(line).rewrite();
+      return JSON.parse(rewritten) as unknown;
     }
   }
   throw new Error("agent-browser did not return JSON");
@@ -1110,7 +1464,7 @@ export async function createBrowserSession(
     });
     networkProxyCreation.pending = null;
     guardBrowserSetup(operationDeadline);
-    const proxyArguments = browserProxyArguments(
+    const proxyArguments = ownedBrowserProxyArguments(
       networkProxy.url,
       selectedProfileDirectory ?? undefined,
     );

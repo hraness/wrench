@@ -9,6 +9,7 @@ import facebookManifest from "../assets/adapters/facebook/wrench-web-adapter.jso
 import instagramManifest from "../assets/adapters/instagram/wrench-web-adapter.json";
 import instagramV1Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.0.0.json";
 import instagramV12Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.2.0.json";
+import instagramV13Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.3.0.json";
 import threadsManifest from "../assets/adapters/threads/wrench-web-adapter.json";
 import threadsV1Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.0.0.json";
 import threadsV12Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.2.0.json";
@@ -408,6 +409,16 @@ describe("Meta consumer-web policy", () => {
       state: "observed",
       contractVersion: 2,
     });
+    expect(META_WEB_OPERATIONS.instagram["media.publish"]).toMatchObject({
+      state: "capture-required",
+      risk: "R3",
+      contractVersion: 2,
+    });
+    expect(META_WEB_OPERATIONS.instagram["content.delete"]).toMatchObject({
+      state: "capture-required",
+      risk: "R3",
+      contractVersion: 1,
+    });
     expect(META_WEB_OPERATIONS.threads["feeds.read"]).toMatchObject({
       state: "observed",
       contractVersion: 2,
@@ -459,7 +470,7 @@ describe("Meta consumer-web policy", () => {
       ["threads", "feeds.read", threadsManifest, threadsV1Manifest],
     ] as const;
 
-    expect(instagramManifest.version).toBe("1.3.0");
+    expect(instagramManifest.version).toBe("1.5.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
     expect(threadsManifest.version).toBe("1.7.0");
     expect(threadsV1Manifest.version).toBe("1.0.0");
@@ -479,6 +490,50 @@ describe("Meta consumer-web policy", () => {
         candidate.name === operation);
       expect(descriptor?.contractVersions).toEqual([1, 2]);
     }
+  });
+
+  test("narrows Instagram publishing to one MP4 and reserves exact authored-video deletion", () => {
+    expect(instagramV13Manifest.version).toBe("1.3.0");
+    expect(instagramV13Manifest.operations).not.toHaveProperty("content.delete");
+    expect(instagramV13Manifest.operations["media.publish"]).toMatchObject({
+      webSession: { contractVersion: 1 },
+    });
+    expect(instagramV13Manifest.operations["media.publish"].input.properties.media.mediaTypes)
+      .toContain("image/jpeg");
+
+    expect(instagramManifest.operations["media.publish"]).toMatchObject({
+      risk: "R3",
+      input: { required: ["media", "caption", "audience"] },
+      webSession: { contractVersion: 2 },
+    });
+    expect(instagramManifest.operations["media.publish"].input.properties.media.mediaTypes)
+      .toEqual(["video/mp4"]);
+    expect(instagramManifest.operations["content.delete"]).toMatchObject({
+      risk: "R3",
+      input: {
+        required: ["media_id", "expected_caption", "expected_media_kind"],
+      },
+      webSession: { contractVersion: 1 },
+    });
+    expect(instagramManifest.operations["content.delete"].description)
+      .toContain("profile and public permalink");
+    expect(instagramManifest.operations["content.delete"].sideEffect)
+      .not.toMatch(/permanent/iu);
+
+    const binding = metaWebPlugin.bindings.find((candidate) =>
+      candidate.surfaceId === "instagram");
+    expect(binding?.operations.find((operation) => operation.name === "media.publish"))
+      .toMatchObject({
+        contractVersion: 2,
+        historicalContractVersions: [1],
+        state: "capture-required",
+      });
+    expect(binding?.operations.find((operation) => operation.name === "content.delete"))
+      .toMatchObject({
+        contractVersion: 1,
+        risk: "R3",
+        state: "capture-required",
+      });
   });
 
   test("preserves the exact pre-profile Meta adapter predecessors", () => {

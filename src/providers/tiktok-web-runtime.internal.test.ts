@@ -178,7 +178,7 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "tiktok",
     action,
-    contractVersion: 1,
+    contractVersion: action === "media.publish" ? 2 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 4 * 1024 * 1024,
   };
@@ -395,6 +395,7 @@ describe("TikTok authenticated internal-API runtime", () => {
     for (const action of [
       "likes.set",
       "content.save",
+      "content.delete",
       "relationships.follow.set",
       "comments.create",
       "replies.create",

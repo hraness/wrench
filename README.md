@@ -256,6 +256,14 @@ repository record, durable target, and authoritative PDS plus public AppView
 readbacks. LinkedIn web, Substack Notes, TikTok, Instagram, and YouTube expose bounded `media.publish` reservations,
 but those routes remain network-inert while their provider-specific upload,
 processing, and independent readback contracts are `capture-required`.
+Substack's reservation now has live 200 evidence for initialization, multipart
+transfer, transcode, status, and video-attachment creation, but remains inert:
+the authorized profile-backed Note create returned 403 in two independent
+attempts, so no exact published-video target or readback exists.
+`substack-web content.delete@1` is observed for one exact current-account
+personal Note. It pre-reads the exact actor and body, dispatches one bodyless
+target-bound DELETE, retains the accepted target, and independently requires
+the exact Note read to return 404.
 
 UI clients can render the current snapshot before awaiting revalidation:
 

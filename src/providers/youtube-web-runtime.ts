@@ -1,5 +1,13 @@
+import { Blob } from "node:buffer";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import { types as nodeTypes } from "node:util";
+
 import type { WrenchAuth } from "../auth";
-import type { OperationInput, WebSessionRecipe } from "../model";
+import type { BrowserFileResolver } from "../browser";
+import { canonicalJson } from "../canonical-json";
+import type { FileInputValue, OperationInput, WebSessionRecipe } from "../model";
 import {
   createWebSessionClient,
   webSessionAuthSubject,
@@ -35,11 +43,53 @@ import {
   youtubeWatchLaterState,
   type YouTubeBootstrapConfig,
 } from "./youtube-web";
+import { isoBmffMp4VideoMetadata } from "./iso-bmff";
 
 const YOUTUBE_ORIGIN = "https://www.youtube.com";
 const MAX_BOOTSTRAP_BYTES = 2 * 1024 * 1024;
 const MAX_PROFILE_PAGE_BYTES = 4 * 1024 * 1024;
+const MAX_YOUTUBE_VIDEO_BYTES = 128 * 1024 * 1024;
 const DEFAULT_LIMIT = 20;
+const YOUTUBE_MP4_COMPATIBILITY_POLICY = Object.freeze({
+  compatibleBrands: Object.freeze([
+    "M4V ",
+    "MSNV",
+    "avc1",
+    "iso2",
+    "isom",
+    "mp41",
+    "mp42",
+  ]),
+  rejectedMajorBrands: Object.freeze(["qt  "]),
+});
+const YOUTUBE_VIDEO_PUBLISH_BINDING_KEYS = Object.freeze([
+  "ageRestricted",
+  "byteLength",
+  "bytes",
+  "caption",
+  "categoryId",
+  "containsSyntheticMedia",
+  "durationSeconds",
+  "height",
+  "madeForKids",
+  "mediaSha256",
+  "mediaType",
+  "notifySubscribers",
+  "title",
+  "visibility",
+  "width",
+] as const);
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(
+  Uint8Array.prototype,
+) as object;
+const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "buffer",
+)?.get;
+const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteLength",
+)?.get;
 
 type InnertubeEndpoint =
   | "account/account_menu"
@@ -77,6 +127,137 @@ export type YouTubeWebDesiredStateReadback = {
   readonly enabled: boolean;
 };
 
+export type YouTubeBoundVideoPublish = Readonly<{
+  ageRestricted: boolean;
+  bytes: Uint8Array<ArrayBuffer>;
+  byteLength: number;
+  caption: string | null;
+  categoryId: string;
+  containsSyntheticMedia: boolean;
+  durationSeconds: number;
+  height: number;
+  madeForKids: boolean;
+  mediaType: "video/mp4";
+  mediaSha256: string;
+  notifySubscribers: boolean;
+  title: string;
+  visibility: "private" | "unlisted" | "public";
+  width: number;
+}>;
+
+export type YouTubeVideoPublishDispatchSnapshot = Readonly<{
+  ageRestricted: boolean;
+  body: Blob;
+  byteLength: number;
+  caption: string | null;
+  categoryId: string;
+  containsSyntheticMedia: boolean;
+  durationSeconds: number;
+  height: number;
+  madeForKids: boolean;
+  mediaType: "video/mp4";
+  mediaSha256: string;
+  notifySubscribers: boolean;
+  title: string;
+  visibility: "private" | "unlisted" | "public";
+  width: number;
+}>;
+
+export type YouTubeVideoDeleteInput = Readonly<{
+  expectedTitle: string;
+  videoId: string;
+}>;
+
+export type YouTubeVideoCanonicalTarget = Readonly<{
+  schemaVersion: 1;
+  url: string;
+  videoId: string;
+}>;
+
+function exactYouTubeVideoPublishBinding(
+  value: unknown,
+): Readonly<Record<string, unknown>> {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+  ) throw new Error("YouTube video binding must be one exact object");
+  if (nodeTypes.isProxy(value)) {
+    throw new Error("YouTube video binding must not be a proxy");
+  }
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("YouTube video binding must use a plain prototype");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const ownKeys = Reflect.ownKeys(descriptors);
+  if (
+    ownKeys.length !== YOUTUBE_VIDEO_PUBLISH_BINDING_KEYS.length
+    || ownKeys.some((key) => typeof key !== "string")
+    || (ownKeys as string[]).sort().join(",")
+      !== [...YOUTUBE_VIDEO_PUBLISH_BINDING_KEYS].sort().join(",")
+  ) throw new Error("YouTube video binding contained unsupported fields");
+  const snapshot = Object.create(null) as Record<string, unknown>;
+  for (const key of YOUTUBE_VIDEO_PUBLISH_BINDING_KEYS) {
+    const descriptor = descriptors[key];
+    if (
+      descriptor === undefined
+      || !descriptor.enumerable
+      || !("value" in descriptor)
+    ) {
+      throw new Error(
+        "YouTube video binding must contain only enumerable data properties",
+      );
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
+}
+
+function snapshotYouTubeVideoBytes(value: unknown): Uint8Array<ArrayBuffer> {
+  if (
+    typeof value !== "object"
+    || value === null
+    || nodeTypes.isProxy(value)
+    || !(value instanceof Uint8Array)
+    || Object.getPrototypeOf(value) !== Uint8Array.prototype
+    || TYPED_ARRAY_BUFFER_GETTER === undefined
+    || TYPED_ARRAY_BYTE_LENGTH_GETTER === undefined
+  ) throw new Error("YouTube video binding must contain one bounded MP4");
+  let buffer: unknown;
+  let byteLength: unknown;
+  try {
+    buffer = TYPED_ARRAY_BUFFER_GETTER.call(value) as unknown;
+    byteLength = TYPED_ARRAY_BYTE_LENGTH_GETTER.call(value) as unknown;
+  } catch {
+    throw new Error("YouTube video binding must contain one bounded MP4");
+  }
+  if (
+    typeof byteLength !== "number"
+    || !Number.isSafeInteger(byteLength)
+    || byteLength < 24
+    || byteLength > MAX_YOUTUBE_VIDEO_BYTES
+    || nodeTypes.isSharedArrayBuffer(buffer)
+  ) throw new Error("YouTube video binding must contain one bounded MP4");
+
+  // Copy through the intrinsic typed-array operation. Caller-defined
+  // byteLength, buffer, iterator, or indexed accessors are not consulted, and
+  // this unique ArrayBuffer is the only source used to validate and build the
+  // eventual Blob.
+  const bytes = new Uint8Array(byteLength);
+  try {
+    Uint8Array.prototype.set.call(bytes, value);
+  } catch {
+    throw new Error("YouTube video binding must contain one bounded MP4");
+  }
+  return bytes;
+}
+
+export const YOUTUBE_VIDEO_CAPTURE_REQUIRED_REASONS = Object.freeze({
+  "content.delete": "cleanup only discarded the stalled incomplete Studio draft; no uploaded-video authored pre-read, accepted video/delete response, or exact-target absence readback was observed",
+  "media.publish": "the signed-in Studio capture reached metadata JSON responses, but the selected MP4 remained at 0%; resumable initiation, byte-transfer acceptance, finalization, processing, and exact current-account readback remain unproved",
+} as const);
+
 type YouTubeBootstrap = {
   readonly auth: WrenchAuth;
   readonly client: WebSessionClient;
@@ -106,6 +287,347 @@ function booleanInput(input: OperationInput, name: string): boolean {
   const value = input[name];
   if (typeof value !== "boolean") throw new Error(`input.${name} must be boolean`);
   return value;
+}
+
+function exactInputKeys(
+  input: OperationInput,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): void {
+  const allowed = new Set([...required, ...optional]);
+  const keys = Object.keys(input);
+  if (keys.some((key) => !allowed.has(key))) {
+    throw new Error(`${label} contained an unsupported input field`);
+  }
+  if (required.some((key) => !Object.hasOwn(input, key))) {
+    throw new Error(`${label} omitted a required input field`);
+  }
+}
+
+function fileInput(value: unknown, label: string): FileInputValue {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== "kind,reference"
+    || (value as { readonly kind?: unknown }).kind !== "file"
+    || typeof (value as { readonly reference?: unknown }).reference !== "string"
+    || (value as { readonly reference: string }).reference.length < 1
+    || (value as { readonly reference: string }).reference.length > 4_096
+    || /[\0\r\n]/u.test((value as { readonly reference: string }).reference)
+  ) throw new Error(`${label} must be one plan-bound file`);
+  return value as FileInputValue;
+}
+
+function youtubeTitleInput(input: OperationInput, name: string): string {
+  const value = stringInput(input, name, 90);
+  if (/\n/u.test(value)) throw new Error(`input.${name} must be one exact YouTube title`);
+  return value;
+}
+
+function youtubeVideoId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{11}$/u.test(value)) {
+    throw new Error(`${label} must be an exact YouTube video ID`);
+  }
+  return value;
+}
+
+function youtubeVideoWatchUrl(videoId: string): string {
+  return `${YOUTUBE_ORIGIN}/watch?v=${videoId}`;
+}
+
+function youtubeMp4Metadata(bytes: Uint8Array): Readonly<{
+  durationSeconds: number;
+  height: number;
+  width: number;
+}> {
+  return isoBmffMp4VideoMetadata(
+    bytes,
+    "YouTube video",
+    YOUTUBE_MP4_COMPATIBILITY_POLICY,
+  );
+}
+
+function youtubeVideoSha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * Serialize only one exact video ID and its derived canonical watch URL. This
+ * local target format does not imply provider acceptance or grant dispatch.
+ */
+export function youtubeVideoTargetIdentifier(videoIdValue: unknown): string {
+  const videoId = youtubeVideoId(
+    videoIdValue,
+    "YouTube canonical video target ID",
+  );
+  return canonicalJson({
+    schemaVersion: 1,
+    url: youtubeVideoWatchUrl(videoId),
+    videoId,
+  });
+}
+
+/** Parse only the canonical local target shape used by future reconciliation. */
+export function parseYouTubeVideoTargetIdentifier(
+  identifier: unknown,
+): YouTubeVideoCanonicalTarget {
+  if (
+    typeof identifier !== "string"
+    || identifier.length < 1
+    || identifier.length > 4_096
+  ) throw new Error("YouTube canonical video target is not canonical JSON");
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier);
+  } catch {
+    throw new Error("YouTube canonical video target is not canonical JSON");
+  }
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== "schemaVersion,url,videoId"
+  ) throw new Error("YouTube canonical video target contained unsupported fields");
+  const target = value as Readonly<Record<string, unknown>>;
+  if (target.schemaVersion !== 1) {
+    throw new Error("YouTube canonical video target schema version is unsupported");
+  }
+  const videoId = youtubeVideoId(
+    target.videoId,
+    "YouTube canonical video target ID",
+  );
+  const parsed = Object.freeze({
+    schemaVersion: 1 as const,
+    url: youtubeVideoWatchUrl(videoId),
+    videoId,
+  });
+  if (target.url !== parsed.url || canonicalJson(parsed) !== identifier) {
+    throw new Error("YouTube canonical video target is not canonical");
+  }
+  return parsed;
+}
+
+/**
+ * Revalidate and snapshot a materialized video immediately before a future
+ * dispatch. The current capture-required operation does not call this helper.
+ */
+export function revalidateYouTubeVideoPublishBindingForDispatch(
+  value: unknown,
+): YouTubeVideoPublishDispatchSnapshot {
+  const binding = exactYouTubeVideoPublishBinding(value);
+  const bytes = snapshotYouTubeVideoBytes(binding.bytes);
+  const metadata = youtubeMp4Metadata(bytes);
+  const mediaSha256 = youtubeVideoSha256(bytes);
+  const declaredByteLength = binding.byteLength;
+  const declaredDurationSeconds = binding.durationSeconds;
+  const declaredHeight = binding.height;
+  const declaredMediaSha256 = binding.mediaSha256;
+  const declaredWidth = binding.width;
+  if (
+    !Number.isSafeInteger(declaredByteLength)
+    || declaredByteLength !== bytes.byteLength
+    || typeof declaredMediaSha256 !== "string"
+    || !/^[a-f0-9]{64}$/u.test(declaredMediaSha256)
+    || declaredMediaSha256 !== mediaSha256
+    || declaredDurationSeconds !== metadata.durationSeconds
+    || declaredHeight !== metadata.height
+    || declaredWidth !== metadata.width
+  ) throw new Error("YouTube video binding changed from its exact bytes");
+  const ageRestricted = binding.ageRestricted;
+  const containsSyntheticMedia = binding.containsSyntheticMedia;
+  const madeForKids = binding.madeForKids;
+  const mediaType = binding.mediaType;
+  const notifySubscribers = binding.notifySubscribers;
+  const visibility = binding.visibility;
+  if (
+    typeof ageRestricted !== "boolean"
+    || typeof containsSyntheticMedia !== "boolean"
+    || typeof madeForKids !== "boolean"
+    || typeof notifySubscribers !== "boolean"
+    || mediaType !== "video/mp4"
+    || (
+      visibility !== "private"
+      && visibility !== "unlisted"
+      && visibility !== "public"
+    )
+  ) throw new Error("YouTube video binding declarations are invalid");
+  if (ageRestricted && madeForKids) {
+    throw new Error("YouTube video cannot be both made for kids and creator age-restricted");
+  }
+  const categoryId = boundedString(
+    binding.categoryId,
+    "YouTube video binding category ID",
+    3,
+  );
+  if (!/^[1-9][0-9]{0,2}$/u.test(categoryId)) {
+    throw new Error("YouTube video binding category ID must be exact");
+  }
+  const title = boundedString(binding.title, "YouTube video binding title", 90);
+  if (/\n/u.test(title)) {
+    throw new Error("YouTube video binding title must be one exact title");
+  }
+  const caption = binding.caption === null
+    ? null
+    : boundedString(binding.caption, "YouTube video binding caption", 1_000);
+  const body = new Blob([bytes], { type: "video/mp4" });
+  if (body.size !== bytes.byteLength || body.type !== "video/mp4") {
+    throw new Error("YouTube video dispatch snapshot changed shape");
+  }
+  return Object.freeze({
+    ageRestricted,
+    body,
+    byteLength: bytes.byteLength,
+    caption,
+    categoryId,
+    containsSyntheticMedia,
+    durationSeconds: metadata.durationSeconds,
+    height: metadata.height,
+    madeForKids,
+    mediaSha256,
+    mediaType: "video/mp4" as const,
+    notifySubscribers,
+    title,
+    visibility,
+    width: metadata.width,
+  });
+}
+
+/**
+ * Materialize exactly one plan-bound MP4 and the complete conservative creator
+ * declarations. This remains a local preflight: no upload route calls it until
+ * an authorized Studio capture proves dispatch and independent readback.
+ */
+export async function materializeYouTubeVideoPublishInput(
+  input: OperationInput,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline?: WebSessionOperationDeadline,
+): Promise<YouTubeBoundVideoPublish> {
+  const required = [
+    "age_restricted",
+    "category_id",
+    "contains_synthetic_media",
+    "made_for_kids",
+    "media",
+    "notify_subscribers",
+    "title",
+    "visibility",
+  ] as const;
+  exactInputKeys(input, required, ["caption"], "YouTube video publishing");
+  const media = fileInput(input.media, "input.media");
+  const title = youtubeTitleInput(input, "title");
+  const caption = input.caption === undefined
+    ? null
+    : stringInput(input, "caption", 1_000);
+  const visibility = input.visibility;
+  if (visibility !== "private" && visibility !== "unlisted" && visibility !== "public") {
+    throw new Error("input.visibility must be private, unlisted, or public");
+  }
+  const madeForKids = booleanInput(input, "made_for_kids");
+  const notifySubscribers = booleanInput(input, "notify_subscribers");
+  const containsSyntheticMedia = booleanInput(input, "contains_synthetic_media");
+  const ageRestricted = booleanInput(input, "age_restricted");
+  if (madeForKids && ageRestricted) {
+    throw new Error("YouTube video cannot be both made for kids and creator age-restricted");
+  }
+  const categoryId = stringInput(input, "category_id", 3);
+  if (!/^[1-9][0-9]{0,2}$/u.test(categoryId)) {
+    throw new Error("input.category_id must be an exact positive YouTube category ID");
+  }
+  if (fileResolver === undefined) {
+    throw new Error("YouTube video upload requires the plan-bound file resolver");
+  }
+  const resolve = () => fileResolver([media]);
+  const paths = operationDeadline === undefined
+    ? await resolve()
+    : await operationDeadline.run(resolve, "authenticated web operation deadline");
+  operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
+  if (paths.length !== 1 || typeof paths[0] !== "string") {
+    throw new Error("YouTube file resolver did not return one exact video path");
+  }
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = operationDeadline === undefined
+    ? await open(paths[0], constants.O_RDONLY | noFollow)
+    : await operationDeadline.run(
+        () => open(paths[0]!, constants.O_RDONLY | noFollow),
+        "authenticated web operation deadline",
+      );
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (
+      !before.isFile()
+      || before.size < 24
+      || before.size > MAX_YOUTUBE_VIDEO_BYTES
+    ) {
+      throw new Error(
+        "YouTube video must be a regular MP4 no larger than the 128 MiB in-memory publish limit",
+      );
+    }
+    const fileBytes = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(
+          () => handle.readFile(),
+          "authenticated web operation deadline",
+        );
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || fileBytes.byteLength !== before.size
+    ) throw new Error("YouTube video changed while it was materialized");
+    const bytes = new Uint8Array(fileBytes);
+    const metadata = youtubeMp4Metadata(bytes);
+    const mediaSha256 = youtubeVideoSha256(bytes);
+    return Object.freeze({
+      ageRestricted,
+      bytes,
+      byteLength: bytes.byteLength,
+      caption,
+      categoryId,
+      containsSyntheticMedia,
+      durationSeconds: metadata.durationSeconds,
+      height: metadata.height,
+      madeForKids,
+      mediaType: "video/mp4" as const,
+      mediaSha256,
+      notifySubscribers,
+      title,
+      visibility,
+      width: metadata.width,
+    });
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Validate the exact authored-video confirmation required by deletion. */
+export function prepareYouTubeVideoDeleteInput(
+  input: OperationInput,
+): YouTubeVideoDeleteInput {
+  exactInputKeys(
+    input,
+    ["expected_title", "video_id"],
+    [],
+    "YouTube video deletion",
+  );
+  return Object.freeze({
+    expectedTitle: youtubeTitleInput(input, "expected_title"),
+    videoId: youtubeVideoId(input.video_id, "input.video_id"),
+  });
 }
 
 function integerInput(
@@ -769,11 +1291,24 @@ export async function executeYouTubeWebOperation(
   options: {
     readonly signal?: AbortSignal;
     readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly fileResolver?: BrowserFileResolver;
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: YouTubeWebRuntimeDependencies;
   } = {},
 ): Promise<WebSessionExecution> {
+  if (
+    recipe.site === "youtube"
+    && (
+      (recipe.action === "media.publish" && recipe.contractVersion === 2)
+      || (recipe.action === "content.delete" && recipe.contractVersion === 1)
+    )
+  ) {
+    const reason = YOUTUBE_VIDEO_CAPTURE_REQUIRED_REASONS[recipe.action as keyof typeof YOUTUBE_VIDEO_CAPTURE_REQUIRED_REASONS];
+    throw new Error(
+      `YouTube authenticated web operation ${recipe.action} is capture-required: ${reason}`,
+    );
+  }
   if (
     recipe.site === "youtube"
     && recipe.contractVersion === 1

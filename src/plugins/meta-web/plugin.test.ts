@@ -55,4 +55,34 @@ describe("Meta web plugin account subjects", () => {
         operation.reconciliation !== undefined)).toBeFalse();
     }
   });
+
+  test("keeps narrowed Instagram MP4 publishing and authored deletion capture-inert", () => {
+    const instagram = binding("instagram");
+    const videoPublish = instagram.operations.find((operation) =>
+      operation.name === "media.publish");
+    expect(videoPublish).toMatchObject({
+        contractVersion: 2,
+        historicalContractVersions: [1],
+        risk: "R3",
+        state: "capture-required",
+        dispatch: "single",
+      });
+    expect(videoPublish?.input.properties.media).toMatchObject({
+      maxBytes: 128 * 1024 * 1024,
+      mediaTypes: ["video/mp4"],
+      type: "file",
+    });
+    expect(instagram.operations.find((operation) => operation.name === "messaging.send")
+      ?.input.properties.attachment).toMatchObject({ maxBytes: 1024 * 1024 * 1024 });
+    expect(instagram.operations.find((operation) => operation.name === "content.delete"))
+      .toMatchObject({
+        contractVersion: 1,
+        risk: "R3",
+        state: "capture-required",
+        dispatch: "single",
+      });
+    expect(instagram.operations.filter((operation) =>
+      operation.name === "media.publish" || operation.name === "content.delete")
+      .every((operation) => operation.reconciliation === undefined)).toBeTrue();
+  });
 });

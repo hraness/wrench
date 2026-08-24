@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import substackWebManifest from "../assets/adapters/substack/wrench-web-adapter.json";
 import substackWebV12Manifest from "../assets/adapters/substack/wrench-web-adapter.v1.2.0.json";
+import substackWebV13Manifest from "../assets/adapters/substack/wrench-web-adapter.v1.3.0.json";
+import substackWebV15Manifest from "../assets/adapters/substack/wrench-web-adapter.v1.5.0.json";
 import {
   SUBSTACK_WEB_OPERATION_NAMES,
   SUBSTACK_WEB_OPERATIONS,
@@ -17,6 +19,7 @@ import {
   parseSubstackInlineAudioEmbeds,
   parseSubstackLoggedInResponse,
   parseSubstackPreloadsHtml,
+  substackWebEvidenceSnapshot,
 } from "./substack-web";
 
 const USER_ID = 42;
@@ -123,7 +126,7 @@ describe("Substack internal-web operation registry", () => {
   test("ships one schema-v4 semantic manifest entry for every provider operation", () => {
     expect(substackWebManifest.schemaVersion).toBe(4);
     expect(substackWebManifest.id).toBe("substack-web");
-    expect(substackWebManifest.version).toBe("1.3.0");
+    expect(substackWebManifest.version).toBe("1.6.0");
     expect(substackWebManifest.surfaceId).toBe("substack");
     expect(substackWebManifest.origins).toEqual(["https://substack.com"]);
     expect(Object.keys(substackWebManifest.operations).sort()).toEqual(
@@ -162,6 +165,19 @@ describe("Substack internal-web operation registry", () => {
     });
   });
 
+  test("preserves the exact pre-graduation Substack adapter predecessor", () => {
+    expect(substackWebV13Manifest.version).toBe("1.3.0");
+    expect(substackWebV13Manifest.operations).not.toHaveProperty("content.delete");
+    expect(substackWebV15Manifest.version).toBe("1.5.0");
+    expect(substackWebV15Manifest.operations["content.delete"]?.description)
+      .toStartWith("Capture-required contract reservation:");
+    expect(substackWebManifest.operations["content.delete"]).toMatchObject({
+      risk: "R3",
+      input: { required: ["note_id", "expected_body"] },
+      webSession: { contractVersion: 1 },
+    });
+  });
+
   test("graduates only the direct reads and authorized Note publication proved against the current site", () => {
     expect(
       Object.entries(SUBSTACK_WEB_OPERATIONS)
@@ -171,6 +187,7 @@ describe("Substack internal-web operation registry", () => {
     ).toEqual([
       "articles.read",
       "comments.read",
+      "content.delete",
       "feeds.read",
       "media.read",
       "messaging.list",
@@ -201,6 +218,26 @@ describe("Substack internal-web operation registry", () => {
       expect(SUBSTACK_WEB_OPERATIONS[operation].risk).toBe("R3");
       expect(SUBSTACK_WEB_OPERATIONS[operation].state).toBe("capture-required");
     }
+  });
+
+  test("records bundle-derived request shapes separately from unresolved responses", () => {
+    expect(substackWebEvidenceSnapshot.observedOn).toBe("2026-08-23");
+    expect(substackWebEvidenceSnapshot.currentBundleOnly).toMatchObject({
+      videoUploadInitialization: expect.stringContaining("fileSize"),
+      videoMultipartTransfer: expect.stringContaining("Etag"),
+      videoTranscode: expect.stringContaining("multipart_upload_etags"),
+      videoStatus: expect.stringContaining("transcoded"),
+      noteDelete: expect.stringContaining("optional publication_id"),
+    });
+    expect(substackWebEvidenceSnapshot.unresolvedMutationBindings).toContain(
+      "Note video attachment identifier and create-response attachment shape",
+    );
+    expect(substackWebEvidenceSnapshot.unresolvedMutationBindings).toContain(
+      "provider-issued multipart upload hostname family, exact accepted PUT status, and returned ETag binding",
+    );
+    expect(substackWebEvidenceSnapshot.liveDirectWrites[0]).toContain(
+      "bodyless DELETE /api/v1/comment/{note-id}",
+    );
   });
 });
 

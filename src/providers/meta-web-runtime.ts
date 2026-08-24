@@ -25,6 +25,26 @@ import type {
   WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
 import {
+  bindInstagramVideoMediaReadback,
+  instagramVideoAcceptedTargetIdentifier,
+  INSTAGRAM_VIDEO_CAPTURE_BLOCKERS,
+  materializeInstagramVideoPublishInput,
+  parseInstagramVideoAcceptedTargetIdentifier,
+  prepareInstagramAuthoredPostDeleteInput,
+  prepareInstagramVideoPublishInput,
+  revalidateInstagramVideoPublishBindingForDispatch,
+} from "./instagram-video-foundations";
+export {
+  bindInstagramVideoMediaReadback,
+  instagramVideoAcceptedTargetIdentifier,
+  INSTAGRAM_VIDEO_CAPTURE_BLOCKERS,
+  materializeInstagramVideoPublishInput,
+  parseInstagramVideoAcceptedTargetIdentifier,
+  prepareInstagramAuthoredPostDeleteInput,
+  prepareInstagramVideoPublishInput,
+  revalidateInstagramVideoPublishBindingForDispatch,
+};
+import {
   META_WEB_OPERATIONS,
   META_WEB_OPERATION_NAMES,
   META_WEB_SITES,
@@ -1684,6 +1704,103 @@ async function requireBoundViewer(
     throw new Error(`${site} current viewer no longer matches the confirmed auth subject`);
   }
   return viewer;
+}
+
+/**
+ * Read only one exact provider-derived Instagram video target. The mutation
+ * transports remain capture-required; this helper exists solely so a future
+ * accepted response can be retained and reconciled without resolving or
+ * uploading the confirmed file again.
+ */
+export async function readInstagramVideoAcceptedMutationTargetPresence(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  identifier: string,
+  options: {
+    readonly dependencies?: MetaWebRuntimeDependencies;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<Readonly<{
+  code: string;
+  mediaId: string;
+  present: boolean;
+}>> {
+  const isPublish = recipe.site === "instagram"
+    && recipe.action === "media.publish"
+    && recipe.contractVersion === 2;
+  const isDelete = recipe.site === "instagram"
+    && recipe.action === "content.delete"
+    && recipe.contractVersion === 1;
+  if (!isPublish && !isDelete) {
+    throw new Error(
+      "Instagram video accepted-target readback supports only media.publish@2 or content.delete@1",
+    );
+  }
+  const target = parseInstagramVideoAcceptedTargetIdentifier(identifier);
+  const expectedCaption = isPublish
+    ? prepareInstagramVideoPublishInput(input).caption
+    : prepareInstagramAuthoredPostDeleteInput(input).expectedCaption;
+  if (isDelete) {
+    const deletion = prepareInstagramAuthoredPostDeleteInput(input);
+    if (deletion.mediaId !== target.mediaId) {
+      throw new Error("Instagram deletion accepted target did not bind the confirmed media ID");
+    }
+  }
+
+  const expectedSubject = expectedMetaAuthSubject("instagram", auth);
+  const client = await createWebSessionClient(ORIGINS.instagram, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined
+      ? {}
+      : { dependencies: options.dependencies }),
+  });
+  const viewer = await requireBoundViewer(
+    "instagram",
+    client,
+    expectedSubject,
+  );
+  const permalink = await client.requestStatus({
+    url: new URL(target.url),
+    method: "GET",
+    headers: htmlHeaders(ORIGINS.instagram),
+    expectedStatuses: [200, 404],
+  });
+  if (permalink.location !== null) {
+    throw new Error("Instagram accepted-target readback returned an unreviewed redirect location");
+  }
+  if (permalink.status === 404) {
+    return Object.freeze({
+      code: target.code,
+      mediaId: target.mediaId,
+      present: false,
+    });
+  }
+  const response = await client.requestJson({
+    url: new URL(`/api/v1/media/${target.mediaId}/info/`, ORIGINS.instagram),
+    method: "GET",
+    headers: instagramHeaders(target.url),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: Math.min(recipe.maxOutputBytes, MAX_API_BYTES),
+  });
+  const normalized = normalizeInstagramPost(response, target.mediaId);
+  bindInstagramVideoMediaReadback(normalized, {
+    expectedCaption,
+    expectedCode: target.code,
+    mediaId: target.mediaId,
+    viewerId: viewer.id,
+  });
+  return Object.freeze({
+    code: target.code,
+    mediaId: target.mediaId,
+    present: true,
+  });
 }
 
 function exactInstagramMediaId(input: OperationInput): string {

@@ -539,6 +539,52 @@ describe("YouTube authenticated Innertube runtime", () => {
     }
   });
 
+  test("keeps video publication and authored-video deletion network-inert", () => {
+    for (const [action, contractVersion, input, reason] of [
+      ["media.publish", 2, {
+        age_restricted: false,
+        category_id: "22",
+        contains_synthetic_media: false,
+        made_for_kids: false,
+        media: { kind: "file", reference: "plan-video" },
+        notify_subscribers: false,
+        title: "Private fixture",
+        visibility: "private",
+      }, "selected MP4 remained at 0%"],
+      ["content.delete", 1, {
+        expected_title: "Private fixture",
+        video_id: VIDEO_ID,
+      }, "discarded the stalled incomplete Studio draft"],
+    ] as const) {
+      let acquisitions = 0;
+      let fileResolutions = 0;
+      const calls: CapturedRequest[] = [];
+      expect(executeYouTubeWebOperation(
+        { ...recipe(action), contractVersion },
+        input,
+        youtubeAuth,
+        {
+          fileResolver: () => {
+            fileResolutions += 1;
+            throw new Error("file resolution must not run");
+          },
+          dependencies: dependencies(
+            calls,
+            () => {
+              throw new Error("network must not run");
+            },
+            () => {
+              acquisitions += 1;
+            },
+          ),
+        },
+      )).rejects.toThrow(reason);
+      expect(acquisitions).toBe(0);
+      expect(fileResolutions).toBe(0);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
   test("prepares all three already-satisfied states before any mutation dispatch", async () => {
     const scenarios = [
       {

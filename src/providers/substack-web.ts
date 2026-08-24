@@ -12,6 +12,7 @@ export const SUBSTACK_WEB_OPERATION_NAMES = Object.freeze([
   "articles.read",
   "comments.create",
   "comments.read",
+  "content.delete",
   "content.edit",
   "content.save",
   "content.schedule",
@@ -171,6 +172,9 @@ export const SUBSTACK_WEB_OPERATIONS = Object.freeze({
     "R3",
     "first-party-bundle",
     "owned Note, comment, draft, and article edits have distinct origins and response/readback contracts",
+  ),
+  "content.delete": observedWrite(
+    "authorized personal-Note fixture proving an exact current-viewer/body pre-read, one bodyless DELETE /api/v1/comment/{note-id} accepted with 200, durable target retention, and an independent exact Note read returning 404",
   ),
   "articles.publish": captureRequired(
     "R3",
@@ -1443,7 +1447,7 @@ export function normalizeSubstackMessageInbox(
  */
 export const substackWebEvidenceSnapshot = Object.freeze({
   schemaVersion: 1,
-  observedOn: "2026-07-23",
+  observedOn: "2026-08-23",
   centralOrigin: SUBSTACK_ORIGIN,
   authentication: "browser-cookie-session" as const,
   liveDirectReads: Object.freeze([
@@ -1457,6 +1461,9 @@ export const substackWebEvidenceSnapshot = Object.freeze({
     "GET /api/v1/reader/post/{post-id}/replies?publication_id={publication-id}",
     "GET /api/v1/messages/inbox?tab={all|people|unread}",
   ]),
+  liveDirectWrites: Object.freeze([
+    "bodyless DELETE /api/v1/comment/{note-id} after exact current-viewer/body pre-read, accepted with 200 and independently absent with GET /api/v1/reader/comment/{note-id} returning 404",
+  ]),
   currentBundleOnly: Object.freeze({
     dmRead: "GET /api/v1/messages/dm/{thread-id}",
     dmStart: "POST /api/v1/messages/dm/start",
@@ -1466,5 +1473,20 @@ export const substackWebEvidenceSnapshot = Object.freeze({
     postSave: "POST|DELETE /api/v1/posts/saved",
     noteSave: "POST|DELETE /api/v1/note/{entity-key}/save",
     restack: "POST /api/v1/restack/feed",
+    videoUploadInitialization:
+      "request-shape candidate: POST /api/v1/video/upload?filetype={type}&fileSize={bytes}&fileName={name} with optional post_id and postAsUserId",
+    videoMultipartTransfer:
+      "request-shape candidate: ordered raw PUT byte slicing with credentials and form-data disabled; static code references Etag fields but proves no returned header",
+    videoTranscode:
+      "request-shape candidate: POST /api/v1/video/upload/{media-upload-id}/transcode with duration, multipart_upload_id, and ordered multipart_upload_etags",
+    videoStatus:
+      "request-shape candidate: GET /api/v1/video/upload/{media-upload-id}; bundle lifecycle vocabulary includes created/uploaded/transcoded/error/cancelled",
+    noteDelete: "DELETE /api/v1/comment/{note-id} with an optional publication_id body field",
   }),
+  unresolvedMutationBindings: Object.freeze([
+    "video initialization acceptance and exact initialization/transcode response key sets",
+    "provider-issued multipart upload hostname family, exact accepted PUT status, and returned ETag binding",
+    "Note video attachment identifier and create-response attachment shape",
+    "independent Note video readback media identity and URL fields",
+  ]),
 });

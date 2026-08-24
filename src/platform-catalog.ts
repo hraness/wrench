@@ -857,12 +857,12 @@ export const socialPlatformCatalog = {
         "posts.quote",
         "content.share",
         "content.edit",
+        "content.delete",
         "content.schedule",
       ],
       unsupported: ["articles.draft.save", "threads.publish", "communities.membership.set"],
       notApplicable: ["reactions.set", "listings.read", "listings.publish", "relationships.connect"],
       R4: [
-        "content.delete",
         "content.audience.set",
         "communities.membership.manage",
         "administration.manage",
@@ -918,6 +918,7 @@ export const socialPlatformCatalog = {
         "comments.create",
         "replies.create",
         "media.publish",
+        "content.delete",
         "posts.repost",
         "content.share",
         "content.edit",
@@ -937,7 +938,6 @@ export const socialPlatformCatalog = {
         "communities.membership.manage",
       ],
       R4: [
-        "content.delete",
         "content.audience.set",
         "administration.manage",
         "commerce.purchase",
@@ -959,8 +959,8 @@ export const socialPlatformCatalog = {
         attachments: noAttachments("Reply attachments are not catalogued"),
       },
       media: {
-        text: [field("caption", 1_000, "utf16-code-units", false)],
-        attachments: attachments(1, ["image", "video"], "Exactly one reviewed media item", 1),
+        text: [field("caption", 1_000, "utf16-code-units")],
+        attachments: attachments(1, ["video"], "Exactly one plan-bound MP4 video", 1),
       },
     },
     longForm: { read: NA_LONG_FORM, publish: NA_LONG_FORM },
@@ -1322,6 +1322,7 @@ export const socialPlatformCatalog = {
         "media.publish",
         "posts.repost",
         "content.share",
+        "content.delete",
         "content.schedule",
       ],
       unsupported: ["content.edit"],
@@ -1339,7 +1340,6 @@ export const socialPlatformCatalog = {
         "communities.membership.manage",
       ],
       R4: [
-        "content.delete",
         "content.audience.set",
         "administration.manage",
         "commerce.purchase",
@@ -1382,7 +1382,7 @@ export const socialPlatformCatalog = {
     operations: buildOperationMatrix({
       R1: ["content.read", "content.clip", "profiles.read", "comments.read", "posts.read", "media.read"],
       R2: ["likes.set", "relationships.follow.set", "content.save"],
-      R3: ["comments.create", "replies.create", "posts.publish", "media.publish", "content.edit", "content.schedule"],
+      R3: ["comments.create", "replies.create", "posts.publish", "media.publish", "content.edit", "content.delete", "content.schedule"],
       unsupported: [],
       notApplicable: [
         "messaging.read",
@@ -1402,7 +1402,6 @@ export const socialPlatformCatalog = {
         "communities.membership.manage",
       ],
       R4: [
-        "content.delete",
         "content.audience.set",
         "administration.manage",
         "commerce.purchase",

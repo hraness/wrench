@@ -1,10 +1,17 @@
+import { Blob } from "node:buffer";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
+import { types as nodeTypes } from "node:util";
+
+import { renderCookieHeader } from "@hraness/kb/clip/cookies";
 
 import type { WrenchAuth } from "../auth";
 import type { BrowserFileResolver } from "../browser";
 import { canonicalJson } from "../canonical-json";
 import type { FileInputValue, OperationInput, WebSessionRecipe } from "../model";
+import { OperationDeadline } from "../operation-deadline";
+import { pinnedHttpsFetch } from "../pinned-https";
 import {
   createWebSessionClient,
   webSessionAuthSubject,
@@ -17,6 +24,7 @@ import type {
   WebSessionOperationDeadline,
   WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
+import { substackMp4Metadata } from "./substack-video-mp4";
 import {
   SUBSTACK_WEB_OPERATION_NAMES,
   SUBSTACK_WEB_OPERATIONS,
@@ -41,8 +49,36 @@ const MAX_BOOTSTRAP_BYTES = 8 * 1024 * 1024;
 const MAX_LOGIN_BYTES = 256 * 1024;
 const MAX_READ_BYTES = 8 * 1024 * 1024;
 const MAX_SUBSTACK_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_SUBSTACK_VIDEO_BYTES = 128 * 1024 * 1024;
+const SUBSTACK_VIDEO_BINDING_KEYS = Object.freeze([
+  "byteLength",
+  "bytes",
+  "durationSeconds",
+  "height",
+  "mediaType",
+  "sha256",
+  "width",
+] as const);
+export const SUBSTACK_VIDEO_MULTIPART_CHUNK_BYTES = 50 * 1024 * 1024;
+const MAX_SUBSTACK_VIDEO_PARTS = Math.ceil(
+  MAX_SUBSTACK_VIDEO_BYTES / SUBSTACK_VIDEO_MULTIPART_CHUNK_BYTES,
+);
+const MAX_SUBSTACK_RECOVERY_IDENTIFIER_BYTES = 4_096;
 const DEFAULT_LIMIT = 20;
 const SUBSTACK_NOTE_READBACK_DELAYS_MS = Object.freeze([500, 1_500, 4_000]);
+const SUBSTACK_DELETE_REQUEST_LABEL = "Substack personal Note deletion request";
+const MIN_PINNED_HTTPS_TIMEOUT_MS = 1_000;
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(
+  Uint8Array.prototype,
+) as object;
+const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "buffer",
+)?.get;
+const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteLength",
+)?.get;
 
 type SubstackWebSleep = (
   milliseconds: number,
@@ -165,14 +201,59 @@ function requireExactInputKeys(input: OperationInput, allowed: readonly string[]
   }
 }
 
-function fileInput(value: OperationInput[string]): FileInputValue {
+function fileInput(value: OperationInput[string] | undefined): FileInputValue {
   if (
     !isRecord(value)
     || value.kind !== "file"
     || typeof value.reference !== "string"
+    || value.reference.length < 1
+    || value.reference.length > 4_096
+    || /[\0\r\n]/u.test(value.reference)
     || Object.keys(value).sort().join(",") !== "kind,reference"
   ) throw new Error("input.media must be one plan-bound file");
   return Object.freeze({ kind: "file", reference: value.reference });
+}
+
+function substackNoteText(value: unknown, label: string): string {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > 500
+    || /[\0\r]/u.test(value)
+  ) throw new Error(`${label} must be bounded Substack Note text`);
+  return value;
+}
+
+export type SubstackVideoNotePublishPlan = Readonly<{
+  readonly body: string;
+  readonly media: FileInputValue;
+}>;
+
+/** Validate the complete capture-neutral Note-video plan without resolving it. */
+export function prepareSubstackVideoNotePublishInput(
+  input: OperationInput,
+): SubstackVideoNotePublishPlan {
+  requireExactInputKeys(input, ["body", "media"]);
+  return Object.freeze({
+    body: substackNoteText(input.body, "input.body"),
+    media: fileInput(input.media),
+  });
+}
+
+export type SubstackPersonalNoteDeletePlan = Readonly<{
+  readonly expectedBody: string;
+  readonly noteId: number;
+}>;
+
+/** Validate the exact authored-personal-Note deletion confirmation. */
+export function prepareSubstackPersonalNoteDeleteInput(
+  input: OperationInput,
+): SubstackPersonalNoteDeletePlan {
+  requireExactInputKeys(input, ["expected_body", "note_id"]);
+  return Object.freeze({
+    expectedBody: substackNoteText(input.expected_body, "input.expected_body"),
+    noteId: positiveIdInput(input, "note_id"),
+  });
 }
 
 type SubstackImage = {
@@ -181,6 +262,664 @@ type SubstackImage = {
   readonly mediaType: "image/png";
   readonly width: number;
 };
+
+export type SubstackVideo = Readonly<{
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly byteLength: number;
+  readonly durationSeconds: number;
+  readonly height: number;
+  readonly mediaType: "video/mp4";
+  readonly sha256: string;
+  readonly width: number;
+}>;
+
+function substackVideoSha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function exactSubstackVideoBinding(
+  value: unknown,
+): Readonly<Record<string, unknown>> {
+  if (
+    typeof value !== "object"
+    || value === null
+  ) throw new Error("Substack video binding must be one exact object");
+  if (nodeTypes.isProxy(value)) {
+    throw new Error("Substack video binding must not be a proxy");
+  }
+  if (Array.isArray(value)) {
+    throw new Error("Substack video binding must be one exact object");
+  }
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("Substack video binding must use a plain prototype");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const ownKeys = Reflect.ownKeys(descriptors);
+  if (
+    ownKeys.length !== SUBSTACK_VIDEO_BINDING_KEYS.length
+    || ownKeys.some((key) => typeof key !== "string")
+    || (ownKeys as string[]).sort().join(",")
+      !== [...SUBSTACK_VIDEO_BINDING_KEYS].sort().join(",")
+  ) throw new Error("Substack video binding contained unsupported fields");
+  const snapshot = Object.create(null) as Record<string, unknown>;
+  for (const key of SUBSTACK_VIDEO_BINDING_KEYS) {
+    const descriptor = descriptors[key];
+    if (
+      descriptor === undefined
+      || !descriptor.enumerable
+      || !("value" in descriptor)
+    ) {
+      throw new Error(
+        "Substack video binding must contain only enumerable data properties",
+      );
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
+}
+
+function snapshotSubstackVideoBytes(value: unknown): Uint8Array<ArrayBuffer> {
+  if (
+    typeof value !== "object"
+    || value === null
+    || nodeTypes.isProxy(value)
+    || !(value instanceof Uint8Array)
+    || Object.getPrototypeOf(value) !== Uint8Array.prototype
+    || TYPED_ARRAY_BUFFER_GETTER === undefined
+    || TYPED_ARRAY_BYTE_LENGTH_GETTER === undefined
+  ) throw new Error("Substack video binding must contain one bounded MP4");
+  let buffer: unknown;
+  let byteLength: unknown;
+  try {
+    buffer = TYPED_ARRAY_BUFFER_GETTER.call(value) as unknown;
+    byteLength = TYPED_ARRAY_BYTE_LENGTH_GETTER.call(value) as unknown;
+  } catch {
+    throw new Error("Substack video binding must contain one bounded MP4");
+  }
+  if (
+    typeof byteLength !== "number"
+    || !Number.isSafeInteger(byteLength)
+    || byteLength < 24
+    || byteLength > MAX_SUBSTACK_VIDEO_BYTES
+    || nodeTypes.isSharedArrayBuffer(buffer)
+  ) throw new Error("Substack video binding must contain one bounded MP4");
+  const bytes = new Uint8Array(byteLength);
+  try {
+    Uint8Array.prototype.set.call(bytes, value);
+  } catch {
+    throw new Error("Substack video binding must contain one bounded MP4");
+  }
+  return bytes;
+}
+
+/** Reparse one local video binding so mutable or caller-forged metadata fails. */
+export function parseSubstackVideoBinding(value: unknown): SubstackVideo {
+  const binding = exactSubstackVideoBinding(value);
+  const bytes = snapshotSubstackVideoBytes(binding.bytes);
+  if (binding.mediaType !== "video/mp4") {
+    throw new Error("Substack video binding must contain one bounded MP4");
+  }
+  const metadata = substackMp4Metadata(bytes, "Substack video");
+  const sha256 = substackVideoSha256(bytes);
+  if (
+    !Number.isSafeInteger(binding.byteLength)
+    || binding.byteLength !== bytes.byteLength
+    || typeof binding.sha256 !== "string"
+    || !/^[a-f0-9]{64}$/u.test(binding.sha256)
+    || binding.sha256 !== sha256
+  ) throw new Error("Substack video binding byte integrity changed from its exact bytes");
+  if (
+    binding.durationSeconds !== metadata.durationSeconds
+    || binding.height !== metadata.height
+    || binding.width !== metadata.width
+  ) throw new Error("Substack video binding metadata changed from its exact bytes");
+  return Object.freeze({
+    bytes,
+    byteLength: bytes.byteLength,
+    durationSeconds: metadata.durationSeconds,
+    height: metadata.height,
+    mediaType: "video/mp4" as const,
+    sha256,
+    width: metadata.width,
+  });
+}
+
+/**
+ * Materialize one plan-bound MP4 without following a final symlink and bind
+ * duration plus dimensions to the exact stable bytes. This is shared protocol
+ * groundwork only; media.publish remains network-inert until its response and
+ * Note attachment contracts are captured.
+ */
+export async function materializeSubstackVideo(
+  media: FileInputValue,
+  fileResolver: BrowserFileResolver | undefined,
+  operationDeadline: WebSessionOperationDeadline | undefined,
+): Promise<SubstackVideo> {
+  if (fileResolver === undefined) {
+    throw new Error("Substack video upload requires the plan-bound file resolver");
+  }
+  const paths = operationDeadline === undefined
+    ? await fileResolver([media])
+    : await operationDeadline.run(
+        () => fileResolver([media]),
+        "authenticated web operation deadline",
+      );
+  operationDeadline?.throwIfUnavailable("authenticated web operation deadline");
+  if (paths.length !== 1 || typeof paths[0] !== "string") {
+    throw new Error("Substack file resolver did not return one exact path");
+  }
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  const handle = operationDeadline === undefined
+    ? await open(paths[0], constants.O_RDONLY | noFollow)
+    : await operationDeadline.run(
+        () => open(paths[0]!, constants.O_RDONLY | noFollow),
+        "authenticated web operation deadline",
+      );
+  try {
+    const before = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (!before.isFile() || before.size < 24 || before.size > MAX_SUBSTACK_VIDEO_BYTES) {
+      throw new Error(
+        "Substack video must be a regular MP4 no larger than the 128 MiB in-memory publish limit",
+      );
+    }
+    const bytes = operationDeadline === undefined
+      ? await handle.readFile()
+      : await operationDeadline.run(
+          () => handle.readFile(),
+          "authenticated web operation deadline",
+        );
+    const after = operationDeadline === undefined
+      ? await handle.stat()
+      : await operationDeadline.run(
+          () => handle.stat(),
+          "authenticated web operation deadline",
+        );
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || bytes.byteLength !== before.size
+    ) throw new Error("Substack video changed while it was materialized");
+    const snapshot = new Uint8Array(bytes);
+    const metadata = substackMp4Metadata(snapshot, "Substack video");
+    return Object.freeze({
+      bytes: snapshot,
+      byteLength: snapshot.byteLength,
+      durationSeconds: metadata.durationSeconds,
+      height: metadata.height,
+      mediaType: "video/mp4" as const,
+      sha256: substackVideoSha256(snapshot),
+      width: metadata.width,
+    });
+  } finally {
+    await handle.close();
+  }
+}
+
+export type SubstackVideoMultipartPart = Readonly<{
+  readonly byteLength: number;
+  readonly endExclusive: number;
+  readonly partNumber: number;
+  readonly start: number;
+}>;
+
+/** Exact byte coverage used by the current first-party 50 MiB uploader. */
+export function planSubstackVideoMultipartParts(
+  byteLength: number,
+  uploadUrlCount: number,
+): readonly SubstackVideoMultipartPart[] {
+  if (
+    !Number.isSafeInteger(byteLength)
+    || byteLength < 24
+    || byteLength > MAX_SUBSTACK_VIDEO_BYTES
+  ) throw new Error("Substack video byte length is outside the reviewed bound");
+  const expectedCount = Math.ceil(byteLength / SUBSTACK_VIDEO_MULTIPART_CHUNK_BYTES);
+  if (
+    !Number.isSafeInteger(uploadUrlCount)
+    || uploadUrlCount !== expectedCount
+    || uploadUrlCount < 1
+    || uploadUrlCount > MAX_SUBSTACK_VIDEO_PARTS
+  ) throw new Error("Substack multipart URL count does not exactly cover the video");
+  return Object.freeze(Array.from({ length: uploadUrlCount }, (_, index) => {
+    const start = index * SUBSTACK_VIDEO_MULTIPART_CHUNK_BYTES;
+    const endExclusive = Math.min(
+      byteLength,
+      start + SUBSTACK_VIDEO_MULTIPART_CHUNK_BYTES,
+    );
+    return Object.freeze({
+      byteLength: endExclusive - start,
+      endExclusive,
+      partNumber: index + 1,
+      start,
+    });
+  }));
+}
+
+export type SubstackVideoMultipartTransferBody = Readonly<{
+  readonly body: Blob;
+  readonly byteLength: number;
+  readonly credentials: "omit";
+  readonly endExclusive: number;
+  readonly formData: false;
+  readonly method: "PUT";
+  readonly partNumber: number;
+  readonly start: number;
+}>;
+
+export type SubstackVideoMultipartDispatchCheckpoint = Readonly<{
+  readonly byteLength: number;
+  readonly durationSeconds: number;
+  readonly height: number;
+  readonly mediaType: "video/mp4";
+  readonly partCount: number;
+  readonly schemaVersion: 1;
+  readonly sha256: string;
+  readonly width: number;
+}>;
+
+export type SubstackVideoMultipartDispatchSnapshot = Readonly<{
+  readonly checkpoint: SubstackVideoMultipartDispatchCheckpoint;
+  readonly parts: readonly SubstackVideoMultipartTransferBody[];
+}>;
+
+function parseSubstackVideoMultipartDispatchCheckpoint(
+  value: unknown,
+): SubstackVideoMultipartDispatchCheckpoint {
+  if (!isRecord(value)) {
+    throw new Error("Substack multipart dispatch checkpoint must be an object");
+  }
+  requireExactKeys(
+    value,
+    [
+      "byteLength",
+      "durationSeconds",
+      "height",
+      "mediaType",
+      "partCount",
+      "schemaVersion",
+      "sha256",
+      "width",
+    ],
+    "Substack multipart dispatch checkpoint",
+  );
+  if (
+    value.schemaVersion !== 1
+    || value.mediaType !== "video/mp4"
+    || !Number.isSafeInteger(value.byteLength)
+    || !Number.isSafeInteger(value.partCount)
+    || typeof value.durationSeconds !== "number"
+    || !Number.isFinite(value.durationSeconds)
+    || value.durationSeconds <= 0
+    || !Number.isSafeInteger(value.height)
+    || (value.height as number) < 1
+    || (value.height as number) > 20_000
+    || !Number.isSafeInteger(value.width)
+    || (value.width as number) < 1
+    || (value.width as number) > 20_000
+    || typeof value.sha256 !== "string"
+    || !/^[a-f0-9]{64}$/u.test(value.sha256)
+  ) throw new Error("Substack multipart dispatch checkpoint changed shape");
+  planSubstackVideoMultipartParts(
+    value.byteLength as number,
+    value.partCount as number,
+  );
+  return Object.freeze({
+    byteLength: value.byteLength as number,
+    durationSeconds: value.durationSeconds,
+    height: value.height as number,
+    mediaType: "video/mp4" as const,
+    partCount: value.partCount as number,
+    schemaVersion: 1 as const,
+    sha256: value.sha256,
+    width: value.width as number,
+  });
+}
+
+/**
+ * Pin the exact local byte version and canonical part count before any future
+ * multipart dispatch. This checkpoint contains no target or retry authority.
+ */
+export function createSubstackVideoMultipartDispatchCheckpoint(
+  videoValue: unknown,
+  uploadUrlCount: number,
+): SubstackVideoMultipartDispatchCheckpoint {
+  const video = parseSubstackVideoBinding(videoValue);
+  const parts = planSubstackVideoMultipartParts(video.byteLength, uploadUrlCount);
+  return Object.freeze({
+    byteLength: video.byteLength,
+    durationSeconds: video.durationSeconds,
+    height: video.height,
+    mediaType: video.mediaType,
+    partCount: parts.length,
+    schemaVersion: 1 as const,
+    sha256: video.sha256,
+    width: video.width,
+  });
+}
+
+/**
+ * Reparse and digest the entire current binding once immediately before a
+ * future dispatch, require its original checkpoint, then snapshot every part
+ * as an immutable Blob from that one byte version. Provider-issued URLs,
+ * accepted PUT statuses, response ETags, and dispatch hooks remain absent
+ * until an authorized capture proves those contracts.
+ */
+export function revalidateAndSnapshotSubstackVideoMultipartDispatch(
+  videoValue: unknown,
+  checkpointValue: unknown,
+): SubstackVideoMultipartDispatchSnapshot {
+  const video = parseSubstackVideoBinding(videoValue);
+  const checkpoint = parseSubstackVideoMultipartDispatchCheckpoint(checkpointValue);
+  if (
+    video.byteLength !== checkpoint.byteLength
+    || video.durationSeconds !== checkpoint.durationSeconds
+    || video.height !== checkpoint.height
+    || video.mediaType !== checkpoint.mediaType
+    || video.sha256 !== checkpoint.sha256
+    || video.width !== checkpoint.width
+  ) throw new Error("Substack video changed after its multipart dispatch checkpoint");
+  const plannedParts = planSubstackVideoMultipartParts(
+    checkpoint.byteLength,
+    checkpoint.partCount,
+  );
+  const immutableVideo = new Blob([
+    // Parsing rejected shared storage and copied the bytes into a fresh buffer.
+    video.bytes as Uint8Array<ArrayBuffer>,
+  ], { type: video.mediaType });
+  if (
+    immutableVideo.size !== checkpoint.byteLength
+    || immutableVideo.type !== checkpoint.mediaType
+  ) throw new Error("Substack video multipart snapshot changed shape");
+  return Object.freeze({
+    checkpoint,
+    parts: Object.freeze(plannedParts.map((part) => Object.freeze({
+      body: immutableVideo.slice(part.start, part.endExclusive, video.mediaType),
+      byteLength: part.byteLength,
+      credentials: "omit" as const,
+      endExclusive: part.endExclusive,
+      formData: false as const,
+      method: "PUT" as const,
+      partNumber: part.partNumber,
+      start: part.start,
+    }))),
+  });
+}
+
+function substackResponseBoundIdentifier(value: unknown, label: string): string {
+  const candidate = typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? String(value)
+    : value;
+  if (
+    typeof candidate !== "string"
+    || !/^[A-Za-z0-9_-]{1,256}$/u.test(candidate)
+  ) throw new Error(`${label} must be one response-bound identifier`);
+  return candidate;
+}
+
+/** Parse ordered strong ETag-shaped values for a future captured PUT contract. */
+export function parseSubstackVideoMultipartEtags(
+  value: unknown,
+  expectedCount: number,
+): readonly string[] {
+  if (
+    !Number.isSafeInteger(expectedCount)
+    || expectedCount < 1
+    || expectedCount > MAX_SUBSTACK_VIDEO_PARTS
+  ) throw new Error("Substack multipart ETags did not bind every ordered part");
+  if (typeof value !== "object" || value === null || nodeTypes.isProxy(value)) {
+    throw new Error("Substack multipart ETags must be one exact data-only array");
+  }
+  if (
+    !Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+  ) throw new Error("Substack multipart ETags must be one exact data-only array");
+  const descriptors = Object.getOwnPropertyDescriptors(value) as unknown as Readonly<
+    Record<PropertyKey, PropertyDescriptor | undefined>
+  >;
+  const ownKeys = Reflect.ownKeys(descriptors);
+  const lengthDescriptor = descriptors.length;
+  if (
+    lengthDescriptor === undefined
+    || !("value" in lengthDescriptor)
+    || lengthDescriptor.value !== expectedCount
+  ) throw new Error("Substack multipart ETags did not bind every ordered part");
+  if (
+    ownKeys.length !== expectedCount + 1
+    || ownKeys.some((key) => typeof key !== "string")
+  ) throw new Error("Substack multipart ETags must be one exact data-only array");
+  const snapshot: string[] = [];
+  for (let index = 0; index < expectedCount; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (
+      descriptor === undefined
+      || !descriptor.enumerable
+      || !("value" in descriptor)
+    ) {
+      throw new Error("Substack multipart ETags must be one exact data-only array");
+    }
+    const entry = descriptor.value;
+    if (
+      typeof entry !== "string"
+      || !/^"[\x21\x23-\x7e]{1,256}"$/u.test(entry)
+    ) throw new Error("Substack multipart ETag changed from a bounded strong entity-tag");
+    snapshot.push(entry);
+  }
+  return Object.freeze(snapshot);
+}
+
+export type SubstackVideoUploadState =
+  | "cancelled"
+  | "created"
+  | "error"
+  | "transcoded"
+  | "uploaded";
+
+export function parseSubstackVideoUploadState(value: unknown): SubstackVideoUploadState {
+  if (
+    value !== "cancelled"
+    && value !== "created"
+    && value !== "error"
+    && value !== "transcoded"
+    && value !== "uploaded"
+  ) throw new Error("Substack video upload returned an unreviewed state");
+  return value;
+}
+
+export type SubstackVideoUploadSettlement = Readonly<{
+  readonly state: SubstackVideoUploadState;
+  readonly status: "complete" | "pending" | "terminal-failure";
+}>;
+
+/** Classify only the lifecycle states named by the current first-party bundle. */
+export function classifySubstackVideoUploadState(
+  value: unknown,
+): SubstackVideoUploadSettlement {
+  const state = parseSubstackVideoUploadState(value);
+  return Object.freeze({
+    state,
+    status: state === "transcoded"
+      ? "complete" as const
+      : state === "created" || state === "uploaded"
+        ? "pending" as const
+        : "terminal-failure" as const,
+  });
+}
+
+/** Bundle-derived initialization request-shape candidate; contextual IDs are omitted. */
+export function substackVideoUploadInitializationRequest(
+  byteLength: number,
+): Readonly<{ method: "POST"; url: string }> {
+  planSubstackVideoMultipartParts(
+    byteLength,
+    Math.ceil(byteLength / SUBSTACK_VIDEO_MULTIPART_CHUNK_BYTES),
+  );
+  const url = new URL("/api/v1/video/upload", SUBSTACK_ORIGIN);
+  url.searchParams.set("filetype", "video/mp4");
+  url.searchParams.set("fileSize", String(byteLength));
+  url.searchParams.set("fileName", "wrench-video.mp4");
+  return Object.freeze({ method: "POST" as const, url: url.href });
+}
+
+/** Build initialization only after reparsing the exact local MP4 binding. */
+export function substackVideoUploadInitializationRequestForBinding(
+  videoValue: unknown,
+): Readonly<{ method: "POST"; url: string }> {
+  const video = parseSubstackVideoBinding(videoValue);
+  return substackVideoUploadInitializationRequest(video.bytes.byteLength);
+}
+
+/** Bundle-derived transcode request-shape candidate over response-bound identifiers. */
+export function substackVideoTranscodeRequest(
+  mediaUploadId: unknown,
+  multipartUploadId: unknown,
+  durationSeconds: number,
+  videoByteLength: number,
+  uploadUrlCount: number,
+  etags: unknown,
+): Readonly<{
+  body: Readonly<{
+    duration: number;
+    multipart_upload_etags: readonly string[];
+    multipart_upload_id: string;
+  }>;
+  method: "POST";
+  url: string;
+}> {
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new Error("Substack video duration must be finite and positive");
+  }
+  const uploadId = substackResponseBoundIdentifier(
+    mediaUploadId,
+    "Substack media upload ID",
+  );
+  const multipartId = substackResponseBoundIdentifier(
+    multipartUploadId,
+    "Substack multipart upload ID",
+  );
+  const parts = planSubstackVideoMultipartParts(videoByteLength, uploadUrlCount);
+  const parsedEtags = parseSubstackVideoMultipartEtags(etags, parts.length);
+  return Object.freeze({
+    body: Object.freeze({
+      duration: durationSeconds,
+      multipart_upload_id: multipartId,
+      multipart_upload_etags: parsedEtags,
+    }),
+    method: "POST" as const,
+    url: new URL(
+      `/api/v1/video/upload/${encodeURIComponent(uploadId)}/transcode`,
+      SUBSTACK_ORIGIN,
+    ).href,
+  });
+}
+
+/** Bind transcode duration and byte coverage to the same reparsed local MP4. */
+export function substackVideoTranscodeRequestForBinding(
+  mediaUploadId: unknown,
+  multipartUploadId: unknown,
+  videoValue: unknown,
+  uploadUrlCount: number,
+  etags: unknown,
+): ReturnType<typeof substackVideoTranscodeRequest> {
+  const video = parseSubstackVideoBinding(videoValue);
+  return substackVideoTranscodeRequest(
+    mediaUploadId,
+    multipartUploadId,
+    video.durationSeconds,
+    video.bytes.byteLength,
+    uploadUrlCount,
+    etags,
+  );
+}
+
+export function substackVideoStatusRequest(
+  mediaUploadId: unknown,
+): Readonly<{ method: "GET"; url: string }> {
+  const uploadId = substackResponseBoundIdentifier(
+    mediaUploadId,
+    "Substack media upload ID",
+  );
+  return Object.freeze({
+    method: "GET" as const,
+    url: new URL(
+      `/api/v1/video/upload/${encodeURIComponent(uploadId)}`,
+      SUBSTACK_ORIGIN,
+    ).href,
+  });
+}
+
+export type SubstackVideoUploadRecoveryTarget = Readonly<{
+  readonly mediaUploadId: string;
+  readonly schemaVersion: 1;
+}>;
+
+/** Serialize only the response-bound upload identity needed for a status GET. */
+export function substackVideoUploadRecoveryTargetIdentifier(
+  mediaUploadId: unknown,
+): string {
+  return canonicalJson({
+    mediaUploadId: substackResponseBoundIdentifier(
+      mediaUploadId,
+      "Substack video recovery media upload ID",
+    ),
+    schemaVersion: 1,
+  });
+}
+
+/** Parse a private canonical upload checkpoint without authorizing any retry. */
+export function parseSubstackVideoUploadRecoveryTargetIdentifier(
+  identifier: unknown,
+): SubstackVideoUploadRecoveryTarget {
+  if (
+    typeof identifier !== "string"
+    || identifier.length < 1
+    || identifier.length > MAX_SUBSTACK_RECOVERY_IDENTIFIER_BYTES
+    || /[\0\r\n]/u.test(identifier)
+  ) throw new Error("Substack video recovery target must be bounded canonical JSON");
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier) as unknown;
+  } catch {
+    throw new Error("Substack video recovery target must be bounded canonical JSON");
+  }
+  if (!isRecord(value)) {
+    throw new Error("Substack video recovery target changed shape");
+  }
+  requireExactKeys(
+    value,
+    ["mediaUploadId", "schemaVersion"],
+    "Substack video recovery target",
+  );
+  if (value.schemaVersion !== 1) {
+    throw new Error("Substack video recovery target changed schema version");
+  }
+  const target = Object.freeze({
+    mediaUploadId: substackResponseBoundIdentifier(
+      value.mediaUploadId,
+      "Substack video recovery media upload ID",
+    ),
+    schemaVersion: 1 as const,
+  });
+  if (canonicalJson(target) !== identifier) {
+    throw new Error("Substack video recovery target must use canonical JSON");
+  }
+  return target;
+}
+
+/** Build the bundle-derived read-only status candidate from a private checkpoint. */
+export function substackVideoUploadRecoveryStatusRequest(
+  identifier: unknown,
+): Readonly<{ method: "GET"; url: string }> {
+  const target = parseSubstackVideoUploadRecoveryTargetIdentifier(identifier);
+  return substackVideoStatusRequest(target.mediaUploadId);
+}
 
 async function materializeSubstackImage(
   media: FileInputValue,
@@ -792,14 +1531,7 @@ function substackBodyJson(body: string): SubstackBodyJson {
 }
 
 function noteBodyInput(input: OperationInput): string {
-  const body = input.body;
-  if (
-    typeof body !== "string"
-    || body.length < 1
-    || body.length > 500
-    || /[\0\r]/u.test(body)
-  ) throw new Error("input.body must be bounded Substack Note text");
-  return body;
+  return substackNoteText(input.body, "input.body");
 }
 
 const CREATED_NOTE_KEYS = Object.freeze([
@@ -1074,6 +1806,246 @@ type ProjectedSubstackNote = Readonly<{
   post: unknown | null;
 }>;
 
+export type SubstackNoteDeletionRecoveryTarget = Readonly<{
+  readonly noteId: number;
+  readonly publicationId: null;
+  readonly schemaVersion: 1;
+}>;
+
+/** Bind deletion to one exact current-account personal Note before dispatch. */
+export function assertSubstackNoteDeletionPreRead(
+  value: unknown,
+  noteId: number,
+  viewerId: number,
+  expectedBody: string,
+): SubstackNoteDeletionRecoveryTarget {
+  if (!Number.isSafeInteger(noteId) || noteId < 1) {
+    throw new Error("Substack deletion Note ID must be positive");
+  }
+  if (!Number.isSafeInteger(viewerId) || viewerId < 1) {
+    throw new Error("Substack deletion viewer ID must be positive");
+  }
+  substackNoteText(expectedBody, "Substack deletion expected body");
+  const note = normalizeSubstackNoteResponse(value, noteId) as ProjectedSubstackNote;
+  if (
+    note.entityKey !== `c-${noteId}`
+    || note.comment.id !== noteId
+    || note.comment.userId !== viewerId
+    || note.comment.publicationId !== null
+    || note.comment.postId !== null
+    || note.comment.body !== expectedBody
+    || note.comment.type !== "feed"
+    || note.post !== null
+  ) throw new Error("Substack deletion pre-read did not bind the exact authored Note");
+  return Object.freeze({ noteId, publicationId: null, schemaVersion: 1 as const });
+}
+
+/** Serialize the pre-read authored target without retaining its private body. */
+export function substackNoteDeletionRecoveryTargetIdentifier(
+  targetValue: unknown,
+): string {
+  if (!isRecord(targetValue)) {
+    throw new Error("Substack deletion recovery target changed shape");
+  }
+  requireExactKeys(
+    targetValue,
+    ["noteId", "publicationId", "schemaVersion"],
+    "Substack deletion recovery target",
+  );
+  if (targetValue.publicationId !== null || targetValue.schemaVersion !== 1) {
+    throw new Error("Substack deletion recovery target changed shape");
+  }
+  return canonicalJson({
+    noteId: positiveInteger(
+      targetValue.noteId,
+      "Substack deletion recovery target.noteId",
+    ),
+    publicationId: null,
+    schemaVersion: 1,
+  });
+}
+
+/** Parse only one canonical personal-Note target for read-only reconciliation. */
+export function parseSubstackNoteDeletionRecoveryTargetIdentifier(
+  identifier: unknown,
+): SubstackNoteDeletionRecoveryTarget {
+  if (
+    typeof identifier !== "string"
+    || identifier.length < 1
+    || identifier.length > MAX_SUBSTACK_RECOVERY_IDENTIFIER_BYTES
+    || /[\0\r\n]/u.test(identifier)
+  ) throw new Error("Substack deletion recovery target must be bounded canonical JSON");
+  let value: unknown;
+  try {
+    value = JSON.parse(identifier) as unknown;
+  } catch {
+    throw new Error("Substack deletion recovery target must be bounded canonical JSON");
+  }
+  if (!isRecord(value)) {
+    throw new Error("Substack deletion recovery target changed shape");
+  }
+  const canonical = substackNoteDeletionRecoveryTargetIdentifier(value);
+  if (canonical !== identifier) {
+    throw new Error("Substack deletion recovery target must use canonical JSON");
+  }
+  return Object.freeze({
+    noteId: positiveInteger(value.noteId, "Substack deletion recovery target.noteId"),
+    publicationId: null,
+    schemaVersion: 1 as const,
+  });
+}
+
+/** Build the exact independent Note GET used for pre-read and absence checks. */
+export function substackNoteDeletionRecoveryReadRequest(
+  identifier: unknown,
+): Readonly<{ method: "GET"; url: string }> {
+  const target = parseSubstackNoteDeletionRecoveryTargetIdentifier(identifier);
+  return Object.freeze({
+    method: "GET" as const,
+    url: new URL(`/api/v1/reader/comment/${target.noteId}`, SUBSTACK_ORIGIN).href,
+  });
+}
+
+export function substackPersonalNoteDeleteRequest(
+  noteId: unknown,
+): Readonly<{ method: "DELETE"; url: string }> {
+  const target = positiveInteger(noteId, "Substack deletion Note ID");
+  return Object.freeze({
+    method: "DELETE" as const,
+    url: new URL(`/api/v1/comment/${target}`, SUBSTACK_ORIGIN).href,
+  });
+}
+
+async function dispatchSubstackPersonalNoteDelete(
+  client: WebSessionClient,
+  noteId: number,
+  options: {
+    readonly timeoutMs: number;
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: SubstackWebRuntimeDependencies;
+  },
+): Promise<void> {
+  const request = substackPersonalNoteDeleteRequest(noteId);
+  const url = new URL(request.url);
+  if (
+    url.origin !== SUBSTACK_ORIGIN
+    || url.pathname !== `/api/v1/comment/${noteId}`
+    || url.search !== ""
+    || url.hash !== ""
+    || url.username !== ""
+    || url.password !== ""
+  ) throw new Error("Substack personal Note deletion escaped its exact reviewed target");
+
+  const ownedDeadline = options.operationDeadline === undefined
+    ? new OperationDeadline(options.timeoutMs, {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    })
+    : null;
+  const deadline = options.operationDeadline ?? ownedDeadline;
+  if (deadline === null) {
+    throw new Error("Substack personal Note deletion deadline is unavailable");
+  }
+  const headers = new Headers(jsonPostHeaders());
+  headers.set("cookie", renderCookieHeader(client.cookies));
+  let response: Response | undefined;
+  try {
+    deadline.throwIfUnavailable(SUBSTACK_DELETE_REQUEST_LABEL);
+    const timeoutMs = deadline.remainingTimeMs();
+    if (options.dependencies?.fetch === undefined && timeoutMs < MIN_PINNED_HTTPS_TIMEOUT_MS) {
+      throw new Error("Substack personal Note deletion has insufficient time for its request");
+    }
+    try {
+      response = await deadline.run(
+        (signal) => {
+          const init: RequestInit = {
+            method: request.method,
+            headers,
+            redirect: "error",
+            signal,
+          };
+          return options.dependencies?.fetch === undefined
+            ? pinnedHttpsFetch(url, init, timeoutMs)
+            : options.dependencies.fetch(url, init);
+        },
+        SUBSTACK_DELETE_REQUEST_LABEL,
+      );
+    } catch (error) {
+      throw new Error(
+        "Substack personal Note deletion failed before a reviewed response was received",
+        { cause: error },
+      );
+    }
+    if (response.status !== 200 || response.headers.get("location") !== null) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new Error(
+        `Substack personal Note deletion returned unreviewed status/redirect ${response.status}`,
+      );
+    }
+    void response.body?.cancel().catch(() => undefined);
+    deadline.throwIfUnavailable(SUBSTACK_DELETE_REQUEST_LABEL);
+  } finally {
+    if (deadline.signal.aborted) {
+      void response?.body?.cancel().catch(() => undefined);
+    }
+    ownedDeadline?.dispose();
+  }
+}
+
+type SubstackPersonalNoteDeletionPresence = Readonly<{
+  present: boolean;
+  target: SubstackNoteDeletionRecoveryTarget | null;
+}>;
+
+async function readSubstackPersonalNoteDeletionPresence(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  noteId: number,
+  viewerId: number,
+  expectedBody: string,
+): Promise<SubstackPersonalNoteDeletionPresence> {
+  const request = substackNoteDeletionRecoveryReadRequest(
+    substackNoteDeletionRecoveryTargetIdentifier({
+      noteId,
+      publicationId: null,
+      schemaVersion: 1,
+    }),
+  );
+  const url = new URL(request.url);
+  authorizeSubstackWebReadRequest({
+    operation: "posts.note",
+    url,
+    method: "GET",
+    targetId: noteId,
+  });
+  const status = await client.requestStatus({
+    url,
+    method: "GET",
+    headers: jsonHeaders(),
+    expectedStatuses: [200, 404],
+  });
+  if (status.status === 404) {
+    return Object.freeze({ present: false, target: null });
+  }
+  const value = await client.requestJson({
+    url,
+    method: "GET",
+    headers: jsonHeaders(),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: boundedMaximum(recipe),
+  });
+  return Object.freeze({
+    present: true,
+    target: assertSubstackNoteDeletionPreRead(
+      value,
+      noteId,
+      viewerId,
+      expectedBody,
+    ),
+  });
+}
+
 type SubstackNoteImageExpectation = Readonly<{
   readonly height: number;
   readonly width: number;
@@ -1119,6 +2091,17 @@ function substackDispatchEvent(
 ): WebSessionDispatchEvent {
   return {
     id: "posts.publish",
+    index: 1,
+    progress: { planned: 1, started, verified },
+  };
+}
+
+function substackDeleteDispatchEvent(
+  started: number,
+  verified: number,
+): WebSessionDispatchEvent {
+  return {
+    id: "content.delete",
     index: 1,
     progress: { planned: 1, started, verified },
   };
@@ -1486,6 +2469,188 @@ async function executeSubstackPost(
   }
 }
 
+type SubstackDeleteFailureStage =
+  | "accepted-target-recording"
+  | "delete-readback"
+  | "delete-transport"
+  | "dispatch-admission"
+  | "verification-recording";
+
+async function executeSubstackPersonalNoteDelete(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  viewer: SubstackWebViewer,
+  input: OperationInput,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly sleep: SubstackWebSleep;
+    readonly dependencies?: SubstackWebRuntimeDependencies;
+  },
+): Promise<WebSessionExecution> {
+  const plan = prepareSubstackPersonalNoteDeleteInput(input);
+  const before = await readSubstackPersonalNoteDeletionPresence(
+    client,
+    recipe,
+    plan.noteId,
+    viewer.id,
+    plan.expectedBody,
+  );
+  const finalUrl = viewer.handle === null
+    ? SUBSTACK_ORIGIN
+    : substackNoteUrl(viewer.handle, plan.noteId);
+  if (!before.present) {
+    return {
+      status: "succeeded",
+      output: Object.freeze({ deleted: true, noOp: true, noteId: plan.noteId }),
+      finalUrl,
+      noOp: true,
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+    };
+  }
+
+  const reboundViewer = await currentViewer(client, boundedMaximum(recipe));
+  if (viewerSubject(reboundViewer) !== viewerSubject(viewer)) {
+    throw new Error("Substack current viewer changed before the Note deletion dispatch");
+  }
+  const fresh = await readSubstackPersonalNoteDeletionPresence(
+    client,
+    recipe,
+    plan.noteId,
+    reboundViewer.id,
+    plan.expectedBody,
+  );
+  if (!fresh.present) {
+    return {
+      status: "succeeded",
+      output: Object.freeze({ deleted: true, noOp: true, noteId: plan.noteId }),
+      finalUrl,
+      noOp: true,
+      dispatchStarted: false,
+      dispatch: { planned: 1, started: 0, verified: 0 },
+    };
+  }
+  if (fresh.target === null) {
+    throw new Error("Substack deletion pre-read omitted its exact recovery target");
+  }
+
+  let started = 0;
+  let verified = 0;
+  let failureStage: SubstackDeleteFailureStage = "dispatch-admission";
+  try {
+    await options.beforeDispatch?.(substackDeleteDispatchEvent(started, verified));
+    started = 1;
+    failureStage = "delete-transport";
+    await dispatchSubstackPersonalNoteDelete(client, plan.noteId, {
+      timeoutMs: recipe.timeoutMs,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+    });
+    failureStage = "accepted-target-recording";
+    await options.afterProviderAcceptedMutationTarget?.({
+      id: "content.delete",
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: substackNoteDeletionRecoveryTargetIdentifier(fresh.target),
+      },
+    });
+    failureStage = "delete-readback";
+    let after = await readSubstackPersonalNoteDeletionPresence(
+      client,
+      recipe,
+      plan.noteId,
+      reboundViewer.id,
+      plan.expectedBody,
+    );
+    for (const delay of SUBSTACK_NOTE_READBACK_DELAYS_MS) {
+      if (!after.present) break;
+      await waitForSubstackNoteReadback(
+        delay,
+        options.sleep,
+        options.signal,
+        options.operationDeadline,
+      );
+      after = await readSubstackPersonalNoteDeletionPresence(
+        client,
+        recipe,
+        plan.noteId,
+        reboundViewer.id,
+        plan.expectedBody,
+      );
+    }
+    if (after.present) {
+      throw new Error("Substack exact Note deletion readback still returned the authored Note");
+    }
+    verified = 1;
+    failureStage = "verification-recording";
+    await options.afterDispatchVerified?.(substackDeleteDispatchEvent(started, verified));
+    return {
+      status: "succeeded",
+      output: Object.freeze({ deleted: true, noOp: false, noteId: plan.noteId }),
+      finalUrl,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? `Substack may have deleted the exact authored Note, but independent absence was not verified; reconcile before retrying (stage: ${failureStage})`
+        : `Substack Note deletion failed before submission (stage: ${failureStage})`,
+    };
+  }
+}
+
+/** Independently read the exact confirmed personal Note's desired deletion state. */
+export async function readSubstackWebContentDeleteDesiredState(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: SubstackWebRuntimeDependencies;
+  } = {},
+): Promise<Readonly<{ present: boolean; noteId: number }>> {
+  if (
+    recipe.site !== "substack"
+    || recipe.action !== "content.delete"
+    || recipe.contractVersion !== 1
+  ) throw new Error("Substack deletion recovery supports only content.delete@1");
+  const plan = prepareSubstackPersonalNoteDeleteInput(input);
+  const client = await createWebSessionClient(SUBSTACK_ORIGIN, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+  });
+  const viewer = await requireBoundViewer(client, auth, recipe.maxOutputBytes);
+  const presence = await readSubstackPersonalNoteDeletionPresence(
+    client,
+    recipe,
+    plan.noteId,
+    viewer.id,
+    plan.expectedBody,
+  );
+  return Object.freeze({ present: presence.present, noteId: plan.noteId });
+}
+
 export async function executeSubstackWebOperation(
   recipe: WebSessionRecipe,
   input: OperationInput,
@@ -1528,6 +2693,7 @@ export async function executeSubstackWebOperation(
     && recipe.action !== "profiles.read"
     && recipe.action !== "organizations.read"
     && recipe.action !== "posts.publish"
+    && recipe.action !== "content.delete"
   ) throw new Error(`Substack authenticated web operation ${recipe.action} has no executable reviewed contract`);
 
   const client = await createWebSessionClient(SUBSTACK_ORIGIN, auth, {
@@ -1541,6 +2707,12 @@ export async function executeSubstackWebOperation(
   const viewer = await requireBoundViewer(client, auth, recipe.maxOutputBytes);
   if (recipe.action === "posts.publish") {
     return executeSubstackPost(client, recipe, viewer, input, {
+      ...options,
+      sleep: options.dependencies?.sleep ?? sleepForSubstackReadback,
+    });
+  }
+  if (recipe.action === "content.delete") {
+    return executeSubstackPersonalNoteDelete(client, recipe, viewer, input, {
       ...options,
       sleep: options.dependencies?.sleep ?? sleepForSubstackReadback,
     });

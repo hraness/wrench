@@ -16,6 +16,7 @@ import { canonicalJson, sha256, type WebSessionRecipe } from "../model";
 import {
   executeMetaWebOperation,
   probeMetaWebSubject,
+  readInstagramVideoAcceptedMutationTargetPresence,
   readThreadsWebPublishedMutationTarget,
   type MetaWebRuntimeDependencies,
 } from "./meta-web-runtime";
@@ -121,6 +122,28 @@ const threadsHtml = script({
     }, 1],
   ],
 });
+
+function instagramVideoPost(
+  postId: string,
+  postCode: string,
+  caption: string,
+  overrides: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    id: postId,
+    pk: postId.split("_", 1)[0],
+    code: postCode,
+    media_type: 2,
+    taken_at: 1_786_923_725,
+    caption: { text: caption },
+    user: { pk: "12345", username: "viewer" },
+    has_liked: false,
+    has_viewer_saved: false,
+    like_count: 0,
+    comment_count: 0,
+    ...overrides,
+  });
+}
 
 function threadsImagePost(
   postId: string,
@@ -646,6 +669,7 @@ function recipe(
     site === "instagram" && (
       action === "comments.read"
       || action === "feeds.read"
+      || action === "media.publish"
       || action === "messaging.list"
     )
   ) || (
@@ -2036,6 +2060,301 @@ describe("Meta authenticated internal-data runtime", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("reads one accepted Instagram video target without resolving or uploading the file", async () => {
+    const mediaId = "900_12345";
+    const code = "VideoABC";
+    const caption = "Disposable Wrench Instagram video fixture";
+    const url = `https://www.instagram.com/p/${code}/`;
+    const identifier = canonicalJson({ code, mediaId, url });
+    const calls: Call[] = [];
+    const network = dependencies("instagram", calls, (call) => {
+      if (call.url.pathname === "/") {
+        return new Response(instagramHtml, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (call.url.pathname === `/p/${code}/`) {
+        expect(call.headers.get("referer")).toBe("https://www.instagram.com/");
+        return new Response("", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (call.url.pathname === `/api/v1/media/${mediaId}/info/`) {
+        expect(call.headers.get("referer")).toBe(url);
+        return new Response(JSON.stringify({
+          status: "ok",
+          items: [instagramVideoPost(mediaId, code, caption)],
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected Instagram video readback ${call.method} ${call.url.pathname}`);
+    });
+    expect(await readInstagramVideoAcceptedMutationTargetPresence(
+      recipe("instagram", "media.publish"),
+      {
+        audience: "default",
+        caption,
+        media: { kind: "file", reference: "confirmed-fixture" },
+      },
+      auth("instagram"),
+      identifier,
+      { dependencies: network },
+    )).toEqual({ code, mediaId, present: true });
+    expect(calls.map((call) => `${call.method} ${call.url.href}`)).toEqual([
+      "GET https://www.instagram.com/",
+      `GET ${url}`,
+      `GET https://www.instagram.com/api/v1/media/${mediaId}/info/`,
+    ]);
+  });
+
+  test("proves one deleted Instagram video absent from its response-derived permalink", async () => {
+    const mediaId = "900_12345";
+    const code = "VideoABC";
+    const caption = "Disposable Wrench Instagram video fixture";
+    const url = `https://www.instagram.com/p/${code}/`;
+    const identifier = canonicalJson({ code, mediaId, url });
+    const calls: Call[] = [];
+    const network = dependencies("instagram", calls, (call) => {
+      if (call.url.pathname === "/") {
+        return new Response(instagramHtml, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      expect(call.method).toBe("GET");
+      expect(call.url.href).toBe(url);
+      return new Response("", {
+        status: 404,
+        headers: { "content-type": "text/html" },
+      });
+    });
+    expect(await readInstagramVideoAcceptedMutationTargetPresence(
+      recipe("instagram", "content.delete"),
+      {
+        expected_caption: caption,
+        expected_media_kind: "video",
+        media_id: mediaId,
+      },
+      auth("instagram"),
+      identifier,
+      { dependencies: network },
+    )).toEqual({ code, mediaId, present: false });
+    expect(calls.map((call) => `${call.method} ${call.url.href}`)).toEqual([
+      "GET https://www.instagram.com/",
+      `GET ${url}`,
+    ]);
+  });
+
+  test("rejects ambiguous Instagram video accepted targets before authenticated readback", async () => {
+    const target = {
+      code: "VideoABC",
+      mediaId: "900_12345",
+      url: "https://www.instagram.com/p/VideoABC/",
+    } as const;
+    const deleteInput = {
+      expected_caption: "Disposable Wrench Instagram video fixture",
+      expected_media_kind: "video",
+      media_id: target.mediaId,
+    } as const;
+    const calls: Call[] = [];
+    const network = dependencies("instagram", calls);
+    expect(await rejectionMessage(readInstagramVideoAcceptedMutationTargetPresence(
+      recipe("instagram", "content.delete"),
+      deleteInput,
+      auth("instagram"),
+      JSON.stringify({ mediaId: target.mediaId, code: target.code, url: target.url }),
+      { dependencies: network },
+    ))).toContain("not canonical");
+    expect(await rejectionMessage(readInstagramVideoAcceptedMutationTargetPresence(
+      recipe("instagram", "content.delete"),
+      { ...deleteInput, media_id: "901_12345" },
+      auth("instagram"),
+      canonicalJson(target),
+      { dependencies: network },
+    ))).toContain("did not bind the confirmed media ID");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects Instagram video permalink redirect and status drift before media readback", async () => {
+    const mediaId = "900_12345";
+    const code = "VideoABC";
+    const caption = "Disposable Wrench Instagram video fixture";
+    const url = `https://www.instagram.com/p/${code}/`;
+    const variants = [
+      {
+        expected: "unreviewed redirect location",
+        response: () => new Response("", {
+          status: 200,
+          headers: {
+            "content-type": "text/html",
+            location: "/accounts/login/",
+          },
+        }),
+      },
+      {
+        expected: "unreviewed status 503",
+        response: () => new Response("", {
+          status: 503,
+          headers: { "content-type": "text/html" },
+        }),
+      },
+    ] as const;
+    for (const variant of variants) {
+      const calls: Call[] = [];
+      const network = dependencies("instagram", calls, (call) => {
+        if (call.url.pathname === "/") {
+          return new Response(instagramHtml, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        expect(call.url.href).toBe(url);
+        return variant.response();
+      });
+      expect(await rejectionMessage(readInstagramVideoAcceptedMutationTargetPresence(
+        recipe("instagram", "media.publish"),
+        {
+          audience: "default",
+          caption,
+          media: { kind: "file", reference: "confirmed-fixture" },
+        },
+        auth("instagram"),
+        canonicalJson({ code, mediaId, url }),
+        { dependencies: network },
+      ))).toContain(variant.expected);
+      expect(calls.map((call) => call.url.pathname)).toEqual([
+        "/",
+        `/p/${code}/`,
+      ]);
+    }
+  });
+
+  test("rejects Instagram video media-info status, content-type, and output-bound drift", async () => {
+    const mediaId = "900_12345";
+    const code = "VideoABC";
+    const caption = "Disposable Wrench Instagram video fixture";
+    const url = `https://www.instagram.com/p/${code}/`;
+    const validBody = JSON.stringify({
+      status: "ok",
+      items: [instagramVideoPost(mediaId, code, caption)],
+    });
+    const variants = [
+      {
+        expected: "unreviewed status/content type 201/application/json",
+        maxOutputBytes: 8 * 1024 * 1024,
+        response: () => new Response(validBody, {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      },
+      {
+        expected: "unreviewed status/content type 200/text/html",
+        maxOutputBytes: 8 * 1024 * 1024,
+        response: () => new Response(validBody, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      },
+      {
+        expected: "exceeded its reviewed byte limit",
+        maxOutputBytes: 256,
+        response: () => new Response(`${validBody}${" ".repeat(512)}`, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      },
+    ] as const;
+    for (const variant of variants) {
+      const calls: Call[] = [];
+      const network = dependencies("instagram", calls, (call) => {
+        if (call.url.pathname === "/") {
+          return new Response(instagramHtml, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        if (call.url.pathname === `/p/${code}/`) {
+          return new Response("", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        expect(call.url.pathname).toBe(`/api/v1/media/${mediaId}/info/`);
+        return variant.response();
+      });
+      expect(await rejectionMessage(readInstagramVideoAcceptedMutationTargetPresence(
+        {
+          ...recipe("instagram", "media.publish"),
+          maxOutputBytes: variant.maxOutputBytes,
+        },
+        {
+          audience: "default",
+          caption,
+          media: { kind: "file", reference: "confirmed-fixture" },
+        },
+        auth("instagram"),
+        canonicalJson({ code, mediaId, url }),
+        { dependencies: network },
+      ))).toContain(variant.expected);
+      expect(calls.map((call) => call.url.pathname)).toEqual([
+        "/",
+        `/p/${code}/`,
+        `/api/v1/media/${mediaId}/info/`,
+      ]);
+    }
+  });
+
+  test("rejects drift in an existing Instagram video target's exact media-info readback", async () => {
+    const mediaId = "900_12345";
+    const code = "VideoABC";
+    const caption = "Disposable Wrench Instagram video fixture";
+    const url = `https://www.instagram.com/p/${code}/`;
+    const calls: Call[] = [];
+    const network = dependencies("instagram", calls, (call) => {
+      if (call.url.pathname === "/") {
+        return new Response(instagramHtml, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (call.url.pathname === `/p/${code}/`) {
+        return new Response("", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      return new Response(JSON.stringify({
+        status: "ok",
+        items: [instagramVideoPost(mediaId, code, caption, {
+          user: { pk: "99999", username: "other" },
+        })],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    expect(await rejectionMessage(readInstagramVideoAcceptedMutationTargetPresence(
+      recipe("instagram", "media.publish"),
+      {
+        audience: "default",
+        caption,
+        media: { kind: "file", reference: "confirmed-fixture" },
+      },
+      auth("instagram"),
+      canonicalJson({ code, mediaId, url }),
+      { dependencies: network },
+    ))).toContain("did not bind the confirmed actor");
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      `/p/${code}/`,
+      `/api/v1/media/${mediaId}/info/`,
+    ]);
+  });
+
   test("executes Instagram timeline through the exact JSON endpoint with no dispatch", async () => {
     const calls: Call[] = [];
     let callbacks = 0;
@@ -2989,6 +3308,8 @@ describe("Meta authenticated internal-data runtime", () => {
       ["facebook-page", "feeds.read"],
       ["facebook-group", "posts.read"],
       ["facebook-marketplace", "media.read"],
+      ["instagram", "content.delete"],
+      ["instagram", "media.publish"],
       ["instagram", "messaging.send"],
       ["threads", "likes.set"],
       ["facebook", "contacts.list"],
@@ -2998,11 +3319,16 @@ describe("Meta authenticated internal-data runtime", () => {
       const calls: Call[] = [];
       const acquisitions = { count: 0 };
       let callbacks = 0;
+      let fileResolutions = 0;
       const message = await rejectionMessage(executeMetaWebOperation(
         recipe(site, action),
         {},
         auth(site === "instagram" ? "instagram" : site === "threads" ? "threads" : "facebook"),
         {
+          fileResolver: () => {
+            fileResolutions += 1;
+            return Promise.resolve([]);
+          },
           beforeDispatch: () => {
             callbacks += 1;
             return Promise.resolve();
@@ -3018,6 +3344,7 @@ describe("Meta authenticated internal-data runtime", () => {
       expect(acquisitions.count).toBe(0);
       expect(calls).toHaveLength(0);
       expect(callbacks).toBe(0);
+      expect(fileResolutions).toBe(0);
     }
   });
 
