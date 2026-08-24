@@ -117,6 +117,10 @@ describe("web-session plugin execution boundary", () => {
           durableCallbacks += 1;
           return Promise.resolve();
         },
+        afterProviderBoundMutationTarget: () => {
+          durableCallbacks += 1;
+          return Promise.resolve();
+        },
       },
       (options) => {
         captured.options = options;
@@ -134,6 +138,15 @@ describe("web-session plugin execution boundary", () => {
       id: "late",
       index: 1,
       progress: { planned: 1, started: 0, verified: 0 },
+    }))).toContain("timed out");
+    const targetCallback = captured.options?.afterProviderBoundMutationTarget;
+    if (targetCallback === undefined) {
+      throw new Error("bounded hook did not receive its provider-bound target callback");
+    }
+    expect(await rejectionMessage(targetCallback({
+      id: "late",
+      index: 1,
+      target: { schemaVersion: 1, identifier: "private:late-target" },
     }))).toContain("timed out");
     const registerCleanupBarrier = captured.options?.registerCleanupBarrier;
     if (registerCleanupBarrier === undefined) {

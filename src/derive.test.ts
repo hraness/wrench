@@ -47,10 +47,17 @@ import {
   parseDerivationGuardBrowserContextResult,
   parseMarkedDerivationBrowserDaemonForCleanup,
   parseDerivationPinnedBrowserContextResult,
+  confirmProfileDerivationMutationOnce,
+  completeProfileDerivationBatchCommand,
+  IndeterminateDerivationConfirmationError,
+  parseProfileDerivationConfirmation,
+  parseProfileDerivationConfirmationResult,
   runPinnedDerivationConfirmationOnce,
   reviewDerivation,
   resolveDerivationFixedUploadInputTarget,
   runDerivationBrowserCommand,
+  runDerivationFixtureUploadBatch,
+  runDerivationMutationWindow,
   sanitizeDerivationNetworkResult,
   startDerivation,
   validateDerivationBrowserCommand,
@@ -147,6 +154,64 @@ async function expectRejectedWith(promise: Promise<unknown>, message: string): P
   expect(failure instanceof Error ? failure.message : "").toContain(message);
 }
 
+function exactDerivationBrowserLifecycle(launchHash = "7") {
+  return {
+    effectiveLaunch: {
+      browserLaunched: true,
+      engine: "chrome",
+      launchHash,
+    },
+    launched: false,
+    relaunchedBrowser: false,
+    restartedBackground: false,
+    restoreStatus: "not_configured",
+    reused: true,
+    saveStatus: "not_attempted",
+  } as const;
+}
+
+function profileConfirmationPending(
+  command: readonly string[],
+  action = "click",
+  confirmationId = "r7",
+) {
+  return [{
+    command,
+    error: null,
+    result: {
+      action,
+      confirmation_id: confirmationId,
+      confirmation_required: true,
+    },
+    success: true,
+  }];
+}
+
+function profileConfirmationCompleted(
+  action = "click",
+  confirmationId = "r7",
+  launchHash = "7",
+) {
+  return {
+    _boundary: { nonce: "a".repeat(32), origin: "unknown" },
+    data: {
+      action,
+      confirmed: true,
+      lifecycle: exactDerivationBrowserLifecycle(launchHash),
+      result: {
+        data: {
+          clicked: true,
+          lifecycle: exactDerivationBrowserLifecycle(launchHash),
+        },
+        id: confirmationId,
+        success: true,
+      },
+    },
+    error: null,
+    success: true,
+  };
+}
+
 describe("derive browser command grammar", () => {
   test("classifies a dropped confirmation response as one-shot indeterminate", async () => {
     let dispatches = 0;
@@ -158,6 +223,211 @@ describe("derive browser command grammar", () => {
     }), "mutation may have applied; do not retry");
     expect(dispatches).toBe(1);
     expect(remoteEffects).toBe(1);
+  });
+
+  test("confirms one exact profile-backed mutation through a code-owned continuation", async () => {
+    const command = ["click", "@e1"] as const;
+    const pending = profileConfirmationPending(command);
+    let confirmations = 0;
+    const result = await confirmProfileDerivationMutationOnce(
+      pending,
+      command,
+      async (confirmation) => {
+        confirmations += 1;
+        expect(confirmation).toEqual({ action: "click", confirmationId: "r7" });
+        return profileConfirmationCompleted();
+      },
+    );
+    expect(confirmations).toBe(1);
+    expect(result).toEqual({
+      clicked: true,
+      lifecycle: exactDerivationBrowserLifecycle(),
+    });
+    expect(() => validateDerivationBrowserCommand(
+      actionPolicy,
+      ["confirm", "r7", "--json"],
+    )).toThrow("does not allow confirm");
+  });
+
+  test("rejects malformed profile confirmation prompts and completions exactly", async () => {
+    const command = ["click", "@e1"] as const;
+    for (const malformed of [
+      profileConfirmationPending(command, "navigate"),
+      profileConfirmationPending(command, "fill"),
+      profileConfirmationPending(command, "click", "request-7"),
+      [{
+        ...profileConfirmationPending(command)[0],
+        result: {
+          ...profileConfirmationPending(command)[0]?.result,
+          extra: true,
+        },
+      }],
+      profileConfirmationPending(["click", "@e2"]),
+    ]) {
+      expect(() => parseProfileDerivationConfirmation(malformed, command)).toThrow(
+        "profile derivation browser confirmation",
+      );
+    }
+
+    const confirmation = parseProfileDerivationConfirmation(
+      profileConfirmationPending(command),
+      command,
+    );
+    for (const malformed of [
+      { ...profileConfirmationCompleted(), extra: true },
+      profileConfirmationCompleted("fill"),
+      {
+        ...profileConfirmationCompleted(),
+        data: {
+          ...profileConfirmationCompleted().data,
+          result: {
+            ...profileConfirmationCompleted().data.result,
+            data: {
+              ...profileConfirmationCompleted().data.result.data,
+              lifecycle: exactDerivationBrowserLifecycle("8"),
+            },
+          },
+        },
+      },
+    ]) {
+      expect(() => parseProfileDerivationConfirmationResult(
+        malformed,
+        confirmation,
+      )).toThrow("profile derivation browser confirmation");
+    }
+  });
+
+  test("never retries a profile confirmation and makes post-invocation failure indeterminate", async () => {
+    const command = ["press", "Enter"] as const;
+    let confirmations = 0;
+    let remoteEffects = 0;
+    await expectRejectedWith(confirmProfileDerivationMutationOnce(
+      profileConfirmationPending(command, "press", "r19"),
+      command,
+      async () => {
+        confirmations += 1;
+        remoteEffects += 1;
+        throw new Error("response dropped after the mutation ran");
+      },
+    ), "mutation may have applied; do not retry");
+    expect(confirmations).toBe(1);
+    expect(remoteEffects).toBe(1);
+
+    await expectRejectedWith(confirmProfileDerivationMutationOnce(
+      profileConfirmationPending(command, "press", "r20"),
+      command,
+      async () => {
+        confirmations += 1;
+        return profileConfirmationCompleted("click", "r20", "9");
+      },
+    ), "mutation may have applied; do not retry");
+    expect(confirmations).toBe(2);
+  });
+
+  test("classifies a profile mutation that bypassed confirmation as one-shot indeterminate", async () => {
+    const command = ["click", "@e1"] as const;
+    const completed = {
+      command,
+      error: null,
+      result: {
+        clicked: true,
+        lifecycle: exactDerivationBrowserLifecycle(),
+      },
+      success: true,
+    };
+    let confirmations = 0;
+    let failure: unknown = null;
+    try {
+      await completeProfileDerivationBatchCommand(completed, command, async () => {
+        confirmations += 1;
+        return profileConfirmationCompleted();
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(IndeterminateDerivationConfirmationError);
+    expect(failure instanceof Error ? failure.message : "").toContain(
+      "mutation may have applied; do not retry",
+    );
+    expect(confirmations).toBe(0);
+  });
+
+  test.each(["upload", "upload-and-seal"] as const)(
+    "preserves an indeterminate confirmation through the %s batch wrapper",
+    async (mode) => {
+      const exactFailure = new IndeterminateDerivationConfirmationError("profile");
+      let invocations = 0;
+      let failure: unknown = null;
+      try {
+        await runDerivationFixtureUploadBatch(
+          mode,
+          async () => {
+            invocations += 1;
+            throw exactFailure;
+          },
+          "/deliberately-unavailable-private-derivation",
+          [stagedFixture],
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBe(exactFailure);
+      expect(invocations).toBe(1);
+    },
+  );
+
+  test.each([
+    ["upload settlement wait", "profile"],
+    ["upload HAR stop", "profile"],
+    ["post-click origin check", "pinned"],
+  ] as const)(
+    "classifies a failure during %s after successful confirmation as indeterminate",
+    async (stage, kind) => {
+      const events: string[] = [];
+      let failure: unknown = null;
+      try {
+        await runDerivationMutationWindow(
+          kind,
+          async (markMutationMayHaveApplied) => {
+            events.push("upload-confirmed");
+            markMutationMayHaveApplied();
+            events.push(stage);
+            throw new Error(`${stage} failed`);
+          },
+          async (error) => {
+            events.push("containment-checked");
+            return error;
+          },
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(IndeterminateDerivationConfirmationError);
+      expect(failure instanceof Error ? failure.message : "").toContain(
+        "mutation may have applied; do not retry",
+      );
+      expect(events).toEqual([
+        "upload-confirmed",
+        stage,
+        "containment-checked",
+      ]);
+    },
+  );
+
+  test("keeps a proven pre-confirmation command failure retryable", async () => {
+    let failure: unknown = null;
+    try {
+      await runDerivationMutationWindow("profile", async () => {
+        throw new Error("profile command failed before confirmation");
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(IndeterminateDerivationConfirmationError);
+    expect(failure instanceof Error ? failure.message : "").toBe(
+      "profile command failed before confirmation",
+    );
   });
 
   test("authorizes pinned concrete observation actions and gates mutation actions", () => {
@@ -2780,6 +3050,143 @@ describe("derivation session path defenses", () => {
         reviewDerivation(id, { kind: "list", offset: 0, limit: 10 }, environment),
         "changed after it was sealed",
       );
+    } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reviews only an exact start-admitted origin and rejects undeclared origins before sealing", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-review-origin-test-")));
+    const wrenchState = join(root, "io-state");
+    const id = crypto.randomUUID();
+    const expectedDirectory = join(wrenchState, "derivations", id);
+    const socketDirectory = join(process.platform === "win32" ? tmpdir() : "/tmp", `io-derive-ab-${id}`);
+    const markerPath = join(expectedDirectory, "review.json");
+    const uploadOrigin = "https://upload.example.net";
+    const safeFixture = "cross-origin-message-fixture";
+    const headerSecret = "cross-origin-header-secret";
+    const undeclaredOrigin = "https://captured.example.org";
+    const harText = JSON.stringify({
+      log: {
+        entries: [
+          {
+            request: {
+              method: "POST",
+              url: "https://example.com/api/messages/target-conversation",
+              postData: { mimeType: "application/json", text: JSON.stringify({ body: { text: "target-message" } }) },
+            },
+            response: { status: 200, content: { mimeType: "application/json", text: "{}" } },
+          },
+          {
+            request: {
+              method: "POST",
+              url: `${uploadOrigin}/api/upload/cross-origin-item`,
+              headers: [{ name: "authorization", value: `Bearer ${headerSecret}` }],
+              postData: { mimeType: "application/json", text: JSON.stringify({ body: { text: safeFixture } }) },
+            },
+            response: {
+              status: 200,
+              content: { mimeType: "application/json", text: JSON.stringify({ data: { id: "cross-origin-response-id" } }) },
+            },
+          },
+          {
+            request: { method: "GET", url: `${undeclaredOrigin}/api/private/captured-item` },
+            response: { status: 200, content: { mimeType: "application/json", text: "{}" } },
+          },
+        ],
+      },
+    });
+    const environment = { WRENCH_STATE_HOME: wrenchState };
+    try {
+      mkdirSync(expectedDirectory, { recursive: true, mode: 0o700 });
+      mkdirSync(socketDirectory, { mode: 0o700 });
+      writeFileSync(join(expectedDirectory, "agent-browser.json"), "{}\n", { mode: 0o600 });
+      writeFileSync(join(expectedDirectory, "action-policy.json"), "{}\n", { mode: 0o600 });
+      writeSessionFixture(id, expectedDirectory, {
+        browserDomains: ["example.com", "upload.example.net"],
+        contentMode: "text",
+        profilePath: "Work",
+      });
+      writeFileSync(join(expectedDirectory, "capture.har"), harText, { mode: 0o600 });
+
+      for (const invalidOrigin of [
+        "http://upload.example.net",
+        "https://upload.example.net/",
+        "https://upload.example.net/path",
+        "https://user:password@upload.example.net",
+      ]) {
+        await expectRejectedWith(
+          reviewDerivation(id, { kind: "list", offset: 0, limit: 10 }, environment, invalidOrigin),
+          "exact HTTPS origin",
+        );
+        expect(existsSync(markerPath)).toBeFalse();
+      }
+
+      let undeclaredFailure: unknown = null;
+      try {
+        await reviewDerivation(
+          id,
+          { kind: "list", offset: 0, limit: 10 },
+          environment,
+          undeclaredOrigin,
+        );
+      } catch (error) {
+        undeclaredFailure = error;
+      }
+      expect(undeclaredFailure).toBeInstanceOf(Error);
+      const undeclaredMessage = undeclaredFailure instanceof Error ? undeclaredFailure.message : "";
+      expect(undeclaredMessage).toContain("not admitted");
+      expect(undeclaredMessage).not.toContain(undeclaredOrigin);
+      expect(existsSync(markerPath)).toBeFalse();
+
+      const defaultReview = await reviewDerivation(
+        id,
+        { kind: "list", offset: 0, limit: 10 },
+        environment,
+      );
+      expect(defaultReview).toMatchObject({
+        kind: "list",
+        targetOrigin,
+        reviewableEntries: 1,
+        entries: [{ entryIndex: 0 }],
+      });
+      expect(existsSync(markerPath)).toBeTrue();
+
+      const uploadReview = await reviewDerivation(
+        id,
+        { kind: "list", offset: 0, limit: 10 },
+        environment,
+        uploadOrigin,
+      );
+      expect(uploadReview).toMatchObject({
+        kind: "list",
+        targetOrigin: uploadOrigin,
+        reviewableEntries: 1,
+        entries: [{ entryIndex: 1, method: "POST", path: "/api/upload/:segment1" }],
+      });
+      const exactUploadReview = await reviewDerivation(
+        id,
+        {
+          kind: "entry",
+          entryIndex: 1,
+          fixtures: { safe_fixture: safeFixture, header_secret: headerSecret },
+        },
+        environment,
+        uploadOrigin,
+      );
+      expect(exactUploadReview).toMatchObject({
+        kind: "entry",
+        targetOrigin: uploadOrigin,
+        fixtureMatches: [
+          { label: "safe_fixture", locations: ["request.body.body.text"] },
+          { label: "header_secret", locations: [] },
+        ],
+      });
+      const rendered = JSON.stringify(exactUploadReview);
+      expect(rendered).not.toContain(safeFixture);
+      expect(rendered).not.toContain(headerSecret);
+      expect(rendered).not.toContain(undeclaredOrigin);
     } finally {
       rmSync(socketDirectory, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });

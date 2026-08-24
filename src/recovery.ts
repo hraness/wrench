@@ -109,11 +109,17 @@ export type RecoveryCapsuleListEntry =
       readonly invalid: true;
     };
 
-export type ProviderAcceptedMutationTarget = {
+export type ProviderBoundMutationTarget = {
   readonly schemaVersion: 1;
-  /** Provider-owned stable identifier obtained from the accepted mutation response. */
+  /**
+   * Provider-owned stable identifier obtained from either a strict mutation
+   * response or a strict target read immediately before one exact dispatch.
+   */
   readonly identifier: string;
 };
+
+/** Historical public name retained for response-derived create targets. */
+export type ProviderAcceptedMutationTarget = ProviderBoundMutationTarget;
 
 export type ProviderAcceptedMutationTargetDispatch = {
   readonly id: string;
@@ -122,13 +128,20 @@ export type ProviderAcceptedMutationTargetDispatch = {
 };
 
 /**
- * Private evidence that one exact web-session dispatch received a strict
- * provider acceptance response. `target` is encrypted at rest and must never
- * be copied into receipts, journals, observations, or diagnostics.
+ * Private evidence that one exact target was strictly bound to one active
+ * web-session dispatch. A create binds it from the provider acceptance
+ * response; a deletion may bind it from a strict read before its request.
+ * `target` is encrypted at rest and must never be copied into receipts,
+ * journals, observations, or diagnostics.
  */
 export type ProviderAcceptedMutationTargetEvidence = {
   readonly schemaVersion: 1;
   readonly runId: string;
+  /**
+   * Historical field name. For a provider-bound deletion target this is the
+   * instant the exact pre-read target was durably retained after dispatch
+   * start, before the mutation request left the process.
+   */
   readonly acceptedAt: string;
   readonly planDigest: string;
   readonly adapter: RecoveryCapsule["adapter"];
@@ -1197,9 +1210,10 @@ function decryptProviderAcceptedMutationTargetEvidence(
 }
 
 /**
- * Persist one provider-accepted target before any independent readback. A
- * byte-for-byte equivalent repeated callback is idempotent; any contradictory
- * duplicate fails closed and leaves the first encrypted evidence untouched.
+ * Persist one provider-accepted or pre-dispatch provider-bound target before
+ * any independent readback. A byte-for-byte equivalent repeated callback is
+ * idempotent; any contradictory duplicate fails closed and leaves the first
+ * encrypted evidence untouched.
  */
 export function writeProviderAcceptedMutationTargetEvidence(
   evidenceValue: unknown,

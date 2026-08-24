@@ -438,6 +438,7 @@ type MetaWebSite =
 const META_WEB_OPERATIONS = Object.freeze({
   instagram: operationPolicies("instagram", [
     "comments.read",
+    "content.delete",
     "contacts.list",
     "feeds.read",
     "media.read",
@@ -446,8 +447,9 @@ const META_WEB_OPERATIONS = Object.freeze({
     "profiles.read",
   ], {
     "comments.read": 2,
+    "content.delete": 2,
     "feeds.read": 2,
-    "media.publish": 2,
+    "media.publish": 3,
     "messaging.list": 2,
   }),
   threads: operationPolicies("threads", ["feeds.read", "media.publish", "posts.publish", "profiles.read"], {

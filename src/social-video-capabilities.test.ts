@@ -72,25 +72,34 @@ describe("social video provider contracts", () => {
     }
   });
 
-  test("reserves exact authored Instagram video deletion without network authority", () => {
+  test("reserves Instagram video publishing and graduates exact authored deletion", () => {
     const publish = operation(metaWebPlugin, "instagram", "media.publish");
     expect(publish).toMatchObject({
-      contractVersion: 2,
+      contractVersion: 3,
       risk: "R3",
       state: "capture-required",
       dispatch: "single",
     });
     expect(fileMediaTypes(publish.input.properties.media)).toEqual(["video/mp4"]);
-    expect(publish.input.required).toEqual(["media", "caption", "audience"]);
+    expect(fileMediaTypes(publish.input.properties.thumbnail)).toEqual(["image/jpeg"]);
+    expect(publish.input.required).toEqual([
+      "media",
+      "thumbnail",
+      "caption",
+      "audience",
+    ]);
 
     const deletion = operation(metaWebPlugin, "instagram", "content.delete");
     expect(deletion).toMatchObject({
-      contractVersion: 1,
+      contractVersion: 2,
       risk: "R3",
-      state: "capture-required",
+      state: "observed",
       dispatch: "single",
+      reconciliation: {
+        kind: "provider-bound-target-desired-state",
+        desiredState: false,
+      },
     });
-    expect(deletion).not.toHaveProperty("reconciliation");
     expect(deletion.input.required).toEqual([
       "media_id",
       "expected_caption",

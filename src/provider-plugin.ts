@@ -124,6 +124,14 @@ export type ProviderPluginReconciliationDefinitionV1 =
   | {
       /** Reconcile a create from its encrypted response-derived exact target. */
       readonly kind: "provider-accepted-target-presence";
+    }
+  | {
+      /**
+       * Reconcile a deletion from an encrypted exact target bound by a strict
+       * provider read before the mutation request leaves the process.
+       */
+      readonly kind: "provider-bound-target-desired-state";
+      readonly desiredState: false;
     };
 
 export type ProviderPluginOmniDefinitionV1 =
@@ -574,8 +582,14 @@ export type ProviderPluginAcceptedTargetReconciliationContextV1 = {
   };
 };
 
+export type ProviderPluginBoundTargetDesiredStateReconciliationContextV1 =
+  Omit<ProviderPluginAcceptedTargetReconciliationContextV1, "kind"> & {
+    readonly kind: "provider-bound-target-desired-state";
+  };
+
 export type ProviderPluginReconciliationContextV1 =
-  ProviderPluginAcceptedTargetReconciliationContextV1;
+  | ProviderPluginAcceptedTargetReconciliationContextV1
+  | ProviderPluginBoundTargetDesiredStateReconciliationContextV1;
 
 export type ProviderPluginLinkedDeviceRuntimeStatusV1 = {
   readonly ready: boolean;
@@ -1851,7 +1865,10 @@ export function parseProviderPluginReconciliationContextV1(
     );
   if (
     schemaVersion !== 1
-    || kind !== "provider-accepted-target-presence"
+    || (
+      kind !== "provider-accepted-target-presence"
+      && kind !== "provider-bound-target-desired-state"
+    )
   ) {
     throw new Error("provider plugin reconciliation context is malformed");
   }
@@ -1900,7 +1917,7 @@ export function parseProviderPluginReconciliationContextV1(
   }
   return Object.freeze({
     schemaVersion: 1,
-    kind: "provider-accepted-target-presence",
+    kind,
     dispatch: Object.freeze({
       id: dispatchId,
       index: dispatchIndex as number,
@@ -2476,15 +2493,32 @@ function freezeOperation(
       }
     } else if (
       operation.reconciliation.kind === "provider-accepted-target-presence"
+      || operation.reconciliation.kind
+        === "provider-bound-target-desired-state"
     ) {
       requireExactKeys(
         operation.reconciliation,
-        ["kind"],
+        operation.reconciliation.kind === "provider-accepted-target-presence"
+          ? ["kind"]
+          : ["kind", "desiredState"],
         reconciliationLabel,
       );
-      if (operation.dispatch !== "single") {
+      if (
+        operation.reconciliation.kind
+          === "provider-bound-target-desired-state"
+        && operation.reconciliation.desiredState !== false
+      ) {
         throw new Error(
-          `provider plugin operation ${operation.name} provider-accepted target reconciliation requires one exact dispatch`,
+          `provider plugin operation ${operation.name} has an invalid reconciliation contract`,
+        );
+      }
+      if (operation.dispatch !== "single") {
+        const targetKind = operation.reconciliation.kind
+          === "provider-accepted-target-presence"
+          ? "provider-accepted"
+          : "provider-bound";
+        throw new Error(
+          `provider plugin operation ${operation.name} ${targetKind} target reconciliation requires one exact dispatch`,
         );
       }
     } else {
@@ -2596,11 +2630,19 @@ function freezeOperation(
             desiredState: operation.reconciliation.desiredState,
           }),
         }
-        : {
-          reconciliation: Object.freeze({
-            kind: operation.reconciliation.kind,
+        : operation.reconciliation.kind
+            === "provider-bound-target-desired-state"
+          ? {
+            reconciliation: Object.freeze({
+              kind: operation.reconciliation.kind,
+              desiredState: operation.reconciliation.desiredState,
+            }),
+          }
+          : {
+            reconciliation: Object.freeze({
+              kind: operation.reconciliation.kind,
+            }),
           }),
-        }),
     ...(omni === undefined ? {} : { omni }),
   };
   if (!official) return Object.freeze(common);
@@ -3091,10 +3133,19 @@ function freezeBinding(
         `provider plugin surface ${binding.surfaceId} has no reconciliation contract for ${operationName}`,
       );
     }
+    const reconciliationKind = selectedOperation.reconciliation?.kind;
     const reconciliationContext =
-      selectedOperation.reconciliation?.kind
-        === "provider-accepted-target-presence"
-        ? parseProviderPluginReconciliationContextV1(context)
+      reconciliationKind === "provider-accepted-target-presence"
+        || reconciliationKind === "provider-bound-target-desired-state"
+        ? (() => {
+            const parsed = parseProviderPluginReconciliationContextV1(context);
+            if (parsed.kind !== reconciliationKind) {
+              throw new Error(
+                `provider plugin surface ${binding.surfaceId} reconciliation target context kind changed`,
+              );
+            }
+            return parsed;
+          })()
         : (() => {
             if (context !== undefined) {
               throw new Error(

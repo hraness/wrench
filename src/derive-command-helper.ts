@@ -48,7 +48,8 @@ type CodeOwnedBrowserRequest =
   | "readiness-context"
   | "pin-context"
   | "pinned-batch"
-  | "pinned-confirm";
+  | "pinned-confirm"
+  | "profile-confirm";
 
 type Request = {
   readonly schemaVersion: 1;
@@ -228,7 +229,7 @@ function parseRequest(value: unknown): Request {
     || typeof value.allowFixtureUpload !== "boolean"
     || typeof value.guardedBrowserConfig !== "boolean"
     || (value.allowFixtureUpload && !value.allowRemoteActions)
-    || !["none", "initial-contained-launch", "readiness-context", "pin-context", "pinned-batch", "pinned-confirm"].includes(
+    || !["none", "initial-contained-launch", "readiness-context", "pin-context", "pinned-batch", "pinned-confirm", "profile-confirm"].includes(
       typeof value.codeOwnedBrowserRequest === "string" ? value.codeOwnedBrowserRequest : "",
     )
     || typeof value.timeoutMs !== "number"
@@ -255,6 +256,7 @@ function parseRequest(value: unknown): Request {
     || (
       value.codeOwnedBrowserRequest !== "none"
       && value.codeOwnedBrowserRequest !== "pinned-confirm"
+      && value.codeOwnedBrowserRequest !== "profile-confirm"
       && (
         (
           value.codeOwnedBrowserRequest !== "pinned-batch"
@@ -272,6 +274,7 @@ function parseRequest(value: unknown): Request {
   if (
     (codeOwnedBrowserRequest === "initial-contained-launch" && value.guardedBrowserConfig)
     || (["readiness-context", "pin-context", "pinned-batch", "pinned-confirm"].includes(codeOwnedBrowserRequest) && !value.guardedBrowserConfig)
+    || (codeOwnedBrowserRequest === "profile-confirm" && value.guardedBrowserConfig)
     || (
       codeOwnedBrowserRequest === "readiness-context"
       && JSON.stringify(value.arguments) !== JSON.stringify([
@@ -298,6 +301,19 @@ function parseRequest(value: unknown): Request {
     || (codeOwnedBrowserRequest === "pinned-batch" && value.browserStdin === null)
     || (codeOwnedBrowserRequest === "pinned-batch" && parsePinnedCommands(value.browserStdin).length !== 1)
     || (codeOwnedBrowserRequest === "pinned-confirm" && (browserPin === null || browserPin.browserIdentity === null || browserPin.confirmationAction === null || browserPin.daemonOwner === null))
+    || (
+      codeOwnedBrowserRequest === "profile-confirm"
+      && (
+        browserPin !== null
+        || !value.allowRemoteActions
+        || value.browserStdin !== null
+        || value.arguments.length !== 3
+        || value.arguments[0] !== "confirm"
+        || typeof value.arguments[1] !== "string"
+        || !/^r\d{1,6}$/u.test(value.arguments[1])
+        || value.arguments[2] !== "--json"
+      )
+    )
     || (
       codeOwnedBrowserRequest === "pinned-confirm"
       && (
@@ -594,7 +610,16 @@ async function main(): Promise<void> {
   );
   assertBoundDirectory(request.expectedDirectory);
   assertPrivateDirectoryPath(request.socketDirectory, request.expectedSocketDirectory);
-  const arguments_ = request.browserPin === null
+  const arguments_ = request.codeOwnedBrowserRequest === "profile-confirm"
+    ? [
+        "--session",
+        request.ownerSessionName,
+        "--content-boundaries",
+        "--max-output",
+        String(5 * 1024 * 1024),
+        ...request.arguments,
+      ]
+    : request.browserPin === null
     ? request.arguments
     : request.codeOwnedBrowserRequest === "pinned-confirm"
       ? [

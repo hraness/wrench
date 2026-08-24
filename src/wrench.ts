@@ -2567,7 +2567,12 @@ async function runCommand(
       }
       selection = { kind: "entry", entryIndex: arguments_.selection.entryIndex, fixtures };
     } else selection = arguments_.selection;
-    const result = await reviewDerivation(arguments_.id, selection, environment);
+    const result = await reviewDerivation(
+      arguments_.id,
+      selection,
+      environment,
+      arguments_.reviewOrigin,
+    );
     print(output, { ok: true, sealed: true, ...result }, arguments_.json);
     return 0;
   }

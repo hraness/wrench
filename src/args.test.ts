@@ -914,6 +914,18 @@ describe("wrench CLI grammar", () => {
       },
     });
     expect(parseWrenchArguments([
+      "derive", "review", "derive-123", "--review-origin", "https://upload.example.com", "--limit", "25", "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "derive-review",
+        id: "derive-123",
+        reviewOrigin: "https://upload.example.com",
+        selection: { kind: "list", offset: 0, limit: 25 },
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
       "derive",
       "finish",
       "derive-123",
@@ -958,6 +970,12 @@ describe("wrench CLI grammar", () => {
     [["derive", "review", "derive-123", "--entry", "1", "--offset", "2"], "cannot be combined"],
     [["derive", "review", "derive-123", "--fixtures", "-"], "requires --entry"],
     [["derive", "review", "derive-123", "--entry", "1", "--fixtures", "fixtures.json"], "stdin"],
+    [["derive", "review", "derive-123", "--review-origin", "http://upload.example.com"], "exact HTTPS origin"],
+    [["derive", "review", "derive-123", "--review-origin", "https://upload.example.com/"], "exact HTTPS origin"],
+    [["derive", "review", "derive-123", "--review-origin", "https://upload.example.com/path"], "exact HTTPS origin"],
+    [["derive", "review", "derive-123", "--review-origin", "https://upload.example.com?secret=never-print"], "exact HTTPS origin"],
+    [["derive", "review", "derive-123", "--review-origin", "https://user:password@upload.example.com"], "exact HTTPS origin"],
+    [["derive", "review", "derive-123", "--review-origin", "https://upload.example.com", "--review-origin", "https://upload.example.com"], "more than once"],
   ])("rejects unsafe derive review grammar %#", (arguments_, message) => {
     const parsed = parseWrenchArguments(arguments_);
     expect(parsed.ok).toBeFalse();

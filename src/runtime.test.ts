@@ -261,6 +261,65 @@ function xWebManifest(): WrenchManifest {
   )) as WrenchManifest;
 }
 
+function providerBoundTargetTestRegistry(): ProviderPluginRegistry {
+  const resolveOperationDefinition: ProviderPluginRegistry["resolveOperationDefinition"] = (
+    transport,
+    surfaceId,
+    operationName,
+    contractVersion,
+  ) => {
+    const resolution = providerPluginRegistry.resolveOperationDefinition(
+      transport,
+      surfaceId,
+      operationName,
+      contractVersion,
+    );
+    if (
+      resolution === undefined
+      || transport !== "web-session-api"
+      || surfaceId !== "x"
+      || operationName !== "content.save"
+      || contractVersion !== 1
+    ) return resolution;
+    return {
+      ...resolution,
+      operation: {
+        ...resolution.operation,
+        reconciliation: {
+          kind: "provider-bound-target-desired-state",
+          desiredState: false,
+        },
+      },
+    };
+  };
+  return {
+    ...providerPluginRegistry,
+    resolveOperationDefinition,
+    requireOperationDefinition: (
+      transport,
+      surfaceId,
+      operationName,
+      contractVersion,
+    ) => {
+      const resolution = resolveOperationDefinition(
+        transport,
+        surfaceId,
+        operationName,
+        contractVersion,
+      );
+      if (resolution === undefined) {
+        return providerPluginRegistry.requireOperationDefinition(
+          transport,
+          surfaceId,
+          operationName,
+          contractVersion,
+        );
+      }
+      return resolution;
+    },
+  };
+}
+
 function reviewedTemplateManifest(
   risk: "R1" | "R3",
   method: "GET" | "DELETE" | "POST" = risk === "R3" ? "POST" : "GET",
@@ -2175,7 +2234,7 @@ describe("local at-most-once dispatch ledger", () => {
     }
   });
 
-  test("stores an encrypted exact-input capsule before web dispatch and retains it for an indeterminate run", async () => {
+  test("does not expose exact-target callbacks to boolean reconciliation", async () => {
     const testState = state();
     try {
       installManifest(xWebManifest(), { force: false, environment: testState.environment });
@@ -2195,7 +2254,6 @@ describe("local at-most-once dispatch ledger", () => {
       );
       const stored = createAndSaveInvocationPlan(invocation, testState.environment);
       let observedRunId: string | null = null;
-      const acceptedTarget = "x:post:provider-accepted-123";
       let calls = 0;
       const result = await confirmInvocation(stored.digest, {
         headed: false,
@@ -2230,24 +2288,18 @@ describe("local at-most-once dispatch ledger", () => {
             "utf8",
           );
           expect(raw).not.toContain(input.post_id);
+          expect(options.afterProviderAcceptedMutationTarget).toBeUndefined();
+          expect(options.afterProviderBoundMutationTarget).toBeUndefined();
           await options?.beforeDispatch?.({
             id: "content.save",
             index: 1,
             progress: { planned: 1, started: 0, verified: 0 },
           });
-          await options.afterProviderAcceptedMutationTarget?.({
-            id: "content.save",
-            index: 1,
-            target: {
-              schemaVersion: 1,
-              identifier: acceptedTarget,
-            },
-          });
           expect(readProviderAcceptedMutationTargetEvidence(
             recovered as RecoveryCapsule,
             { id: "content.save", index: 1, planned: 1 },
             testState.environment,
-          )?.target.identifier).toBe(acceptedTarget);
+          )).toBeNull();
           return {
             status: "indeterminate",
             output: null,
@@ -2265,7 +2317,7 @@ describe("local at-most-once dispatch ledger", () => {
         dispatch: { planned: 1, started: 1, verified: 0 },
       });
       expect(result.receipt.error).toContain("indeterminate after the dispatch boundary");
-      expect(JSON.stringify(result.receipt)).not.toContain(acceptedTarget);
+      expect(JSON.stringify(result.receipt)).not.toContain(input.post_id);
       expect<string | null>(observedRunId).toBe(result.receipt.runId);
       expect(readRecoveryCapsule(
         result.receipt.runId,
@@ -2273,18 +2325,6 @@ describe("local at-most-once dispatch ledger", () => {
         sha256(canonicalJson(selectedAuth)),
         testState.environment,
       )?.input).toEqual(input);
-      const recovered = readRecoveryCapsule(
-        result.receipt.runId,
-        selectedAuth.id,
-        sha256(canonicalJson(selectedAuth)),
-        testState.environment,
-      );
-      expect(readProviderAcceptedMutationTargetEvidence(
-        recovered as RecoveryCapsule,
-        { id: "content.save", index: 1, planned: 1 },
-        testState.environment,
-      )?.target.identifier).toBe(acceptedTarget);
-
       const duplicate = createAndSaveInvocationPlan(invocation, testState.environment);
       expect(await rejectionMessage(confirmInvocation(duplicate.digest, {
         headed: false,
@@ -2295,6 +2335,122 @@ describe("local at-most-once dispatch ledger", () => {
         },
       }))).toContain("reconcile it before retrying");
       expect(calls).toBe(1);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("binds one exact deletion target only after durable dispatch start", async () => {
+    const testState = state();
+    try {
+      const registry = providerBoundTargetTestRegistry();
+      installManifest(xWebManifest(), {
+        force: false,
+        environment: testState.environment,
+        registry,
+      });
+      const selectedAuth = createAuth("x-web-test", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "123",
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const input = { post_id: "2078889282404569267", saved: false };
+      const invocation = prepareInvocation(
+        "x-web",
+        "content.save",
+        input,
+        selectedAuth.id,
+        testState.environment,
+        registry,
+      );
+      const stored = createAndSaveInvocationPlan(
+        invocation,
+        testState.environment,
+        new Date(),
+        registry,
+      );
+      const targetIdentifier = "x:post:strict-pre-read-123";
+      let providerRequests = 0;
+      const result = await confirmInvocation(stored.digest, {
+        headed: false,
+        environment: testState.environment,
+        registry,
+        executeWebSession: async (_manifest, _recipe, _input, _auth, options) => {
+          const [runFile] = readdirSync(join(testState.directory, "runs"));
+          if (typeof runFile !== "string") {
+            throw new Error("expected a provisional run receipt");
+          }
+          const runId = runFile.slice(0, -5);
+          const capsule = readRecoveryCapsule(
+            runId,
+            selectedAuth.id,
+            sha256(canonicalJson(selectedAuth)),
+            testState.environment,
+          );
+          if (capsule === null) throw new Error("expected encrypted recovery input");
+          const targetEvent = {
+            id: "content.save",
+            index: 1,
+            target: {
+              schemaVersion: 1 as const,
+              identifier: targetIdentifier,
+            },
+          };
+          expect(options.afterProviderAcceptedMutationTarget).toBeUndefined();
+          expect(await rejectionMessage(
+            options.afterProviderBoundMutationTarget?.(targetEvent)
+              ?? Promise.reject(new Error("provider-bound target callback missing")),
+          )).toContain("diverged from the active dispatch");
+          expect(readProviderAcceptedMutationTargetEvidence(
+            capsule,
+            { id: "content.save", index: 1, planned: 1 },
+            testState.environment,
+          )).toBeNull();
+
+          await options.beforeDispatch?.({
+            id: "content.save",
+            index: 1,
+            progress: { planned: 1, started: 0, verified: 0 },
+          });
+          expect(readRunJournal(runId, testState.environment)?.journal.dispatch)
+            .toEqual({ planned: 1, started: 1, verified: 0 });
+          await options.afterProviderBoundMutationTarget?.(targetEvent);
+          expect(readProviderAcceptedMutationTargetEvidence(
+            capsule,
+            { id: "content.save", index: 1, planned: 1 },
+            testState.environment,
+          )?.target.identifier).toBe(targetIdentifier);
+
+          providerRequests += 1;
+          return {
+            status: "indeterminate",
+            output: null,
+            finalUrl: "https://x.com/i/status/2078889282404569267",
+            dispatchStarted: true,
+            dispatch: { planned: 1, started: 1, verified: 0 },
+            error: "synthetic response loss after one request",
+          };
+        },
+      });
+
+      expect(providerRequests).toBe(1);
+      expect(result.receipt).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+      });
+      const capsule = readRecoveryCapsule(
+        result.receipt.runId,
+        selectedAuth.id,
+        sha256(canonicalJson(selectedAuth)),
+        testState.environment,
+      );
+      expect(readProviderAcceptedMutationTargetEvidence(
+        capsule as RecoveryCapsule,
+        { id: "content.save", index: 1, planned: 1 },
+        testState.environment,
+      )?.target.identifier).toBe(targetIdentifier);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
@@ -2315,8 +2471,8 @@ describe("local at-most-once dispatch ledger", () => {
       saveAuth(selectedAuth, testState.environment);
       const invocation = prepareInvocation(
         "x-web",
-        "content.save",
-        { post_id: "2078889282404569267", saved: true },
+        "posts.publish",
+        { body: "provider accepted target cleanup fixture" },
         selectedAuth.id,
         testState.environment,
       );
@@ -2350,7 +2506,7 @@ describe("local at-most-once dispatch ledger", () => {
             throw new Error("expected encrypted recovery input");
           }
           const targetEvent = {
-            id: "content.save",
+            id: "posts.publish",
             index: 1,
             target: {
               schemaVersion: 1 as const,
@@ -2358,25 +2514,33 @@ describe("local at-most-once dispatch ledger", () => {
             },
           };
           expect(await rejectionMessage(
+            options.afterProviderBoundMutationTarget?.(targetEvent)
+              ?? Promise.reject(new Error("provider-bound target callback missing")),
+          )).toContain("provider-bound target callback missing");
+          expect(await rejectionMessage(
             options.afterProviderAcceptedMutationTarget?.(targetEvent)
               ?? Promise.reject(new Error("accepted-target callback missing")),
           )).toContain("diverged from the active dispatch");
           await options.beforeDispatch?.({
-            id: "content.save",
+            id: "posts.publish",
             index: 1,
             progress: { planned: 1, started: 0, verified: 0 },
           });
           await options.afterProviderAcceptedMutationTarget?.(targetEvent);
           expect(readProviderAcceptedMutationTargetEvidence(
             recovered,
-            { id: "content.save", index: 1, planned: 1 },
+            { id: "posts.publish", index: 1, planned: 1 },
             testState.environment,
           )).not.toBeNull();
           await options.afterDispatchVerified?.({
-            id: "content.save",
+            id: "posts.publish",
             index: 1,
             progress: { planned: 1, started: 1, verified: 1 },
           });
+          expect(await rejectionMessage(
+            options.afterProviderBoundMutationTarget?.(targetEvent)
+              ?? Promise.reject(new Error("provider-bound target callback missing")),
+          )).toContain("provider-bound target callback missing");
           expect(await rejectionMessage(
             options.afterProviderAcceptedMutationTarget?.(targetEvent)
               ?? Promise.reject(new Error("accepted-target callback missing")),

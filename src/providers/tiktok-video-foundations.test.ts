@@ -9,7 +9,10 @@ import type { BrowserFileResolver } from "../browser";
 import type { OperationInput } from "../model";
 import type { WebSessionOperationDeadline } from "../web-session-execution";
 import {
+  TIKTOK_PROJECT_STATUS_POLL_POLICY,
   TIKTOK_TOS_PART_BYTES,
+  TIKTOK_VIDEO_TRANSCODE_POLL_INTERVAL_MS,
+  TIKTOK_VIDEO_TRANSCODE_POLL_TIMEOUT_MS,
   buildTikTokApplyUploadInnerRequest,
   buildTikTokCommitUploadInnerRequest,
   buildTikTokPostDetailRequestProjection,
@@ -19,6 +22,8 @@ import {
   buildTikTokTosInitRequest,
   buildTikTokTosTransferRequest,
   buildTikTokVideoProjectPayloadProjection,
+  buildTikTokVideoTranscodeEnableRequestProjection,
+  buildTikTokVideoTranscodeResultRequestProjection,
   buildTikTokVideoUploadAuthRequest,
   parseTikTokApplyUploadResultProjection,
   parseTikTokCommitUploadResultProjection,
@@ -29,9 +34,11 @@ import {
   parseTikTokVideoUploadTokenProjection,
   planTikTokTosPartIntegrity,
   planTikTokTosParts,
+  resolveTikTokVideoTranscodeState,
   tikTokTosCrc32,
   tiktokWebSanitizedPublishCaptureEvidenceSnapshot,
   tiktokWebStudioBundleEvidenceSnapshot,
+  tiktokWebStudioSecurityEvidenceSnapshot,
   verifyTikTokTosCompletedTransfer,
 } from "./tiktok-web";
 import {
@@ -41,6 +48,53 @@ import {
 } from "./tiktok-web-runtime";
 
 const POST_ID = "7491234567890123456";
+const PROJECT_ID = "project-1";
+const RUNTIME_TIME_ZONE = "America/Puerto_Rico";
+const SUBJECT_ID = "7123456789012345678";
+
+function deletePermission(
+  index: number,
+  recyclable?: boolean,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    biz_reason: index,
+    biz_status: index % 3,
+    biz_type: index + 100,
+    ...(recyclable === undefined ? {} : { is_recyclable: recyclable }),
+  });
+}
+
+function uploadAuth(overrides: Readonly<Record<string, unknown>> = {}): unknown {
+  const token = (
+    spaceName: "tt_audio_mode" | "tiktok-ai-frame" | "tiktok",
+    tokenOverrides: Readonly<Record<string, unknown>> = {},
+  ) => ({
+    access_key_id: "AKID-1",
+    current_time: "2026-08-24T12:00:00Z",
+    expired_time: "2026-08-24T13:00:00Z",
+    secret_acess_key: "synthetic-secret",
+    session_token: "synthetic-session-token",
+    space_name: spaceName,
+    ...tokenOverrides,
+  });
+  return {
+    ak: "0123456789abcdef0123456789abcdef",
+    audio_token_v5: token("tt_audio_mode"),
+    auth: "synthetic-auth-envelope",
+    extra: {
+      fatal_item_ids: [],
+      logid: "synthetic-log-id",
+      now: 1_787_572_800_000,
+    },
+    log_pb: { impr_id: "synthetic-impression-id" },
+    status_code: 0,
+    status_msg: "",
+    store_region: "US",
+    vframe_token_v5: token("tiktok-ai-frame"),
+    video_token_v5: token("tiktok", overrides),
+  };
+}
+
 const IDENTITY_MATRIX = Object.freeze([
   0x0001_0000,
   0,
@@ -154,6 +208,10 @@ function applyProjection(overrides: Readonly<Record<string, unknown>> = {}): unk
   };
 }
 
+function tosNode() {
+  return parseTikTokApplyUploadResultProjection(applyProjection()).primary;
+}
+
 describe("TikTok Studio first-party bundle foundations", () => {
   test("retains route and state-machine evidence without dispatch credentials", () => {
     expect(tiktokWebStudioBundleEvidenceSnapshot).toMatchObject({
@@ -176,6 +234,62 @@ describe("TikTok Studio first-party bundle foundations", () => {
     expect(serialized).not.toContain("sessionid=");
     expect(serialized).not.toContain("Authorization:");
     expect(serialized).not.toContain("X-Bogus=");
+  });
+
+  test("retains only secret-free in-origin proof and interception requirements", () => {
+    expect(tiktokWebStudioSecurityEvidenceSnapshot).toEqual({
+      schemaVersion: 1,
+      role: "bundle-evidence-only",
+      observedOn: "2026-08-24",
+      aid: 1988,
+      baseQuery: {
+        aid: "1988",
+        ttp2TargetIdc: "useast8",
+        verifyFp: "first-profile-read-only-request-only",
+      },
+      acrawler: {
+        intercept: true,
+        mode: 513,
+        paths: [
+          "/api/v1/web/project/post",
+          "/api/v1/item/create/bulk/",
+          "/api/v1/item/create/",
+          "/api/upload/search/user/",
+          "/api/upload/challenge/sug/",
+          "/api/post/item_list/",
+          "/api/v1/user/profile/upload/",
+          "/api/v1/video/upload/auth/",
+          "/api/v1/draft/create_update/",
+          "/tiktok/web/project/post/v1/",
+          "/tiktok/web/project/cancel/v1/",
+          "/tiktok/post/edit/v1/",
+          "/api/user/list/",
+        ],
+      },
+      antiCsrf: {
+        host: "www.tiktok.com",
+        method: "POST",
+        paths: [
+          "/api/v1/post_schedule/ack/",
+          "/api/v1/video/transcode/enable/",
+        ],
+      },
+      zti: {
+        abGate: "creation_use_zti",
+        certType: "header",
+        scene: "tt_fetch",
+        signVersion: 2,
+        paths: [
+          "/api/v1/web/project/post/",
+          "/api/v1/item/create/bulk/",
+          "/tiktok/web/project/post/v1/",
+          "/tiktok/post/edit/v1/",
+        ],
+      },
+    });
+    const serialized = JSON.stringify(tiktokWebStudioSecurityEvidenceSnapshot);
+    expect(serialized).not.toContain("tt-csrf-token\":");
+    expect(serialized).not.toContain("caller-proof");
   });
 
   test("retains sanitized success evidence only as a fail-closed structural boundary", () => {
@@ -205,11 +319,12 @@ describe("TikTok Studio first-party bundle foundations", () => {
     expect(buildTikTokVideoUploadAuthRequest()).toEqual({
       method: "GET",
       path: "/api/v1/video/upload/auth/",
-      query: {},
+      query: { aid: "1988" },
     });
     expect(buildTikTokApplyUploadInnerRequest({
       fileSize: 6_291_457,
       nonce: "nonce_123456",
+      publicRegion: "ttp2",
     })).toEqual({
       method: "GET",
       path: "/top/v1",
@@ -220,57 +335,77 @@ describe("TikTok Studio first-party bundle foundations", () => {
         FileType: "video",
         IsInner: "1",
         FileSize: "6291457",
+        "X-Amz-Expires": "604800",
+        "tt-target-idc": "useast8",
         s: "nonce_123456",
         device_platform: "web",
         business_tag: "tiktok_video_submission_web",
       },
     });
-    expect(buildTikTokCommitUploadInnerRequest("session-1")).toEqual({
+    expect(buildTikTokCommitUploadInnerRequest("session-1", "ttp2")).toEqual({
       method: "POST",
       path: "/top/v1",
       query: {
         Action: "CommitUploadInner",
         Version: "2020-11-19",
         SpaceName: "tiktok",
+        "X-Amz-Expires": "604800",
+        "tt-target-idc": "useast8",
       },
-      body: { SessionKey: "session-1", Functions: [] },
+      body: { SessionKey: "session-1", Functions: [{ name: "GetMeta" }] },
     });
-    expect(buildTikTokProjectStatusRequestProjection("project-1")).toEqual({
+    expect(buildTikTokProjectStatusRequestProjection("project-1", "ttp2")).toEqual({
       method: "GET",
       path: "/tiktok/web/project/status/v1/",
-      query: { project_id: "project-1" },
+      query: {
+        project_id: "project-1",
+        aid: "1988",
+        "tt-target-idc": "useast8",
+      },
+      runtimeSecurity: {
+        acrawler: "not-listed-for-route",
+        antiCsrf: "not-listed-for-route",
+        credentials: "include",
+        csrfHeader: "not-explicit-for-route",
+        execution: "authenticated-in-origin-studio-session",
+        verifyFp: "not-requested-by-base-query",
+        zti: "not-listed-for-route",
+      },
     });
-    expect(() => buildTikTokApplyUploadInnerRequest({ fileSize: 0, nonce: "nonce_123456" }))
+    expect(() => buildTikTokApplyUploadInnerRequest({
+      fileSize: 0,
+      nonce: "nonce_123456",
+      publicRegion: "ttp2",
+    }))
       .toThrow("fileSize");
-    expect(() => buildTikTokApplyUploadInnerRequest({ fileSize: 100, nonce: "../escape" }))
+    expect(() => buildTikTokApplyUploadInnerRequest({
+      fileSize: 100,
+      nonce: "../escape",
+      publicRegion: "ttp2",
+    }))
       .toThrow("nonce");
     expect(buildTikTokApplyUploadInnerRequest({
       fileSize: 128 * 1024 * 1024,
       nonce: "nonce_123456",
+      publicRegion: "ttp",
     }).query.FileSize).toBe(String(128 * 1024 * 1024));
     expect(() => buildTikTokApplyUploadInnerRequest({
       fileSize: 128 * 1024 * 1024 + 1,
       nonce: "nonce_123456",
+      publicRegion: "ttp2",
     })).toThrow("between 24 and 134217728");
-    expect(() => buildTikTokProjectStatusRequestProjection("bad\rproject"))
+    expect(() => buildTikTokProjectStatusRequestProjection("bad\rproject", "ttp"))
       .toThrow("bounded string");
   });
 
   test("strictly projects temporary STS credentials and explicit upload nodes", () => {
-    expect(parseTikTokVideoUploadTokenProjection({
-      video_token_v5: {
-        access_key_id: "AKID-1",
-        secret_acess_key: "synthetic-secret",
-        session_token: "synthetic-session-token",
-        expired_time: 2_000,
-        current_time: 1_000,
-      },
-    })).toEqual({
+    expect(parseTikTokVideoUploadTokenProjection(uploadAuth())).toEqual({
       accessKeyId: "AKID-1",
+      clockState: "reviewed-utc-second",
+      expiresAtIso: "2026-08-24T13:00:00.000Z",
       secretAccessKey: "synthetic-secret",
+      serverCurrentTimeIso: "2026-08-24T12:00:00.000Z",
       sessionToken: "synthetic-session-token",
-      expiredTime: 2_000,
-      currentTime: 1_000,
     });
     expect(parseTikTokApplyUploadResultProjection(applyProjection())).toEqual({
       primary: {
@@ -282,28 +417,15 @@ describe("TikTok Studio first-party bundle foundations", () => {
       },
       fallback: null,
     });
-    expect(() => parseTikTokVideoUploadTokenProjection({
-      video_token_v5: {
-        access_key_id: "AKID-1",
-        secret_acess_key: "secret",
-        session_token: "token",
-        expired_time: 999,
-        current_time: 1_000,
-      },
-    })).toThrow("expire after");
-    expect(() => parseTikTokVideoUploadTokenProjection({
-      video_token_v5: {
-        access_key_id: "AKID-1",
-        secret_acess_key: "secret",
-        session_token: "token",
-        expired_time: 2_000,
-        current_time: 1_000,
-        unreviewed: true,
-      },
-    })).toThrow("bundle-proven fields");
+    expect(() => parseTikTokVideoUploadTokenProjection(uploadAuth({
+      expired_time: "2026-08-24T11:59:59Z",
+    }))).toThrow("expire after");
+    expect(() => parseTikTokVideoUploadTokenProjection(uploadAuth({
+      unreviewed: true,
+    }))).toThrow("bundle-proven fields");
     expect(() => parseTikTokApplyUploadResultProjection(applyProjection({
       UploadHeader: '{"X-Caller-Selected":"no"}',
-    }))).toThrow("reviewed non-empty header capture");
+    }))).toThrow("reviewed empty header object");
     for (const UploadHost of [
       "https://evil.example",
       "https://tos16-up-useast8.tiktokcdn-us.com.evil.example",
@@ -318,25 +440,37 @@ describe("TikTok Studio first-party bundle foundations", () => {
 
   test("plans fixed contiguous 3 MiB parts and binds every CRC acknowledgement", () => {
     const parts = planTikTokTosParts(TIKTOK_TOS_PART_BYTES * 2 + 7);
+    const node = tosNode();
     expect(parts).toEqual([
       { partNumber: 1, byteOffset: 0, byteLength: TIKTOK_TOS_PART_BYTES },
       { partNumber: 2, byteOffset: TIKTOK_TOS_PART_BYTES, byteLength: TIKTOK_TOS_PART_BYTES },
       { partNumber: 3, byteOffset: TIKTOK_TOS_PART_BYTES * 2, byteLength: 7 },
     ]);
     expect(tikTokTosCrc32(new TextEncoder().encode("123456789"))).toBe("cbf43926");
-    expect(buildTikTokTosInitRequest("tos-maliva-v-0068/object-1")).toEqual({
+    expect(buildTikTokTosInitRequest({ node, subjectId: SUBJECT_ID })).toEqual({
+      headers: {
+        Authorization: "synthetic-upload-authorization",
+        "X-Storage-U": SUBJECT_ID,
+      },
       method: "POST",
+      origin: "https://tos16-up-useast8.tiktokcdn-us.com",
       path: "/upload/v1/tos-maliva-v-0068/object-1",
       query: { uploadmode: "part", phase: "init" },
     });
     expect(buildTikTokTosTransferRequest({
-      oid: "tos-maliva-v-0068/object-1",
+      node,
+      subjectId: SUBJECT_ID,
       uploadId: "upload-1",
       part: parts[1]!,
       crc32: "CBF43926",
     })).toEqual({
-      contentCrc32: "cbf43926",
+      headers: {
+        Authorization: "synthetic-upload-authorization",
+        "X-Storage-U": SUBJECT_ID,
+        "Content-CRC32": "cbf43926",
+      },
       method: "POST",
+      origin: "https://tos16-up-useast8.tiktokcdn-us.com",
       path: "/upload/v1/tos-maliva-v-0068/object-1",
       query: {
         uploadid: "upload-1",
@@ -346,12 +480,24 @@ describe("TikTok Studio first-party bundle foundations", () => {
       },
     });
     expect(buildTikTokTosFinishRequest({
-      oid: "tos-maliva-v-0068/object-1",
+      byteLength: TIKTOK_TOS_PART_BYTES * 2 + 7,
+      node,
+      subjectId: SUBJECT_ID,
       uploadId: "upload-1",
     })).toEqual({
+      headers: {
+        Authorization: "synthetic-upload-authorization",
+        "X-Storage-U": SUBJECT_ID,
+      },
       method: "POST",
+      origin: "https://tos16-up-useast8.tiktokcdn-us.com",
       path: "/upload/v1/tos-maliva-v-0068/object-1",
-      query: { uploadmode: "part", phase: "finish", uploadid: "upload-1" },
+      query: {
+        uploadmode: "part",
+        phase: "finish",
+        size: String(TIKTOK_TOS_PART_BYTES * 2 + 7),
+        uploadid: "upload-1",
+      },
     });
     expect(parseTikTokTosInitResponse({ code: 2000, data: { uploadid: "upload-1" } }))
       .toEqual({ uploadId: "upload-1" });
@@ -369,8 +515,26 @@ describe("TikTok Studio first-party bundle foundations", () => {
       code: 2000,
       data: { uploadid: "upload-1", extra: true },
     })).toThrow("bundle-proven fields");
-    expect(() => buildTikTokTosInitRequest("object/../escape"))
+    expect(() => buildTikTokTosInitRequest({
+      node: { ...node, storeUri: "object/../escape" },
+      subjectId: SUBJECT_ID,
+    }))
       .toThrow("provider path segments");
+    expect(() => buildTikTokTosInitRequest({
+      node: { ...node, uploadHost: "https://evil.example" },
+      subjectId: SUBJECT_ID,
+    })).toThrow("sanitized live capture");
+    expect(() => buildTikTokTosInitRequest({
+      node,
+      subjectId: "caller-selected-user",
+    })).toThrow("decimal TikTok identifier");
+    expect(() => buildTikTokTosTransferRequest({
+      node,
+      subjectId: SUBJECT_ID,
+      uploadId: "upload-1",
+      part: { ...parts[0]!, extra: true } as never,
+      crc32: "cbf43926",
+    })).toThrow("bundle-proven fields");
     expect(planTikTokTosParts(128 * 1024 * 1024).at(-1)?.byteOffset)
       .toBeLessThan(128 * 1024 * 1024);
     expect(() => planTikTokTosParts(128 * 1024 * 1024 + 1))
@@ -413,6 +577,92 @@ describe("TikTok Studio first-party bundle foundations", () => {
       responses[0],
       { ...responses[1], extra: true },
     ])).toThrow("bundle-proven fields");
+  });
+
+  test("models conditional transcode enablement and bounded result polling", () => {
+    expect(TIKTOK_VIDEO_TRANSCODE_POLL_INTERVAL_MS).toBe(1_000);
+    expect(TIKTOK_VIDEO_TRANSCODE_POLL_TIMEOUT_MS).toBe(3_600_000);
+    const enable = buildTikTokVideoTranscodeEnableRequestProjection({
+      publicRegion: "ttp2",
+      videoId: "video-1",
+    });
+    expect(enable).toEqual({
+      method: "POST",
+      path: "/api/v1/video/transcode/enable/",
+      query: {
+        video_id: "video-1",
+        aid: "1988",
+        "tt-target-idc": "useast8",
+      },
+      runtimeSecurity: {
+        acrawler: "not-listed-for-route",
+        antiCsrf: "required",
+        credentials: "include",
+        csrfHeader: "in-origin-ephemeral",
+        execution: "authenticated-in-origin-studio-session",
+        verifyFp: "not-requested-by-base-query",
+        zti: "not-listed-for-route",
+      },
+    });
+    expect(enable).not.toHaveProperty("headers");
+    expect(buildTikTokVideoTranscodeResultRequestProjection({
+      durationSeconds: 8.000_1,
+      fileKey: "file-key-1",
+      height: 360,
+      publicRegion: "ttp",
+      videoId: "video-1",
+      width: 640,
+    })).toEqual({
+      body: {
+        scene: 0,
+        video_info: [{
+          file_key: "file-key-1",
+          video_id: "video-1",
+          original_width: 640,
+          original_height: 360,
+          original_duration_ms: 8_001,
+        }],
+      },
+      method: "POST",
+      path: "/api/v1/video/transcode/result/",
+      query: { aid: "1988" },
+      runtimeSecurity: {
+        acrawler: "not-listed-for-route",
+        antiCsrf: "not-listed-for-route",
+        credentials: "include",
+        csrfHeader: "not-explicit-for-route",
+        execution: "authenticated-in-origin-studio-session",
+        verifyFp: "not-requested-by-base-query",
+        zti: "not-listed-for-route",
+      },
+    });
+    expect([0, 1, 2, 3, 4].map(resolveTikTokVideoTranscodeState)).toEqual([
+      "unknown",
+      "init",
+      "in-progress",
+      "success",
+      "failed",
+    ]);
+    expect(() => resolveTikTokVideoTranscodeState(5)).toThrow("between 0 and 4");
+    expect(() => buildTikTokVideoTranscodeResultRequestProjection({
+      durationSeconds: Number.NaN,
+      fileKey: "file-key-1",
+      height: 360,
+      publicRegion: "ttp",
+      videoId: "video-1",
+      width: 640,
+    })).toThrow("durationSeconds must be finite");
+    expect(() => buildTikTokVideoTranscodeEnableRequestProjection({
+      publicRegion: "ttp",
+      videoId: "video-1",
+      verifyFp: "caller-proof",
+    } as never)).toThrow("bundle-proven fields");
+    expect(TIKTOK_PROJECT_STATUS_POLL_POLICY).toEqual({
+      defaultDelayMs: 10_000,
+      maxPostingObservations: 50,
+      plainVideoInitialDelaysMs: [0, 1_000, 1_000, 1_000, 1_000],
+      videoEditedInitialDelaysMs: [10_000, 5_000, 5_000, 5_000, 5_000],
+    });
   });
 
   test("projects one committed video and conservative plain-video settings", () => {
@@ -462,7 +712,7 @@ describe("TikTok Studio first-party bundle foundations", () => {
         tcm_params: '{"commerce_toggle_info":{}}',
         aigc_info: { aigc_label_type: 1 },
         privacy_setting_info: {
-          visibility: 1,
+          visibility_type: 1,
           allow_comment: 0,
           allow_duet: 0,
           allow_stitch: 0,
@@ -484,44 +734,104 @@ describe("TikTok Studio first-party bundle foundations", () => {
   });
 
   test("builds only exact authored-post detail and permission-selected delete projections", () => {
-    expect(buildTikTokPostDetailRequestProjection(POST_ID)).toEqual({
+    expect(buildTikTokPostDetailRequestProjection(POST_ID, RUNTIME_TIME_ZONE)).toEqual({
       method: "GET",
       path: "/api/v1/post/detail/",
-      query: { item_id: POST_ID },
+      query: {
+        tz_name: RUNTIME_TIME_ZONE,
+        item_id: POST_ID,
+        aid: "1988",
+      },
     });
+    expect(() => buildTikTokPostDetailRequestProjection(POST_ID, "America/Not_A_Zone"))
+      .toThrow("recognized IANA name");
+    expect(() => buildTikTokPostDetailRequestProjection(POST_ID, "../Puerto_Rico"))
+      .toThrow("bounded IANA name");
+    expect(buildTikTokPostDetailRequestProjection(POST_ID, "UTC").query.tz_name).toBe("UTC");
     expect(parseTikTokDeletePermissionProjection({
       biz_permissions: [
-        { opaque_1: false },
-        { opaque_2: [true] },
-        { is_recyclable: true },
-        ...Array.from({ length: 12 }, (_, index) => ({ [`opaque_${index + 3}`]: index })),
+        deletePermission(1),
+        deletePermission(2),
+        deletePermission(3, true),
+        ...Array.from({ length: 12 }, (_unused, index) => deletePermission(index + 4)),
       ],
     })).toEqual({ recyclable: true });
     expect(parseTikTokDeletePermissionProjection({
-      biz_permissions: [{ opaque: null }, { is_recyclable: false }],
+      biz_permissions: [deletePermission(1), deletePermission(2, false)],
     })).toEqual({ recyclable: false });
-    expect(buildTikTokPublishedPostDeleteBody({ postId: POST_ID, recyclable: true }))
-      .toEqual({ aweme_id: POST_ID, scene: 1, delete: { delete_type: 1 } });
-    expect(() => buildTikTokPublishedPostDeleteBody({ postId: POST_ID, recyclable: false }))
+    expect(parseTikTokDeletePermissionProjection({
+      biz_permissions: [deletePermission(1)],
+    })).toEqual({ recyclable: false });
+    expect(buildTikTokPublishedPostDeleteBody({
+      postId: POST_ID,
+      projectId: PROJECT_ID,
+      recyclable: true,
+    })).toEqual({
+      aweme_id: POST_ID,
+      project_id: PROJECT_ID,
+      scene: 1,
+      delete: { delete_type: 1 },
+    });
+    expect(buildTikTokPublishedPostDeleteBody({
+      postId: POST_ID,
+      projectId: undefined,
+      recyclable: true,
+    })).toEqual({
+      aweme_id: POST_ID,
+      scene: 1,
+      delete: { delete_type: 1 },
+    });
+    expect(() => buildTikTokPublishedPostDeleteBody({
+      postId: POST_ID,
+      projectId: null,
+      recyclable: true,
+    })).toThrow("TikTok delete project ID must be a bounded string");
+    expect(() => buildTikTokPublishedPostDeleteBody({
+      postId: POST_ID,
+      projectId: "not a project",
+      recyclable: true,
+    })).toThrow("bounded provider identifier");
+    expect(() => buildTikTokPublishedPostDeleteBody({
+      postId: POST_ID,
+      projectId: PROJECT_ID,
+      recyclable: false,
+    }))
       .toThrow("requires exact is_recyclable true permission");
-    expect(() => buildTikTokPublishedPostDeleteBody({ postId: POST_ID, recyclable: "true" }))
+    expect(() => buildTikTokPublishedPostDeleteBody({
+      postId: POST_ID,
+      projectId: PROJECT_ID,
+      recyclable: "true",
+    }))
       .toThrow("requires exact is_recyclable true permission");
-    expect(() => buildTikTokPublishedPostDeleteBody({ postId: "not-a-post", recyclable: true }))
+    expect(() => buildTikTokPublishedPostDeleteBody({
+      postId: "not-a-post",
+      projectId: PROJECT_ID,
+      recyclable: true,
+    }))
       .toThrow("decimal TikTok identifier");
     expect(() => parseTikTokDeletePermissionProjection({
       biz_permissions: [{ opaque: true }],
-    })).toThrow("exactly one is_recyclable owner");
+    })).toThrow("bundle-proven fields");
+    expect(parseTikTokDeletePermissionProjection({
+      biz_permissions: [deletePermission(1, true), deletePermission(2, false)],
+    })).toEqual({ recyclable: true });
     expect(() => parseTikTokDeletePermissionProjection({
-      biz_permissions: [{ is_recyclable: true }, { is_recyclable: false }],
-    })).toThrow("exactly one is_recyclable owner");
+      biz_permissions: [deletePermission(1, true), deletePermission(2, true)],
+    })).toThrow("at most one exact true is_recyclable permission");
     expect(() => parseTikTokDeletePermissionProjection({
-      biz_permissions: [{ is_recyclable: 1 }],
+      biz_permissions: [{ ...deletePermission(1), is_recyclable: 1 }],
     })).toThrow("is_recyclable must be boolean");
     expect(() => parseTikTokDeletePermissionProjection({
-      biz_permissions: [{ opaque: undefined }, { is_recyclable: true }],
+      biz_permissions: [{ ...deletePermission(1), biz_status: -1 }],
+    })).toThrow("biz_status must be an integer");
+    expect(() => parseTikTokDeletePermissionProjection({
+      biz_permissions: [{ ...deletePermission(1), unreviewed: true }],
+    })).toThrow("bundle-proven fields");
+    expect(() => parseTikTokDeletePermissionProjection({
+      biz_permissions: [{ ...deletePermission(1), opaque: undefined }, deletePermission(2, true)],
     })).toThrow("must contain only JSON data");
     expect(() => parseTikTokDeletePermissionProjection({
-      biz_permissions: [new Date(0), { is_recyclable: true }],
+      biz_permissions: [new Date(0), deletePermission(2, true)],
     })).toThrow("plain prototype");
   });
 
@@ -546,7 +856,7 @@ describe("TikTok Studio first-party bundle foundations", () => {
       },
     });
     expect(() => parseTikTokDeletePermissionProjection({
-      biz_permissions: [trapped, { is_recyclable: true }],
+      biz_permissions: [trapped, deletePermission(2, true)],
     })).toThrow("must not contain proxies");
     expect(traps).toBe(0);
 
@@ -569,22 +879,25 @@ describe("TikTok Studio first-party bundle foundations", () => {
       biz_permissions: Array.from({ length: 65 }, () => ({})),
     })).toThrow("arrays must contain at most 64 items");
     expect(() => parseTikTokDeletePermissionProjection({
-      biz_permissions: [{ opaque: "x".repeat(256 * 1024 + 1) }, { is_recyclable: true }],
+      biz_permissions: [
+        { opaque: "x".repeat(256 * 1024 + 1) },
+        deletePermission(2, true),
+      ],
     })).toThrow("oversized string");
     expect(() => parseTikTokDeletePermissionProjection({
-      biz_permissions: [{ ["k".repeat(1_025)]: true }, { is_recyclable: true }],
+      biz_permissions: [{ ["k".repeat(1_025)]: true }, deletePermission(2, true)],
     })).toThrow("oversized property name");
     expect(() => parseTikTokDeletePermissionProjection({
       biz_permissions: [
         ...Array.from({ length: 5 }, () => ({ opaque: "x".repeat(220 * 1024) })),
-        { is_recyclable: true },
+        deletePermission(6, true),
       ],
     })).toThrow("total JSON byte bound");
     const oversizedObject = Object.fromEntries(
       Array.from({ length: 16_384 }, (_unused, index) => [`opaque_${index}`, null]),
     );
     expect(() => parseTikTokDeletePermissionProjection({
-      biz_permissions: [oversizedObject, { is_recyclable: true }],
+      biz_permissions: [oversizedObject, deletePermission(2, true)],
     })).toThrow("JSON structural bound");
   });
 });

@@ -173,6 +173,7 @@ export type WrenchArguments =
   | {
       readonly command: "derive-review";
       readonly id: string;
+      readonly reviewOrigin?: string;
       readonly selection:
         | { readonly kind: "list"; readonly offset: number; readonly limit: number }
         | { readonly kind: "entry"; readonly entryIndex: number; readonly fixtures: boolean };
@@ -1403,12 +1404,32 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     if (subcommand === "review") {
       const id = raw[2];
       if (id === undefined) return { ok: false, message: "derive review requires a derivation ID" };
-      const parsed = optionValues(raw.slice(3), ["--entry", "--offset", "--limit", "--fixtures"], ["--json"]);
+      const parsed = optionValues(raw.slice(3), ["--entry", "--offset", "--limit", "--fixtures", "--review-origin"], ["--json"]);
       if (isFailure(parsed)) return parsed;
       const entryValue = parsed.values["--entry"];
       const offsetValue = parsed.values["--offset"];
       const limitValue = parsed.values["--limit"];
       const fixtureSource = parsed.values["--fixtures"];
+      const reviewOriginValue = parsed.values["--review-origin"];
+      let reviewOrigin: string | undefined;
+      if (reviewOriginValue !== undefined) {
+        let origin: URL;
+        try {
+          if (reviewOriginValue.length > 4_096) throw new Error("oversized origin");
+          origin = new URL(reviewOriginValue);
+        } catch {
+          return { ok: false, message: "derive review --review-origin must be an exact HTTPS origin" };
+        }
+        if (
+          origin.protocol !== "https:"
+          || origin.username !== ""
+          || origin.password !== ""
+          || reviewOriginValue !== origin.origin
+        ) {
+          return { ok: false, message: "derive review --review-origin must be an exact HTTPS origin" };
+        }
+        reviewOrigin = origin.origin;
+      }
       const boundedInteger = (value: string | undefined, fallback: number, maximum: number): number | null => {
         if (value === undefined) return fallback;
         if (!/^\d{1,5}$/u.test(value)) return null;
@@ -1429,6 +1450,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
           value: {
             command: "derive-review",
             id,
+            ...(reviewOrigin === undefined ? {} : { reviewOrigin }),
             selection: { kind: "entry", entryIndex, fixtures: fixtureSource === "-" },
             json: parsed.booleans.has("--json"),
           },
@@ -1444,6 +1466,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         value: {
           command: "derive-review",
           id,
+          ...(reviewOrigin === undefined ? {} : { reviewOrigin }),
           selection: { kind: "list", offset, limit },
           json: parsed.booleans.has("--json"),
         },

@@ -10,6 +10,7 @@ import instagramManifest from "../assets/adapters/instagram/wrench-web-adapter.j
 import instagramV1Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.0.0.json";
 import instagramV12Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.2.0.json";
 import instagramV13Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.3.0.json";
+import instagramV15Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.5.0.json";
 import threadsManifest from "../assets/adapters/threads/wrench-web-adapter.json";
 import threadsV1Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.0.0.json";
 import threadsV12Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.2.0.json";
@@ -412,12 +413,12 @@ describe("Meta consumer-web policy", () => {
     expect(META_WEB_OPERATIONS.instagram["media.publish"]).toMatchObject({
       state: "capture-required",
       risk: "R3",
-      contractVersion: 2,
+      contractVersion: 3,
     });
     expect(META_WEB_OPERATIONS.instagram["content.delete"]).toMatchObject({
-      state: "capture-required",
+      state: "observed",
       risk: "R3",
-      contractVersion: 1,
+      contractVersion: 2,
     });
     expect(META_WEB_OPERATIONS.threads["feeds.read"]).toMatchObject({
       state: "observed",
@@ -470,7 +471,8 @@ describe("Meta consumer-web policy", () => {
       ["threads", "feeds.read", threadsManifest, threadsV1Manifest],
     ] as const;
 
-    expect(instagramManifest.version).toBe("1.5.0");
+    expect(instagramManifest.version).toBe("1.6.0");
+    expect(instagramV15Manifest.version).toBe("1.5.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
     expect(threadsManifest.version).toBe("1.7.0");
     expect(threadsV1Manifest.version).toBe("1.0.0");
@@ -503,8 +505,8 @@ describe("Meta consumer-web policy", () => {
 
     expect(instagramManifest.operations["media.publish"]).toMatchObject({
       risk: "R3",
-      input: { required: ["media", "caption", "audience"] },
-      webSession: { contractVersion: 2 },
+      input: { required: ["media", "thumbnail", "caption", "audience"] },
+      webSession: { contractVersion: 3 },
     });
     expect(instagramManifest.operations["media.publish"].input.properties.media.mediaTypes)
       .toEqual(["video/mp4"]);
@@ -513,27 +515,32 @@ describe("Meta consumer-web policy", () => {
       input: {
         required: ["media_id", "expected_caption", "expected_media_kind"],
       },
-      webSession: { contractVersion: 1 },
+      webSession: { contractVersion: 2 },
     });
     expect(instagramManifest.operations["content.delete"].description)
-      .toContain("profile and public permalink");
+      .toContain("soft-200 removal marker");
     expect(instagramManifest.operations["content.delete"].sideEffect)
       .not.toMatch(/permanent/iu);
 
     const binding = metaWebPlugin.bindings.find((candidate) =>
       candidate.surfaceId === "instagram");
-    expect(binding?.operations.find((operation) => operation.name === "media.publish"))
+    expect(binding?.operations.find((operation) =>
+      operation.name === "media.publish" && operation.contractVersion === 3))
+      .toMatchObject({
+        contractVersion: 3,
+        state: "capture-required",
+      });
+    expect(binding?.operations.filter((operation) => operation.name === "media.publish")
+      .map((operation) => operation.contractVersion)).toEqual([1, 2, 3]);
+    expect(binding?.operations.find((operation) =>
+      operation.name === "content.delete" && operation.contractVersion === 2))
       .toMatchObject({
         contractVersion: 2,
-        historicalContractVersions: [1],
-        state: "capture-required",
-      });
-    expect(binding?.operations.find((operation) => operation.name === "content.delete"))
-      .toMatchObject({
-        contractVersion: 1,
         risk: "R3",
-        state: "capture-required",
+        state: "observed",
       });
+    expect(binding?.operations.filter((operation) => operation.name === "content.delete")
+      .map((operation) => operation.contractVersion)).toEqual([1, 2]);
   });
 
   test("preserves the exact pre-profile Meta adapter predecessors", () => {

@@ -1814,7 +1814,8 @@ async function runBoundAgentBrowser(
       | { readonly kind: "readiness-context" }
       | { readonly kind: "pin-context"; readonly pin: DerivationBrowserPin }
       | { readonly kind: "pinned-batch"; readonly pin: DerivationBrowserPin }
-      | { readonly kind: "pinned-confirm"; readonly pin: DerivationBrowserPin };
+      | { readonly kind: "pinned-confirm"; readonly pin: DerivationBrowserPin }
+      | { readonly kind: "profile-confirm" };
   },
 ) {
   return runCommand(
@@ -1891,11 +1892,21 @@ async function rawBatch(
 }
 
 export class IndeterminateDerivationConfirmationError extends Error {
-  constructor() {
+  constructor(kind: "pinned" | "profile" = "pinned") {
     super(
-      "pinned derivation browser confirmation is indeterminate: the mutation may have applied; do not retry it and reconcile the exact page state before any further mutation",
+      `${kind} derivation browser confirmation is indeterminate: the mutation may have applied; do not retry it and reconcile the exact page state before any further mutation`,
     );
     this.name = "IndeterminateDerivationConfirmationError";
+  }
+}
+
+async function runProfileDerivationConfirmationOnce<T>(
+  attempt: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await attempt();
+  } catch {
+    throw new IndeterminateDerivationConfirmationError("profile");
   }
 }
 
@@ -1912,11 +1923,226 @@ export async function runPinnedDerivationConfirmationOnce<T>(
   }
 }
 
+export type ProfileDerivationConfirmation = {
+  readonly action: string;
+  readonly confirmationId: string;
+};
+
+function profileDerivationExpectedConfirmationAction(
+  command: readonly string[],
+): string {
+  const action = command[0] === "find" ? command[3] : command[0];
+  if (
+    typeof action !== "string"
+    || !(derivationConfirmedPolicyActions as readonly string[]).includes(action)
+  ) {
+    throw new Error("profile derivation browser confirmation changed shape");
+  }
+  return action;
+}
+
+/**
+ * Parse the one pending action returned by an uncontained profile session.
+ * The public derivation grammar cannot issue `confirm`; only this exact,
+ * code-owned continuation can consume the returned identifier.
+ */
+export function parseProfileDerivationConfirmation(
+  value: unknown,
+  command: readonly string[],
+): ProfileDerivationConfirmation {
+  const expectedAction = profileDerivationExpectedConfirmationAction(command);
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new Error("profile derivation browser confirmation changed shape");
+  }
+  const record = guardBrowserRecord(value[0], "profile derivation browser result");
+  exactGuardBrowserKeys(
+    record,
+    ["command", "error", "result", "success"],
+    "profile derivation browser result",
+  );
+  if (
+    JSON.stringify(record.command) !== JSON.stringify(command)
+    || record.success !== true
+    || record.error !== null
+  ) throw new Error("profile derivation browser confirmation changed shape");
+  const data = guardBrowserRecord(
+    record.result,
+    "profile derivation browser confirmation",
+  );
+  exactGuardBrowserKeys(
+    data,
+    ["action", "confirmation_id", "confirmation_required"],
+    "profile derivation browser confirmation",
+  );
+  if (
+    data.confirmation_required !== true
+    || typeof data.confirmation_id !== "string"
+    || !/^r\d{1,6}$/u.test(data.confirmation_id)
+    || typeof data.action !== "string"
+    || data.action !== expectedAction
+  ) throw new Error("profile derivation browser confirmation changed shape");
+  return {
+    action: data.action,
+    confirmationId: data.confirmation_id,
+  };
+}
+
+export function parseProfileDerivationConfirmationResult(
+  value: unknown,
+  confirmation: ProfileDerivationConfirmation,
+): Record<string, unknown> {
+  const root = guardBrowserRecord(
+    value,
+    "profile derivation browser confirmation result",
+  );
+  exactGuardBrowserKeys(
+    root,
+    ["_boundary", "data", "error", "success"],
+    "profile derivation browser confirmation result",
+  );
+  const boundary = guardBrowserRecord(
+    root._boundary,
+    "profile derivation browser confirmation boundary",
+  );
+  exactGuardBrowserKeys(
+    boundary,
+    ["nonce", "origin"],
+    "profile derivation browser confirmation boundary",
+  );
+  const data = guardBrowserRecord(
+    root.data,
+    "profile derivation browser confirmation data",
+  );
+  exactGuardBrowserKeys(
+    data,
+    ["action", "confirmed", "lifecycle", "result"],
+    "profile derivation browser confirmation data",
+  );
+  const result = guardBrowserRecord(
+    data.result,
+    "profile derivation browser confirmed result",
+  );
+  exactGuardBrowserKeys(
+    result,
+    ["data", "id", "success"],
+    "profile derivation browser confirmed result",
+  );
+  const confirmedData = guardBrowserRecord(
+    result.data,
+    "profile derivation browser confirmed data",
+  );
+  if (
+    root.success !== true
+    || root.error !== null
+    || typeof boundary.nonce !== "string"
+    || !/^[a-f0-9]{32}$/u.test(boundary.nonce)
+    || boundary.origin !== "unknown"
+    || data.confirmed !== true
+    || data.action !== confirmation.action
+    || result.id !== confirmation.confirmationId
+    || result.success !== true
+    || !("lifecycle" in confirmedData)
+    || ["confirmation_required", "confirmation_id", "confirmed", "denied"].some(
+      (key) => key in confirmedData,
+    )
+  ) throw new Error("profile derivation browser confirmation did not complete exactly");
+  try {
+    exactGuardBrowserIdentity([
+      guardBrowserLifecycle(data.lifecycle, false),
+      guardBrowserLifecycle(confirmedData.lifecycle, false),
+    ]);
+  } catch (error) {
+    throw new Error(
+      "profile derivation browser confirmation lifecycle changed identity",
+      { cause: error },
+    );
+  }
+  return confirmedData;
+}
+
+export async function confirmProfileDerivationMutationOnce(
+  pendingValue: unknown,
+  command: readonly string[],
+  invoke: (confirmation: ProfileDerivationConfirmation) => Promise<unknown>,
+): Promise<Record<string, unknown>> {
+  const confirmation = parseProfileDerivationConfirmation(pendingValue, command);
+  return runProfileDerivationConfirmationOnce(async () => parseProfileDerivationConfirmationResult(
+    await invoke(confirmation),
+    confirmation,
+  ));
+}
+
+async function profileRawBatch(
+  session: DerivationSession,
+  commands: readonly (readonly string[])[],
+  onCommandCompleted?: (command: readonly string[]) => void,
+): Promise<readonly Record<string, unknown>[]> {
+  const completed: Record<string, unknown>[] = [];
+  for (const command of commands) {
+    const records = await rawBatch(session, [command]);
+    const record = records[0];
+    if (record === undefined) {
+      throw new Error("profile derivation browser returned a malformed command result");
+    }
+    completed.push(await completeProfileDerivationBatchCommand(
+      record,
+      command,
+      async (confirmation) => {
+        const result = await runBoundAgentBrowser(
+          session,
+          ["confirm", confirmation.confirmationId, "--json"],
+          {
+            timeoutMs: 120_000,
+            maxOutputBytes: 10 * 1024 * 1024,
+            codeOwnedBrowserRequest: { kind: "profile-confirm" },
+          },
+        );
+        if (result.exitCode !== 0) {
+          throw agentBrowserFailure(result, "profile agent-browser confirmation");
+        }
+        return parseLastJsonWithExactLaunchHashes(result.stdout);
+      },
+    ));
+    onCommandCompleted?.(command);
+  }
+  return completed;
+}
+
+/** Deterministic profile-result seam used by the command runner and its safety tests. */
+export async function completeProfileDerivationBatchCommand(
+  record: unknown,
+  command: readonly string[],
+  invokeConfirmation: (confirmation: ProfileDerivationConfirmation) => Promise<unknown>,
+): Promise<Record<string, unknown>> {
+  const data = guardBrowserResult(record, command);
+  const requiresConfirmation = commandCanMutate(command);
+  if ("lifecycle" in data) {
+    if (requiresConfirmation) {
+      // A completed mutation means the remote effect may already exist even
+      // though the required confirmation protocol was bypassed. Classify it
+      // as one-shot indeterminate so no caller can safely retry it.
+      throw new IndeterminateDerivationConfirmationError("profile");
+    }
+    guardBrowserLifecycle(data.lifecycle, false);
+    return record as Record<string, unknown>;
+  }
+  if (!requiresConfirmation) {
+    throw new Error("read-only profile derivation browser command requested confirmation");
+  }
+  const confirmedData = await confirmProfileDerivationMutationOnce(
+    [record],
+    command,
+    invokeConfirmation,
+  );
+  return { command, error: null, result: confirmedData, success: true };
+}
+
 async function pinnedRawBatch(
   session: DerivationSession,
   commands: readonly (readonly string[])[],
   pin: DerivationBrowserPin & { readonly browserIdentity: DerivationGuardBrowserIdentity },
   expectedPageUrl: string,
+  onCommandCompleted?: (command: readonly string[]) => void,
 ): Promise<readonly Record<string, unknown>[]> {
   const completed: Record<string, unknown>[] = [];
   for (const command of commands) {
@@ -2084,10 +2310,11 @@ async function pinnedRawBatch(
         result: confirmedData,
         success: true,
       });
+      onCommandCompleted?.(command);
       continue;
     }
     if (requiresConfirmation) {
-      throw new Error("mutating pinned derivation browser command bypassed confirmation");
+      throw new IndeterminateDerivationConfirmationError();
     }
     exactGuardBrowserIdentity([guardBrowserLifecycle(data.lifecycle, false)], pin.browserIdentity);
     if (
@@ -2096,6 +2323,7 @@ async function pinnedRawBatch(
       && data.cdpUrl !== pin.cdpUrl
     ) throw new Error("pinned derivation browser returned a different private CDP URL");
     completed.push(record);
+    onCommandCompleted?.(command);
   }
   return completed;
 }
@@ -2446,9 +2674,15 @@ async function initializeContainedNetworkGuard(session: DerivationSession): Prom
 async function batch(
   session: DerivationSession,
   commands: readonly (readonly string[])[],
+  onCommandCompleted?: (command: readonly string[]) => void,
 ): Promise<readonly Record<string, unknown>[]> {
   const context = await verifyContainedNetworkGuard(session);
-  if (context === null) return rawBatch(session, commands);
+  if (context === null) {
+    // Unguarded legacy sessions use the same exact pending-confirmation
+    // protocol as profile-backed sessions. Never let a raw mutating batch
+    // bypass that parser merely because it has no selected profile path.
+    return profileRawBatch(session, commands, onCommandCompleted);
+  }
   const pinContext = await privateDerivationPinnedBrowserContext(session, context);
   return pinnedRawBatch(session, commands, {
     sessionName: derivationPinSessionName(session),
@@ -2456,7 +2690,7 @@ async function batch(
     browserIdentity: pinContext.browserIdentity,
     confirmationAction: null,
     daemonOwner: null,
-  }, pinContext.currentUrl);
+  }, pinContext.currentUrl, onCommandCompleted);
 }
 
 function parseActiveDerivationBrowserDaemon(
@@ -3893,6 +4127,72 @@ export function resolveDerivationFixedUploadInputTarget(
   return fixedInputSelector;
 }
 
+/** Executes one upload batch without weakening an ambiguous mutation result. */
+export async function runDerivationFixtureUploadBatch(
+  mode: "upload" | "upload-and-seal",
+  invoke: () => Promise<readonly Record<string, unknown>[]>,
+  directory: string,
+  fixtures: readonly DerivationFixture[],
+): Promise<readonly Record<string, unknown>[]> {
+  try {
+    return await invoke();
+  } catch (error) {
+    // Once a profile or pinned confirmation was attempted, neither fixture
+    // revalidation nor diagnostic redaction may turn the result into an
+    // ordinary retryable error.
+    if (error instanceof IndeterminateDerivationConfirmationError) throw error;
+    for (const fixture of fixtures) assertDerivationFixtureFile(directory, fixture);
+    if (mode === "upload-and-seal") {
+      throw new Error("managed browser could not upload and seal the staged derivation fixture");
+    }
+    let detail = error instanceof Error ? error.message : "";
+    detail = detail.replaceAll(directory, "<private-derivation>");
+    for (const fixture of fixtures) {
+      detail = detail
+        .replaceAll(`./${fixture.fileName}`, fixture.reference)
+        .replaceAll(fixture.fileName, fixture.reference);
+    }
+    if (
+      detail.length < 1
+      || detail.length > 1_000
+      || /[\u0000-\u001f\u007f]/u.test(detail)
+      || detail.includes("/Users/")
+      || detail.includes("/private/")
+      || detail.includes("/tmp/")
+      || detail.includes("\\")
+    ) detail = "";
+    throw new Error(`managed browser could not upload the staged derivation fixture${detail === "" ? "" : `: ${detail}`}`);
+  }
+}
+
+/** Keeps every failure after a confirmed mutation permanently non-retryable. */
+export async function runDerivationMutationWindow<T>(
+  kind: "pinned" | "profile",
+  invoke: (markMutationMayHaveApplied: () => void) => Promise<T>,
+  containFailure: (error: unknown) => Promise<unknown> = async (error) => error,
+): Promise<T> {
+  let mutationMayHaveApplied = false;
+  try {
+    return await invoke(() => {
+      mutationMayHaveApplied = true;
+    });
+  } catch (error) {
+    let failure: unknown;
+    try {
+      failure = await containFailure(error);
+    } catch (containmentError) {
+      failure = containmentError;
+    }
+    if (
+      mutationMayHaveApplied
+      && !(failure instanceof IndeterminateDerivationConfirmationError)
+    ) {
+      throw new IndeterminateDerivationConfirmationError(kind);
+    }
+    throw failure;
+  }
+}
+
 export async function runDerivationBrowserCommand(
   id: string,
   command: readonly string[],
@@ -3935,11 +4235,20 @@ export async function runDerivationBrowserCommand(
       // redact the private derivation directory below.
       return join(session.directory, fixture.fileName);
     });
-    try {
+    return runDerivationMutationWindow(
+      session.profilePath === null ? "pinned" : "profile",
+      async (markMutationMayHaveApplied) => {
+      const trackedBatch = (commands: readonly (readonly string[])[]) => batch(
+        session,
+        commands,
+        (completedCommand) => {
+          if (commandCanMutate(completedCommand)) markMutationMayHaveApplied();
+        },
+      );
       if (commandCanMutate(command)) await assertDerivationOrigin(session);
       if (command[0] === "cleartext") {
         const reference = command[1] ?? "";
-        await batch(session, [["fill", reference, ""]]);
+        await trackedBatch([["fill", reference, ""]]);
         await assertDerivationOrigin(session);
         return { cleared: reference };
       }
@@ -3948,7 +4257,7 @@ export async function runDerivationBrowserCommand(
         if (currentUrl.origin !== session.targetOrigin) {
           throw new Error(`derivation left its target origin: ${currentUrl.origin}`);
         }
-        const [cdpRecord] = await batch(session, [["get", "cdp-url"]]);
+        const [cdpRecord] = await trackedBatch([["get", "cdp-url"]]);
         const cdpData = cdpRecord === undefined ? null : browserResultData(cdpRecord);
         const cdpUrl = typeof cdpData === "object" && cdpData !== null && !Array.isArray(cdpData)
           ? localBrowserCdpUrl((cdpData as Record<string, unknown>).cdpUrl)
@@ -3956,12 +4265,12 @@ export async function runDerivationBrowserCommand(
         await uploadThroughInterceptedFileChooser({
           cdpUrl,
           click: async () => {
-            await batch(session, [["click", command[1] ?? ""]]);
+            await trackedBatch([["click", command[1] ?? ""]]);
           },
           currentUrl: currentUrl.href,
           filePaths: fixturePaths,
         });
-        await batch(session, [["wait", String(uploadSettlingDelayMs)]]);
+        await trackedBatch([["wait", String(uploadSettlingDelayMs)]]);
         for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
         await assertDerivationOrigin(session);
         return { attachedFiles: requestedFixtures.length };
@@ -3969,7 +4278,7 @@ export async function runDerivationBrowserCommand(
       let uploadTarget = command[1] ?? "";
       const fixedInputSelector = derivationFixedUploadInputSelector(uploadTarget);
       if (uploadAction && fixedInputSelector !== null) {
-        const [countRecord] = await batch(session, [["get", "count", fixedInputSelector]]);
+        const [countRecord] = await trackedBatch([["get", "count", fixedInputSelector]]);
         const countData = countRecord === undefined ? null : browserResultData(countRecord);
         uploadTarget = resolveDerivationFixedUploadInputTarget(uploadTarget, countData);
       }
@@ -3977,17 +4286,16 @@ export async function runDerivationBrowserCommand(
         ? ["upload", uploadTarget, ...fixturePaths]
         : command;
       if (command[0] === "upload-and-seal") {
-        let records: readonly Record<string, unknown>[];
-        try {
-          records = await batch(session, [
+        const records = await runDerivationFixtureUploadBatch(
+          "upload-and-seal",
+          () => trackedBatch([
             browserCommand,
             ["wait", String(uploadSettlingDelayMs)],
             ["network", "har", "stop", "capture.har"],
-          ]);
-        } catch {
-          for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
-          throw new Error("managed browser could not upload and seal the staged derivation fixture");
-        }
+          ]),
+          session.directory,
+          requestedFixtures,
+        );
         for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
         if (!hasCapturedHar(session, environment)) {
           throw new Error("managed browser upload completed without a sealed derivation recorder");
@@ -3999,54 +4307,41 @@ export async function runDerivationBrowserCommand(
         };
       }
       let record: Record<string, unknown> | undefined;
-      try {
+      if (uploadAction) {
         // Keep the pinned browser batch alive while page code consumes the
         // selected File and settles its first-party upload. Ending the batch
         // immediately after setInputFiles can abort a deferred request even
         // though the page already rendered a local blob preview.
-        const records = await batch(
-          session,
-          uploadAction
-            ? [browserCommand, ["wait", String(uploadSettlingDelayMs)]]
-            : [browserCommand],
+        const records = await runDerivationFixtureUploadBatch(
+          "upload",
+          () => trackedBatch([browserCommand, ["wait", String(uploadSettlingDelayMs)]]),
+          session.directory,
+          requestedFixtures,
         );
         [record] = records;
-      } catch (error) {
-        for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
-        if (uploadAction) {
-          let detail = error instanceof Error ? error.message : "";
-          detail = detail.replaceAll(session.directory, "<private-derivation>");
-          for (const fixture of requestedFixtures) {
-            detail = detail
-              .replaceAll(`./${fixture.fileName}`, fixture.reference)
-              .replaceAll(fixture.fileName, fixture.reference);
-          }
-          if (
-            detail.length < 1
-            || detail.length > 1_000
-            || /[\u0000-\u001f\u007f]/u.test(detail)
-            || detail.includes("/Users/")
-            || detail.includes("/private/")
-            || detail.includes("/tmp/")
-            || detail.includes("\\")
-          ) detail = "";
-          throw new Error(`managed browser could not upload the staged derivation fixture${detail === "" ? "" : `: ${detail}`}`);
-        }
-        throw error;
+      } else {
+        const records = await trackedBatch([browserCommand]);
+        [record] = records;
       }
       for (const fixture of requestedFixtures) assertDerivationFixtureFile(session.directory, fixture);
       await assertDerivationOrigin(session);
       const data = record === undefined ? null : browserResultData(record);
       return command[0] === "network" ? sanitizeDerivationNetworkResult(data) : data;
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("left its target origin")) {
+      },
+      async (error) => {
+        if (!(error instanceof Error) || !error.message.includes("left its target origin")) {
+          return error;
+        }
         if (!await closeSession(session, environment)) {
-          throw new Error(`derivation ${id} left its target origin and could not be closed; its private session was preserved`, { cause: error });
+          return new Error(
+            `derivation ${id} left its target origin and could not be closed; its private session was preserved`,
+            { cause: error },
+          );
         }
         removeSessionTrees(session, environment);
-      }
-      throw error;
-    }
+        return error;
+      },
+    );
   });
 }
 
@@ -4113,15 +4408,47 @@ async function sealDerivationReview(
   return { seal: persisted, text: readSealedReviewHar(session, persisted) };
 }
 
+function admittedDerivationReviewOrigin(
+  session: DerivationSession,
+  reviewOriginValue: string | undefined,
+): string {
+  if (reviewOriginValue === undefined) return session.targetOrigin;
+  let reviewOrigin: URL;
+  try {
+    if (reviewOriginValue.length > 4_096) throw new Error("oversized origin");
+    reviewOrigin = new URL(reviewOriginValue);
+  } catch {
+    throw new Error("derive review --review-origin must be an exact HTTPS origin");
+  }
+  if (
+    reviewOrigin.protocol !== "https:"
+    || reviewOrigin.username !== ""
+    || reviewOrigin.password !== ""
+    || reviewOrigin.origin !== reviewOriginValue
+  ) {
+    throw new Error("derive review --review-origin must be an exact HTTPS origin");
+  }
+  if (!browserDomainsCover(session.browserDomains, reviewOrigin.hostname.toLowerCase())) {
+    throw new Error(
+      "derive review --review-origin was not admitted by the derivation start-time browser domains",
+    );
+  }
+  return reviewOrigin.origin;
+}
+
 export async function reviewDerivation(
   id: string,
   selection: DerivationReviewSelection,
   environment: Readonly<Record<string, string | undefined>> = process.env,
+  reviewOriginValue?: string,
 ): Promise<DerivationReviewResult> {
   return withDerivationLifecycleGate(id, environment, async () => {
     const session = loadSession(id, environment);
+    // Reject caller-selected origins before stopping or sealing the recorder.
+    // Admission comes only from immutable start-time session metadata.
+    const reviewOrigin = admittedDerivationReviewOrigin(session, reviewOriginValue);
     const sealed = await sealDerivationReview(session, environment);
-    return reviewDerivationHarText(sealed.text, session.targetOrigin, selection);
+    return reviewDerivationHarText(sealed.text, reviewOrigin, selection);
   });
 }
 

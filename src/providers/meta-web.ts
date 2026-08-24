@@ -199,13 +199,13 @@ export const META_WEB_OPERATIONS = Object.freeze({
     ),
     "media.publish": captureRequired(
       "media.publish",
-      "the current Instagram consumer-web MP4 initialization, transfer, processing, configure response, authored-target binding, and independent publication readback require an authorized fixture",
-      2,
+      "one exact plan-bound MP4 and JPEG cover can reach one configure POST, but the observed first response was 202 without an accepted target; no safe retry or independent upload-ID reconciliation contract is proven",
+      3,
     ),
-    "content.delete": captureRequired(
-      "content.delete",
-      "exact authored-video pre-read, actor/caption/kind binding, deletion response, and independent exact-target absence require an authorized fixture",
-      1,
+    "content.delete": observedMutation(
+      "R3",
+      "two exact authored-video pre-reads bind actor, caption, kind, full media ID, and shortcode before one delete POST; did_delete acknowledgement and the exact authenticated soft-200 removal marker verify deletion",
+      2,
     ),
     "profiles.read": observed(
       "live direct target-bound /api/v1/users/web_profile_info JSON with exact current-viewer ID binding and exact follower, following, and post counts",

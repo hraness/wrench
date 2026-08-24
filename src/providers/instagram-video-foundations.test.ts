@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { appendFile, mkdtemp, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 import type { BrowserFileResolver } from "../browser";
@@ -48,7 +48,14 @@ function isoBox(type: string, ...payloads: readonly Uint8Array[]): Buffer {
   return bytes;
 }
 
-function videoFixture(majorBrand = "isom"): Buffer {
+function videoFixture(
+  majorBrand = "isom",
+  options: Readonly<{
+    durationUnits?: number;
+    includeMediaHeader?: boolean;
+    timescale?: number;
+  }> = {},
+): Buffer {
   const fileType = Buffer.alloc(16);
   fileType.write(majorBrand, 0, 4, "ascii");
   fileType.writeUInt32BE(0x200, 4);
@@ -62,6 +69,16 @@ function videoFixture(majorBrand = "isom"): Buffer {
   track.writeUInt32BE(540 * 65_536, 80);
   const handler = Buffer.alloc(12);
   handler.write("vide", 8, 4, "ascii");
+  const mediaHeader = Buffer.alloc(24);
+  mediaHeader.writeUInt32BE(options.timescale ?? 1_000, 12);
+  mediaHeader.writeUInt32BE(options.durationUnits ?? 8_000, 16);
+  const media = options.includeMediaHeader === false
+    ? isoBox("mdia", isoBox("hdlr", handler))
+    : isoBox(
+        "mdia",
+        isoBox("hdlr", handler),
+        isoBox("mdhd", mediaHeader),
+      );
   return Buffer.concat([
     isoBox("ftyp", fileType),
     isoBox(
@@ -69,7 +86,7 @@ function videoFixture(majorBrand = "isom"): Buffer {
       isoBox(
         "trak",
         isoBox("tkhd", track),
-        isoBox("mdia", isoBox("hdlr", handler)),
+        media,
       ),
     ),
     isoBox("mdat", Buffer.from([1, 2, 3, 4])),
@@ -83,6 +100,7 @@ function publishInput(
     audience: "default",
     caption: "Disposable Wrench Instagram video fixture",
     media: { kind: "file", reference: "plan-video-1" },
+    thumbnail: { kind: "file", reference: "plan-thumbnail-1" },
     ...overrides,
   } as OperationInput;
 }
@@ -116,7 +134,12 @@ async function withFixture<T>(
 ): Promise<T> {
   const directory = await mkdtemp(join(tmpdir(), "wrench-instagram-video-test-"));
   const path = join(directory, "fixture.mp4");
+  const thumbnailPath = join(directory, "fixture.jpg");
   await writeFile(path, bytes);
+  await writeFile(thumbnailPath, Buffer.from([
+    0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x02, 0x1c, 0x03,
+    0xc0, 0x01, 0x01, 0x11, 0x00, 0xff, 0xda, 0xff, 0xd9,
+  ]));
   try {
     return await run(path, directory);
   } finally {
@@ -130,6 +153,7 @@ describe("Instagram video capture-neutral foundations", () => {
       audience: "default",
       caption: "Disposable Wrench Instagram video fixture",
       media: { kind: "file", reference: "plan-video-1" },
+      thumbnail: { kind: "file", reference: "plan-thumbnail-1" },
     });
   });
 
@@ -137,32 +161,77 @@ describe("Instagram video capture-neutral foundations", () => {
     const fixture = videoFixture();
     await withFixture(fixture, async (path) => {
       const resolver: BrowserFileResolver = (files) => {
-        expect(files).toEqual([{ kind: "file", reference: "plan-video-1" }]);
-        return Promise.resolve([path]);
+        expect(files).toEqual([
+          { kind: "file", reference: "plan-video-1" },
+          { kind: "file", reference: "plan-thumbnail-1" },
+        ]);
+        return Promise.resolve([path, join(dirname(path), "fixture.jpg")]);
       };
       const result = await materializeInstagramVideoPublishInput(
         publishInput(),
         resolver,
       );
-      expect({ ...result, bytes: undefined }).toEqual({
+      expect({ ...result, bytes: undefined, thumbnailBytes: undefined }).toEqual({
         audience: "default",
         byteLength: fixture.byteLength,
         bytes: undefined,
         caption: "Disposable Wrench Instagram video fixture",
+        durationMilliseconds: 8_000,
         height: 540,
         mediaType: "video/mp4",
         mediaSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        thumbnailByteLength: 19,
+        thumbnailBytes: undefined,
+        thumbnailHeight: 540,
+        thumbnailMediaType: "image/jpeg",
+        thumbnailSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        thumbnailWidth: 960,
         width: 960,
       });
       expect(result.bytes).toEqual(new Uint8Array(fixture));
     });
   });
 
+  test("requires mdhd duration and enforces the exact 1 ms through 24 hour bound", async () => {
+    for (const [durationUnits, timescale, expectedMilliseconds] of [
+      [1, 1_000, 1],
+      [86_400_000, 1_000, 86_400_000],
+    ] as const) {
+      await withFixture(videoFixture("isom", {
+        durationUnits,
+        timescale,
+      }), async (path) => {
+        const binding = await materializeInstagramVideoPublishInput(
+          publishInput(),
+          () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
+        );
+        expect(binding.durationMilliseconds).toBe(expectedMilliseconds);
+      });
+    }
+
+    for (const [fixture, message] of [
+      [videoFixture("isom", { includeMediaHeader: false }), "exactly one mdhd box"],
+      [videoFixture("isom", { durationUnits: 1, timescale: 2_000 }), "duration is outside the reviewed bound"],
+      [videoFixture("isom", { durationUnits: 86_400_001 }), "duration is outside the reviewed bound"],
+      [videoFixture("isom", {
+        durationUnits: 4_294_944_001,
+        timescale: 49_710,
+      }), "duration is outside the reviewed bound"],
+    ] as const) {
+      await withFixture(fixture, async (path) => {
+        await expect(materializeInstagramVideoPublishInput(
+          publishInput(),
+          () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
+        )).rejects.toThrow(message);
+      });
+    }
+  });
+
   test("admits the 128 MiB sparse boundary and rejects the next byte before reading", async () => {
     const maximumBytes = 128 * 1024 * 1024;
     for (const [size, expectedRuns, expectedMessage] of [
       [maximumBytes, 4, "test blocked sparse-file read after admission"],
-      [maximumBytes + 1, 3, "128 MiB in-memory publish limit"],
+      [maximumBytes + 1, 3, "reviewed in-memory bound"],
     ] as const) {
       const directory = await mkdtemp(join(tmpdir(), "wrench-instagram-video-cap-test-"));
       const path = join(directory, "sparse.mp4");
@@ -185,7 +254,7 @@ describe("Instagram video capture-neutral foundations", () => {
       try {
         await expect(materializeInstagramVideoPublishInput(
           publishInput(),
-          () => Promise.resolve([path]),
+          () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
           deadline,
         )).rejects.toThrow(expectedMessage);
         expect(runs).toBe(expectedRuns);
@@ -200,17 +269,28 @@ describe("Instagram video capture-neutral foundations", () => {
     await withFixture(fixture, async (path) => {
       const binding = await materializeInstagramVideoPublishInput(
         publishInput(),
-        () => Promise.resolve([path]),
+        () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
       );
       const dispatchSnapshot = revalidateInstagramVideoPublishBindingForDispatch(binding);
-      expect({ ...dispatchSnapshot, body: undefined }).toEqual({
+      expect({
+        ...dispatchSnapshot,
+        body: undefined,
+        thumbnailBody: undefined,
+      }).toEqual({
         audience: binding.audience,
         body: undefined,
         byteLength: binding.byteLength,
         caption: binding.caption,
+        durationMilliseconds: binding.durationMilliseconds,
         height: binding.height,
         mediaSha256: binding.mediaSha256,
         mediaType: binding.mediaType,
+        thumbnailBody: undefined,
+        thumbnailByteLength: binding.thumbnailByteLength,
+        thumbnailHeight: binding.thumbnailHeight,
+        thumbnailMediaType: binding.thumbnailMediaType,
+        thumbnailSha256: binding.thumbnailSha256,
+        thumbnailWidth: binding.thumbnailWidth,
         width: binding.width,
       });
       expect(dispatchSnapshot).not.toHaveProperty("bytes");
@@ -248,10 +328,11 @@ describe("Instagram video capture-neutral foundations", () => {
     await withFixture(fixture, async (path) => {
       const binding = await materializeInstagramVideoPublishInput(
         publishInput(),
-        () => Promise.resolve([path]),
+        () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
       );
       for (const [value, message] of [
         [{ ...binding, byteLength: binding.byteLength + 1 }, "changed from its exact bytes"],
+        [{ ...binding, durationMilliseconds: binding.durationMilliseconds + 1 }, "changed from its exact bytes"],
         [{ ...binding, mediaSha256: "0".repeat(64) }, "changed from its exact bytes"],
         [{ ...binding, width: binding.width + 1 }, "changed from its exact bytes"],
         [{ ...binding, audience: "friends" }, "declarations are invalid"],
@@ -360,7 +441,7 @@ describe("Instagram video capture-neutral foundations", () => {
     await withFixture(videoFixture(), async (path) => {
       const binding = await materializeInstagramVideoPublishInput(
         publishInput(),
-        () => Promise.resolve([path]),
+        () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
       );
 
       const disguisedBacking = new SharedArrayBuffer(binding.byteLength);
@@ -413,13 +494,13 @@ describe("Instagram video capture-neutral foundations", () => {
     await withFixture(videoFixture("qt  "), async (path) => {
       await expect(materializeInstagramVideoPublishInput(
         publishInput(),
-        () => Promise.resolve([path]),
+        () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
       )).rejects.toThrow("not MP4-compatible");
     });
     await withFixture(Buffer.alloc(32), async (path) => {
       await expect(materializeInstagramVideoPublishInput(
         publishInput(),
-        () => Promise.resolve([path]),
+        () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
       )).rejects.toThrow("MP4 file-type box");
     });
     await withFixture(videoFixture(), async (path, directory) => {
@@ -449,7 +530,7 @@ describe("Instagram video capture-neutral foundations", () => {
       };
       await expect(materializeInstagramVideoPublishInput(
         publishInput(),
-        () => Promise.resolve([path]),
+        () => Promise.resolve([path, join(dirname(path), "fixture.jpg")]),
         deadline,
       )).rejects.toThrow("changed while it was materialized");
     });
@@ -470,7 +551,7 @@ describe("Instagram video capture-neutral foundations", () => {
         expected_caption: "Disposable Wrench Instagram video fixture",
         expected_media_kind: "video",
         media_id: "0900_12345",
-      }, "canonical Instagram media ID"],
+      }, "full Instagram media ID"],
       [{
         expected_caption: "Disposable Wrench Instagram video fixture",
         expected_media_kind: "image",
@@ -511,8 +592,7 @@ describe("Instagram video capture-neutral foundations", () => {
     expect(identifier).toBe(canonicalJson(target));
     expect(parseInstagramVideoAcceptedTargetIdentifier(identifier)).toEqual(target);
     expect(INSTAGRAM_VIDEO_CAPTURE_BLOCKERS).toEqual({
-      "content.delete": "exact delete route segment and fourth response field name",
-      "media.publish": "exact Comet form-field and header closure",
+      "media.publish": expect.stringContaining("202"),
     });
   });
 

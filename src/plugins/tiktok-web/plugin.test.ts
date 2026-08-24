@@ -50,5 +50,6 @@ describe("TikTok provider plugin", () => {
       "expected_caption",
       "post_id",
     ]);
+    expect(binding.reconcile).toBeUndefined();
   });
 });
