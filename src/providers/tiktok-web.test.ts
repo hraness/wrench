@@ -10,6 +10,7 @@ import {
   normalizeTikTokWebFeedResponse,
   parseTikTokWebProfileResponse,
   parseTikTokWebViewerResponse,
+  tiktokWebDisposableVideoLifecycleEvidenceSnapshot,
   tiktokWebDirectEvidenceSnapshot,
   tiktokWebHeaderSinkPolicy,
 } from "./tiktok-web";
@@ -151,6 +152,69 @@ describe("TikTok internal-web operation registry", () => {
     for (const operation of ["likes.set", "content.save", "relationships.follow.set"] as const) {
       expect(TIKTOK_WEB_OPERATIONS[operation].risk).toBe("R2");
     }
+  });
+
+  test("records the disposable video lifecycle without promoting missing proof transports", () => {
+    expect(tiktokWebDisposableVideoLifecycleEvidenceSnapshot).toMatchObject({
+      role: "live-authorized-disposable-cycle",
+      observedOn: "2026-08-24",
+      origin: "https://www.tiktok.com",
+      media: {
+        mediaType: "video/mp4",
+        binding: "exact-plan-bound-private-fixture",
+        audience: "private",
+      },
+      publish: {
+        applyCommitCycles: 2,
+        projectCreate: "POST /tiktok/web/project/post/v1/ HTTP 200",
+      },
+      recycle: {
+        mutation: {
+          request: "POST /tiktok/post/edit/v1/ HTTP 200",
+          scene: 1,
+          deleteType: 1,
+        },
+        readback: {
+          absenceProven: false,
+          contentListMissProvesAbsence: false,
+          providerRecycleFolder: "app-only",
+        },
+      },
+      executableAudit: {
+        containedBrowser: { state: "insufficient" },
+        mediaPublish: { state: "capture-required" },
+        contentDelete: { state: "capture-required" },
+      },
+    });
+    expect(TIKTOK_WEB_OPERATIONS["media.publish"]).toMatchObject({
+      state: "capture-required",
+      evidence: "first-party-bundle",
+    });
+    expect(TIKTOK_WEB_OPERATIONS["content.delete"]).toMatchObject({
+      state: "capture-required",
+      evidence: "live-har",
+    });
+    expect(TIKTOK_WEB_OPERATIONS["media.publish"].reason).toContain(
+      "observed TOS traffic differs",
+    );
+    expect(TIKTOK_WEB_OPERATIONS["content.delete"].reason).toContain(
+      "ACrawler/ZTI",
+    );
+
+    const serialized = JSON.stringify(tiktokWebDisposableVideoLifecycleEvidenceSnapshot);
+    for (const forbidden of [
+      '"itemId"',
+      '"projectId"',
+      '"actor"',
+      '"caption"',
+      "sessionid",
+      "msToken",
+      "authorization",
+      "signed_url",
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+    expect(serialized).not.toMatch(/\b[0-9]{16,32}\b/u);
   });
 });
 

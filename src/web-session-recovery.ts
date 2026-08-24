@@ -286,19 +286,23 @@ function resolveOperation(
   return resolution;
 }
 
-function providerAcceptedTargetReconciliationContext(
+function providerBoundTargetReconciliationContext(
   receipt: Extract<RunReceipt, { readonly schemaVersion: 4 }>,
   capsule: RecoveryCapsule,
   resolution: ProviderPluginOperationResolutionV1,
   input: OperationInput,
   environment: Environment,
 ): ProviderPluginReconciliationContextV1 | undefined {
+  const reconciliation = resolution.operation.reconciliation;
   if (
-    resolution.operation.reconciliation?.kind
-      !== "provider-accepted-target-presence"
+    reconciliation?.kind !== "provider-accepted-target-presence"
+    && reconciliation?.kind !== "provider-bound-target-desired-state"
   ) {
     return undefined;
   }
+  const targetKind = reconciliation.kind === "provider-accepted-target-presence"
+    ? "provider-accepted"
+    : "provider-bound";
   if (
     receipt.dispatchStarted !== true
     || receipt.dispatch.planned !== 1
@@ -307,7 +311,7 @@ function providerAcceptedTargetReconciliationContext(
     || receipt.dispatch.verified > 1
   ) {
     throw new Error(
-      "provider-accepted target reconciliation requires one exact started dispatch",
+      `${targetKind} target reconciliation requires one exact started dispatch`,
     );
   }
   const plannedDispatches = runProviderPluginPlanConformance(
@@ -317,7 +321,7 @@ function providerAcceptedTargetReconciliationContext(
   const plannedDispatch = plannedDispatches[0];
   if (plannedDispatches.length !== 1 || plannedDispatch === undefined) {
     throw new Error(
-      "provider-accepted target reconciliation requires one exact confirmed dispatch",
+      `${targetKind} target reconciliation requires one exact confirmed dispatch`,
     );
   }
   const dispatch = Object.freeze({
@@ -332,12 +336,14 @@ function providerAcceptedTargetReconciliationContext(
   );
   if (evidence === null) {
     throw new Error(
-      "this provider-accepted target run has no encrypted response-derived target and is not safely reconcilable",
+      reconciliation.kind === "provider-accepted-target-presence"
+        ? "this provider-accepted target run has no encrypted response-derived target and is not safely reconcilable"
+        : "this provider-bound target run has no encrypted exact pre-dispatch target and is not safely reconcilable",
     );
   }
   return Object.freeze({
     schemaVersion: 1,
-    kind: "provider-accepted-target-presence",
+    kind: reconciliation.kind,
     dispatch,
     target: evidence.target,
   });
@@ -376,7 +382,7 @@ function selectReconciliation(
       );
     }
     const reconciliationContext =
-      providerAcceptedTargetReconciliationContext(
+      providerBoundTargetReconciliationContext(
         receipt,
         capsule,
         resolution,
@@ -596,7 +602,9 @@ export async function reconcileWebSessionRun(
   }
   const desired = reconciliation.kind === "boolean-desired-state"
     ? reconciliation.desiredState(selected.input)
-    : true;
+    : reconciliation.kind === "provider-accepted-target-presence"
+      ? true
+      : reconciliation.desiredState;
   if (typeof desired !== "boolean") {
     throw new Error(
       "provider plugin reconciliation desired state is invalid",

@@ -10,6 +10,7 @@ import { tiktokMp4Metadata } from "./tiktok-video-mp4";
 import { revalidateTikTokVideoPublishBindingForDispatch } from "./tiktok-web-runtime";
 
 const POST_ID = "7491234567890123456";
+const PROJECT_ID = "project-1";
 const TIKTOK_COMPATIBLE_MP4_BRANDS = new Set([
   "M4V ",
   "MSNV",
@@ -111,21 +112,30 @@ const unknownMp4Brand = fc.array(
 ).map((characters) => characters.join(""))
   .filter((brand) => !TIKTOK_COMPATIBLE_MP4_BRANDS.has(brand));
 
-const opaquePermission = fc.dictionary(
-  fc.string({ minLength: 1, maxLength: 16 })
-    .filter((key) => key !== "is_recyclable"),
-  fc.jsonValue(),
-  { maxKeys: 6 },
+const permissionCode = fc.integer({ min: 0, max: 1_000_000 });
+const exactPermission = fc.record({
+  biz_reason: permissionCode,
+  biz_status: permissionCode,
+  biz_type: permissionCode,
+});
+const exactPermissionWithoutTrue = fc.oneof(
+  exactPermission,
+  exactPermission.map((permission) => ({ ...permission, is_recyclable: false })),
 );
 
-test("property: TikTok recyclable permission is selected uniquely across heterogeneous JSON objects", () => {
+test("property: TikTok recyclable permission is selected uniquely across exact permission objects", () => {
   assertProperty(fc.property(
     fc.boolean(),
-    fc.array(opaquePermission, { maxLength: 20 }),
-    fc.array(opaquePermission, { maxLength: 20 }),
-    (recyclable, before, after) => {
+    exactPermission,
+    fc.array(exactPermissionWithoutTrue, { maxLength: 20 }),
+    fc.array(exactPermissionWithoutTrue, { maxLength: 20 }),
+    (recyclable, owner, before, after) => {
       expect(parseTikTokDeletePermissionProjection({
-        biz_permissions: [...before, { is_recyclable: recyclable }, ...after],
+        biz_permissions: [
+          ...before,
+          { ...owner, is_recyclable: recyclable },
+          ...after,
+        ],
       })).toEqual({ recyclable });
     },
   ));
@@ -135,19 +145,62 @@ test("property: TikTok recycle-bin deletion admits only exact true eligibility",
   assertProperty(fc.property(
     fc.jsonValue().filter((value) => value !== true),
     (recyclable) => {
-      expect(() => buildTikTokPublishedPostDeleteBody({ postId: POST_ID, recyclable }))
+      expect(() => buildTikTokPublishedPostDeleteBody({
+        postId: POST_ID,
+        projectId: PROJECT_ID,
+        recyclable,
+      }))
         .toThrow("requires exact is_recyclable true permission");
     },
   ));
 });
 
-test("property: TikTok permission projections reject every missing owner", () => {
+test("property: TikTok normal recycle deletion omits only an undefined project ID", () => {
+  const providerProjectId = fc.array(
+    fc.constantFrom(..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~:@+/=-"),
+    { minLength: 1, maxLength: 128 },
+  ).map((characters) => characters.join(""));
   assertProperty(fc.property(
-    fc.array(opaquePermission, { minLength: 1, maxLength: 64 }),
+    fc.option(providerProjectId, { nil: undefined }),
+    (projectId) => {
+      const body = buildTikTokPublishedPostDeleteBody({
+        postId: POST_ID,
+        projectId,
+        recyclable: true,
+      });
+      expect(body).toEqual({
+        aweme_id: POST_ID,
+        ...(projectId === undefined ? {} : { project_id: projectId }),
+        scene: 1,
+        delete: { delete_type: 1 },
+      });
+      expect(Object.hasOwn(body, "project_id")).toBe(projectId !== undefined);
+    },
+  ));
+});
+
+test("property: TikTok permission projections treat every missing true grant as not recyclable", () => {
+  assertProperty(fc.property(
+    fc.array(exactPermissionWithoutTrue, { minLength: 1, maxLength: 64 }),
     (bizPermissions) => {
-      expect(() => parseTikTokDeletePermissionProjection({
+      expect(parseTikTokDeletePermissionProjection({
         biz_permissions: bizPermissions,
-      })).toThrow("exactly one is_recyclable owner");
+      })).toEqual({ recyclable: false });
+    },
+  ));
+});
+
+test("property: TikTok permission projections reject every unknown permission field", () => {
+  assertProperty(fc.property(
+    exactPermission,
+    fc.string({ minLength: 1, maxLength: 32 }).filter((key) =>
+      !["biz_reason", "biz_status", "biz_type", "is_recyclable"].includes(key)
+    ),
+    fc.jsonValue(),
+    (permission, key, value) => {
+      expect(() => parseTikTokDeletePermissionProjection({
+        biz_permissions: [{ ...permission, [key]: value }],
+      })).toThrow("bundle-proven fields");
     },
   ));
 });

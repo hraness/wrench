@@ -93,6 +93,7 @@ import {
   type WebSessionOperationExecutor,
   type PublicWebSessionOperationExecutor,
   type WebSessionProviderAcceptedMutationTargetEvent,
+  type WebSessionProviderBoundMutationTargetEvent,
 } from "./web-session-execution";
 import {
   withWebSessionCleanupAdmission,
@@ -4022,8 +4023,10 @@ async function runPreparedCore(
       return Promise.reject(new Error("refusing provider dispatch because durable progress could not be stored", { cause: error }));
     }
   };
-  const persistProviderAcceptedMutationTarget = (
-    eventValue: WebSessionProviderAcceptedMutationTargetEvent,
+  const persistProviderBoundMutationTarget = (
+    eventValue:
+      | WebSessionProviderAcceptedMutationTargetEvent
+      | WebSessionProviderBoundMutationTargetEvent,
   ): Promise<void> => {
     const event = foreignDataRecord(eventValue);
     if (
@@ -4092,6 +4095,8 @@ async function runPreparedCore(
     : webSessionOperation
       ? "web-session"
       : reviewedTemplateOperation ? "reviewed-template" : "browser";
+  const exactTargetReconciliationKind =
+    pluginResolution?.operation.reconciliation?.kind;
   const maxOutputBytes = executionOutputLimit(operation);
   const publicWebSessionOperation = webSessionOperation
     && isPublicWebSessionInvocationAuthority(invocation.auth);
@@ -4127,9 +4132,19 @@ async function runPreparedCore(
                 }),
               beforeDispatch: (event) => persistDispatchProgress(event, "starting"),
               ...(isWrite
+                && exactTargetReconciliationKind
+                  === "provider-accepted-target-presence"
                 ? {
                   afterProviderAcceptedMutationTarget:
-                    persistProviderAcceptedMutationTarget,
+                    persistProviderBoundMutationTarget,
+                }
+                : {}),
+              ...(isWrite
+                && exactTargetReconciliationKind
+                  === "provider-bound-target-desired-state"
+                ? {
+                  afterProviderBoundMutationTarget:
+                    persistProviderBoundMutationTarget,
                 }
                 : {}),
               afterDispatchVerified: (event) => persistDispatchProgress(event, "verified"),

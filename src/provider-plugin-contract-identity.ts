@@ -131,9 +131,10 @@ const identities = Object.freeze({
   },
   "meta-web": {
     schemaVersion: 1,
-    pluginVersion: "1.2.0",
-    implementationSha256: "8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101",
+    pluginVersion: "1.3.0",
+    implementationSha256: "cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b",
     legacyCurrentReadImplementationSha256: [
+      "8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101",
       "6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994",
       "af2d809b8a18806c8f36e86660289c219a99eb0799baa42a2afbcfbc428e37c2",
       "5d62645a730274c6dc86dd058886a2eb6b9a8bddf94ba888f017b7294580e452",
@@ -194,8 +195,9 @@ const identities = Object.freeze({
   "tiktok-web": {
     schemaVersion: 1,
     pluginVersion: "1.2.0",
-    implementationSha256: "d92111d5ae92e002310ad201144b7a5cd05ad209cebac2fe2b31c3852cfca1cd",
+    implementationSha256: "59b037c542e5a32290c10a6d16a22e85a1f5b8c7b65d562fda67b6e04364f069",
     legacyCurrentReadImplementationSha256: [
+      "d92111d5ae92e002310ad201144b7a5cd05ad209cebac2fe2b31c3852cfca1cd",
       "d6693ee40e9de8f62a09f44000e7d5005d69715baa50c3034109a381f3c53180",
       "7d7f92ec9bbb5675102dd5cc0d1441334f723e66a7d9f5926e89a163c4cd2989",
       "48f1e574b3e897b51a1ea90bdf26280ae4841d34eaa012e1b9a19e9b42b5e59b",

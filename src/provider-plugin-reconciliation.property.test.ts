@@ -20,7 +20,21 @@ const validContext: ProviderPluginReconciliationContextV1 = Object.freeze({
   }),
 });
 
-test("arbitrary JSON cannot escape accepted-target context parsing", () => {
+const validDeletionContext: ProviderPluginReconciliationContextV1 = Object.freeze({
+  schemaVersion: 1,
+  kind: "provider-bound-target-desired-state",
+  dispatch: Object.freeze({
+    id: "content.delete",
+    index: 1,
+    planned: 1,
+  }),
+  target: Object.freeze({
+    schemaVersion: 1,
+    identifier: "property:post:private-123",
+  }),
+});
+
+test("arbitrary JSON cannot escape exact-target context parsing", () => {
   assertProperty(fc.property(fc.jsonValue(), (value) => {
     try {
       const parsed = parseProviderPluginReconciliationContextV1(value);
@@ -38,23 +52,24 @@ test("arbitrary JSON cannot escape accepted-target context parsing", () => {
   }));
 });
 
-test("accepted-target context rejects every unknown field", () => {
+test("exact-target context rejects every unknown field", () => {
   assertProperty(fc.property(
+    fc.constantFrom(validContext, validDeletionContext),
     fc.constantFrom("context", "dispatch", "target"),
     fc.string({ minLength: 1, maxLength: 64 }),
     fc.jsonValue(),
-    (location, key, value) => {
+    (baseContext, location, key, value) => {
       const selected = location === "context"
-        ? validContext
+        ? baseContext
         : location === "dispatch"
-          ? validContext.dispatch
-          : validContext.target;
+          ? baseContext.dispatch
+          : baseContext.target;
       fc.pre(!Object.hasOwn(selected, key));
       const candidate = location === "context"
-        ? { ...validContext, [key]: value }
+        ? { ...baseContext, [key]: value }
         : location === "dispatch"
-          ? { ...validContext, dispatch: { ...validContext.dispatch, [key]: value } }
-          : { ...validContext, target: { ...validContext.target, [key]: value } };
+          ? { ...baseContext, dispatch: { ...baseContext.dispatch, [key]: value } }
+          : { ...baseContext, target: { ...baseContext.target, [key]: value } };
       expect(() => parseProviderPluginReconciliationContextV1(candidate))
         .toThrow("must contain exactly");
     },

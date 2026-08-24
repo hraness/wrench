@@ -95,8 +95,10 @@ export const wrenchUsage = `Usage:
                        # bounded upload: upload @ref|@single-file-input|@single-image-input|@single-video-input fixture:<n>...
                        # chooser upload: choose-upload @upload-control-ref fixture:<n>...
                        # terminal upload: upload-and-seal @ref|@single-file-input|@single-image-input|@single-video-input fixture:<n>...
-  wrench derive review <derivation-id> [--offset <n> --limit <1-100>] [--json]
-  wrench derive review <derivation-id> --entry <zero-based> [--fixtures -] [--json]
+  wrench derive review <derivation-id> [--review-origin <exact-https-origin>]
+                       [--offset <n> --limit <1-100>] [--json]
+  wrench derive review <derivation-id> --entry <zero-based>
+                       [--review-origin <exact-https-origin>] [--fixtures -] [--json]
   wrench derive finish <derivation-id> --output <directory> [--platform <surface-id>] [--force] [--json]
   wrench derive analyze <har> --adapter <id> --origin <origin> --output <directory> [--platform <surface-id>]
   wrench derive discard <derivation-id> --yes

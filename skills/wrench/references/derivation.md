@@ -235,6 +235,26 @@ printf '%s' '{"target":"known-fixture-value"}' \
   | wrench derive review <id> --entry 0 --fixtures - --json
 ```
 
+Review stays on the derivation target origin by default. If the one operation
+intentionally uses another HTTPS origin, that hostname must have been covered
+by the immutable `--domains` declaration at `derive start`. Select it with one
+canonical exact origin (no path, query, fragment, credentials, or trailing
+slash):
+
+```sh
+wrench derive start example-web https://www.example.com/feed/ \
+  --domains 'www.example.com,upload.example.net' ...
+wrench derive review <id> \
+  --review-origin https://upload.example.net --limit 50 --json
+```
+
+An undeclared origin is rejected before the recorder is stopped or sealed,
+even if traffic for it appears in the private HAR. `--review-origin` changes
+only the exact-origin filter for the same bounded structural review; it does
+not expose raw values, broaden fixture matching, replay traffic, or make the
+cross-origin exchange executable. Each repeat review may select only one
+start-admitted exact origin from the same sealed bytes.
+
 The first review stops and seals the exact inode-bound managed HAR. Browser commands are then disabled; repeat reviews and `finish` consume the same sealed bytes. Fixture values are accepted only through bounded stdin, matched only by exact primitive equality, and the result contains labels and structural locations, never the supplied values. It never performs substring probes. Credential-like query, form, JSON, path, header, cookie, authorization, session, signature, CSRF/XSRF, and token material is opaque. Bounded traversal reports `truncated: true` whenever searchable content was omitted, including oversized URLs, query values, JSON or text, capped parameters or containers, forms, and multipart bodies.
 
 Review cannot replay a request or generate executable transport. Use the returned locations only to implement and test an owned parser and request builder.

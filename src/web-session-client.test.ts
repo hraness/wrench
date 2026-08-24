@@ -315,6 +315,140 @@ describe("authenticated text API transport", () => {
   });
 });
 
+describe("reviewed authenticated JSON response transport", () => {
+  test("preserves one reviewed 202 response without retrying", async () => {
+    let fetches = 0;
+    const client = await createWebSessionClient("https://x.com", auth, {
+      timeoutMs: 1_000,
+      dependencies: {
+        acquireCookies: () => Promise.resolve({ cookies, warnings: [] }),
+        fetch: () => {
+          fetches += 1;
+          return Promise.resolve(new Response('{"processing":true}', {
+            status: 202,
+            headers: { "content-type": "application/json; charset=utf-8" },
+          }));
+        },
+      },
+    });
+
+    const response = await client.requestJsonResponse({
+      url: new URL("https://x.com/i/api/processing"),
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      expectedStatuses: [202],
+      expectedContentTypes: ["application/json"],
+      maxBytes: 1_024,
+    });
+    expect(response).toEqual({ status: 202, value: { processing: true } });
+    expect(Object.isFrozen(response)).toBeTrue();
+    expect(fetches).toBe(1);
+  });
+
+  test("shares requestJson's strict status, content-type, byte, and JSON guards", async () => {
+    const cases = [
+      {
+        label: "status",
+        response: () => new Response('{"ok":true}', {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        maxBytes: 1_024,
+        message: "200/application/json",
+      },
+      {
+        label: "content type",
+        response: () => new Response('{"ok":true}', {
+          status: 202,
+          headers: { "content-type": "text/plain" },
+        }),
+        maxBytes: 1_024,
+        message: "202/text/plain",
+      },
+      {
+        label: "byte bound",
+        response: () => new Response('{"ok":true}', {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        }),
+        maxBytes: 4,
+        message: "reviewed byte limit",
+      },
+      {
+        label: "JSON",
+        response: () => new Response("{", {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        }),
+        maxBytes: 1_024,
+        message: "malformed JSON",
+      },
+    ] as const;
+
+    for (const selected of cases) {
+      const messages: string[] = [];
+      for (const method of ["requestJson", "requestJsonResponse"] as const) {
+        let fetches = 0;
+        const client = await createWebSessionClient("https://x.com", auth, {
+          timeoutMs: 1_000,
+          dependencies: {
+            acquireCookies: () => Promise.resolve({ cookies, warnings: [] }),
+            fetch: () => {
+              fetches += 1;
+              return Promise.resolve(selected.response());
+            },
+          },
+        });
+        const request = {
+          url: new URL(`https://x.com/i/api/${selected.label.replaceAll(" ", "-")}`),
+          method: "POST" as const,
+          headers: { "content-type": "application/json" },
+          body: "{}",
+          expectedStatuses: [202] as const,
+          expectedContentTypes: ["application/json"] as const,
+          maxBytes: selected.maxBytes,
+        };
+        messages.push(await rejectionMessage(
+          method === "requestJson"
+            ? client.requestJson(request)
+            : client.requestJsonResponse(request),
+        ));
+        expect(fetches).toBe(1);
+      }
+      expect(messages[1]).toBe(messages[0]);
+      expect(messages[1]).toContain(selected.message);
+    }
+  });
+
+  test("does not retry a transport failure", async () => {
+    let fetches = 0;
+    const client = await createWebSessionClient("https://x.com", auth, {
+      timeoutMs: 1_000,
+      dependencies: {
+        acquireCookies: () => Promise.resolve({ cookies, warnings: [] }),
+        fetch: () => {
+          fetches += 1;
+          return Promise.reject(new Error("private transport diagnostic"));
+        },
+      },
+    });
+
+    const message = await rejectionMessage(client.requestJsonResponse({
+      url: new URL("https://x.com/i/api/processing"),
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      expectedStatuses: [202],
+      expectedContentTypes: ["application/json"],
+      maxBytes: 1_024,
+    }));
+    expect(message).toContain("failed before a reviewed response");
+    expect(message).not.toContain("private transport diagnostic");
+    expect(fetches).toBe(1);
+  });
+});
+
 describe("reviewed authenticated status transport", () => {
   test("preserves a bounded binary POST body and binds the acquired cookies", async () => {
     const body = new Uint8Array([0, 1, 2, 127, 255]);

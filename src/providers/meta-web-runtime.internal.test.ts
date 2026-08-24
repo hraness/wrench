@@ -15,6 +15,13 @@ import { sealCursorToken } from "../cursor-token";
 import { canonicalJson, sha256, type WebSessionRecipe } from "../model";
 import {
   executeMetaWebOperation,
+  instagramConfigureDispatchDecision,
+  instagramVideoConfigureForm,
+  instagramVideoConfigurePayload,
+  instagramVideoConfigureRequestShape,
+  instagramVideoRequestConfig,
+  instagramVideoUploadId,
+  instagramVideoUploadRequestShape,
   probeMetaWebSubject,
   readInstagramVideoAcceptedMutationTargetPresence,
   readThreadsWebPublishedMutationTarget,
@@ -91,6 +98,23 @@ const facebookMarketplaceMediaStreamKey =
 const instagramHtml = script({
   require: [["PolarisViewer", [], { id: "12345", data: {} }, 1]],
 });
+
+const instagramRemovedHtml = [
+  "<html><head><title>Page not found • Instagram</title></head><body>",
+  "Sorry, this page isn't available.",
+  "The link you followed may be broken, or the page may have been removed.",
+  "Go back to Instagram.",
+  "</body></html>",
+].join("");
+
+const instagramMutationHtml = `${instagramHtml}${script({
+  require: [[
+    "InstagramWebPushInfo",
+    [],
+    { rollout_hash: "rollout-fixture" },
+    1,
+  ]],
+})}`;
 
 const threadsHtml = script({
   require: [
@@ -665,13 +689,15 @@ function threadsMutationCookies(): readonly StrictCookie[] {
 function recipe(
   site: MetaWebSite,
   action: WebSessionRecipe["action"],
-  contractVersion = (
-    site === "instagram" && (
-      action === "comments.read"
-      || action === "feeds.read"
-      || action === "media.publish"
-      || action === "messaging.list"
-    )
+  contractVersion = site === "instagram" && action === "media.publish"
+    ? 3
+    : (
+      site === "instagram" && (
+        action === "comments.read"
+        || action === "content.delete"
+        || action === "feeds.read"
+        || action === "messaging.list"
+      )
   ) || (
     site === "threads" && action === "feeds.read"
   ) || (
@@ -903,6 +929,270 @@ function issueMarketplaceCursorWithHistory(
     environment,
   );
 }
+
+describe("capture-neutral Instagram video request facts", () => {
+  const uploadId = "1786923725481";
+  const caption = "Synthetic Instagram protocol fixture";
+  const csrfToken = "csrf-fixture";
+  const requestConfig = Object.freeze({ rolloutHash: "rollout-fixture" });
+  const upload = Object.freeze({
+    byteLength: 400_123,
+    durationMilliseconds: 7_321,
+    height: 359,
+    mediaType: "video/mp4" as const,
+    width: 641,
+  });
+
+  test("parses exactly one bounded rollout hash from the established bootstrap module", () => {
+    const html = script({
+      require: [[
+        "InstagramWebPushInfo",
+        [],
+        { rollout_hash: requestConfig.rolloutHash },
+        1,
+      ]],
+    });
+    const parsed = instagramVideoRequestConfig(html);
+    expect(parsed).toEqual(requestConfig);
+    expect(Object.isFrozen(parsed)).toBeTrue();
+
+    expect(() => instagramVideoRequestConfig(`${html}${html}`))
+      .toThrow("one exact InstagramWebPushInfo configuration");
+    for (const value of ["", "contains space", "line\nbreak", "x".repeat(257)]) {
+      expect(() => instagramVideoRequestConfig(script({
+        require: [["InstagramWebPushInfo", [], { rollout_hash: value }, 1]],
+      }))).toThrow("rollout hash is invalid");
+    }
+  });
+
+  test("derives only one canonical 13-digit upload ID", () => {
+    expect(instagramVideoUploadId(() => 1_786_923_725_481.9)).toBe(uploadId);
+    for (const value of [
+      999_999_999_999,
+      10_000_000_000_000,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(() => instagramVideoUploadId(() => value))
+        .toThrow("canonical 13-digit ID");
+    }
+  });
+
+  test("constructs the exact upload route and header parameters without a body or response parser", () => {
+    const request = instagramVideoUploadRequestShape(
+      upload,
+      uploadId,
+      csrfToken,
+      requestConfig,
+    );
+    expect(request).toEqual({
+      url: `https://i.instagram.com/rupload_igvideo/fb_uploader_${uploadId}`,
+      method: "POST",
+      headers: {
+        accept: "*/*",
+        "content-type": "video/mp4",
+        origin: "https://www.instagram.com",
+        referer: "https://www.instagram.com/",
+        "x-asbd-id": "359341",
+        "x-csrftoken": csrfToken,
+        "x-entity-length": String(upload.byteLength),
+        "x-entity-name": `fb_uploader_${uploadId}`,
+        "x-ig-app-id": "936619743392459",
+        "x-instagram-ajax": requestConfig.rolloutHash,
+        "x-instagram-rupload-params": JSON.stringify({
+          "client-passthrough": "1",
+          is_clips_video: "1",
+          for_album: false,
+          is_sidecar: "0",
+          media_type: 2,
+          upload_id: uploadId,
+          upload_media_duration_ms: upload.durationMilliseconds,
+          upload_media_height: upload.height,
+          upload_media_width: upload.width,
+          video_format: upload.mediaType,
+          video_transform: null,
+        }),
+        offset: "0",
+      },
+    });
+    expect(Object.isFrozen(request)).toBeTrue();
+    expect(Object.isFrozen(request.headers)).toBeTrue();
+    expect(request).not.toHaveProperty("body");
+    expect(request).not.toHaveProperty("expectedStatuses");
+  });
+
+  test("rejects every adjacent upload-request bound before constructing headers", () => {
+    const invalid = [
+      { ...upload, byteLength: 23 },
+      { ...upload, byteLength: (128 * 1024 * 1024) + 1 },
+      { ...upload, durationMilliseconds: 0 },
+      { ...upload, durationMilliseconds: 86_400_001 },
+      { ...upload, height: 0 },
+      { ...upload, height: 20_001 },
+      { ...upload, width: 0 },
+      { ...upload, width: 20_001 },
+      { ...upload, mediaType: "video/quicktime" },
+    ];
+    for (const value of invalid) {
+      expect(() => instagramVideoUploadRequestShape(
+        value as never,
+        uploadId,
+        csrfToken,
+        requestConfig,
+      )).toThrow("outside its reviewed bound");
+    }
+    expect(() => instagramVideoUploadRequestShape(
+      upload,
+      "178692372548",
+      csrfToken,
+      requestConfig,
+    )).toThrow("outside its reviewed bound");
+    expect(() => instagramVideoUploadRequestShape(
+      upload,
+      uploadId,
+      "line\nbreak",
+      requestConfig,
+    )).toThrow("CSRF cookie is invalid");
+  });
+
+  test("constructs the exact configure payload, signed form, route, and headers", () => {
+    const payload = instagramVideoConfigurePayload(caption, uploadId);
+    expect(payload).toEqual({
+      archive_only: false,
+      caption,
+      clips_share_preview_to_feed: "1",
+      disable_comments: "0",
+      disable_oa_reuse: false,
+      igtv_share_preview_to_feed: 1,
+      is_meta_only_post: "0",
+      is_unified_video: 1,
+      like_and_view_counts_disabled: "0",
+      media_share_flow: "creation_flow",
+      share_to_facebook: "",
+      share_to_fb_destination_type: "USER",
+      source_type: "library",
+      upload_id: uploadId,
+      video_subtitles_enabled: "0",
+    });
+    expect(Object.isFrozen(payload)).toBeTrue();
+
+    const body = instagramVideoConfigureForm(caption, uploadId);
+    const expectedBody = [
+      "archive_only=false&caption=Synthetic+Instagram+protocol+fixture",
+      "&clips_share_preview_to_feed=1&disable_comments=0&disable_oa_reuse=false",
+      "&igtv_share_preview_to_feed=1&is_meta_only_post=0&is_unified_video=1",
+      "&like_and_view_counts_disabled=0&media_share_flow=creation_flow",
+      "&share_to_facebook=&share_to_fb_destination_type=USER&source_type=library",
+      "&upload_id=1786923725481",
+      "&video_subtitles_enabled=0&signed_body=SIGNATURE.%7B%22archive_only%22%3Afalse",
+      "%2C%22caption%22%3A%22Synthetic+Instagram+protocol+fixture%22",
+      "%2C%22clips_share_preview_to_feed%22%3A%221%22",
+      "%2C%22disable_comments%22%3A%220%22%2C%22disable_oa_reuse%22%3Afalse",
+      "%2C%22igtv_share_preview_to_feed%22%3A1%2C%22is_meta_only_post%22%3A%220%22",
+      "%2C%22is_unified_video%22%3A1%2C%22like_and_view_counts_disabled%22%3A%220%22",
+      "%2C%22media_share_flow%22%3A%22creation_flow%22",
+      "%2C%22share_to_facebook%22%3A%22%22",
+      "%2C%22share_to_fb_destination_type%22%3A%22USER%22",
+      "%2C%22source_type%22%3A%22library%22",
+      "%2C%22upload_id%22%3A%221786923725481%22",
+      "%2C%22video_subtitles_enabled%22%3A%220%22%7D",
+    ].join("");
+    expect(body).toBe(expectedBody);
+    const form = Object.fromEntries(new URLSearchParams(body));
+    expect(form).toEqual({
+      ...Object.fromEntries(
+        Object.entries(payload).map(([name, value]) => [name, String(value)]),
+      ),
+      signed_body: `SIGNATURE.${JSON.stringify(payload)}`,
+    });
+    const request = instagramVideoConfigureRequestShape(
+      caption,
+      uploadId,
+      csrfToken,
+      requestConfig,
+    );
+    expect(request).toEqual({
+      body: expectedBody,
+      headers: {
+        accept: "*/*",
+        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+        origin: "https://www.instagram.com",
+        referer: "https://www.instagram.com/",
+        "x-asbd-id": "359341",
+        "x-csrftoken": csrfToken,
+        "x-ig-app-id": "936619743392459",
+        "x-instagram-ajax": requestConfig.rolloutHash,
+      },
+      method: "POST",
+      url: "https://www.instagram.com/api/v1/media/configure_to_clips/",
+    });
+    expect(Object.isFrozen(request)).toBeTrue();
+    expect(Object.isFrozen(request.headers)).toBeTrue();
+  });
+
+  test("keeps configure input bounds strict without interpreting provider responses", () => {
+    for (const [selectedCaption, selectedUploadId] of [
+      ["", uploadId],
+      ["x".repeat(1_001), uploadId],
+      ["line\rbreak", uploadId],
+      [caption, "178692372548"],
+    ] as const) {
+      expect(() => instagramVideoConfigureForm(selectedCaption, selectedUploadId))
+        .toThrow(/Instagram configure/u);
+    }
+  });
+
+  test("classifies one configure response without authorizing a repeated POST", () => {
+    const terminal = instagramConfigureDispatchDecision(200);
+    expect(terminal).toEqual({ kind: "inspect-terminal-envelope" });
+    expect(Object.isFrozen(terminal)).toBeTrue();
+    const accepted = instagramConfigureDispatchDecision(202);
+    expect(accepted).toEqual({ kind: "retain-indeterminate-dispatch" });
+    expect(Object.isFrozen(accepted)).toBeTrue();
+    for (const status of [199, 201, 500]) {
+      expect(() => instagramConfigureDispatchDecision(status))
+        .toThrow("unreviewed HTTP status");
+    }
+  });
+
+  test("keeps exact publishing inert before resolving either plan-bound file", async () => {
+    const calls: Call[] = [];
+    const acquisitions = { count: 0 };
+    let fileResolutions = 0;
+    let dispatchCallbacks = 0;
+    const message = await rejectionMessage(executeMetaWebOperation(
+      recipe("instagram", "media.publish"),
+      {
+        audience: "default",
+        caption,
+        media: { kind: "file", reference: "confirmed-video" },
+        thumbnail: { kind: "file", reference: "confirmed-thumbnail" },
+      },
+      auth("instagram"),
+      {
+        fileResolver: () => {
+          fileResolutions += 1;
+          return Promise.resolve([]);
+        },
+        beforeDispatch: () => {
+          dispatchCallbacks += 1;
+          return Promise.resolve();
+        },
+        dependencies: dependencies(
+          "instagram",
+          calls,
+          undefined,
+          acquisitions,
+        ),
+      },
+    ));
+    expect(message).toContain("capture-required");
+    expect(acquisitions.count).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(fileResolutions).toBe(0);
+    expect(dispatchCallbacks).toBe(0);
+  });
+});
 
 describe("Meta authenticated internal-data runtime", () => {
   test("probes exact Instagram, Threads, and Facebook identities by direct HTTPS", async () => {
@@ -2076,7 +2366,7 @@ describe("Meta authenticated internal-data runtime", () => {
       }
       if (call.url.pathname === `/p/${code}/`) {
         expect(call.headers.get("referer")).toBe("https://www.instagram.com/");
-        return new Response("", {
+        return new Response("<html><head><title>Instagram</title></head></html>", {
           status: 200,
           headers: { "content-type": "text/html" },
         });
@@ -2099,6 +2389,7 @@ describe("Meta authenticated internal-data runtime", () => {
         audience: "default",
         caption,
         media: { kind: "file", reference: "confirmed-fixture" },
+        thumbnail: { kind: "file", reference: "confirmed-thumbnail" },
       },
       auth("instagram"),
       identifier,
@@ -2111,7 +2402,7 @@ describe("Meta authenticated internal-data runtime", () => {
     ]);
   });
 
-  test("proves one deleted Instagram video absent from its response-derived permalink", async () => {
+  test("proves one deleted Instagram video absent from its exact soft-200 permalink", async () => {
     const mediaId = "900_12345";
     const code = "VideoABC";
     const caption = "Disposable Wrench Instagram video fixture";
@@ -2127,8 +2418,8 @@ describe("Meta authenticated internal-data runtime", () => {
       }
       expect(call.method).toBe("GET");
       expect(call.url.href).toBe(url);
-      return new Response("", {
-        status: 404,
+      return new Response(instagramRemovedHtml, {
+        status: 200,
         headers: { "content-type": "text/html" },
       });
     });
@@ -2147,6 +2438,213 @@ describe("Meta authenticated internal-data runtime", () => {
       "GET https://www.instagram.com/",
       `GET ${url}`,
     ]);
+  });
+
+  test("does not claim deletion while authenticated media-info still exists", async () => {
+    const mediaId = "900_12345";
+    const code = "VideoABC";
+    const caption = "Disposable Wrench Instagram video fixture";
+    const url = `https://www.instagram.com/p/${code}/`;
+    const calls: Call[] = [];
+    const network = dependencies("instagram", calls, (call) => {
+      if (call.url.pathname === "/") {
+        return new Response(instagramHtml, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (call.url.pathname === `/p/${code}/`) {
+        return new Response("<html><head><title>Instagram</title></head></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      expect(call.url.pathname).toBe(`/api/v1/media/${mediaId}/info/`);
+      return new Response(JSON.stringify({
+        status: "ok",
+        items: [instagramVideoPost(mediaId, code, caption)],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    expect(await readInstagramVideoAcceptedMutationTargetPresence(
+      recipe("instagram", "content.delete"),
+      {
+        expected_caption: caption,
+        expected_media_kind: "video",
+        media_id: mediaId,
+      },
+      auth("instagram"),
+      canonicalJson({ code, mediaId, url }),
+      { dependencies: network },
+    )).toEqual({ code, mediaId, present: true });
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      `/p/${code}/`,
+      `/api/v1/media/${mediaId}/info/`,
+    ]);
+  });
+
+  test("deletes one exact authored Instagram video and verifies the soft-200 tombstone", async () => {
+    const mediaId = "900_12345";
+    const code = "VideoABC";
+    const caption = "Disposable Wrench Instagram video fixture";
+    const url = `https://www.instagram.com/p/${code}/`;
+    const calls: Call[] = [];
+    const callbacks: string[] = [];
+    const network = dependencies(
+      "instagram",
+      calls,
+      (call) => {
+        if (call.url.pathname === "/") {
+          return new Response(instagramMutationHtml, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        if (call.url.pathname === `/api/v1/media/${mediaId}/info/`) {
+          return new Response(JSON.stringify({
+            status: "ok",
+            items: [instagramVideoPost(mediaId, code, caption)],
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (call.url.pathname === `/api/v1/web/create/${mediaId}/delete/`) {
+          expect(call.method).toBe("POST");
+          expect(call.body).toBe("");
+          expect(call.headers.get("x-csrftoken")).toBe("csrf-fixture");
+          return new Response(JSON.stringify({ status: "ok", did_delete: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        expect(call.url.href).toBe(url);
+        return new Response(instagramRemovedHtml, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      },
+      undefined,
+      [
+        strictCookie("www.instagram.com", "csrftoken", "csrf-fixture"),
+        strictCookie("www.instagram.com", "ds_user_id", "12345"),
+        strictCookie("www.instagram.com", "sessionid", "private"),
+      ],
+    );
+    const result = await executeMetaWebOperation(
+      recipe("instagram", "content.delete"),
+      {
+        expected_caption: caption,
+        expected_media_kind: "video",
+        media_id: mediaId,
+      },
+      auth("instagram"),
+      {
+        beforeDispatch: (event) => {
+          callbacks.push(`before:${event.progress.started}`);
+          return Promise.resolve();
+        },
+        afterProviderBoundMutationTarget: (event) => {
+          callbacks.push(`target:${event.target.identifier}`);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          callbacks.push(`verified:${event.progress.verified}`);
+          return Promise.resolve();
+        },
+        dependencies: network,
+      },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+      finalUrl: url,
+      output: { deleted: true },
+    });
+    expect(callbacks).toEqual([
+      "before:0",
+      `target:${canonicalJson({ code, mediaId, url })}`,
+      "verified:1",
+    ]);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      `/api/v1/media/${mediaId}/info/`,
+      "/",
+      `/api/v1/media/${mediaId}/info/`,
+      `/api/v1/web/create/${mediaId}/delete/`,
+      "/",
+      `/p/${code}/`,
+    ]);
+  });
+
+  test("never retries an unverified Instagram delete and retains its bound target", async () => {
+    const mediaId = "900_12345";
+    const code = "VideoABC";
+    const caption = "Disposable Wrench Instagram video fixture";
+    const url = `https://www.instagram.com/p/${code}/`;
+    const calls: Call[] = [];
+    const retainedTargets: string[] = [];
+    const network = dependencies(
+      "instagram",
+      calls,
+      (call) => {
+        if (call.url.pathname === "/") {
+          return new Response(instagramMutationHtml, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        if (call.url.pathname === `/api/v1/media/${mediaId}/info/`) {
+          return new Response(JSON.stringify({
+            status: "ok",
+            items: [instagramVideoPost(mediaId, code, caption)],
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        expect(call.url.pathname).toBe(`/api/v1/web/create/${mediaId}/delete/`);
+        return new Response(JSON.stringify({ status: "fail", did_delete: false }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      undefined,
+      [
+        strictCookie("www.instagram.com", "csrftoken", "csrf-fixture"),
+        strictCookie("www.instagram.com", "ds_user_id", "12345"),
+        strictCookie("www.instagram.com", "sessionid", "private"),
+      ],
+    );
+    const result = await executeMetaWebOperation(
+      recipe("instagram", "content.delete"),
+      {
+        expected_caption: caption,
+        expected_media_kind: "video",
+        media_id: mediaId,
+      },
+      auth("instagram"),
+      {
+        beforeDispatch: () => Promise.resolve(),
+        afterProviderBoundMutationTarget: (event) => {
+          retainedTargets.push(event.target.identifier);
+          return Promise.resolve();
+        },
+        dependencies: network,
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+    });
+    expect(retainedTargets).toEqual([canonicalJson({ code, mediaId, url })]);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
   });
 
   test("rejects ambiguous Instagram video accepted targets before authenticated readback", async () => {
@@ -2179,25 +2677,25 @@ describe("Meta authenticated internal-data runtime", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("rejects Instagram video permalink redirect and status drift before media readback", async () => {
+  test("rejects Instagram video permalink marker and status drift before media readback", async () => {
     const mediaId = "900_12345";
     const code = "VideoABC";
     const caption = "Disposable Wrench Instagram video fixture";
     const url = `https://www.instagram.com/p/${code}/`;
     const variants = [
       {
-        expected: "unreviewed redirect location",
-        response: () => new Response("", {
+        expected: "removal marker changed shape",
+        response: () => new Response(
+          "<html><head><title>Page not found • Instagram</title></head></html>",
+          {
           status: 200,
-          headers: {
-            "content-type": "text/html",
-            location: "/accounts/login/",
+          headers: { "content-type": "text/html" },
           },
-        }),
+        ),
       },
       {
-        expected: "unreviewed status 503",
-        response: () => new Response("", {
+        expected: "unreviewed status/content type 503/text/html",
+        response: () => new Response("<html><head><title>Instagram</title></head></html>", {
           status: 503,
           headers: { "content-type": "text/html" },
         }),
@@ -2221,6 +2719,7 @@ describe("Meta authenticated internal-data runtime", () => {
           audience: "default",
           caption,
           media: { kind: "file", reference: "confirmed-fixture" },
+          thumbnail: { kind: "file", reference: "confirmed-thumbnail" },
         },
         auth("instagram"),
         canonicalJson({ code, mediaId, url }),
@@ -2278,7 +2777,7 @@ describe("Meta authenticated internal-data runtime", () => {
           });
         }
         if (call.url.pathname === `/p/${code}/`) {
-          return new Response("", {
+          return new Response("<html><head><title>Instagram</title></head></html>", {
             status: 200,
             headers: { "content-type": "text/html" },
           });
@@ -2295,6 +2794,7 @@ describe("Meta authenticated internal-data runtime", () => {
           audience: "default",
           caption,
           media: { kind: "file", reference: "confirmed-fixture" },
+          thumbnail: { kind: "file", reference: "confirmed-thumbnail" },
         },
         auth("instagram"),
         canonicalJson({ code, mediaId, url }),
@@ -2322,7 +2822,7 @@ describe("Meta authenticated internal-data runtime", () => {
         });
       }
       if (call.url.pathname === `/p/${code}/`) {
-        return new Response("", {
+        return new Response("<html><head><title>Instagram</title></head></html>", {
           status: 200,
           headers: { "content-type": "text/html" },
         });
@@ -2343,6 +2843,7 @@ describe("Meta authenticated internal-data runtime", () => {
         audience: "default",
         caption,
         media: { kind: "file", reference: "confirmed-fixture" },
+        thumbnail: { kind: "file", reference: "confirmed-thumbnail" },
       },
       auth("instagram"),
       canonicalJson({ code, mediaId, url }),
@@ -3308,7 +3809,6 @@ describe("Meta authenticated internal-data runtime", () => {
       ["facebook-page", "feeds.read"],
       ["facebook-group", "posts.read"],
       ["facebook-marketplace", "media.read"],
-      ["instagram", "content.delete"],
       ["instagram", "media.publish"],
       ["instagram", "messaging.send"],
       ["threads", "likes.set"],

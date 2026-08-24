@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "instagram-web",
-  "version": "1.6.0",
+  "version": "1.5.0",
   "displayName": "Instagram (Authenticated Web API)",
   "surfaceId": "instagram",
   "origins": [
@@ -144,7 +144,7 @@
       }
     },
     "content.delete": {
-      "description": "Observed contract: remove one exact current-account Instagram video after two exact media-info pre-reads bind its full ID, shortcode, actor, expected caption, and video kind; verify the did_delete response and exact authenticated soft-200 removal marker.",
+      "description": "Capture-required contract reservation: remove one exact current-account Instagram video from its profile and public permalink only after an authored-media pre-read binds the authenticated actor, expected caption, and video kind, and an independent exact-target absence readback is captured.",
       "risk": "R3",
       "sideEffect": "Removes the exact confirmed Instagram video from the authenticated account's profile and public permalink; no physical-erasure guarantee is made.",
       "idempotency": "local-at-most-once",
@@ -153,7 +153,7 @@
         "properties": {
           "media_id": {
             "type": "string",
-            "description": "Exact full Instagram media ID (<media-pk>_<viewer-id>)",
+            "description": "Exact canonical Instagram media ID",
             "minLength": 1,
             "maxLength": 65
           },
@@ -180,7 +180,7 @@
       "webSession": {
         "site": "instagram",
         "action": "content.delete",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 8388608
       }
@@ -319,7 +319,7 @@
       }
     },
     "media.publish": {
-      "description": "Capture-required contract reservation: bind one exact stable MP4 plus one exact plan-bound JPEG cover for the captured video-then-cover uploads, but do not dispatch until the observed first configure 202 can be reconciled without repeating the configure POST.",
+      "description": "Capture-required contract reservation: publish one exact stable MP4 video only after the current consumer-web initialization, transfer, processing, configure response, authored-target binding, and independent publication readback are reviewed with an authorized fixture.",
       "risk": "R3",
       "sideEffect": "Publishes one exact MP4 video with the confirmed caption to the authenticated Instagram account.",
       "idempotency": "local-at-most-once",
@@ -332,14 +332,6 @@
             "maxBytes": 134217728,
             "mediaTypes": [
               "video/mp4"
-            ]
-          },
-          "thumbnail": {
-            "type": "file",
-            "description": "Exact plan-bound JPEG thumbnail",
-            "maxBytes": 8388608,
-            "mediaTypes": [
-              "image/jpeg"
             ]
           },
           "caption": {
@@ -358,7 +350,6 @@
         },
         "required": [
           "media",
-          "thumbnail",
           "caption",
           "audience"
         ]
@@ -366,7 +357,7 @@
       "webSession": {
         "site": "instagram",
         "action": "media.publish",
-        "contractVersion": 3,
+        "contractVersion": 2,
         "timeoutMs": 600000,
         "maxOutputBytes": 8388608
       }

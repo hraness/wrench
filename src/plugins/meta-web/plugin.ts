@@ -7,7 +7,14 @@ import {
   webSessionContractOperations,
   webImplementationSources,
 } from "../../provider-plugin-builtins";
-import { webSessionContractDefinitions } from "../../web-session-contract-definitions";
+import archivedInstagramWebManifestV1_3 from "../../assets/adapters/instagram/wrench-web-adapter.v1.3.0.json";
+import archivedInstagramWebManifestV1_5 from "../../assets/adapters/instagram/wrench-web-adapter.v1.5.0.json";
+import type { OperationInput } from "../../model";
+import {
+  planWebSessionContractDispatches,
+  reviewedArchivedWebSessionContract,
+  webSessionContractDefinitions,
+} from "../../web-session-contract-definitions";
 import {
   isCanonicalMetaNumericId,
   type MetaWebSite,
@@ -88,7 +95,6 @@ const historicalVersions = Object.freeze({
   instagram: Object.freeze({
     "comments.read": Object.freeze([1]),
     "feeds.read": Object.freeze([1]),
-    "media.publish": Object.freeze([1]),
     "messaging.list": Object.freeze([1]),
   }),
   threads: Object.freeze({
@@ -112,7 +118,7 @@ const historicalVersions = Object.freeze({
 >);
 
 const contractSemanticIdentities = Object.freeze({
-  instagram: "fa50f3b2b32782f779ccb3a6e10a964ce92e1e1ba0c860b305ad8313e4a4d2e6",
+  instagram: "3d2aac4e12ce927b14f45070df5844cace039bf039dfeee9fcb67061c45ce30e",
   threads: "04b95f200d512ef150043986fea9a106a401c5b7a2ba501cd454983edcacb00a",
   facebook: "f4724c9619794070da784d03fdaef5889cc4f3d237f9f402e9d5a53f7c156184",
   "facebook-page": "0a13cbe416286efe003ecf9c28fefcbd45c5d1f3b62a94936d9278ad8e488ada",
@@ -120,10 +126,82 @@ const contractSemanticIdentities = Object.freeze({
   "facebook-marketplace": "396567380895c017c3385048b4c6971e68be82f446fab052f1605d52934ee4cd",
 } as const satisfies Readonly<Record<MetaWebSite, string>>);
 
+function archivedInstagramOperation(
+  contract: ReturnType<typeof reviewedArchivedWebSessionContract>,
+) {
+  return Object.freeze({
+    name: contract.operation,
+    contractVersion: contract.contractVersion,
+    risk: contract.risk,
+    input: contract.input,
+    sideEffect: contract.sideEffect,
+    idempotency: contract.idempotency,
+    dedupeWindowMs: contract.dedupeWindowMs,
+    state: contract.state,
+    dispatch: contract.dispatch,
+    implementation: contract.implementation,
+    planDispatches: (input: OperationInput) =>
+      planWebSessionContractDispatches(contract, input),
+    validateInput: () => Object.freeze([]),
+  });
+}
+
+const archivedInstagramMediaPublishV1 = reviewedArchivedWebSessionContract(
+  archivedInstagramWebManifestV1_3,
+  {
+    adapterId: "instagram-web",
+    adapterVersion: "1.3.0",
+    site: "instagram",
+    operation: "media.publish",
+    contractVersion: 1,
+    risk: "R3",
+    state: "capture-required",
+    implementation:
+      "instagram media.publish requires a fresh reviewed authenticated first-party contract before execution",
+  },
+);
+const archivedInstagramMediaPublishV2 = reviewedArchivedWebSessionContract(
+  archivedInstagramWebManifestV1_5,
+  {
+    adapterId: "instagram-web",
+    adapterVersion: "1.5.0",
+    site: "instagram",
+    operation: "media.publish",
+    contractVersion: 2,
+    risk: "R3",
+    state: "capture-required",
+    implementation:
+      "instagram media.publish requires a fresh reviewed authenticated first-party contract before execution",
+  },
+);
+const archivedInstagramMediaPublishOperations = Object.freeze([
+  archivedInstagramOperation(archivedInstagramMediaPublishV1),
+  archivedInstagramOperation(archivedInstagramMediaPublishV2),
+]);
+
+const archivedInstagramContentDeleteV1 = reviewedArchivedWebSessionContract(
+  archivedInstagramWebManifestV1_5,
+  {
+    adapterId: "instagram-web",
+    adapterVersion: "1.5.0",
+    site: "instagram",
+    operation: "content.delete",
+    contractVersion: 1,
+    risk: "R3",
+    state: "capture-required",
+    implementation:
+      "exact authored-video pre-read, actor/caption/kind binding, deletion response, and independent exact-target absence require an authorized fixture",
+  },
+);
+const archivedInstagramOperations = Object.freeze([
+  ...archivedInstagramMediaPublishOperations,
+  archivedInstagramOperation(archivedInstagramContentDeleteV1),
+]);
+
 export const metaWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "meta-web",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "Meta Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
@@ -150,20 +228,37 @@ export const metaWebPlugin = defineProviderPlugin({
     origin: origins[site],
     protectedHostnameFamilies: protectedHostnameFamilies[site],
     authKinds: browserSessionAuthKinds,
-    operations: webSessionContractOperations(
-      Object.values(webSessionContractDefinitions[site]),
-      contractSemanticIdentities[site],
-      historicalVersions[site],
-      metaOmniDefinitions(site),
-    ).map((operation) => site === "threads"
-      && (operation.name === "posts.publish" || operation.name === "media.publish")
-      ? Object.freeze({
+    operations: Object.freeze([
+      ...webSessionContractOperations(
+        Object.values(webSessionContractDefinitions[site]),
+        contractSemanticIdentities[site],
+        historicalVersions[site],
+        metaOmniDefinitions(site),
+      ).map((operation) => {
+      if (
+        site === "threads"
+        && (operation.name === "posts.publish" || operation.name === "media.publish")
+      ) {
+        return Object.freeze({
           ...operation,
           reconciliation: Object.freeze({
             kind: "provider-accepted-target-presence" as const,
           }),
-        })
-      : operation),
+        });
+      }
+      if (site === "instagram" && operation.name === "content.delete") {
+        return Object.freeze({
+          ...operation,
+          reconciliation: Object.freeze({
+            kind: "provider-bound-target-desired-state" as const,
+            desiredState: false as const,
+          }),
+        });
+      }
+        return operation;
+      }),
+      ...(site === "instagram" ? archivedInstagramOperations : []),
+    ]),
     subject: {
       format: subjectFormats[site],
       matches: (value: string) => subjectMatches(site, value),
@@ -176,6 +271,23 @@ export const metaWebPlugin = defineProviderPlugin({
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeMetaWebOperation(recipe, input, auth, options),
         reconcile: async (operation, input, auth, context) => {
+          if (
+            site === "instagram"
+            && operation === "content.delete"
+            && context?.kind === "provider-bound-target-desired-state"
+          ) {
+            const readback = await runtime.readInstagramVideoAcceptedMutationTargetPresence({
+              site: "instagram",
+              action: operation,
+              contractVersion: 2,
+              timeoutMs: 60_000,
+              maxOutputBytes: 8 * 1024 * 1024,
+            }, input, auth, context.target.identifier);
+            return {
+              actualState: readback.present,
+              reason: "exact-target-readback",
+            };
+          }
           if (
             site !== "threads"
             || (operation !== "posts.publish" && operation !== "media.publish")

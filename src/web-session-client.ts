@@ -88,6 +88,15 @@ export type WebSessionClient = {
     readonly expectedContentTypes?: readonly string[];
     readonly maxBytes: number;
   }) => Promise<unknown>;
+  readonly requestJsonResponse: (request: {
+    readonly url: URL;
+    readonly method: "GET" | "POST";
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body?: string | Uint8Array;
+    readonly expectedStatuses?: readonly number[];
+    readonly expectedContentTypes?: readonly string[];
+    readonly maxBytes: number;
+  }) => Promise<Readonly<{ status: number; value: unknown }>>;
   readonly requestStatus: (request: {
     readonly url: URL;
     readonly method: "GET" | "POST";
@@ -604,6 +613,60 @@ export async function createWebSessionClient(
       tombstones: Object.freeze([...rotatingTombstones.values()]),
     }));
   };
+  const requestJsonResponse: WebSessionClient["requestJsonResponse"] = async (request) => {
+    if (request.url.origin !== origin || request.url.username !== "" || request.url.password !== "" || request.url.hash !== "") {
+      throw new Error("authenticated web API request escaped its reviewed origin");
+    }
+    if (request.body !== undefined && request.method !== "POST") {
+      throw new Error("authenticated web API request body requires POST");
+    }
+    const headers = new Headers(request.headers);
+    headers.set("cookie", renderCookieHeader(combinedCookies()));
+    return withWebSessionDeadline(options, async (deadline) => {
+      let response: Response | undefined;
+      try {
+        try {
+          response = await deadline.run(
+            () => dependencies.fetch(
+              request.url,
+              {
+                method: request.method,
+                headers,
+                ...(request.body === undefined ? {} : { body: request.body }),
+                redirect: "error",
+                signal: deadline.signal,
+              },
+              remainingRequestTimeMs(deadline),
+            ),
+            WEB_SESSION_OPERATION_LABEL,
+          );
+        } catch (error) {
+          throw new Error("authenticated web API request failed before a reviewed response was received", { cause: error });
+        }
+        const expected = request.expectedStatuses ?? [200];
+        const contentType = contentTypeEssence(response);
+        const contentTypeAllowed = request.expectedContentTypes === undefined
+          ? isJsonContentType(contentType)
+          : contentType !== null && request.expectedContentTypes.includes(contentType);
+        if (!expected.includes(response.status) || !contentTypeAllowed) {
+          response.body?.cancel().catch(() => undefined);
+          throw new Error(`authenticated web API returned unreviewed status/content type ${response.status}/${contentType ?? "missing"}`);
+        }
+        await applyResponseCookies(response, request.url);
+        const status = response.status;
+        const value = parseJson(await boundedBytes(
+          response,
+          request.maxBytes,
+          deadline,
+        ));
+        return Object.freeze({ status, value });
+      } finally {
+        if (deadline.signal.aborted) {
+          void response?.body?.cancel().catch(() => undefined);
+        }
+      }
+    });
+  };
   return {
     origin,
     get cookies() {
@@ -666,58 +729,8 @@ export async function createWebSessionClient(
         }
       });
     },
-    requestJson: async (request) => {
-      if (request.url.origin !== origin || request.url.username !== "" || request.url.password !== "" || request.url.hash !== "") {
-        throw new Error("authenticated web API request escaped its reviewed origin");
-      }
-      if (request.body !== undefined && request.method !== "POST") {
-        throw new Error("authenticated web API request body requires POST");
-      }
-      const headers = new Headers(request.headers);
-      headers.set("cookie", renderCookieHeader(combinedCookies()));
-      return withWebSessionDeadline(options, async (deadline) => {
-        let response: Response | undefined;
-        try {
-          try {
-            response = await deadline.run(
-              () => dependencies.fetch(
-                request.url,
-                {
-                  method: request.method,
-                  headers,
-                  ...(request.body === undefined ? {} : { body: request.body }),
-                  redirect: "error",
-                  signal: deadline.signal,
-                },
-                remainingRequestTimeMs(deadline),
-              ),
-              WEB_SESSION_OPERATION_LABEL,
-            );
-          } catch (error) {
-            throw new Error("authenticated web API request failed before a reviewed response was received", { cause: error });
-          }
-          const expected = request.expectedStatuses ?? [200];
-          const contentType = contentTypeEssence(response);
-          const contentTypeAllowed = request.expectedContentTypes === undefined
-            ? isJsonContentType(contentType)
-            : contentType !== null && request.expectedContentTypes.includes(contentType);
-          if (!expected.includes(response.status) || !contentTypeAllowed) {
-            response.body?.cancel().catch(() => undefined);
-            throw new Error(`authenticated web API returned unreviewed status/content type ${response.status}/${contentType ?? "missing"}`);
-          }
-          await applyResponseCookies(response, request.url);
-          return parseJson(await boundedBytes(
-            response,
-            request.maxBytes,
-            deadline,
-          ));
-        } finally {
-          if (deadline.signal.aborted) {
-            void response?.body?.cancel().catch(() => undefined);
-          }
-        }
-      });
-    },
+    requestJson: async (request) => (await requestJsonResponse(request)).value,
+    requestJsonResponse,
     requestStatus: async (request) => {
       if (request.url.origin !== origin || request.url.username !== "" || request.url.password !== "" || request.url.hash !== "") {
         throw new Error("authenticated web API request escaped its reviewed origin");
