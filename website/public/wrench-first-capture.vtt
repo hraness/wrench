@@ -1,0 +1,14 @@
+WEBVTT
+
+00:00.000 --> 00:01.650
+Wrench v0.13.5 first capture.
+Command: wrench read https://example.com
+
+00:01.650 --> 00:03.000
+Capturing https://example.com/ with automatic platform and acquisition selection.
+
+00:03.000 --> 00:06.700
+The result identifies Example Domain, the source URL, capture date 2026-08-25, generic platform, complete status, HTTP method, and page scope.
+
+00:06.700 --> 00:12.000
+The captured Markdown contains the Example Domain heading, its documentation-use notice, and a link to IANA.

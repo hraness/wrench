@@ -985,6 +985,45 @@ code:not(pre code) {
   margin: 1.75rem 0;
 }
 
+.demo-media {
+  margin: 2rem 0 0;
+  max-width: 72rem;
+}
+
+.demo-media video {
+  background: var(--dark-background);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-low);
+  display: block;
+  height: auto;
+  width: 100%;
+}
+
+.demo-media figcaption {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.58;
+  margin-top: 0.85rem;
+  max-width: 54rem;
+}
+
+.demo-transcript {
+  border-block: 1px solid var(--line);
+  margin-top: 1.75rem;
+  max-width: 72rem;
+}
+
+.demo-transcript summary {
+  cursor: pointer;
+  font-weight: 720;
+  padding: 1rem 0;
+}
+
+.demo-transcript .command-panel {
+  margin-top: 0;
+}
+
 .guide-list,
 .guide-steps {
   display: grid;

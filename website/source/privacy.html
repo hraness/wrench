@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
-    <title>Wrench website privacy: cookieless, personless analytics</title>
-    <meta name="description" content="wrench.rip uses cookieless, personless, DNT-aware PostHog analytics limited to page lifecycle, Core Web Vitals, and two GitHub links.">
+    <title>Wrench privacy and data custody: CLI, providers, and website</title>
+    <meta name="description" content="How Wrench stores CLI and provider state locally, when requested work contacts third parties, how to remove data, and what wrench.rip measures.">
     <meta name="robots" content="max-image-preview:large">
     <link rel="canonical" href="https://wrench.rip/privacy/">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -16,16 +16,16 @@
     {{MARKDOWN_ALTERNATE}}
     <meta property="og:type" content="article">
     <meta property="og:site_name" content="Wrench">
-    <meta property="og:title" content="Wrench website privacy: cookieless, personless analytics">
-    <meta property="og:description" content="wrench.rip uses cookieless, personless, DNT-aware PostHog analytics limited to page lifecycle, Core Web Vitals, and two GitHub links.">
+    <meta property="og:title" content="Wrench privacy and data custody: CLI, providers, and website">
+    <meta property="og:description" content="How Wrench stores CLI and provider state locally, when requested work contacts third parties, how to remove data, and what wrench.rip measures.">
     <meta property="og:url" content="https://wrench.rip/privacy/">
     <meta property="og:image" content="https://wrench.rip/og.png">
     <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Wrench website privacy: cookieless, personless analytics">
-    <meta name="twitter:description" content="wrench.rip uses cookieless, personless, DNT-aware PostHog analytics limited to page lifecycle, Core Web Vitals, and two GitHub links.">
+    <meta name="twitter:title" content="Wrench privacy and data custody: CLI, providers, and website">
+    <meta name="twitter:description" content="How Wrench stores CLI and provider state locally, when requested work contacts third parties, how to remove data, and what wrench.rip measures.">
     <meta name="twitter:image" content="https://wrench.rip/og.png">
     <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
     <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
@@ -50,30 +50,64 @@
       <article class="guide-article">
         <header class="guide-hero">
           <p class="eyebrow">Privacy · Wrench {{WRENCH_VERSION}}</p>
-          <h1>This website measures pages, not people.</h1>
-          <p class="answer-lede">wrench.rip is a static documentation site. On the canonical production host only, an optional PostHog bootstrap records cookieless, personless, memory-only analytics. The CLI and TypeScript SDK do not send website analytics.</p>
-          <p class="review-note">This statement describes the current website analytics contract. It is not a privacy policy for local Wrench state, provider accounts, or captured content.</p>
+          <h1>Wrench keeps product state with the operator.</h1>
+          <p class="answer-lede">Wrench is a local CLI and TypeScript SDK, not a hosted account or API. Captures, archives, auth locators, read snapshots, provider state, and mutation evidence stay on paths controlled by the operator. Requested capture and provider work still contacts third parties, and the caller decides where Wrench output goes next.</p>
+          <p class="review-note">This page documents the data flow in Wrench {{WRENCH_VERSION}} across the CLI, SDK, connected providers, plugins, and wrench.rip. Third-party sites, providers, tools, agent hosts, and content remain subject to their own terms and privacy practices.</p>
         </header>
 
-        <section aria-labelledby="what-is-collected">
-          <h2 id="what-is-collected">What the website may record</h2>
-          <p>Allowed events are page view, page leave, Core Web Vitals, and the two explicit GitHub repository links on the home page. The runtime is DNT-aware, query-free, and restricted to the canonical host. URL query strings, fragments, and common attribution parameters are stripped before an event can leave the browser.</p>
-          <p>The site does not use cookies, replay, identity, feature flags, broad autocapture, console capture, or person profiles. It does not record form input, local file paths, or provider account material. JavaScript is optional; every public page remains readable without it.</p>
+        <section aria-labelledby="local-state">
+          <h2 id="local-state">The CLI stores state on the operator's machine</h2>
+          <p>The default state home is <code>~/.local/share/wrench</code>. An operator can select a dedicated path with <code>WRENCH_STATE_HOME</code>. Wrench restricts its owned state directories to the current operating-system account and rejects shared, symbolic-link, or unexpectedly replaced state paths before trusted state is read.</p>
+          <p>State can include auth locators, managed OAuth credentials, encrypted exact-query snapshots, normalized read projections, provider and plugin state, plans, receipts, journals, recovery evidence, session material, locally installed tools, and capture working state. Durable page captures and media archives live in the vault or output path selected by the operator.</p>
+          <p>Local custody does not mean that every stored byte is encrypted. Exact provider-read snapshots and normalized projections use authenticated local encryption. A Wrench-managed Gmail OAuth JSON file, for example, is mode-restricted private state, but it is not an operating-system keychain and is not encrypted at rest. Protect the local account, disk, state home, selected output paths, and backups.</p>
+        </section>
+
+        <section aria-labelledby="network-use">
+          <h2 id="network-use">Selected work determines which third parties receive data</h2>
+          <p>A page read or capture contacts the requested source through its selected acquisition method. URL metadata work can perform read-only Archive.today discovery. A media command contacts the selected source and may run operator-selected local tools. An authenticated capability sends only the checked request and credential material required by its exact provider, origin, transport, account realm, and contract.</p>
+          <p>Those sites and providers can observe ordinary request information such as the source IP address, request timing, their own account identifier, and the bounded action or query. A signed-in browser page can also emit telemetry owned by that provider. Wrench does not turn those interactions into a claim that third parties retain nothing.</p>
+          <p>The CLI and SDK do not send wrench.rip analytics. They do make the network requests required by the operation the caller selected. Wrench does not include a hosted relay, model, planner, or tool loop. A calling agent, application, terminal, logging system, or model service can receive whatever output the operator gives it; that downstream handling is outside Wrench.</p>
+        </section>
+
+        <section aria-labelledby="provider-data">
+          <h2 id="provider-data">Credentials stay bound to one declared use</h2>
+          <p>An auth locator can point to an explicit cookie source or file, browser profile, OAuth token file, Wrench-managed OAuth credential, or linked-device store. The caller selects the locator by name. Wrench binds it to one provider account and transport, keeps credential values out of normal outputs and receipts, and does not silently fall back to another transport.</p>
+          <p>A successful subject-bound R1 read can store the validated input and bounded provider output as authenticated local ciphertext. A later <code>--cache-only</code> read can return that exact snapshot without a provider connection. Exact inputs, account subjects, cursors, private identifiers, and provider output remain inside the encrypted snapshot instead of entering its public diagnostic reason.</p>
+          <p>R2 and R3 mutations retain local plan, dispatch, receipt, and recovery evidence so Wrench can avoid a blind retry. Some evidence must remain available while a dispatch is indeterminate. The remote provider controls any server-side records produced or retained by an accepted request under that provider's policy.</p>
+        </section>
+
+        <section aria-labelledby="captures-and-media">
+          <h2 id="captures-and-media">Captures and archives contain source material</h2>
+          <p>A durable page capture stores the selected page content and source metadata in the operator's Markdown vault. A completed media archive can contain acquired encoded media, privacy-projected provider metadata, requested derivatives and transcripts, a versioned manifest, and SHA-256 records. Anyone with access to those output paths can read that retained material.</p>
+          <p>Wrench does not persist media cookies, request headers, signed media URLs, raw yt-dlp metadata, or transport fragments in the completed archive. It cannot remove personal or confidential information already present in the source content. Use Wrench only with material and accounts you are authorized to access, and choose output and backup locations that match the content's sensitivity.</p>
+        </section>
+
+        <section aria-labelledby="plugin-data">
+          <h2 id="plugin-data">Trusted plugins and native tools share the local account boundary</h2>
+          <p>Bundled source plugins run as trusted in-process code. A portable plugin requires an explicit trust decision for one verified, content-addressed bundle and receives denied-by-default host capabilities. Its child process contains ordinary failures, but it is not a hostile native-code sandbox. Plugin code still runs with the ambient authority of the current operating-system account.</p>
+          <p>Operator-selected browser executables, media tools, transcription tools, models, linked-device clients, and other native dependencies have their own provenance and behavior. Wrench checks the boundaries documented for each integration, but continuity and content hashes do not prove that third-party native code is safe.</p>
+        </section>
+
+        <section aria-labelledby="retention-and-removal">
+          <h2 id="retention-and-removal">The operator controls retention and provider revocation</h2>
+          <p>Wrench sets no hosted retention period because it does not receive CLI state through a Wrench service. Captures and archives remain until the operator removes them from their selected output paths and any backups. Provider-side records remain until the provider removes them under its own controls and policy.</p>
+          <p><code>wrench auth remove ID --yes</code> removes the locator, any Wrench-managed OAuth credential, session secrets, and auth-bound local read caches. It does not revoke a browser session, linked device, externally managed token, or provider-side grant. Revoke those separately with the provider. Do not discard run, receipt, journal, or recovery evidence for an unsettled mutation; inspect and reconcile it first.</p>
+        </section>
+
+        <section aria-labelledby="website-analytics">
+          <h2 id="website-analytics">wrench.rip measures pages, not people</h2>
+          <p>wrench.rip is a static documentation site. On the canonical production host only, an optional PostHog bootstrap can record page view, page leave, Core Web Vitals, and the two explicit GitHub repository links on the home page. The runtime is cookieless, personless, memory-only, DNT-aware, query-free, and restricted to that host.</p>
+          <p>URL query strings, fragments, and common attribution parameters are stripped before an event can leave the browser. The site does not use replay, identity, feature flags, broad autocapture, console capture, or person profiles. It does not record form input, local file paths, CLI state, or provider account material. JavaScript is optional, and every public page remains readable without it.</p>
         </section>
 
         <section aria-labelledby="without-javascript">
-          <h2 id="without-javascript">Reading without JavaScript</h2>
-          <p>Every public page remains readable without JavaScript. Agents can request <code>Accept: text/markdown</code> on the same URL and receive a Markdown body with <code>Vary: Accept</code>. A Do Not Track signal is honored by the optional analytics bootstrap, so the pages stay useful when that script does not run.</p>
-        </section>
-
-        <section aria-labelledby="what-this-does-not-cover">
-          <h2 id="what-this-does-not-cover">What this page does not cover</h2>
-          <p>Wrench stores local credentials, encrypted snapshots, and archives on the operator's machine. Those artifacts are not website analytics. Use the <a href="/security/">security guide</a> for local custody, and GitHub private vulnerability reporting on the <a href="/contact/">contact page</a> for suspected product issues.</p>
+          <h2 id="without-javascript">The documentation works without JavaScript</h2>
+          <p>Agents can request <code>Accept: text/markdown</code> on a public content URL and receive a Markdown body with <code>Vary: Accept</code>. A Do Not Track signal disables the optional analytics bootstrap. The site content, install commands, privacy information, and support links remain available when JavaScript does not run.</p>
         </section>
 
         <aside class="guide-callout" aria-labelledby="privacy-next">
           <h2 id="privacy-next">Related public documents</h2>
-          <p>See <a href="/llms.txt">llms.txt</a> for agent-oriented site guidance and the <a href="/about/">about page</a> for project identity.</p>
+          <p>Read the <a href="/security/">security and local-custody model</a>, <a href="/provider-capabilities/">provider capability attestation</a>, and <a href="/capture-and-archives/">capture and archive boundaries</a>. Report suspected product vulnerabilities through the private path on the <a href="/contact/">contact page</a>.</p>
         </aside>
       </article>
     </main>
