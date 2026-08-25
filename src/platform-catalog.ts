@@ -739,7 +739,7 @@ export const socialPlatformCatalog = {
     displayName: "GitHub",
     originPolicy: exactOrigins("https://github.com"),
     operations: buildOperationMatrix({
-      R1: ["content.read", "content.clip", "profiles.read"],
+      R1: ["content.read", "content.clip", "profiles.read", "organizations.read"],
       R2: [],
       R3: [],
       unsupported: [
@@ -758,7 +758,6 @@ export const socialPlatformCatalog = {
         "articles.read",
         "articles.draft.save",
         "articles.publish",
-        "organizations.read",
         "listings.read",
         "listings.publish",
         "relationships.recommendations.read",

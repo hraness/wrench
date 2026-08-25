@@ -1,13 +1,12 @@
 /**
- * GitHub public profile policy and bounded profile-stat projection.
- *
- * The only executable exchange is the fixed credential-free REST user read.
- * Callers choose one username, never an endpoint, query, header, or response
- * projection.
+ * GitHub public user and organization policy with bounded statistics
+ * projections. Callers choose one canonical account name, never an endpoint,
+ * query, header, response projection, or pagination cursor.
  */
 
 export const GITHUB_WEB_OPERATION_NAMES = Object.freeze([
   "profiles.read",
+  "organizations.read",
 ] as const);
 
 export type GitHubWebOperationName =
@@ -21,12 +20,31 @@ export const GITHUB_WEB_OPERATIONS = Object.freeze({
     reason:
       "fixed credential-free REST user read binds the requested username, immutable numeric account ID, and canonical profile URL before projecting exact follower, following, and public repository counts",
   }),
+  "organizations.read": Object.freeze({
+    effect: "read" as const,
+    risk: "R1" as const,
+    state: "observed" as const,
+    reason:
+      "fixed credential-free REST organization read binds the requested organization, immutable numeric account ID, canonical public URL, exact follower count, and declared public repository count before a bounded completed public-repository pagination sums every exact stargazer count",
+  }),
 });
 
 export const GITHUB_APP_ORIGIN = "https://github.com";
 export const GITHUB_API_ORIGIN = "https://api.github.com";
+export const GITHUB_REPOSITORIES_PER_PAGE = 100;
+export const GITHUB_MAX_ORGANIZATION_REPOSITORIES = 10_000;
+export const GITHUB_MAX_ORGANIZATION_REPOSITORY_PAGES = Math.ceil(
+  GITHUB_MAX_ORGANIZATION_REPOSITORIES / GITHUB_REPOSITORIES_PER_PAGE,
+);
 
 type JsonRecord = Record<string, unknown>;
+
+type ExactCountMetric = {
+  readonly status: "available";
+  readonly value: number;
+  readonly precision: "exact";
+  readonly unit: "count";
+};
 
 export type GitHubProfileStats = {
   readonly schemaVersion: 1;
@@ -50,11 +68,37 @@ export type GitHubProfileStats = {
   };
 };
 
-type ExactCountMetric = {
-  readonly status: "available";
-  readonly value: number;
-  readonly precision: "exact";
-  readonly unit: "count";
+export type GitHubOrganizationRead = {
+  readonly id: number;
+  readonly organization: string;
+  readonly url: string;
+  readonly followers: number;
+  readonly publicRepositories: number;
+};
+
+export type GitHubOrganizationRepository = {
+  readonly id: number;
+  readonly stars: number;
+};
+
+export type GitHubOrganizationStats = {
+  readonly schemaVersion: 1;
+  readonly provider: "github";
+  readonly target: {
+    readonly kind: "organization";
+    readonly id: string;
+    readonly url: string;
+  };
+  readonly observedAt: string;
+  readonly completeness: "complete";
+  readonly metrics: {
+    readonly stars: ExactCountMetric;
+    readonly followers: ExactCountMetric;
+  };
+  readonly metadata: {
+    readonly organization: string;
+    readonly publicRepositories: number;
+  };
 };
 
 function record(value: unknown, label: string): JsonRecord {
@@ -128,12 +172,19 @@ export function githubUsername(value: unknown, label = "GitHub username"): strin
   return username;
 }
 
+export function githubOrganization(
+  value: unknown,
+  label = "GitHub organization",
+): string {
+  return githubUsername(value, label);
+}
+
 function exactObservedAt(value: string): string {
   if (
     !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
     || !Number.isFinite(Date.parse(value))
   ) {
-    throw new Error("GitHub profile stats observedAt must be an exact UTC observation time");
+    throw new Error("GitHub statistics observedAt must be an exact UTC observation time");
   }
   return value;
 }
@@ -143,6 +194,7 @@ function exactResponseUrl(
   origin: string,
   pathname: string,
   label: string,
+  targetLabel: string,
 ): string {
   const raw = boundedString(value, label, 512);
   let url: URL;
@@ -159,7 +211,7 @@ function exactResponseUrl(
     || url.username !== ""
     || url.password !== ""
   ) {
-    throw new Error(`${label} did not bind the requested GitHub profile`);
+    throw new Error(`${label} did not bind the requested GitHub ${targetLabel}`);
   }
   return url.href;
 }
@@ -188,12 +240,14 @@ export function projectGitHubProfileStats(
     GITHUB_API_ORIGIN,
     `/users/${responseUsername}`,
     "GitHub profile stats API URL",
+    "profile",
   );
   const profileUrl = exactResponseUrl(
     profile.html_url,
     GITHUB_APP_ORIGIN,
     `/${responseUsername}`,
     "GitHub profile stats public URL",
+    "profile",
   );
   return Object.freeze({
     schemaVersion: 1,
@@ -221,6 +275,129 @@ export function projectGitHubProfileStats(
         1_000,
       ),
       bio: optionalString(profile.bio, "GitHub profile stats bio", 10_000),
+    }),
+  });
+}
+
+/** Bind the organization response before any public-repository page is read. */
+export function parseGitHubOrganizationRead(
+  value: unknown,
+  expectedOrganization: string,
+): GitHubOrganizationRead {
+  const organization = githubOrganization(expectedOrganization);
+  const response = record(value, "GitHub organization stats");
+  const responseOrganization = githubOrganization(
+    response.login,
+    "GitHub organization stats login",
+  );
+  if (responseOrganization !== organization) {
+    throw new Error("GitHub organization stats response did not bind the requested organization");
+  }
+  if (response.type !== "Organization") {
+    throw new Error("GitHub organization stats response is not one organization");
+  }
+  const id = boundedInteger(response.id, "GitHub organization stats ID", 1);
+  exactResponseUrl(
+    response.url,
+    GITHUB_API_ORIGIN,
+    `/orgs/${responseOrganization}`,
+    "GitHub organization stats API URL",
+    "organization",
+  );
+  const url = exactResponseUrl(
+    response.html_url,
+    GITHUB_APP_ORIGIN,
+    `/${responseOrganization}`,
+    "GitHub organization stats public URL",
+    "organization",
+  );
+  return Object.freeze({
+    id,
+    organization: responseOrganization,
+    url,
+    followers: boundedInteger(
+      response.followers,
+      "GitHub organization followers",
+    ),
+    publicRepositories: boundedInteger(
+      response.public_repos,
+      "GitHub organization public repositories",
+    ),
+  });
+}
+
+/** Bind one listed public repository to the already-bound organization. */
+export function projectGitHubOrganizationRepository(
+  value: unknown,
+  organization: GitHubOrganizationRead,
+): GitHubOrganizationRepository {
+  const repository = record(value, "GitHub organization public repository");
+  const owner = record(repository.owner, "GitHub organization repository owner");
+  const ownerOrganization = githubOrganization(
+    owner.login,
+    "GitHub organization repository owner login",
+  );
+  if (
+    ownerOrganization !== organization.organization
+    || boundedInteger(owner.id, "GitHub organization repository owner ID", 1)
+      !== organization.id
+    || owner.type !== "Organization"
+  ) {
+    throw new Error("GitHub organization repository did not bind the requested organization");
+  }
+  if (repository.private !== false || repository.visibility !== "public") {
+    throw new Error("GitHub organization repository is not one public repository");
+  }
+  const name = boundedString(
+    repository.name,
+    "GitHub organization repository name",
+    100,
+  );
+  const fullName = boundedString(
+    repository.full_name,
+    "GitHub organization repository full name",
+    256,
+  );
+  if (
+    fullName.toLowerCase() !== `${organization.organization}/${name}`.toLowerCase()
+  ) {
+    throw new Error("GitHub organization repository did not bind its public name");
+  }
+  return Object.freeze({
+    id: boundedInteger(repository.id, "GitHub organization repository ID", 1),
+    stars: boundedInteger(
+      repository.stargazers_count,
+      "GitHub organization repository stargazers",
+    ),
+  });
+}
+
+/** Project the completed, already-bound public organization repository set. */
+export function projectGitHubOrganizationStats(
+  organization: GitHubOrganizationRead,
+  totalStars: number,
+  observedAt: string,
+): GitHubOrganizationStats {
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "github",
+    target: Object.freeze({
+      kind: "organization",
+      id: String(organization.id),
+      url: organization.url,
+    }),
+    observedAt: exactObservedAt(observedAt),
+    completeness: "complete",
+    metrics: Object.freeze({
+      stars: exactCountMetric(totalStars, "GitHub organization stars"),
+      followers: exactCountMetric(
+        organization.followers,
+        "GitHub organization followers",
+      ),
+    }),
+    metadata: Object.freeze({
+      organization: organization.organization,
+      publicRepositories: organization.publicRepositories,
     }),
   });
 }

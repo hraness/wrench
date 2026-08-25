@@ -326,6 +326,25 @@ describe("authenticated web-session contract identity", () => {
     }
   });
 
+  test("observes exact public GitHub profile and organization statistic reads", () => {
+    for (const action of ["profiles.read", "organizations.read"] as const) {
+      expect(contract({ site: "github", action, contractVersion: 1 })).toMatchObject({
+        site: "github",
+        operation: action,
+        risk: "R1",
+        state: "observed",
+        dispatch: "none",
+        sideEffect: "none",
+        idempotency: "none",
+      });
+    }
+    const github = providerPluginRegistry.requireSessionRoute("github");
+    expect(providerPluginRegistry.legacyContractImplementationHashes(github)
+      .map((value) => value.toString("hex"))).toEqual([
+      "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
+    ]);
+  });
+
   test("keeps every Marketplace mutation capture-required", () => {
     const binding = providerPluginRegistry.requireSessionRoute(
       "facebook-marketplace",

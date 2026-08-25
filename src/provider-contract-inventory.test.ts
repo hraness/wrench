@@ -74,14 +74,20 @@ function legacyHash(contract, implementationHash, web) {
     .update(implementationHash)
     .digest("hex");
 }
-function appendCurrentRow(row) {
-  if ((row[0] === "provider-api" && row[1] === "gmail")
+function isCurrentOnlyRow(row) {
+  return (row[0] === "provider-api" && row[1] === "gmail")
     || (row[0] === "linked-device" && row[1] === "beeper")
-    || (row[0] === "web-session-api" && row[1] === "github")) {
+    || (row[0] === "web-session-api" && row[1] === "github");
+}
+function appendCurrentRow(row) {
+  if (isCurrentOnlyRow(row)) {
+    // Routes introduced after the predecessor inventory keep their own
+    // reader aliases without rewriting that historical baseline.
     currentOnlyRows.push(row);
-    return;
+    return false;
   }
   rows.push(row);
+  return true;
 }
 for (const plugin of registry.list()) {
   for (const binding of plugin.bindings) {
@@ -96,14 +102,16 @@ for (const plugin of registry.list()) {
             timeoutMs: 30_000,
             maxOutputBytes: 1024 * 1024,
           }, registry);
-          appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
+          const includePredecessorInventory = appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
             providerContracts.providerContractHash(contract, registry)]);
-          legacyImplementations.forEach((implementationHash, index) => {
-            const hash = legacyHash(contract, implementationHash, false);
-            legacyRows[index] ??= [];
-            legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
-            acceptedLegacy &&= providerContracts.isCompatibleProviderContractHash(contract, hash, registry);
-          });
+          if (includePredecessorInventory) {
+            legacyImplementations.forEach((implementationHash, index) => {
+              const hash = legacyHash(contract, implementationHash, false);
+              legacyRows[index] ??= [];
+              legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
+              acceptedLegacy &&= providerContracts.isCompatibleProviderContractHash(contract, hash, registry);
+            });
+          }
           rejectedUnknown &&= !providerContracts.isCompatibleProviderContractHash(
             contract, "f".repeat(64), registry,
           );
@@ -115,14 +123,16 @@ for (const plugin of registry.list()) {
             timeoutMs: 60_000,
             maxOutputBytes: 2 * 1024 * 1024,
           }, registry);
-          appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
+          const includePredecessorInventory = appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
             webContracts.webSessionContractHash(contract, registry)]);
-          legacyImplementations.forEach((implementationHash, index) => {
-            const hash = legacyHash(contract, implementationHash, true);
-            legacyRows[index] ??= [];
-            legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
-            acceptedLegacy &&= webContracts.isCompatibleWebSessionContractHash(contract, hash, registry);
-          });
+          if (includePredecessorInventory) {
+            legacyImplementations.forEach((implementationHash, index) => {
+              const hash = legacyHash(contract, implementationHash, true);
+              legacyRows[index] ??= [];
+              legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
+              acceptedLegacy &&= webContracts.isCompatibleWebSessionContractHash(contract, hash, registry);
+            });
+          }
           rejectedUnknown &&= !webContracts.isCompatibleWebSessionContractHash(
             contract, "f".repeat(64), registry,
           );
@@ -185,39 +195,45 @@ process.stdout.write(JSON.stringify({
 }));
 `;
 
-function inventoryForNodeEnv(nodeEnv: string | undefined): unknown {
+async function inventoryForNodeEnv(nodeEnv: string | undefined): Promise<unknown> {
   const environment = { ...process.env };
   if (nodeEnv === undefined) delete environment.NODE_ENV;
   else environment.NODE_ENV = nodeEnv;
-  const result = Bun.spawnSync({
+  const result = Bun.spawn({
     cmd: [process.execPath, "-e", inventoryProgram],
     cwd: join(import.meta.dir, ".."),
     env: environment,
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (result.exitCode !== 0) {
+  const [exitCode, stdout, stderr] = await Promise.all([
+    result.exited,
+    new Response(result.stdout).text(),
+    new Response(result.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
     throw new Error(
-      `contract inventory child failed for NODE_ENV=${nodeEnv ?? "<unset>"}: ${result.stderr.toString()}`,
+      `contract inventory child failed for NODE_ENV=${nodeEnv ?? "<unset>"}: ${stderr}`,
     );
   }
-  return JSON.parse(result.stdout.toString());
+  return JSON.parse(stdout);
 }
 
 describe("durable provider contract inventory", () => {
-  test("preserves every predecessor writer identity across execution modes", () => {
-    for (const nodeEnv of [
+  test("preserves every predecessor writer identity across execution modes", async () => {
+    const inventories = await Promise.all([
       undefined,
       "test",
       "production",
       "development",
       "staging",
-    ] as const) {
-      expect(inventoryForNodeEnv(nodeEnv)).toEqual({
+    ].map((nodeEnv) => inventoryForNodeEnv(nodeEnv)));
+    for (const inventory of inventories) {
+      expect(inventory).toEqual({
         rows: 317,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 8,
-        currentOnlySha256: "084359010fb0c398b3c4c5392b84055d4cbfabac4d12afe57648a52d9161c160",
+        currentOnlyRows: 9,
+        currentOnlySha256: "adc3292c16a1280f286637cc4e837378924a86d3440ffd1200b7a0dbec041265",
         legacyRows: [
           317,
           317,
