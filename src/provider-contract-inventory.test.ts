@@ -195,35 +195,41 @@ process.stdout.write(JSON.stringify({
 }));
 `;
 
-function inventoryForNodeEnv(nodeEnv: string | undefined): unknown {
+async function inventoryForNodeEnv(nodeEnv: string | undefined): Promise<unknown> {
   const environment = { ...process.env };
   if (nodeEnv === undefined) delete environment.NODE_ENV;
   else environment.NODE_ENV = nodeEnv;
-  const result = Bun.spawnSync({
+  const result = Bun.spawn({
     cmd: [process.execPath, "-e", inventoryProgram],
     cwd: join(import.meta.dir, ".."),
     env: environment,
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (result.exitCode !== 0) {
+  const [exitCode, stdout, stderr] = await Promise.all([
+    result.exited,
+    new Response(result.stdout).text(),
+    new Response(result.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
     throw new Error(
-      `contract inventory child failed for NODE_ENV=${nodeEnv ?? "<unset>"}: ${result.stderr.toString()}`,
+      `contract inventory child failed for NODE_ENV=${nodeEnv ?? "<unset>"}: ${stderr}`,
     );
   }
-  return JSON.parse(result.stdout.toString());
+  return JSON.parse(stdout);
 }
 
 describe("durable provider contract inventory", () => {
-  test("preserves every predecessor writer identity across execution modes", () => {
-    for (const nodeEnv of [
+  test("preserves every predecessor writer identity across execution modes", async () => {
+    const inventories = await Promise.all([
       undefined,
       "test",
       "production",
       "development",
       "staging",
-    ] as const) {
-      expect(inventoryForNodeEnv(nodeEnv)).toEqual({
+    ].map((nodeEnv) => inventoryForNodeEnv(nodeEnv)));
+    for (const inventory of inventories) {
+      expect(inventory).toEqual({
         rows: 317,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 9,
