@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.4 - 2026-08-24
+
+- Add a credential-free, target-bound GitHub organization read that binds the
+  organization and completes its bounded public repository pagination before
+  projecting exact aggregate stars and followers.
+- Preserve the existing GitHub profile read and document both public GitHub
+  social-statistics routes for scheduled consumers.
+
 ## 0.13.3 - 2026-08-24
 
 - Add a credential-free, target-bound GitHub profile read through the fixed

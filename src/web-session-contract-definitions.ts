@@ -380,6 +380,7 @@ const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
   "posts.publish": 3,
 });
 const GITHUB_WEB_OPERATIONS = operationPolicies("github", [
+  "organizations.read",
   "profiles.read",
 ]);
 const HACKER_NEWS_WEB_OPERATIONS = operationPolicies("hacker-news", [
@@ -603,6 +604,13 @@ const hackerNews = {
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const github = {
+  "organizations.read": contract(
+    "github",
+    "organizations.read",
+    GITHUB_WEB_OPERATIONS["organizations.read"].risk,
+    GITHUB_WEB_OPERATIONS["organizations.read"].state,
+    GITHUB_WEB_OPERATIONS["organizations.read"].reason,
+  ),
   "profiles.read": contract(
     "github",
     "profiles.read",

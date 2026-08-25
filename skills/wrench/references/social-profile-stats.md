@@ -38,10 +38,11 @@ credentials. Wrench probes and binds each authenticated provider subject.
 | `substack-hraness` | `substack-web profiles.read` | `substack-chrome` | `{"profile":"hraness"}` | followers |
 | `substack-hraness` | `substack-web organizations.read` | `substack-chrome` | `{"organization":"hraness"}` | freeSubscribers, paidSubscribers |
 | `github-0thernet` | `github-web profiles.read` | public | `{"username":"0thernet"}` | followers, following, publicRepositories |
+| `github-hraness` | `github-web organizations.read` | public | `{"organization":"hraness"}` | stars, followers |
 | `tiktok-hraness` | `tiktok-web profiles.read` | `tiktok-chrome` | `{"profile":"hraness"}` | followers, following, likes |
 | `reddit-bgdotjpg` | `reddit-web profiles.read` | `reddit-chrome` | `{"profile":"bgdotjpg"}` | followers, karma, contributions |
 
-Bluesky and GitHub profile statistics come from public target-bound APIs.
+Bluesky and GitHub profile and organization statistics come from public target-bound APIs.
 Invoke these rows without `--auth`. Wrench assigns each reviewed operation a
 deterministic public authority for receipts and exact R1 caching. Supplying an
 auth locator is an error.
@@ -80,7 +81,15 @@ printf '%s' '{"handle":"hraness.bsky.social"}' \
   | wrench invoke bluesky-web profiles.read --input - --json
 printf '%s' '{"username":"0thernet"}' \
   | wrench invoke github-web profiles.read --input - --json
+printf '%s' '{"organization":"hraness"}' \
+  | wrench invoke github-web organizations.read --input - --json
 ```
+
+`github-web organizations.read` first binds the exact organization and its
+declared public repository count, then completes the fixed public repository
+pagination before summing `stargazers_count`. It returns `stars` only when the
+complete repository set is available and bound; it never substitutes a partial
+page, a rounded display total, or a prior observation.
 
 Do not put an auth ID, provider receipt, cache key, run ID, subject identifier,
 or raw provider response in the consumer snapshot. Do not print or persist

@@ -15,7 +15,7 @@ if (githubContracts === undefined) {
 
 const operations = webSessionContractOperations(
   Object.values(githubContracts),
-  "e98e40c98b2ab018dc4dc08fd701d384939425240224631bde25be278695127b",
+  "ee1f44dca49dfaf7fdf06831765abf3775a97914821b9b3856684067d2acea84",
 ).map((operation) => Object.freeze({
   ...operation,
   access: "public" as const,
@@ -24,8 +24,8 @@ const operations = webSessionContractOperations(
 export const githubWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "github-web",
-  version: "1.0.0",
-  displayName: "GitHub Public Profile API",
+  version: "1.1.0",
+  displayName: "GitHub Public Statistics API",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
     ["providers/github-web.ts", "../../providers/github-web.ts"],
@@ -49,13 +49,28 @@ export const githubWebPlugin = defineProviderPlugin({
       return {
         probe: runtime.probeGitHubWebSubject,
         execute: runtime.executeGitHubAuthenticatedOperation,
-        executePublic: (_manifest, recipe, input, options) =>
-          runtime.executeGitHubPublicProfileRead(
-            recipe,
-            input,
-            undefined,
-            options.operationDeadline,
-          ),
+        executePublic: (_manifest, recipe, input, options) => {
+          switch (recipe.action) {
+            case "profiles.read":
+              return runtime.executeGitHubPublicProfileRead(
+                recipe,
+                input,
+                undefined,
+                options.operationDeadline,
+              );
+            case "organizations.read":
+              return runtime.executeGitHubPublicOrganizationRead(
+                recipe,
+                input,
+                undefined,
+                options.operationDeadline,
+              );
+            default:
+              return Promise.reject(
+                new Error("GitHub public operation is not installed"),
+              );
+          }
+        },
       };
     }),
   }],

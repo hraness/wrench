@@ -420,7 +420,7 @@ describe("social platform catalog", () => {
       "x",
       "youtube",
     ]);
-    const organizationSurfaces = new Set(["linkedin", "substack"]);
+    const organizationSurfaces = new Set(["github", "linkedin", "substack"]);
     for (const surfaceId of platformSurfaceIds) {
       expect(socialPlatformCatalog[surfaceId].operations["profiles.read"]).toMatchObject(
         profileSurfaces.has(surfaceId)

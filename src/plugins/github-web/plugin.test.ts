@@ -8,10 +8,10 @@ if (binding?.transport !== "web-session-api") {
 }
 
 describe("GitHub provider plugin", () => {
-  test("advertises one public exact profile read", () => {
+  test("advertises public exact profile and organization statistics reads", () => {
     expect(githubWebPlugin).toMatchObject({
       id: "github-web",
-      version: "1.0.0",
+      version: "1.1.0",
       sourceKind: "built-in",
     });
     expect(binding).toMatchObject({
@@ -21,8 +21,12 @@ describe("GitHub provider plugin", () => {
       protectedHostnameFamilies: ["api.github.com", "github.com"],
       authKinds: ["browser-profile"],
     });
-    expect(binding.operations).toHaveLength(1);
-    expect(binding.operations[0]).toMatchObject({
+    const profile = binding.operations.find((operation) =>
+      operation.name === "profiles.read");
+    const organization = binding.operations.find((operation) =>
+      operation.name === "organizations.read");
+    expect(binding.operations).toHaveLength(2);
+    expect(profile).toMatchObject({
       name: "profiles.read",
       access: "public",
       contractVersion: 1,
@@ -36,6 +40,20 @@ describe("GitHub provider plugin", () => {
         required: ["username"],
       },
     });
+    expect(organization).toMatchObject({
+      name: "organizations.read",
+      access: "public",
+      contractVersion: 1,
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+      input: {
+        properties: {
+          organization: { type: "string", minLength: 1, maxLength: 39 },
+        },
+        required: ["organization"],
+      },
+    });
     expect(binding.executePublic).toBeFunction();
   });
 
@@ -47,6 +65,6 @@ describe("GitHub provider plugin", () => {
       kind: "browser-profile",
       profile: "unused",
       trustUnfilteredEgress: true,
-    })).rejects.toThrow("is public and does not use an auth realm");
+    })).rejects.toThrow("do not use an auth realm");
   });
 });

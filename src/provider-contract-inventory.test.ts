@@ -74,14 +74,20 @@ function legacyHash(contract, implementationHash, web) {
     .update(implementationHash)
     .digest("hex");
 }
-function appendCurrentRow(row) {
-  if ((row[0] === "provider-api" && row[1] === "gmail")
+function isCurrentOnlyRow(row) {
+  return (row[0] === "provider-api" && row[1] === "gmail")
     || (row[0] === "linked-device" && row[1] === "beeper")
-    || (row[0] === "web-session-api" && row[1] === "github")) {
+    || (row[0] === "web-session-api" && row[1] === "github");
+}
+function appendCurrentRow(row) {
+  if (isCurrentOnlyRow(row)) {
+    // Routes introduced after the predecessor inventory keep their own
+    // reader aliases without rewriting that historical baseline.
     currentOnlyRows.push(row);
-    return;
+    return false;
   }
   rows.push(row);
+  return true;
 }
 for (const plugin of registry.list()) {
   for (const binding of plugin.bindings) {
@@ -96,14 +102,16 @@ for (const plugin of registry.list()) {
             timeoutMs: 30_000,
             maxOutputBytes: 1024 * 1024,
           }, registry);
-          appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
+          const includePredecessorInventory = appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
             providerContracts.providerContractHash(contract, registry)]);
-          legacyImplementations.forEach((implementationHash, index) => {
-            const hash = legacyHash(contract, implementationHash, false);
-            legacyRows[index] ??= [];
-            legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
-            acceptedLegacy &&= providerContracts.isCompatibleProviderContractHash(contract, hash, registry);
-          });
+          if (includePredecessorInventory) {
+            legacyImplementations.forEach((implementationHash, index) => {
+              const hash = legacyHash(contract, implementationHash, false);
+              legacyRows[index] ??= [];
+              legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
+              acceptedLegacy &&= providerContracts.isCompatibleProviderContractHash(contract, hash, registry);
+            });
+          }
           rejectedUnknown &&= !providerContracts.isCompatibleProviderContractHash(
             contract, "f".repeat(64), registry,
           );
@@ -115,14 +123,16 @@ for (const plugin of registry.list()) {
             timeoutMs: 60_000,
             maxOutputBytes: 2 * 1024 * 1024,
           }, registry);
-          appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
+          const includePredecessorInventory = appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
             webContracts.webSessionContractHash(contract, registry)]);
-          legacyImplementations.forEach((implementationHash, index) => {
-            const hash = legacyHash(contract, implementationHash, true);
-            legacyRows[index] ??= [];
-            legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
-            acceptedLegacy &&= webContracts.isCompatibleWebSessionContractHash(contract, hash, registry);
-          });
+          if (includePredecessorInventory) {
+            legacyImplementations.forEach((implementationHash, index) => {
+              const hash = legacyHash(contract, implementationHash, true);
+              legacyRows[index] ??= [];
+              legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
+              acceptedLegacy &&= webContracts.isCompatibleWebSessionContractHash(contract, hash, registry);
+            });
+          }
           rejectedUnknown &&= !webContracts.isCompatibleWebSessionContractHash(
             contract, "f".repeat(64), registry,
           );
@@ -216,8 +226,8 @@ describe("durable provider contract inventory", () => {
       expect(inventoryForNodeEnv(nodeEnv)).toEqual({
         rows: 317,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 8,
-        currentOnlySha256: "084359010fb0c398b3c4c5392b84055d4cbfabac4d12afe57648a52d9161c160",
+        currentOnlyRows: 9,
+        currentOnlySha256: "adc3292c16a1280f286637cc4e837378924a86d3440ffd1200b7a0dbec041265",
         legacyRows: [
           317,
           317,

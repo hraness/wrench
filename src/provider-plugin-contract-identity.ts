@@ -61,9 +61,11 @@ const identities = Object.freeze({
   },
   "github-web": {
     schemaVersion: 1,
-    pluginVersion: "1.0.0",
-    implementationSha256: "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.1.0",
+    implementationSha256: "2764fb3c746755b2453279b5a6672f1460a139717c45e83520dfa5d9f753025a",
+    legacyCurrentReadImplementationSha256: [
+      "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
+    ],
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
   },
