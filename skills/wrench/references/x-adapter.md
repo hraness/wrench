@@ -189,7 +189,10 @@ content-disclosure field. The reviewed GraphQL contract has no
 `made_with_ai` or `content_disclosure` input; do not invent one. Official
 OAuth `x` `posts.publish` exposes optional `made_with_ai` and sends `true`
 only when the caller explicitly asks. Leave that field unset or `false` for
-user-supplied cross-post copy. See [X AI disclosure](x-ai-disclosure.md).
+user-supplied cross-post copy. JPEG and PNG uploads are re-encoded to
+pixels-only bytes before INIT or APPEND. A live Made with AI sparkle on
+CreateTweet or TweetResultByRestId is a failed unlabeled-copy publish.
+See [X AI disclosure](x-ai-disclosure.md).
 
 Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.
 

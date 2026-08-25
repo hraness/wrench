@@ -632,7 +632,7 @@ const x = {
   "articles.read": contract("x", "articles.read", "R1", "capture-required", "native article detail requires entitlement-specific reviewed capture"),
   "articles.draft.save": contract("x", "articles.draft.save", "R2", "observed", "current bounded media INIT/APPEND/FINALIZE plus Article entity create/title/content mutations save one response-bound private rich-text-and-image draft and never call ArticleEntityPublish", 2),
   "messaging.send": contract("x", "messaging.send", "R3", "capture-required", "DM send requires exact current mutation and target binding"),
-  "posts.publish": contract("x", "posts.publish", "R3", "observed", "current optional single-PNG or MP4 upload plus strict CreateTweet response, durable accepted-target evidence, and bounded independent TweetResultByRestId readback binding", 4),
+  "posts.publish": contract("x", "posts.publish", "R3", "observed", "current optional single-PNG or MP4 upload with pixels-only provenance scrub, strict CreateTweet response, durable accepted-target evidence, and fail-closed TweetResultByRestId readback for Made with AI labels", 4),
   "threads.publish": contract("x", "threads.publish", "R3", "capture-required", "ordered CreateTweet root/self-reply dispatch needs an authorized live fixture and reviewed transaction-header behavior"),
   "replies.create": contract("x", "replies.create", "R3", "capture-required", "CreateTweet reply needs an authorized live fixture and reviewed transaction-header behavior"),
   "posts.repost": contract("x", "posts.repost", "R3", "capture-required", "repost desired-state mutation needs an authorized live fixture and reviewed transaction-header behavior"),

@@ -12,6 +12,8 @@ import { isAbsolute } from "node:path";
 import { isXAccountSubject } from "../provider-subject";
 import { bearerHeaders, type ProviderResponse } from "../provider-http";
 import type { ProviderActionContext, ProviderFile } from "../provider-context";
+import { rejectGifProvenanceMarkers, scrubXUploadImage } from "./x-image-provenance";
+import { rejectXTweetMadeWithAiLabel } from "./x-made-with-ai";
 
 const X_API_ORIGIN = "https://api.x.com";
 const X_ALLOWED_HOSTS = ["api.x.com"] as const;
@@ -1179,11 +1181,15 @@ async function uploadOneShotImage(
   const { file } = prepared;
   const bytes = verifiedProviderRead(file, prepared.preflightIdentity, true).bytes;
   if (bytes === null) throw new Error("official X image could not be materialized safely");
+  if (file.mediaType !== "image/jpeg" && file.mediaType !== "image/png") {
+    throw new Error("official X one-shot upload supports only JPEG or PNG");
+  }
+  const uploadBytes = scrubXUploadImage(new Uint8Array(bytes), file.mediaType);
   const multipart = xMultipartPayload([
     { name: "media_category", value: category },
     { name: "media_type", value: file.mediaType },
   ], {
-    bytes,
+    bytes: uploadBytes,
     mediaType: file.mediaType,
     filename: genericUploadName(file.mediaType),
   });
@@ -1259,6 +1265,11 @@ async function uploadChunkedMedia(
   category: string,
 ): Promise<UploadedMedia> {
   const { file } = prepared;
+  if (file.mediaType === "image/gif") {
+    const bytes = verifiedProviderRead(file, prepared.preflightIdentity, true).bytes;
+    if (bytes === null) throw new Error("official X GIF could not be materialized safely");
+    rejectGifProvenanceMarkers(bytes);
+  }
   const opened = openProviderFile(file, prepared.preflightIdentity);
   let id: string;
   try {
@@ -1459,11 +1470,15 @@ async function executePostsPublish(context: ProviderActionContext): Promise<void
     );
     const id = createdPostId(response);
     const url = postUrl(id);
+    const post = dataRecord(response, "post creation");
+    if (officialMadeWithAiLabel(madeWithAi) !== true) {
+      rejectXTweetMadeWithAiLabel(post, { id, url });
+    }
     context.setOutput({
       provider: "x",
       operation: "posts.publish",
       published: true,
-      post: dataRecord(response, "post creation"),
+      post,
       uploadedMedia: uploaded,
       url,
     });

@@ -133,6 +133,22 @@ function withInvocationAuthorityAdmission<T>(
       );
 }
 
+function liveReadDiscardedError(
+  invocation: PreparedInvocation,
+  cause?: unknown,
+): Error {
+  return new Error(
+    `auth locator ${invocation.auth.id} changed while the live read was running; its result was discarded`,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function isOptionalAdmissionRewrite(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes("could not safely open optional read projection admission")
+    && error.message.includes("state file changed while it was read");
+}
+
 type AuthRealmState = "matches" | "missing" | "changed";
 
 function authRealmState(
@@ -323,14 +339,13 @@ export async function revalidatePreparedCapability(
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     },
   );
-  return withInvocationAuthorityAdmission(
-    invocation,
-    environment,
-    () => {
+  try {
+    return withInvocationAuthorityAdmission(
+      invocation,
+      environment,
+      () => {
       if (authRealmState(invocation, query, environment) !== "matches") {
-        throw new Error(
-          `auth locator ${invocation.auth.id} changed while the live read was running; its result was discarded`,
-        );
+        throw liveReadDiscardedError(invocation);
       }
       if (query === null) {
         return Object.freeze({
@@ -442,8 +457,14 @@ export async function revalidatePreparedCapability(
         }),
       });
     },
-    { maximumWaitMs: READ_PROJECTION_TRANSITION_SETTLEMENT_WAIT_MS },
-  );
+      { maximumWaitMs: READ_PROJECTION_TRANSITION_SETTLEMENT_WAIT_MS },
+    );
+  } catch (error) {
+    if (isOptionalAdmissionRewrite(error)) {
+      throw liveReadDiscardedError(invocation, error);
+    }
+    throw error;
+  }
 }
 
 export async function revalidateCapability(

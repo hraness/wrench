@@ -309,7 +309,7 @@
       }
     },
     "posts.publish": {
-      "description": "Observed contract: publish one confirmed X post with optional reviewed PNG or MP4 through exact upload, CreateTweet response, and independent TweetResultByRestId readback binding.",
+      "description": "Observed contract: publish one confirmed X post with optional reviewed PNG or MP4 through pixels-only upload scrub, CreateTweet response, and fail-closed TweetResultByRestId Made with AI readback.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible X post with the exact confirmed content and reply audience.",
       "idempotency": "local-at-most-once",

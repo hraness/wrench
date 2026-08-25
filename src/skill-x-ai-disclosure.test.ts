@@ -27,6 +27,10 @@ describe("packaged Wrench skill X AI disclosure", () => {
     expect(disclosure).toContain("explicitly authorized `made_with_ai: true`");
     expect(disclosure).toContain("outside this workflow");
     expect(disclosure).toContain("Do not report success");
+    expect(disclosure).toContain("pixels-only");
+    expect(disclosure).toContain("caBX");
+    expect(disclosure).toContain("locked");
+    expect(disclosure).toContain("auto-label");
 
     const crossPost = readSkill("references/cross-posting.md");
     expect(crossPost).toContain("x-ai-disclosure.md");

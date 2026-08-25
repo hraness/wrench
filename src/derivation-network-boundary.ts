@@ -570,8 +570,13 @@ export async function createDerivationNetworkBoundary(input: {
   try {
     for (;;) {
       if (existsSync(readyPath)) {
-        readyRead = readGuardPrivateFile(readyPath, 64 * 1024);
-        break;
+        try {
+          readyRead = readGuardPrivateFile(readyPath, 64 * 1024);
+          break;
+        } catch {
+          // The helper creates the ready path with O_EXCL before the write
+          // finishes. Keep polling until the file is complete or the deadline.
+        }
       }
       const exit = await Promise.race([
         child.exited.then((code) => ({ exited: true as const, code })),

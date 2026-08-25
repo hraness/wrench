@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Scrub JPEG and PNG provenance before X media upload, and fail closed when
+  CreateTweet or independent TweetResultByRestId readback shows a Made with AI
+  sparkle on user-supplied copy.
+- Treat a mid-read optional admission rewrite after live I/O as an auth-changed
+  discard so the live result cannot be published.
+- Keep polling derivation-proxy readiness until the ready file is a complete
+  0600 regular file, so an O_EXCL create cannot fail the start race.
+
 ## 0.13.5 - 2026-08-24
 
 - Add the Hraness Twitch channel to the package-owned social-statistics

@@ -345,6 +345,8 @@
     "src/providers/whatsapp-web.ts",
     "src/providers/whatsapp-omni.ts",
     "src/providers/x-transaction-id.ts",
+    "src/providers/x-image-provenance.ts",
+    "src/providers/x-made-with-ai.ts",
     "src/providers/x-web-runtime.ts",
     "src/providers/x-web.ts",
     "src/providers/x.ts",
