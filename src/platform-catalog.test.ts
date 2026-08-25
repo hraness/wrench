@@ -26,8 +26,10 @@ const r1Operations = new Set<SemanticOperationName>([
   "profiles.read",
   "organizations.read",
   "contacts.list",
+  "contacts.search",
   "feeds.read",
   "messaging.list",
+  "messaging.search",
   "messaging.read",
   "comments.read",
   "posts.read",
@@ -111,6 +113,13 @@ const commonActionContracts = {
     posting: ["R1", "R3"],
     liking: ["not-applicable", "R2"],
     media: ["R1", "R3"],
+  },
+  github: {
+    messaging: ["unsupported", "unsupported"],
+    commenting: ["unsupported", "unsupported", "unsupported"],
+    posting: ["unsupported", "unsupported"],
+    liking: ["unsupported", "unsupported"],
+    media: ["unsupported", "unsupported"],
   },
   "hacker-news": {
     messaging: ["not-applicable", "not-applicable"],
@@ -202,6 +211,7 @@ const binaryAttachmentCompositions = {
   linkedin: ["message", "post", "media", "article"],
   x: ["message", "reply", "post", "article"],
   reddit: ["post", "media"],
+  github: [],
   "hacker-news": [],
   whatsapp: ["message"],
   substack: ["post", "media", "article"],
@@ -248,15 +258,16 @@ const expandedExecutableContracts = {
     R2: ["relationships.follow.set", "content.save", "communities.membership.set"],
     R3: ["posts.repost", "content.share", "content.edit", "content.delete"],
   },
+  github: { R2: [], R3: [] },
   "hacker-news": { R2: ["content.save"], R3: ["content.edit"] },
   whatsapp: { R2: ["content.save"], R3: ["content.share", "content.edit"] },
   substack: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["posts.repost", "posts.quote", "content.share", "content.edit", "content.schedule"],
+    R3: ["posts.repost", "posts.quote", "content.share", "content.edit", "content.delete", "content.schedule"],
   },
   instagram: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["posts.repost", "content.share", "content.edit"],
+    R3: ["posts.repost", "content.share", "content.edit", "content.delete"],
   },
   threads: {
     R2: ["relationships.follow.set", "content.save"],
@@ -277,11 +288,11 @@ const expandedExecutableContracts = {
   "facebook-marketplace": { R2: ["content.save"], R3: ["content.share", "content.edit"] },
   tiktok: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["posts.repost", "content.share", "content.schedule"],
+    R3: ["posts.repost", "content.share", "content.delete", "content.schedule"],
   },
   youtube: {
     R2: ["relationships.follow.set", "content.save"],
-    R3: ["content.edit", "content.schedule"],
+    R3: ["content.edit", "content.delete", "content.schedule"],
   },
   bluesky: {
     R2: ["relationships.follow.set", "content.save"],
@@ -401,6 +412,7 @@ describe("social platform catalog", () => {
   test("catalogues profile and organization reads only on surfaces with bounded identity projections", () => {
     const profileSurfaces = new Set([
       "bluesky",
+      "github",
       "instagram",
       "linkedin",
       "reddit",
@@ -410,7 +422,7 @@ describe("social platform catalog", () => {
       "x",
       "youtube",
     ]);
-    const organizationSurfaces = new Set(["linkedin", "substack"]);
+    const organizationSurfaces = new Set(["github", "linkedin", "substack"]);
     for (const surfaceId of platformSurfaceIds) {
       expect(socialPlatformCatalog[surfaceId].operations["profiles.read"]).toMatchObject(
         profileSurfaces.has(surfaceId)
@@ -464,7 +476,7 @@ describe("social platform catalog", () => {
         expect(surface.operations[operationName].state).not.toBe("adapter-eligible");
       }
       expect(surface.operations["content.delete"]).toMatchObject(
-        surfaceId === "x" || surfaceId === "bluesky" || surfaceId === "reddit"
+        surfaceId === "x" || surfaceId === "bluesky" || surfaceId === "reddit" || surfaceId === "substack" || surfaceId === "instagram" || surfaceId === "tiktok" || surfaceId === "youtube"
           ? { state: "adapter-eligible", risk: "R3" }
           : { state: "R4", risk: "R4" },
       );

@@ -3,6 +3,7 @@ type JsonRecord = Record<string, unknown>;
 type PendingResponse = {
   readonly reject: (error: Error) => void;
   readonly resolve: (value: unknown) => void;
+  readonly sessionId: string | undefined;
   readonly timer: ReturnType<typeof setTimeout>;
 };
 
@@ -62,7 +63,7 @@ export function localBrowserCdpUrl(value: unknown): string {
   return url.href;
 }
 
-function parseTargetId(value: unknown): string {
+export function parsePrivateCdpTargetId(value: unknown): string {
   const result = boundedIdentifier(value, "managed browser target ID", 128);
   if (!/^[A-Fa-f0-9]{16,128}$/u.test(result)) {
     throw new Error("managed browser target ID is invalid");
@@ -110,7 +111,7 @@ export function exactPageTarget(result: unknown, currentUrl: string): string {
     ) throw new Error("managed browser target listing changed shape");
     const url = candidate.url;
     if (type !== "page" || url !== currentUrl) continue;
-    matches.push(parseTargetId(candidate.targetId));
+    matches.push(parsePrivateCdpTargetId(candidate.targetId));
   }
   if (matches.length !== 1) {
     throw new Error("managed browser did not expose one exact derivation page target");
@@ -135,7 +136,7 @@ export function fileChooserBackendNode(
   return value.backendNodeId as number;
 }
 
-class PrivateCdpClient {
+export class PrivateCdpClient {
   readonly #events = new Set<PendingEvent>();
   readonly #pending = new Map<number, PendingResponse>();
   readonly #socket: WebSocket;
@@ -201,9 +202,33 @@ class PrivateCdpClient {
       if (pending === undefined) return;
       this.#pending.delete(value.id as number);
       clearTimeout(pending.timer);
-      if (isRecord(value.error)) pending.reject(new Error("private CDP command failed"));
-      else if ("result" in value) pending.resolve(value.result);
-      else pending.reject(new Error("private CDP response changed shape"));
+      const hasResult = Object.hasOwn(value, "result");
+      const hasError = Object.hasOwn(value, "error");
+      const expectedKeys = pending.sessionId === undefined
+        ? ["id", hasResult ? "result" : "error"]
+        : ["id", hasResult ? "result" : "error", "sessionId"];
+      if (
+        hasResult === hasError
+        || (pending.sessionId !== undefined && value.sessionId !== pending.sessionId)
+      ) {
+        pending.reject(new Error("private CDP response changed shape"));
+        return;
+      }
+      try {
+        exactKeys(value, expectedKeys, "private CDP response");
+      } catch {
+        pending.reject(new Error("private CDP response changed shape"));
+        return;
+      }
+      if (hasError) {
+        if (!isRecord(value.error)) {
+          pending.reject(new Error("private CDP response changed shape"));
+          return;
+        }
+        pending.reject(new Error("private CDP command failed"));
+        return;
+      }
+      pending.resolve(value.result);
       return;
     }
     if (typeof value.method !== "string" || !isRecord(value.params)) return;
@@ -227,7 +252,7 @@ class PrivateCdpClient {
         this.#pending.delete(id);
         reject(new Error("private CDP command timed out"));
       }, cdpCommandTimeoutMs);
-      this.#pending.set(id, { reject, resolve, timer });
+      this.#pending.set(id, { reject, resolve, sessionId, timer });
       this.#socket.send(JSON.stringify({ id, method, params: parameters, ...(sessionId === undefined ? {} : { sessionId }) }));
     });
   }
@@ -256,13 +281,13 @@ class PrivateCdpClient {
   }
 }
 
-function exactSessionId(result: unknown): string {
+export function exactPrivateCdpSessionId(result: unknown): string {
   if (!isRecord(result)) throw new Error("managed browser attachment changed shape");
   exactKeys(result, ["sessionId"], "managed browser attachment");
   return boundedIdentifier(result.sessionId, "managed browser session ID", 128);
 }
 
-function emptyResult(value: unknown, label: string): void {
+export function assertEmptyPrivateCdpResult(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} changed shape`);
   exactKeys(value, [], label);
 }
@@ -322,9 +347,9 @@ export async function uploadThroughInterceptedFileChooser(input: {
   let interceptionEnabled = false;
   try {
     const targetId = exactPageTarget(await client.send("Target.getTargets"), input.currentUrl);
-    sessionId = exactSessionId(await client.send("Target.attachToTarget", { flatten: true, targetId }));
-    emptyResult(await client.send("Page.enable", {}, sessionId), "managed browser Page.enable response");
-    emptyResult(
+    sessionId = exactPrivateCdpSessionId(await client.send("Target.attachToTarget", { flatten: true, targetId }));
+    assertEmptyPrivateCdpResult(await client.send("Page.enable", {}, sessionId), "managed browser Page.enable response");
+    assertEmptyPrivateCdpResult(
       await client.send("Page.setInterceptFileChooserDialog", { enabled: true }, sessionId),
       "managed browser chooser interception response",
     );
@@ -332,7 +357,7 @@ export async function uploadThroughInterceptedFileChooser(input: {
     const chooser = client.event("Page.fileChooserOpened", sessionId);
     await input.click();
     const backendNodeId = fileChooserBackendNode(await chooser, input.filePaths.length > 1);
-    emptyResult(
+    assertEmptyPrivateCdpResult(
       await client.send("DOM.setFileInputFiles", { backendNodeId, files: [...input.filePaths] }, sessionId),
       "managed browser file selection response",
     );

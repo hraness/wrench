@@ -17,12 +17,13 @@ if (tiktokContracts === undefined) {
 export const tiktokWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "tiktok-web",
-  version: "1.1.0",
+  version: "1.2.0",
   displayName: "TikTok Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
     ["providers/tiktok-web.ts", "../../providers/tiktok-web.ts"],
     ["providers/tiktok-web-runtime.ts", "../../providers/tiktok-web-runtime.ts"],
+    ["providers/tiktok-video-mp4.ts", "../../providers/tiktok-video-mp4.ts"],
   ]),
   bindings: [{
     transport: "web-session-api",
@@ -32,8 +33,10 @@ export const tiktokWebPlugin = defineProviderPlugin({
     authKinds: browserSessionAuthKinds,
     operations: webSessionContractOperations(
       Object.values(tiktokContracts),
-      "6ac405e86c58c8b4fc773f09f629d70b5551209abe18c953556c682948efb678",
-      {},
+      "1a629f5c443d84f6d1a6f83dfb8d47684a653e7f6e12fcc0d48bd613501bee31",
+      {
+        "media.publish": [1],
+      },
       {
         "messaging.list": {
           state: "unsupported",

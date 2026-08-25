@@ -26,6 +26,15 @@ export type YouTubeBootstrapConfig = {
   readonly visitorData: string | null;
 };
 
+export type YouTubeVideoDeleteRequest = Readonly<{
+  body: Readonly<{
+    context: YouTubeInnertubeContext;
+    videoId: string;
+  }>;
+  endpoint: "video/delete";
+  method: "POST";
+}>;
+
 export type YouTubeProjectedItem = {
   readonly kind: "video" | "playlist" | "channel" | "post";
   readonly id: string;
@@ -496,6 +505,30 @@ export function assertYouTubeResponseSuccess(value: unknown, label: string): Jso
     if (item.type === "ERROR") throw new Error(`${label} response contained an error alert`);
   }
   return envelope;
+}
+
+/**
+ * Build the bounded public-bundle-proven authored-video deletion request.
+ * Dispatch remains intentionally absent until an authorized accepted response,
+ * current-account pre-read, and exact-target absence readback are captured.
+ */
+export function youtubeVideoDeleteRequest(
+  config: YouTubeBootstrapConfig,
+  videoIdValue: unknown,
+): YouTubeVideoDeleteRequest {
+  const videoId = boundedString(videoIdValue, "YouTube delete video ID", 11);
+  if (!/^[A-Za-z0-9_-]{11}$/u.test(videoId)) {
+    throw new Error("YouTube delete video ID must be exact");
+  }
+  if (
+    config.context.client.clientName !== config.clientName
+    || config.context.client.clientVersion !== config.clientVersion
+  ) throw new Error("YouTube delete context did not match its reviewed bootstrap");
+  return Object.freeze({
+    body: Object.freeze({ context: config.context, videoId }),
+    endpoint: "video/delete" as const,
+    method: "POST" as const,
+  });
 }
 
 function exactYouTubePublicUrl(value: unknown, _label: string): string | null {

@@ -20,6 +20,8 @@ export {
   type WebSessionExecutionOptions,
   type WebSessionOperationDeadline,
   type WebSessionOperationExecutor,
+  type WebSessionProviderAcceptedMutationTargetEvent,
+  type WebSessionProviderBoundMutationTargetEvent,
 } from "./web-session-execution";
 
 export async function probeWebSessionSubject(

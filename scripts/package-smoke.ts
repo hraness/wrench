@@ -56,6 +56,58 @@ async function collectMarkdownFiles(root: string): Promise<readonly string[]> {
   return files;
 }
 
+async function collectArchivedAdapterFiles(
+  root: string,
+  prefix = "",
+): Promise<readonly string[]> {
+  const entries = await readdir(join(root, prefix), { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const relativePath = join(prefix, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await collectArchivedAdapterFiles(root, relativePath));
+    } else if (
+      entry.isFile()
+      && /^wrench(?:-web)?-adapter\.v[0-9]+\.[0-9]+\.[0-9]+\.json$/u.test(entry.name)
+    ) {
+      files.push(relativePath);
+    }
+  }
+  return files.sort();
+}
+
+async function verifyPackedArchivedAdapterInventory(
+  repository: string,
+  packageRoot: string,
+): Promise<void> {
+  const sourceRoot = join(repository, "src", "assets", "adapters");
+  const packedRoot = join(packageRoot, "src", "assets", "adapters");
+  const expected = await collectArchivedAdapterFiles(sourceRoot);
+  const actual = await collectArchivedAdapterFiles(packedRoot);
+  if (
+    expected.length !== actual.length
+    || expected.some((path, index) => path !== actual[index])
+  ) {
+    throw new Error(
+      `Packed archived adapter inventory differs from source (expected ${expected.join(", ")}; got ${actual.join(", ")}).`,
+    );
+  }
+  const requiredSubstackBaseline = join(
+    "substack",
+    "wrench-web-adapter.v1.1.0.json",
+  );
+  if (!actual.includes(requiredSubstackBaseline)) {
+    throw new Error("Packed Wrench omitted the Substack 1.1.0 upgrade baseline.");
+  }
+  for (const relativePath of expected) {
+    const sourceBytes = await readFile(join(sourceRoot, relativePath));
+    const packedBytes = await readFile(join(packedRoot, relativePath));
+    if (!Buffer.from(sourceBytes).equals(Buffer.from(packedBytes))) {
+      throw new Error(`Packed archived adapter bytes drifted: ${relativePath}`);
+    }
+  }
+}
+
 async function verifyLocalMarkdownLinks(skillRoot: string): Promise<void> {
   for (const markdownPath of await collectMarkdownFiles(skillRoot)) {
     const markdown = await readFile(markdownPath, "utf8");
@@ -72,7 +124,7 @@ async function verifyLocalMarkdownLinks(skillRoot: string): Promise<void> {
   }
 }
 
-async function verifyPackagedSkill(consumer: string): Promise<void> {
+async function verifyPackagedSkill(repository: string, consumer: string): Promise<void> {
   const packageRoot = join(consumer, "node_modules", "@hraness", "wrench");
   const skillRoot = join(packageRoot, "skills", "wrench");
   const skill = await readFile(join(skillRoot, "SKILL.md"), "utf8");
@@ -131,6 +183,8 @@ async function verifyPackagedSkill(consumer: string): Promise<void> {
   if (!install.includes(`github:hraness/wrench#v${manifest.version}`)) {
     throw new Error("Packed Wrench skill install pin does not match the package version.");
   }
+
+  await verifyPackedArchivedAdapterInventory(repository, packageRoot);
 }
 
 const repository = process.cwd();
@@ -151,7 +205,7 @@ try {
   ], repository);
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
   await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
-  await verifyPackagedSkill(consumer);
+  await verifyPackagedSkill(repository, consumer);
   await run(["node", "--input-type=module", "-e", `await import(${JSON.stringify(packageName)})`], consumer);
   for (const binName of binNames) {
     await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);

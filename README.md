@@ -27,7 +27,7 @@ wrench capabilities
 wrench plugin list
 ```
 
-[Project site](https://wrench.rip) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md)
+[Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md)
 
 ## What Wrench does
 
@@ -63,6 +63,11 @@ owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
+The CLI and SDK use the immutable GitHub release tag shown below. Wrench is not
+currently published on npm, Homebrew, or another package repository, so those
+registries are not supported install paths. The Agent Skill remains available
+through skills.sh.
+
 Install the single Wrench Agent Skill with either runner:
 
 ```sh
@@ -75,10 +80,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.13.2` tag:
+Install the current immutable CLI release from the `v0.13.5` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.13.2
+bun add --global github:hraness/wrench#v0.13.5
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -102,7 +107,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.13.2
+bun add github:hraness/wrench#v0.13.5
 ```
 
 ```ts
@@ -230,7 +235,7 @@ wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","
 ```
 
 Observed `profiles.read` capabilities expose target-bound exact counters for X,
-Bluesky, LinkedIn, Instagram, Threads, Substack, YouTube, Reddit, and TikTok;
+Bluesky, GitHub, LinkedIn, Instagram, Threads, Substack, YouTube, Reddit, and TikTok;
 Substack also exposes owned-publication subscriber totals through
 `organizations.read`. Each counter is either an exact nonnegative integer or a
 categorical unavailable value. Wrench never promotes a rounded profile label
@@ -256,6 +261,14 @@ repository record, durable target, and authoritative PDS plus public AppView
 readbacks. LinkedIn web, Substack Notes, TikTok, Instagram, and YouTube expose bounded `media.publish` reservations,
 but those routes remain network-inert while their provider-specific upload,
 processing, and independent readback contracts are `capture-required`.
+Substack's reservation now has live 200 evidence for initialization, multipart
+transfer, transcode, status, and video-attachment creation, but remains inert:
+the authorized profile-backed Note create returned 403 in two independent
+attempts, so no exact published-video target or readback exists.
+`substack-web content.delete@1` is observed for one exact current-account
+personal Note. It pre-reads the exact actor and body, dispatches one bodyless
+target-bound DELETE, retains the accepted target, and independently requires
+the exact Note read to return 404.
 
 UI clients can render the current snapshot before awaiting revalidation:
 
@@ -303,7 +316,7 @@ not turn missing message history into zero activity.
 | Provider | Contact collection | Directional statistics |
 | --- | --- | --- |
 | Gmail | Google People connections | Bounded Gmail message scans with explicit truncation |
-| Beeper local Desktop | One bounded account-aware page from the already-authorized local Desktop projection | Unavailable; Wrench does not scan message history while listing contacts |
+| Beeper local Desktop | One coverage-limited account-aware result window from the already-authorized local Desktop projection; the CLI exposes no continuation and may cap results below the requested limit | Unavailable; Wrench does not scan message history while listing contacts |
 | LinkedIn official API | First-degree connections with locale-selection evidence | Unavailable; the Connections API does not expose ordinary inbox history |
 | Instagram authenticated web | Unique non-viewer participants from the reviewed first Direct inbox summary page, with explicit first-page and pagination incompleteness | Unavailable until acknowledgement-free message-history paging is reviewed |
 | WhatsApp linked device | One page of the authenticated account owner's private, quiescent Whatsmeow contact store | Unavailable; Wrench does not treat a linked-device message cache as account-owned history |
@@ -346,8 +359,9 @@ and message-history completeness without weakening the linked-device boundary.
 The bundled `beeper-linked-device` source plugin reads an existing Beeper
 Desktop authorization through the official Beeper CLI 0.6.2. Wrench accepts
 only the exact pinned macOS arm64 binary, the fixed selected `desktop` target,
-and three JSON operations: `contacts.list`, `messaging.list`, and
-`messaging.read`. Every child command uses Beeper's read-only mode. The plugin
+and five JSON operations: `contacts.list`, `contacts.search`,
+`messaging.list`, `messaging.search`, and `messaging.read`. Every child command
+uses Beeper's read-only mode. The plugin
 does not expose raw API calls, targets, media downloads, sends, presence,
 pairing, sync, or other CLI commands.
 
@@ -376,12 +390,22 @@ and rejects every other executable byte sequence before reading private data.
 
 Binding hashes the stable local self-account coordinate before storing or
 printing it. The first bind or read may take longer while the pinned CLI unpacks
-its embedded payload into an operation-private cache. Read the local account
-and conversation identifiers, then request one exact conversation page:
+its embedded payload into an operation-private cache. List and search results
+are always marked incomplete because CLI 0.6.2 exposes no continuation and may
+apply a provider-defined cap below the requested limit. Search is fuzzy and
+returns candidates, not identity matches. Search output retains only stable
+identity, account, network, directness, and participant metadata; it omits
+message content and private UI state. Read the local account and conversation
+identifiers, search bounded candidates, then request one exact conversation
+page:
 
 ```sh
 wrench beeper-local messaging.list --auth beeper-main \
   --input '{"limit":100}' --json
+wrench beeper-local contacts.search --auth beeper-main \
+  --input '{"query":"Ada Fixture","limit":20}' --json
+wrench beeper-local messaging.search --auth beeper-main \
+  --input '{"query":"Ada Fixture","limit":20}' --json
 wrench beeper-local messaging.read --auth beeper-main \
   --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","limit":100}' --json
 ```

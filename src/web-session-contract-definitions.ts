@@ -4,6 +4,7 @@ import facebookGroupWebManifest from "./assets/adapters/facebook-group/wrench-we
 import facebookMarketplaceWebManifest from "./assets/adapters/facebook-marketplace/wrench-web-adapter.json";
 import facebookPageWebManifest from "./assets/adapters/facebook-page/wrench-web-adapter.json";
 import facebookWebManifest from "./assets/adapters/facebook/wrench-web-adapter.json";
+import githubWebManifest from "./assets/adapters/github/wrench-web-adapter.json";
 import hackerNewsWebManifest from "./assets/adapters/hacker-news/wrench-web-adapter.json";
 import instagramWebManifest from "./assets/adapters/instagram/wrench-web-adapter.json";
 import linkedinWebManifest from "./assets/adapters/linkedin/wrench-web-adapter.json";
@@ -49,6 +50,7 @@ const bundledManifests: Readonly<Partial<Record<WebSessionSiteId, unknown>>> = {
   "facebook-group": facebookGroupWebManifest,
   "facebook-marketplace": facebookMarketplaceWebManifest,
   "facebook-page": facebookPageWebManifest,
+  github: githubWebManifest,
   "hacker-news": hackerNewsWebManifest,
   instagram: instagramWebManifest,
   linkedin: linkedinWebManifest,
@@ -377,6 +379,10 @@ const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
   "articles.draft.save": 7,
   "posts.publish": 3,
 });
+const GITHUB_WEB_OPERATIONS = operationPolicies("github", [
+  "organizations.read",
+  "profiles.read",
+]);
 const HACKER_NEWS_WEB_OPERATIONS = operationPolicies("hacker-news", [
   "comments.read",
   "feeds.read",
@@ -396,12 +402,15 @@ const REDDIT_WEB_OPERATIONS = operationPolicies("reddit", [
 });
 const BEEPER_LOCAL_OPERATIONS = operationPolicies("beeper", [
   "contacts.list",
+  "contacts.search",
   "messaging.list",
+  "messaging.search",
   "messaging.read",
 ]);
 const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
   "articles.read",
   "comments.read",
+  "content.delete",
   "feeds.read",
   "media.read",
   "messaging.list",
@@ -416,7 +425,9 @@ const TIKTOK_WEB_OPERATIONS = operationPolicies("tiktok", [
   "comments.read",
   "feeds.read",
   "profiles.read",
-]);
+], {
+  "media.publish": 2,
+});
 const WHATSAPP_WEB_OPERATIONS = operationPolicies("whatsapp", [
   "contacts.list",
   "media.read",
@@ -435,6 +446,7 @@ type MetaWebSite =
 const META_WEB_OPERATIONS = Object.freeze({
   instagram: operationPolicies("instagram", [
     "comments.read",
+    "content.delete",
     "contacts.list",
     "feeds.read",
     "media.read",
@@ -443,7 +455,9 @@ const META_WEB_OPERATIONS = Object.freeze({
     "profiles.read",
   ], {
     "comments.read": 2,
+    "content.delete": 2,
     "feeds.read": 2,
+    "media.publish": 3,
     "messaging.list": 2,
   }),
   threads: operationPolicies("threads", ["feeds.read", "media.publish", "posts.publish", "profiles.read"], {
@@ -591,6 +605,23 @@ const hackerNews = {
   "replies.create": contract("hacker-news", "replies.create", HACKER_NEWS_WEB_OPERATIONS["replies.create"].risk, HACKER_NEWS_WEB_OPERATIONS["replies.create"].state, HACKER_NEWS_WEB_OPERATIONS["replies.create"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
+const github = {
+  "organizations.read": contract(
+    "github",
+    "organizations.read",
+    GITHUB_WEB_OPERATIONS["organizations.read"].risk,
+    GITHUB_WEB_OPERATIONS["organizations.read"].state,
+    GITHUB_WEB_OPERATIONS["organizations.read"].reason,
+  ),
+  "profiles.read": contract(
+    "github",
+    "profiles.read",
+    GITHUB_WEB_OPERATIONS["profiles.read"].risk,
+    GITHUB_WEB_OPERATIONS["profiles.read"].state,
+    GITHUB_WEB_OPERATIONS["profiles.read"].reason,
+  ),
+} as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
+
 const x = {
   "feeds.read": contract("x", "feeds.read", "R1", "observed", "current first-party GraphQL timeline/list/search/bookmark query"),
   "profiles.read": contract("x", "profiles.read", "R1", "observed", "current target-bound UserByScreenName first-party GraphQL query with exact follower and following counts"),
@@ -648,7 +679,9 @@ const whatsapp = {
 
 const beeper = {
   "contacts.list": contract("beeper", "contacts.list", BEEPER_LOCAL_OPERATIONS["contacts.list"].risk, BEEPER_LOCAL_OPERATIONS["contacts.list"].state, BEEPER_LOCAL_OPERATIONS["contacts.list"].reason),
+  "contacts.search": contract("beeper", "contacts.search", BEEPER_LOCAL_OPERATIONS["contacts.search"].risk, BEEPER_LOCAL_OPERATIONS["contacts.search"].state, BEEPER_LOCAL_OPERATIONS["contacts.search"].reason),
   "messaging.list": contract("beeper", "messaging.list", BEEPER_LOCAL_OPERATIONS["messaging.list"].risk, BEEPER_LOCAL_OPERATIONS["messaging.list"].state, BEEPER_LOCAL_OPERATIONS["messaging.list"].reason),
+  "messaging.search": contract("beeper", "messaging.search", BEEPER_LOCAL_OPERATIONS["messaging.search"].risk, BEEPER_LOCAL_OPERATIONS["messaging.search"].state, BEEPER_LOCAL_OPERATIONS["messaging.search"].reason),
   "messaging.read": contract("beeper", "messaging.read", BEEPER_LOCAL_OPERATIONS["messaging.read"].risk, BEEPER_LOCAL_OPERATIONS["messaging.read"].state, BEEPER_LOCAL_OPERATIONS["messaging.read"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
@@ -657,6 +690,7 @@ const substack = {
   "articles.read": contract("substack", "articles.read", SUBSTACK_WEB_OPERATIONS["articles.read"].risk, SUBSTACK_WEB_OPERATIONS["articles.read"].state, SUBSTACK_WEB_OPERATIONS["articles.read"].reason),
   "comments.create": contract("substack", "comments.create", SUBSTACK_WEB_OPERATIONS["comments.create"].risk, SUBSTACK_WEB_OPERATIONS["comments.create"].state, SUBSTACK_WEB_OPERATIONS["comments.create"].reason),
   "comments.read": contract("substack", "comments.read", SUBSTACK_WEB_OPERATIONS["comments.read"].risk, SUBSTACK_WEB_OPERATIONS["comments.read"].state, SUBSTACK_WEB_OPERATIONS["comments.read"].reason),
+  "content.delete": contract("substack", "content.delete", SUBSTACK_WEB_OPERATIONS["content.delete"].risk, SUBSTACK_WEB_OPERATIONS["content.delete"].state, SUBSTACK_WEB_OPERATIONS["content.delete"].reason),
   "content.edit": contract("substack", "content.edit", SUBSTACK_WEB_OPERATIONS["content.edit"].risk, SUBSTACK_WEB_OPERATIONS["content.edit"].state, SUBSTACK_WEB_OPERATIONS["content.edit"].reason),
   "content.save": contract("substack", "content.save", SUBSTACK_WEB_OPERATIONS["content.save"].risk, SUBSTACK_WEB_OPERATIONS["content.save"].state, SUBSTACK_WEB_OPERATIONS["content.save"].reason),
   "content.schedule": contract("substack", "content.schedule", SUBSTACK_WEB_OPERATIONS["content.schedule"].risk, SUBSTACK_WEB_OPERATIONS["content.schedule"].state, SUBSTACK_WEB_OPERATIONS["content.schedule"].reason),
@@ -681,12 +715,13 @@ const substack = {
 const tiktok = {
   "comments.create": contract("tiktok", "comments.create", TIKTOK_WEB_OPERATIONS["comments.create"].risk, TIKTOK_WEB_OPERATIONS["comments.create"].state, TIKTOK_WEB_OPERATIONS["comments.create"].reason),
   "comments.read": contract("tiktok", "comments.read", TIKTOK_WEB_OPERATIONS["comments.read"].risk, TIKTOK_WEB_OPERATIONS["comments.read"].state, TIKTOK_WEB_OPERATIONS["comments.read"].reason),
+  "content.delete": contract("tiktok", "content.delete", TIKTOK_WEB_OPERATIONS["content.delete"].risk, TIKTOK_WEB_OPERATIONS["content.delete"].state, TIKTOK_WEB_OPERATIONS["content.delete"].reason),
   "content.save": contract("tiktok", "content.save", TIKTOK_WEB_OPERATIONS["content.save"].risk, TIKTOK_WEB_OPERATIONS["content.save"].state, TIKTOK_WEB_OPERATIONS["content.save"].reason),
   "content.schedule": contract("tiktok", "content.schedule", TIKTOK_WEB_OPERATIONS["content.schedule"].risk, TIKTOK_WEB_OPERATIONS["content.schedule"].state, TIKTOK_WEB_OPERATIONS["content.schedule"].reason),
   "content.share": contract("tiktok", "content.share", TIKTOK_WEB_OPERATIONS["content.share"].risk, TIKTOK_WEB_OPERATIONS["content.share"].state, TIKTOK_WEB_OPERATIONS["content.share"].reason),
   "feeds.read": contract("tiktok", "feeds.read", TIKTOK_WEB_OPERATIONS["feeds.read"].risk, TIKTOK_WEB_OPERATIONS["feeds.read"].state, TIKTOK_WEB_OPERATIONS["feeds.read"].reason),
   "likes.set": contract("tiktok", "likes.set", TIKTOK_WEB_OPERATIONS["likes.set"].risk, TIKTOK_WEB_OPERATIONS["likes.set"].state, TIKTOK_WEB_OPERATIONS["likes.set"].reason),
-  "media.publish": contract("tiktok", "media.publish", TIKTOK_WEB_OPERATIONS["media.publish"].risk, TIKTOK_WEB_OPERATIONS["media.publish"].state, TIKTOK_WEB_OPERATIONS["media.publish"].reason),
+  "media.publish": contract("tiktok", "media.publish", TIKTOK_WEB_OPERATIONS["media.publish"].risk, TIKTOK_WEB_OPERATIONS["media.publish"].state, TIKTOK_WEB_OPERATIONS["media.publish"].reason, TIKTOK_WEB_OPERATIONS["media.publish"].contractVersion),
   "media.read": contract("tiktok", "media.read", TIKTOK_WEB_OPERATIONS["media.read"].risk, TIKTOK_WEB_OPERATIONS["media.read"].state, TIKTOK_WEB_OPERATIONS["media.read"].reason),
   "messaging.list": contract("tiktok", "messaging.list", TIKTOK_WEB_OPERATIONS["messaging.list"].risk, TIKTOK_WEB_OPERATIONS["messaging.list"].state, TIKTOK_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("tiktok", "messaging.read", TIKTOK_WEB_OPERATIONS["messaging.read"].risk, TIKTOK_WEB_OPERATIONS["messaging.read"].state, TIKTOK_WEB_OPERATIONS["messaging.read"].reason),
@@ -702,12 +737,13 @@ const tiktok = {
 const youtube = {
   "comments.create": contract("youtube", "comments.create", "R3", "capture-required", "current comment mutation, actor/target response binding, and an authorized live fixture remain required"),
   "comments.read": contract("youtube", "comments.read", "R1", "observed", "current acknowledgement-free Innertube next/continuation requests with exact video binding"),
+  "content.delete": contract("youtube", "content.delete", "R3", "capture-required", "cleanup only discarded the stalled incomplete Studio draft; no uploaded-video authored pre-read, accepted video/delete response, or exact-target absence readback was observed"),
   "content.edit": contract("youtube", "content.edit", "R3", "capture-required", "video, Community-post, and comment edit mutations require separate reviewed contracts"),
   "content.save": contract("youtube", "content.save", "R2", "capture-required", "the current Watch Later playlist edit implementation and target-bound readback are deterministic-test proven but still require an authorized low-stakes live fixture"),
   "content.schedule": contract("youtube", "content.schedule", "R3", "capture-required", "Studio scheduling requires current multi-origin visibility, timezone, audience, and processing contracts"),
   "feeds.read": contract("youtube", "feeds.read", "R1", "observed", "current signed-in fixed Innertube browse feeds"),
   "likes.set": contract("youtube", "likes.set", "R2", "capture-required", "the current target-bound like implementation and independent readback are deterministic-test proven but still require an authorized low-stakes live fixture"),
-  "media.publish": contract("youtube", "media.publish", "R3", "capture-required", "Studio resumable upload, byte transfer, metadata, audience, processing, and publication require an authorized fixture"),
+  "media.publish": contract("youtube", "media.publish", "R3", "capture-required", "the signed-in Studio capture reached metadata JSON responses, but the selected MP4 remained at 0%; resumable initiation, byte-transfer acceptance, finalization, processing, and exact current-account readback remain unproved", 2),
   "media.read": contract("youtube", "media.read", "R1", "observed", "current fixed Innertube player metadata request with playback credentials omitted"),
   "posts.publish": contract("youtube", "posts.publish", "R3", "capture-required", "Community text/media publication requires current actor binding and an authorized fixture"),
   "posts.read": contract("youtube", "posts.read", "R1", "observed", "current resolve_url plus exact Community-post browse request"),
@@ -723,6 +759,7 @@ export const webSessionContractDefinitions = {
   "facebook-group": facebookGroup,
   "facebook-marketplace": facebookMarketplace,
   "facebook-page": facebookPage,
+  github,
   "hacker-news": hackerNews,
   instagram,
   linkedin,

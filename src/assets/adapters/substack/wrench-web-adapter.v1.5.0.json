@@ -1,0 +1,936 @@
+{
+  "schemaVersion": 4,
+  "id": "substack-web",
+  "version": "1.5.0",
+  "displayName": "Substack (Authenticated Web API)",
+  "surfaceId": "substack",
+  "origins": [
+    "https://substack.com"
+  ],
+  "browserDomains": [
+    "substack.com"
+  ],
+  "operations": {
+    "feeds.read": {
+      "description": "Observed contract: read and project one bounded first page from the current Substack Notes, inbox, or reader-post feed without acknowledgement writes.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Exact reviewed Substack central feed",
+            "enum": [
+              "notes",
+              "inbox",
+              "reader-posts"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum entities projected from the complete first-party page",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.read": {
+      "description": "Observed contract: read one exact Substack Note through the target-bound central reader endpoint.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "note_id": {
+            "type": "number",
+            "description": "Exact positive Substack Note ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "note_id"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "articles.read": {
+      "description": "Observed contract: read one exact entitled Substack article, including bounded body HTML, through the target-bound central post endpoint.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "article_id": {
+            "type": "number",
+            "description": "Exact positive Substack article ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "article_id"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "articles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "comments.read": {
+      "description": "Observed contract: read one bounded article reply page after independently binding the requested article to its exact publication.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "article_id": {
+            "type": "number",
+            "description": "Exact positive Substack article ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "publication_id": {
+            "type": "number",
+            "description": "Exact publication ID independently checked against the article",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding reply page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum comments projected",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "article_id",
+          "publication_id"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "media.read": {
+      "description": "Observed contract: project bounded cover, podcast, video-upload, API audio-item, and exact same-publication inline audio metadata from one exact entitled Substack article response.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "article_id": {
+            "type": "number",
+            "description": "Exact positive Substack article ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "article_id"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "media.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed Substack Note with one MP4 only after exact upload initialization, byte transfer, processing, viewer binding, public Note creation, returned-entity attachment binding, and independent exact-Note readback are reviewed; this is not article or newsletter publication.",
+      "risk": "R3",
+      "sideEffect": "Uploads one video and publishes one externally visible Substack Note with the exact confirmed body.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact Note body",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact plan-bound Substack Note MP4",
+            "maxBytes": 134217728,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          }
+        },
+        "required": [
+          "body",
+          "media"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "media.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.list": {
+      "description": "Observed contract: list one bounded Substack inbox tab without sending read acknowledgements, presence, or typing state.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Exact current Substack inbox tab",
+            "enum": [
+              "all",
+              "people",
+              "unread"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding inbox page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum inbox threads projected",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "profiles.read": {
+      "description": "Observed contract: read one exact target-bound Substack profile follower count with current-viewer ID binding.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Canonical lowercase Substack profile handle bound to the signed-in viewer",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "organizations.read": {
+      "description": "Observed contract: read exact free and paid subscriber counts from one bootstrap-bound viewer-owned Substack publication summary.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "organization": {
+            "type": "string",
+            "description": "Canonical lowercase viewer-owned Substack publication subdomain",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "organization"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "organizations.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.read": {
+      "description": "Capture-required contract reservation: read one exact Substack direct-message thread only after a real low-stakes fixture proves the GET has no acknowledgement side effect.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "description": "Exact opaque Substack thread ID returned by messaging.list",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "thread_id"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "likes.set": {
+      "description": "Capture-required contract reservation: set one exact Substack post or Note/comment heart state after target-specific desired-state readback is proven.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated user's heart reaction on the exact confirmed Substack target.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "description": "Target-specific reaction contract",
+            "enum": [
+              "article",
+              "note",
+              "comment"
+            ]
+          },
+          "target_id": {
+            "type": "number",
+            "description": "Exact positive target ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "liked": {
+            "type": "boolean",
+            "description": "Exact desired heart state"
+          }
+        },
+        "required": [
+          "target_type",
+          "target_id",
+          "liked"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "likes.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: set one exact Substack article or Note saved state after target-specific independent readback is proven.",
+      "risk": "R2",
+      "sideEffect": "Saves or removes the exact confirmed Substack article or Note in the authenticated user's library.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "description": "Target-specific save contract",
+            "enum": [
+              "article",
+              "note"
+            ]
+          },
+          "target_id": {
+            "type": "number",
+            "description": "Exact positive target ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired saved state"
+          }
+        },
+        "required": [
+          "target_type",
+          "target_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "relationships.follow.set": {
+      "description": "Capture-required contract reservation: set one exact free user-follow or publication-subscription state; paid, pledge, purchase, email, and access changes remain blocked.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears one exact free Substack follow/subscription relationship without changing billing or email settings.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "description": "Free relationship type",
+            "enum": [
+              "user",
+              "publication"
+            ]
+          },
+          "target_id": {
+            "type": "number",
+            "description": "Exact positive user or publication ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "following": {
+            "type": "boolean",
+            "description": "Exact desired free relationship state"
+          }
+        },
+        "required": [
+          "target_type",
+          "target_id",
+          "following"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "relationships.follow.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: send one confirmed Substack DM to an exact existing thread or exact user after start/send response binding is reviewed.",
+      "risk": "R3",
+      "sideEffect": "Sends one externally visible direct message to the exact confirmed Substack recipient or thread.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "description": "Send to an existing thread or start with one exact user",
+            "enum": [
+              "thread",
+              "user"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Exact thread ID or decimal user ID selected by target_type",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact direct-message body",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "target_type",
+          "target_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.create": {
+      "description": "Capture-required contract reservation: publish one confirmed top-level article comment after exact publication permissions and returned actor/post binding are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible comment on the exact confirmed Substack article.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "article_id": {
+            "type": "number",
+            "description": "Exact positive article ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "publication_id": {
+            "type": "number",
+            "description": "Exact publication ID independently bound to the article",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact comment body",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "article_id",
+          "publication_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "comments.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: publish one confirmed reply through an exact Note, article-comment, or chat reply contract.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible reply beneath the exact confirmed Substack parent.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "parent_type": {
+            "type": "string",
+            "description": "Exact parent contract",
+            "enum": [
+              "note",
+              "comment",
+              "chat"
+            ]
+          },
+          "parent_id": {
+            "type": "string",
+            "description": "Exact parent entity or thread ID",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact reply body",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "parent_type",
+          "parent_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.publish": {
+      "description": "Observed contract: publish one confirmed Substack Note with an optional reviewed PNG after exact asset, actor, and returned-entity binding, durably retain the accepted Note ID, and poll the same exact independent readback at four bounded attempts over six seconds.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible Substack Note with the exact confirmed text and optional media.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact Note body",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional reviewed Note PNG",
+            "maxBytes": 20971520,
+            "mediaTypes": [
+              "image/png"
+            ]
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "posts.publish",
+        "contractVersion": 3,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.quote": {
+      "description": "Capture-required contract reservation: publish one confirmed quote-Note bound to an exact source Note, comment, or article.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible Substack quote-Note referencing the exact confirmed source.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "source_type": {
+            "type": "string",
+            "description": "Exact quoted entity type",
+            "enum": [
+              "article",
+              "note",
+              "comment"
+            ]
+          },
+          "source_id": {
+            "type": "number",
+            "description": "Exact positive source entity ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact quote-Note body",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "source_type",
+          "source_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "posts.quote",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.repost": {
+      "description": "Capture-required contract reservation: restack one exact Substack article, Note, comment, or media clip only after the returned restack entity is response-bound.",
+      "risk": "R3",
+      "sideEffect": "Creates one externally visible Substack restack of the exact confirmed source.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "source_type": {
+            "type": "string",
+            "description": "Exact restack source contract",
+            "enum": [
+              "article",
+              "note",
+              "comment",
+              "media"
+            ]
+          },
+          "source_id": {
+            "type": "number",
+            "description": "Exact positive source entity ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "source_type",
+          "source_id"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.share": {
+      "description": "Capture-required contract reservation: share one exact Substack entity to one explicitly confirmed native or external destination after destination-specific effects are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Shares the exact confirmed Substack entity to the exact confirmed destination.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "description": "Exact source entity type",
+            "enum": [
+              "article",
+              "note",
+              "comment"
+            ]
+          },
+          "target_id": {
+            "type": "number",
+            "description": "Exact positive source entity ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "destination": {
+            "type": "string",
+            "description": "Exact share destination contract",
+            "enum": [
+              "substack",
+              "external"
+            ]
+          }
+        },
+        "required": [
+          "target_type",
+          "target_id",
+          "destination"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "content.share",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.edit": {
+      "description": "Capture-required contract reservation: edit one exact owned Substack Note, comment, draft, or article after actor ownership and independent readback are proven.",
+      "risk": "R3",
+      "sideEffect": "Changes externally visible or scheduled content owned by the authenticated Substack user.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "description": "Exact owned-content edit contract",
+            "enum": [
+              "note",
+              "comment",
+              "draft",
+              "article"
+            ]
+          },
+          "target_id": {
+            "type": "number",
+            "description": "Exact positive owned entity ID",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact replacement body",
+            "minLength": 1,
+            "maxLength": 50000
+          }
+        },
+        "required": [
+          "target_type",
+          "target_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "content.edit",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "content.delete": {
+      "description": "Capture-required contract reservation: delete one exact current-account personal Note only after an authored-target pre-read, exact DELETE body and accepted response, durable accepted-target retention, and independent exact absence readback are reviewed.",
+      "risk": "R3",
+      "sideEffect": "Deletes one externally visible personal Substack Note authored by the exact bound current account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "note_id": {
+            "type": "number",
+            "description": "Exact positive personal Note ID independently pre-read as authored by the bound current account",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expected_body": {
+            "type": "string",
+            "description": "Exact current Note body independently matched before deletion",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "note_id",
+          "expected_body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "content.delete",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "articles.publish": {
+      "description": "Capture-required contract reservation: publish one article only against an exact viewer-owned publication origin, with send-email permanently opt-in and never enabled by default.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible article on the exact confirmed viewer-owned publication; no subscriber email is sent by default.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "publication_id": {
+            "type": "number",
+            "description": "Exact viewer-owned publication ID resolved to its bound origin",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "title": {
+            "type": "string",
+            "description": "Exact article title",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact article body",
+            "minLength": 1,
+            "maxLength": 50000
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional reviewed lead image, video, or audio attachment",
+            "maxBytes": 536870912,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "video/mp4",
+              "video/quicktime",
+              "audio/mpeg",
+              "audio/mp4",
+              "audio/wav"
+            ]
+          }
+        },
+        "required": [
+          "publication_id",
+          "title",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "articles.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "content.schedule": {
+      "description": "Capture-required contract reservation: schedule one exact article on a viewer-owned publication with send-email disabled unless a future separate explicit contract is reviewed.",
+      "risk": "R3",
+      "sideEffect": "Schedules one externally visible article on the exact confirmed viewer-owned publication; no subscriber email is sent by default.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "publication_id": {
+            "type": "number",
+            "description": "Exact viewer-owned publication ID resolved to its bound origin",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "title": {
+            "type": "string",
+            "description": "Exact article title",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact article body",
+            "minLength": 1,
+            "maxLength": 50000
+          },
+          "scheduled_at": {
+            "type": "string",
+            "description": "Exact ISO-8601 schedule time with explicit offset",
+            "minLength": 20,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "publication_id",
+          "title",
+          "body",
+          "scheduled_at"
+        ]
+      },
+      "webSession": {
+        "site": "substack",
+        "action": "content.schedule",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 4194304
+      }
+    }
+  }
+}

@@ -8,6 +8,27 @@
 - Treat a mid-read optional admission rewrite after live I/O as an auth-changed
   discard so the live result cannot be published.
 
+## 0.13.5 - 2026-08-24
+
+- Add the Hraness Twitch channel to the package-owned social-statistics
+  manifest with an exact-only categorical-gap contract until its reviewed
+  capability and eligible authenticated source are available.
+
+## 0.13.4 - 2026-08-24
+
+- Add a credential-free, target-bound GitHub organization read that binds the
+  organization and completes its bounded public repository pagination before
+  projecting exact aggregate stars and followers.
+- Preserve the existing GitHub profile read and document both public GitHub
+  social-statistics routes for scheduled consumers.
+
+## 0.13.3 - 2026-08-24
+
+- Add a credential-free, target-bound GitHub profile read through the fixed
+  public REST user endpoint, projecting exact follower, following, and public
+  repository counts.
+- Add GitHub to the package-owned Hraness social-profile-statistics workflow.
+
 ## 0.13.2 - 2026-08-23
 
 - Publish exact Threads text through `posts.publish@5` without requiring a

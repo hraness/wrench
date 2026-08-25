@@ -21,7 +21,7 @@ if (beeperContracts === undefined) {
 export const beeperLinkedDevicePlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "beeper-linked-device",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "Beeper Local Read-Only",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
@@ -40,7 +40,7 @@ export const beeperLinkedDevicePlugin = defineProviderPlugin({
     authKinds: linkedDeviceAuthKinds,
     operations: webSessionContractOperations(
       Object.values(beeperContracts),
-      "b80358d83a7062ea4e901b2b5564d1e72a5198ea5c2bb48f39ff815d15367aee",
+      "968fd03641643a9747ff41f3cf3e2bc68d9d26764d4602e42afc7ea49ad325ef",
       {},
       {
         "messaging.list": {

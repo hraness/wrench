@@ -45,7 +45,6 @@ describe("Meta web plugin account subjects", () => {
       reconciliation: { kind: "provider-accepted-target-presence" },
     });
     for (const surfaceId of [
-      "instagram",
       "facebook",
       "facebook-page",
       "facebook-group",
@@ -54,5 +53,42 @@ describe("Meta web plugin account subjects", () => {
       expect(binding(surfaceId).operations.some((operation) =>
         operation.reconciliation !== undefined)).toBeFalse();
     }
+  });
+
+  test("keeps narrowed Instagram video publishing inert and exposes authored deletion", () => {
+    const instagram = binding("instagram");
+    const videoPublish = instagram.operations.find((operation) =>
+      operation.name === "media.publish" && operation.contractVersion === 3);
+    expect(videoPublish).toMatchObject({
+        contractVersion: 3,
+        risk: "R3",
+        state: "capture-required",
+        dispatch: "single",
+      });
+    expect(videoPublish?.reconciliation).toBeUndefined();
+    expect(videoPublish?.input.properties.media).toMatchObject({
+      maxBytes: 128 * 1024 * 1024,
+      mediaTypes: ["video/mp4"],
+      type: "file",
+    });
+    expect(videoPublish?.input.properties.thumbnail).toMatchObject({
+      maxBytes: 8 * 1024 * 1024,
+      mediaTypes: ["image/jpeg"],
+      type: "file",
+    });
+    expect(instagram.operations.find((operation) => operation.name === "messaging.send")
+      ?.input.properties.attachment).toMatchObject({ maxBytes: 1024 * 1024 * 1024 });
+    expect(instagram.operations.find((operation) =>
+      operation.name === "content.delete" && operation.contractVersion === 2))
+      .toMatchObject({
+        contractVersion: 2,
+        risk: "R3",
+        state: "observed",
+        dispatch: "single",
+        reconciliation: {
+          kind: "provider-bound-target-desired-state",
+          desiredState: false,
+        },
+      });
   });
 });

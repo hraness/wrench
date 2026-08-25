@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "beeper-local",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "displayName": "Beeper (Local Read-Only Projection)",
   "surfaceId": "beeper",
   "origins": [
@@ -42,6 +42,45 @@
         "maxOutputBytes": 10485760
       }
     },
+    "contacts.search": {
+      "description": "Search one bounded fuzzy candidate window from the local Beeper contact projection, preserving only stable identity, account, and network metadata and never claiming completeness.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Person lookup text normalized with NFKC and surrounding whitespace removed",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Optional exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected fuzzy contact candidates",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "webSession": {
+        "site": "beeper",
+        "action": "contacts.search",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
     "messaging.list": {
       "description": "List one bounded local Beeper conversation projection with account, network, participant, and completeness evidence and no remote mutation.",
       "risk": "R1",
@@ -68,6 +107,45 @@
       "webSession": {
         "site": "beeper",
         "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.search": {
+      "description": "Search one bounded fuzzy candidate window from local Beeper conversations, preserving only stable conversation, account, network, directness, and participant identity metadata without message content or private UI state.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Conversation or participant lookup text normalized with NFKC and surrounding whitespace removed",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Optional exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected fuzzy conversation candidates",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "webSession": {
+        "site": "beeper",
+        "action": "messaging.search",
         "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 10485760

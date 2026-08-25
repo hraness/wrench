@@ -1,0 +1,24 @@
+[Script Info]
+Title: Wrench first capture demo
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Header,Helvetica Neue,30,&H00F5F2E9,&H00F5F2E9,&H000E1113,&H000E1113,-1,0,0,0,100,100,0,0,1,0,0,7,64,64,42,1
+Style: Meta,Helvetica Neue,18,&H00A7A39C,&H00A7A39C,&H000E1113,&H000E1113,0,0,0,0,100,100,0,0,1,0,0,9,64,64,48,1
+Style: Command,Menlo,24,&H002FA7F1,&H002FA7F1,&H000E1113,&H000E1113,0,0,0,0,100,100,0,0,1,0,0,7,72,72,125,1
+Style: Output,Menlo,23,&H00F5F2E9,&H00F5F2E9,&H000E1113,&H000E1113,0,0,0,0,100,100,0,0,1,0,0,7,72,72,168,1
+Style: Dim,Menlo,21,&H00A7A39C,&H00A7A39C,&H000E1113,&H000E1113,0,0,0,0,100,100,0,0,1,0,0,7,72,72,168,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:12.00,Header,,0,0,0,,Wrench first capture
+Dialogue: 0,0:00:00.00,0:00:12.00,Meta,,0,0,0,,v0.13.5 · silent · actual CLI output
+Dialogue: 0,0:00:00.35,0:00:12.00,Command,,0,0,0,,{\pos(72,125)}$ wrench read https://example.com
+Dialogue: 0,0:00:01.65,0:00:12.00,Dim,,0,0,0,,{\pos(72,170)}Capturing https://example.com/ (auto, auto) ...
+Dialogue: 0,0:00:03.00,0:00:12.00,Output,,0,0,0,,{\pos(72,218)}---\Ntitle: "Example Domain"\Nsource: "https://example.com/"\Nclipped: "2026-08-25"\Nplatform: "generic"\Ncapture_status: "complete"\Ncapture_method: "http"\Ncapture_scope: "page"\N---
+Dialogue: 0,0:00:06.70,0:00:12.00,Output,,0,0,0,,{\pos(72,500)}# Example Domain\N\NThis domain is for use in documentation examples without needing permission.\NAvoid use in operations.\N\N[Learn more](https://iana.org/domains/example)

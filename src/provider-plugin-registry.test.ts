@@ -266,18 +266,28 @@ describe("provider plugin definition and registry", () => {
     if (binding === undefined) throw new Error("Gmail provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
       .toBe("821e81dcd0d09756253ace93bece4b906c9fca3f1ab27adcbf0108a3fb0f6702");
-    expect(providerPluginRegistry.legacyContractImplementationHashes(binding)).toEqual([]);
+    expect(providerPluginRegistry.legacyContractImplementationHashes(binding, "contacts.list", 5))
+      .toEqual([]);
   });
 
   test("retains a distinct prior current implementation without replacing e71 readers", () => {
     const plugin = providerPluginRegistry.get("meta-web");
     const binding = plugin?.bindings.find(({ surfaceId }) => surfaceId === "instagram");
-    expect(plugin?.version).toBe("1.2.0");
+    expect(plugin?.version).toBe("1.3.0");
     if (binding === undefined) throw new Error("Meta provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
-      .toBe("6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994");
-    const readers = providerPluginRegistry.legacyContractImplementationHashes(binding)
+      .toBe("cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b");
+    expect(providerPluginRegistry.legacyContractImplementationHashes(binding, "contacts.list", 1)
+      .map((hash) => hash.toString("hex")))
+      .toContain("8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101");
+    const readers = providerPluginRegistry.legacyContractImplementationHashes(binding, "contacts.list", 1)
       .map((value) => value.toString("hex"));
+    expect(readers).toContain(
+      "5690d4ba2d37bce7aed32f12a44a2ed6066cb01c319674d37521f011122c9da7",
+    );
+    expect(readers).toContain(
+      "6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994",
+    );
     expect(readers).toContain(
       "fc6875171617dfe466f1e39308b8a208253b7b4adae3201f58634cfd43c30913",
     );

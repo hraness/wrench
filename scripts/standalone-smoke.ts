@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { providerPluginRepositoryRoot } from "../src/provider-plugin";
+import { adapterManifestPath } from "../src/storage";
 
 type CommandResult = {
   readonly exitCode: number;
@@ -30,6 +31,10 @@ const expectedClosureRuntimeDependencies = Object.freeze({
 });
 const reviewedKbDynamicModuleSha256 =
   "90dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b";
+const archivedAdapterNamePattern =
+  /^wrench(?:-web)?-adapter\.v([0-9]+\.[0-9]+\.[0-9]+)\.json$/u;
+const MAX_PACKED_ARCHIVED_UPGRADE_FAMILIES = 32;
+const PACKED_ARCHIVED_UPGRADE_COMMAND_TIMEOUT_MS = 30_000;
 
 const packageRoot = resolve(import.meta.dir, "..");
 const cli = join(packageRoot, "src", "cli.ts");
@@ -75,6 +80,7 @@ async function runCommand(
   command: readonly string[],
   cwd: string,
   expectedExitCodes: readonly number[] = [0],
+  timeoutMs = 180_000,
 ): Promise<CommandResult> {
   const child = Bun.spawn([...command], {
     cwd,
@@ -82,11 +88,19 @@ async function runCommand(
     stdout: "pipe",
     stderr: "pipe",
   });
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill();
+  }, timeoutMs);
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
-  ]);
+  ]).finally(() => clearTimeout(timeout));
+  if (timedOut) {
+    throw new Error(`${label} exceeded its ${String(timeoutMs)} ms smoke deadline`);
+  }
   if (!expectedExitCodes.includes(exitCode)) {
     throw new Error(
       `${label} failed (${String(exitCode)}): ${stderr.trim() || stdout.trim() || "no output"}`,
@@ -100,12 +114,14 @@ function runCli(
   label: string,
   arguments_: readonly string[],
   expectedExitCodes: readonly number[] = [0],
+  timeoutMs = 180_000,
 ): Promise<CommandResult> {
   return runCommand(
     `${target.label} ${label}`,
     [process.execPath, target.cliPath, ...arguments_],
     target.cwd,
     expectedExitCodes,
+    timeoutMs,
   );
 }
 
@@ -120,6 +136,181 @@ function parseJsonObject(label: string, text: string): Record<string, unknown> {
     throw new Error(`${label} did not return a JSON object`);
   }
   return parsed as Record<string, unknown>;
+}
+
+async function collectArchivedAdapterFiles(
+  root: string,
+  prefix = "",
+): Promise<readonly string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
+    const relativePath = join(prefix, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await collectArchivedAdapterFiles(root, relativePath));
+    } else if (entry.isFile() && archivedAdapterNamePattern.test(entry.name)) {
+      files.push(relativePath);
+    }
+  }
+  return files.sort();
+}
+
+async function packedArchivedAdapterInventory(
+  installedPackageRoot: string,
+): Promise<readonly string[]> {
+  const sourceRoot = join(packageRoot, "src", "assets", "adapters");
+  const packedRoot = join(installedPackageRoot, "src", "assets", "adapters");
+  const expected = await collectArchivedAdapterFiles(sourceRoot);
+  const actual = await collectArchivedAdapterFiles(packedRoot);
+  if (
+    expected.length !== actual.length
+    || expected.some((path, index) => path !== actual[index])
+  ) {
+    throw new Error(
+      `packed archived adapter inventory differs from source (expected ${expected.join(", ")}; got ${actual.join(", ")})`,
+    );
+  }
+  const requiredSubstackBaseline = join(
+    "substack",
+    "wrench-web-adapter.v1.1.0.json",
+  );
+  if (!actual.includes(requiredSubstackBaseline)) {
+    throw new Error("packed Wrench omitted the Substack 1.1.0 upgrade baseline");
+  }
+  for (const relativePath of expected) {
+    const sourceBytes = Buffer.from(
+      await Bun.file(join(sourceRoot, relativePath)).arrayBuffer(),
+    );
+    const packedBytes = Buffer.from(
+      await Bun.file(join(packedRoot, relativePath)).arrayBuffer(),
+    );
+    if (!sourceBytes.equals(packedBytes)) {
+      throw new Error(`packed archived adapter bytes drifted: ${relativePath}`);
+    }
+  }
+  return expected;
+}
+
+async function exercisePackedArchivedAdapterUpgrades(
+  target: Readonly<{ cliPath: string; cwd: string; label: string }>,
+  installedPackageRoot: string,
+): Promise<void> {
+  const packedRoot = join(installedPackageRoot, "src", "assets", "adapters");
+  const archivedFiles = await packedArchivedAdapterInventory(installedPackageRoot);
+  const byCurrentManifest = new Map<string, string[]>();
+  for (const relativePath of archivedFiles) {
+    const currentRelativePath = relativePath.replace(
+      /\.v[0-9]+\.[0-9]+\.[0-9]+\.json$/u,
+      ".json",
+    );
+    const candidates = byCurrentManifest.get(currentRelativePath) ?? [];
+    candidates.push(relativePath);
+    byCurrentManifest.set(currentRelativePath, candidates);
+  }
+  const representatives: string[] = [];
+  for (const [currentRelativePath, candidates] of [...byCurrentManifest]
+    .sort(([left], [right]) => left.localeCompare(right))) {
+    const current = requireJsonObject(
+      `packed current adapter ${currentRelativePath}`,
+      await Bun.file(join(packedRoot, currentRelativePath)).json(),
+    );
+    const requiredVersion = current.id === "youtube-web" || current.id === "substack-web"
+      ? "1.1.0"
+      : null;
+    const selected = requiredVersion === null
+      ? candidates[0]
+      : candidates.find((path) =>
+          path.endsWith(`.v${requiredVersion}.json`));
+    if (selected === undefined) {
+      throw new Error(
+        `packed archived adapter family ${String(current.id)} omitted required representative ${requiredVersion ?? "baseline"}`,
+      );
+    }
+    representatives.push(selected);
+  }
+  if (
+    representatives.length < 1
+    || representatives.length > MAX_PACKED_ARCHIVED_UPGRADE_FAMILIES
+  ) {
+    throw new Error(
+      `packed archived adapter representative count ${String(representatives.length)} exceeded its smoke bound`,
+    );
+  }
+  for (const required of [
+    join("youtube", "wrench-web-adapter.v1.1.0.json"),
+    join("substack", "wrench-web-adapter.v1.1.0.json"),
+  ]) {
+    if (!representatives.includes(required)) {
+      throw new Error(`packed upgrade representatives omitted ${required}`);
+    }
+  }
+  const upgradeState = join(work, "packed-upgrade-state");
+  environment.WRENCH_STATE_HOME = upgradeState;
+  environment.WRENCH_MEDIA_HOME = join(upgradeState, "media");
+  await mkdir(upgradeState, { recursive: true, mode: 0o700 });
+  const expectedUpgrades: Array<Readonly<{
+    archivedId: string;
+    archivedVersion: string;
+    currentVersion: string;
+  }>> = [];
+  for (const relativePath of representatives) {
+    const archivedMatch = archivedAdapterNamePattern.exec(
+      relativePath.split(/[\\/]/u).at(-1) ?? "",
+    );
+    if (archivedMatch === null) {
+      throw new Error(`packed archived adapter name changed: ${relativePath}`);
+    }
+    const currentRelativePath = relativePath.replace(
+      /\.v[0-9]+\.[0-9]+\.[0-9]+\.json$/u,
+      ".json",
+    );
+    const archivedBytes = await Bun.file(join(packedRoot, relativePath)).text();
+    const archived = requireJsonObject(
+      `packed archived adapter ${relativePath}`,
+      JSON.parse(archivedBytes) as unknown,
+    );
+    const current = requireJsonObject(
+      `packed current adapter ${currentRelativePath}`,
+      await Bun.file(join(packedRoot, currentRelativePath)).json(),
+    );
+    if (
+      typeof archived.id !== "string"
+      || archived.id !== current.id
+      || archived.version !== archivedMatch[1]
+      || typeof current.version !== "string"
+    ) {
+      throw new Error(`packed archived adapter identity changed: ${relativePath}`);
+    }
+    const legacyPath = adapterManifestPath(archived.id, environment);
+    await mkdir(dirname(legacyPath), { recursive: true, mode: 0o700 });
+    await writeFile(legacyPath, archivedBytes, { mode: 0o600 });
+    expectedUpgrades.push({
+      archivedId: archived.id,
+      archivedVersion: archived.version,
+      currentVersion: current.version,
+    });
+  }
+  await runCli(
+    target,
+    "sync representative archived adapter families",
+    ["adapter", "sync-bundled", "--json"],
+    [0],
+    PACKED_ARCHIVED_UPGRADE_COMMAND_TIMEOUT_MS,
+  );
+  for (const expected of expectedUpgrades) {
+    const upgraded = await runCli(
+      target,
+      `read upgraded adapter ${expected.archivedId}@${expected.archivedVersion}`,
+      ["capabilities", expected.archivedId, "--json"],
+      [0],
+      PACKED_ARCHIVED_UPGRADE_COMMAND_TIMEOUT_MS,
+    );
+    assertCapabilityAdapterVersion(
+      `packed upgraded adapter ${expected.archivedId}@${expected.archivedVersion}`,
+      upgraded.stdout,
+      expected.archivedId,
+      expected.currentVersion,
+    );
+  }
 }
 
 function requireJsonObject(label: string, value: unknown): Record<string, unknown> {
@@ -188,6 +379,24 @@ function requireKeys(
   if (missing.length > 0) {
     throw new Error(
       `${label} is missing required keys: ${missing.join(", ")}`,
+    );
+  }
+}
+
+function assertCapabilityAdapterVersion(
+  label: string,
+  text: string,
+  adapterId: string,
+  expectedVersion: string,
+): void {
+  const response = parseJsonObject(label, text);
+  if (!Array.isArray(response.adapters) || response.adapters.length !== 1) {
+    throw new Error(`${label} did not return one exact adapter`);
+  }
+  const adapter = requireJsonObject(`${label}.adapters[0]`, response.adapters[0]);
+  if (adapter.id !== adapterId || adapter.version !== expectedVersion) {
+    throw new Error(
+      `${label} returned ${String(adapter.id)}@${String(adapter.version)}, expected ${adapterId}@${expectedVersion}`,
     );
   }
 }
@@ -607,6 +816,11 @@ try {
       cwd: consumer,
       label: "packed",
     } as const;
+    await exercisePackedArchivedAdapterUpgrades(packedCli, installedPackageRoot);
+    const packedState = join(work, "packed-state");
+    environment.WRENCH_STATE_HOME = packedState;
+    environment.WRENCH_MEDIA_HOME = join(packedState, "media");
+    await mkdir(packedState, { recursive: true, mode: 0o700 });
     await runCli(packedCli, "install isolated omni adapter", [
       "adapter",
       "install",

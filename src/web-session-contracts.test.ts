@@ -68,16 +68,16 @@ describe("authenticated web-session contract identity", () => {
       "0ae0b0279917a5964578558aa3e761d467a121b6fe4d04c09441f279fcb0f30f",
     );
     expect(webSessionContractHash(facebookFeed)).toBe(
-      "208db74b57370fb1e5014cd65ac3f4df317a889147609f473524c11a7bd25b0a",
+      "c87f38bc96f0e54dd58a58cb91a7877284322729db9d7cdb21c18bfd0e0091bd",
     );
     expect(webSessionContractHash(facebookGroupFeed)).toBe(
-      "c4278bec1e4c44f60a99214a0a9662296345a6f9973ad332114da387f9bb4eaa",
+      "b6cc776e9a81a359dd50c07922b567789ece27a765dc8b7a670b7f1b71b896e7",
     );
     expect(webSessionContractHash(marketplaceFeed)).toBe(
-      "a9cad660c87a3bd8b112d9032560e93895ff26d7ae990b828dd580eb7a22d63e",
+      "bda0da0b1e00d2e240f1acd7e70f78e9e6db89246578e5508810baa5a8cbcdb2",
     );
     expect(webSessionContractHash(marketplaceListing)).toBe(
-      "1541620ea7a56f072901d676fefbb24f55ce2fd63726c8c8ceeef7043d0deec6",
+      "33dc0285d94e8f682b2f487de88a61077adb6e1b4c5070b65e6670a74924db42",
     );
 
     for (const value of [
@@ -94,14 +94,50 @@ describe("authenticated web-session contract identity", () => {
 
   test("accepts exact bounded predecessor hashes only as read aliases", () => {
     const xLike = contract({ site: "x", action: "likes.set", contractVersion: 2 });
+    const facebookFeed = contract({ site: "facebook", action: "feeds.read", contractVersion: 2 });
+    const facebookGroupFeed = contract({
+      site: "facebook-group",
+      action: "feeds.read",
+      contractVersion: 2,
+    });
     const marketplaceFeed = contract({
       site: "facebook-marketplace",
       action: "feeds.read",
       contractVersion: 2,
     });
+    const marketplaceListing = contract({
+      site: "facebook-marketplace",
+      action: "listings.read",
+      contractVersion: 2,
+    });
+    const historicalMarketplaceFeed = contract({
+      site: "facebook-marketplace",
+      action: "feeds.read",
+      contractVersion: 1,
+    });
     expect(isCompatibleWebSessionContractHash(
       xLike,
       "18ad1c307b5aeb1caaa6e057048ba53e0bf7dfca8f35dd7ee9613942c3d23afa",
+    )).toBeTrue();
+    expect(isCompatibleWebSessionContractHash(
+      facebookFeed,
+      "208db74b57370fb1e5014cd65ac3f4df317a889147609f473524c11a7bd25b0a",
+    )).toBeTrue();
+    expect(isCompatibleWebSessionContractHash(
+      facebookGroupFeed,
+      "c4278bec1e4c44f60a99214a0a9662296345a6f9973ad332114da387f9bb4eaa",
+    )).toBeTrue();
+    expect(isCompatibleWebSessionContractHash(
+      marketplaceFeed,
+      "a9cad660c87a3bd8b112d9032560e93895ff26d7ae990b828dd580eb7a22d63e",
+    )).toBeTrue();
+    expect(isCompatibleWebSessionContractHash(
+      marketplaceListing,
+      "1541620ea7a56f072901d676fefbb24f55ce2fd63726c8c8ceeef7043d0deec6",
+    )).toBeTrue();
+    expect(isCompatibleWebSessionContractHash(
+      historicalMarketplaceFeed,
+      "c6a59efe3cd132112a3c4516007f0224e51af9f7288219b124c4820551ae89c7",
     )).toBeTrue();
     expect(isCompatibleWebSessionContractHash(
       marketplaceFeed,
@@ -132,7 +168,7 @@ describe("authenticated web-session contract identity", () => {
       contractVersion: 1,
     });
     expect(webSessionContractHash(historicalMarketplaceFeed)).toBe(
-      "c6a59efe3cd132112a3c4516007f0224e51af9f7288219b124c4820551ae89c7",
+      "dabc37e84a27c799b978298f6c87f8b392968105475ea62b5b48fb7ac055828d",
     );
     expect(() => contract({
       site: "facebook-marketplace",
@@ -288,6 +324,34 @@ describe("authenticated web-session contract identity", () => {
         idempotency: "none",
       });
     }
+  });
+
+  test("observes exact public GitHub profile and organization statistic reads", () => {
+    for (const action of ["profiles.read", "organizations.read"] as const) {
+      expect(contract({ site: "github", action, contractVersion: 1 })).toMatchObject({
+        site: "github",
+        operation: action,
+        risk: "R1",
+        state: "observed",
+        dispatch: "none",
+        sideEffect: "none",
+        idempotency: "none",
+      });
+    }
+    const github = providerPluginRegistry.requireSessionRoute("github");
+    expect(providerPluginRegistry.legacyContractImplementationHashes(
+      github,
+      "profiles.read",
+      1,
+    )
+      .map((value) => value.toString("hex"))).toEqual([
+      "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
+    ]);
+    expect(providerPluginRegistry.legacyContractImplementationHashes(
+      github,
+      "organizations.read",
+      1,
+    )).toEqual([]);
   });
 
   test("keeps every Marketplace mutation capture-required", () => {

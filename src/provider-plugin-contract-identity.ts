@@ -5,6 +5,10 @@ export interface ReviewedBuiltInContractIdentityV1 {
   readonly implementationSha256: string;
   /** Exact later current-distribution writer identities accepted only by readers. */
   readonly legacyCurrentReadImplementationSha256: readonly string[];
+  /** Exact later writer identities accepted only for routes that existed in that distribution. */
+  readonly legacyRouteReadImplementationSha256?: Readonly<
+    Record<string, readonly string[]>
+  >;
   /** Exact b64ccd66 predecessor execution identities accepted only by readers. */
   readonly legacyReadImplementationSha256: Readonly<{
     readonly test: string;
@@ -23,9 +27,20 @@ export interface ReviewedBuiltInContractIdentityV1 {
 const identities = Object.freeze({
   "beeper-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "1.0.0",
-    implementationSha256: "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+    pluginVersion: "1.1.0",
+    implementationSha256: "e1a2abc8b5dc045635768388987c664319f5f6af942d5f1138eb0a6848e60148",
     legacyCurrentReadImplementationSha256: [],
+    legacyRouteReadImplementationSha256: {
+      "contacts.list@1": [
+        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+      ],
+      "messaging.list@1": [
+        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+      ],
+      "messaging.read@1": [
+        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+      ],
+    },
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
   },
@@ -56,6 +71,19 @@ const identities = Object.freeze({
     pluginVersion: "1.3.0",
     implementationSha256: "821e81dcd0d09756253ace93bece4b906c9fca3f1ab27adcbf0108a3fb0f6702",
     legacyCurrentReadImplementationSha256: [],
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
+  },
+  "github-web": {
+    schemaVersion: 1,
+    pluginVersion: "1.1.0",
+    implementationSha256: "2764fb3c746755b2453279b5a6672f1460a139717c45e83520dfa5d9f753025a",
+    legacyCurrentReadImplementationSha256: [],
+    legacyRouteReadImplementationSha256: {
+      "profiles.read@1": [
+        "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
+      ],
+    },
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
   },
@@ -123,13 +151,16 @@ const identities = Object.freeze({
   },
   "meta-web": {
     schemaVersion: 1,
-    pluginVersion: "1.2.0",
-    implementationSha256: "6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994",
+    pluginVersion: "1.3.0",
+    implementationSha256: "cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b",
     legacyCurrentReadImplementationSha256: [
+      "8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101",
+      "6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994",
       "af2d809b8a18806c8f36e86660289c219a99eb0799baa42a2afbcfbc428e37c2",
       "5d62645a730274c6dc86dd058886a2eb6b9a8bddf94ba888f017b7294580e452",
       "b1e997c0540283f45b3b7b0f4c5712f8592e140a840bab75e463aac40efaa805",
       "2267887ca46e413fab5fded684edb1bab495b4782925f6be67153195131ad6c6",
+      "5690d4ba2d37bce7aed32f12a44a2ed6066cb01c319674d37521f011122c9da7",
     ],
     legacyReadImplementationSha256: {
       test: "398b1b05ef6493dab56e37d2edb440b1a591163148d861dda475b17941b81225",
@@ -162,9 +193,13 @@ const identities = Object.freeze({
   },
   "substack-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "e4ba73882eb3f5bf489c88861cdd1fedd790a55af027e03ff5a07b526b8f0f5f",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.2.0",
+    implementationSha256: "d35dda6043e224f4a2d6305a4a6aac9f05bef37ecfbfd087973394cdbe0c6811",
+    legacyCurrentReadImplementationSha256: [
+      "2062f7c39c75ce286f26e7bd513871e5cbc2b62e2408d20df28af906f8ad5012",
+      "e4ba73882eb3f5bf489c88861cdd1fedd790a55af027e03ff5a07b526b8f0f5f",
+      "96a992faae17420dc2ec74c9d22903bb7973f69d3f0de198800d357480651269",
+    ],
     legacyReadImplementationSha256: {
       test: "99fc0287f9445b0e4d692e39201ebb8b9e9bb86308c9619c20e3bff83655243d",
       production: "fb58ac6ba745b2dc4dc176e8e3b7f4d3362cd8026d3e00557f72342b76b7c519",
@@ -179,9 +214,15 @@ const identities = Object.freeze({
   },
   "tiktok-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "48f1e574b3e897b51a1ea90bdf26280ae4841d34eaa012e1b9a19e9b42b5e59b",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.2.0",
+    implementationSha256: "59b037c542e5a32290c10a6d16a22e85a1f5b8c7b65d562fda67b6e04364f069",
+    legacyCurrentReadImplementationSha256: [
+      "d92111d5ae92e002310ad201144b7a5cd05ad209cebac2fe2b31c3852cfca1cd",
+      "d6693ee40e9de8f62a09f44000e7d5005d69715baa50c3034109a381f3c53180",
+      "7d7f92ec9bbb5675102dd5cc0d1441334f723e66a7d9f5926e89a163c4cd2989",
+      "48f1e574b3e897b51a1ea90bdf26280ae4841d34eaa012e1b9a19e9b42b5e59b",
+      "a61661497f61933afc8fcc1f4b4a0997eae3c4c85327c842738f1acb4b7f6418",
+    ],
     legacyReadImplementationSha256: {
       test: "09f48f093e444206b5ef41fae135a1543d4cf1217d590978b9a1470ccb7a1df3",
       production: "dd1b13afa9a164e40c1dce423a5808e1cd8bafddf39a83c59d5ee83c1474705f",
@@ -247,10 +288,12 @@ const identities = Object.freeze({
   },
   "youtube-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "2c73bbfcb49ba86a7dec8b08d62b87c98c234545d8a1fd93cf02f03868dced34",
+    pluginVersion: "1.2.0",
+    implementationSha256: "4d38cceaf871d6885abf76790b3d47b1e77b8b35dbb94bf5411d86f60202acb4",
     legacyCurrentReadImplementationSha256: [
+      "2c73bbfcb49ba86a7dec8b08d62b87c98c234545d8a1fd93cf02f03868dced34",
       "324abc5f2776c5dc16b9f42f65c20d9781ffc3925ba9f80ca098de45e8d29407",
+      "e7d4f87718ebfd9e499d5a8a939acaca2f73c2bd78388e360419f9ab098a5cb0",
     ],
     legacyReadImplementationSha256: {
       test: "02fe9106b2d620b3be3f4d0cd415ae7edebfe67997ae97c7fff8cedd4508b99f",
@@ -270,6 +313,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MAXIMUM_LATER_CURRENT_IDENTITIES = 10;
 
 for (const [pluginId, identity] of Object.entries(identities)) {
+  const reviewedIdentity = identity as ReviewedBuiltInContractIdentityV1;
   if (!SHA256_PATTERN.test(identity.implementationSha256)) {
     throw new Error(`${pluginId} current contract identity is not one lowercase SHA-256`);
   }
@@ -300,7 +344,31 @@ for (const [pluginId, identity] of Object.entries(identities)) {
     }
     reviewedIdentities.push(value);
   }
+  for (const [operation, values] of Object.entries(
+    reviewedIdentity.legacyRouteReadImplementationSha256 ?? {},
+  )) {
+    if (!/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+@[1-9][0-9]*$/u.test(operation)) {
+      throw new Error(`${pluginId} has a malformed route-scoped reader identity`);
+    }
+    if (values.length > MAXIMUM_LATER_CURRENT_IDENTITIES) {
+      throw new Error(`${pluginId}/${operation} has too many operation-scoped reader identities`);
+    }
+    const operationValues = new Set<string>();
+    for (const value of values) {
+      if (!SHA256_PATTERN.test(value)) {
+        throw new Error(`${pluginId}/${operation} reader identity is not one lowercase SHA-256`);
+      }
+      if (reviewedIdentities.includes(value) || operationValues.has(value)) {
+        throw new Error(`${pluginId}/${operation} reader identity is duplicated`);
+      }
+      operationValues.add(value);
+    }
+    Object.freeze(values);
+  }
   Object.freeze(identity.legacyCurrentReadImplementationSha256);
+  if (reviewedIdentity.legacyRouteReadImplementationSha256 !== undefined) {
+    Object.freeze(reviewedIdentity.legacyRouteReadImplementationSha256);
+  }
   if (identity.legacyReadImplementationSha256 !== null) {
     Object.freeze(identity.legacyReadImplementationSha256);
   }

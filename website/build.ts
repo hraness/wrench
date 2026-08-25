@@ -24,8 +24,15 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.13.2" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.13.5" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
+export const DEMO_PUBLIC_FILES = [
+  "wrench-first-capture.gif",
+  "wrench-first-capture.mp4",
+  "wrench-first-capture.png",
+  "wrench-first-capture.vtt",
+  "wrench-first-capture.webm",
+] as const;
 
 export const PUBLIC_PAGES = [
   {
@@ -94,10 +101,10 @@ export const PUBLIC_PAGES = [
   {
     canonicalPath: "/privacy/",
     description:
-      "wrench.rip uses cookieless, personless, DNT-aware PostHog analytics limited to page lifecycle, Core Web Vitals, and two GitHub links.",
+      "How Wrench stores CLI and provider state locally, when requested work contacts third parties, how to remove data, and what wrench.rip measures.",
     outputFile: "privacy/index.html",
     sourceFile: "privacy.html",
-    title: "Wrench website privacy: cookieless, personless analytics",
+    title: "Wrench privacy and data custody: CLI, providers, and website",
   },
 ] as const;
 
@@ -523,6 +530,10 @@ export async function buildWebsite(
     ),
     copyFile(join(publicRoot, "favicon.svg"), join(outputRoot, "favicon.svg")),
     copyFile(join(publicRoot, "og.png"), join(outputRoot, "og.png")),
+    ...DEMO_PUBLIC_FILES.map((file) => copyFile(
+      join(publicRoot, file),
+      join(outputRoot, file),
+    )),
     copyFile(
       join(publicRoot, "dc84ee4863539f2fff50ef5f0a164168.txt"),
       join(outputRoot, "dc84ee4863539f2fff50ef5f0a164168.txt"),

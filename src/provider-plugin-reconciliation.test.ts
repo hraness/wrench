@@ -33,6 +33,20 @@ const context = Object.freeze({
   }),
 }) satisfies ProviderPluginReconciliationContextV1;
 
+const deletionContext = Object.freeze({
+  schemaVersion: 1,
+  kind: "provider-bound-target-desired-state",
+  dispatch: Object.freeze({
+    id: "content.delete",
+    index: 1,
+    planned: 1,
+  }),
+  target: Object.freeze({
+    schemaVersion: 1,
+    identifier: "provider-bound:post:private-123",
+  }),
+}) satisfies ProviderPluginReconciliationContextV1;
+
 function presenceOperation(): WebSessionPluginOperationDefinitionV1 {
   return {
     name: "posts.publish",
@@ -68,6 +82,42 @@ function presenceOperation(): WebSessionPluginOperationDefinitionV1 {
   };
 }
 
+function deletionOperation(): WebSessionPluginOperationDefinitionV1 {
+  return {
+    name: "content.delete",
+    contractVersion: 1,
+    risk: "R3",
+    input: {
+      properties: {
+        target_id: {
+          type: "string",
+          description: "Exact provider target ID",
+          minLength: 1,
+          maxLength: 256,
+        },
+      },
+      required: ["target_id"],
+    },
+    sideEffect: "deletes one exact post",
+    idempotency: "local-at-most-once",
+    dedupeWindowMs: 86_400_000,
+    state: "observed",
+    dispatch: "single",
+    implementation: "synthetic exact target deletion test",
+    planDispatches: () => [{
+      id: "content.delete",
+      description: "Delete one exact post",
+    }],
+    validateInput: (input) => typeof input.target_id === "string"
+      ? []
+      : ["input.target_id must be a string"],
+    reconciliation: {
+      kind: "provider-bound-target-desired-state",
+      desiredState: false,
+    },
+  };
+}
+
 describe("provider-accepted target reconciliation kernel", () => {
   test("passes one strictly parsed target context to the declared runtime", async () => {
     let runtimeLoads = 0;
@@ -87,7 +137,7 @@ describe("provider-accepted target reconciliation kernel", () => {
         surfaceId: "accepted-target-test",
         origin: "https://accepted-target-test.example",
         authKinds: ["cookie-source"],
-        operations: [presenceOperation()],
+        operations: [presenceOperation(), deletionOperation()],
         subject: {
           format: "accepted-target:<id>",
           matches: (value) => /^accepted-target:[a-z0-9-]{1,40}$/u.test(value),
@@ -149,9 +199,27 @@ describe("provider-accepted target reconciliation kernel", () => {
     expect(Object.isFrozen(receivedContext)).toBeTrue();
     expect(Object.isFrozen(receivedContext?.dispatch)).toBeTrue();
     expect(Object.isFrozen(receivedContext?.target)).toBeTrue();
+
+    await expect(binding.reconcile(
+      "content.delete",
+      { target_id: "private-123" },
+      auth,
+      context,
+    )).rejects.toThrow("target context kind changed");
+    await expect(binding.reconcile(
+      "content.delete",
+      { target_id: "private-123" },
+      auth,
+      deletionContext,
+    )).resolves.toEqual({
+      actualState: true,
+      reason: "exact target is present",
+    });
+    expect(receivedContext).toEqual(deletionContext);
+    expect(receivedContext).not.toBe(deletionContext);
   });
 
-  test("rejects invalid presence declarations and strict target context input", () => {
+  test("rejects invalid exact-target declarations and strict context input", () => {
     const invalidDispatch = {
       ...presenceOperation(),
       dispatch: "bounded-items",
@@ -214,5 +282,46 @@ describe("provider-accepted target reconciliation kernel", () => {
     });
     expect(() => parseProviderPluginReconciliationContextV1(accessor))
       .toThrow("must be an enumerable data property");
+
+    const invalidDesiredState = {
+      ...deletionOperation(),
+      reconciliation: {
+        kind: "provider-bound-target-desired-state",
+        desiredState: true,
+      },
+    } as unknown as WebSessionPluginOperationDefinitionV1;
+    expect(() => defineProviderPlugin({
+      apiVersion: 1,
+      id: "invalid-bound-target-state-test",
+      version: "1.0.0",
+      displayName: "Invalid Bound Target State Test",
+      sourceKind: "source",
+      implementationSources: [{
+        label: "plugin.ts",
+        url: new URL("./provider-plugin-test-fixture.ts", import.meta.url),
+      }],
+      bindings: [{
+        transport: "web-session-api",
+        surfaceId: "invalid-bound-target-state",
+        origin: "https://invalid-bound-target-state.example",
+        authKinds: ["cookie-source"],
+        operations: [invalidDesiredState],
+        subject: {
+          format: "invalid:<id>",
+          matches: () => true,
+        },
+        runtime: lazyWebSessionRuntime(() => Promise.resolve({
+          probe: () => Promise.resolve("invalid:viewer"),
+          execute: () => Promise.resolve({
+            status: "failed",
+            output: null,
+            finalUrl: null,
+            dispatchStarted: false,
+            dispatch: { planned: 0, started: 0, verified: 0 },
+            error: "inert invalid fixture",
+          }),
+        })),
+      }],
+    })).toThrow("invalid reconciliation contract");
   });
 });

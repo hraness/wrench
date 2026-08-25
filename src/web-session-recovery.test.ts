@@ -381,7 +381,43 @@ const presenceOperation: WebSessionPluginOperationDefinitionV1 = {
   },
 };
 
-function presenceRegistry() {
+const boundAbsenceOperation: WebSessionPluginOperationDefinitionV1 = {
+  name: "content.delete",
+  contractVersion: 1,
+  risk: "R3",
+  input: {
+    properties: {
+      target_id: {
+        type: "string",
+        description: "Exact deletion target ID",
+        minLength: 1,
+        maxLength: 256,
+      },
+    },
+    required: ["target_id"],
+  },
+  sideEffect: "deletes one exact post",
+  idempotency: "local-at-most-once",
+  dedupeWindowMs: 86_400_000,
+  state: "observed",
+  dispatch: "single",
+  implementation: "synthetic provider-bound target absence fixture",
+  planDispatches: () => [{
+    id: "content.delete",
+    description: "Delete one exact post",
+  }],
+  validateInput: (input) => typeof input.target_id === "string"
+    ? []
+    : ["input.target_id must be a string"],
+  reconciliation: {
+    kind: "provider-bound-target-desired-state",
+    desiredState: false,
+  },
+};
+
+function presenceRegistry(
+  mode: "presence" | "bound-absence" = "presence",
+) {
   const plugin = defineProviderPlugin({
     apiVersion: 1,
     id: "presence-test-plugin",
@@ -397,7 +433,9 @@ function presenceRegistry() {
       surfaceId: "presence-test",
       origin: "https://presence-test.example",
       authKinds: ["cookie-source"],
-      operations: [presenceOperation],
+      operations: [
+        mode === "presence" ? presenceOperation : boundAbsenceOperation,
+      ],
       subject: {
         format: "presence:<id>",
         matches: (value) => /^presence:[a-z0-9-]{1,40}$/u.test(value),
@@ -425,18 +463,22 @@ function presenceRegistry() {
 function installPresenceRun(
   testState: TestState,
   withTargetEvidence: boolean,
+  mode: "presence" | "bound-absence" = "presence",
 ) {
-  const registry = presenceRegistry();
+  const registry = presenceRegistry(mode);
   const auth = createAuth("presence-main", {
     source: "arc",
     profile: "Profile 1",
     subject: "presence:viewer",
   });
   saveAuth(auth, testState.environment);
-  const input = { body: "private presence reconciliation body" };
+  const input = mode === "presence"
+    ? { body: "private presence reconciliation body" }
+    : { target_id: "private-123" };
+  const action = mode === "presence" ? "posts.publish" : "content.delete";
   const selectedRecipe: WebSessionRecipe = {
     site: "presence-test",
-    action: "posts.publish",
+    action,
     contractVersion: 1,
     timeoutMs: 60_000,
     maxOutputBytes: 2 * 1024 * 1024,
@@ -458,7 +500,7 @@ function installPresenceRun(
       version: "1.0.0",
       hash: sha256("presence-test-adapter"),
     },
-    operation: "posts.publish",
+    operation: action,
     risk: "R3",
     inputHash: sha256(canonicalJson(input)),
     auth: {
@@ -489,7 +531,7 @@ function installPresenceRun(
     contract: {
       transport: "web-session-api",
       site: "presence-test",
-      action: "posts.publish",
+      action,
       version: 1,
       hash: contractHash,
     },
@@ -511,7 +553,7 @@ function installPresenceRun(
       inputHash: selectedCapsule.inputHash,
       auth: selectedCapsule.auth,
       contract: selectedCapsule.contract,
-      dispatch: { id: "posts.publish", index: 1, planned: 1 },
+      dispatch: { id: action, index: 1, planned: 1 },
       target: { schemaVersion: 1, identifier: PRESENCE_TARGET },
     }, testState.environment);
   }
@@ -772,6 +814,167 @@ describe("web-session run reconciliation", () => {
       expect(readProviderAcceptedMutationTargetEvidence(
         installed.capsule,
         { id: "posts.publish", index: 1, planned: 1 },
+        testState.environment,
+      )?.target.identifier).toBe(PRESENCE_TARGET);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("settles a provider-bound deletion only when the exact target is absent", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(
+        testState,
+        true,
+        "bound-absence",
+      );
+      let observedContext: ProviderPluginReconciliationContextV1 | undefined;
+      const result = await reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          dependencies: {
+            observeActualState: (_recipe, _input, _auth, context) => {
+              observedContext = context;
+              return Promise.resolve({
+                actualState: false,
+                reason: "exact target absent",
+              });
+            },
+          },
+        },
+      );
+
+      expect(observedContext).toEqual({
+        schemaVersion: 1,
+        kind: "provider-bound-target-desired-state",
+        dispatch: { id: "content.delete", index: 1, planned: 1 },
+        target: { schemaVersion: 1, identifier: PRESENCE_TARGET },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        status: "reconciliation-observed",
+        recoveryArtifactsReleased: true,
+        observation: {
+          outcome: "desired-state-observed",
+          desiredStateMatched: true,
+          actualState: false,
+          reason: "exact-readback",
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain(PRESENCE_TARGET);
+      expect(readRecoveryCapsule(
+        PRESENCE_RUN_ID,
+        installed.auth.id,
+        installed.receipt.auth.hash,
+        testState.environment,
+      )).toBeNull();
+      expect(readProviderAcceptedMutationTargetEvidence(
+        installed.capsule,
+        { id: "content.delete", index: 1, planned: 1 },
+        testState.environment,
+      )).toBeNull();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("retains provider-bound deletion recovery while the target is present", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(
+        testState,
+        true,
+        "bound-absence",
+      );
+      const result = await reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          dependencies: {
+            observeActualState: () => Promise.resolve({
+              actualState: true,
+              reason: "exact target present",
+            }),
+          },
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: "reconciliation-observed",
+        recoveryArtifactsReleased: false,
+        observation: {
+          outcome: "desired-state-not-observed",
+          desiredStateMatched: false,
+          actualState: true,
+          reason: "exact-readback",
+        },
+      });
+      expect(readRecoveryCapsule(
+        PRESENCE_RUN_ID,
+        installed.auth.id,
+        installed.receipt.auth.hash,
+        testState.environment,
+      )).toEqual(installed.capsule);
+      expect(readProviderAcceptedMutationTargetEvidence(
+        installed.capsule,
+        { id: "content.delete", index: 1, planned: 1 },
+        testState.environment,
+      )?.target.identifier).toBe(PRESENCE_TARGET);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("retains provider-bound deletion recovery when exact readback fails", async () => {
+    const testState = state();
+    try {
+      const installed = installPresenceRun(
+        testState,
+        true,
+        "bound-absence",
+      );
+      const result = await reconcileWebSessionRun(
+        PRESENCE_RUN_ID,
+        undefined,
+        {
+          environment: testState.environment,
+          registry: installed.registry,
+          dependencies: {
+            observeActualState: () => Promise.reject(
+              new Error("private deletion readback failure"),
+            ),
+          },
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: "reconciliation-inconclusive",
+        recoveryArtifactsReleased: false,
+        observation: {
+          outcome: "inconclusive",
+          desiredStateMatched: null,
+          actualState: null,
+          reason: "readback-failed",
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("private deletion readback failure");
+      expect(readRecoveryCapsule(
+        PRESENCE_RUN_ID,
+        installed.auth.id,
+        installed.receipt.auth.hash,
+        testState.environment,
+      )).toEqual(installed.capsule);
+      expect(readProviderAcceptedMutationTargetEvidence(
+        installed.capsule,
+        { id: "content.delete", index: 1, planned: 1 },
         testState.environment,
       )?.target.identifier).toBe(PRESENCE_TARGET);
     } finally {

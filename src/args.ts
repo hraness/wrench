@@ -164,6 +164,7 @@ export type WrenchArguments =
       readonly allowRemoteActions: boolean;
       readonly contentMode: HarContentMode;
       readonly browserDomains: readonly string[];
+      readonly cookieOrigins: readonly string[];
       readonly fixtureSources: readonly string[];
       readonly headed: boolean;
     }
@@ -172,6 +173,7 @@ export type WrenchArguments =
   | {
       readonly command: "derive-review";
       readonly id: string;
+      readonly reviewOrigin?: string;
       readonly selection:
         | { readonly kind: "list"; readonly offset: number; readonly limit: number }
         | { readonly kind: "entry"; readonly entryIndex: number; readonly fixtures: boolean };
@@ -1314,7 +1316,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         raw.slice(4),
         ["--auth", "--content", "--domains"],
         ["--allow-remote-actions", "--headed", "--json"],
-        ["--fixture"],
+        ["--fixture", "--cookie-origin"],
       );
       if (isFailure(parsed)) return parsed;
       const content = parsed.values["--content"] ?? "none";
@@ -1328,6 +1330,40 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       const browserDomains = (parsed.values["--domains"] ?? hostname).split(",").map((value) => value.trim()).filter((value) => value !== "");
       if (browserDomains.length < 1 || browserDomains.length > 100 || browserDomains.some((value) => !/^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u.test(value))) {
         return { ok: false, message: "--domains must be a comma-separated list of exact or wildcard hostnames" };
+      }
+      const cookieOrigins: string[] = [];
+      for (const value of parsed.repeatedValues["--cookie-origin"] ?? []) {
+        let origin: URL;
+        try {
+          origin = new URL(value);
+        } catch {
+          return { ok: false, message: "derive start --cookie-origin must be an exact HTTPS origin" };
+        }
+        if (
+          origin.protocol !== "https:"
+          || origin.username !== ""
+          || origin.password !== ""
+          || (value !== origin.origin && value !== `${origin.origin}/`)
+        ) {
+          return { ok: false, message: "derive start --cookie-origin must be an exact HTTPS origin" };
+        }
+        if (cookieOrigins.includes(origin.origin)) {
+          return { ok: false, message: "derive start --cookie-origin values must be unique exact HTTPS origins" };
+        }
+        cookieOrigins.push(origin.origin);
+      }
+      if (cookieOrigins.length > 16) {
+        return { ok: false, message: "derive start accepts at most 16 --cookie-origin values" };
+      }
+      const normalizedBrowserDomains = browserDomains.map((value) => value.toLowerCase());
+      const cookieOriginCovered = (origin: string): boolean => {
+        const hostname = new URL(origin).hostname.toLowerCase();
+        return normalizedBrowserDomains.some((domain) =>
+          domain === hostname
+          || (domain.startsWith("*.") && (hostname === domain.slice(2) || hostname.endsWith(`.${domain.slice(2)}`))));
+      };
+      if (cookieOrigins.some((origin) => !cookieOriginCovered(origin))) {
+        return { ok: false, message: "every --cookie-origin hostname must be covered by --domains" };
       }
       const fixtureSources = parsed.repeatedValues["--fixture"] ?? [];
       if (fixtureSources.length > 20 || fixtureSources.some((value) => value.length > 4_096 || value.includes("\u0000"))) {
@@ -1346,6 +1382,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
           allowRemoteActions: parsed.booleans.has("--allow-remote-actions"),
           contentMode: content,
           browserDomains,
+          cookieOrigins,
           fixtureSources,
           headed: parsed.booleans.has("--headed"),
         },
@@ -1367,12 +1404,32 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     if (subcommand === "review") {
       const id = raw[2];
       if (id === undefined) return { ok: false, message: "derive review requires a derivation ID" };
-      const parsed = optionValues(raw.slice(3), ["--entry", "--offset", "--limit", "--fixtures"], ["--json"]);
+      const parsed = optionValues(raw.slice(3), ["--entry", "--offset", "--limit", "--fixtures", "--review-origin"], ["--json"]);
       if (isFailure(parsed)) return parsed;
       const entryValue = parsed.values["--entry"];
       const offsetValue = parsed.values["--offset"];
       const limitValue = parsed.values["--limit"];
       const fixtureSource = parsed.values["--fixtures"];
+      const reviewOriginValue = parsed.values["--review-origin"];
+      let reviewOrigin: string | undefined;
+      if (reviewOriginValue !== undefined) {
+        let origin: URL;
+        try {
+          if (reviewOriginValue.length > 4_096) throw new Error("oversized origin");
+          origin = new URL(reviewOriginValue);
+        } catch {
+          return { ok: false, message: "derive review --review-origin must be an exact HTTPS origin" };
+        }
+        if (
+          origin.protocol !== "https:"
+          || origin.username !== ""
+          || origin.password !== ""
+          || reviewOriginValue !== origin.origin
+        ) {
+          return { ok: false, message: "derive review --review-origin must be an exact HTTPS origin" };
+        }
+        reviewOrigin = origin.origin;
+      }
       const boundedInteger = (value: string | undefined, fallback: number, maximum: number): number | null => {
         if (value === undefined) return fallback;
         if (!/^\d{1,5}$/u.test(value)) return null;
@@ -1393,6 +1450,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
           value: {
             command: "derive-review",
             id,
+            ...(reviewOrigin === undefined ? {} : { reviewOrigin }),
             selection: { kind: "entry", entryIndex, fixtures: fixtureSource === "-" },
             json: parsed.booleans.has("--json"),
           },
@@ -1408,6 +1466,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         value: {
           command: "derive-review",
           id,
+          ...(reviewOrigin === undefined ? {} : { reviewOrigin }),
           selection: { kind: "list", offset, limit },
           json: parsed.booleans.has("--json"),
         },

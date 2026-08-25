@@ -23,7 +23,36 @@ import type {
   WebSessionExecution,
   WebSessionOperationDeadline,
   WebSessionProviderAcceptedMutationTargetEvent,
+  WebSessionProviderBoundMutationTargetEvent,
 } from "../web-session-execution";
+import {
+  assertInstagramVideoConfigureIndeterminate,
+  assertInstagramVideoDeleteAcknowledgement,
+  assertInstagramVideoUploadAcknowledgement,
+  bindInstagramVideoMediaReadback,
+  instagramVideoAcceptedTargetIdentifier,
+  INSTAGRAM_VIDEO_CAPTURE_BLOCKERS,
+  materializeInstagramVideoPublishInput,
+  parseInstagramVideoAcceptedTargetIdentifier,
+  prepareInstagramAuthoredPostDeleteInput,
+  prepareInstagramVideoPublishInput,
+  parseInstagramVideoConfigureAccepted,
+  revalidateInstagramVideoPublishBindingForDispatch,
+} from "./instagram-video-foundations";
+export {
+  assertInstagramVideoConfigureIndeterminate,
+  assertInstagramVideoDeleteAcknowledgement,
+  assertInstagramVideoUploadAcknowledgement,
+  bindInstagramVideoMediaReadback,
+  instagramVideoAcceptedTargetIdentifier,
+  INSTAGRAM_VIDEO_CAPTURE_BLOCKERS,
+  materializeInstagramVideoPublishInput,
+  parseInstagramVideoAcceptedTargetIdentifier,
+  prepareInstagramAuthoredPostDeleteInput,
+  prepareInstagramVideoPublishInput,
+  parseInstagramVideoConfigureAccepted,
+  revalidateInstagramVideoPublishBindingForDispatch,
+};
 import {
   META_WEB_OPERATIONS,
   META_WEB_OPERATION_NAMES,
@@ -100,6 +129,9 @@ const MAX_THREADS_UPLOAD_ACKNOWLEDGEMENT_BYTES = 16 * 1024;
 const MARKETPLACE_CURSOR_SCOPE = "facebook-marketplace-feed";
 const THREADS_WEB_APP_ID = "238260118697367";
 const THREADS_ASBD_ID = "359341";
+const INSTAGRAM_UPLOAD_ORIGIN = "https://i.instagram.com";
+const INSTAGRAM_WEB_APP_ID = "936619743392459";
+const INSTAGRAM_ASBD_ID = "359341";
 
 export type MetaWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
   readonly now?: () => number;
@@ -110,7 +142,7 @@ function metaWebSessionDependencies(
   auth: WrenchAuth,
   dependencies: MetaWebRuntimeDependencies | undefined,
 ): Partial<WebSessionNetworkDependencies> | undefined {
-  if (site !== "threads") return dependencies;
+  if (site !== "threads" && site !== "instagram") return dependencies;
   const fallback = dependencies?.acquireCookies ?? acquireCookieRecords;
   return {
     ...(dependencies?.fetch === undefined ? {} : { fetch: dependencies.fetch }),
@@ -207,7 +239,7 @@ function instagramHeaders(referer: string): Readonly<Record<string, string>> {
   return Object.freeze({
     accept: "application/json, text/plain, */*",
     referer,
-    "x-ig-app-id": "936619743392459",
+    "x-ig-app-id": INSTAGRAM_WEB_APP_ID,
     "x-requested-with": "XMLHttpRequest",
   });
 }
@@ -226,7 +258,7 @@ function bootstrapConfig(
   while (stack.length > 0) {
     const value = stack.pop();
     visited += 1;
-    if (visited > 250_000) throw new Error("Threads bootstrap configuration exceeded its reviewed bound");
+    if (visited > 250_000) throw new Error("Meta bootstrap configuration exceeded its reviewed bound");
     if (Array.isArray(value)) {
       if (value[0] === moduleName && isRecord(value[2])) matches.push(value[2]);
       for (const item of value) stack.push(item);
@@ -235,7 +267,7 @@ function bootstrapConfig(
     }
   }
   if (matches.length !== 1) {
-    throw new Error(`Threads bootstrap must contain one exact ${moduleName} configuration`);
+    throw new Error(`Meta bootstrap must contain one exact ${moduleName} configuration`);
   }
   return matches[0]!;
 }
@@ -264,6 +296,63 @@ function threadsRequestConfig(html: string): ThreadsRequestConfig {
     bloksVersionId: bloks.versioningID,
     sprinkleParameter: "jazoest",
     sprinkleVersion: sprinkle.version as number,
+  });
+}
+
+export type InstagramVideoRequestConfig = Readonly<{
+  rolloutHash: string;
+}>;
+
+function exactInstagramRolloutHash(value: unknown): string {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > 256
+    || /[^\x21-\x7e]/u.test(value)
+  ) throw new Error("Instagram bootstrap rollout hash is invalid");
+  return value;
+}
+
+/**
+ * Parse the one request value already established in the authenticated
+ * Instagram bootstrap. This does not create a client or perform a request.
+ */
+export function instagramVideoRequestConfig(
+  html: string,
+): InstagramVideoRequestConfig {
+  const pushInfo = bootstrapConfig(html, "InstagramWebPushInfo");
+  return Object.freeze({
+    rolloutHash: exactInstagramRolloutHash(pushInfo.rollout_hash),
+  });
+}
+
+/**
+ * Construct only the established header shape. The live executor deliberately
+ * does not call this while the mutation response envelopes remain uncaptured.
+ */
+export function instagramVideoMutationHeaders(
+  csrfToken: string,
+  config: InstagramVideoRequestConfig,
+  contentType:
+    | "application/x-www-form-urlencoded;charset=UTF-8"
+    | "image/jpeg"
+    | "video/mp4",
+): Readonly<Record<string, string>> {
+  if (
+    csrfToken.length < 1
+    || csrfToken.length > 512
+    || /[\0\r\n]/u.test(csrfToken)
+  ) throw new Error("Instagram CSRF cookie is invalid");
+  const rolloutHash = exactInstagramRolloutHash(config.rolloutHash);
+  return Object.freeze({
+    accept: "*/*",
+    "content-type": contentType,
+    origin: ORIGINS.instagram,
+    referer: `${ORIGINS.instagram}/`,
+    "x-asbd-id": INSTAGRAM_ASBD_ID,
+    "x-csrftoken": csrfToken,
+    "x-ig-app-id": INSTAGRAM_WEB_APP_ID,
+    "x-instagram-ajax": rolloutHash,
   });
 }
 
@@ -647,6 +736,264 @@ function threadsUploadId(now: () => number): string {
     throw new Error("Threads upload clock did not produce one canonical 13-digit ID");
   }
   return uploadId;
+}
+
+export function instagramVideoUploadId(now: () => number): string {
+  const value = Math.trunc(now());
+  const uploadId = String(value);
+  if (!/^[1-9][0-9]{12}$/u.test(uploadId)) {
+    throw new Error("Instagram upload clock did not produce one canonical 13-digit ID");
+  }
+  return uploadId;
+}
+
+export type InstagramVideoUploadRequestShape = Readonly<{
+  headers: Readonly<Record<string, string>>;
+  method: "POST";
+  url: string;
+}>;
+
+/**
+ * Build the established cross-origin upload request shape without reading a
+ * file, acquiring credentials, opening a network client, or assuming an
+ * acknowledgement envelope.
+ */
+export function instagramVideoUploadRequestShape(
+  snapshot: Pick<
+    ReturnType<typeof revalidateInstagramVideoPublishBindingForDispatch>,
+    | "byteLength"
+    | "durationMilliseconds"
+    | "height"
+    | "mediaType"
+    | "width"
+  >,
+  uploadId: string,
+  csrfToken: string,
+  config: InstagramVideoRequestConfig,
+): InstagramVideoUploadRequestShape {
+  if (
+    !/^[1-9][0-9]{12}$/u.test(uploadId)
+    || !Number.isSafeInteger(snapshot.byteLength)
+    || snapshot.byteLength < 24
+    || snapshot.byteLength > 128 * 1024 * 1024
+    || !Number.isSafeInteger(snapshot.durationMilliseconds)
+    || snapshot.durationMilliseconds < 1
+    || snapshot.durationMilliseconds > 86_400_000
+    || !Number.isSafeInteger(snapshot.height)
+    || snapshot.height < 1
+    || snapshot.height > 20_000
+    || !Number.isSafeInteger(snapshot.width)
+    || snapshot.width < 1
+    || snapshot.width > 20_000
+    || snapshot.mediaType !== "video/mp4"
+  ) throw new Error("Instagram upload request input is outside its reviewed bound");
+  const entityName = `fb_uploader_${uploadId}`;
+  return Object.freeze({
+    url: new URL(`/rupload_igvideo/${entityName}`, INSTAGRAM_UPLOAD_ORIGIN).href,
+    method: "POST",
+    headers: Object.freeze({
+      ...instagramVideoMutationHeaders(csrfToken, config, "video/mp4"),
+      offset: "0",
+      "x-entity-length": String(snapshot.byteLength),
+      "x-entity-name": entityName,
+      "x-instagram-rupload-params": JSON.stringify({
+        "client-passthrough": "1",
+        is_clips_video: "1",
+        for_album: false,
+        is_sidecar: "0",
+        media_type: 2,
+        upload_id: uploadId,
+        upload_media_duration_ms: snapshot.durationMilliseconds,
+        upload_media_height: snapshot.height,
+        upload_media_width: snapshot.width,
+        video_format: snapshot.mediaType,
+        video_transform: null,
+      }),
+    }),
+  });
+}
+
+export type InstagramVideoThumbnailUploadRequestShape = Readonly<{
+  headers: Readonly<Record<string, string>>;
+  method: "POST";
+  url: string;
+}>;
+
+/** Build the observed same-identity JPEG cover upload. */
+export function instagramVideoThumbnailUploadRequestShape(
+  thumbnail: Pick<
+    ReturnType<typeof revalidateInstagramVideoPublishBindingForDispatch>,
+    | "thumbnailByteLength"
+    | "thumbnailHeight"
+    | "thumbnailMediaType"
+    | "thumbnailWidth"
+  >,
+  uploadId: string,
+  csrfToken: string,
+  config: InstagramVideoRequestConfig,
+): InstagramVideoThumbnailUploadRequestShape {
+  if (
+    !/^[1-9][0-9]{12}$/u.test(uploadId)
+    || !Number.isSafeInteger(thumbnail.thumbnailByteLength)
+    || thumbnail.thumbnailByteLength < 16
+    || thumbnail.thumbnailByteLength > 8 * 1024 * 1024
+    || !Number.isSafeInteger(thumbnail.thumbnailHeight)
+    || thumbnail.thumbnailHeight < 1
+    || thumbnail.thumbnailHeight > 20_000
+    || !Number.isSafeInteger(thumbnail.thumbnailWidth)
+    || thumbnail.thumbnailWidth < 1
+    || thumbnail.thumbnailWidth > 20_000
+    || thumbnail.thumbnailMediaType !== "image/jpeg"
+  ) throw new Error("Instagram thumbnail upload request input is outside its reviewed bound");
+  const entityName = `fb_uploader_${uploadId}`;
+  return Object.freeze({
+    url: new URL(`/rupload_igphoto/${entityName}`, INSTAGRAM_UPLOAD_ORIGIN).href,
+    method: "POST" as const,
+    headers: Object.freeze({
+      ...instagramVideoMutationHeaders(csrfToken, config, "image/jpeg"),
+      offset: "0",
+      "x-entity-length": String(thumbnail.thumbnailByteLength),
+      "x-entity-name": entityName,
+      "x-entity-type": "image/jpeg",
+      "x-instagram-rupload-params": JSON.stringify({
+        is_sidecar: "0",
+        media_type: 1,
+        upload_id: uploadId,
+        upload_media_height: thumbnail.thumbnailHeight,
+        upload_media_width: thumbnail.thumbnailWidth,
+      }),
+    }),
+  });
+}
+
+function exactInstagramConfigureInput(caption: string, uploadId: string): void {
+  if (
+    typeof caption !== "string"
+    || caption.length < 1
+    || caption.length > 1_000
+    || /[\0\r]/u.test(caption)
+  ) throw new Error("Instagram configure caption is outside its reviewed bound");
+  if (!/^[1-9][0-9]{12}$/u.test(uploadId)) {
+    throw new Error("Instagram configure upload ID is invalid");
+  }
+}
+
+export function instagramVideoConfigurePayload(
+  caption: string,
+  uploadId: string,
+): Readonly<Record<string, boolean | number | string>> {
+  exactInstagramConfigureInput(caption, uploadId);
+  return Object.freeze({
+    archive_only: false,
+    caption,
+    clips_share_preview_to_feed: "1",
+    disable_comments: "0",
+    disable_oa_reuse: false,
+    igtv_share_preview_to_feed: 1,
+    is_meta_only_post: "0",
+    is_unified_video: 1,
+    like_and_view_counts_disabled: "0",
+    media_share_flow: "creation_flow",
+    share_to_facebook: "",
+    share_to_fb_destination_type: "USER",
+    source_type: "library",
+    upload_id: uploadId,
+    video_subtitles_enabled: "0",
+  });
+}
+
+export function instagramVideoConfigureForm(
+  caption: string,
+  uploadId: string,
+): string {
+  const payload = instagramVideoConfigurePayload(caption, uploadId);
+  const form = new URLSearchParams();
+  for (const [name, value] of Object.entries(payload)) form.set(name, String(value));
+  form.set("signed_body", `SIGNATURE.${JSON.stringify(payload)}`);
+  return form.toString();
+}
+
+export type InstagramConfigureDispatchDecision =
+  | Readonly<{
+    kind: "inspect-terminal-envelope";
+  }>
+  | Readonly<{
+    kind: "retain-indeterminate-dispatch";
+  }>;
+
+/**
+ * Classify the one allowed configure POST response. A 202 never authorizes a
+ * repeated mutation: retain the dispatch as indeterminate until separately
+ * obtained exact evidence can reconcile it. Both response bodies remain
+ * uninterpreted until a reviewed capture establishes their exact envelopes.
+ */
+export function instagramConfigureDispatchDecision(
+  status: number,
+): InstagramConfigureDispatchDecision {
+  if (status === 200) {
+    return Object.freeze({ kind: "inspect-terminal-envelope" as const });
+  }
+  if (status === 202) {
+    return Object.freeze({ kind: "retain-indeterminate-dispatch" as const });
+  }
+  throw new Error("Instagram configure returned an unreviewed HTTP status");
+}
+
+export type InstagramVideoConfigureRequestShape = Readonly<{
+  body: string;
+  headers: Readonly<Record<string, string>>;
+  method: "POST";
+  url: string;
+}>;
+
+/** Construct the established configure request without performing it. */
+export function instagramVideoConfigureRequestShape(
+  caption: string,
+  uploadId: string,
+  csrfToken: string,
+  config: InstagramVideoRequestConfig,
+): InstagramVideoConfigureRequestShape {
+  return Object.freeze({
+    body: instagramVideoConfigureForm(caption, uploadId),
+    headers: instagramVideoMutationHeaders(
+      csrfToken,
+      config,
+      "application/x-www-form-urlencoded;charset=UTF-8",
+    ),
+    method: "POST" as const,
+    url: new URL("/api/v1/media/configure_to_clips/", ORIGINS.instagram).href,
+  });
+}
+
+export type InstagramVideoDeleteRequestShape = Readonly<{
+  body: "";
+  headers: Readonly<Record<string, string>>;
+  method: "POST";
+  url: string;
+}>;
+
+/** Build the observed empty-body authored-media deletion request. */
+export function instagramVideoDeleteRequestShape(
+  mediaId: string,
+  csrfToken: string,
+  config: InstagramVideoRequestConfig,
+): InstagramVideoDeleteRequestShape {
+  if (!/^[1-9][0-9]{0,31}_[1-9][0-9]{0,31}$/u.test(mediaId)) {
+    throw new Error("Instagram deletion request media ID is invalid");
+  }
+  return Object.freeze({
+    body: "" as const,
+    headers: instagramVideoMutationHeaders(
+      csrfToken,
+      config,
+      "application/x-www-form-urlencoded;charset=UTF-8",
+    ),
+    method: "POST" as const,
+    url: new URL(
+      `/api/v1/web/create/${mediaId}/delete/`,
+      ORIGINS.instagram,
+    ).href,
+  });
 }
 
 type ThreadsUploadedMedia = Readonly<{
@@ -1686,6 +2033,139 @@ async function requireBoundViewer(
   return viewer;
 }
 
+const INSTAGRAM_REMOVED_TITLE = "Page not found • Instagram";
+const INSTAGRAM_REMOVED_MAIN_TEXT = "Sorry, this page isn't available.";
+const INSTAGRAM_REMOVED_DETAIL_TEXT =
+  "The link you followed may be broken, or the page may have been removed.";
+const INSTAGRAM_REMOVED_BACK_LINK_TEXT = "Go back to Instagram.";
+
+function instagramHtmlTitle(source: string): string {
+  const matches = [...source.matchAll(/<title(?:\s[^>]*)?>([^<]*)<\/title>/giu)];
+  if (matches.length !== 1) {
+    throw new Error("Instagram permalink response did not contain one exact HTML title");
+  }
+  return (matches[0]?.[1] ?? "")
+    .replaceAll("&bull;", "•")
+    .replaceAll("&#8226;", "•")
+    .replaceAll("&#x2022;", "•")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'");
+}
+
+/** Fixed semantic projection of the observed authenticated soft-200 tombstone. */
+export function instagramVideoPermalinkWasRemoved(html: unknown): boolean {
+  if (
+    typeof html !== "string"
+    || html.length < 1
+    || Buffer.byteLength(html, "utf8") > MAX_API_BYTES
+  ) throw new Error("Instagram permalink response exceeded its reviewed HTML bound");
+  const title = instagramHtmlTitle(html);
+  if (title !== INSTAGRAM_REMOVED_TITLE) return false;
+  if (
+    !html.includes(INSTAGRAM_REMOVED_MAIN_TEXT)
+    || !html.includes(INSTAGRAM_REMOVED_DETAIL_TEXT)
+    || !html.includes(INSTAGRAM_REMOVED_BACK_LINK_TEXT)
+  ) throw new Error("Instagram permalink removal marker changed shape");
+  return true;
+}
+
+/**
+ * Read only one exact provider-derived Instagram video target. Publishing
+ * remains capture-required; deletion uses this same target projection for
+ * durable desired-state reconciliation without resolving either upload file.
+ */
+export async function readInstagramVideoAcceptedMutationTargetPresence(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  identifier: string,
+  options: {
+    readonly dependencies?: MetaWebRuntimeDependencies;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<Readonly<{
+  code: string;
+  mediaId: string;
+  present: boolean;
+}>> {
+  const isPublish = recipe.site === "instagram"
+    && recipe.action === "media.publish"
+    && recipe.contractVersion === 3;
+  const isDelete = recipe.site === "instagram"
+    && recipe.action === "content.delete"
+    && recipe.contractVersion === 2;
+  if (!isPublish && !isDelete) {
+    throw new Error(
+      "Instagram video accepted-target readback supports only media.publish@3 or content.delete@2",
+    );
+  }
+  const target = parseInstagramVideoAcceptedTargetIdentifier(identifier);
+  const expectedCaption = isPublish
+    ? prepareInstagramVideoPublishInput(input).caption
+    : prepareInstagramAuthoredPostDeleteInput(input).expectedCaption;
+  if (isDelete) {
+    const deletion = prepareInstagramAuthoredPostDeleteInput(input);
+    if (deletion.mediaId !== target.mediaId) {
+      throw new Error("Instagram deletion accepted target did not bind the confirmed media ID");
+    }
+  }
+
+  const expectedSubject = expectedMetaAuthSubject("instagram", auth);
+  const client = await createWebSessionClient(ORIGINS.instagram, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined
+      ? {}
+      : { dependencies: options.dependencies }),
+  });
+  const viewer = await requireBoundViewer(
+    "instagram",
+    client,
+    expectedSubject,
+  );
+  const permalink = await client.requestText({
+    url: new URL(target.url),
+    method: "GET",
+    headers: htmlHeaders(ORIGINS.instagram),
+    expectedContentTypes: ["text/html"],
+    maxBytes: Math.min(recipe.maxOutputBytes, MAX_API_BYTES),
+  });
+  if (instagramVideoPermalinkWasRemoved(permalink)) {
+    return Object.freeze({
+      code: target.code,
+      mediaId: target.mediaId,
+      present: false,
+    });
+  }
+  const response = await client.requestJson({
+    url: new URL(`/api/v1/media/${target.mediaId}/info/`, ORIGINS.instagram),
+    method: "GET",
+    headers: instagramHeaders(target.url),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: Math.min(recipe.maxOutputBytes, MAX_API_BYTES),
+  });
+  const normalized = normalizeInstagramPost(response, target.mediaId);
+  bindInstagramVideoMediaReadback(normalized, {
+    expectedCaption,
+    expectedCode: target.code,
+    mediaId: target.mediaId,
+    viewerId: viewer.id,
+  });
+  return Object.freeze({
+    code: target.code,
+    mediaId: target.mediaId,
+    present: true,
+  });
+}
+
 function exactInstagramMediaId(input: OperationInput): string {
   return exactStringInput(
     input,
@@ -1696,6 +2176,15 @@ function exactInstagramMediaId(input: OperationInput): string {
 }
 
 type PreparedMetaRead =
+  | {
+    readonly kind: "instagram-video";
+    readonly input: OperationInput;
+  }
+  | {
+    readonly kind: "instagram-video-delete";
+    readonly expectedCaption: string;
+    readonly mediaId: string;
+  }
   | {
     readonly kind: "instagram-profile";
     readonly profile: string;
@@ -1768,6 +2257,18 @@ function prepareMetaRead(
   environment: Readonly<Record<string, string | undefined>>,
 ): PreparedMetaRead {
   if (recipe.site === "instagram") {
+    if (recipe.action === "media.publish") {
+      prepareInstagramVideoPublishInput(input);
+      return Object.freeze({ kind: "instagram-video", input });
+    }
+    if (recipe.action === "content.delete") {
+      const deletion = prepareInstagramAuthoredPostDeleteInput(input);
+      return Object.freeze({
+        kind: "instagram-video-delete",
+        expectedCaption: deletion.expectedCaption,
+        mediaId: deletion.mediaId,
+      });
+    }
     if (recipe.action === "profiles.read") {
       requireExactInputKeys(input, ["profile"]);
       return Object.freeze({
@@ -2033,6 +2534,363 @@ async function executeInstagramRead(
   throw new Error(`Instagram authenticated web operation ${(exhaustive as { kind: string }).kind} is not reviewed`);
 }
 
+function instagramMutationDispatchEvent(
+  id: "content.delete" | "media.publish",
+  started: number,
+  verified: number,
+): WebSessionDispatchEvent {
+  return Object.freeze({
+    id,
+    index: 1,
+    progress: Object.freeze({ planned: 1, started, verified }),
+  });
+}
+
+async function readInstagramAuthoredVideoTarget(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  viewerId: string,
+  mediaId: string,
+  expectedCaption: string,
+): Promise<ReturnType<typeof bindInstagramVideoMediaReadback>> {
+  const response = await client.requestJson({
+    url: new URL(`/api/v1/media/${mediaId}/info/`, ORIGINS.instagram),
+    method: "GET",
+    headers: instagramHeaders(`${ORIGINS.instagram}/`),
+    expectedStatuses: [200],
+    expectedContentTypes: ["application/json"],
+    maxBytes: Math.min(recipe.maxOutputBytes, MAX_API_BYTES),
+  });
+  return bindInstagramVideoMediaReadback(
+    normalizeInstagramPost(response, mediaId),
+    { expectedCaption, mediaId, viewerId },
+  );
+}
+
+async function instagramBlobBytes(
+  body: Blob,
+  expectedLength: number,
+  label: "video" | "thumbnail",
+): Promise<Uint8Array> {
+  const bytes = new Uint8Array(await body.arrayBuffer());
+  if (bytes.byteLength !== expectedLength) {
+    throw new Error(`Instagram ${label} dispatch body changed length`);
+  }
+  return bytes;
+}
+
+async function executeInstagramVideoPublish(
+  client: WebSessionClient,
+  viewer: BoundMetaViewer,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly fileResolver?: BrowserFileResolver;
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderAcceptedMutationTarget?: (
+      event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly dependencies?: MetaWebRuntimeDependencies;
+    readonly now: () => number;
+  },
+): Promise<WebSessionExecution> {
+  const bound = await materializeInstagramVideoPublishInput(
+    input,
+    options.fileResolver,
+    options.operationDeadline,
+  );
+  const snapshot = revalidateInstagramVideoPublishBindingForDispatch(bound);
+  const uploadId = instagramVideoUploadId(options.now);
+  const config = instagramVideoRequestConfig(viewer.rootHtml);
+  const csrfToken = webSessionCookie(client.cookies, "csrftoken");
+  const uploadClient = await createWebSessionClient(INSTAGRAM_UPLOAD_ORIGIN, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined
+      ? {}
+      : { dependencies: options.dependencies }),
+  });
+  if (webSessionCookie(uploadClient.cookies, "ds_user_id") !== viewer.id) {
+    throw new Error("Instagram upload session did not bind the confirmed viewer");
+  }
+
+  let started = 0;
+  let verified = 0;
+  let failureStage = "dispatch-admission";
+  let target: ReturnType<typeof parseInstagramVideoConfigureAccepted> | null = null;
+  try {
+    await options.beforeDispatch?.(
+      instagramMutationDispatchEvent("media.publish", started, verified),
+    );
+    started = 1;
+
+    failureStage = "video-upload";
+    const videoRequest = instagramVideoUploadRequestShape(
+      snapshot,
+      uploadId,
+      csrfToken,
+      config,
+    );
+    const videoBytes = await instagramBlobBytes(
+      snapshot.body,
+      snapshot.byteLength,
+      "video",
+    );
+    try {
+      const acknowledgement = await uploadClient.requestJson({
+        url: new URL(videoRequest.url),
+        method: videoRequest.method,
+        headers: videoRequest.headers,
+        body: videoBytes,
+        expectedStatuses: [200],
+        expectedContentTypes: ["application/json"],
+        maxBytes: 16 * 1024,
+      });
+      assertInstagramVideoUploadAcknowledgement(acknowledgement);
+    } finally {
+      videoBytes.fill(0);
+    }
+
+    failureStage = "thumbnail-upload";
+    const thumbnailRequest = instagramVideoThumbnailUploadRequestShape(
+      snapshot,
+      uploadId,
+      csrfToken,
+      config,
+    );
+    const thumbnailBytes = await instagramBlobBytes(
+      snapshot.thumbnailBody,
+      snapshot.thumbnailByteLength,
+      "thumbnail",
+    );
+    try {
+      const acknowledgement = await uploadClient.requestJson({
+        url: new URL(thumbnailRequest.url),
+        method: thumbnailRequest.method,
+        headers: thumbnailRequest.headers,
+        body: thumbnailBytes,
+        expectedStatuses: [200],
+        expectedContentTypes: ["application/json"],
+        maxBytes: 16 * 1024,
+      });
+      assertInstagramVideoUploadAcknowledgement(acknowledgement);
+    } finally {
+      thumbnailBytes.fill(0);
+    }
+
+    failureStage = "account-revalidation";
+    const reboundViewer = await requireBoundViewer(
+      "instagram",
+      client,
+      viewer.subject,
+    );
+
+    failureStage = "configure";
+    const configureRequest = instagramVideoConfigureRequestShape(
+      snapshot.caption,
+      uploadId,
+      csrfToken,
+      config,
+    );
+    const configure = await client.requestJsonResponse({
+      url: new URL(configureRequest.url),
+      method: configureRequest.method,
+      headers: configureRequest.headers,
+      body: configureRequest.body,
+      expectedStatuses: [200, 202],
+      expectedContentTypes: ["application/json"],
+      maxBytes: Math.min(recipe.maxOutputBytes, MAX_API_BYTES),
+    });
+    if (configure.status === 202) {
+      assertInstagramVideoConfigureIndeterminate(configure.value);
+      throw new Error(
+        "Instagram configure remains indeterminate after its one allowed POST",
+      );
+    }
+    target = parseInstagramVideoConfigureAccepted(configure.value, {
+      caption: snapshot.caption,
+      uploadId,
+      viewerId: reboundViewer.id,
+    });
+
+    failureStage = "accepted-target-recording";
+    await options.afterProviderAcceptedMutationTarget?.({
+      id: "media.publish",
+      index: 1,
+      target: Object.freeze({
+        schemaVersion: 1,
+        identifier: instagramVideoAcceptedTargetIdentifier(target),
+      }),
+    });
+
+    failureStage = "publication-readback";
+    await readInstagramAuthoredVideoTarget(
+      client,
+      recipe,
+      reboundViewer.id,
+      target.mediaId,
+      snapshot.caption,
+    );
+    verified = 1;
+    failureStage = "verification-recording";
+    await options.afterDispatchVerified?.(
+      instagramMutationDispatchEvent("media.publish", started, verified),
+    );
+    return {
+      status: "succeeded",
+      output: Object.freeze({
+        published: true,
+        target,
+        media: Object.freeze({
+          byteLength: snapshot.byteLength,
+          durationMilliseconds: snapshot.durationMilliseconds,
+          height: snapshot.height,
+          mediaType: snapshot.mediaType,
+          sha256: snapshot.mediaSha256,
+          thumbnailByteLength: snapshot.thumbnailByteLength,
+          thumbnailMediaType: snapshot.thumbnailMediaType,
+          thumbnailSha256: snapshot.thumbnailSha256,
+          width: snapshot.width,
+        }),
+      }),
+      finalUrl: target.url,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: target?.url ?? ORIGINS.instagram,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? `Instagram may have accepted the exact video publish, but its response-derived target and independent readback were not both verified; reconcile before retrying (stage: ${failureStage})`
+        : `Instagram video publication failed before remote submission (stage: ${failureStage})`,
+    };
+  }
+}
+
+async function executeInstagramVideoDelete(
+  client: WebSessionClient,
+  viewer: BoundMetaViewer,
+  recipe: WebSessionRecipe,
+  prepared: Extract<PreparedMetaRead, { readonly kind: "instagram-video-delete" }>,
+  options: {
+    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+    readonly afterProviderBoundMutationTarget?: (
+      event: WebSessionProviderBoundMutationTargetEvent,
+    ) => Promise<void>;
+    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+  },
+): Promise<WebSessionExecution> {
+  const initial = await readInstagramAuthoredVideoTarget(
+    client,
+    recipe,
+    viewer.id,
+    prepared.mediaId,
+    prepared.expectedCaption,
+  );
+  const reboundViewer = await requireBoundViewer(
+    "instagram",
+    client,
+    viewer.subject,
+  );
+  const fresh = await readInstagramAuthoredVideoTarget(
+    client,
+    recipe,
+    reboundViewer.id,
+    prepared.mediaId,
+    prepared.expectedCaption,
+  );
+  if (instagramVideoAcceptedTargetIdentifier(initial)
+    !== instagramVideoAcceptedTargetIdentifier(fresh)) {
+    throw new Error("Instagram deletion target changed between its exact pre-reads");
+  }
+  const config = instagramVideoRequestConfig(reboundViewer.rootHtml);
+  const csrfToken = webSessionCookie(client.cookies, "csrftoken");
+  const request = instagramVideoDeleteRequestShape(
+    fresh.mediaId,
+    csrfToken,
+    config,
+  );
+
+  let started = 0;
+  let verified = 0;
+  let failureStage = "dispatch-admission";
+  try {
+    await options.beforeDispatch?.(
+      instagramMutationDispatchEvent("content.delete", started, verified),
+    );
+    started = 1;
+    failureStage = "bound-target-recording";
+    await options.afterProviderBoundMutationTarget?.({
+      id: "content.delete",
+      index: 1,
+      target: Object.freeze({
+        schemaVersion: 1,
+        identifier: instagramVideoAcceptedTargetIdentifier(fresh),
+      }),
+    });
+
+    failureStage = "delete-transport";
+    const acknowledgement = await client.requestJson({
+      url: new URL(request.url),
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+      expectedStatuses: [200],
+      expectedContentTypes: ["application/json"],
+      maxBytes: 16 * 1024,
+    });
+    assertInstagramVideoDeleteAcknowledgement(acknowledgement);
+
+    failureStage = "account-revalidation";
+    await requireBoundViewer("instagram", client, reboundViewer.subject);
+    failureStage = "deletion-readback";
+    const permalink = await client.requestText({
+      url: new URL(fresh.url),
+      method: "GET",
+      headers: htmlHeaders(ORIGINS.instagram),
+      expectedContentTypes: ["text/html"],
+      maxBytes: Math.min(recipe.maxOutputBytes, MAX_API_BYTES),
+    });
+    if (!instagramVideoPermalinkWasRemoved(permalink)) {
+      throw new Error("Instagram deleted-video permalink did not return its removal marker");
+    }
+    verified = 1;
+    failureStage = "verification-recording";
+    await options.afterDispatchVerified?.(
+      instagramMutationDispatchEvent("content.delete", started, verified),
+    );
+    return {
+      status: "succeeded",
+      output: Object.freeze({ deleted: true, target: fresh }),
+      finalUrl: fresh.url,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started, verified },
+    };
+  } catch {
+    return {
+      status: started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: fresh.url,
+      dispatchStarted: started > 0,
+      dispatch: { planned: 1, started, verified },
+      error: started > 0
+        ? `Instagram may have deleted the exact authored video, but its fixed soft-200 removal marker was not verified; reconcile before retrying (stage: ${failureStage})`
+        : `Instagram video deletion failed before remote submission (stage: ${failureStage})`,
+    };
+  }
+}
+
 export async function executeMetaWebOperation(
   recipe: WebSessionRecipe,
   input: OperationInput,
@@ -2044,6 +2902,9 @@ export async function executeMetaWebOperation(
     readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly afterProviderAcceptedMutationTarget?: (
       event: WebSessionProviderAcceptedMutationTargetEvent,
+    ) => Promise<void>;
+    readonly afterProviderBoundMutationTarget?: (
+      event: WebSessionProviderBoundMutationTargetEvent,
     ) => Promise<void>;
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: MetaWebRuntimeDependencies;
@@ -2065,14 +2926,19 @@ export async function executeMetaWebOperation(
   }
   const isThreadsMutation = recipe.site === "threads"
     && (recipe.action === "posts.publish" || recipe.action === "media.publish");
+  const isInstagramMutation = recipe.site === "instagram"
+    && recipe.action === "content.delete";
   if (
     !isThreadsMutation
+    && !isInstagramMutation
     && (contract.risk !== "R1" || contract.effect !== "read")
   ) {
     throw new Error(`${recipe.site} reviewed Meta runtime refuses non-read execution`);
   }
-  if (!isThreadsMutation) {
+  if (!isThreadsMutation && !isInstagramMutation) {
     void options.beforeDispatch;
+    void options.afterProviderAcceptedMutationTarget;
+    void options.afterProviderBoundMutationTarget;
     void options.afterDispatchVerified;
   }
 
@@ -2115,6 +2981,52 @@ export async function executeMetaWebOperation(
       : {}),
   });
   const viewer = await requireBoundViewer(recipe.site, client, expectedSubject);
+  if (prepared.kind === "instagram-video") {
+    return executeInstagramVideoPublish(
+      client,
+      viewer,
+      recipe,
+      prepared.input,
+      auth,
+      {
+        ...(options.fileResolver === undefined ? {} : { fileResolver: options.fileResolver }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.operationDeadline === undefined
+          ? {}
+          : { operationDeadline: options.operationDeadline }),
+        ...(options.beforeDispatch === undefined
+          ? {}
+          : { beforeDispatch: options.beforeDispatch }),
+        ...(options.afterProviderAcceptedMutationTarget === undefined
+          ? {}
+          : {
+              afterProviderAcceptedMutationTarget:
+                options.afterProviderAcceptedMutationTarget,
+            }),
+        ...(options.afterDispatchVerified === undefined
+          ? {}
+          : { afterDispatchVerified: options.afterDispatchVerified }),
+        ...(dependencies === undefined ? {} : { dependencies }),
+        now: options.dependencies?.now ?? Date.now,
+      },
+    );
+  }
+  if (prepared.kind === "instagram-video-delete") {
+    return executeInstagramVideoDelete(client, viewer, recipe, prepared, {
+      ...(options.beforeDispatch === undefined
+        ? {}
+        : { beforeDispatch: options.beforeDispatch }),
+      ...(options.afterProviderBoundMutationTarget === undefined
+        ? {}
+        : {
+            afterProviderBoundMutationTarget:
+              options.afterProviderBoundMutationTarget,
+          }),
+      ...(options.afterDispatchVerified === undefined
+        ? {}
+        : { afterDispatchVerified: options.afterDispatchVerified }),
+    });
+  }
   if (prepared.kind === "threads-post") {
     return executeThreadsPost(client, viewer, prepared, {
       ...(options.fileResolver === undefined ? {} : { fileResolver: options.fileResolver }),

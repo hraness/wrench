@@ -32,18 +32,28 @@ credentials. Wrench probes and binds each authenticated provider subject.
 | `linkedin-personal` | `linkedin-web profiles.read` | `linkedin-chrome` | `{"profile_url":"https://www.linkedin.com/in/hraness","include_connections":true}` | followers, connections |
 | `linkedin-company-hraness` | `linkedin-web organizations.read` | `linkedin-chrome` | `{"organization_url":"https://www.linkedin.com/company/hraness"}` | followers |
 | `youtube-hraness` | `youtube-web profiles.read` | `youtube-chrome` | `{"profile":"@hraness"}` | subscribers, videos, views |
+| `twitch-hranessdotcom` | `twitch-web profiles.read` | `twitch-chrome` | `{"profile":"hranessdotcom"}` | followers |
 | `bluesky-hraness` | `bluesky-web profiles.read` | public | `{"handle":"hraness.bsky.social"}` | followers, following, posts |
 | `instagram-hraness` | `instagram-web profiles.read` | `instagram-chrome` | `{"profile":"hraness"}` | followers, following, posts |
 | `threads-hraness` | `threads-web profiles.read` | `threads-chrome` | `{"profile":"hraness"}` | followers, recentViews |
 | `substack-hraness` | `substack-web profiles.read` | `substack-chrome` | `{"profile":"hraness"}` | followers |
 | `substack-hraness` | `substack-web organizations.read` | `substack-chrome` | `{"organization":"hraness"}` | freeSubscribers, paidSubscribers |
+| `github-0thernet` | `github-web profiles.read` | public | `{"username":"0thernet"}` | followers, following, publicRepositories |
+| `github-hraness` | `github-web organizations.read` | public | `{"organization":"hraness"}` | stars, followers |
 | `tiktok-hraness` | `tiktok-web profiles.read` | `tiktok-chrome` | `{"profile":"hraness"}` | followers, following, likes |
 | `reddit-bgdotjpg` | `reddit-web profiles.read` | `reddit-chrome` | `{"profile":"bgdotjpg"}` | followers, karma, contributions |
 
-Bluesky profile statistics come from the public target-bound AppView API.
-Invoke this row without `--auth`. Wrench assigns the reviewed operation a
+Bluesky and GitHub profile and organization statistics come from public target-bound APIs.
+Invoke these rows without `--auth`. Wrench assigns each reviewed operation a
 deterministic public authority for receipts and exact R1 caching. Supplying an
 auth locator is an error.
+
+The Twitch row targets exactly
+`https://www.twitch.tv/hranessdotcom`. Until `twitch-web profiles.read` is an
+installed observed capability and `twitch-chrome` resolves to an eligible,
+target-bound auth source, record Twitch followers as a categorical gap. Do not
+substitute browser automation, raw HTTP, a rounded public display, a cached
+value, or an estimate.
 
 Keep the two X calls sequential, both LinkedIn calls sequential, and both
 Substack calls sequential because each pair shares one authenticated realm.
@@ -72,12 +82,22 @@ printf '%s' '<input-json>' \
   | wrench invoke <adapter> <operation> --input - --auth <auth-id> --json
 ```
 
-For the public Bluesky row, omit the auth option:
+For the public Bluesky and GitHub rows, omit the auth option:
 
 ```sh
 printf '%s' '{"handle":"hraness.bsky.social"}' \
   | wrench invoke bluesky-web profiles.read --input - --json
+printf '%s' '{"username":"0thernet"}' \
+  | wrench invoke github-web profiles.read --input - --json
+printf '%s' '{"organization":"hraness"}' \
+  | wrench invoke github-web organizations.read --input - --json
 ```
+
+`github-web organizations.read` first binds the exact organization and its
+declared public repository count, then completes the fixed public repository
+pagination before summing `stargazers_count`. It returns `stars` only when the
+complete repository set is available and bound; it never substitutes a partial
+page, a rounded display total, or a prior observation.
 
 Do not put an auth ID, provider receipt, cache key, run ID, subject identifier,
 or raw provider response in the consumer snapshot. Do not print or persist

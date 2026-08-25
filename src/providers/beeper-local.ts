@@ -29,7 +29,9 @@ export const BEEPER_DESKTOP_TARGET = "desktop" as const;
 
 export const BEEPER_LOCAL_OPERATION_NAMES = Object.freeze([
   "contacts.list",
+  "contacts.search",
   "messaging.list",
+  "messaging.search",
   "messaging.read",
 ] as const);
 
@@ -44,12 +46,26 @@ export const BEEPER_LOCAL_OPERATIONS = Object.freeze({
     reason:
       "the pinned official Beeper CLI reads one bounded account-aware contact projection from local Desktop in read-only mode; it does not download media or expose raw requests",
   }),
+  "contacts.search": Object.freeze({
+    effect: "read",
+    risk: "R1",
+    state: "observed",
+    reason:
+      "the pinned official Beeper CLI performs one bounded account-aware fuzzy contact search against local Desktop in read-only mode and returns candidate identity metadata without media or private content",
+  }),
   "messaging.list": Object.freeze({
     effect: "read",
     risk: "R1",
     state: "observed",
     reason:
       "the pinned official Beeper CLI reads one bounded local chat projection in read-only mode and preserves account, network, participant, and local-completeness evidence",
+  }),
+  "messaging.search": Object.freeze({
+    effect: "read",
+    risk: "R1",
+    state: "observed",
+    reason:
+      "the pinned official Beeper CLI performs one bounded account-aware fuzzy chat search against local Desktop in read-only mode and returns candidate conversation and participant identity metadata without message content or private UI state",
   }),
   "messaging.read": Object.freeze({
     effect: "read",
@@ -70,6 +86,18 @@ export type BeeperMessagingListInput = Readonly<{
   limit: number;
 }>;
 
+export type BeeperContactsSearchInput = Readonly<{
+  accountId: string | null;
+  query: string;
+  limit: number;
+}>;
+
+export type BeeperMessagingSearchInput = Readonly<{
+  accountId: string | null;
+  query: string;
+  limit: number;
+}>;
+
 export type BeeperMessagingReadInput = Readonly<{
   accountId: string;
   conversationId: string;
@@ -80,7 +108,9 @@ export type BeeperMessagingReadInput = Readonly<{
 
 export type BeeperOperationInput =
   | BeeperContactsListInput
+  | BeeperContactsSearchInput
   | BeeperMessagingListInput
+  | BeeperMessagingSearchInput
   | BeeperMessagingReadInput;
 
 export type BeeperReadCommand = Readonly<{
@@ -149,6 +179,21 @@ function optionalOpaque(
   return value === undefined ? null : boundedOpaque(value, label, maximum);
 }
 
+function normalizedSearchQuery(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be text`);
+  }
+  const normalized = value.normalize("NFKC").trim();
+  if (
+    normalized.length < 1
+    || Buffer.byteLength(normalized, "utf8") > 256
+    || /[\u0000-\u001f\u007f-\u009f]/u.test(normalized)
+  ) {
+    throw new Error(`${label} must be nonempty normalized text of at most 256 UTF-8 bytes`);
+  }
+  return normalized;
+}
+
 export function parseBeeperContactsListInput(
   input: OperationInput,
 ): BeeperContactsListInput {
@@ -180,6 +225,48 @@ export function parseBeeperMessagingListInput(
     limit: source.limit === undefined
       ? 200
       : integer(source.limit, "messaging.list input.limit", 1, 200),
+  });
+}
+
+export function parseBeeperContactsSearchInput(
+  input: OperationInput,
+): BeeperContactsSearchInput {
+  const source = record(input, "contacts.search input");
+  exactKeys(source, ["query"], ["account_id", "limit"], "contacts.search input");
+  return Object.freeze({
+    accountId: optionalOpaque(
+      source.account_id,
+      "contacts.search input.account_id",
+      512,
+    ),
+    query: normalizedSearchQuery(
+      source.query,
+      "contacts.search input.query",
+    ),
+    limit: source.limit === undefined
+      ? 20
+      : integer(source.limit, "contacts.search input.limit", 1, 20),
+  });
+}
+
+export function parseBeeperMessagingSearchInput(
+  input: OperationInput,
+): BeeperMessagingSearchInput {
+  const source = record(input, "messaging.search input");
+  exactKeys(source, ["query"], ["account_id", "limit"], "messaging.search input");
+  return Object.freeze({
+    accountId: optionalOpaque(
+      source.account_id,
+      "messaging.search input.account_id",
+      512,
+    ),
+    query: normalizedSearchQuery(
+      source.query,
+      "messaging.search input.query",
+    ),
+    limit: source.limit === undefined
+      ? 20
+      : integer(source.limit, "messaging.search input.limit", 1, 20),
   });
 }
 
@@ -230,7 +317,9 @@ export function parseBeeperOperationInput(
   input: OperationInput,
 ): BeeperOperationInput {
   if (action === "contacts.list") return parseBeeperContactsListInput(input);
+  if (action === "contacts.search") return parseBeeperContactsSearchInput(input);
   if (action === "messaging.list") return parseBeeperMessagingListInput(input);
+  if (action === "messaging.search") return parseBeeperMessagingSearchInput(input);
   return parseBeeperMessagingReadInput(input);
 }
 
@@ -331,6 +420,22 @@ export function planBeeperReadCommand(
       ]),
     });
   }
+  if (action === "contacts.search") {
+    const value = input as BeeperContactsSearchInput;
+    return Object.freeze({
+      action,
+      argv: Object.freeze([
+        "contacts",
+        "list",
+        "--query",
+        value.query,
+        ...(value.accountId === null ? [] : ["--account", value.accountId]),
+        "--limit",
+        String(value.limit),
+        ...common,
+      ]),
+    });
+  }
   if (action === "messaging.list") {
     const value = input as BeeperMessagingListInput;
     return Object.freeze({
@@ -341,6 +446,21 @@ export function planBeeperReadCommand(
         "--limit",
         String(value.limit),
         ...(value.accountId === null ? [] : ["--account", value.accountId]),
+        ...common,
+      ]),
+    });
+  }
+  if (action === "messaging.search") {
+    const value = input as BeeperMessagingSearchInput;
+    return Object.freeze({
+      action,
+      argv: Object.freeze([
+        "chats",
+        "search",
+        value.query,
+        ...(value.accountId === null ? [] : ["--account", value.accountId]),
+        "--limit",
+        String(value.limit),
         ...common,
       ]),
     });

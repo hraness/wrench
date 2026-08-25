@@ -6,6 +6,7 @@ import {
   buildWebsite,
   CONTENT_REVIEWED_RELEASE,
   DEFAULT_POSTHOG_HOST,
+  DEMO_PUBLIC_FILES,
   markdownSiblingPath,
   parsePackageIdentity,
   PUBLIC_PAGES,
@@ -69,7 +70,7 @@ describe("wrench.rip static site", () => {
       NEXT_PUBLIC_POSTHOG_HOST: DEFAULT_POSTHOG_HOST,
       NEXT_PUBLIC_POSTHOG_KEY: "phc_public_project_token",
     });
-    const [pages, notFound, notFoundMarkdown, llms, robots, sitemap, indexNowKey, favicon, css, vercel, middleware] = await Promise.all([
+    const [pages, notFound, notFoundMarkdown, llms, robots, sitemap, indexNowKey, favicon, css, demoFiles, vercel, middleware] = await Promise.all([
       Promise.all(PUBLIC_PAGES.map(async (page) => ({
         definition: page,
         html: await readFile(join(websiteRoot, "dist", page.outputFile), "utf8"),
@@ -82,6 +83,11 @@ describe("wrench.rip static site", () => {
       readFile(join(websiteRoot, "dist/dc84ee4863539f2fff50ef5f0a164168.txt"), "utf8"),
       readFile(join(websiteRoot, "dist/favicon.svg"), "utf8"),
       readFile(join(websiteRoot, "source/styles.css"), "utf8"),
+      Promise.all(DEMO_PUBLIC_FILES.map(async (file) => ({
+        file,
+        output: new Uint8Array(await Bun.file(join(websiteRoot, "dist", file)).arrayBuffer()),
+        source: new Uint8Array(await Bun.file(join(websiteRoot, "public", file)).arrayBuffer()),
+      }))),
       Bun.file(join(repositoryRoot, "vercel.json")).json(),
       readFile(join(repositoryRoot, "middleware.ts"), "utf8"),
     ]);
@@ -161,6 +167,23 @@ describe("wrench.rip static site", () => {
     expect(favicon).toContain('viewBox="0 0 64 64"');
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
     expect(css).toContain("@media (forced-colors: active)");
+    for (const demo of demoFiles) expect(demo.output).toEqual(demo.source);
+    const demoPng = demoFiles.find(({ file }) => file.endsWith(".png"))?.output;
+    const demoGif = demoFiles.find(({ file }) => file.endsWith(".gif"))?.output;
+    const demoMp4 = demoFiles.find(({ file }) => file.endsWith(".mp4"))?.output;
+    const demoWebm = demoFiles.find(({ file }) => file.endsWith(".webm"))?.output;
+    const demoVtt = demoFiles.find(({ file }) => file.endsWith(".vtt"))?.output;
+    expect(Array.from(demoPng?.slice(1, 4) ?? [])).toEqual([80, 78, 71]);
+    const demoPngView = new DataView(demoPng!.buffer, demoPng!.byteOffset, demoPng!.byteLength);
+    expect(demoPngView.getUint32(16)).toBe(1280);
+    expect(demoPngView.getUint32(20)).toBe(720);
+    expect(new TextDecoder().decode(demoGif?.slice(0, 6))).toBe("GIF89a");
+    const demoGifView = new DataView(demoGif!.buffer, demoGif!.byteOffset, demoGif!.byteLength);
+    expect(demoGifView.getUint16(6, true)).toBe(960);
+    expect(demoGifView.getUint16(8, true)).toBe(540);
+    expect(new TextDecoder().decode(demoMp4?.slice(4, 8))).toBe("ftyp");
+    expect(Array.from(demoWebm?.slice(0, 4) ?? [])).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
+    expect(new TextDecoder().decode(demoVtt?.slice(0, 6))).toBe("WEBVTT");
     expect(vercel).toMatchObject({
       framework: null,
       outputDirectory: "website/dist",
@@ -317,6 +340,21 @@ describe("wrench.rip static site", () => {
     const gettingStarted = pages.find((page) => page.definition.canonicalPath === "/getting-started/");
     expect(gettingStarted?.html).toContain("Wrench developer resources");
     expect(gettingStarted?.html).toContain("does not publish a hosted API");
+    expect(gettingStarted?.html).toContain('id="demo"');
+    expect(gettingStarted?.html).toContain('poster="/wrench-first-capture.png"');
+    expect(gettingStarted?.html).toContain('src="/wrench-first-capture.webm"');
+    expect(gettingStarted?.html).toContain('src="/wrench-first-capture.mp4"');
+    expect(gettingStarted?.html).toContain('src="/wrench-first-capture.vtt"');
+    expect(gettingStarted?.html).toContain('href="/wrench-first-capture.gif"');
+    expect(gettingStarted?.html).toContain("The terminal text is actual CLI output");
+
+    const privacy = pages.find((page) => page.definition.canonicalPath === "/privacy/");
+    expect(privacy?.html).toContain("The CLI stores state on the operator's machine");
+    expect(privacy?.html).toContain("Local custody does not mean that every stored byte is encrypted");
+    expect(privacy?.html).toContain("Wrench-managed Gmail OAuth JSON file");
+    expect(privacy?.html).toContain("The CLI and SDK do not send wrench.rip analytics");
+    expect(privacy?.html).toContain("wrench auth remove ID --yes");
+    expect(privacy?.html).toContain("it is not a hostile native-code sandbox");
 
     const providerCapabilities = pages.find((page) =>
       page.definition.canonicalPath === "/provider-capabilities/");

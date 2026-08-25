@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "youtube-web",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "displayName": "YouTube (Authenticated Web API)",
   "surfaceId": "youtube",
   "origins": [
@@ -367,7 +367,7 @@
       }
     },
     "media.publish": {
-      "description": "Capture-required contract reservation: upload one confirmed YouTube video only after Studio resumable upload, metadata, audience, processing, and response bindings are reviewed.",
+      "description": "Capture-required contract reservation: the signed-in Studio attempt reached metadata responses but the selected MP4 remained at 0%; resumable initiation, byte-transfer acceptance, finalization, processing, and exact current-account readback remain unproved.",
       "risk": "R3",
       "sideEffect": "Uploads one YouTube video with the exact confirmed media, title, description, and reviewed audience settings.",
       "idempotency": "local-at-most-once",
@@ -388,12 +388,10 @@
           },
           "media": {
             "type": "file",
-            "description": "Exact reviewed video file",
-            "maxBytes": 1073741824,
+            "description": "Exact plan-bound ISO BMFF MP4 video file",
+            "maxBytes": 134217728,
             "mediaTypes": [
-              "video/mp4",
-              "video/quicktime",
-              "video/webm"
+              "video/mp4"
             ]
           },
           "visibility": {
@@ -418,6 +416,14 @@
             "description": "Exact provider video-category ID",
             "minLength": 1,
             "maxLength": 3
+          },
+          "contains_synthetic_media": {
+            "type": "boolean",
+            "description": "Exact altered or synthetic-media disclosure"
+          },
+          "age_restricted": {
+            "type": "boolean",
+            "description": "Exact creator-selected age-restriction declaration"
           }
         },
         "required": [
@@ -426,14 +432,50 @@
           "visibility",
           "made_for_kids",
           "notify_subscribers",
-          "category_id"
+          "category_id",
+          "contains_synthetic_media",
+          "age_restricted"
         ]
       },
       "webSession": {
         "site": "youtube",
         "action": "media.publish",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 600000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "content.delete": {
+      "description": "Capture-required contract reservation: cleanup only discarded the stalled incomplete Studio draft; no uploaded-video authored pre-read, accepted video/delete response, or exact-target absence readback was observed.",
+      "risk": "R3",
+      "sideEffect": "Permanently deletes the exact confirmed YouTube video authored by the authenticated account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 2592000000,
+      "input": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "description": "Exact 11-character current-account YouTube video ID",
+            "minLength": 11,
+            "maxLength": 11
+          },
+          "expected_title": {
+            "type": "string",
+            "description": "Exact current video title used for pre-delete confirmation",
+            "minLength": 1,
+            "maxLength": 90
+          }
+        },
+        "required": [
+          "video_id",
+          "expected_title"
+        ]
+      },
+      "webSession": {
+        "site": "youtube",
+        "action": "content.delete",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
         "maxOutputBytes": 4194304
       }
     },

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "tiktok-web",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "displayName": "TikTok (Authenticated Web API)",
   "surfaceId": "tiktok",
   "origins": [
@@ -309,6 +309,40 @@
         "maxOutputBytes": 2097152
       }
     },
+    "content.delete": {
+      "description": "Capture-required contract reservation: move one exact authored TikTok post to the recycle bin only after current detail, exact recyclable permission, accepted mutation, actor/caption binding, and independently absent readback are proven.",
+      "risk": "R3",
+      "sideEffect": "Moves the exact confirmed authored TikTok post to the provider recycle bin; this contract does not perform a normal or permanent deletion.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal authored TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "expected_caption": {
+            "type": "string",
+            "description": "Exact current caption re-confirmed before deletion",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "post_id",
+          "expected_caption"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "content.delete",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
     "relationships.follow.set": {
       "description": "Capture-required contract reservation: set one exact TikTok follow state only after the current AB-selected mutation and independent relationship readback are proven.",
       "risk": "R2",
@@ -512,7 +546,7 @@
       }
     },
     "media.publish": {
-      "description": "Capture-required contract reservation: upload and publish one confirmed TikTok image or video only after byte transfer, declarations, audience, and returned post binding are proven.",
+      "description": "Capture-required contract reservation: upload and publish one strictly materialized MP4 through the first-party Studio upload, multipart transfer, commit, project publish, and status families only after signing, authenticated response, actor, and independent post-readback contracts are captured.",
       "risk": "R3",
       "sideEffect": "Uploads and publishes one externally visible TikTok media post with the exact confirmed bytes, caption, settings, and audience.",
       "idempotency": "local-at-most-once",
@@ -521,13 +555,10 @@
         "properties": {
           "media": {
             "type": "file",
-            "description": "Exact reviewed image or video bytes",
-            "maxBytes": 1073741824,
+            "description": "Exactly one stable plan-bound ISO BMFF MP4",
+            "maxBytes": 134217728,
             "mediaTypes": [
-              "image/jpeg",
-              "image/png",
-              "video/mp4",
-              "video/quicktime"
+              "video/mp4"
             ]
           },
           "caption": {
@@ -556,6 +587,25 @@
           "allow_stitch": {
             "type": "boolean",
             "description": "Exact desired stitch permission"
+          },
+          "allow_content_reuse": {
+            "type": "boolean",
+            "description": "Exact desired content-reuse permission"
+          },
+          "allow_ai_remix": {
+            "type": "boolean",
+            "description": "Exact desired AI-remix permission"
+          },
+          "contains_synthetic_media": {
+            "type": "boolean",
+            "description": "Explicit creator declaration for AI-generated or significantly AI-edited content"
+          },
+          "commercial_content": {
+            "type": "string",
+            "description": "Explicit conservative commercial-content declaration supported by this narrow reservation",
+            "enum": [
+              "none"
+            ]
           }
         },
         "required": [
@@ -563,13 +613,17 @@
           "audience",
           "allow_comments",
           "allow_duet",
-          "allow_stitch"
+          "allow_stitch",
+          "allow_content_reuse",
+          "allow_ai_remix",
+          "contains_synthetic_media",
+          "commercial_content"
         ]
       },
       "webSession": {
         "site": "tiktok",
         "action": "media.publish",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }

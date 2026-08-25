@@ -33,6 +33,8 @@ import {
   type BeeperCliInvocationResult,
 } from "./beeper-local-runtime";
 import {
+  parseBeeperContactsSearchInput,
+  parseBeeperMessagingSearchInput,
   parseBeeperMessagingReadInput,
   planBeeperAccountsListCommand,
   planBeeperMessageLikeMeExportCommand,
@@ -227,7 +229,11 @@ function recipe(action: string): WebSessionRecipe {
 
 function runner(
   calls: BeeperCliInvocation[],
-  options: { readonly includeDirection?: boolean } = {},
+  options: {
+    readonly includeDirection?: boolean;
+    readonly contactsData?: readonly unknown[];
+    readonly chatsData?: readonly unknown[];
+  } = {},
 ): (invocation: BeeperCliInvocation) => Promise<BeeperCliInvocationResult> {
   return async (invocation) => {
     calls.push(invocation);
@@ -236,8 +242,11 @@ function runner(
       return envelope({ name: "@beeper/cli", version: "0.6.2" });
     }
     if (command === "accounts list") return envelope(accounts());
-    if (command === "contacts list") return envelope(contacts());
-    if (command === "chats list") return envelope(chats());
+    if (command === "contacts list") {
+      return envelope(options.contactsData ?? contacts());
+    }
+    if (command === "chats list") return envelope(options.chatsData ?? chats());
+    if (command === "chats search") return envelope(options.chatsData ?? chats());
     if (command === "messages list") {
       return envelope(messages(options.includeDirection ?? true));
     }
@@ -250,7 +259,11 @@ async function execute(
   action: string,
   input: OperationInput,
   calls: BeeperCliInvocation[],
-  options: { readonly includeDirection?: boolean } = {},
+  options: {
+    readonly includeDirection?: boolean;
+    readonly contactsData?: readonly unknown[];
+    readonly chatsData?: readonly unknown[];
+  } = {},
 ) {
   return executeBeeperLocalOperation(recipe(action), input, auth(path), {
     dependencies: {
@@ -305,6 +318,63 @@ describe("Beeper local read runtime", () => {
       before_cursor: "before",
       after_cursor: "after",
     })).toThrow("only one cursor direction");
+  });
+
+  test("normalizes and bounds fuzzy search queries and plans only pinned search commands", () => {
+    const contactInput = parseBeeperContactsSearchInput({
+      account_id: NETWORK_ACCOUNT_ID,
+      query: "  Åda Fixture  ",
+      limit: 7,
+    });
+    expect(contactInput.query).toBe("Åda Fixture");
+    expect(planBeeperReadCommand("contacts.search", contactInput, 60_000).argv)
+      .toEqual([
+        "contacts",
+        "list",
+        "--query",
+        "Åda Fixture",
+        "--account",
+        NETWORK_ACCOUNT_ID,
+        "--limit",
+        "7",
+        "--read-only",
+        "--json",
+        "--full",
+        "--quiet",
+        "--target",
+        "desktop",
+        "--timeout",
+        "60s",
+      ]);
+    const conversationInput = parseBeeperMessagingSearchInput({
+      query: "Ada Fixture",
+    });
+    expect(conversationInput.limit).toBe(20);
+    expect(planBeeperReadCommand(
+      "messaging.search",
+      conversationInput,
+      60_000,
+    ).argv.slice(0, 5)).toEqual([
+      "chats",
+      "search",
+      "Ada Fixture",
+      "--limit",
+      "20",
+    ]);
+    expect(() => parseBeeperContactsSearchInput({ query: "  " }))
+      .toThrow("nonempty normalized text");
+    expect(() => parseBeeperContactsSearchInput({ query: "Ada\nFixture" }))
+      .toThrow("nonempty normalized text");
+    expect(() => parseBeeperContactsSearchInput({ query: "é".repeat(129) }))
+      .toThrow("at most 256 UTF-8 bytes");
+    expect(() => parseBeeperMessagingSearchInput({
+      query: "Ada",
+      limit: 21,
+    })).toThrow("integer from 1 through 20");
+    expect(() => parseBeeperMessagingSearchInput({
+      query: "Ada",
+      raw_endpoint: "/private",
+    })).toThrow("unsupported fields");
   });
 
   test("plans the official export without an account or diagnostic surface", () => {
@@ -394,6 +464,12 @@ describe("Beeper local read runtime", () => {
           contacts: [{ accountId: NETWORK_ACCOUNT_ID, fullName: "Ada Fixture" }],
           operation: "contacts.list",
           provider: "beeper",
+          completeness: {
+            continuationAvailable: false,
+            localPageComplete: false,
+            remoteContactSetComplete: false,
+            resultWindowComplete: false,
+          },
         },
       });
       expect(listResult).toMatchObject({
@@ -401,6 +477,12 @@ describe("Beeper local read runtime", () => {
         output: {
           conversations: [{ accountId: NETWORK_ACCOUNT_ID, id: CHAT_ID }],
           operation: "messaging.list",
+          completeness: {
+            continuationAvailable: false,
+            localPageComplete: false,
+            remoteConversationSetComplete: false,
+            resultWindowComplete: false,
+          },
         },
       });
       expect(readResult).toMatchObject({
@@ -462,6 +544,295 @@ describe("Beeper local read runtime", () => {
         expect(invocation.arguments.indexOf("--read-only")).toBeGreaterThan(0);
       }
       expect(calls.filter((call) => call.arguments[0] === "accounts")).toHaveLength(3);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("projects fuzzy search as incomplete candidate-only identity metadata", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    try {
+      const contactResult = await execute(
+        path,
+        "contacts.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "  Ada Fixture ", limit: 2 },
+        calls,
+      );
+      const conversationResult = await execute(
+        path,
+        "messaging.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Ada Fixture", limit: 2 },
+        calls,
+      );
+
+      expect(contactResult.output).toEqual({
+        provider: "beeper",
+        operation: "contacts.search",
+        accountSubject: SUBJECT,
+        projection: "bounded-local-desktop-search",
+        requestedAccountId: NETWORK_ACCOUNT_ID,
+        query: "Ada Fixture",
+        searchSemantics: "provider-fuzzy-candidates",
+        contacts: [{
+          accountId: NETWORK_ACCOUNT_ID,
+          network: "Signal",
+          id: "signal:ada",
+          fullName: "Ada Fixture",
+          username: null,
+          isSelf: null,
+        }],
+        completeness: {
+          resultWindowComplete: false,
+          remoteContactSetComplete: false,
+          continuationAvailable: false,
+          requestedLimitReached: false,
+          warnings: [
+            "beeper-cli-v0.6.2-search-results-are-fuzzy-candidates",
+            "beeper-cli-v0.6.2-contact-search-result-window-has-no-continuation",
+            "provider-history-coverage-varies-by-connected-account",
+          ],
+        },
+      });
+      expect(conversationResult.output).toMatchObject({
+        provider: "beeper",
+        operation: "messaging.search",
+        accountSubject: SUBJECT,
+        projection: "bounded-local-desktop-search",
+        requestedAccountId: NETWORK_ACCOUNT_ID,
+        query: "Ada Fixture",
+        searchSemantics: "provider-fuzzy-candidates",
+        conversations: [{
+          id: CHAT_ID,
+          accountId: NETWORK_ACCOUNT_ID,
+          network: "Signal",
+          title: "Ada Fixture",
+          type: "single",
+          direct: true,
+          participants: {
+            total: 2,
+            hasMore: false,
+            items: [{
+              id: "signal:ada",
+              fullName: "Ada Fixture",
+              username: null,
+              isSelf: false,
+            }, {
+              id: "signal:self",
+              fullName: "Fixture Self",
+              username: null,
+              isSelf: true,
+            }],
+          },
+        }],
+        completeness: {
+          resultWindowComplete: false,
+          remoteConversationSetComplete: false,
+          continuationAvailable: false,
+          requestedLimitReached: false,
+        },
+      });
+      const encoded = JSON.stringify([contactResult.output, conversationResult.output]);
+      for (const omitted of [
+        "loginId",
+        "statusText",
+        "description",
+        "lastActivity",
+        "unreadCount",
+        "isArchived",
+        "cannotMessage",
+        "phoneNumber",
+        "email",
+        "imgURL",
+        "preview",
+      ]) expect(encoded).not.toContain(omitted);
+      expect(calls.map((call) => call.arguments.slice(0, 2).join(" ")))
+        .toEqual([
+          "version --read-only",
+          "accounts list",
+          "contacts list",
+          "version --read-only",
+          "accounts list",
+          "chats search",
+        ]);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects local list and fuzzy-search output beyond the requested bound", async () => {
+    const path = privateStore();
+    const repeatedContacts = [
+      ...(contacts() as readonly Record<string, unknown>[]),
+      {
+        ...(contacts()[0] as Record<string, unknown>),
+        id: "signal:grace",
+        fullName: "Grace Fixture",
+      },
+    ];
+    const repeatedChats = [
+      ...(chats() as readonly Record<string, unknown>[]),
+      {
+        ...(chats()[0] as Record<string, unknown>),
+        id: "chat-second-synthetic",
+        title: "Grace Fixture",
+      },
+    ];
+    try {
+      await expect(execute(
+        path,
+        "contacts.list",
+        { account_id: NETWORK_ACCOUNT_ID, limit: 1 },
+        [],
+        { contactsData: repeatedContacts },
+      )).rejects.toThrow("exceeded the requested result bound");
+      await expect(execute(
+        path,
+        "contacts.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 1 },
+        [],
+        { contactsData: repeatedContacts },
+      )).rejects.toThrow("search exceeded the requested result bound");
+      await expect(execute(
+        path,
+        "messaging.list",
+        { account_id: NETWORK_ACCOUNT_ID, limit: 1 },
+        [],
+        { chatsData: repeatedChats },
+      )).rejects.toThrow("exceeded the requested result bound");
+      await expect(execute(
+        path,
+        "messaging.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 1 },
+        [],
+        { chatsData: repeatedChats },
+      )).rejects.toThrow("search exceeded the requested result bound");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects malformed search identity text and contradictory participant evidence", async () => {
+    const path = privateStore();
+    const contact = contacts()[0] as Record<string, unknown>;
+    const chat = chats()[0] as Record<string, unknown>;
+    const participants = chat.participants as Record<string, unknown>;
+    const items = participants.items as readonly Record<string, unknown>[];
+    try {
+      await expect(execute(
+        path,
+        "contacts.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
+        [],
+        { contactsData: [{ ...contact, id: "signal:\ud800" }] },
+      )).rejects.toThrow("must contain well-formed Unicode");
+      await expect(execute(
+        path,
+        "contacts.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
+        [],
+        { contactsData: [{ ...contact, id: "signal:\nada" }] },
+      )).rejects.toThrow("must not contain control characters");
+      await expect(execute(
+        path,
+        "messaging.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
+        [],
+        {
+          chatsData: [{
+            ...chat,
+            participants: { ...participants, total: 3, hasMore: false },
+          }],
+        },
+      )).rejects.toThrow("completeness evidence is inconsistent");
+      await expect(execute(
+        path,
+        "messaging.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
+        [],
+        {
+          chatsData: [{
+            ...chat,
+            participants: {
+              ...participants,
+              items: [items[0], { ...items[1], id: items[0]!.id }],
+            },
+          }],
+        },
+      )).rejects.toThrow("repeated a stable user ID");
+      await expect(execute(
+        path,
+        "messaging.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
+        [],
+        {
+          chatsData: [{
+            ...chat,
+            participants: {
+              ...participants,
+              items: items.map((item) => ({ ...item, isSelf: true })),
+            },
+          }],
+        },
+      )).rejects.toThrow("ambiguous self ownership");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("strictly validates discarded nested chat-search metadata", async () => {
+    const path = privateStore();
+    const chat = chats()[0] as Record<string, unknown>;
+    const preview = messages()[0] as Record<string, unknown>;
+    try {
+      const accepted = await execute(
+        path,
+        "messaging.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
+        [],
+        {
+          chatsData: [{
+            ...chat,
+            capabilities: {
+              archive: true,
+              reaction: 2,
+              attachments: {
+                "m.image": {
+                  mimeTypes: { "image/*": 2 },
+                  maxSize: 10_000_000,
+                },
+              },
+            },
+            draft: { text: "first line\nsecond line" },
+            preview,
+            reminder: {
+              dismissOnIncomingMessage: true,
+              remindAt: "2026-08-22T12:00:00.000Z",
+            },
+            snooze: {
+              snoozeUntil: "2026-08-22T13:00:00.000Z",
+              userSnoozedAt: "2026-08-22T11:00:00.000Z",
+            },
+          }],
+        },
+      );
+      expect(JSON.stringify(accepted.output)).not.toContain("first line");
+      expect(JSON.stringify(accepted.output)).not.toContain("message-outgoing");
+
+      await expect(execute(
+        path,
+        "messaging.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
+        [],
+        { chatsData: [{ ...chat, capabilities: { unreviewed: true } }] },
+      )).rejects.toThrow("contains unreviewed property unreviewed");
+      await expect(execute(
+        path,
+        "messaging.search",
+        { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
+        [],
+        { chatsData: [{ ...chat, preview: { ...preview, unreviewed: true } }] },
+      )).rejects.toThrow("contains unreviewed property unreviewed");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

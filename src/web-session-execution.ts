@@ -8,7 +8,10 @@ import type {
   OperationInput,
   WebSessionRecipe,
 } from "./model";
-import type { ProviderAcceptedMutationTarget } from "./recovery";
+import type {
+  ProviderAcceptedMutationTarget,
+  ProviderBoundMutationTarget,
+} from "./recovery";
 import {
   OperationDeadline,
   type OperationDeadlineClock,
@@ -56,6 +59,12 @@ export type WebSessionProviderAcceptedMutationTargetEvent = {
   readonly id: string;
   readonly index: number;
   readonly target: ProviderAcceptedMutationTarget;
+};
+
+export type WebSessionProviderBoundMutationTargetEvent = {
+  readonly id: string;
+  readonly index: number;
+  readonly target: ProviderBoundMutationTarget;
 };
 
 export type WebSessionOperationDeadline = Pick<
@@ -129,6 +138,15 @@ export type WebSessionExecutionOptions = {
    */
   readonly afterProviderAcceptedMutationTarget?: (
     event: WebSessionProviderAcceptedMutationTargetEvent,
+  ) => Promise<void>;
+  /**
+   * Persist one exact provider-owned target after a strict pre-dispatch read.
+   * The runtime must call `beforeDispatch` first so dispatch start is durable,
+   * then await this callback before sending the mutation request. It must never
+   * retain a caller-inferred, scraped, or otherwise ambiguous target.
+   */
+  readonly afterProviderBoundMutationTarget?: (
+    event: WebSessionProviderBoundMutationTargetEvent,
   ) => Promise<void>;
   readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
 };
@@ -279,6 +297,13 @@ export async function runWebSessionOperationWithDeadline<T>(
           () => options.afterProviderAcceptedMutationTarget!(event),
           WEB_SESSION_OPERATION_LABEL,
         );
+  const afterProviderBoundMutationTarget =
+    options.afterProviderBoundMutationTarget === undefined
+      ? undefined
+      : (event: WebSessionProviderBoundMutationTargetEvent) => deadline.run(
+          () => options.afterProviderBoundMutationTarget!(event),
+          WEB_SESSION_OPERATION_LABEL,
+        );
   const afterDispatchVerified = guardDispatch(options.afterDispatchVerified);
   const cleanupBarriers: TrackedWebSessionCleanupBarrier[] = [];
   let acceptingCleanupBarriers = true;
@@ -316,6 +341,9 @@ export async function runWebSessionOperationWithDeadline<T>(
     ...(afterProviderAcceptedMutationTarget === undefined
       ? {}
       : { afterProviderAcceptedMutationTarget }),
+    ...(afterProviderBoundMutationTarget === undefined
+      ? {}
+      : { afterProviderBoundMutationTarget }),
     ...(afterDispatchVerified === undefined ? {} : { afterDispatchVerified }),
   };
   let outcome:

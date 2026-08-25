@@ -11,10 +11,18 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
+
+import {
+  agentBrowserCommand,
+  isolatedEnvironment,
+  parseLastJsonWithExactLaunchHashes,
+} from "./browser";
 
 import {
   acquireDerivationLifecycleGate,
@@ -22,18 +30,53 @@ import {
   assertDerivationRecorderCommandAllowed,
   DERIVATION_LIFECYCLE_ORPHAN_GRACE_MS,
   derivationGlobalArguments,
+  derivationExistingOwnerContextArguments,
+  derivationActionPolicy,
+  derivationBrowserConfig,
+  derivationPinSessionName,
+  derivationFixedUploadInputSelector,
+  derivationCookieCommands,
   derivationBootstrapUrl,
+  exactCdpEndpointStatus,
+  derivationDnrPolicyActions,
+  derivationDnrPolicyFileName,
   derivationPolicyActions,
   discardDerivation,
   finishDerivation as finishDerivationWithRegistry,
   listDerivations,
+  parseDerivationGuardBrowserContextResult,
+  parseMarkedDerivationBrowserDaemonForCleanup,
+  parseDerivationPinnedBrowserContextResult,
+  confirmProfileDerivationMutationOnce,
+  completeProfileDerivationBatchCommand,
+  IndeterminateDerivationConfirmationError,
+  parseProfileDerivationConfirmation,
+  parseProfileDerivationConfirmationResult,
+  runPinnedDerivationConfirmationOnce,
   reviewDerivation,
+  resolveDerivationFixedUploadInputTarget,
   runDerivationBrowserCommand,
+  runDerivationFixtureUploadBatch,
+  runDerivationMutationWindow,
   sanitizeDerivationNetworkResult,
   startDerivation,
   validateDerivationBrowserCommand,
   type DerivationSession,
 } from "./derive";
+import {
+  adoptDerivationNetworkBoundary,
+  closeDerivationNetworkBoundary,
+  createDerivationNetworkBoundary,
+} from "./derivation-network-boundary";
+import {
+  DERIVATION_GUARD_PROXY_READY,
+  derivationGuardControlSocketPath,
+} from "./derivation-network-guard";
+import {
+  parsePinnedDerivationConfirmation,
+  parsePinnedDerivationConfirmationResult,
+  validatePinnedDerivationBrowserOutput,
+} from "./derive-command-helper";
 import {
   analyzeHarValue,
   assertBrowserDerivationTargetAllowed,
@@ -43,6 +86,7 @@ import {
 import { sha256 } from "./model";
 import type { ProviderPluginRegistry } from "./provider-plugin-registry";
 import { providerPluginRegistry } from "./provider-plugins";
+import { captureProcessOwnerIdentity, processOwnerStatus } from "./process-identity";
 import {
   createPrivateJsonIfAbsent,
   listPrivateStateDirectory,
@@ -62,6 +106,10 @@ const stagedFixture = {
   inode: "2",
 } as const;
 const fixtureActionPolicy = { ...actionPolicy, fixtures: [stagedFixture] } as const;
+const videoFixtureActionPolicy = {
+  ...actionPolicy,
+  fixtures: [{ ...stagedFixture, mediaType: "video/mp4" as const }],
+} as const;
 
 const finishDerivation = (
   id: Parameters<typeof finishDerivationWithRegistry>[0],
@@ -106,8 +154,288 @@ async function expectRejectedWith(promise: Promise<unknown>, message: string): P
   expect(failure instanceof Error ? failure.message : "").toContain(message);
 }
 
+function exactDerivationBrowserLifecycle(launchHash = "7") {
+  return {
+    effectiveLaunch: {
+      browserLaunched: true,
+      engine: "chrome",
+      launchHash,
+    },
+    launched: false,
+    relaunchedBrowser: false,
+    restartedBackground: false,
+    restoreStatus: "not_configured",
+    reused: true,
+    saveStatus: "not_attempted",
+  } as const;
+}
+
+function profileConfirmationPending(
+  command: readonly string[],
+  action = "click",
+  confirmationId = "r7",
+) {
+  return [{
+    command,
+    error: null,
+    result: {
+      action,
+      confirmation_id: confirmationId,
+      confirmation_required: true,
+    },
+    success: true,
+  }];
+}
+
+function profileConfirmationCompleted(
+  action = "click",
+  confirmationId = "r7",
+  launchHash = "7",
+) {
+  return {
+    _boundary: { nonce: "a".repeat(32), origin: "unknown" },
+    data: {
+      action,
+      confirmed: true,
+      lifecycle: exactDerivationBrowserLifecycle(launchHash),
+      result: {
+        data: {
+          clicked: true,
+          lifecycle: exactDerivationBrowserLifecycle(launchHash),
+        },
+        id: confirmationId,
+        success: true,
+      },
+    },
+    error: null,
+    success: true,
+  };
+}
+
 describe("derive browser command grammar", () => {
+  test("classifies a dropped confirmation response as one-shot indeterminate", async () => {
+    let dispatches = 0;
+    let remoteEffects = 0;
+    await expectRejectedWith(runPinnedDerivationConfirmationOnce(async () => {
+      dispatches += 1;
+      remoteEffects += 1;
+      throw new Error("response dropped after dispatch");
+    }), "mutation may have applied; do not retry");
+    expect(dispatches).toBe(1);
+    expect(remoteEffects).toBe(1);
+  });
+
+  test("confirms one exact profile-backed mutation through a code-owned continuation", async () => {
+    const command = ["click", "@e1"] as const;
+    const pending = profileConfirmationPending(command);
+    let confirmations = 0;
+    const result = await confirmProfileDerivationMutationOnce(
+      pending,
+      command,
+      async (confirmation) => {
+        confirmations += 1;
+        expect(confirmation).toEqual({ action: "click", confirmationId: "r7" });
+        return profileConfirmationCompleted();
+      },
+    );
+    expect(confirmations).toBe(1);
+    expect(result).toEqual({
+      clicked: true,
+      lifecycle: exactDerivationBrowserLifecycle(),
+    });
+    expect(() => validateDerivationBrowserCommand(
+      actionPolicy,
+      ["confirm", "r7", "--json"],
+    )).toThrow("does not allow confirm");
+  });
+
+  test("rejects malformed profile confirmation prompts and completions exactly", async () => {
+    const command = ["click", "@e1"] as const;
+    for (const malformed of [
+      profileConfirmationPending(command, "navigate"),
+      profileConfirmationPending(command, "fill"),
+      profileConfirmationPending(command, "click", "request-7"),
+      [{
+        ...profileConfirmationPending(command)[0],
+        result: {
+          ...profileConfirmationPending(command)[0]?.result,
+          extra: true,
+        },
+      }],
+      profileConfirmationPending(["click", "@e2"]),
+    ]) {
+      expect(() => parseProfileDerivationConfirmation(malformed, command)).toThrow(
+        "profile derivation browser confirmation",
+      );
+    }
+
+    const confirmation = parseProfileDerivationConfirmation(
+      profileConfirmationPending(command),
+      command,
+    );
+    for (const malformed of [
+      { ...profileConfirmationCompleted(), extra: true },
+      profileConfirmationCompleted("fill"),
+      {
+        ...profileConfirmationCompleted(),
+        data: {
+          ...profileConfirmationCompleted().data,
+          result: {
+            ...profileConfirmationCompleted().data.result,
+            data: {
+              ...profileConfirmationCompleted().data.result.data,
+              lifecycle: exactDerivationBrowserLifecycle("8"),
+            },
+          },
+        },
+      },
+    ]) {
+      expect(() => parseProfileDerivationConfirmationResult(
+        malformed,
+        confirmation,
+      )).toThrow("profile derivation browser confirmation");
+    }
+  });
+
+  test("never retries a profile confirmation and makes post-invocation failure indeterminate", async () => {
+    const command = ["press", "Enter"] as const;
+    let confirmations = 0;
+    let remoteEffects = 0;
+    await expectRejectedWith(confirmProfileDerivationMutationOnce(
+      profileConfirmationPending(command, "press", "r19"),
+      command,
+      async () => {
+        confirmations += 1;
+        remoteEffects += 1;
+        throw new Error("response dropped after the mutation ran");
+      },
+    ), "mutation may have applied; do not retry");
+    expect(confirmations).toBe(1);
+    expect(remoteEffects).toBe(1);
+
+    await expectRejectedWith(confirmProfileDerivationMutationOnce(
+      profileConfirmationPending(command, "press", "r20"),
+      command,
+      async () => {
+        confirmations += 1;
+        return profileConfirmationCompleted("click", "r20", "9");
+      },
+    ), "mutation may have applied; do not retry");
+    expect(confirmations).toBe(2);
+  });
+
+  test("classifies a profile mutation that bypassed confirmation as one-shot indeterminate", async () => {
+    const command = ["click", "@e1"] as const;
+    const completed = {
+      command,
+      error: null,
+      result: {
+        clicked: true,
+        lifecycle: exactDerivationBrowserLifecycle(),
+      },
+      success: true,
+    };
+    let confirmations = 0;
+    let failure: unknown = null;
+    try {
+      await completeProfileDerivationBatchCommand(completed, command, async () => {
+        confirmations += 1;
+        return profileConfirmationCompleted();
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(IndeterminateDerivationConfirmationError);
+    expect(failure instanceof Error ? failure.message : "").toContain(
+      "mutation may have applied; do not retry",
+    );
+    expect(confirmations).toBe(0);
+  });
+
+  test.each(["upload", "upload-and-seal"] as const)(
+    "preserves an indeterminate confirmation through the %s batch wrapper",
+    async (mode) => {
+      const exactFailure = new IndeterminateDerivationConfirmationError("profile");
+      let invocations = 0;
+      let failure: unknown = null;
+      try {
+        await runDerivationFixtureUploadBatch(
+          mode,
+          async () => {
+            invocations += 1;
+            throw exactFailure;
+          },
+          "/deliberately-unavailable-private-derivation",
+          [stagedFixture],
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBe(exactFailure);
+      expect(invocations).toBe(1);
+    },
+  );
+
+  test.each([
+    ["upload settlement wait", "profile"],
+    ["upload HAR stop", "profile"],
+    ["post-click origin check", "pinned"],
+  ] as const)(
+    "classifies a failure during %s after successful confirmation as indeterminate",
+    async (stage, kind) => {
+      const events: string[] = [];
+      let failure: unknown = null;
+      try {
+        await runDerivationMutationWindow(
+          kind,
+          async (markMutationMayHaveApplied) => {
+            events.push("upload-confirmed");
+            markMutationMayHaveApplied();
+            events.push(stage);
+            throw new Error(`${stage} failed`);
+          },
+          async (error) => {
+            events.push("containment-checked");
+            return error;
+          },
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(IndeterminateDerivationConfirmationError);
+      expect(failure instanceof Error ? failure.message : "").toContain(
+        "mutation may have applied; do not retry",
+      );
+      expect(events).toEqual([
+        "upload-confirmed",
+        stage,
+        "containment-checked",
+      ]);
+    },
+  );
+
+  test("keeps a proven pre-confirmation command failure retryable", async () => {
+    let failure: unknown = null;
+    try {
+      await runDerivationMutationWindow("profile", async () => {
+        throw new Error("profile command failed before confirmation");
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(IndeterminateDerivationConfirmationError);
+    expect(failure instanceof Error ? failure.message : "").toBe(
+      "profile command failed before confirmation",
+    );
+  });
+
   test("authorizes pinned concrete observation actions and gates mutation actions", () => {
+    expect(derivationDnrPolicyActions).toEqual([
+      "launch",
+      "cdp_url",
+      "url",
+    ]);
     for (const action of ["getbyrole", "inputvalue", "getattribute", "textcontent", "innerhtml", "waitfortext", "waitforurl", "har_start", "har_stop", "requests", "close"]) {
       expect(derivationPolicyActions(false).includes(action)).toBeTrue();
     }
@@ -133,9 +461,21 @@ describe("derive browser command grammar", () => {
       ["upload", "@single-image-input", "fixture:1"],
     )).not.toThrow();
     expect(() => validateDerivationBrowserCommand(
+      videoFixtureActionPolicy,
+      ["upload", "@single-video-input", "fixture:1"],
+    )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
       fixtureActionPolicy,
       ["upload-and-seal", "@single-file-input", "fixture:1"],
     )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
+      videoFixtureActionPolicy,
+      ["upload-and-seal", "@single-video-input", "fixture:1"],
+    )).not.toThrow();
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["upload", "@single-video-input", "fixture:1"],
+    )).toThrow("MP4 fixtures only");
     expect(() => validateDerivationBrowserCommand(
       fixtureActionPolicy,
       ["choose-upload", "@e5", "fixture:1"],
@@ -144,6 +484,14 @@ describe("derive browser command grammar", () => {
       fixtureActionPolicy,
       ["choose-upload", "@single-file-input", "fixture:1"],
     )).toThrow("snapshot upload-control");
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["choose-upload", "@single-video-input", "fixture:1"],
+    )).toThrow("snapshot upload-control");
+    expect(() => validateDerivationBrowserCommand(
+      fixtureActionPolicy,
+      ["upload", "input[type=file][accept*='video']", "fixture:1"],
+    )).toThrow("@single-video-input");
     expect(() => validateDerivationBrowserCommand(
       fixtureActionPolicy,
       ["eval", "document.cookie"],
@@ -164,6 +512,35 @@ describe("derive browser command grammar", () => {
       { ...fixtureActionPolicy, allowRemoteActions: false },
       ["upload", "@e5", "fixture:1"],
     )).toThrow("read-only");
+  });
+
+  test("maps the fixed video upload reference to its code-owned runtime selector", () => {
+    const selector = "input[type=file][accept*='video']";
+    expect(derivationFixedUploadInputSelector("@single-video-input")).toBe(selector);
+    expect(resolveDerivationFixedUploadInputTarget("@single-video-input", {
+      count: 1,
+      lifecycle: { state: "ready" },
+      selector,
+    })).toBe(selector);
+  });
+
+  test.each([
+    ["zero matches", 0, "; found 0"],
+    ["two matches", 2, "; found 2"],
+    [
+      "malformed browser result",
+      {
+        count: 1,
+        lifecycle: { state: "ready" },
+        selector: "input[type=file][accept*='image']",
+      },
+      "; browser returned object(count,lifecycle,selector)",
+    ],
+  ] as const)("rejects a non-single fixed video input for %s", (_label, countData, detail) => {
+    expect(() => resolveDerivationFixedUploadInputTarget(
+      "@single-video-input",
+      countData,
+    )).toThrow(`derive browser @single-video-input requires exactly one matching file input on the current page${detail}`);
   });
 
   test("allows an exact browser close after the derivation recorder is sealed", () => {
@@ -213,6 +590,7 @@ describe("derive browser command grammar", () => {
     ["click", "@e1"],
     ["dblclick", "@e1"],
     ["fill", "@e1", "hello"],
+    ["cleartext", "@e1"],
     ["type", "@e1", "hello"],
     ["press", "Enter"],
     ["focus", "@e1"],
@@ -231,8 +609,44 @@ describe("derive browser command grammar", () => {
 
   test("allows an action-enabled derivation to clear a field explicitly", () => {
     expect(() => validateAction(["fill", "@e1", ""])).not.toThrow();
+    expect(() => validateAction(["cleartext", "@e1"])).not.toThrow();
     expect(() => validateAction(["find", "label", "Message", "fill", ""])).not.toThrow();
     expect(() => validateReadOnly(["fill", "@e1", ""])).toThrow("read-only");
+    expect(() => validateAction(["cleartext", "#message"])).toThrow("snapshot textbox reference");
+    expect(() => validateAction(["cleartext", "@e1", "extra"])).toThrow("snapshot textbox reference");
+  });
+
+  test("binds confirmations to the exact allow set and denies implicit relaunch", () => {
+    const withoutFixture = derivationActionPolicy(true, false);
+    expect(withoutFixture.confirm).not.toContain("upload");
+    expect(withoutFixture.confirm.every((action) => withoutFixture.allow.includes(action))).toBeTrue();
+    expect(withoutFixture.deny).toEqual([
+      "plugin:wrench-contained-relaunch-tripwire:launch.mutate",
+    ]);
+    const withFixture = derivationActionPolicy(true, true);
+    expect(withFixture.confirm).toContain("upload");
+    expect(withFixture.confirm.every((action) => withFixture.allow.includes(action))).toBeTrue();
+    expect(derivationBrowserConfig(false)).toEqual({});
+    expect(derivationBrowserConfig(true)).toEqual({
+      plugins: [{
+        args: [],
+        capabilities: ["launch.mutate"],
+        command: "wrench-contained-browser-relaunch-is-forbidden",
+        name: "wrench-contained-relaunch-tripwire",
+      }],
+    });
+    expect(derivationExistingOwnerContextArguments({
+      sessionName: "io-derive-0123456789ab",
+    })).toEqual([
+      "--session",
+      "io-derive-0123456789ab",
+      "--content-boundaries",
+      "--max-output",
+      "5242880",
+      "batch",
+      "--bail",
+      "--json",
+    ]);
   });
 
   test.each([
@@ -364,6 +778,33 @@ function sessionMetadata(
   };
 }
 
+function containedNetworkGuardFixture(): NonNullable<DerivationSession["networkGuard"]> {
+  const digest = "a".repeat(64);
+  const evidence = { device: "1", inode: "2", byteLength: 10, sha256: digest };
+  return {
+    schemaVersion: 1,
+    kind: "contained-mv3-dnr-proxy",
+    extension: {
+      id: "gjhalpeeegljfdmfkoilmojkfehhpgbm",
+      directoryIdentity: { device: "1", inode: "3" },
+      files: {
+        "manifest.json": evidence,
+        "rules.json": evidence,
+        "readiness.js": evidence,
+      },
+    },
+    proxy: {
+      policySha256: digest,
+      controlNonce: "b".repeat(64),
+      port: 43_123,
+      owner: { pid: 123, bootId: digest, processStartId: "c".repeat(64) },
+      parentOwner: { pid: 122, bootId: digest, processStartId: "d".repeat(64) },
+      configFile: evidence,
+      readyFile: evidence,
+    },
+  };
+}
+
 function writeDirectoryPhaseFixture(id: string, directory: string): void {
   const directoryStats = lstatSync(directory, { bigint: true });
   writeFileSync(join(directory, "phase.json"), JSON.stringify({
@@ -422,6 +863,38 @@ function writeSessionFixture(
   }), { mode: 0o600 });
 }
 
+async function createInterruptedProxyFixture(prefix: string) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const wrenchState = join(root, "io-state");
+  const id = crypto.randomUUID();
+  const directory = join(wrenchState, "derivations", id);
+  const socketDirectory = join(process.platform === "win32" ? tmpdir() : "/tmp", `io-derive-ab-${id}`);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  mkdirSync(socketDirectory, { mode: 0o700 });
+  writeInitializationFixture(id, directory);
+  const identity = (path: string) => {
+    const stats = lstatSync(path, { bigint: true });
+    return { device: stats.dev.toString(), inode: stats.ino.toString() };
+  };
+  const guard = await createDerivationNetworkBoundary({
+    derivationId: id,
+    directory,
+    directoryIdentity: identity(directory),
+    socketDirectory,
+    socketIdentity: identity(socketDirectory),
+    browserDomains: ["example.com"],
+  });
+  return {
+    root,
+    wrenchState,
+    id,
+    directory,
+    socketDirectory,
+    controlPath: derivationGuardControlSocketPath(id),
+    guard,
+  };
+}
+
 async function leaveCrashedLifecycleGate(id: string, wrenchState: string): Promise<string> {
   const modulePath = join(import.meta.dir, "derive.ts");
   const child = Bun.spawn([
@@ -439,11 +912,315 @@ async function leaveCrashedLifecycleGate(id: string, wrenchState: string): Promi
 }
 
 describe("derivation session path defenses", () => {
+  test("strictly binds the code-owned guard browser CDP and current URL", () => {
+    // Pinned agent-browser emits its Option<u64> launch hash as an unquoted JSON
+    // number. This observed value intentionally exceeds Number.MAX_SAFE_INTEGER.
+    const observedLaunchHash = "12798390076057945372";
+    const lifecycle = {
+      effectiveLaunch: {
+        browserLaunched: true,
+        engine: "chrome",
+        launchHash: observedLaunchHash,
+      },
+      launched: false,
+      relaunchedBrowser: false,
+      restartedBackground: false,
+      restoreStatus: "not_configured",
+      reused: true,
+      saveStatus: "not_attempted",
+    };
+    const record = (command: readonly string[], result: Record<string, unknown>) => ({
+      command,
+      error: null,
+      result,
+      success: true,
+    });
+    const contextResult = [
+      record(["get", "cdp-url"], {
+        cdpUrl: "ws://127.0.0.1:9222/devtools/browser/wrench-test",
+        lifecycle,
+      }),
+      record(["get", "url"], { lifecycle, url: "about:blank" }),
+    ];
+    const context = parseDerivationGuardBrowserContextResult(contextResult, ["example.com"]);
+    expect(context).toEqual({
+      cdpUrl: "ws://127.0.0.1:9222/devtools/browser/wrench-test",
+      currentUrl: "about:blank",
+      browserIdentity: { engine: "chrome", launchHash: observedLaunchHash },
+    });
+
+    const malformed = [
+      [
+        { ...contextResult[0], command: ["get", "url"] },
+        contextResult[1],
+      ],
+      [...contextResult, record(["get", "url"], { lifecycle, url: "about:blank" })],
+      [
+        contextResult[0],
+        record(["get", "url"], {
+          lifecycle,
+          url: "chrome-extension://example/private",
+        }),
+      ],
+      [
+        record(["get", "cdp-url"], {
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/wrench-test",
+          lifecycle,
+          leakedTitle: "private-title-value",
+        }),
+        contextResult[1],
+      ],
+      ...[
+        { ...lifecycle, launched: true },
+        { ...lifecycle, relaunchedBrowser: true },
+        { ...lifecycle, restartedBackground: true },
+        { ...lifecycle, reused: false },
+        { ...lifecycle, restoreStatus: "restored" },
+        { ...lifecycle, saveStatus: "saved" },
+        {
+          ...lifecycle,
+          effectiveLaunch: { ...lifecycle.effectiveLaunch, browserLaunched: false },
+        },
+        {
+          ...lifecycle,
+          effectiveLaunch: { ...lifecycle.effectiveLaunch, engine: "firefox" },
+        },
+        ...[null, "1", Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, 2 ** 65]
+          .map((launchHash) => ({
+            ...lifecycle,
+            effectiveLaunch: { ...lifecycle.effectiveLaunch, launchHash },
+          })),
+        { ...lifecycle, extraLifecycleField: "private-lifecycle-value" },
+      ].map((changedLifecycle) => [
+        record(["get", "cdp-url"], {
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/wrench-test",
+          lifecycle: changedLifecycle,
+        }),
+        contextResult[1],
+      ]),
+      [
+        contextResult[0],
+        record(["get", "url"], {
+          lifecycle: {
+            ...lifecycle,
+            effectiveLaunch: { ...lifecycle.effectiveLaunch, launchHash: "2" },
+          },
+          url: "about:blank",
+        }),
+      ],
+    ];
+    for (const value of malformed) {
+      let failure: unknown = null;
+      try {
+        parseDerivationGuardBrowserContextResult(value, ["example.com"]);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      const message = failure instanceof Error ? failure.message : "";
+      expect(message).not.toContain("private-title-value");
+      expect(message).not.toContain("private-lifecycle-value");
+      expect(message).not.toContain("chrome-extension://");
+    }
+
+  });
+
+  test("strictly binds every pinned command lifecycle to its exact CDP session", () => {
+    const cdpUrl = "ws://127.0.0.1:9222/devtools/browser/wrench-pin-test";
+    const browserIdentity = { engine: "chrome" as const, launchHash: "42" };
+    const lifecycle = {
+      effectiveLaunch: { browserLaunched: true, ...browserIdentity },
+      launched: false,
+      relaunchedBrowser: false,
+      restartedBackground: false,
+      restoreStatus: "not_configured",
+      reused: true,
+      saveStatus: "not_attempted",
+    };
+    const command = ["get", "cdp-url"] as const;
+    const value = [{
+      command,
+      error: null,
+      result: { cdpUrl, lifecycle },
+      success: true,
+    }];
+    const pin = {
+      sessionName: "io-derive-pin-0123456789ab",
+      cdpUrl,
+      browserIdentity,
+      confirmationAction: null,
+      daemonOwner: null,
+    } as const;
+    expect(validatePinnedDerivationBrowserOutput(value, [command], pin)).toEqual(browserIdentity);
+    expect(validatePinnedDerivationBrowserOutput([{
+      ...value[0],
+      result: { cdpUrl, lifecycle: { ...lifecycle, reused: false } },
+    }], [command], pin)).toEqual(browserIdentity);
+    expect(parseDerivationPinnedBrowserContextResult([
+      value[0],
+      {
+        command: ["get", "url"],
+        error: null,
+        result: { lifecycle, url: "about:blank" },
+        success: true,
+      },
+    ], ["example.com"])).toEqual({ cdpUrl, currentUrl: "about:blank", browserIdentity });
+
+    for (const changed of [
+      { ...lifecycle, launched: true },
+      { ...lifecycle, relaunchedBrowser: true },
+      { ...lifecycle, restartedBackground: true },
+      { ...lifecycle, effectiveLaunch: { ...lifecycle.effectiveLaunch, launchHash: "43" } },
+    ]) {
+      expect(() => validatePinnedDerivationBrowserOutput([{
+        ...value[0],
+        result: { cdpUrl, lifecycle: changed },
+      }], [command], pin)).toThrow();
+    }
+    expect(() => validatePinnedDerivationBrowserOutput([{
+      ...value[0],
+      result: {
+        cdpUrl: "ws://127.0.0.1:9222/devtools/browser/replacement",
+        lifecycle,
+      },
+    }], [command], pin)).toThrow();
+    expect(() => validatePinnedDerivationBrowserOutput([{
+      ...value[0],
+      command: ["open", "about:blank#mutation"],
+    }], [command], pin)).toThrow();
+
+    expect(derivationPinSessionName({
+      id: "01234567-89ab-4def-8123-456789abcdef",
+      sessionName: "io-derive-0123456789ab",
+    })).toBe("io-derive-pin-0123456789ab");
+    expect(() => derivationPinSessionName({
+      id: "01234567-89ab-4def-8123-456789abcdef",
+      sessionName: "caller-selected",
+    })).toThrow();
+  });
+
+  test("keeps cleanup authority when browser continuity drifts but not daemon ownership", () => {
+    const session: DerivationSession = {
+      schemaVersion: 2,
+      id: "01234567-89ab-4def-8123-456789abcdef",
+      adapterId: "example",
+      targetUrl: "https://example.com/",
+      targetOrigin: "https://example.com",
+      createdAt: "2026-08-23T00:00:00.000Z",
+      allowRemoteActions: true,
+      contentMode: "none",
+      browserDomains: ["example.com"],
+      fixtures: [],
+      headed: false,
+      sessionName: "io-derive-0123456789ab",
+      directory: "opaque-directory-boundary",
+      directoryIdentity: { device: "1", inode: "2" },
+      socketDirectory: "opaque-socket-boundary",
+      socketIdentity: { device: "3", inode: "4" },
+      configPath: "opaque-config-boundary",
+      policyPath: "opaque-policy-boundary",
+      profilePath: null,
+      networkGuard: containedNetworkGuardFixture(),
+    };
+    const daemonOwner = {
+      pid: 12_345,
+      bootId: "a".repeat(64),
+      processStartId: "b".repeat(64),
+    };
+    const launch = {
+      browserLaunched: false,
+      engine: "chrome",
+      launchHash: null,
+    };
+    const runtime = {
+      backgroundPid: daemonOwner.pid,
+      browserLaunched: false,
+      compatibilityStatus: "current",
+      effectiveLaunch: launch,
+      engine: "chrome",
+      launchHash: null,
+      lifecycle: {
+        effectiveLaunch: { ...launch },
+        launched: true,
+        relaunchedBrowser: true,
+        restartedBackground: true,
+        restoreStatus: "drifted",
+        reused: false,
+        saveStatus: "failed",
+      },
+      namespace: null,
+      pageCount: 2,
+      restoreCheckFn: null,
+      restoreCheckText: null,
+      restoreCheckUrl: null,
+      restoreKey: null,
+      restoreLoadedPath: null,
+      restoreSave: "auto",
+      restoreSavedPath: null,
+      restoreStatus: "drifted",
+      restoreStatusDetail: "browser disconnected",
+      restoreValidationPending: true,
+      saveStatus: "failed",
+      session: session.sessionName,
+      socketDir: session.socketDirectory,
+    };
+    const value = {
+      data: {
+        active: true,
+        namespace: null,
+        pid: daemonOwner.pid,
+        runtime,
+        runtimeError: null,
+        session: session.sessionName,
+        socketDir: session.socketDirectory,
+        version: "0.32.3",
+      },
+      success: true,
+    };
+    const marker = { daemonOwner, sessionName: session.sessionName };
+    expect(parseMarkedDerivationBrowserDaemonForCleanup(value, session, marker))
+      .toBe(daemonOwner.pid);
+    for (const changed of [
+      { ...value, data: { ...value.data, pid: daemonOwner.pid + 1 } },
+      { ...value, data: { ...value.data, runtime: { ...runtime, backgroundPid: daemonOwner.pid + 1 } } },
+      { ...value, data: { ...value.data, session: "io-derive-fedcba987654" } },
+      { ...value, data: { ...value.data, socketDir: "replacement-socket-boundary" } },
+    ]) {
+      expect(() => parseMarkedDerivationBrowserDaemonForCleanup(changed, session, marker)).toThrow();
+    }
+  });
+
+  test("classifies exact numeric-loopback CDP reachability conservatively", async () => {
+    const server = createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("loopback server address missing");
+    const cdpUrl = `ws://127.0.0.1:${address.port}/devtools/browser/exact`;
+    expect(await exactCdpEndpointStatus(cdpUrl)).toBe("available");
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error == null ? resolve() : reject(error));
+    });
+    expect(await exactCdpEndpointStatus(cdpUrl)).toBe("unavailable");
+    expect(await exactCdpEndpointStatus(
+      `ws://localhost:${address.port}/devtools/browser/exact`,
+    )).toBe("indeterminate");
+  });
+
   test("initializes agent-browser on a harmless exact-origin URL instead of about:blank", () => {
     expect(derivationBootstrapUrl(new URL("https://x.com/home?private=value")))
       .toBe("https://x.com/robots.txt");
     expect(derivationBootstrapUrl(new URL("https://example.com:8443/messages")))
       .toBe("https://example.com:8443/robots.txt");
+    expect(derivationBootstrapUrl(
+      new URL("https://studio.youtube.com/channel/example/videos/upload"),
+      [
+        new URL("https://www.youtube.com"),
+        new URL("https://accounts.google.com"),
+      ],
+    )).toBe("https://www.youtube.com/robots.txt");
   });
 
   test.each([
@@ -607,8 +1384,14 @@ describe("derivation session path defenses", () => {
 
     expect(generic.slice(generic.indexOf("--profile"), generic.indexOf("--profile") + 2)).toEqual(["--profile", "./profile"]);
     expect(generic).not.toContain("--profile-directory=Default");
+    expect(generic.filter((argument) => argument === "--args")).toHaveLength(1);
+    expect(generic[generic.indexOf("--args") + 1]).toContain("--no-first-run");
+    expect(generic[generic.indexOf("--args") + 1]).toContain("--no-default-browser-check");
     expect(selected.slice(selected.indexOf("--profile"), selected.indexOf("--profile") + 2)).toEqual(["--profile", "./profile-user-data"]);
-    expect(selected).toContain("--profile-directory=Default");
+    expect(selected.filter((argument) => argument === "--args")).toHaveLength(1);
+    expect(selected[selected.indexOf("--args") + 1]).toContain("--profile-directory=Default");
+    expect(selected[selected.indexOf("--args") + 1]).toContain("--no-first-run");
+    expect(selected[selected.indexOf("--args") + 1]).toContain("--no-default-browser-check");
     expect(selected.slice(
       selected.indexOf("--executable-path"),
       selected.indexOf("--executable-path") + 2,
@@ -617,6 +1400,148 @@ describe("derivation session path defenses", () => {
       "/Applications/Chromium.app/Contents/MacOS/Chromium",
     ]);
     expect(named.slice(named.indexOf("--profile"), named.indexOf("--profile") + 2)).toEqual(["--profile", "Work"]);
+    expect(named).not.toContain("--args");
+  });
+
+  test("launches a fresh contained browser only through its proxy and exact DNR guard", () => {
+    const id = crypto.randomUUID();
+    const directory = "/private/wrench/derivation";
+    const session = sessionMetadata(id, directory, {
+      schemaVersion: 2,
+      networkGuard: containedNetworkGuardFixture(),
+    }) as DerivationSession;
+    const arguments_ = derivationGlobalArguments(session);
+    expect(arguments_).not.toContain("--allowed-domains");
+    expect(arguments_.slice(arguments_.indexOf("--proxy"), arguments_.indexOf("--proxy") + 2))
+      .toEqual(["--proxy", "http://127.0.0.1:43123"]);
+    expect(arguments_.filter((argument) => argument === "--args")).toHaveLength(1);
+    const chromeArguments = arguments_[arguments_.indexOf("--args") + 1]?.split("\n") ?? [];
+    expect(chromeArguments).toContain("--disable-quic");
+    expect(chromeArguments).toContain("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+    expect(chromeArguments).toContain(
+      `--disable-extensions-except=${join(directory, "network-guard-extension")}`,
+    );
+    expect(chromeArguments).toContain(
+      `--load-extension=${join(directory, "network-guard-extension")}`,
+    );
+  });
+
+  test("seeds multiple exact cookie origins once and rejects identity conflicts before returning commands", async () => {
+    const auth = {
+      schemaVersion: 1,
+      id: "youtube-cookie",
+      kind: "cookie-source",
+      source: "arc",
+      profile: "Default",
+    } as const;
+    const seen: { readonly url: string; readonly explicit: boolean }[] = [];
+    const shared = {
+      name: "shared",
+      value: "private-shared-value",
+      domain: "example.com",
+      hostOnly: false,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax" as const,
+      expires: 0,
+    };
+    const commands = await derivationCookieCommands(
+      auth,
+      new URL("https://studio.example.com/upload"),
+      [new URL("https://accounts.example.com")],
+      (options, target) => {
+        seen.push({
+          url: target.href,
+          explicit: options.requireExplicitCookieScope === true,
+        });
+        return Promise.resolve({
+          cookies: target.hostname === "accounts.example.com"
+            ? [shared, {
+                name: "account",
+                value: "private-account-value",
+                domain: "accounts.example.com",
+                hostOnly: true,
+                path: "/",
+                secure: true,
+                httpOnly: true,
+                sameSite: "Strict" as const,
+                expires: 0,
+              }]
+            : [shared],
+          warnings: [],
+        });
+      },
+    );
+    expect(seen).toEqual([
+      { url: "https://studio.example.com/upload", explicit: true },
+      { url: "https://accounts.example.com/", explicit: true },
+    ]);
+    expect(commands).toHaveLength(2);
+    expect(commands.filter((command) => command[2] === "shared")).toHaveLength(1);
+    expect(commands.find((command) => command[2] === "account")).toContain("https://accounts.example.com");
+
+    await expectRejectedWith(derivationCookieCommands(
+      auth,
+      new URL("https://studio.example.com/upload"),
+      [new URL("https://accounts.example.com")],
+      (_options, target) => Promise.resolve({
+        cookies: [{
+          ...shared,
+          value: target.hostname === "accounts.example.com"
+            ? "different-private-value"
+            : shared.value,
+        }],
+        warnings: [],
+      }),
+    ), "conflicting duplicate cookie identities");
+  });
+
+  test("rejects multi-origin cookie seeding unless the auth stays in a contained fresh browser", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-cookie-origins-test-")));
+    const wrenchState = join(root, "io-state");
+    try {
+      await expectRejectedWith(startDerivation(
+        "youtube-web",
+        "https://studio.example.com/upload",
+        {
+          schemaVersion: 1,
+          id: "profile-auth",
+          kind: "browser-profile",
+          profile: "Work",
+          trustUnfilteredEgress: true,
+        },
+        {
+          allowRemoteActions: false,
+          contentMode: "none",
+          browserDomains: ["studio.example.com", "accounts.example.com"],
+          cookieOrigins: ["https://accounts.example.com"],
+          headed: false,
+          environment: { WRENCH_STATE_HOME: wrenchState },
+        },
+      ), "browser remains domain-contained");
+      await expectRejectedWith(startDerivation(
+        "youtube-web",
+        "https://studio.example.com/upload",
+        {
+          schemaVersion: 1,
+          id: "cookie-auth",
+          kind: "cookie-source",
+          source: "arc",
+        },
+        {
+          allowRemoteActions: false,
+          contentMode: "none",
+          browserDomains: ["studio.example.com"],
+          cookieOrigins: ["https://accounts.example.com"],
+          headed: false,
+          environment: { WRENCH_STATE_HOME: wrenchState },
+        },
+      ), "covered by browser domains");
+      expect(existsSync(wrenchState)).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("the browser launcher rejects a replaced cwd and policy-override arguments before startup", () => {
@@ -625,10 +1550,15 @@ describe("derivation session path defenses", () => {
     const stats = lstatSync(directory, { bigint: true });
     const helper = join(import.meta.dir, "derive-command-helper.ts");
     const config = join(import.meta.dir, "state-helper.bunfig.toml");
-    writeFileSync(join(directory, "agent-browser.json"), "{}\n", { mode: 0o600 });
+    const writeBrowserConfig = (guarded: boolean): void => writeFileSync(
+      join(directory, "agent-browser.json"),
+      `${JSON.stringify(derivationBrowserConfig(guarded))}\n`,
+      { mode: 0o600 },
+    );
+    writeBrowserConfig(false);
     writeFileSync(
       join(directory, "action-policy.json"),
-      `${JSON.stringify({ allow: derivationPolicyActions(false), default: "deny" })}\n`,
+      `${JSON.stringify(derivationActionPolicy(false))}\n`,
       { mode: 0o600 },
     );
     const base = {
@@ -637,8 +1567,12 @@ describe("derivation session path defenses", () => {
       expectedDirectory: { device: stats.dev.toString(), inode: stats.ino.toString() },
       socketDirectory: directory,
       expectedSocketDirectory: { device: stats.dev.toString(), inode: stats.ino.toString() },
+      ownerSessionName: "io-derive-0123456789ab",
       allowRemoteActions: false,
       allowFixtureUpload: false,
+      guardedBrowserConfig: false,
+      codeOwnedBrowserRequest: "none",
+      browserPin: null,
       timeoutMs: 10_000,
       maxOutputBytes: 1024 * 1024,
       arguments: ["close", "--json"],
@@ -672,10 +1606,438 @@ describe("derivation session path defenses", () => {
       expect(override.exitCode).not.toBe(0);
       expect(override.stderr.toString()).toContain("request is invalid");
 
+      const forgedCdp = invoke({
+        ...base,
+        codeOwnedBrowserRequest: "readiness-context",
+      });
+      expect(forgedCdp.exitCode).not.toBe(0);
+      expect(forgedCdp.stderr.toString()).toContain("request is invalid");
+
+      const pinRequest = {
+        ...base,
+        requestId: crypto.randomUUID(),
+        codeOwnedBrowserRequest: "pinned-batch",
+        guardedBrowserConfig: true,
+        browserPin: {
+          sessionName: "io-derive-pin-0123456789ab",
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/exact-guid",
+          browserIdentity: { engine: "chrome", launchHash: "42" },
+          confirmationAction: null,
+          daemonOwner: null,
+        },
+        arguments: ["batch", "--bail", "--json"],
+        browserStdin: JSON.stringify([["get", "url"]]),
+      } as const;
+      for (const drifted of [
+        { ...pinRequest, arguments: ["--cdp", "ws://127.0.0.1:1/devtools/browser/caller", "batch", "--bail", "--json"] },
+        { ...pinRequest, arguments: ["--session", "caller", "batch", "--bail", "--json"] },
+        { ...pinRequest, browserPin: { ...pinRequest.browserPin, sessionName: "caller-selected" } },
+        { ...pinRequest, browserPin: { ...pinRequest.browserPin, sessionName: "io-derive-pin-fedcba987654" } },
+        { ...pinRequest, browserPin: { ...pinRequest.browserPin, cdpUrl: "ws://example.com/devtools/browser/caller" } },
+        { ...pinRequest, browserPin: { ...pinRequest.browserPin, browserIdentity: { engine: "chrome", launchHash: "18446744073709551616" } } },
+      ]) {
+        const refusedPinOverride = invoke(drifted);
+        expect(refusedPinOverride.exitCode).not.toBe(0);
+      }
+
+      const contextStdin = JSON.stringify([["get", "cdp-url"], ["get", "url"]]);
+      const exactContext = invoke({
+        ...base,
+        expectedDirectory: { ...base.expectedDirectory, inode: (stats.ino + 1n).toString() },
+        codeOwnedBrowserRequest: "readiness-context",
+        guardedBrowserConfig: true,
+        arguments: derivationExistingOwnerContextArguments({
+          sessionName: base.ownerSessionName,
+        }),
+        browserStdin: contextStdin,
+      });
+      expect(exactContext.exitCode).not.toBe(0);
+      expect(exactContext.stderr.toString()).toContain("no longer matches");
+
+      for (const browserStdin of [
+        JSON.stringify([["get", "cdp-url"]]),
+        JSON.stringify([["get", "url"], ["get", "cdp-url"]]),
+        JSON.stringify([["get", "cdp-url"], ["get", "url"], ["get", "url"]]),
+      ]) {
+        const driftedContext = invoke({
+          ...base,
+          codeOwnedBrowserRequest: "readiness-context",
+          guardedBrowserConfig: true,
+          arguments: derivationExistingOwnerContextArguments({
+            sessionName: base.ownerSessionName,
+          }),
+          browserStdin,
+        });
+        expect(driftedContext.exitCode).not.toBe(0);
+        expect(driftedContext.stderr.toString()).toContain("request is invalid");
+      }
+
       const help = invoke({ ...base, requestId: crypto.randomUUID(), arguments: ["--help"] });
       expect(help.exitCode).toBe(0);
       expect(readdirSync(directory).sort()).toEqual(["action-policy.json", "agent-browser.json"]);
     } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("an exact dead CDP pin cannot dispatch against a replacement browser", () => {
+    if (process.platform === "win32") return;
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-pin-replacement-test-")));
+    const socketDirectory = realpathSync(mkdtempSync(join(tmpdir(), "wdp-")));
+    chmodSync(socketDirectory, 0o700);
+    chmodSync(directory, 0o700);
+    const writeBrowserConfig = (guarded: boolean): void => writeFileSync(
+      join(directory, "agent-browser.json"),
+      `${JSON.stringify(derivationBrowserConfig(guarded))}\n`,
+      { mode: 0o600 },
+    );
+    writeBrowserConfig(false);
+    writeFileSync(
+      join(directory, "action-policy.json"),
+      `${JSON.stringify(derivationActionPolicy(true))}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      join(directory, "network-readiness-policy.json"),
+      `${JSON.stringify({ allow: derivationDnrPolicyActions, default: "deny" })}\n`,
+      { mode: 0o600 },
+    );
+    const directoryStats = lstatSync(directory, { bigint: true });
+    const socketStats = lstatSync(socketDirectory, { bigint: true });
+    const helper = join(import.meta.dir, "derive-command-helper.ts");
+    const bunConfig = join(import.meta.dir, "state-helper.bunfig.toml");
+    const ownerSession = "io-derive-0123456789ab";
+    const replacementSession = "io-replace-0123456789";
+    const pinSession = "io-derive-pin-0123456789ab";
+    const browserEnvironment = isolatedEnvironment(socketDirectory);
+    const browserWithSession = (session: string, policy: string, ...arguments_: readonly string[]) => Bun.spawnSync({
+      cmd: [
+        ...agentBrowserCommand(),
+        "--config",
+        "agent-browser.json",
+        "--action-policy",
+        policy,
+        "--session",
+        session,
+        ...arguments_,
+      ],
+      cwd: directory,
+      env: browserEnvironment,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const browser = (...arguments_: readonly string[]) => browserWithSession(ownerSession, "action-policy.json", ...arguments_);
+    const guardBrowser = (...arguments_: readonly string[]) => browserWithSession(ownerSession, "action-policy.json", ...arguments_);
+    const replacementBrowser = (policy: string, ...arguments_: readonly string[]) => browserWithSession(replacementSession, policy, ...arguments_);
+    const helperRequest = (request: unknown) => Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "--no-env-file",
+        "--no-install",
+        "--no-macros",
+        "--no-addons",
+        `--config=${bunConfig}`,
+        helper,
+      ],
+      cwd: directory,
+      env: { NODE_ENV: "production" },
+      stdin: new Blob([JSON.stringify(request)]),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const baseRequest = {
+      schemaVersion: 1,
+      requestId: crypto.randomUUID(),
+      expectedDirectory: {
+        device: directoryStats.dev.toString(),
+        inode: directoryStats.ino.toString(),
+      },
+      socketDirectory,
+      expectedSocketDirectory: {
+        device: socketStats.dev.toString(),
+        inode: socketStats.ino.toString(),
+      },
+      ownerSessionName: ownerSession,
+      allowRemoteActions: true,
+      allowFixtureUpload: false,
+      guardedBrowserConfig: true,
+      timeoutMs: 10_000,
+      maxOutputBytes: 1024 * 1024,
+      arguments: ["batch", "--bail", "--json"],
+    } as const;
+    let oldCdpUrl: string | null = null;
+    try {
+      const cdpResult = guardBrowser("--json", "get", "cdp-url");
+      expect(cdpResult.exitCode).toBe(0);
+      const cdpValue = parseLastJsonWithExactLaunchHashes(cdpResult.stdout.toString()) as {
+        readonly data: { readonly cdpUrl: string };
+      };
+      oldCdpUrl = cdpValue.data.cdpUrl;
+      writeBrowserConfig(true);
+      const pinDescriptor = {
+        sessionName: pinSession,
+        cdpUrl: oldCdpUrl,
+        browserIdentity: null,
+        confirmationAction: null,
+        daemonOwner: null,
+      } as const;
+      const pinContextResult = helperRequest({
+        ...baseRequest,
+        requestId: crypto.randomUUID(),
+        codeOwnedBrowserRequest: "pin-context",
+        browserPin: pinDescriptor,
+        browserStdin: JSON.stringify([["get", "cdp-url"], ["get", "url"]]),
+      });
+      expect(pinContextResult.exitCode).toBe(0);
+      const pinContext = parseDerivationPinnedBrowserContextResult(
+        parseLastJsonWithExactLaunchHashes(pinContextResult.stdout.toString()),
+        ["example.com"],
+      );
+
+      expect(browser("close", "--json").exitCode).toBe(0);
+      writeBrowserConfig(false);
+      const replacementCdp = replacementBrowser("action-policy.json", "--json", "get", "cdp-url");
+      expect(replacementCdp.exitCode).toBe(0);
+      const replacementCdpValue = parseLastJsonWithExactLaunchHashes(replacementCdp.stdout.toString()) as {
+        readonly data: { readonly cdpUrl: string };
+      };
+      expect(replacementCdpValue.data.cdpUrl).not.toBe(oldCdpUrl);
+      writeBrowserConfig(true);
+
+      const refused = helperRequest({
+        ...baseRequest,
+        requestId: crypto.randomUUID(),
+        codeOwnedBrowserRequest: "pinned-batch",
+        browserPin: { ...pinDescriptor, browserIdentity: pinContext.browserIdentity },
+        browserStdin: JSON.stringify([["open", "about:blank#provider-command-must-not-run"]]),
+      });
+      expect(refused.exitCode).not.toBe(0);
+
+      const replacementUrl = replacementBrowser("action-policy.json", "--json", "get", "url");
+      expect(replacementUrl.exitCode).toBe(0);
+      const replacementUrlValue = parseLastJsonWithExactLaunchHashes(replacementUrl.stdout.toString()) as {
+        readonly data: { readonly url: string };
+      };
+      expect(replacementUrlValue.data.url).toBe("about:blank");
+    } finally {
+      if (oldCdpUrl !== null) {
+        Bun.spawnSync({
+          cmd: [
+            ...agentBrowserCommand(),
+            "--session",
+            pinSession,
+            "--cdp",
+            oldCdpUrl,
+            "close",
+            "--json",
+          ],
+          cwd: directory,
+          env: browserEnvironment,
+          stdout: "ignore",
+          stderr: "ignore",
+        });
+      }
+      browser("close", "--json");
+      replacementBrowser("action-policy.json", "close", "--json");
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("confirms one exact pinned mutation and denies browser relaunch before confirmation", async () => {
+    if (process.platform === "win32") return;
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-confirm-test-")));
+    const socketDirectory = realpathSync(mkdtempSync(join(tmpdir(), "wdc-")));
+    chmodSync(socketDirectory, 0o700);
+    chmodSync(directory, 0o700);
+    const writeBrowserConfig = (guarded: boolean): void => writeFileSync(
+      join(directory, "agent-browser.json"),
+      `${JSON.stringify(derivationBrowserConfig(guarded))}\n`,
+      { mode: 0o600 },
+    );
+    writeBrowserConfig(false);
+    writeFileSync(
+      join(directory, "action-policy.json"),
+      `${JSON.stringify(derivationActionPolicy(true))}\n`,
+      { mode: 0o600 },
+    );
+    const directoryStats = lstatSync(directory, { bigint: true });
+    const socketStats = lstatSync(socketDirectory, { bigint: true });
+    const helper = join(import.meta.dir, "derive-command-helper.ts");
+    const bunConfig = join(import.meta.dir, "state-helper.bunfig.toml");
+    const ownerSession = "io-derive-abcdef012345";
+    const pinSession = "io-derive-pin-abcdef012345";
+    const browserEnvironment = isolatedEnvironment(socketDirectory);
+    const browserWithSession = (sessionName: string, ...arguments_: readonly string[]) => Bun.spawnSync({
+      cmd: [
+        ...agentBrowserCommand(),
+        "--config",
+        "agent-browser.json",
+        "--action-policy",
+        "action-policy.json",
+        "--session",
+        sessionName,
+        ...arguments_,
+      ],
+      cwd: directory,
+      env: browserEnvironment,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const helperRequest = (request: unknown) => Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "--no-env-file",
+        "--no-install",
+        "--no-macros",
+        "--no-addons",
+        `--config=${bunConfig}`,
+        helper,
+      ],
+      cwd: directory,
+      env: { NODE_ENV: "production" },
+      stdin: new Blob([JSON.stringify(request)]),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const baseRequest = {
+      schemaVersion: 1,
+      requestId: crypto.randomUUID(),
+      expectedDirectory: {
+        device: directoryStats.dev.toString(),
+        inode: directoryStats.ino.toString(),
+      },
+      socketDirectory,
+      expectedSocketDirectory: {
+        device: socketStats.dev.toString(),
+        inode: socketStats.ino.toString(),
+      },
+      ownerSessionName: ownerSession,
+      allowRemoteActions: true,
+      allowFixtureUpload: false,
+      guardedBrowserConfig: true,
+      timeoutMs: 10_000,
+      maxOutputBytes: 1024 * 1024,
+    } as const;
+    let cdpUrl: string | null = null;
+    try {
+      const ownerContext = browserWithSession(ownerSession, "--json", "get", "cdp-url");
+      expect(ownerContext.exitCode).toBe(0);
+      const ownerValue = parseLastJsonWithExactLaunchHashes(ownerContext.stdout.toString()) as {
+        readonly data: { readonly cdpUrl: string };
+      };
+      cdpUrl = ownerValue.data.cdpUrl;
+      writeBrowserConfig(true);
+      const guardedOwnerContext = helperRequest({
+        ...baseRequest,
+        requestId: crypto.randomUUID(),
+        codeOwnedBrowserRequest: "readiness-context",
+        browserPin: null,
+        arguments: derivationExistingOwnerContextArguments({ sessionName: ownerSession }),
+        browserStdin: JSON.stringify([["get", "cdp-url"], ["get", "url"]]),
+      });
+      expect(guardedOwnerContext.exitCode).toBe(0);
+      expect(parseDerivationGuardBrowserContextResult(
+        parseLastJsonWithExactLaunchHashes(guardedOwnerContext.stdout.toString()),
+        ["example.com"],
+      ).cdpUrl).toBe(cdpUrl);
+      const pinDescriptor = {
+        sessionName: pinSession,
+        cdpUrl,
+        browserIdentity: null,
+        confirmationAction: null,
+        daemonOwner: null,
+      } as const;
+      const pinContextResult = helperRequest({
+        ...baseRequest,
+        requestId: crypto.randomUUID(),
+        codeOwnedBrowserRequest: "pin-context",
+        browserPin: pinDescriptor,
+        arguments: ["batch", "--bail", "--json"],
+        browserStdin: JSON.stringify([["get", "cdp-url"], ["get", "url"]]),
+      });
+      expect(pinContextResult.exitCode).toBe(0);
+      const pinContext = parseDerivationPinnedBrowserContextResult(
+        parseLastJsonWithExactLaunchHashes(pinContextResult.stdout.toString()),
+        ["example.com"],
+      );
+      const prompt = (command: readonly string[]) => {
+        const result = helperRequest({
+          ...baseRequest,
+          requestId: crypto.randomUUID(),
+          codeOwnedBrowserRequest: "pinned-batch",
+          browserPin: { ...pinDescriptor, browserIdentity: pinContext.browserIdentity },
+          arguments: ["batch", "--bail", "--json"],
+          browserStdin: JSON.stringify([command]),
+        });
+        expect(result.exitCode).toBe(0);
+        const pending = parseLastJsonWithExactLaunchHashes(result.stdout.toString());
+        const confirmation = parsePinnedDerivationConfirmation(pending, command);
+        if (confirmation === null) throw new Error("test mutation did not require confirmation");
+        const infoResult = browserWithSession(pinSession, "session", "info", "--json");
+        expect(infoResult.exitCode).toBe(0);
+        const info = parseLastJsonWithExactLaunchHashes(infoResult.stdout.toString()) as {
+          readonly data: { readonly pid: number };
+        };
+        const daemonOwner = captureProcessOwnerIdentity(info.data.pid);
+        return { confirmation, daemonOwner };
+      };
+      const confirm = (
+        confirmation: { readonly action: string; readonly confirmationId: string },
+        daemonOwner: ReturnType<typeof captureProcessOwnerIdentity>,
+      ) => helperRequest({
+        ...baseRequest,
+        requestId: crypto.randomUUID(),
+        codeOwnedBrowserRequest: "pinned-confirm",
+        browserPin: {
+          ...pinDescriptor,
+          browserIdentity: pinContext.browserIdentity,
+          confirmationAction: confirmation.action,
+          daemonOwner,
+        },
+        arguments: ["confirm", confirmation.confirmationId, "--json"],
+        browserStdin: null,
+      });
+
+      const first = prompt(["press", "Tab"]);
+      const confirmed = confirm(first.confirmation, first.daemonOwner);
+      if (confirmed.exitCode !== 0) {
+        const stderr = confirmed.stderr.toString();
+        const category = [
+          "request is invalid",
+          "daemon changed",
+          "confirmation result changed shape",
+          "action denied",
+          "no pending confirmation",
+        ].find((candidate) => stderr.includes(candidate)) ?? "unclassified";
+        throw new Error(`confirmation helper failed (${category})`);
+      }
+      parsePinnedDerivationConfirmationResult(
+        parseLastJsonWithExactLaunchHashes(confirmed.stdout.toString()),
+        first.confirmation,
+        {
+          ...pinDescriptor,
+          browserIdentity: pinContext.browserIdentity,
+          confirmationAction: first.confirmation.action,
+          daemonOwner: first.daemonOwner,
+        },
+      );
+
+      const second = prompt(["press", "Shift+Tab"]);
+      expect(browserWithSession(ownerSession, "close", "--json").exitCode).toBe(0);
+      let endpointStatus: Awaited<ReturnType<typeof exactCdpEndpointStatus>> = "available";
+      for (let attempt = 0; attempt < 100 && endpointStatus === "available"; attempt += 1) {
+        endpointStatus = await exactCdpEndpointStatus(cdpUrl);
+        if (endpointStatus === "available") await Bun.sleep(25);
+      }
+      expect(endpointStatus).toBe("unavailable");
+      const denied = confirm(second.confirmation, second.daemonOwner);
+      expect(denied.exitCode).not.toBe(0);
+      expect(await exactCdpEndpointStatus(cdpUrl)).toBe("unavailable");
+    } finally {
+      browserWithSession(pinSession, "close", "--json");
+      browserWithSession(ownerSession, "close", "--json");
+      rmSync(socketDirectory, { recursive: true, force: true });
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -761,7 +2123,7 @@ describe("derivation session path defenses", () => {
       mkdirSync(socketDirectory, { mode: 0o700 });
       writeFileSync(join(expectedDirectory, "agent-browser.json"), "{}\n", { mode: 0o600 });
       writeFileSync(join(expectedDirectory, "action-policy.json"), "{}\n", { mode: 0o600 });
-      writeSessionFixture(id, expectedDirectory);
+      writeSessionFixture(id, expectedDirectory, { profilePath: "Work" });
 
       expect(listDerivations({ WRENCH_STATE_HOME: wrenchState })).toEqual([{
         id,
@@ -818,6 +2180,101 @@ describe("derivation session path defenses", () => {
     } finally {
       rmSync(socketDirectory, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("metadata-missing discard signals only ready evidence owner after true control ENOENT", async () => {
+    const fixture = await createInterruptedProxyFixture("wrench-derive-interrupted-proxy-missing-test-");
+    let helperDead = false;
+    try {
+      rmSync(fixture.socketDirectory, { recursive: true });
+      unlinkSync(fixture.controlPath);
+      expect(await discardDerivation(fixture.id, { WRENCH_STATE_HOME: fixture.wrenchState })).toBeTrue();
+      helperDead = processOwnerStatus(fixture.guard.proxy.owner) === "different-or-dead";
+      expect(helperDead).toBeTrue();
+      expect(existsSync(fixture.directory)).toBeFalse();
+    } finally {
+      if (!helperDead && processOwnerStatus(fixture.guard.proxy.owner) === "exact-live-owner") {
+        await closeDerivationNetworkBoundary({
+          derivationId: fixture.id,
+          guard: fixture.guard,
+        });
+        helperDead = true;
+      }
+      if (existsSync(fixture.controlPath)) rmSync(fixture.controlPath, { force: true });
+      rmSync(fixture.socketDirectory, { recursive: true, force: true });
+      if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("metadata-missing discard preserves foreign endpoint, owner, and state", async () => {
+    const fixture = await createInterruptedProxyFixture("wrench-derive-interrupted-proxy-foreign-test-");
+    rmSync(fixture.socketDirectory, { recursive: true });
+    unlinkSync(fixture.controlPath);
+    const fake = createServer((socket) => socket.end('{"schemaVersion":1,"ok":true}\n'));
+    await new Promise<void>((resolve, reject) => {
+      fake.once("error", reject);
+      fake.listen(fixture.controlPath, resolve);
+    });
+    chmodSync(fixture.controlPath, 0o600);
+    let helperDead = false;
+    try {
+      await expectRejectedWith(
+        discardDerivation(fixture.id, { WRENCH_STATE_HOME: fixture.wrenchState }),
+        "malformed",
+      );
+      expect(processOwnerStatus(fixture.guard.proxy.owner)).toBe("exact-live-owner");
+      expect(existsSync(fixture.controlPath)).toBeTrue();
+      expect(existsSync(fixture.directory)).toBeTrue();
+    } finally {
+      await new Promise<void>((resolve) => fake.close(() => resolve()));
+      if (existsSync(fixture.controlPath)) unlinkSync(fixture.controlPath);
+      expect(await discardDerivation(
+        fixture.id,
+        { WRENCH_STATE_HOME: fixture.wrenchState },
+      )).toBeTrue();
+      helperDead = processOwnerStatus(fixture.guard.proxy.owner) === "different-or-dead";
+      if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
+    }
+    expect(helperDead).toBeTrue();
+  });
+
+  test("metadata-missing discard rejects crossed ready policy before owner action", async () => {
+    const fixture = await createInterruptedProxyFixture("wrench-derive-interrupted-proxy-crosswire-test-");
+    const readyPath = join(fixture.directory, DERIVATION_GUARD_PROXY_READY);
+    const originalReady = readFileSync(readyPath, "utf8");
+    const crossedReady = JSON.parse(originalReady) as Record<string, unknown>;
+    crossedReady.policySha256 = "f".repeat(64);
+    writeFileSync(readyPath, `${JSON.stringify(crossedReady)}\n`, { mode: 0o600 });
+    rmSync(fixture.socketDirectory, { recursive: true });
+    let helperDead = false;
+    try {
+      await expectRejectedWith(
+        discardDerivation(fixture.id, { WRENCH_STATE_HOME: fixture.wrenchState }),
+        "changed identity",
+      );
+      expect(processOwnerStatus(fixture.guard.proxy.owner)).toBe("exact-live-owner");
+      expect(existsSync(fixture.directory)).toBeTrue();
+      writeFileSync(readyPath, originalReady, { mode: 0o600 });
+      expect(await discardDerivation(
+        fixture.id,
+        { WRENCH_STATE_HOME: fixture.wrenchState },
+      )).toBeTrue();
+      helperDead = processOwnerStatus(fixture.guard.proxy.owner) === "different-or-dead";
+      expect(helperDead).toBeTrue();
+    } finally {
+      if (!helperDead && processOwnerStatus(fixture.guard.proxy.owner) === "exact-live-owner") {
+        if (existsSync(readyPath)) writeFileSync(readyPath, originalReady, { mode: 0o600 });
+        if (existsSync(fixture.controlPath)) unlinkSync(fixture.controlPath);
+        await closeDerivationNetworkBoundary({
+          derivationId: fixture.id,
+          guard: fixture.guard,
+        });
+        helperDead = true;
+      }
+      if (existsSync(fixture.controlPath)) rmSync(fixture.controlPath, { force: true });
+      rmSync(fixture.socketDirectory, { recursive: true, force: true });
+      if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
     }
   });
 
@@ -1420,6 +2877,58 @@ describe("derivation session path defenses", () => {
     }
   });
 
+  test("quiesces a live bound proxy before discarding state after both socket endpoints disappear", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-missing-both-sockets-test-")));
+    const wrenchState = join(root, "io-state");
+    const id = crypto.randomUUID();
+    const expectedDirectory = join(wrenchState, "derivations", id);
+    const socketDirectory = join(process.platform === "win32" ? tmpdir() : "/tmp", `io-derive-ab-${id}`);
+    const controlPath = derivationGuardControlSocketPath(id);
+    const environment = { WRENCH_STATE_HOME: wrenchState };
+    let helperDead = false;
+    let guard: Awaited<ReturnType<typeof createDerivationNetworkBoundary>> | null = null;
+    try {
+      mkdirSync(expectedDirectory, { recursive: true, mode: 0o700 });
+      mkdirSync(socketDirectory, { mode: 0o700 });
+      const identity = (path: string) => {
+        const stats = lstatSync(path, { bigint: true });
+        return { device: stats.dev.toString(), inode: stats.ino.toString() };
+      };
+      writeFileSync(join(expectedDirectory, "agent-browser.json"), "{}\n", { mode: 0o600 });
+      writeFileSync(join(expectedDirectory, "action-policy.json"), "{}\n", { mode: 0o600 });
+      writeFileSync(join(expectedDirectory, derivationDnrPolicyFileName), "{}\n", { mode: 0o600 });
+      guard = await createDerivationNetworkBoundary({
+        derivationId: id,
+        directory: expectedDirectory,
+        directoryIdentity: identity(expectedDirectory),
+        socketDirectory,
+        socketIdentity: identity(socketDirectory),
+        browserDomains: ["example.com"],
+      });
+      await adoptDerivationNetworkBoundary({ derivationId: id, guard });
+      writeSessionFixture(id, expectedDirectory, {
+        schemaVersion: 2,
+        networkGuard: guard,
+      });
+      rmSync(socketDirectory, { recursive: true });
+      unlinkSync(controlPath);
+
+      expect(processOwnerStatus(guard.proxy.owner)).toBe("exact-live-owner");
+      expect(await discardDerivation(id, environment)).toBeTrue();
+      helperDead = processOwnerStatus(guard.proxy.owner) === "different-or-dead";
+      expect(helperDead).toBeTrue();
+      expect(existsSync(expectedDirectory)).toBeFalse();
+    } finally {
+      if (guard !== null && processOwnerStatus(guard.proxy.owner) === "exact-live-owner") {
+        await closeDerivationNetworkBoundary({ derivationId: id, guard });
+        helperDead = true;
+      }
+      if (existsSync(controlPath)) rmSync(controlPath, { force: true });
+      rmSync(socketDirectory, { recursive: true, force: true });
+      if (helperDead || guard === null) rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("does not treat a replacement socket directory as recoverably missing", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-replaced-socket-test-")));
     const wrenchState = join(root, "io-state");
@@ -1482,7 +2991,7 @@ describe("derivation session path defenses", () => {
       mkdirSync(socketDirectory, { mode: 0o700 });
       writeFileSync(join(expectedDirectory, "agent-browser.json"), "{}\n", { mode: 0o600 });
       writeFileSync(join(expectedDirectory, "action-policy.json"), "{}\n", { mode: 0o600 });
-      writeSessionFixture(id, expectedDirectory, { contentMode: "text" });
+      writeSessionFixture(id, expectedDirectory, { contentMode: "text", profilePath: "Work" });
       writeFileSync(harPath, harText, { mode: 0o600 });
       const stats = lstatSync(harPath, { bigint: true });
       const directoryStats = lstatSync(expectedDirectory, { bigint: true });
@@ -1547,6 +3056,143 @@ describe("derivation session path defenses", () => {
     }
   });
 
+  test("reviews only an exact start-admitted origin and rejects undeclared origins before sealing", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-review-origin-test-")));
+    const wrenchState = join(root, "io-state");
+    const id = crypto.randomUUID();
+    const expectedDirectory = join(wrenchState, "derivations", id);
+    const socketDirectory = join(process.platform === "win32" ? tmpdir() : "/tmp", `io-derive-ab-${id}`);
+    const markerPath = join(expectedDirectory, "review.json");
+    const uploadOrigin = "https://upload.example.net";
+    const safeFixture = "cross-origin-message-fixture";
+    const headerSecret = "cross-origin-header-secret";
+    const undeclaredOrigin = "https://captured.example.org";
+    const harText = JSON.stringify({
+      log: {
+        entries: [
+          {
+            request: {
+              method: "POST",
+              url: "https://example.com/api/messages/target-conversation",
+              postData: { mimeType: "application/json", text: JSON.stringify({ body: { text: "target-message" } }) },
+            },
+            response: { status: 200, content: { mimeType: "application/json", text: "{}" } },
+          },
+          {
+            request: {
+              method: "POST",
+              url: `${uploadOrigin}/api/upload/cross-origin-item`,
+              headers: [{ name: "authorization", value: `Bearer ${headerSecret}` }],
+              postData: { mimeType: "application/json", text: JSON.stringify({ body: { text: safeFixture } }) },
+            },
+            response: {
+              status: 200,
+              content: { mimeType: "application/json", text: JSON.stringify({ data: { id: "cross-origin-response-id" } }) },
+            },
+          },
+          {
+            request: { method: "GET", url: `${undeclaredOrigin}/api/private/captured-item` },
+            response: { status: 200, content: { mimeType: "application/json", text: "{}" } },
+          },
+        ],
+      },
+    });
+    const environment = { WRENCH_STATE_HOME: wrenchState };
+    try {
+      mkdirSync(expectedDirectory, { recursive: true, mode: 0o700 });
+      mkdirSync(socketDirectory, { mode: 0o700 });
+      writeFileSync(join(expectedDirectory, "agent-browser.json"), "{}\n", { mode: 0o600 });
+      writeFileSync(join(expectedDirectory, "action-policy.json"), "{}\n", { mode: 0o600 });
+      writeSessionFixture(id, expectedDirectory, {
+        browserDomains: ["example.com", "upload.example.net"],
+        contentMode: "text",
+        profilePath: "Work",
+      });
+      writeFileSync(join(expectedDirectory, "capture.har"), harText, { mode: 0o600 });
+
+      for (const invalidOrigin of [
+        "http://upload.example.net",
+        "https://upload.example.net/",
+        "https://upload.example.net/path",
+        "https://user:password@upload.example.net",
+      ]) {
+        await expectRejectedWith(
+          reviewDerivation(id, { kind: "list", offset: 0, limit: 10 }, environment, invalidOrigin),
+          "exact HTTPS origin",
+        );
+        expect(existsSync(markerPath)).toBeFalse();
+      }
+
+      let undeclaredFailure: unknown = null;
+      try {
+        await reviewDerivation(
+          id,
+          { kind: "list", offset: 0, limit: 10 },
+          environment,
+          undeclaredOrigin,
+        );
+      } catch (error) {
+        undeclaredFailure = error;
+      }
+      expect(undeclaredFailure).toBeInstanceOf(Error);
+      const undeclaredMessage = undeclaredFailure instanceof Error ? undeclaredFailure.message : "";
+      expect(undeclaredMessage).toContain("not admitted");
+      expect(undeclaredMessage).not.toContain(undeclaredOrigin);
+      expect(existsSync(markerPath)).toBeFalse();
+
+      const defaultReview = await reviewDerivation(
+        id,
+        { kind: "list", offset: 0, limit: 10 },
+        environment,
+      );
+      expect(defaultReview).toMatchObject({
+        kind: "list",
+        targetOrigin,
+        reviewableEntries: 1,
+        entries: [{ entryIndex: 0 }],
+      });
+      expect(existsSync(markerPath)).toBeTrue();
+
+      const uploadReview = await reviewDerivation(
+        id,
+        { kind: "list", offset: 0, limit: 10 },
+        environment,
+        uploadOrigin,
+      );
+      expect(uploadReview).toMatchObject({
+        kind: "list",
+        targetOrigin: uploadOrigin,
+        reviewableEntries: 1,
+        entries: [{ entryIndex: 1, method: "POST", path: "/api/upload/:segment1" }],
+      });
+      const exactUploadReview = await reviewDerivation(
+        id,
+        {
+          kind: "entry",
+          entryIndex: 1,
+          fixtures: { safe_fixture: safeFixture, header_secret: headerSecret },
+        },
+        environment,
+        uploadOrigin,
+      );
+      expect(exactUploadReview).toMatchObject({
+        kind: "entry",
+        targetOrigin: uploadOrigin,
+        fixtureMatches: [
+          { label: "safe_fixture", locations: ["request.body.body.text"] },
+          { label: "header_secret", locations: [] },
+        ],
+      });
+      const rendered = JSON.stringify(exactUploadReview);
+      expect(rendered).not.toContain(safeFixture);
+      expect(rendered).not.toContain(headerSecret);
+      expect(rendered).not.toContain(undeclaredOrigin);
+    } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("uses the caller's active registry when finishing a sealed derivation", async () => {
     const root = realpathSync(mkdtempSync(
       join(tmpdir(), "wrench-derive-finish-registry-test-"),
@@ -1574,7 +3220,7 @@ describe("derivation session path defenses", () => {
         "{}\n",
         { mode: 0o600 },
       );
-      writeSessionFixture(id, expectedDirectory);
+      writeSessionFixture(id, expectedDirectory, { profilePath: "Work" });
       const harPath = join(expectedDirectory, "capture.har");
       writeFileSync(harPath, harText, { mode: 0o600 });
       const harStats = lstatSync(harPath, { bigint: true });

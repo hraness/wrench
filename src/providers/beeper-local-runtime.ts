@@ -31,6 +31,8 @@ import {
   planBeeperAccountsListCommand,
   planBeeperReadCommand,
   type BeeperLocalOperationName,
+  type BeeperContactsSearchInput,
+  type BeeperMessagingSearchInput,
   type BeeperMessagingReadInput,
   type BeeperOperationInput,
   type BeeperReadCommand,
@@ -48,6 +50,24 @@ const SUBJECT_PROBE_TIMEOUT_MS = 120_000;
 
 type BeeperAuth = Extract<WrenchAuth, { readonly kind: "linked-device-store" }>;
 type JsonRecord = Readonly<Record<string, unknown>>;
+
+function hasWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hasControlCharacters(value: string): boolean {
+  return /[\u0000-\u001f\u007f-\u009f]/u.test(value);
+}
 
 export type BeeperCliInvocation = Readonly<{
   binary: string;
@@ -203,6 +223,9 @@ function strictRecord(value: unknown, label: string): JsonRecord {
   const descriptors = Object.getOwnPropertyDescriptors(value);
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== "string") throw new Error(`${label} must not contain symbols`);
+    if (!hasWellFormedUnicode(key) || hasControlCharacters(key)) {
+      throw new Error(`${label} contains a malformed property name`);
+    }
     const descriptor = descriptors[key];
     if (
       descriptor === undefined
@@ -246,20 +269,31 @@ function boundedString(
   label: string,
   maximum: number,
   allowEmpty = false,
+  allowControls = false,
 ): string {
   if (
     typeof value !== "string"
     || (!allowEmpty && value.length === 0)
     || Buffer.byteLength(value, "utf8") > maximum
-    || /[\0]/u.test(value)
   ) throw new Error(`${label} must be bounded text`);
+  if (!hasWellFormedUnicode(value)) {
+    throw new Error(`${label} must contain well-formed Unicode`);
+  }
+  if (/\0/u.test(value) || (!allowControls && hasControlCharacters(value))) {
+    throw new Error(`${label} must not contain control characters`);
+  }
   return value;
 }
 
-function nullableString(value: unknown, label: string, maximum: number): string | null {
+function nullableString(
+  value: unknown,
+  label: string,
+  maximum: number,
+  allowControls = false,
+): string | null {
   return value === undefined || value === null
     ? null
-    : boundedString(value, label, maximum, true);
+    : boundedString(value, label, maximum, true, allowControls);
 }
 
 function optionalBoolean(value: unknown, label: string): boolean | null {
@@ -537,7 +571,7 @@ function parseConversation(
     network: boundedString(source.network, `${label}.network`, 512),
     title: boundedString(source.title, `${label}.title`, 4_096, true),
     type,
-    description: nullableString(source.description, `${label}.description`, 65_536),
+    description: nullableString(source.description, `${label}.description`, 65_536, true),
     lastActivity: optionalTimestamp(source.lastActivity, `${label}.lastActivity`),
     unreadCount: integer(source.unreadCount, `${label}.unreadCount`, 0, 100_000_000),
     unreadMentionsCount: optionalInteger(
@@ -620,6 +654,7 @@ function parseAttachment(value: unknown, label: string): BeeperAttachmentProject
         value.transcription,
         `${label}.transcription.transcription`,
         MAX_TEXT_BYTES,
+        true,
         true,
       ),
       language: nullableString(value.language, `${label}.transcription.language`, 128),
@@ -759,12 +794,12 @@ function parseMessage(
         "originalURL",
         "summary",
       ], `${label}.links[${index}]`);
-      boundedString(link.title, `${label}.links[${index}].title`, 8_192, true);
+      boundedString(link.title, `${label}.links[${index}].title`, 8_192, true, true);
       boundedString(link.url, `${label}.links[${index}].url`, 16_384);
       nullableString(link.favicon, `${label}.links[${index}].favicon`, 16_384);
       nullableString(link.img, `${label}.links[${index}].img`, 16_384);
       nullableString(link.originalURL, `${label}.links[${index}].originalURL`, 16_384);
-      nullableString(link.summary, `${label}.links[${index}].summary`, 65_536);
+      nullableString(link.summary, `${label}.links[${index}].summary`, 65_536, true);
       if (link.imgSize !== undefined && link.imgSize !== null) {
         const size = strictRecord(link.imgSize, `${label}.links[${index}].imgSize`);
         exactKeys(size, [], ["height", "width"], `${label}.links[${index}].imgSize`);
@@ -783,9 +818,9 @@ function parseMessage(
     ], `${label}.sendStatus`);
     boundedString(status.status, `${label}.sendStatus.status`, 64);
     timestamp(status.timestamp, `${label}.sendStatus.timestamp`);
-    nullableString(status.internalError, `${label}.sendStatus.internalError`, 65_536);
-    nullableString(status.message, `${label}.sendStatus.message`, 65_536);
-    nullableString(status.reason, `${label}.sendStatus.reason`, 2_048);
+    nullableString(status.internalError, `${label}.sendStatus.internalError`, 65_536, true);
+    nullableString(status.message, `${label}.sendStatus.message`, 65_536, true);
+    nullableString(status.reason, `${label}.sendStatus.reason`, 2_048, true);
     if (status.deliveredToUsers !== undefined) {
       strictArray(status.deliveredToUsers, `${label}.sendStatus.deliveredToUsers`, 2_000)
         .forEach((item, index) =>
@@ -794,7 +829,7 @@ function parseMessage(
   }
   const isDeleted = optionalBoolean(source.isDeleted, `${label}.isDeleted`) ?? false;
   const isHidden = optionalBoolean(source.isHidden, `${label}.isHidden`) ?? false;
-  const text = nullableString(source.text, `${label}.text`, MAX_TEXT_BYTES);
+  const text = nullableString(source.text, `${label}.text`, MAX_TEXT_BYTES, true);
   const mentions = source.mentions === undefined || source.mentions === null
     ? null
     : Object.freeze(strictArray(source.mentions, `${label}.mentions`, 2_000)
@@ -828,6 +863,322 @@ function parseMessage(
     attachments: Object.freeze(attachments),
     reactions: Object.freeze(reactions),
   });
+}
+
+function validateCapabilityLevel(value: unknown, label: string): void {
+  integer(value, label, -2, 2);
+}
+
+function validateCapabilityLevelMap(
+  value: unknown,
+  label: string,
+  maximum: number,
+): void {
+  const source = strictRecord(value, label);
+  const entries = Object.entries(source);
+  if (entries.length > maximum) throw new Error(`${label} contains too many entries`);
+  for (const [key, item] of entries) {
+    boundedString(key, `${label} key`, 256);
+    validateCapabilityLevel(item, `${label}.${key}`);
+  }
+}
+
+function validateChatCapabilities(value: unknown, label: string): void {
+  const source = strictRecord(value, label);
+  exactKeys(source, [], [
+    "allowedReactions",
+    "archive",
+    "attachments",
+    "customEmojiReactions",
+    "delete",
+    "deleteChat",
+    "deleteChatForEveryone",
+    "deleteForMe",
+    "deleteMaxAge",
+    "disappearingTimer",
+    "edit",
+    "editMaxAge",
+    "editMaxCount",
+    "formatting",
+    "locationMessage",
+    "markAsUnread",
+    "maxTextLength",
+    "messageRequest",
+    "participantActions",
+    "poll",
+    "reaction",
+    "reactionCount",
+    "readReceipts",
+    "reply",
+    "state",
+    "thread",
+    "typingNotifications",
+  ], label);
+  if (source.allowedReactions !== undefined) {
+    strictArray(source.allowedReactions, `${label}.allowedReactions`, 10_000)
+      .forEach((item, index) =>
+        boundedString(item, `${label}.allowedReactions[${index}]`, 2_048, true));
+  }
+  for (const key of [
+    "archive",
+    "customEmojiReactions",
+    "deleteChat",
+    "deleteChatForEveryone",
+    "deleteForMe",
+    "markAsUnread",
+    "readReceipts",
+    "typingNotifications",
+  ] as const) {
+    if (source[key] !== undefined) requiredBoolean(source[key], `${label}.${key}`);
+  }
+  for (const key of [
+    "delete",
+    "edit",
+    "locationMessage",
+    "poll",
+    "reaction",
+    "reply",
+    "thread",
+  ] as const) {
+    if (source[key] !== undefined) validateCapabilityLevel(source[key], `${label}.${key}`);
+  }
+  for (const key of [
+    "deleteMaxAge",
+    "editMaxAge",
+    "editMaxCount",
+    "maxTextLength",
+    "reactionCount",
+  ] as const) {
+    if (source[key] !== undefined) {
+      finiteNumber(source[key], `${label}.${key}`, 0, Number.MAX_SAFE_INTEGER);
+    }
+  }
+  if (source.attachments !== undefined) {
+    const attachments = strictRecord(source.attachments, `${label}.attachments`);
+    const entries = Object.entries(attachments);
+    if (entries.length > 256) throw new Error(`${label}.attachments contains too many entries`);
+    for (const [messageType, item] of entries) {
+      boundedString(messageType, `${label}.attachments key`, 256);
+      const attachment = strictRecord(item, `${label}.attachments.${messageType}`);
+      exactKeys(attachment, ["mimeTypes"], [
+        "caption",
+        "maxCaptionLength",
+        "maxDuration",
+        "maxHeight",
+        "maxSize",
+        "maxWidth",
+        "viewOnce",
+      ], `${label}.attachments.${messageType}`);
+      validateCapabilityLevelMap(
+        attachment.mimeTypes,
+        `${label}.attachments.${messageType}.mimeTypes`,
+        1_024,
+      );
+      if (attachment.caption !== undefined) {
+        validateCapabilityLevel(
+          attachment.caption,
+          `${label}.attachments.${messageType}.caption`,
+        );
+      }
+      for (const key of [
+        "maxCaptionLength",
+        "maxDuration",
+        "maxHeight",
+        "maxSize",
+        "maxWidth",
+      ] as const) {
+        if (attachment[key] !== undefined) {
+          finiteNumber(
+            attachment[key],
+            `${label}.attachments.${messageType}.${key}`,
+            0,
+            Number.MAX_SAFE_INTEGER,
+          );
+        }
+      }
+      if (attachment.viewOnce !== undefined) {
+        requiredBoolean(
+          attachment.viewOnce,
+          `${label}.attachments.${messageType}.viewOnce`,
+        );
+      }
+    }
+  }
+  if (source.disappearingTimer !== undefined) {
+    const timer = strictRecord(source.disappearingTimer, `${label}.disappearingTimer`);
+    exactKeys(timer, [], ["omitEmptyTimer", "timers", "types"], `${label}.disappearingTimer`);
+    if (timer.omitEmptyTimer !== undefined) {
+      requiredBoolean(timer.omitEmptyTimer, `${label}.disappearingTimer.omitEmptyTimer`);
+    }
+    if (timer.timers !== undefined) {
+      strictArray(timer.timers, `${label}.disappearingTimer.timers`, 1_000)
+        .forEach((item, index) =>
+          finiteNumber(
+            item,
+            `${label}.disappearingTimer.timers[${index}]`,
+            0,
+            Number.MAX_SAFE_INTEGER,
+          ));
+    }
+    if (timer.types !== undefined) {
+      strictArray(timer.types, `${label}.disappearingTimer.types`, 16)
+        .forEach((item, index) => {
+          if (item !== "afterRead" && item !== "afterSend") {
+            throw new Error(`${label}.disappearingTimer.types[${index}] is unsupported`);
+          }
+        });
+    }
+  }
+  if (source.formatting !== undefined) {
+    validateCapabilityLevelMap(source.formatting, `${label}.formatting`, 256);
+  }
+  for (const key of ["messageRequest", "participantActions"] as const) {
+    if (source[key] === undefined) continue;
+    const nested = strictRecord(source[key], `${label}.${key}`);
+    const allowed = key === "messageRequest"
+      ? ["acceptWithButton", "acceptWithMessage"] as const
+      : ["ban", "invite", "kick", "leave", "revokeInvite"] as const;
+    exactKeys(nested, [], allowed, `${label}.${key}`);
+    for (const field of allowed) {
+      if (nested[field] !== undefined) {
+        validateCapabilityLevel(nested[field], `${label}.${key}.${field}`);
+      }
+    }
+  }
+  if (source.state !== undefined) {
+    const state = strictRecord(source.state, `${label}.state`);
+    exactKeys(state, [], ["avatar", "description", "disappearingTimer", "title"], `${label}.state`);
+    for (const key of ["avatar", "description", "disappearingTimer", "title"] as const) {
+      if (state[key] === undefined) continue;
+      const item = strictRecord(state[key], `${label}.state.${key}`);
+      exactKeys(item, ["level"], [], `${label}.state.${key}`);
+      validateCapabilityLevel(item.level, `${label}.state.${key}.level`);
+    }
+  }
+}
+
+function validateChatDraft(value: unknown, label: string): void {
+  const source = strictRecord(value, label);
+  exactKeys(source, ["text"], ["attachments"], label);
+  boundedString(source.text, `${label}.text`, MAX_TEXT_BYTES, true, true);
+  if (source.attachments === undefined) return;
+  const attachments = strictRecord(source.attachments, `${label}.attachments`);
+  const entries = Object.entries(attachments);
+  if (entries.length > 256) throw new Error(`${label}.attachments contains too many entries`);
+  for (const [key, item] of entries) {
+    boundedString(key, `${label}.attachments key`, 2_048);
+    const attachment = strictRecord(item, `${label}.attachments.${key}`);
+    exactKeys(attachment, ["id", "type"], [
+      "audioDurationSeconds",
+      "fileName",
+      "filePath",
+      "fileSize",
+      "mimeType",
+      "size",
+      "stickerID",
+    ], `${label}.attachments.${key}`);
+    boundedString(attachment.id, `${label}.attachments.${key}.id`, 2_048);
+    if (
+      attachment.type !== "file"
+      && attachment.type !== "gif"
+      && attachment.type !== "recorded_audio"
+    ) throw new Error(`${label}.attachments.${key}.type is unsupported`);
+    if (attachment.audioDurationSeconds !== undefined) {
+      finiteNumber(
+        attachment.audioDurationSeconds,
+        `${label}.attachments.${key}.audioDurationSeconds`,
+        0,
+        31_536_000,
+      );
+    }
+    nullableString(attachment.fileName, `${label}.attachments.${key}.fileName`, 4_096);
+    nullableString(attachment.filePath, `${label}.attachments.${key}.filePath`, 16_384);
+    if (attachment.fileSize !== undefined) {
+      integer(
+        attachment.fileSize,
+        `${label}.attachments.${key}.fileSize`,
+        0,
+        Number.MAX_SAFE_INTEGER,
+      );
+    }
+    nullableString(attachment.mimeType, `${label}.attachments.${key}.mimeType`, 256);
+    nullableString(attachment.stickerID, `${label}.attachments.${key}.stickerID`, 2_048);
+    if (attachment.size !== undefined && attachment.size !== null) {
+      const size = strictRecord(attachment.size, `${label}.attachments.${key}.size`);
+      exactKeys(size, [], ["height", "width"], `${label}.attachments.${key}.size`);
+      optionalInteger(size.height, `${label}.attachments.${key}.size.height`, 0, 1_000_000);
+      optionalInteger(size.width, `${label}.attachments.${key}.size.width`, 0, 1_000_000);
+    }
+  }
+}
+
+function validateChatReminder(value: unknown, label: string): void {
+  const source = strictRecord(value, label);
+  exactKeys(source, [], ["dismissOnIncomingMessage", "remindAt"], label);
+  if (source.dismissOnIncomingMessage !== undefined) {
+    requiredBoolean(source.dismissOnIncomingMessage, `${label}.dismissOnIncomingMessage`);
+  }
+  if (source.remindAt !== undefined) timestamp(source.remindAt, `${label}.remindAt`);
+}
+
+function validateChatSnooze(value: unknown, label: string): void {
+  const source = strictRecord(value, label);
+  exactKeys(source, [], ["snoozeUntil", "userSnoozedAt"], label);
+  if (source.snoozeUntil !== undefined) timestamp(source.snoozeUntil, `${label}.snoozeUntil`);
+  if (source.userSnoozedAt !== undefined) timestamp(source.userSnoozedAt, `${label}.userSnoozedAt`);
+}
+
+function parseSearchedConversation(
+  value: unknown,
+  label: string,
+  accountIds: ReadonlySet<string>,
+  expectedAccountId: string | null,
+): BeeperConversationProjection {
+  const conversation = parseConversation(value, label, accountIds, expectedAccountId);
+  const source = strictRecord(value, label);
+  if (source.capabilities !== undefined) {
+    validateChatCapabilities(source.capabilities, `${label}.capabilities`);
+  }
+  if (source.draft !== undefined && source.draft !== null) {
+    validateChatDraft(source.draft, `${label}.draft`);
+  }
+  if (source.preview !== undefined) {
+    const preview = strictRecord(source.preview, `${label}.preview`);
+    parseMessage(
+      Object.hasOwn(preview, "isSender")
+        ? preview
+        : Object.freeze({ ...preview, isSender: false }),
+      `${label}.preview`,
+      Object.freeze({
+        accountId: conversation.accountId,
+        conversationId: conversation.id,
+        beforeCursor: null,
+        afterCursor: null,
+        limit: 1,
+      }),
+    );
+  }
+  if (source.reminder !== undefined && source.reminder !== null) {
+    validateChatReminder(source.reminder, `${label}.reminder`);
+  }
+  if (source.snooze !== undefined && source.snooze !== null) {
+    validateChatSnooze(source.snooze, `${label}.snooze`);
+  }
+  const participants = conversation.participants;
+  const participantIds = participants.items.map(({ id }) => id);
+  if (new Set(participantIds).size !== participantIds.length) {
+    throw new Error(`${label}.participants repeated a stable user ID`);
+  }
+  if (
+    participants.items.length > participants.total
+    || participants.hasMore !== (participants.items.length < participants.total)
+  ) {
+    throw new Error(`${label}.participants completeness evidence is inconsistent`);
+  }
+  if (participants.items.filter(({ isSelf }) => isSelf === true).length > 1) {
+    throw new Error(`${label}.participants contains ambiguous self ownership`);
+  }
+  return conversation;
 }
 
 export function parseBeeperExportMessages(
@@ -1509,7 +1860,10 @@ function contactOutput(
     ...contact.user,
     ...unavailableContactStats(),
   }));
-  const limitReached = contacts.length === input.limit;
+  if (contacts.length > input.limit) {
+    throw new Error("Beeper contacts exceeded the requested result bound");
+  }
+  const requestedLimitReached = contacts.length >= input.limit;
   return Object.freeze({
     provider: "beeper",
     operation: "contacts.list",
@@ -1519,11 +1873,14 @@ function contactOutput(
     requestedAccountId: accountId,
     contacts: Object.freeze(contacts),
     completeness: Object.freeze({
-      localPageComplete: !limitReached,
+      localPageComplete: false,
+      resultWindowComplete: false,
       remoteContactSetComplete: false,
-      limitReached,
+      continuationAvailable: false,
+      requestedLimitReached,
       warnings: Object.freeze([
-        "beeper-contact-pagination-cursor-not-exposed-by-cli-v0.6.2",
+        "beeper-cli-v0.6.2-contact-result-window-has-no-continuation",
+        "beeper-cli-v0.6.2-may-cap-results-below-the-requested-limit",
         "provider-history-coverage-varies-by-connected-account",
       ]),
     }),
@@ -1548,9 +1905,12 @@ function conversationOutput(
       accountIds,
       accountId,
     ));
+  if (conversations.length > input.limit) {
+    throw new Error("Beeper conversations exceeded the requested result bound");
+  }
   const ids = conversations.map((conversation) => `${conversation.accountId}\0${conversation.id}`);
   if (new Set(ids).size !== ids.length) throw new Error("Beeper conversations repeat an account-scoped ID");
-  const limitReached = conversations.length === input.limit;
+  const requestedLimitReached = conversations.length >= input.limit;
   return Object.freeze({
     provider: "beeper",
     operation: "messaging.list",
@@ -1560,11 +1920,149 @@ function conversationOutput(
     requestedAccountId: accountId,
     conversations: Object.freeze(conversations),
     completeness: Object.freeze({
-      localPageComplete: !limitReached,
+      localPageComplete: false,
+      resultWindowComplete: false,
       remoteConversationSetComplete: false,
-      limitReached,
+      continuationAvailable: false,
+      requestedLimitReached,
       warnings: Object.freeze([
-        "beeper-chat-pagination-cursor-not-exposed-by-cli-v0.6.2",
+        "beeper-cli-v0.6.2-chat-result-window-has-no-continuation",
+        "newly-connected-accounts-may-have-incomplete-history",
+      ]),
+    }),
+  });
+}
+
+function requestedAccount(
+  accounts: readonly BeeperAccountProjection[],
+  accountId: string | null,
+  operation: string,
+): ReadonlyMap<string, BeeperAccountProjection> {
+  const byId = new Map(accounts.map((account) => [account.accountId, account]));
+  if (accountId !== null && !byId.has(accountId)) {
+    throw new Error(`${operation} requested an account outside the bound Beeper realm`);
+  }
+  return byId;
+}
+
+function contactSearchOutput(
+  accounts: readonly BeeperAccountProjection[],
+  subject: string,
+  input: BeeperContactsSearchInput,
+  raw: unknown,
+) {
+  const byAccountId = requestedAccount(
+    accounts,
+    input.accountId,
+    "contacts.search",
+  );
+  const accountIds = new Set(byAccountId.keys());
+  const contacts = parseContacts(raw, accountIds, input.accountId).map((contact) => {
+    const account = byAccountId.get(contact.accountId);
+    if (account === undefined) {
+      throw new Error("contacts.search result escaped the bound Beeper realm");
+    }
+    return Object.freeze({
+      accountId: contact.accountId,
+      network: account.network,
+      id: contact.user.id,
+      fullName: contact.user.fullName,
+      username: contact.user.username,
+      isSelf: contact.user.isSelf,
+    });
+  });
+  if (contacts.length > input.limit) {
+    throw new Error("Beeper contact search exceeded the requested result bound");
+  }
+  const ids = contacts.map((contact) => `${contact.accountId}\0${contact.id}`);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error("Beeper contact search repeated an account-scoped identity");
+  }
+  return Object.freeze({
+    provider: "beeper",
+    operation: "contacts.search",
+    accountSubject: subject,
+    projection: "bounded-local-desktop-search",
+    requestedAccountId: input.accountId,
+    query: input.query,
+    searchSemantics: "provider-fuzzy-candidates",
+    contacts: Object.freeze(contacts),
+    completeness: Object.freeze({
+      resultWindowComplete: false,
+      remoteContactSetComplete: false,
+      continuationAvailable: false,
+      requestedLimitReached: contacts.length >= input.limit,
+      warnings: Object.freeze([
+        "beeper-cli-v0.6.2-search-results-are-fuzzy-candidates",
+        "beeper-cli-v0.6.2-contact-search-result-window-has-no-continuation",
+        "provider-history-coverage-varies-by-connected-account",
+      ]),
+    }),
+  });
+}
+
+function messagingSearchOutput(
+  accounts: readonly BeeperAccountProjection[],
+  subject: string,
+  input: BeeperMessagingSearchInput,
+  raw: unknown,
+) {
+  const byAccountId = requestedAccount(
+    accounts,
+    input.accountId,
+    "messaging.search",
+  );
+  const accountIds = new Set(byAccountId.keys());
+  const parsed = strictArray(raw, "Beeper searched conversations", MAX_CHATS)
+    .map((item, index) => parseSearchedConversation(
+      item,
+      `Beeper searched conversations[${index}]`,
+      accountIds,
+      input.accountId,
+    ));
+  if (parsed.length > input.limit) {
+    throw new Error("Beeper conversation search exceeded the requested result bound");
+  }
+  const ids = parsed.map((conversation) => `${conversation.accountId}\0${conversation.id}`);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error("Beeper conversation search repeated an account-scoped ID");
+  }
+  const conversations = parsed.map((conversation) => Object.freeze({
+    id: conversation.id,
+    accountId: conversation.accountId,
+    network: conversation.network,
+    title: conversation.title,
+    type: conversation.type,
+    direct: conversation.type === "single",
+    participants: Object.freeze({
+      items: Object.freeze(conversation.participants.items.map((participant) =>
+        Object.freeze({
+          id: participant.id,
+          fullName: participant.fullName,
+          username: participant.username,
+          isSelf: participant.isSelf,
+        }))),
+      total: conversation.participants.total,
+      hasMore: conversation.participants.hasMore,
+    }),
+  }));
+  return Object.freeze({
+    provider: "beeper",
+    operation: "messaging.search",
+    accountSubject: subject,
+    projection: "bounded-local-desktop-search",
+    requestedAccountId: input.accountId,
+    query: input.query,
+    searchSemantics: "provider-fuzzy-candidates",
+    conversations: Object.freeze(conversations),
+    completeness: Object.freeze({
+      resultWindowComplete: false,
+      remoteConversationSetComplete: false,
+      continuationAvailable: false,
+      requestedLimitReached: conversations.length >= input.limit,
+      warnings: Object.freeze([
+        "beeper-cli-v0.6.2-search-results-are-fuzzy-candidates",
+        "beeper-cli-v0.6.2-chat-search-result-window-has-no-continuation",
         "newly-connected-accounts-may-have-incomplete-history",
       ]),
     }),
@@ -1670,9 +2168,23 @@ export async function executeBeeperLocalOperation(
         const raw = await run(planBeeperReadCommand(action, input, recipe.timeoutMs));
         const output = action === "contacts.list"
           ? contactOutput(accounts, subject, input, raw)
-          : action === "messaging.list"
-            ? conversationOutput(accounts, subject, input, raw)
-            : messageOutput(accounts, subject, input as BeeperMessagingReadInput, raw);
+          : action === "contacts.search"
+            ? contactSearchOutput(
+              accounts,
+              subject,
+              input as BeeperContactsSearchInput,
+              raw,
+            )
+            : action === "messaging.list"
+              ? conversationOutput(accounts, subject, input, raw)
+              : action === "messaging.search"
+                ? messagingSearchOutput(
+                  accounts,
+                  subject,
+                  input as BeeperMessagingSearchInput,
+                  raw,
+                )
+                : messageOutput(accounts, subject, input as BeeperMessagingReadInput, raw);
         const encoded = Buffer.from(JSON.stringify(output), "utf8");
         if (encoded.byteLength > recipe.maxOutputBytes) {
           throw new Error("Beeper local projection exceeded the reviewed output bound");

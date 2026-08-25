@@ -41,7 +41,7 @@ const unavailableInstagramContactStatsProjection = projectContactDirectionStats(
 
 export const META_WEB_OPERATION_NAMES = Object.freeze({
   instagram: Object.freeze([
-    "comments.create", "comments.read", "contacts.list", "content.edit", "content.save", "content.share",
+    "comments.create", "comments.read", "contacts.list", "content.delete", "content.edit", "content.save", "content.share",
     "feeds.read", "likes.set", "media.publish", "media.read", "messaging.list",
     "messaging.read", "messaging.send", "posts.read", "posts.repost", "profiles.read", "reactions.set",
     "relationships.follow.set", "replies.create",
@@ -196,6 +196,16 @@ export const META_WEB_OPERATIONS = Object.freeze({
     "messaging.send": captureRequired(
       "messaging.send",
       "Instagram messaging is split across Direct, LS/Msys, and E2EE transports; plaintext replay is prohibited",
+    ),
+    "media.publish": captureRequired(
+      "media.publish",
+      "one exact plan-bound MP4 and JPEG cover can reach one configure POST, but the observed first response was 202 without an accepted target; no safe retry or independent upload-ID reconciliation contract is proven",
+      3,
+    ),
+    "content.delete": observedMutation(
+      "R3",
+      "two exact authored-video pre-reads bind actor, caption, kind, full media ID, and shortcode before one delete POST; did_delete acknowledgement and the exact authenticated soft-200 removal marker verify deletion",
+      2,
     ),
     "profiles.read": observed(
       "live direct target-bound /api/v1/users/web_profile_info JSON with exact current-viewer ID binding and exact follower, following, and post counts",

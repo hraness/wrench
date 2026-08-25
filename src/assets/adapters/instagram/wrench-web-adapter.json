@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "instagram-web",
-  "version": "1.3.0",
+  "version": "1.6.0",
   "displayName": "Instagram (Authenticated Web API)",
   "surfaceId": "instagram",
   "origins": [
@@ -143,6 +143,48 @@
         "maxOutputBytes": 8388608
       }
     },
+    "content.delete": {
+      "description": "Observed contract: remove one exact current-account Instagram video after two exact media-info pre-reads bind its full ID, shortcode, actor, expected caption, and video kind; verify the did_delete response and exact authenticated soft-200 removal marker.",
+      "risk": "R3",
+      "sideEffect": "Removes the exact confirmed Instagram video from the authenticated account's profile and public permalink; no physical-erasure guarantee is made.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 2592000000,
+      "input": {
+        "properties": {
+          "media_id": {
+            "type": "string",
+            "description": "Exact full Instagram media ID (<media-pk>_<viewer-id>)",
+            "minLength": 1,
+            "maxLength": 65
+          },
+          "expected_caption": {
+            "type": "string",
+            "description": "Exact current caption used for pre-delete confirmation",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "expected_media_kind": {
+            "type": "string",
+            "description": "Exact current media kind used for pre-delete confirmation",
+            "enum": [
+              "video"
+            ]
+          }
+        },
+        "required": [
+          "media_id",
+          "expected_caption",
+          "expected_media_kind"
+        ]
+      },
+      "webSession": {
+        "site": "instagram",
+        "action": "content.delete",
+        "contractVersion": 2,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
     "content.save": {
       "description": "Capture-required contract reservation: the exact actor, target, mutation response, and independent desired-state readback require an authorized fixture.",
       "risk": "R2",
@@ -277,28 +319,32 @@
       }
     },
     "media.publish": {
-      "description": "Capture-required contract reservation: publish one exact JPEG, PNG, WebP, MP4, or QuickTime item only after actor, audience, attachment transport, processing, dispatch response, and independent publication readback are reviewed with an authorized fixture.",
+      "description": "Capture-required contract reservation: bind one exact stable MP4 plus one exact plan-bound JPEG cover for the captured video-then-cover uploads, but do not dispatch until the observed first configure 202 can be reconciled without repeating the configure POST.",
       "risk": "R3",
-      "sideEffect": "Changes remote instagram state only after exact preview confirmation and reviewed dispatch.",
+      "sideEffect": "Publishes one exact MP4 video with the confirmed caption to the authenticated Instagram account.",
       "idempotency": "local-at-most-once",
       "dedupeWindowMs": 86400000,
       "input": {
         "properties": {
           "media": {
             "type": "file",
-            "description": "Exact media file",
-            "maxBytes": 1073741824,
+            "description": "Exact plan-bound MP4 video",
+            "maxBytes": 134217728,
             "mediaTypes": [
-              "image/jpeg",
-              "image/png",
-              "image/webp",
-              "video/mp4",
-              "video/quicktime"
+              "video/mp4"
+            ]
+          },
+          "thumbnail": {
+            "type": "file",
+            "description": "Exact plan-bound JPEG thumbnail",
+            "maxBytes": 8388608,
+            "mediaTypes": [
+              "image/jpeg"
             ]
           },
           "caption": {
             "type": "string",
-            "description": "Optional media caption",
+            "description": "Exact non-empty video caption",
             "minLength": 1,
             "maxLength": 1000
           },
@@ -312,13 +358,15 @@
         },
         "required": [
           "media",
+          "thumbnail",
+          "caption",
           "audience"
         ]
       },
       "webSession": {
         "site": "instagram",
         "action": "media.publish",
-        "contractVersion": 1,
+        "contractVersion": 3,
         "timeoutMs": 600000,
         "maxOutputBytes": 8388608
       }

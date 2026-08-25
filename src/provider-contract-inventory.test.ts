@@ -4,22 +4,22 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "8faea4bfd80c8f4a6a6ebdd453a1ce7ac4018f98989b20fc62429c77120ab658";
+  "482ec20d29414e4200a2fb8d63a6a6e822262a052352dd1534d96af985b6256a";
 const predecessorLegacyInventorySha256 = [
-  "3a93d4561bafcf7aff2d11fe4557c910480f64ca7ca1c118f4687df0b60788c3",
-  "8dfab9b00519b25f51408563f4d3e72fc5be1b5ea6e27eca19550d6ea1f21e41",
-  "9e638e1bf728130f46d6fd4e5421ffc21f6dc11e864634c15f8a231c4df5e0d0",
-  "e02128e3f1fd906dc8ef37d370eb60aec316fee00208d3486b0ad6870d58f620",
-  "c0246bf5ae8df9d632176216ed4a00879233e8b421d2adfc7c5b77902de54f7b",
-  "74d1f8fbdcb05a000b21aafe5c74462224354b4544322751757e8e597f61c1b7",
-  "968c3fa6845549731db7df26d31a098d0d1d2df47ae9d86042531191d5f5dfd2",
-  "690d083413be239249da53f38be004a9ffdb2cd31a862a92f749c688a74261b3",
-  "9707875cde9b23a8600d8d86dbc13df634585d458f6071b63a9da961f7620c73",
-  "a4c7ccb37d286c55ff83b17614fbecd31f9f34d921d5487b92624a91af0f7f95",
-  "175b20407f193d0fb413f651e7b92db4acf3e4794fd76f5247e699a38fde9b24",
-  "7dd48dd60e8c9b5e2c609409bf33d0e8ebbc62d8c2c500d7ea25c83bbfbbc48e",
-  "9fbec27b0fc78e6881092336d5c18501125c9c9cd7c123d8258ac99bb374f217",
-  "f9f0feaf7f6bd5a11df12421e7517e44365238ba1508faa707ab24f60bc2558f",
+  "ba95f351013ac01031f8a2af335547ca03a66572ec3280cc0131542fbd9409d3",
+  "1172e654dc75103138890898c01be77f72506aa2f843086d61d4cddc3f7b2e9e",
+  "a4ab91f56b7470d8a58bd57d1107a1c52f74460be6497f10f54be2dc74a945f3",
+  "ddc0cda46b7d241ee22b49b60d08d983b2cb6038229a4d7a42391a55e0cc5798",
+  "8f1e13a36cb3e3b40c5865bbbad766a585c7607328b8d5aa1fb3b0365141c41b",
+  "dac913ed7113a2bfbb8f22ff4559106f7449b9b28269787e043bbd92f66395d1",
+  "c2819cec7ce8742298e419008d04a55481b9d34235c019404035d403af10d3ca",
+  "6658d53bb5890c3dea9c7e2c6985876fb04c2c5e286b5fed0b49fce4523a4fe8",
+  "816053f54ce88d4c08f605903f414d096630ed386feca8bb5c87d8c60f0cb1fc",
+  "954015a0e5c00dfa8dd51972fec2aa0dd884cf1346d74dcc9abe4b69d8bfd88b",
+  "572edee59ca1acae13d68bd545dc14dcf1ee7d5819fa1e5e340f8d35ec1ea0a1",
+  "24d0497433ba37860c749b66552e6f02e23a4f2935e84d801875eff20fd544c0",
+  "22a3314de80e521127d24f028274592a6c14038c9df0d498043e1b6db5f27d9a",
+  "5df01769a47b42db0079844e82e2cf2eae5b1910c72828ffa11f3eaa4923deac",
   "ced281b781c1f73af8315245a68dfb5ea9fee9f737671e18fe1cd3ee5015ed20",
   "25bb7f467fd40e044764c82de8be108405ec66e275a5c02d0682bd1ee058b4f8",
   "5e0b6f9d4265074dee0b125772f39ac8457bb4b5db703dee1e4457d30828fef0",
@@ -74,19 +74,30 @@ function legacyHash(contract, implementationHash, web) {
     .update(implementationHash)
     .digest("hex");
 }
+function isCurrentOnlyRow(row) {
+  return (row[0] === "provider-api" && row[1] === "gmail")
+    || (row[0] === "linked-device" && row[1] === "beeper")
+    || (row[0] === "web-session-api" && row[1] === "github");
+}
 function appendCurrentRow(row) {
-  if ((row[0] === "provider-api" && row[1] === "gmail")
-    || (row[0] === "linked-device" && row[1] === "beeper")) {
+  if (isCurrentOnlyRow(row)) {
+    // Routes introduced after the predecessor inventory keep their own
+    // reader aliases without rewriting that historical baseline.
     currentOnlyRows.push(row);
-    return;
+    return false;
   }
   rows.push(row);
+  return true;
 }
 for (const plugin of registry.list()) {
   for (const binding of plugin.bindings) {
     for (const operation of binding.operations) {
         for (const contractVersion of operation.contractVersions) {
-          const legacyImplementations = registry.legacyContractImplementationHashes(binding);
+          const legacyImplementations = registry.legacyContractImplementationHashes(
+            binding,
+            operation.name,
+            contractVersion,
+          );
           if (binding.transport === "provider-api") {
           const contract = providerContracts.getProviderContract({
             provider: binding.surfaceId,
@@ -95,14 +106,16 @@ for (const plugin of registry.list()) {
             timeoutMs: 30_000,
             maxOutputBytes: 1024 * 1024,
           }, registry);
-          appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
+          const includePredecessorInventory = appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
             providerContracts.providerContractHash(contract, registry)]);
-          legacyImplementations.forEach((implementationHash, index) => {
-            const hash = legacyHash(contract, implementationHash, false);
-            legacyRows[index] ??= [];
-            legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
-            acceptedLegacy &&= providerContracts.isCompatibleProviderContractHash(contract, hash, registry);
-          });
+          if (includePredecessorInventory) {
+            legacyImplementations.forEach((implementationHash, index) => {
+              const hash = legacyHash(contract, implementationHash, false);
+              legacyRows[index] ??= [];
+              legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
+              acceptedLegacy &&= providerContracts.isCompatibleProviderContractHash(contract, hash, registry);
+            });
+          }
           rejectedUnknown &&= !providerContracts.isCompatibleProviderContractHash(
             contract, "f".repeat(64), registry,
           );
@@ -114,14 +127,16 @@ for (const plugin of registry.list()) {
             timeoutMs: 60_000,
             maxOutputBytes: 2 * 1024 * 1024,
           }, registry);
-          appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
+          const includePredecessorInventory = appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
             webContracts.webSessionContractHash(contract, registry)]);
-          legacyImplementations.forEach((implementationHash, index) => {
-            const hash = legacyHash(contract, implementationHash, true);
-            legacyRows[index] ??= [];
-            legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
-            acceptedLegacy &&= webContracts.isCompatibleWebSessionContractHash(contract, hash, registry);
-          });
+          if (includePredecessorInventory) {
+            legacyImplementations.forEach((implementationHash, index) => {
+              const hash = legacyHash(contract, implementationHash, true);
+              legacyRows[index] ??= [];
+              legacyRows[index].push([binding.transport, binding.surfaceId, operation.name, contractVersion, hash]);
+              acceptedLegacy &&= webContracts.isCompatibleWebSessionContractHash(contract, hash, registry);
+            });
+          }
           rejectedUnknown &&= !webContracts.isCompatibleWebSessionContractHash(
             contract, "f".repeat(64), registry,
           );
@@ -131,6 +146,7 @@ for (const plugin of registry.list()) {
   }
 }
 const predecessorRouteOrder = [
+  ["linked-device", "beeper"],
   ["linked-device", "whatsapp"],
   ["provider-api", "linkedin"],
   ["provider-api", "x"],
@@ -184,54 +200,60 @@ process.stdout.write(JSON.stringify({
 }));
 `;
 
-function inventoryForNodeEnv(nodeEnv: string | undefined): unknown {
+async function inventoryForNodeEnv(nodeEnv: string | undefined): Promise<unknown> {
   const environment = { ...process.env };
   if (nodeEnv === undefined) delete environment.NODE_ENV;
   else environment.NODE_ENV = nodeEnv;
-  const result = Bun.spawnSync({
+  const result = Bun.spawn({
     cmd: [process.execPath, "-e", inventoryProgram],
     cwd: join(import.meta.dir, ".."),
     env: environment,
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (result.exitCode !== 0) {
+  const [exitCode, stdout, stderr] = await Promise.all([
+    result.exited,
+    new Response(result.stdout).text(),
+    new Response(result.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
     throw new Error(
-      `contract inventory child failed for NODE_ENV=${nodeEnv ?? "<unset>"}: ${result.stderr.toString()}`,
+      `contract inventory child failed for NODE_ENV=${nodeEnv ?? "<unset>"}: ${stderr}`,
     );
   }
-  return JSON.parse(result.stdout.toString());
+  return JSON.parse(stdout);
 }
 
 describe("durable provider contract inventory", () => {
-  test("preserves every predecessor writer identity across execution modes", () => {
-    for (const nodeEnv of [
+  test("preserves every predecessor writer identity across execution modes", async () => {
+    const inventories = await Promise.all([
       undefined,
       "test",
       "production",
       "development",
       "staging",
-    ] as const) {
-      expect(inventoryForNodeEnv(nodeEnv)).toEqual({
-        rows: 308,
+    ].map((nodeEnv) => inventoryForNodeEnv(nodeEnv)));
+    for (const inventory of inventories) {
+      expect(inventory).toEqual({
+        rows: 317,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 7,
-        currentOnlySha256: "ee4f714b977e75d55f85d41582267eb61b5eed6eb60ed1272739541aa3191c1a",
+        currentOnlyRows: 11,
+        currentOnlySha256: "78bba7333ba77fe76a2812d70864542b70f64beac2166e8725c51a15d6d26fd4",
         legacyRows: [
-          308,
-          308,
-          308,
-          308,
-          308,
-          308,
-          308,
-          175,
-          161,
-          161,
-          161,
-          23,
-          23,
-          23,
+          317,
+          317,
+          317,
+          317,
+          317,
+          317,
+          317,
+          226,
+          226,
+          226,
+          185,
+          164,
+          144,
+          144,
           23,
           23,
           23,
