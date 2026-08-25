@@ -339,10 +339,19 @@ describe("authenticated web-session contract identity", () => {
       });
     }
     const github = providerPluginRegistry.requireSessionRoute("github");
-    expect(providerPluginRegistry.legacyContractImplementationHashes(github)
+    expect(providerPluginRegistry.legacyContractImplementationHashes(
+      github,
+      "profiles.read",
+      1,
+    )
       .map((value) => value.toString("hex"))).toEqual([
       "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
     ]);
+    expect(providerPluginRegistry.legacyContractImplementationHashes(
+      github,
+      "organizations.read",
+      1,
+    )).toEqual([]);
   });
 
   test("keeps every Marketplace mutation capture-required", () => {

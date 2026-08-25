@@ -112,6 +112,8 @@ export type ProviderPluginRegistry = {
   /** Bounded predecessor common-mode identities accepted only by durable readers. */
   readonly legacyContractImplementationHashes: (
     binding: ProviderPluginBindingV1,
+    operation: string,
+    contractVersion: number,
   ) => readonly Buffer[];
   /** Environment-independent exact current source/dependency closure identity. */
   readonly implementationClosureHash: (
@@ -2989,19 +2991,34 @@ function createProviderPluginRegistryInternal(
   };
   const legacyContractImplementationHashes = (
     binding: ProviderPluginBindingV1,
+    operation: string,
+    contractVersion: number,
   ): readonly Buffer[] => {
     const plugin = ownerByBinding.get(binding);
     if (plugin === undefined) {
       throw new Error("provider plugin binding is not registered");
     }
+    if (!binding.operations.some((candidate) =>
+      candidate.name === operation && candidate.contractVersions.includes(contractVersion)
+    )) {
+      throw new Error(
+        `provider plugin ${plugin.id} does not own operation ${operation}@${contractVersion}`,
+      );
+    }
     if (plugin.sourceKind !== "built-in") return Object.freeze([]);
-    const legacy = reviewedBuiltInContractIdentity(plugin.id, plugin.version)
-      .legacyReadImplementationSha256;
-    const e71Legacy = reviewedBuiltInContractIdentity(plugin.id, plugin.version)
-      .legacyE71ReadImplementationSha256;
-    const currentLegacy = reviewedBuiltInContractIdentity(plugin.id, plugin.version)
-      .legacyCurrentReadImplementationSha256;
-    if (legacy === null && e71Legacy === null && currentLegacy.length === 0) {
+    const identity = reviewedBuiltInContractIdentity(plugin.id, plugin.version);
+    const legacy = identity.legacyReadImplementationSha256;
+    const e71Legacy = identity.legacyE71ReadImplementationSha256;
+    const currentLegacy = identity.legacyCurrentReadImplementationSha256;
+    const routeLegacy = identity.legacyRouteReadImplementationSha256?.[
+      `${operation}@${contractVersion}`
+    ] ?? [];
+    if (
+      legacy === null
+      && e71Legacy === null
+      && currentLegacy.length === 0
+      && routeLegacy.length === 0
+    ) {
       return Object.freeze([]);
     }
     if (legacy === null || e71Legacy === null) {
@@ -3010,7 +3027,8 @@ function createProviderPluginRegistryInternal(
           `built-in provider plugin ${plugin.id}@${plugin.version} has an incomplete legacy contract identity`,
         );
       }
-      return Object.freeze(currentLegacy.map((value) => Buffer.from(value, "hex")));
+      return Object.freeze([...currentLegacy, ...routeLegacy]
+        .map((value) => Buffer.from(value, "hex")));
     }
     return Object.freeze([
       Buffer.from(legacy.test, "hex"),
@@ -3021,6 +3039,7 @@ function createProviderPluginRegistryInternal(
       Buffer.from(e71Legacy.production, "hex"),
       Buffer.from(e71Legacy.development, "hex"),
       ...currentLegacy.map((value) => Buffer.from(value, "hex")),
+      ...routeLegacy.map((value) => Buffer.from(value, "hex")),
     ]);
   };
   const implementationClosureHash = (

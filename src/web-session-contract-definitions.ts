@@ -402,7 +402,9 @@ const REDDIT_WEB_OPERATIONS = operationPolicies("reddit", [
 });
 const BEEPER_LOCAL_OPERATIONS = operationPolicies("beeper", [
   "contacts.list",
+  "contacts.search",
   "messaging.list",
+  "messaging.search",
   "messaging.read",
 ]);
 const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
@@ -677,7 +679,9 @@ const whatsapp = {
 
 const beeper = {
   "contacts.list": contract("beeper", "contacts.list", BEEPER_LOCAL_OPERATIONS["contacts.list"].risk, BEEPER_LOCAL_OPERATIONS["contacts.list"].state, BEEPER_LOCAL_OPERATIONS["contacts.list"].reason),
+  "contacts.search": contract("beeper", "contacts.search", BEEPER_LOCAL_OPERATIONS["contacts.search"].risk, BEEPER_LOCAL_OPERATIONS["contacts.search"].state, BEEPER_LOCAL_OPERATIONS["contacts.search"].reason),
   "messaging.list": contract("beeper", "messaging.list", BEEPER_LOCAL_OPERATIONS["messaging.list"].risk, BEEPER_LOCAL_OPERATIONS["messaging.list"].state, BEEPER_LOCAL_OPERATIONS["messaging.list"].reason),
+  "messaging.search": contract("beeper", "messaging.search", BEEPER_LOCAL_OPERATIONS["messaging.search"].risk, BEEPER_LOCAL_OPERATIONS["messaging.search"].state, BEEPER_LOCAL_OPERATIONS["messaging.search"].reason),
   "messaging.read": contract("beeper", "messaging.read", BEEPER_LOCAL_OPERATIONS["messaging.read"].risk, BEEPER_LOCAL_OPERATIONS["messaging.read"].state, BEEPER_LOCAL_OPERATIONS["messaging.read"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 

@@ -218,7 +218,11 @@ export function isCompatibleProviderContractHash(
     action: contract.operation,
     contractVersion: contract.contractVersion,
   }, registry);
-  return registry.legacyContractImplementationHashes(binding).some(
+  return registry.legacyContractImplementationHashes(
+    binding,
+    contract.operation,
+    contract.contractVersion,
+  ).some(
     (implementationHash) =>
       createHash("sha256")
         .update(stableJson(contract))

@@ -266,7 +266,8 @@ describe("provider plugin definition and registry", () => {
     if (binding === undefined) throw new Error("Gmail provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
       .toBe("821e81dcd0d09756253ace93bece4b906c9fca3f1ab27adcbf0108a3fb0f6702");
-    expect(providerPluginRegistry.legacyContractImplementationHashes(binding)).toEqual([]);
+    expect(providerPluginRegistry.legacyContractImplementationHashes(binding, "contacts.list", 5))
+      .toEqual([]);
   });
 
   test("retains a distinct prior current implementation without replacing e71 readers", () => {
@@ -276,10 +277,10 @@ describe("provider plugin definition and registry", () => {
     if (binding === undefined) throw new Error("Meta provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
       .toBe("cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b");
-    expect(providerPluginRegistry.legacyContractImplementationHashes(binding)
+    expect(providerPluginRegistry.legacyContractImplementationHashes(binding, "contacts.list", 1)
       .map((hash) => hash.toString("hex")))
       .toContain("8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101");
-    const readers = providerPluginRegistry.legacyContractImplementationHashes(binding)
+    const readers = providerPluginRegistry.legacyContractImplementationHashes(binding, "contacts.list", 1)
       .map((value) => value.toString("hex"));
     expect(readers).toContain(
       "5690d4ba2d37bce7aed32f12a44a2ed6066cb01c319674d37521f011122c9da7",

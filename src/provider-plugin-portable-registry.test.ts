@@ -189,7 +189,7 @@ describe("portable provider plugin registry identity", () => {
       .toBe(fixture.package.bundleSha256);
     expect(registry.implementationClosureHash(resolution.binding))
       .toBe(fixture.package.bundleSha256);
-    expect(registry.legacyContractImplementationHashes(resolution.binding))
+    expect(registry.legacyContractImplementationHashes(resolution.binding, "profiles.read", 1))
       .toEqual([]);
   });
 

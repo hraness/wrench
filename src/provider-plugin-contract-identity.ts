@@ -5,6 +5,10 @@ export interface ReviewedBuiltInContractIdentityV1 {
   readonly implementationSha256: string;
   /** Exact later current-distribution writer identities accepted only by readers. */
   readonly legacyCurrentReadImplementationSha256: readonly string[];
+  /** Exact later writer identities accepted only for routes that existed in that distribution. */
+  readonly legacyRouteReadImplementationSha256?: Readonly<
+    Record<string, readonly string[]>
+  >;
   /** Exact b64ccd66 predecessor execution identities accepted only by readers. */
   readonly legacyReadImplementationSha256: Readonly<{
     readonly test: string;
@@ -23,9 +27,20 @@ export interface ReviewedBuiltInContractIdentityV1 {
 const identities = Object.freeze({
   "beeper-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "1.0.0",
-    implementationSha256: "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+    pluginVersion: "1.1.0",
+    implementationSha256: "e1a2abc8b5dc045635768388987c664319f5f6af942d5f1138eb0a6848e60148",
     legacyCurrentReadImplementationSha256: [],
+    legacyRouteReadImplementationSha256: {
+      "contacts.list@1": [
+        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+      ],
+      "messaging.list@1": [
+        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+      ],
+      "messaging.read@1": [
+        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
+      ],
+    },
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
   },
@@ -63,9 +78,12 @@ const identities = Object.freeze({
     schemaVersion: 1,
     pluginVersion: "1.1.0",
     implementationSha256: "2764fb3c746755b2453279b5a6672f1460a139717c45e83520dfa5d9f753025a",
-    legacyCurrentReadImplementationSha256: [
-      "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
-    ],
+    legacyCurrentReadImplementationSha256: [],
+    legacyRouteReadImplementationSha256: {
+      "profiles.read@1": [
+        "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
+      ],
+    },
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
   },
@@ -295,6 +313,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MAXIMUM_LATER_CURRENT_IDENTITIES = 10;
 
 for (const [pluginId, identity] of Object.entries(identities)) {
+  const reviewedIdentity = identity as ReviewedBuiltInContractIdentityV1;
   if (!SHA256_PATTERN.test(identity.implementationSha256)) {
     throw new Error(`${pluginId} current contract identity is not one lowercase SHA-256`);
   }
@@ -325,7 +344,31 @@ for (const [pluginId, identity] of Object.entries(identities)) {
     }
     reviewedIdentities.push(value);
   }
+  for (const [operation, values] of Object.entries(
+    reviewedIdentity.legacyRouteReadImplementationSha256 ?? {},
+  )) {
+    if (!/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+@[1-9][0-9]*$/u.test(operation)) {
+      throw new Error(`${pluginId} has a malformed route-scoped reader identity`);
+    }
+    if (values.length > MAXIMUM_LATER_CURRENT_IDENTITIES) {
+      throw new Error(`${pluginId}/${operation} has too many operation-scoped reader identities`);
+    }
+    const operationValues = new Set<string>();
+    for (const value of values) {
+      if (!SHA256_PATTERN.test(value)) {
+        throw new Error(`${pluginId}/${operation} reader identity is not one lowercase SHA-256`);
+      }
+      if (reviewedIdentities.includes(value) || operationValues.has(value)) {
+        throw new Error(`${pluginId}/${operation} reader identity is duplicated`);
+      }
+      operationValues.add(value);
+    }
+    Object.freeze(values);
+  }
   Object.freeze(identity.legacyCurrentReadImplementationSha256);
+  if (reviewedIdentity.legacyRouteReadImplementationSha256 !== undefined) {
+    Object.freeze(reviewedIdentity.legacyRouteReadImplementationSha256);
+  }
   if (identity.legacyReadImplementationSha256 !== null) {
     Object.freeze(identity.legacyReadImplementationSha256);
   }

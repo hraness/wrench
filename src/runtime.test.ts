@@ -1629,7 +1629,7 @@ describe("confirmation binding and consumption", () => {
       const currentImplementationHash = providerPluginRegistry
         .contractImplementationHash(binding);
       const legacyImplementationHash = providerPluginRegistry
-        .legacyContractImplementationHashes(binding)
+        .legacyContractImplementationHashes(binding, "posts.publish", 1)
         .find((candidate) => !candidate.equals(currentImplementationHash));
       if (legacyImplementationHash === undefined) {
         throw new Error("expected a reader-compatible provider implementation hash");

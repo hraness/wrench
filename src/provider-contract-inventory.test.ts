@@ -93,7 +93,11 @@ for (const plugin of registry.list()) {
   for (const binding of plugin.bindings) {
     for (const operation of binding.operations) {
         for (const contractVersion of operation.contractVersions) {
-          const legacyImplementations = registry.legacyContractImplementationHashes(binding);
+          const legacyImplementations = registry.legacyContractImplementationHashes(
+            binding,
+            operation.name,
+            contractVersion,
+          );
           if (binding.transport === "provider-api") {
           const contract = providerContracts.getProviderContract({
             provider: binding.surfaceId,
@@ -142,6 +146,7 @@ for (const plugin of registry.list()) {
   }
 }
 const predecessorRouteOrder = [
+  ["linked-device", "beeper"],
   ["linked-device", "whatsapp"],
   ["provider-api", "linkedin"],
   ["provider-api", "x"],
@@ -232,8 +237,8 @@ describe("durable provider contract inventory", () => {
       expect(inventory).toEqual({
         rows: 317,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 9,
-        currentOnlySha256: "adc3292c16a1280f286637cc4e837378924a86d3440ffd1200b7a0dbec041265",
+        currentOnlyRows: 11,
+        currentOnlySha256: "78bba7333ba77fe76a2812d70864542b70f64beac2166e8725c51a15d6d26fd4",
         legacyRows: [
           317,
           317,

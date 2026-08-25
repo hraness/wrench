@@ -311,7 +311,7 @@ not turn missing message history into zero activity.
 | Provider | Contact collection | Directional statistics |
 | --- | --- | --- |
 | Gmail | Google People connections | Bounded Gmail message scans with explicit truncation |
-| Beeper local Desktop | One bounded account-aware page from the already-authorized local Desktop projection | Unavailable; Wrench does not scan message history while listing contacts |
+| Beeper local Desktop | One coverage-limited account-aware result window from the already-authorized local Desktop projection; the CLI exposes no continuation and may cap results below the requested limit | Unavailable; Wrench does not scan message history while listing contacts |
 | LinkedIn official API | First-degree connections with locale-selection evidence | Unavailable; the Connections API does not expose ordinary inbox history |
 | Instagram authenticated web | Unique non-viewer participants from the reviewed first Direct inbox summary page, with explicit first-page and pagination incompleteness | Unavailable until acknowledgement-free message-history paging is reviewed |
 | WhatsApp linked device | One page of the authenticated account owner's private, quiescent Whatsmeow contact store | Unavailable; Wrench does not treat a linked-device message cache as account-owned history |
@@ -354,8 +354,9 @@ and message-history completeness without weakening the linked-device boundary.
 The bundled `beeper-linked-device` source plugin reads an existing Beeper
 Desktop authorization through the official Beeper CLI 0.6.2. Wrench accepts
 only the exact pinned macOS arm64 binary, the fixed selected `desktop` target,
-and three JSON operations: `contacts.list`, `messaging.list`, and
-`messaging.read`. Every child command uses Beeper's read-only mode. The plugin
+and five JSON operations: `contacts.list`, `contacts.search`,
+`messaging.list`, `messaging.search`, and `messaging.read`. Every child command
+uses Beeper's read-only mode. The plugin
 does not expose raw API calls, targets, media downloads, sends, presence,
 pairing, sync, or other CLI commands.
 
@@ -384,12 +385,22 @@ and rejects every other executable byte sequence before reading private data.
 
 Binding hashes the stable local self-account coordinate before storing or
 printing it. The first bind or read may take longer while the pinned CLI unpacks
-its embedded payload into an operation-private cache. Read the local account
-and conversation identifiers, then request one exact conversation page:
+its embedded payload into an operation-private cache. List and search results
+are always marked incomplete because CLI 0.6.2 exposes no continuation and may
+apply a provider-defined cap below the requested limit. Search is fuzzy and
+returns candidates, not identity matches. Search output retains only stable
+identity, account, network, directness, and participant metadata; it omits
+message content and private UI state. Read the local account and conversation
+identifiers, search bounded candidates, then request one exact conversation
+page:
 
 ```sh
 wrench beeper-local messaging.list --auth beeper-main \
   --input '{"limit":100}' --json
+wrench beeper-local contacts.search --auth beeper-main \
+  --input '{"query":"Ada Fixture","limit":20}' --json
+wrench beeper-local messaging.search --auth beeper-main \
+  --input '{"query":"Ada Fixture","limit":20}' --json
 wrench beeper-local messaging.read --auth beeper-main \
   --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","limit":100}' --json
 ```

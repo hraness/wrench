@@ -146,6 +146,7 @@ describe("single-process bundled adapter generation sync", () => {
         `${adapter.id}@${baseline.manifest.version}`
       )
     )).toEqual([
+      "beeper-local@1.0.0",
       "bluesky-web@1.0.0",
       "bluesky-web@1.1.0",
       "bluesky-web@1.2.0",
