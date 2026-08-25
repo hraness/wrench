@@ -141,6 +141,7 @@ describe("local browser admission", () => {
     );
     chmodSync(controllerDirectory, 0o700);
     const startPath = join(controllerDirectory, "start");
+    const releasePath = join(controllerDirectory, "release");
     const admissionModuleUrl = pathToFileURL(
       join(import.meta.dir, "browser-admission.ts"),
     ).href;
@@ -157,21 +158,19 @@ describe("local browser admission", () => {
       writeFileSync(required("WRENCH_TEST_READY"), "ready\\n", { mode: 0o600 });
       while (!existsSync(required("WRENCH_TEST_START"))) await Bun.sleep(5);
       const admission = await acquireBrowserAdmission({
-        timeoutMs: 10_000,
+        timeoutMs: 30_000,
         environment: process.env,
       });
-      const acquiredNs = process.hrtime.bigint();
-      await Bun.sleep(125);
+      writeFileSync(required("WRENCH_TEST_ACQUIRED"), "acquired\\n", { mode: 0o600 });
+      while (!existsSync(required("WRENCH_TEST_RELEASE"))) await Bun.sleep(5);
       admission.release();
-      const releasedNs = process.hrtime.bigint();
       process.stdout.write(JSON.stringify({
         slot: admission.slot,
-        acquiredNs: acquiredNs.toString(),
-        releasedNs: releasedNs.toString(),
       }) + "\\n");
     `;
     const children = Array.from({ length: 8 }, (_value, index) => {
       const readyPath = join(controllerDirectory, `ready-${index}`);
+      const acquiredPath = join(controllerDirectory, `acquired-${index}`);
       const child = Bun.spawn(
         [process.execPath, "--no-env-file", "--eval", workerSource],
         {
@@ -181,6 +180,8 @@ describe("local browser admission", () => {
             WRENCH_STATE_HOME: testState.directory,
             WRENCH_TEST_READY: readyPath,
             WRENCH_TEST_START: startPath,
+            WRENCH_TEST_ACQUIRED: acquiredPath,
+            WRENCH_TEST_RELEASE: releasePath,
           },
           stdout: "pipe",
           stderr: "pipe",
@@ -189,6 +190,7 @@ describe("local browser admission", () => {
       return {
         child,
         readyPath,
+        acquiredPath,
         stdout: new Response(child.stdout).text(),
         stderr: new Response(child.stderr).text(),
       };
@@ -210,6 +212,43 @@ describe("local browser admission", () => {
       expect(children.every((entry) => existsSync(entry.readyPath))).toBeTrue();
       writeFileSync(startPath, "start\n", { mode: 0o600 });
 
+      const overlapDeadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+      while (
+        children.filter((entry) => existsSync(entry.acquiredPath)).length
+          < LOCAL_BROWSER_ADMISSION_LIMIT
+        && performance.now() < overlapDeadline
+      ) {
+        const exited = children.find((entry) => entry.child.exitCode !== null);
+        if (exited !== undefined) {
+          throw new Error(
+            `admission child exited before overlap: ${await exited.stderr}`,
+          );
+        }
+        await Bun.sleep(10);
+      }
+      const acquiredBeforeRelease = children.filter((entry) =>
+        existsSync(entry.acquiredPath)
+      ).length;
+      let thirdAdmissionOutcome: "admitted" | "timed-out";
+      try {
+        const unexpected = await acquireBrowserAdmission({
+          timeoutMs: 3_000,
+          environment: testState.environment,
+        });
+        unexpected.release();
+        thirdAdmissionOutcome = "admitted";
+      } catch (error) {
+        expect(error).toMatchObject({ failure: "timed-out" });
+        thirdAdmissionOutcome = "timed-out";
+      }
+      const acquiredAfterProbe = children.filter((entry) =>
+        existsSync(entry.acquiredPath)
+      ).length;
+      writeFileSync(releasePath, "release\n", { mode: 0o600 });
+      expect(acquiredBeforeRelease).toBe(LOCAL_BROWSER_ADMISSION_LIMIT);
+      expect(acquiredAfterProbe).toBe(LOCAL_BROWSER_ADMISSION_LIMIT);
+      expect(thirdAdmissionOutcome).toBe("timed-out");
+
       const results = await Promise.all(children.map(async (entry) => ({
         exitCode: await entry.child.exited,
         stdout: await entry.stdout,
@@ -219,27 +258,11 @@ describe("local browser admission", () => {
       expect(failures).toEqual([]);
       const intervals = results.map((result) => JSON.parse(result.stdout) as {
         readonly slot: 0 | 1;
-        readonly acquiredNs: string;
-        readonly releasedNs: string;
       });
       expect(intervals).toHaveLength(8);
       expect(results.every((result) => result.stderr.length === 0)).toBeTrue();
-      const events = intervals.flatMap((interval) => [
-        { time: BigInt(interval.acquiredNs), delta: 1 },
-        { time: BigInt(interval.releasedNs), delta: -1 },
-      ]).sort((left, right) =>
-        left.time === right.time
-          ? left.delta - right.delta
-          : left.time < right.time ? -1 : 1
-      );
-      let active = 0;
-      let maximumActive = 0;
-      for (const event of events) {
-        active += event.delta;
-        maximumActive = Math.max(maximumActive, active);
-      }
-      expect(maximumActive).toBeLessThanOrEqual(LOCAL_BROWSER_ADMISSION_LIMIT);
-      expect(maximumActive).toBe(LOCAL_BROWSER_ADMISSION_LIMIT);
+      expect(new Set(intervals.map((interval) => interval.slot)))
+        .toEqual(new Set([0, 1]));
     } finally {
       for (const entry of children) entry.child.kill(9);
       await Promise.allSettled(children.map((entry) => entry.child.exited));

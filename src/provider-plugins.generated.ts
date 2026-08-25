@@ -13,10 +13,11 @@ import sourceProviderPlugin7 from "./plugins/meta-web/plugin";
 import sourceProviderPlugin8 from "./plugins/reddit-web/plugin";
 import sourceProviderPlugin9 from "./plugins/substack-web/plugin";
 import sourceProviderPlugin10 from "./plugins/tiktok-web/plugin";
-import sourceProviderPlugin11 from "./plugins/whatsapp-linked-device/plugin";
-import sourceProviderPlugin12 from "./plugins/x-official/plugin";
-import sourceProviderPlugin13 from "./plugins/x-web/plugin";
-import sourceProviderPlugin14 from "./plugins/youtube-web/plugin";
+import sourceProviderPlugin11 from "./plugins/twitch-web/plugin";
+import sourceProviderPlugin12 from "./plugins/whatsapp-linked-device/plugin";
+import sourceProviderPlugin13 from "./plugins/x-official/plugin";
+import sourceProviderPlugin14 from "./plugins/x-web/plugin";
+import sourceProviderPlugin15 from "./plugins/youtube-web/plugin";
 
 export const generatedProviderPlugins = Object.freeze([
   sourceProviderPlugin0,
@@ -34,4 +35,5 @@ export const generatedProviderPlugins = Object.freeze([
   sourceProviderPlugin12,
   sourceProviderPlugin13,
   sourceProviderPlugin14,
+  sourceProviderPlugin15,
 ] as const satisfies readonly ProviderPluginV1[]);

@@ -12,6 +12,7 @@ import redditWebManifest from "./assets/adapters/reddit/wrench-web-adapter.json"
 import substackWebManifest from "./assets/adapters/substack/wrench-web-adapter.json";
 import tiktokWebManifest from "./assets/adapters/tiktok/wrench-web-adapter.json";
 import threadsWebManifest from "./assets/adapters/threads/wrench-web-adapter.json";
+import twitchWebManifest from "./assets/adapters/twitch/wrench-web-adapter.json";
 import xWebManifest from "./assets/adapters/x/wrench-web-adapter.json";
 import youtubeWebManifest from "./assets/adapters/youtube/wrench-web-adapter.json";
 import whatsappWebManifest from "./assets/adapters/whatsapp/wrench-web-adapter.json";
@@ -58,6 +59,7 @@ const bundledManifests: Readonly<Partial<Record<WebSessionSiteId, unknown>>> = {
   substack: substackWebManifest,
   tiktok: tiktokWebManifest,
   threads: threadsWebManifest,
+  twitch: twitchWebManifest,
   x: xWebManifest,
   youtube: youtubeWebManifest,
   whatsapp: whatsappWebManifest,
@@ -428,6 +430,9 @@ const TIKTOK_WEB_OPERATIONS = operationPolicies("tiktok", [
 ], {
   "media.publish": 2,
 });
+const TWITCH_WEB_OPERATIONS = operationPolicies("twitch", [
+  "profiles.read",
+]);
 const WHATSAPP_WEB_OPERATIONS = operationPolicies("whatsapp", [
   "contacts.list",
   "media.read",
@@ -734,6 +739,16 @@ const tiktok = {
   "replies.create": contract("tiktok", "replies.create", TIKTOK_WEB_OPERATIONS["replies.create"].risk, TIKTOK_WEB_OPERATIONS["replies.create"].state, TIKTOK_WEB_OPERATIONS["replies.create"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
+const twitch = {
+  "profiles.read": contract(
+    "twitch",
+    "profiles.read",
+    TWITCH_WEB_OPERATIONS["profiles.read"].risk,
+    TWITCH_WEB_OPERATIONS["profiles.read"].state,
+    TWITCH_WEB_OPERATIONS["profiles.read"].reason,
+  ),
+} as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
+
 const youtube = {
   "comments.create": contract("youtube", "comments.create", "R3", "capture-required", "current comment mutation, actor/target response binding, and an authorized live fixture remain required"),
   "comments.read": contract("youtube", "comments.read", "R1", "observed", "current acknowledgement-free Innertube next/continuation requests with exact video binding"),
@@ -767,6 +782,7 @@ export const webSessionContractDefinitions = {
   substack,
   tiktok,
   threads,
+  twitch,
   x,
   youtube,
   whatsapp,

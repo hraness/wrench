@@ -697,12 +697,16 @@ describe("omni runtime", () => {
         testState.environment,
       );
       const cacheSentinel = `private cache output ${baseline.providerCursor}`;
+      let structurallyOversizedValue: unknown = cacheSentinel;
+      for (let depth = 0; depth < 65; depth += 1) {
+        structurallyOversizedValue = { next: structurallyOversizedValue };
+      }
       const oversizedOutput = {
-        messages: Array.from({ length: 110_001 }, () => null),
+        messages: [redditMessage],
         after: null,
         before: null,
         requested: null,
-        privateDiagnostic: cacheSentinel,
+        privateDiagnostic: structurallyOversizedValue,
       };
       const cacheFailure = await revalidateOmniViewInternal(baseline.liveRequest, {
         environment: testState.environment,

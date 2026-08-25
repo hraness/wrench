@@ -2977,11 +2977,17 @@ describe("derivation session path defenses", () => {
             method: "POST",
             url: "https://example.com/api/messages/conversation-one",
             headers: [{ name: "authorization", value: "Bearer never-print-this" }],
-            postData: { mimeType: "application/json", text: JSON.stringify({ body: { text: "message-one" } }) },
+            postData: {
+              mimeType: "application/json",
+              text: JSON.stringify({ body: { text: "message-one", followerCountExact: 3 } }),
+            },
           },
           response: {
             status: 200,
-            content: { mimeType: "application/json", text: JSON.stringify({ data: { id: "message-id-one" } }) },
+            content: {
+              mimeType: "application/json",
+              text: JSON.stringify({ data: { id: "message-id-one", viewerNameExact: "private-viewer" } }),
+            },
           },
         }],
       },
@@ -3040,6 +3046,44 @@ describe("derivation session path defenses", () => {
       });
       expect(JSON.stringify(exact)).not.toContain("message-one");
       expect(JSON.stringify(exact)).not.toContain("never-print-this");
+      const mutableFieldNames = ["followerCountExact", "viewerNameExact", "missingExact"];
+      const fieldProbePromise = reviewDerivation(id, {
+        kind: "entry",
+        entryIndex: 0,
+        fieldNames: mutableFieldNames,
+      }, environment);
+      mutableFieldNames.splice(0, mutableFieldNames.length, "authorization");
+      const fieldProbe = await fieldProbePromise;
+      expect(fieldProbe).toMatchObject({
+        kind: "entry",
+        fixtureMatches: [],
+        fieldNameMatches: [
+          {
+            candidateIndex: 0,
+            locations: ["request.body.body.:candidate-field"],
+            truncated: false,
+            valueTypes: ["number"],
+          },
+          {
+            candidateIndex: 1,
+            locations: ["response.body.data.:candidate-field"],
+            truncated: false,
+            valueTypes: ["string"],
+          },
+          {
+            candidateIndex: 2,
+            locations: [],
+            truncated: false,
+            valueTypes: [],
+          },
+        ],
+      });
+      for (const privateText of [
+        "followerCountExact",
+        "viewerNameExact",
+        "missingExact",
+        "private-viewer",
+      ]) expect(JSON.stringify(fieldProbe)).not.toContain(privateText);
       await expectRejectedWith(
         runDerivationBrowserCommand(id, ["reload"], environment),
         "sealed for private review",
@@ -3050,6 +3094,55 @@ describe("derivation session path defenses", () => {
         reviewDerivation(id, { kind: "list", offset: 0, limit: 10 }, environment),
         "changed after it was sealed",
       );
+    } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects invalid direct field probes without sealing an active recorder", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-review-field-preflight-test-")));
+    const wrenchState = join(root, "io-state");
+    const id = crypto.randomUUID();
+    const expectedDirectory = join(wrenchState, "derivations", id);
+    const socketDirectory = join(process.platform === "win32" ? tmpdir() : "/tmp", `io-derive-ab-${id}`);
+    const markerPath = join(expectedDirectory, "review.json");
+    const environment = { WRENCH_STATE_HOME: wrenchState };
+    try {
+      mkdirSync(expectedDirectory, { recursive: true, mode: 0o700 });
+      mkdirSync(socketDirectory, { mode: 0o700 });
+      writeFileSync(join(expectedDirectory, "agent-browser.json"), "{}\n", { mode: 0o600 });
+      writeFileSync(join(expectedDirectory, "action-policy.json"), "{}\n", { mode: 0o600 });
+      writeSessionFixture(id, expectedDirectory, { profilePath: "Work" });
+
+      await expectRejectedWith(
+        reviewDerivation(id, {
+          kind: "entry",
+          entryIndex: 0,
+          fixtures: { safe_fixture: "safe-value" },
+          fieldNames: ["followerCount"],
+        } as unknown as Parameters<typeof reviewDerivation>[1], environment),
+        "mutually exclusive",
+      );
+      await expectRejectedWith(
+        reviewDerivation(id, {
+          kind: "entry",
+          entryIndex: 0,
+          fieldNames: ["authorization"],
+        }, environment),
+        "must not identify credential-like schema keys",
+      );
+
+      expect(existsSync(markerPath)).toBeFalse();
+      expect(existsSync(join(expectedDirectory, "capture.har"))).toBeFalse();
+      expect(listDerivations(environment)).toEqual([
+        expect.objectContaining({
+          id,
+          rawHarPresent: false,
+          reviewSealed: false,
+          ready: true,
+        }),
+      ]);
     } finally {
       rmSync(socketDirectory, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
@@ -3187,13 +3280,164 @@ describe("derivation session path defenses", () => {
       expect(rendered).not.toContain(safeFixture);
       expect(rendered).not.toContain(headerSecret);
       expect(rendered).not.toContain(undeclaredOrigin);
+      expect(JSON.parse(readFileSync(markerPath, "utf8"))).not.toHaveProperty("reviewOrigin");
     } finally {
       rmSync(socketDirectory, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("uses the caller's active registry when finishing a sealed derivation", async () => {
+  test("rejects invalid or unadmitted finish origins without partial output", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-finish-origin-test-")));
+    const wrenchState = join(root, "io-state");
+    const id = crypto.randomUUID();
+    const expectedDirectory = join(wrenchState, "derivations", id);
+    const socketDirectory = join(process.platform === "win32" ? tmpdir() : "/tmp", `io-derive-ab-${id}`);
+    const harPath = join(expectedDirectory, "capture.har");
+    const markerPath = join(expectedDirectory, "review.json");
+    const invalidOutput = join(root, "invalid-output");
+    const preservedOutput = join(root, "preserved-output");
+    const uploadOrigin = "https://upload.example.net";
+    const unadmittedOrigin = "https://captured.example.org";
+    const environment = { WRENCH_STATE_HOME: wrenchState };
+    const harText = JSON.stringify({
+      log: {
+        entries: [
+          {
+            request: { method: "GET", url: `${targetOrigin}/api/profile` },
+            response: { status: 200, content: { mimeType: "application/json", text: "{}" } },
+          },
+          {
+            request: { method: "GET", url: `${uploadOrigin}/api/upload-status` },
+            response: { status: 200, content: { mimeType: "application/json", text: "{}" } },
+          },
+        ],
+      },
+    });
+    try {
+      mkdirSync(expectedDirectory, { recursive: true, mode: 0o700 });
+      mkdirSync(socketDirectory, { mode: 0o700 });
+      mkdirSync(preservedOutput, { mode: 0o700 });
+      writeFileSync(join(preservedOutput, "sentinel"), "keep", { mode: 0o600 });
+      writeFileSync(join(expectedDirectory, "agent-browser.json"), "{}\n", { mode: 0o600 });
+      writeFileSync(join(expectedDirectory, "action-policy.json"), "{}\n", { mode: 0o600 });
+      writeSessionFixture(id, expectedDirectory, {
+        browserDomains: ["example.com", "upload.example.net"],
+        profilePath: "Work",
+      });
+      writeFileSync(harPath, harText, { mode: 0o600 });
+
+      await expectRejectedWith(
+        finishDerivation(id, invalidOutput, {
+          force: false,
+          environment,
+          reviewOrigin: `${uploadOrigin}/path`,
+        }),
+        "derive finish --review-origin must be an exact HTTPS origin",
+      );
+      expect(existsSync(invalidOutput)).toBeFalse();
+      expect(existsSync(markerPath)).toBeFalse();
+
+      await expectRejectedWith(
+        finishDerivation(id, preservedOutput, {
+          force: true,
+          environment,
+          reviewOrigin: unadmittedOrigin,
+        }),
+        "not admitted by the derivation start-time browser domains",
+      );
+      expect(readdirSync(preservedOutput)).toEqual(["sentinel"]);
+      expect(readFileSync(join(preservedOutput, "sentinel"), "utf8")).toBe("keep");
+      expect(existsSync(markerPath)).toBeFalse();
+      expect(readFileSync(harPath, "utf8")).toBe(harText);
+    } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("uses one admitted finish origin for both analyzers and the scaffold target", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-derive-admitted-finish-origin-test-")));
+    const wrenchState = join(root, "io-state");
+    const id = crypto.randomUUID();
+    const expectedDirectory = join(wrenchState, "derivations", id);
+    const socketDirectory = join(process.platform === "win32" ? tmpdir() : "/tmp", `io-derive-ab-${id}`);
+    const outputDirectory = join(root, "derived");
+    const uploadOrigin = "https://upload.example.net";
+    const environment = { WRENCH_STATE_HOME: wrenchState };
+    const harText = JSON.stringify({
+      log: {
+        entries: [
+          {
+            request: { method: "GET", url: `${targetOrigin}/api/profile` },
+            response: { status: 200, content: { mimeType: "application/json", text: "{}" } },
+          },
+          {
+            request: { method: "GET", url: `${uploadOrigin}/api/upload-status` },
+            response: { status: 200, content: { mimeType: "application/json", text: "{}" } },
+          },
+        ],
+      },
+    });
+    try {
+      mkdirSync(expectedDirectory, { recursive: true, mode: 0o700 });
+      mkdirSync(socketDirectory, { mode: 0o700 });
+      writeFileSync(join(expectedDirectory, "agent-browser.json"), "{}\n", { mode: 0o600 });
+      writeFileSync(join(expectedDirectory, "action-policy.json"), "{}\n", { mode: 0o600 });
+      writeSessionFixture(id, expectedDirectory, {
+        browserDomains: ["example.com", "upload.example.net"],
+        profilePath: "Work",
+      });
+      const harPath = join(expectedDirectory, "capture.har");
+      writeFileSync(harPath, harText, { mode: 0o600 });
+      const harStats = lstatSync(harPath, { bigint: true });
+      writeFileSync(join(expectedDirectory, "review.json"), JSON.stringify({
+        schemaVersion: 1,
+        state: "sealed",
+        har: {
+          device: harStats.dev.toString(),
+          inode: harStats.ino.toString(),
+          byteLength: Buffer.byteLength(harText, "utf8"),
+          sha256: sha256(harText),
+        },
+      }), { mode: 0o600 });
+      await expectRejectedWith(
+        finishDerivation(id, outputDirectory, {
+          force: false,
+          environment,
+          reviewOrigin: uploadOrigin,
+          surfaceId: "substack",
+        }),
+        "finished its scaffold but the browser could not be closed",
+      );
+      expect(JSON.parse(
+        readFileSync(join(outputDirectory, "derivation.candidates.json"), "utf8"),
+      )).toMatchObject({
+        targetOrigin: uploadOrigin,
+        observedEntries: 2,
+        ignoredEntries: 1,
+        candidates: [{ origin: uploadOrigin }],
+      });
+      expect(JSON.parse(
+        readFileSync(join(outputDirectory, "internal-api-evidence.json"), "utf8"),
+      )).toMatchObject({
+        targetOrigin: uploadOrigin,
+        observedEntries: 2,
+        candidates: [{ origin: uploadOrigin }],
+      });
+      expect(JSON.parse(
+        readFileSync(join(outputDirectory, "wrench-adapter.json"), "utf8"),
+      )).toMatchObject({
+        surfaceId: "substack",
+        origins: ["https://substack.com", uploadOrigin],
+      });
+    } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("defaults sealed finish to the session target and uses the caller's active registry", async () => {
     const root = realpathSync(mkdtempSync(
       join(tmpdir(), "wrench-derive-finish-registry-test-"),
     ));
@@ -3252,6 +3496,12 @@ describe("derivation session path defenses", () => {
         "finished its scaffold but the browser could not be closed",
       );
       expect(registryListCalls).toBeGreaterThan(0);
+      expect(JSON.parse(
+        readFileSync(join(outputDirectory, "derivation.candidates.json"), "utf8"),
+      )).toMatchObject({ targetOrigin, candidates: [] });
+      expect(JSON.parse(
+        readFileSync(join(outputDirectory, "internal-api-evidence.json"), "utf8"),
+      )).toMatchObject({ targetOrigin, candidates: [] });
       expect(JSON.parse(
         readFileSync(join(outputDirectory, "wrench-adapter.json"), "utf8"),
       )).toMatchObject({

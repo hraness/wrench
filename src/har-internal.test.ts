@@ -1338,6 +1338,213 @@ describe("internal HAR evidence fail-closed boundaries", () => {
     expect(serialized).not.toContain("F2JM9rnivTO");
   });
 
+  test("reviews bounded text/plain JSON only on the exact Twitch GraphQL route", () => {
+    const requestBody = {
+      operationName: "PrivateFollowerOperation",
+      variables: {
+        channelLogin: "private-target-login",
+        skipSchedule: true,
+        authToken: { login: "private-login-under-token" },
+        cookie: { channelLogin: "private-login-under-cookie" },
+      },
+      extensions: {
+        persistedQuery: {
+          version: 1,
+          sha256Hash: "private-query-hash",
+        },
+      },
+    };
+    const responseBody = {
+      data: {
+        currentUser: {
+          id: "private-viewer-id",
+          login: "private-viewer-login",
+          displayName: "Private Viewer",
+        },
+        user: {
+          id: "private-target-id",
+          login: "private-target-login",
+          displayName: "Private Target",
+          followers: { totalCount: 37 },
+          auth: { followers: { totalCount: 999 } },
+          session: { login: "private-session-login" },
+        },
+      },
+      extensions: { requestInfo: { id: "private-request-id" } },
+    };
+    const evidence = analyzeInternalHarValue(har([entry({
+      method: "POST",
+      url: "https://gql.twitch.tv/gql",
+      requestHeaders: [
+        { name: "Client-ID", value: "private-client-id" },
+        { name: "Client-Integrity", value: "private-client-integrity" },
+        { name: "X-Private-Header", value: "private-header-value" },
+      ],
+      requestText: JSON.stringify(requestBody),
+      requestMimeType: "text/plain; charset=UTF-8",
+      responseJson: responseBody,
+    })]), "twitch-web", "https://gql.twitch.tv", new Date("2026-08-25T00:00:00.000Z"));
+
+    const candidate = oneCandidate(evidence);
+    expect(candidate.path).toBe("/gql");
+    expect(candidate.headerNames).toContain("client-id");
+    expect(candidate.headerNames).toContain("client-integrity");
+    for (const path of [
+      "operationName",
+      "variables.channelLogin",
+      "variables.skipSchedule",
+      "extensions.persistedQuery.version",
+      "extensions.persistedQuery.sha256Hash",
+    ]) expect(candidate.requestFieldPaths).toContain(path);
+    for (const path of [
+      "data.currentUser.id",
+      "data.currentUser.login",
+      "data.currentUser.displayName",
+      "data.user.id",
+      "data.user.login",
+      "data.user.displayName",
+      "data.user.followers.totalCount",
+      "extensions.requestInfo.id",
+    ]) expect(candidate.responseFieldPaths).toContain(path);
+    expect(candidate.requestFieldPaths).not.toContain("variables.:dynamic.login");
+    expect(candidate.responseFieldPaths).not.toContain("data.user.:dynamic.followers");
+    expect(candidate.responseFieldPaths).not.toContain("data.user.:dynamic.login");
+
+    const serialized = JSON.stringify(evidence);
+    for (const privateValue of [
+      "PrivateFollowerOperation",
+      "private-target-login",
+      "private-login-under-token",
+      "private-login-under-cookie",
+      "private-query-hash",
+      "private-viewer-id",
+      "private-viewer-login",
+      "Private Viewer",
+      "private-target-id",
+      "Private Target",
+      "private-session-login",
+      "private-client-id",
+      "private-client-integrity",
+      "private-header-value",
+      "authToken",
+    ]) expect(serialized).not.toContain(privateValue);
+
+    for (const scenario of [
+      {
+        origin: "https://gql.twitch.tv",
+        url: "https://gql.twitch.tv/not-gql",
+        mimeType: "text/plain",
+      },
+      {
+        origin: "https://example.com",
+        url: "https://example.com/gql",
+        mimeType: "text/plain",
+      },
+      {
+        origin: "https://gql.twitch.tv",
+        url: "https://gql.twitch.tv/gql",
+        mimeType: "application/octet-stream",
+      },
+    ]) {
+      const failedClosed = analyzeInternalHarValue(har([entry({
+        method: "POST",
+        url: scenario.url,
+        requestText: JSON.stringify(requestBody),
+        requestMimeType: scenario.mimeType,
+        responseJson: { data: {} },
+      })]), "twitch-web", scenario.origin, new Date("2026-08-25T00:00:00.000Z"));
+      expect(oneCandidate(failedClosed).requestFieldPaths).not.toContain("variables.channelLogin");
+      expect(JSON.stringify(failedClosed)).not.toContain("channelLogin");
+    }
+  });
+
+  test("retains only exact reviewed Twitch registered-query revisions", () => {
+    const viewerRevision = "a".repeat(64);
+    const aboutRevision = "b".repeat(64);
+    const request = (operationName: string, variables: Record<string, unknown>, revision: string) => ({
+      extensions: { persistedQuery: { sha256Hash: revision, version: 1 } },
+      operationName,
+      variables,
+    });
+    const evidence = analyzeInternalHarValue(har([
+      entry({
+        method: "POST",
+        url: "https://gql.twitch.tv/gql",
+        requestText: JSON.stringify([
+          request("TopNav_CurrentUser", {}, viewerRevision),
+        ]),
+        requestMimeType: "text/plain; charset=UTF-8",
+        responseJson: [{ data: { currentUser: { id: "private-viewer-id" } } }],
+      }),
+      entry({
+        method: "POST",
+        url: "https://gql.twitch.tv/gql",
+        requestText: JSON.stringify([
+          request(
+            "ChannelRoot_AboutPanel",
+            { channelLogin: "private_target", skipSchedule: true },
+            aboutRevision,
+          ),
+        ]),
+        requestMimeType: "text/plain",
+        responseJson: [{ data: { user: { followers: { totalCount: 1 } } } }],
+      }),
+    ]), "twitch-web", "https://gql.twitch.tv", new Date("2026-08-25T00:00:00.000Z"));
+
+    expect(evidence.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        operationType: "query",
+        revisions: [`twitch=TopNav_CurrentUser.${viewerRevision}`],
+      }),
+      expect.objectContaining({
+        operationType: "query",
+        revisions: [`twitch=ChannelRoot_AboutPanel.${aboutRevision}`],
+      }),
+    ]));
+    const serialized = JSON.stringify(evidence);
+    expect(serialized).not.toContain("UnreviewedOperation");
+    expect(serialized).not.toContain("c".repeat(64));
+    expect(serialized).not.toContain("private_target");
+    expect(serialized).not.toContain("private-viewer-id");
+
+    const viewer = request("TopNav_CurrentUser", {}, viewerRevision);
+    const about = request(
+      "ChannelRoot_AboutPanel",
+      { channelLogin: "private_target", skipSchedule: true },
+      aboutRevision,
+    );
+    const unreviewed = request("UnreviewedOperation", {}, "c".repeat(64));
+    for (const malformedBody of [
+      [viewer, unreviewed],
+      [viewer, about],
+      [unreviewed],
+      [request(
+        "ChannelRoot_AboutPanel",
+        { channelLogin: "private_target", skipSchedule: false },
+        aboutRevision,
+      )],
+      [request(
+        "ChannelRoot_AboutPanel",
+        { channelLogin: "private_target", skipSchedule: true, extra: true },
+        aboutRevision,
+      )],
+      [request("TopNav_CurrentUser", { extra: true }, viewerRevision)],
+      [{ ...viewer, unexpected: true }],
+      [],
+      viewer,
+    ]) {
+      const failedClosed = analyzeInternalHarValue(har([entry({
+        method: "POST",
+        url: "https://gql.twitch.tv/gql",
+        requestText: JSON.stringify(malformedBody),
+        requestMimeType: "text/plain",
+        responseJson: [{ data: {} }],
+      })]), "twitch-web", "https://gql.twitch.tv", new Date("2026-08-25T00:00:00.000Z"));
+      expect(oneCandidate(failedClosed).revisions).toEqual([]);
+      expect(oneCandidate(failedClosed).operationType).toBe("unknown");
+    }
+  });
+
   test("property: arbitrary identifier-shaped path segments and JSON map keys never survive evidence", () => {
     const suffix = fc.array(fc.constantFrom(..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"), {
       minLength: 3,

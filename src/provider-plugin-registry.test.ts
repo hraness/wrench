@@ -258,6 +258,26 @@ function writeInstalledDependency(
 }
 
 describe("provider plugin definition and registry", () => {
+  test("registers Twitch as a current-only durable authenticated-web identity", () => {
+    const plugin = providerPluginRegistry.get("twitch-web");
+    const binding = plugin?.bindings.find(({ surfaceId }) =>
+      surfaceId === "twitch");
+    expect(plugin?.version).toBe("1.0.0");
+    expect(binding?.transport).toBe("web-session-api");
+    if (binding === undefined) {
+      throw new Error("Twitch provider binding is unavailable");
+    }
+    const reviewed =
+      "325065c463ecf8d7b5e6202780c0392c1f7556baeb4a0b33fec1d3af937e5eb9";
+    expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
+      .toBe(reviewed);
+    expect(providerPluginRegistry.legacyContractImplementationHashes(
+      binding,
+      "profiles.read",
+      1,
+    )).toEqual([]);
+  });
+
   test("registers Gmail as a current-only durable provider identity", () => {
     const plugin = providerPluginRegistry.get("gmail-official");
     const binding = plugin?.bindings[0];

@@ -49,11 +49,14 @@ deterministic public authority for receipts and exact R1 caching. Supplying an
 auth locator is an error.
 
 The Twitch row targets exactly
-`https://www.twitch.tv/hranessdotcom`. Until `twitch-web profiles.read` is an
-installed observed capability and `twitch-chrome` resolves to an eligible,
-target-bound auth source, record Twitch followers as a categorical gap. Do not
-substitute browser automation, raw HTTP, a rounded public display, a cached
-value, or an estimate.
+`https://www.twitch.tv/hranessdotcom`. Invoke the installed observed
+`twitch-web profiles.read` capability with `{"profile":"hranessdotcom"}` and
+the `twitch-chrome` realm. Wrench binds the authenticated current viewer before
+it binds the fixed login-parameterized channel response to that viewer's
+immutable identity, then accepts followers only as an exact nonnegative
+integer. A missing, changed, or mismatched realm, an ambiguous target, or
+provider drift creates a categorical gap. Do not substitute browser
+automation, raw HTTP, a rounded public display, a cached value, or an estimate.
 
 Keep the two X calls sequential, both LinkedIn calls sequential, and both
 Substack calls sequential because each pair shares one authenticated realm.

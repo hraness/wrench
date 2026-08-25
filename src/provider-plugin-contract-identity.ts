@@ -235,6 +235,14 @@ const identities = Object.freeze({
       development: "0f70eaee8275a922d6c6fff85507caf3f5000a8c7a32a3cc01f05d643da85b0d",
     },
   },
+  "twitch-web": {
+    schemaVersion: 1,
+    pluginVersion: "1.0.0",
+    implementationSha256: "325065c463ecf8d7b5e6202780c0392c1f7556baeb4a0b33fec1d3af937e5eb9",
+    legacyCurrentReadImplementationSha256: [],
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
+  },
   "whatsapp-linked-device": {
     schemaVersion: 1,
     pluginVersion: "1.0.0",

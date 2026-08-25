@@ -191,6 +191,13 @@ const commonActionContracts = {
     liking: ["R2", "not-applicable"],
     media: ["R1", "R3"],
   },
+  twitch: {
+    messaging: ["unsupported", "unsupported"],
+    commenting: ["unsupported", "unsupported", "unsupported"],
+    posting: ["unsupported", "unsupported"],
+    liking: ["unsupported", "unsupported"],
+    media: ["unsupported", "unsupported"],
+  },
   youtube: {
     messaging: ["not-applicable", "not-applicable"],
     commenting: ["R1", "R3", "R3"],
@@ -222,6 +229,7 @@ const binaryAttachmentCompositions = {
   "facebook-group": ["post", "media"],
   "facebook-marketplace": ["listing"],
   tiktok: ["message", "media"],
+  twitch: [],
   youtube: ["post", "media"],
   bluesky: ["reply", "post", "media"],
 } as const satisfies Readonly<Record<PlatformSurfaceId, readonly CompositionName[]>>;
@@ -290,6 +298,7 @@ const expandedExecutableContracts = {
     R2: ["relationships.follow.set", "content.save"],
     R3: ["posts.repost", "content.share", "content.delete", "content.schedule"],
   },
+  twitch: { R2: [], R3: [] },
   youtube: {
     R2: ["relationships.follow.set", "content.save"],
     R3: ["content.edit", "content.delete", "content.schedule"],
@@ -419,6 +428,7 @@ describe("social platform catalog", () => {
       "substack",
       "threads",
       "tiktok",
+      "twitch",
       "x",
       "youtube",
     ]);

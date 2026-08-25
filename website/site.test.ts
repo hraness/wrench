@@ -346,6 +346,7 @@ describe("wrench.rip static site", () => {
     expect(gettingStarted?.html).toContain('src="/wrench-first-capture.mp4"');
     expect(gettingStarted?.html).toContain('src="/wrench-first-capture.vtt"');
     expect(gettingStarted?.html).toContain('href="/wrench-first-capture.gif"');
+    expect(gettingStarted?.html).toContain("successful Wrench 0.13.5 run on August 25, 2026");
     expect(gettingStarted?.html).toContain("The terminal text is actual CLI output");
 
     const privacy = pages.find((page) => page.definition.canonicalPath === "/privacy/");

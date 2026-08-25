@@ -354,6 +354,37 @@ describe("authenticated web-session contract identity", () => {
     )).toEqual([]);
   });
 
+  test("observes only the exact Twitch self-profile follower read", () => {
+    expect(contract({
+      site: "twitch",
+      action: "profiles.read",
+      contractVersion: 1,
+    })).toMatchObject({
+      site: "twitch",
+      operation: "profiles.read",
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+      sideEffect: "none",
+      idempotency: "none",
+      input: {
+        properties: {
+          profile: { type: "string", minLength: 4, maxLength: 25 },
+        },
+        required: ["profile"],
+      },
+    });
+    const twitch = providerPluginRegistry.requireSessionRoute("twitch");
+    expect(twitch.operations.map((operation) => operation.name)).toEqual([
+      "profiles.read",
+    ]);
+    expect(providerPluginRegistry.legacyContractImplementationHashes(
+      twitch,
+      "profiles.read",
+      1,
+    )).toEqual([]);
+  });
+
   test("keeps every Marketplace mutation capture-required", () => {
     const binding = providerPluginRegistry.requireSessionRoute(
       "facebook-marketplace",
