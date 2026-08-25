@@ -3849,6 +3849,10 @@ describe("CLI previews and exit semantics", () => {
     expect(usage).toContain("wrench plugin show <id> [--json]");
     expect(usage).toContain("wrench plugin scaffold --site <id>");
     expect(usage).toContain("wrench plugin check <directory> [--json]");
+    expect(usage).toContain(
+      "wrench derive finish <derivation-id> --output <directory> [--review-origin <exact-https-origin>]",
+    );
+    expect(usage).toContain("[--fixtures - | --field-names -] [--json]");
     expect(usage).toContain("Compatibility alias for 'wrench plugin scaffold'");
     expect(usage).not.toContain("install-local.sh");
     expect(usage).not.toContain("uninstall-local.sh");
@@ -4023,6 +4027,47 @@ describe("Wrench process termination boundary", () => {
 });
 
 describe("UTF-8 stdin", () => {
+  test("rejects invalid field-name probes before derivation lookup without echoing candidates", async () => {
+    const testState = state();
+    try {
+      const privateText = "privateCandidate";
+      const child = Bun.spawn([
+        process.execPath,
+        join(import.meta.dir, "wrench.ts"),
+        "derive",
+        "review",
+        "not-a-live-derivation",
+        "--entry",
+        "0",
+        "--field-names",
+        "-",
+        "--json",
+      ], {
+        cwd: process.cwd(),
+        env: testState.environment,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await child.stdin.write(Buffer.concat([
+        Buffer.from(`["${privateText}`),
+        Buffer.from([0xff]),
+        Buffer.from('"]'),
+      ]));
+      await child.stdin.end();
+      const [stderr, exitCode] = await Promise.all([
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(exitCode).toBe(3);
+      expect(stderr).toContain("valid UTF-8 JSON on stdin");
+      expect(stderr).not.toContain("derivation was not found");
+      expect(stderr).not.toContain(privateText);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("splits thread text from stdin without changing a multibyte scalar", async () => {
     const testState = state();
     try {

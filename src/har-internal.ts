@@ -83,6 +83,11 @@ const reviewedHeaderNames: ReadonlySet<string> = new Set([
   "x-twitter-client-language",
 ] as const);
 
+const reviewedTwitchGraphQlHeaderNames: ReadonlySet<string> = new Set([
+  "client-id",
+  "client-integrity",
+] as const);
+
 /**
  * HAR object keys are untrusted content too. In particular, normalized API
  * responses commonly use account IDs, URNs, names, and slugs as map keys. A
@@ -145,6 +150,32 @@ const reviewedStructuralFieldNames: ReadonlySet<string> = new Set([
   "variables",
   "users",
   "withAuxiliaryUserLabels",
+] as const);
+
+/** Exact schema vocabulary reviewed only for Twitch's first-party GraphQL route. */
+const reviewedTwitchGraphQlFieldNames: ReadonlySet<string> = new Set([
+  "channelLogin",
+  "currentUser",
+  "displayName",
+  "extensions",
+  "followers",
+  "id",
+  "login",
+  "operationName",
+  "persistedQuery",
+  "query",
+  "requestInfo",
+  "sha256Hash",
+  "skipSchedule",
+  "totalCount",
+  "user",
+  "variables",
+  "version",
+] as const);
+
+const reviewedTwitchGraphQlOperationNames: ReadonlySet<string> = new Set([
+  "ChannelRoot_AboutPanel",
+  "TopNav_CurrentUser",
 ] as const);
 
 /** Exact schema vocabulary reviewed only for LinkedIn's native Article route. */
@@ -293,6 +324,24 @@ function isExactFacebookOrigin(url: URL): boolean {
   return url.origin === "https://www.facebook.com";
 }
 
+export function isReviewedTwitchGraphQlRoute(url: URL): boolean {
+  return url.origin === "https://gql.twitch.tv" && url.pathname === "/gql";
+}
+
+function isTwitchPublicAccountFieldName(value: string): boolean {
+  return value === "channelLogin" || value === "login";
+}
+
+function isTwitchCredentialLikeFieldName(value: string): boolean {
+  if (isTwitchPublicAccountFieldName(value)) return false;
+  const compact = value.replaceAll(/[^A-Za-z0-9]/gu, "").toLowerCase();
+  return /(?:auth|authorization|cookie|credential|password|passwd|private|secret|session|signature|token)/u.test(compact);
+}
+
+function isReviewedTwitchStructuralContainer(value: string): boolean {
+  return !isTwitchCredentialLikeFieldName(value);
+}
+
 export function isReviewedLinkedInArticleRoute(url: URL): boolean {
   if (url.origin !== "https://www.linkedin.com") return false;
   const segments = url.pathname.split("/").filter(Boolean);
@@ -311,6 +360,13 @@ export function isReviewedLinkedInArticleRoute(url: URL): boolean {
 }
 
 export function reviewedInternalFieldNameForUrl(url: URL, value: string): string {
+  if (
+    isReviewedTwitchGraphQlRoute(url)
+    && value.length <= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters
+    && safeFieldName.test(value)
+    && !isTwitchCredentialLikeFieldName(value)
+    && reviewedTwitchGraphQlFieldNames.has(value)
+  ) return value;
   if (
     isReviewedLinkedInArticleRoute(url)
     && value.length <= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters
@@ -478,6 +534,7 @@ function safePath(url: URL): string {
       || pathname === "/data/manifest/"
     )
   ) return pathname;
+  if (isReviewedTwitchGraphQlRoute(url)) return "/gql";
   const xGraphQl = reviewedXGraphQlRoute(url);
   if (xGraphQl !== null) {
     return xGraphQl.reviewed
@@ -504,7 +561,7 @@ function safePath(url: URL): string {
   }).join("/");
 }
 
-function headerNames(value: unknown): readonly string[] {
+function headerNames(value: unknown, url: URL): readonly string[] {
   if (!Array.isArray(value)) return [];
   const output = new Set<string>();
   const count = Math.min(value.length, INTERNAL_HAR_REVIEW_BOUNDS.maxHeaderItems);
@@ -514,7 +571,12 @@ function headerNames(value: unknown): readonly string[] {
     if (candidate.name.length > INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters) continue;
     const name = candidate.name.toLowerCase();
     if (!safeHeaderName.test(name)) continue;
-    output.add(reviewedHeaderNames.has(name) ? name : ":dynamic");
+    output.add(
+      reviewedHeaderNames.has(name)
+        || (isReviewedTwitchGraphQlRoute(url) && reviewedTwitchGraphQlHeaderNames.has(name))
+        ? name
+        : ":dynamic",
+    );
     if (output.size >= INTERNAL_HAR_REVIEW_BOUNDS.maxHeaderNames) break;
   }
   return [...output].sort();
@@ -633,7 +695,10 @@ function requestFields(request: JsonRecord, url: URL): readonly string[] {
     && rawMime.length <= INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters
     ? rawMime.toLowerCase()
     : "";
-  if (mime.includes("json")) value = parsedJson(request.postData.text);
+  const twitchTextPlainJson = request.method === "POST"
+    && isReviewedTwitchGraphQlRoute(url)
+    && mime.split(";", 1)[0]?.trim() === "text/plain";
+  if (mime.includes("json") || twitchTextPlainJson) value = parsedJson(request.postData.text);
   else {
     const form = boundedFormParameters(request.postData);
     if (form === null) return [];
@@ -677,7 +742,11 @@ function requestFields(request: JsonRecord, url: URL): readonly string[] {
     0,
     false,
     (fieldName) => reviewedMetaRequestFieldName(url, fieldName),
-    isExactFacebookOrigin(url) ? isReviewedMetaStructuralContainer : undefined,
+    isExactFacebookOrigin(url)
+      ? isReviewedMetaStructuralContainer
+      : isReviewedTwitchGraphQlRoute(url)
+        ? isReviewedTwitchStructuralContainer
+        : undefined,
     isReviewedLinkedInArticleRoute(url)
       ? INTERNAL_HAR_REVIEW_BOUNDS.maxLinkedInArticleTraversalDepth
       : INTERNAL_HAR_REVIEW_BOUNDS.maxTraversalDepth,
@@ -785,7 +854,11 @@ function responseFields(response: unknown, url: URL): readonly string[] {
       0,
       false,
       (fieldName) => reviewedMetaRequestFieldName(url, fieldName),
-      isExactFacebookOrigin(url) ? isReviewedMetaStructuralContainer : undefined,
+      isExactFacebookOrigin(url)
+        ? isReviewedMetaStructuralContainer
+        : isReviewedTwitchGraphQlRoute(url)
+          ? isReviewedTwitchStructuralContainer
+          : undefined,
       isReviewedLinkedInArticleRoute(url)
         ? INTERNAL_HAR_REVIEW_BOUNDS.maxLinkedInArticleTraversalDepth
         : INTERNAL_HAR_REVIEW_BOUNDS.maxTraversalDepth,
@@ -829,6 +902,69 @@ function metaRegisteredOperationRevision(
   return `meta=${friendlyName}.${documentId}`;
 }
 
+function exactOwnKeys(
+  value: JsonRecord,
+  expected: readonly string[],
+): boolean {
+  const keys = Object.keys(value).sort();
+  return keys.length === expected.length
+    && keys.every((key, index) => key === expected[index]);
+}
+
+function twitchRegisteredOperationRevisions(
+  url: URL,
+  method: string,
+  request: JsonRecord,
+): readonly string[] {
+  if (
+    method !== "POST"
+    || !isReviewedTwitchGraphQlRoute(url)
+    || !isRecord(request.postData)
+  ) return [];
+  const rawMime = request.postData.mimeType;
+  if (
+    typeof rawMime !== "string"
+    || rawMime.length > INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters
+    || rawMime.toLowerCase().split(";", 1)[0]?.trim() !== "text/plain"
+  ) return [];
+  const body = parsedJson(request.postData.text);
+  if (
+    !Array.isArray(body)
+    || body.length !== 1
+  ) return [];
+  const candidate = body[0];
+  if (
+    !isRecord(candidate)
+    || !exactOwnKeys(candidate, ["extensions", "operationName", "variables"])
+    || typeof candidate.operationName !== "string"
+    || !reviewedTwitchGraphQlOperationNames.has(candidate.operationName)
+    || !isRecord(candidate.variables)
+    || !isRecord(candidate.extensions)
+    || !exactOwnKeys(candidate.extensions, ["persistedQuery"])
+    || !isRecord(candidate.extensions.persistedQuery)
+    || !exactOwnKeys(candidate.extensions.persistedQuery, ["sha256Hash", "version"])
+    || candidate.extensions.persistedQuery.version !== 1
+    || typeof candidate.extensions.persistedQuery.sha256Hash !== "string"
+    || !/^[a-f0-9]{64}$/u.test(candidate.extensions.persistedQuery.sha256Hash)
+  ) return [];
+  if (
+    candidate.operationName === "TopNav_CurrentUser"
+    && !exactOwnKeys(candidate.variables, [])
+  ) return [];
+  if (
+    candidate.operationName === "ChannelRoot_AboutPanel"
+    && (
+      !exactOwnKeys(candidate.variables, ["channelLogin", "skipSchedule"])
+      || typeof candidate.variables.channelLogin !== "string"
+      || !/^[a-z0-9_]{4,25}$/u.test(candidate.variables.channelLogin)
+      || candidate.variables.skipSchedule !== true
+    )
+  ) return [];
+  return [
+    `twitch=${candidate.operationName}.${candidate.extensions.persistedQuery.sha256Hash}`,
+  ];
+}
+
 function revisionValues(url: URL, method: string, request: JsonRecord): readonly string[] {
   const values: string[] = [];
   if (url.origin === "https://www.linkedin.com" && method === "GET") {
@@ -845,6 +981,9 @@ function revisionValues(url: URL, method: string, request: JsonRecord): readonly
   }
   const xGraphQl = reviewedXGraphQlRoute(url);
   if (xGraphQl?.reviewed === true) values.push(`graphql=${xGraphQl.operation}.${xGraphQl.revision}`);
+  for (const revision of twitchRegisteredOperationRevisions(url, method, request)) {
+    values.push(revision);
+  }
   const metaRevision = metaRegisteredOperationRevision(url, method, request);
   if (metaRevision !== null) values.push(metaRevision);
   return values;
@@ -858,6 +997,7 @@ function registeredOperationType(
   const xGraphQl = reviewedXGraphQlRoute(url);
   if (xGraphQl?.reviewed === true) return xGraphQl.operationType;
   if (revision.startsWith("queryId=")) return "query";
+  if (revision.startsWith("twitch=")) return "query";
   // Meta friendly names are labels, not authoritative GraphQL syntax. Keep
   // their type unknown until a code-owned reviewed descriptor supplies it.
   return "unknown";
@@ -1041,7 +1181,7 @@ export function analyzeInternalHarValue(
         if (sensitiveName.test(name) && renderedName === ":dynamic") continue;
         current.queryNames.add(renderedName);
       }
-      for (const name of headerNames(reviewed.request.headers)) current.headerNames.add(name);
+      for (const name of headerNames(reviewed.request.headers, reviewed.url)) current.headerNames.add(name);
       for (const pathName of requestFields(reviewed.request, reviewed.url)) {
         addFieldPath(current.requestFieldPaths, pathName);
       }

@@ -98,8 +98,10 @@ export const wrenchUsage = `Usage:
   wrench derive review <derivation-id> [--review-origin <exact-https-origin>]
                        [--offset <n> --limit <1-100>] [--json]
   wrench derive review <derivation-id> --entry <zero-based>
-                       [--review-origin <exact-https-origin>] [--fixtures -] [--json]
-  wrench derive finish <derivation-id> --output <directory> [--platform <surface-id>] [--force] [--json]
+                       [--review-origin <exact-https-origin>]
+                       [--fixtures - | --field-names -] [--json]
+  wrench derive finish <derivation-id> --output <directory> [--review-origin <exact-https-origin>]
+                       [--platform <surface-id>] [--force] [--json]
   wrench derive analyze <har> --adapter <id> --origin <origin> --output <directory> [--platform <surface-id>]
   wrench derive discard <derivation-id> --yes
 

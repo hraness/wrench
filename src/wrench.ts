@@ -56,7 +56,9 @@ import {
   startDerivation,
 } from "./derive";
 import {
+  parseDerivationReviewFieldNames,
   parseDerivationReviewFixtures,
+  type DerivationReviewFieldNames,
   type DerivationReviewFixtures,
   type DerivationReviewSelection,
 } from "./derive-review";
@@ -2555,17 +2557,40 @@ async function runCommand(
   if (arguments_.command === "derive-review") {
     let selection: DerivationReviewSelection;
     if (arguments_.selection.kind === "entry") {
-      let fixtures: DerivationReviewFixtures = {};
-      if (arguments_.selection.fixtures) {
+      if (arguments_.selection.stdinMode === "fixtures") {
         let value: unknown;
         try {
           value = JSON.parse(await readStdinBounded(64 * 1024)) as unknown;
         } catch {
           throw new Error("derive review fixtures must be valid UTF-8 JSON on stdin");
         }
-        fixtures = parseDerivationReviewFixtures(value);
+        const fixtures: DerivationReviewFixtures = parseDerivationReviewFixtures(value);
+        selection = {
+          kind: "entry",
+          entryIndex: arguments_.selection.entryIndex,
+          fixtures,
+        };
+      } else if (arguments_.selection.stdinMode === "field-names") {
+        let value: unknown;
+        try {
+          value = JSON.parse(await readStdinBounded(8 * 1024)) as unknown;
+        } catch {
+          throw new Error("derive review field names must be valid UTF-8 JSON on stdin");
+        }
+        const fieldNames: DerivationReviewFieldNames =
+          parseDerivationReviewFieldNames(value);
+        selection = {
+          kind: "entry",
+          entryIndex: arguments_.selection.entryIndex,
+          fieldNames,
+        };
+      } else {
+        selection = {
+          kind: "entry",
+          entryIndex: arguments_.selection.entryIndex,
+          fixtures: {},
+        };
       }
-      selection = { kind: "entry", entryIndex: arguments_.selection.entryIndex, fixtures };
     } else selection = arguments_.selection;
     const result = await reviewDerivation(
       arguments_.id,
@@ -2580,6 +2605,7 @@ async function runCommand(
     const result = await finishDerivation(arguments_.id, arguments_.output, {
       force: arguments_.force,
       registry: dependencies.providerPluginRegistry,
+      ...(arguments_.reviewOrigin === undefined ? {} : { reviewOrigin: arguments_.reviewOrigin }),
       ...(arguments_.surfaceId === undefined ? {} : { surfaceId: arguments_.surfaceId }),
       environment,
     });

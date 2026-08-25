@@ -233,7 +233,24 @@ wrench derive review <id> --limit 50 --json
 wrench derive review <id> --entry 0 --json
 printf '%s' '{"target":"known-fixture-value"}' \
   | wrench derive review <id> --entry 0 --fixtures - --json
+printf '%s' '["viewerName","followerCount"]' \
+  | wrench derive review <id> --entry 0 --field-names - --json
 ```
+
+Use `--field-names -` only when the sanitized structure has redacted a small,
+already hypothesized request or response schema key. Supply a JSON array of
+1–50 unique exact names on bounded stdin. Each name must be a non-credential
+schema-key string of at most 128 characters. `fieldNameMatches` identifies each
+candidate only by its zero-based array index, fixed `:candidate-field`
+locations, sorted structural value types, and truncation state. Probe matches
+never label or echo a candidate name and never return provider values. The
+independently sanitized `structure` remains unchanged, so a name already in
+Wrench's reviewed structural vocabulary may still appear there. Matching is
+exact and case-sensitive over
+own keys in bounded parsed JSON request bodies, JSON-valued query fields, and
+JSON responses. Credential subtrees and dynamic-map key positions remain
+opaque. `--field-names -` and `--fixtures -` are mutually exclusive; repeat
+the entry review separately when both kinds of evidence are needed.
 
 Review stays on the derivation target origin by default. If the one operation
 intentionally uses another HTTPS origin, that hostname must have been covered
@@ -257,6 +274,10 @@ start-admitted exact origin from the same sealed bytes.
 
 The first review stops and seals the exact inode-bound managed HAR. Browser commands are then disabled; repeat reviews and `finish` consume the same sealed bytes. Fixture values are accepted only through bounded stdin, matched only by exact primitive equality, and the result contains labels and structural locations, never the supplied values. It never performs substring probes. Credential-like query, form, JSON, path, header, cookie, authorization, session, signature, CSRF/XSRF, and token material is opaque. Bounded traversal reports `truncated: true` whenever searchable content was omitted, including oversized URLs, query values, JSON or text, capped parameters or containers, forms, and multipart bodies.
 
+Field-name input is parsed and rejected before the recorder is sealed.
+Invalid, duplicate, credential-like, oversized, or malformed candidates cannot
+change derivation lifecycle state.
+
 Review cannot replay a request or generate executable transport. Use the returned locations only to implement and test an owned parser and request builder.
 
 ## Finish and remove the raw capture
@@ -264,6 +285,23 @@ Review cannot replay a request or generate executable transport. Use the returne
 ```sh
 wrench derive finish <id> --output /absolute/private/linkedin-web-capture
 ```
+
+Finish analyzes and scaffolds the derivation target origin by default. A prior
+`derive review --review-origin` selection is never remembered. To finish an
+intentionally cross-origin exchange, select its one canonical origin again:
+
+```sh
+wrench derive finish <id> \
+  --review-origin https://upload.example.net \
+  --output /absolute/private/example-upload-capture
+```
+
+The selected hostname must be covered by the immutable `--domains` admission
+from `derive start`. Wrench rejects an invalid or unadmitted finish origin
+before it seals the recorder or mutates scaffold output. The selected origin is
+the target for both sanitized evidence reports and `wrench-adapter.json`.
+`--platform` independently selects reviewed surface metadata; it does not
+select, broaden, or remember the finish origin.
 
 Successful finish writes four mode-private artifacts and deletes the managed raw HAR:
 

@@ -909,7 +909,29 @@ describe("wrench CLI grammar", () => {
       value: {
         command: "derive-review",
         id: "derive-123",
-        selection: { kind: "entry", entryIndex: 42, fixtures: true },
+        selection: { kind: "entry", entryIndex: 42, stdinMode: "fixtures" },
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "derive", "review", "derive-123", "--entry", "7", "--field-names", "-", "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "derive-review",
+        id: "derive-123",
+        selection: { kind: "entry", entryIndex: 7, stdinMode: "field-names" },
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "derive", "review", "derive-123", "--entry", "8", "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "derive-review",
+        id: "derive-123",
+        selection: { kind: "entry", entryIndex: 8, stdinMode: "none" },
         json: true,
       },
     });
@@ -931,6 +953,8 @@ describe("wrench CLI grammar", () => {
       "derive-123",
       "--output",
       "./linkedin-adapter",
+      "--review-origin",
+      "https://upload.example.com",
       "--platform",
       "linkedin",
       "--force",
@@ -941,6 +965,7 @@ describe("wrench CLI grammar", () => {
         command: "derive-finish",
         id: "derive-123",
         output: "./linkedin-adapter",
+        reviewOrigin: "https://upload.example.com",
         surfaceId: "linkedin",
         force: true,
         json: true,
@@ -970,13 +995,23 @@ describe("wrench CLI grammar", () => {
     [["derive", "review", "derive-123", "--entry", "1", "--offset", "2"], "cannot be combined"],
     [["derive", "review", "derive-123", "--fixtures", "-"], "requires --entry"],
     [["derive", "review", "derive-123", "--entry", "1", "--fixtures", "fixtures.json"], "stdin"],
+    [["derive", "review", "derive-123", "--field-names", "-"], "requires --entry"],
+    [["derive", "review", "derive-123", "--entry", "1", "--field-names", "fields.json"], "stdin"],
+    [["derive", "review", "derive-123", "--entry", "1", "--fixtures", "-", "--field-names", "-"], "mutually exclusive"],
     [["derive", "review", "derive-123", "--review-origin", "http://upload.example.com"], "exact HTTPS origin"],
     [["derive", "review", "derive-123", "--review-origin", "https://upload.example.com/"], "exact HTTPS origin"],
     [["derive", "review", "derive-123", "--review-origin", "https://upload.example.com/path"], "exact HTTPS origin"],
     [["derive", "review", "derive-123", "--review-origin", "https://upload.example.com?secret=never-print"], "exact HTTPS origin"],
     [["derive", "review", "derive-123", "--review-origin", "https://user:password@upload.example.com"], "exact HTTPS origin"],
     [["derive", "review", "derive-123", "--review-origin", "https://upload.example.com", "--review-origin", "https://upload.example.com"], "more than once"],
-  ])("rejects unsafe derive review grammar %#", (arguments_, message) => {
+    [["derive", "finish", "derive-123", "--output", "./derived", "--review-origin", "http://upload.example.com"], "exact HTTPS origin"],
+    [["derive", "finish", "derive-123", "--output", "./derived", "--review-origin", "https://upload.example.com/"], "exact HTTPS origin"],
+    [["derive", "finish", "derive-123", "--output", "./derived", "--review-origin", "https://upload.example.com/path"], "exact HTTPS origin"],
+    [["derive", "finish", "derive-123", "--output", "./derived", "--review-origin", "https://upload.example.com?secret=never-print"], "exact HTTPS origin"],
+    [["derive", "finish", "derive-123", "--output", "./derived", "--review-origin", "https://user:password@upload.example.com"], "exact HTTPS origin"],
+    [["derive", "finish", "derive-123", "--output", "./derived", "--review-origin", "https://upload.example.com", "--review-origin", "https://upload.example.com"], "more than once"],
+    [["derive", "finish", "derive-123", "--output", "./derived", "--review-origin"], "requires a value"],
+  ])("rejects unsafe derive origin grammar %#", (arguments_, message) => {
     const parsed = parseWrenchArguments(arguments_);
     expect(parsed.ok).toBeFalse();
     if (!parsed.ok) expect(parsed.message).toContain(message);

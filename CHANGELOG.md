@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.13.6 - 2026-08-25
+
 - Scrub JPEG and PNG provenance before X media upload, and fail closed when
   CreateTweet or independent TweetResultByRestId readback shows a Made with AI
   sparkle on user-supplied copy.
@@ -9,6 +11,11 @@
   discard so the live result cannot be published.
 - Keep polling derivation-proxy readiness until the ready file is a complete
   0600 regular file, so an O_EXCL create cannot fail the start race.
+- Add an authenticated, current-viewer-bound Twitch profile read that binds the
+  fixed login-parameterized channel response to the viewer's immutable identity
+  before returning its exact follower count.
+- Promote the Hraness Twitch row from an expected categorical gap to the
+  package-owned exact daily social-statistics workflow.
 
 ## 0.13.5 - 2026-08-24
 

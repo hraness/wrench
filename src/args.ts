@@ -176,13 +176,18 @@ export type WrenchArguments =
       readonly reviewOrigin?: string;
       readonly selection:
         | { readonly kind: "list"; readonly offset: number; readonly limit: number }
-        | { readonly kind: "entry"; readonly entryIndex: number; readonly fixtures: boolean };
+        | {
+            readonly kind: "entry";
+            readonly entryIndex: number;
+            readonly stdinMode: "none" | "fixtures" | "field-names";
+          };
       readonly json: boolean;
     }
   | {
       readonly command: "derive-finish";
       readonly id: string;
       readonly output: string;
+      readonly reviewOrigin?: string;
       readonly surfaceId?: PlatformSurfaceId;
       readonly force: boolean;
       readonly json: boolean;
@@ -353,6 +358,29 @@ function optionValues(
 
 function isFailure(value: OptionValuesResult): value is ParseWrenchFailure {
   return "ok" in value && value.ok === false;
+}
+
+function parseExactHttpsOriginOption(
+  value: string | undefined,
+  label: string,
+): ParseWrenchFailure | string | undefined {
+  if (value === undefined) return undefined;
+  let origin: URL;
+  try {
+    if (value.length > 4_096) throw new Error("oversized origin");
+    origin = new URL(value);
+  } catch {
+    return { ok: false, message: `${label} must be an exact HTTPS origin` };
+  }
+  if (
+    origin.protocol !== "https:"
+    || origin.username !== ""
+    || origin.password !== ""
+    || value !== origin.origin
+  ) {
+    return { ok: false, message: `${label} must be an exact HTTPS origin` };
+  }
+  return origin.origin;
 }
 
 function simpleJsonOptions(raw: readonly string[], label: string): ParseWrenchResult | boolean {
@@ -1404,32 +1432,22 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     if (subcommand === "review") {
       const id = raw[2];
       if (id === undefined) return { ok: false, message: "derive review requires a derivation ID" };
-      const parsed = optionValues(raw.slice(3), ["--entry", "--offset", "--limit", "--fixtures", "--review-origin"], ["--json"]);
+      const parsed = optionValues(
+        raw.slice(3),
+        ["--entry", "--offset", "--limit", "--fixtures", "--field-names", "--review-origin"],
+        ["--json"],
+      );
       if (isFailure(parsed)) return parsed;
       const entryValue = parsed.values["--entry"];
       const offsetValue = parsed.values["--offset"];
       const limitValue = parsed.values["--limit"];
       const fixtureSource = parsed.values["--fixtures"];
-      const reviewOriginValue = parsed.values["--review-origin"];
-      let reviewOrigin: string | undefined;
-      if (reviewOriginValue !== undefined) {
-        let origin: URL;
-        try {
-          if (reviewOriginValue.length > 4_096) throw new Error("oversized origin");
-          origin = new URL(reviewOriginValue);
-        } catch {
-          return { ok: false, message: "derive review --review-origin must be an exact HTTPS origin" };
-        }
-        if (
-          origin.protocol !== "https:"
-          || origin.username !== ""
-          || origin.password !== ""
-          || reviewOriginValue !== origin.origin
-        ) {
-          return { ok: false, message: "derive review --review-origin must be an exact HTTPS origin" };
-        }
-        reviewOrigin = origin.origin;
-      }
+      const fieldNameSource = parsed.values["--field-names"];
+      const reviewOrigin = parseExactHttpsOriginOption(
+        parsed.values["--review-origin"],
+        "derive review --review-origin",
+      );
+      if (typeof reviewOrigin === "object") return reviewOrigin;
       const boundedInteger = (value: string | undefined, fallback: number, maximum: number): number | null => {
         if (value === undefined) return fallback;
         if (!/^\d{1,5}$/u.test(value)) return null;
@@ -1445,18 +1463,33 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         if (fixtureSource !== undefined && fixtureSource !== "-") {
           return { ok: false, message: "derive review fixtures must be supplied on stdin with --fixtures -" };
         }
+        if (fieldNameSource !== undefined && fieldNameSource !== "-") {
+          return { ok: false, message: "derive review field names must be supplied on stdin with --field-names -" };
+        }
+        if (fixtureSource !== undefined && fieldNameSource !== undefined) {
+          return { ok: false, message: "derive review --fixtures and --field-names are mutually exclusive" };
+        }
         return {
           ok: true,
           value: {
             command: "derive-review",
             id,
             ...(reviewOrigin === undefined ? {} : { reviewOrigin }),
-            selection: { kind: "entry", entryIndex, fixtures: fixtureSource === "-" },
+            selection: {
+              kind: "entry",
+              entryIndex,
+              stdinMode: fixtureSource === "-"
+                ? "fixtures"
+                : fieldNameSource === "-"
+                  ? "field-names"
+                  : "none",
+            },
             json: parsed.booleans.has("--json"),
           },
         };
       }
       if (fixtureSource !== undefined) return { ok: false, message: "derive review --fixtures requires --entry" };
+      if (fieldNameSource !== undefined) return { ok: false, message: "derive review --field-names requires --entry" };
       const offset = boundedInteger(offsetValue, 0, 20_000);
       const limit = boundedInteger(limitValue, 50, 100);
       if (offset === null) return { ok: false, message: "derive review --offset must be an integer from 0 to 20000" };
@@ -1475,10 +1508,19 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     if (subcommand === "finish") {
       const id = raw[2];
       if (id === undefined) return { ok: false, message: "derive finish requires a derivation ID" };
-      const parsed = optionValues(raw.slice(3), ["--output", "--platform"], ["--force", "--json"]);
+      const parsed = optionValues(
+        raw.slice(3),
+        ["--output", "--platform", "--review-origin"],
+        ["--force", "--json"],
+      );
       if (isFailure(parsed)) return parsed;
       const output = parsed.values["--output"];
       if (output === undefined) return { ok: false, message: "derive finish requires --output" };
+      const reviewOrigin = parseExactHttpsOriginOption(
+        parsed.values["--review-origin"],
+        "derive finish --review-origin",
+      );
+      if (typeof reviewOrigin === "object") return reviewOrigin;
       const requestedPlatform = parsed.values["--platform"];
       const surfaceId = requestedPlatform === undefined ? undefined : knownPlatformSurface(requestedPlatform);
       if (surfaceId === null) {
@@ -1490,6 +1532,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
           command: "derive-finish",
           id,
           output,
+          ...(reviewOrigin === undefined ? {} : { reviewOrigin }),
           ...(surfaceId === undefined ? {} : { surfaceId }),
           force: parsed.booleans.has("--force"),
           json: parsed.booleans.has("--json"),

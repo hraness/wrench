@@ -66,6 +66,7 @@ import {
 } from "./har";
 import { analyzeInternalHarFile, analyzeInternalHarValue, type InternalHarEvidence } from "./har-internal";
 import {
+  parseDerivationReviewFieldNames,
   reviewDerivationHarText,
   type DerivationReviewResult,
   type DerivationReviewSelection,
@@ -4411,6 +4412,7 @@ async function sealDerivationReview(
 function admittedDerivationReviewOrigin(
   session: DerivationSession,
   reviewOriginValue: string | undefined,
+  command: "review" | "finish",
 ): string {
   if (reviewOriginValue === undefined) return session.targetOrigin;
   let reviewOrigin: URL;
@@ -4418,7 +4420,7 @@ function admittedDerivationReviewOrigin(
     if (reviewOriginValue.length > 4_096) throw new Error("oversized origin");
     reviewOrigin = new URL(reviewOriginValue);
   } catch {
-    throw new Error("derive review --review-origin must be an exact HTTPS origin");
+    throw new Error(`derive ${command} --review-origin must be an exact HTTPS origin`);
   }
   if (
     reviewOrigin.protocol !== "https:"
@@ -4426,14 +4428,37 @@ function admittedDerivationReviewOrigin(
     || reviewOrigin.password !== ""
     || reviewOrigin.origin !== reviewOriginValue
   ) {
-    throw new Error("derive review --review-origin must be an exact HTTPS origin");
+    throw new Error(`derive ${command} --review-origin must be an exact HTTPS origin`);
   }
   if (!browserDomainsCover(session.browserDomains, reviewOrigin.hostname.toLowerCase())) {
     throw new Error(
-      "derive review --review-origin was not admitted by the derivation start-time browser domains",
+      `derive ${command} --review-origin was not admitted by the derivation start-time browser domains`,
     );
   }
   return reviewOrigin.origin;
+}
+
+function stableDirectDerivationReviewSelection(
+  selection: DerivationReviewSelection,
+): DerivationReviewSelection {
+  if (selection.kind !== "entry") return selection;
+  const direct = selection as {
+    readonly entryIndex: number;
+    readonly fieldNames?: unknown;
+    readonly fixtures?: unknown;
+    readonly kind: "entry";
+  };
+  const fixtures = direct.fixtures;
+  const fieldNames = direct.fieldNames;
+  if (fixtures !== undefined && fieldNames !== undefined) {
+    throw new Error("private review entry probes are mutually exclusive");
+  }
+  if (fieldNames === undefined) return selection;
+  return Object.freeze({
+    kind: "entry",
+    entryIndex: direct.entryIndex,
+    fieldNames: parseDerivationReviewFieldNames(fieldNames),
+  });
 }
 
 export async function reviewDerivation(
@@ -4442,13 +4467,18 @@ export async function reviewDerivation(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   reviewOriginValue?: string,
 ): Promise<DerivationReviewResult> {
+  // Direct callers can retain and mutate their selection while HAR sealing
+  // awaits browser shutdown. Validate and take an immutable field-name copy
+  // before entering that lifecycle so a malformed or changed probe cannot
+  // seal the recorder first.
+  const stableSelection = stableDirectDerivationReviewSelection(selection);
   return withDerivationLifecycleGate(id, environment, async () => {
     const session = loadSession(id, environment);
     // Reject caller-selected origins before stopping or sealing the recorder.
     // Admission comes only from immutable start-time session metadata.
-    const reviewOrigin = admittedDerivationReviewOrigin(session, reviewOriginValue);
+    const reviewOrigin = admittedDerivationReviewOrigin(session, reviewOriginValue, "review");
     const sealed = await sealDerivationReview(session, environment);
-    return reviewDerivationHarText(sealed.text, reviewOrigin, selection);
+    return reviewDerivationHarText(sealed.text, reviewOrigin, stableSelection);
   });
 }
 
@@ -4458,6 +4488,7 @@ export async function finishDerivation(
   options: {
     readonly force: boolean;
     readonly registry: ProviderPluginRegistry;
+    readonly reviewOrigin?: string;
     readonly surfaceId?: PlatformSurfaceId;
     readonly environment?: Readonly<Record<string, string | undefined>>;
   },
@@ -4472,7 +4503,10 @@ export async function finishDerivation(
   const environment = options.environment ?? process.env;
   return withDerivationLifecycleGate(id, environment, async () => {
     const session = loadSession(id, environment);
-    assertBrowserDerivationTargetAllowed(new URL(session.targetOrigin));
+    // A finish selection is invocation-local. Validate it against immutable
+    // start-time admission before sealing the HAR or touching scaffold output.
+    const reviewOrigin = admittedDerivationReviewOrigin(session, options.reviewOrigin, "finish");
+    assertBrowserDerivationTargetAllowed(new URL(reviewOrigin));
     assertScaffoldOutput(outputDirectory, options.force);
     const harPath = captureHarPath(session);
     let reviewSeal = readReviewSeal(session, environment);
@@ -4503,28 +4537,28 @@ export async function finishDerivation(
         analysis = analyzeHarValue(
           value,
           session.adapterId,
-          session.targetOrigin,
+          reviewOrigin,
           new Date(),
           session.browserDomains,
         );
         internalEvidence = analyzeInternalHarValue(
           value,
           session.adapterId,
-          session.targetOrigin,
+          reviewOrigin,
         );
       } else {
         await batch(session, [["network", "har", "stop", "capture.har"]]);
         analysis = analyzeHarFile(
           harPath,
           session.adapterId,
-          session.targetOrigin,
+          reviewOrigin,
           session.browserDomains,
           session.directoryIdentity,
         );
         internalEvidence = analyzeInternalHarFile(
           harPath,
           session.adapterId,
-          session.targetOrigin,
+          reviewOrigin,
           session.directoryIdentity,
         );
       }

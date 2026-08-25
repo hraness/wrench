@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  parseDerivationReviewFieldNames,
   parseDerivationReviewFixtures,
   reviewDerivationHarValue,
 } from "./derive-review";
@@ -206,7 +207,623 @@ function deeplyNestedFixture(value: string): unknown {
   return nested;
 }
 
+function deeplyNestedField(name: string): unknown {
+  let nested: unknown = { [name]: 1 };
+  for (let depth = 0; depth < 9; depth += 1) nested = { body: nested };
+  return nested;
+}
+
+const twitchGraphQlOrigin = "https://gql.twitch.tv";
+
+function twitchGraphQlHar(options: {
+  readonly method?: string;
+  readonly url?: string;
+  readonly requestMimeType?: string;
+  readonly responseMimeType?: string;
+  readonly responseBody?: unknown;
+} = {}): unknown {
+  return {
+    log: {
+      entries: [{
+        request: {
+          method: options.method ?? "POST",
+          url: options.url ?? `${twitchGraphQlOrigin}/gql`,
+          headers: [
+            { name: "Client-ID", value: "private-client-id-fixture" },
+            { name: "Client-Integrity", value: "private-client-integrity-fixture" },
+            { name: "Authorization", value: "private-header-auth-fixture" },
+          ],
+          postData: {
+            mimeType: options.requestMimeType ?? "text/plain; charset=UTF-8",
+            text: JSON.stringify({
+              operationName: "PrivateFollowerOperation",
+              variables: {
+                channelLogin: "private-request-channel-login",
+                login: "private-request-login",
+                authToken: { channelLogin: "private-request-auth-token-login" },
+                authorization: { login: "private-request-authorization-login" },
+                cookie: { login: "private-request-cookie-login" },
+                session: { login: "private-request-session-login" },
+                token: { login: "private-request-token-login" },
+                secret: { login: "private-request-secret-login" },
+                password: { login: "private-request-password-login" },
+              },
+              extensions: {
+                persistedQuery: { version: 1, sha256Hash: "private-query-hash" },
+              },
+            }),
+          },
+        },
+        response: {
+          status: 200,
+          content: {
+            mimeType: options.responseMimeType ?? "application/json",
+            text: JSON.stringify(options.responseBody ?? {
+              data: {
+                currentUser: {
+                  id: "private-viewer-id",
+                  login: "private-viewer-login",
+                  displayName: "Private Viewer",
+                },
+                user: {
+                  id: "private-target-id",
+                  login: "private-target-login",
+                  displayName: "Private Target",
+                  followers: { totalCount: 37 },
+                  auth: { login: "private-response-auth-login" },
+                  authToken: { login: "private-response-auth-token-login" },
+                  cookie: { login: "private-response-cookie-login" },
+                  session: { login: "private-response-session-login" },
+                  token: { login: "private-response-token-login" },
+                  secret: { login: "private-response-secret-login" },
+                  password: { login: "private-response-password-login" },
+                },
+              },
+              extensions: { requestInfo: { id: "private-request-info-id" } },
+            }),
+          },
+        },
+      }],
+    },
+  };
+}
+
 describe("private derivation review", () => {
+  test("reviews exact-route Twitch text/plain JSON fixtures without exposing values or credential subtrees", () => {
+    const fixtureValues = {
+      request_channel: "private-request-channel-login",
+      request_login: "private-request-login",
+      viewer_login: "private-viewer-login",
+      target_login: "private-target-login",
+      follower_count: "37",
+      client_id: "private-client-id-fixture",
+      client_integrity: "private-client-integrity-fixture",
+      header_auth: "private-header-auth-fixture",
+      request_auth: "private-request-auth-token-login",
+      request_authorization: "private-request-authorization-login",
+      request_cookie: "private-request-cookie-login",
+      request_session: "private-request-session-login",
+      request_token: "private-request-token-login",
+      request_secret: "private-request-secret-login",
+      request_password: "private-request-password-login",
+      response_auth: "private-response-auth-login",
+      response_auth_token: "private-response-auth-token-login",
+      response_cookie: "private-response-cookie-login",
+      response_session: "private-response-session-login",
+      response_token: "private-response-token-login",
+      response_secret: "private-response-secret-login",
+      response_password: "private-response-password-login",
+    };
+    const result = reviewDerivationHarValue(twitchGraphQlHar(), twitchGraphQlOrigin, {
+      kind: "entry",
+      entryIndex: 0,
+      fixtures: parseDerivationReviewFixtures(fixtureValues),
+    });
+    expect(result.kind).toBe("entry");
+    if (result.kind !== "entry") throw new Error("expected entry review");
+
+    expect(result.structure.path).toBe("/gql");
+    expect(result.structure.headerNames).toContain("client-id");
+    expect(result.structure.headerNames).toContain("client-integrity");
+    for (const path of [
+      "operationName",
+      "variables.channelLogin",
+      "variables.login",
+      "extensions.persistedQuery.version",
+      "extensions.persistedQuery.sha256Hash",
+    ]) expect(result.structure.requestFieldPaths).toContain(path);
+    for (const path of [
+      "data.currentUser.id",
+      "data.currentUser.login",
+      "data.currentUser.displayName",
+      "data.user.id",
+      "data.user.login",
+      "data.user.displayName",
+      "data.user.followers.totalCount",
+      "extensions.requestInfo.id",
+    ]) expect(result.structure.responseFieldPaths).toContain(path);
+
+    expect(Object.fromEntries(result.fixtureMatches.map((match) => [match.label, match.locations]))).toEqual({
+      request_channel: ["request.body.variables.channelLogin"],
+      request_login: ["request.body.variables.login"],
+      viewer_login: ["response.body.data.currentUser.login"],
+      target_login: ["response.body.data.user.login"],
+      follower_count: ["response.body.data.user.followers.totalCount"],
+      client_id: [],
+      client_integrity: [],
+      header_auth: [],
+      request_auth: [],
+      request_authorization: [],
+      request_cookie: [],
+      request_session: [],
+      request_token: [],
+      request_secret: [],
+      request_password: [],
+      response_auth: [],
+      response_auth_token: [],
+      response_cookie: [],
+      response_session: [],
+      response_token: [],
+      response_secret: [],
+      response_password: [],
+    });
+    expect(result.fixtureMatches.every((match) => match.truncated === false)).toBeTrue();
+    const rendered = JSON.stringify(result);
+    for (const privateValue of Object.values(fixtureValues)) expect(rendered).not.toContain(privateValue);
+    for (const privateValue of [
+      "PrivateFollowerOperation",
+      "private-viewer-id",
+      "Private Viewer",
+      "private-target-id",
+      "Private Target",
+      "private-query-hash",
+      "private-request-info-id",
+    ]) expect(rendered).not.toContain(privateValue);
+  });
+
+  test("reports Twitch schema-key value types without returning provider values", () => {
+    const fieldNames = parseDerivationReviewFieldNames([
+      "currentUser",
+      "followers",
+      "totalCount",
+      "displayName",
+    ]);
+    const result = reviewDerivationHarValue(twitchGraphQlHar(), twitchGraphQlOrigin, {
+      kind: "entry",
+      entryIndex: 0,
+      fieldNames,
+    });
+    expect(result.kind).toBe("entry");
+    if (result.kind !== "entry") throw new Error("expected entry review");
+    expect(result.fieldNameMatches).toEqual([
+      {
+        candidateIndex: 0,
+        locations: ["response.body.data.:candidate-field"],
+        truncated: false,
+        valueTypes: ["object"],
+      },
+      {
+        candidateIndex: 1,
+        locations: ["response.body.data.user.:candidate-field"],
+        truncated: false,
+        valueTypes: ["object"],
+      },
+      {
+        candidateIndex: 2,
+        locations: ["response.body.data.user.followers.:candidate-field"],
+        truncated: false,
+        valueTypes: ["number"],
+      },
+      {
+        candidateIndex: 3,
+        locations: [
+          "response.body.data.currentUser.:candidate-field",
+          "response.body.data.user.:candidate-field",
+        ],
+        truncated: false,
+        valueTypes: ["string"],
+      },
+    ]);
+    const rendered = JSON.stringify(result);
+    expect(rendered).not.toContain("private-target-login");
+    expect(rendered).not.toContain("private-viewer-login");
+  });
+
+  test("fails Twitch fixture traversal closed away from the exact POST origin, path, and MIME", () => {
+    const scenarios = [
+      {
+        origin: twitchGraphQlOrigin,
+        har: twitchGraphQlHar({ url: `${twitchGraphQlOrigin}/not-gql` }),
+        responseLoginShouldBeOpaque: true,
+      },
+      {
+        origin: "https://example.com",
+        har: twitchGraphQlHar({ url: "https://example.com/gql" }),
+        responseLoginShouldBeOpaque: true,
+      },
+      {
+        origin: twitchGraphQlOrigin,
+        har: twitchGraphQlHar({ requestMimeType: "application/octet-stream" }),
+        responseLoginShouldBeOpaque: false,
+      },
+      {
+        origin: twitchGraphQlOrigin,
+        har: twitchGraphQlHar({ method: "GET" }),
+        responseLoginShouldBeOpaque: true,
+      },
+      {
+        origin: twitchGraphQlOrigin,
+        har: twitchGraphQlHar({ method: "PUT" }),
+        responseLoginShouldBeOpaque: true,
+      },
+    ];
+    for (const scenario of scenarios) {
+      const fixtures = {
+        request_channel: "private-request-channel-login",
+        request_login: "private-request-login",
+        ...(scenario.responseLoginShouldBeOpaque
+          ? {
+              viewer_login: "private-viewer-login",
+              target_login: "private-target-login",
+            }
+          : {}),
+      };
+      const result = reviewDerivationHarValue(scenario.har, scenario.origin, {
+        kind: "entry",
+        entryIndex: 0,
+        fixtures: parseDerivationReviewFixtures(fixtures),
+      });
+      expect(result.kind).toBe("entry");
+      if (result.kind !== "entry") throw new Error("expected entry review");
+      expect(result.fixtureMatches).toEqual(Object.keys(fixtures).map((label) => ({
+        label,
+        locations: [],
+        truncated: false,
+      })));
+      expect(result.structure.requestFieldPaths).not.toContain("variables.channelLogin");
+      expect(result.structure.requestFieldPaths).not.toContain("variables.login");
+      const rendered = JSON.stringify(result);
+      for (const privateValue of Object.values(fixtures)) expect(rendered).not.toContain(privateValue);
+    }
+  });
+
+  test("marks exact Twitch public-login probes truncated at depth and remaining-array node caps", () => {
+    let depthCapped: unknown = { channelLogin: "private-depth-channel-login" };
+    for (let depth = 0; depth < 8; depth += 1) depthCapped = { data: depthCapped };
+    const nodeCapped = [
+      ...Array.from(
+        { length: 99 },
+        () => Array.from({ length: 100 }, () => null),
+      ),
+      { login: "private-node-login" },
+    ];
+    const scenarios = [
+      { fixture: "private-depth-channel-login", responseBody: depthCapped },
+      { fixture: "private-node-login", responseBody: nodeCapped },
+    ];
+
+    for (const scenario of scenarios) {
+      const result = reviewDerivationHarValue(
+        twitchGraphQlHar({
+          requestMimeType: "application/octet-stream",
+          responseBody: scenario.responseBody,
+        }),
+        twitchGraphQlOrigin,
+        {
+          kind: "entry",
+          entryIndex: 0,
+          fixtures: parseDerivationReviewFixtures({ hidden: scenario.fixture }),
+        },
+      );
+      expect(result.kind).toBe("entry");
+      if (result.kind !== "entry") throw new Error("expected entry review");
+      expect(result.fixtureMatches).toEqual([{
+        label: "hidden",
+        locations: [],
+        truncated: true,
+      }]);
+      expect(JSON.stringify(result)).not.toContain(scenario.fixture);
+    }
+  });
+
+  test("parses only unique bounded non-credential schema-key candidates without echoing them", () => {
+    const candidates = ["viewerName", "follower.count", "$identity", "safe-name"];
+    expect(parseDerivationReviewFieldNames(candidates)).toEqual(candidates);
+    expect(Object.isFrozen(parseDerivationReviewFieldNames(candidates))).toBeTrue();
+
+    for (const invalid of [
+      null,
+      {},
+      [],
+      ["duplicate", "duplicate"],
+      ["bad space"],
+      ["1startsWithDigit"],
+      ["x".repeat(129)],
+      ["authorization"],
+      ["apiKey"],
+      Array.from({ length: 51 }, (_value, index) => `field${index}`),
+    ]) {
+      const renderedInput = JSON.stringify(invalid);
+      let message = "";
+      try {
+        parseDerivationReviewFieldNames(invalid);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message.length).toBeGreaterThan(0);
+      if (renderedInput !== undefined) {
+        for (const candidate of Array.isArray(invalid) ? invalid : []) {
+          if (typeof candidate === "string") expect(message).not.toContain(candidate);
+        }
+      }
+    }
+
+    const withExtra = ["safeField"] as string[] & { extra?: string };
+    withExtra.extra = "must-not-be-accepted";
+    expect(() => parseDerivationReviewFieldNames(withExtra)).toThrow("plain JSON array");
+  });
+
+  test("matches exact own JSON keys across query, request, and response with types but never names or values", () => {
+    const query = encodeURIComponent(JSON.stringify({ followerCount: 3 }));
+    const har = rawJsonExchangeHar(
+      JSON.stringify({
+        followerCount: 4,
+        viewerName: "private-viewer-value",
+        valueOnly: "valueOnlyCandidate",
+        credentials: { safeInsideOpaque: 99 },
+      }),
+      JSON.stringify({
+        data: {
+          followerCount: 5,
+          viewerName: "private-target-value",
+          FollowerCount: 6,
+          messages: {
+            dynamicCandidate: { followerCount: 7 },
+          },
+          mixedType: null,
+          items: [
+            { mixedType: true },
+            { mixedType: 8 },
+            { mixedType: "private-mixed-value" },
+            { mixedType: [] },
+            { mixedType: {} },
+          ],
+        },
+      }),
+    ) as { log: { entries: Array<{ request: { url: string } }> } };
+    har.log.entries[0]!.request.url = `${targetOrigin}/api/messages?variables=${query}`;
+    const fieldNames = parseDerivationReviewFieldNames([
+      "followerCount",
+      "viewerName",
+      "mixedType",
+      "valueOnlyCandidate",
+      "dynamicCandidate",
+      "Followercount",
+      "safeInsideOpaque",
+    ]);
+    const result = reviewDerivationHarValue(har, targetOrigin, {
+      kind: "entry",
+      entryIndex: 0,
+      fieldNames,
+    });
+    expect(result.kind).toBe("entry");
+    if (result.kind !== "entry") throw new Error("expected entry review");
+
+    expect(result.fixtureMatches).toEqual([]);
+    expect(result.fieldNameMatches[0]).toEqual({
+      candidateIndex: 0,
+      locations: [
+        "request.body.:candidate-field",
+        "request.query.variables[0].:candidate-field",
+        "response.body.data.:candidate-field",
+        "response.body.data.messages.:dynamic.:candidate-field",
+      ],
+      truncated: false,
+      valueTypes: ["number"],
+    });
+    expect(result.fieldNameMatches[1]).toEqual({
+      candidateIndex: 1,
+      locations: [
+        "request.body.:candidate-field",
+        "response.body.data.:candidate-field",
+      ],
+      truncated: false,
+      valueTypes: ["string"],
+    });
+    expect(result.fieldNameMatches[2]).toEqual({
+      candidateIndex: 2,
+      locations: [
+        "response.body.data.:candidate-field",
+        "response.body.data.items[].:candidate-field",
+      ],
+      truncated: false,
+      valueTypes: ["array", "boolean", "null", "number", "object", "string"],
+    });
+    for (const candidateIndex of [3, 4, 5, 6]) {
+      expect(result.fieldNameMatches[candidateIndex]).toEqual({
+        candidateIndex,
+        locations: [],
+        truncated: false,
+        valueTypes: [],
+      });
+    }
+    const rendered = JSON.stringify(result);
+    for (const privateText of [
+      ...fieldNames,
+      "private-viewer-value",
+      "private-target-value",
+      "private-mixed-value",
+    ]) expect(rendered).not.toContain(privateText);
+  });
+
+  test("keeps dynamic member keys opaque beneath an unreviewed object container while reviewing member values", () => {
+    const result = reviewDerivationHarValue(
+      jsonExchangeHar({
+        data: {
+          unreviewedContainer: {
+            targetSlug: { followerCount: 9 },
+          },
+        },
+      }),
+      targetOrigin,
+      {
+        kind: "entry",
+        entryIndex: 0,
+        fieldNames: parseDerivationReviewFieldNames(["targetSlug", "followerCount"]),
+      },
+    );
+    expect(result.kind).toBe("entry");
+    if (result.kind !== "entry") throw new Error("expected entry review");
+    expect(result.fieldNameMatches).toEqual([
+      {
+        candidateIndex: 0,
+        locations: [],
+        truncated: false,
+        valueTypes: [],
+      },
+      {
+        candidateIndex: 1,
+        locations: ["request.body.data.:dynamic.:dynamic.:candidate-field"],
+        truncated: false,
+        valueTypes: ["number"],
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("targetSlug");
+    expect(JSON.stringify(result)).not.toContain("followerCount");
+  });
+
+  test("marks schema-key probes truncated at depth, array, object, and node traversal caps", () => {
+    const objectEntries = Array.from({ length: 301 }, (_value, index) => [
+      index === 0 ? "visibleObjectProbe" : index === 300 ? "hiddenObjectProbe" : `field_${index}`,
+      index,
+    ] as const);
+    const nodeMatrix = Array.from(
+      { length: 100 },
+      () => Array.from({ length: 100 }, () => ({ filler: false })),
+    );
+    const scenarios = [
+      {
+        body: {
+          visibleDepthProbe: 1,
+          body: deeplyNestedField("hiddenDepthProbe"),
+        },
+        names: ["visibleDepthProbe", "hiddenDepthProbe"],
+      },
+      {
+        body: {
+          items: Array.from({ length: 101 }, (_value, index) =>
+            index === 0
+              ? { visibleArrayProbe: 1 }
+              : index === 100
+                ? { hiddenArrayProbe: 2 }
+                : { filler: 0 }),
+        },
+        names: ["visibleArrayProbe", "hiddenArrayProbe"],
+      },
+      {
+        body: { metadata: Object.fromEntries(objectEntries) },
+        names: ["visibleObjectProbe", "hiddenObjectProbe"],
+      },
+      {
+        body: {
+          visibleNodeProbe: 1,
+          items: nodeMatrix,
+          hiddenNodeProbe: 2,
+        },
+        names: ["visibleNodeProbe", "hiddenNodeProbe"],
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const fieldNames = parseDerivationReviewFieldNames([...scenario.names]);
+      const result = reviewDerivationHarValue(
+        jsonExchangeHar(scenario.body),
+        targetOrigin,
+        { kind: "entry", entryIndex: 0, fieldNames },
+      );
+      expect(result.kind).toBe("entry");
+      if (result.kind !== "entry") throw new Error("expected entry review");
+      expect(result.fieldNameMatches).toEqual([
+        {
+          candidateIndex: 0,
+          locations: [expect.stringContaining(":candidate-field")],
+          truncated: true,
+          valueTypes: ["number"],
+        },
+        {
+          candidateIndex: 1,
+          locations: [],
+          truncated: true,
+          valueTypes: [],
+        },
+      ]);
+      const rendered = JSON.stringify(result);
+      for (const name of fieldNames) expect(rendered).not.toContain(name);
+    }
+  });
+
+  test("applies the 100-location cap independently to each schema-key candidate", () => {
+    const branches = [
+      "body",
+      "comments",
+      "conversation",
+      "data",
+      "entities",
+      "items",
+      "media",
+      "messages",
+      "metadata",
+      "nodes",
+      "paging",
+    ];
+    const leaves = [
+      "category",
+      "conversation_id",
+      "count",
+      "cursor",
+      "entityUrn",
+      "id",
+      "limit",
+      "message",
+      "name",
+      "subject",
+      "text",
+    ];
+    const repeated = Object.fromEntries(branches.map((branch) => [
+      branch,
+      Object.fromEntries(leaves.map((leaf) => [leaf, { cappedProbe: 1 }])),
+    ]));
+    const result = reviewDerivationHarValue(
+      jsonExchangeHar({
+        payload: { body: repeated, data: repeated },
+        controlProbe: "private-control-value",
+      }),
+      targetOrigin,
+      {
+        kind: "entry",
+        entryIndex: 0,
+        fieldNames: parseDerivationReviewFieldNames(["cappedProbe", "controlProbe"]),
+      },
+    );
+    expect(result.kind).toBe("entry");
+    if (result.kind !== "entry") throw new Error("expected entry review");
+    expect(result.fieldNameMatches[0]).toMatchObject({
+      candidateIndex: 0,
+      truncated: true,
+      valueTypes: ["number"],
+    });
+    expect(result.fieldNameMatches[0]?.locations).toHaveLength(100);
+    expect(result.fieldNameMatches[1]).toEqual({
+      candidateIndex: 1,
+      locations: ["request.body.:candidate-field"],
+      truncated: false,
+      valueTypes: ["string"],
+    });
+    expect(JSON.stringify(result)).not.toContain("private-control-value");
+    expect(JSON.stringify(result)).not.toContain("cappedProbe");
+    expect(JSON.stringify(result)).not.toContain("controlProbe");
+  });
+
   test("matches only reviewed non-secret contract headers and returns locations, never values", () => {
     const fixtures = parseDerivationReviewFixtures({
       method: "PARTIAL_UPDATE",
@@ -391,8 +1008,8 @@ describe("private derivation review", () => {
       response_header: [],
       request_aliases: [],
       response_aliases: [],
-      safe_author: ["request.body.payload.:dynamic.text"],
-      safe_consideration: ["request.body.payload.:dynamic.text"],
+      safe_author: ["request.body.payload.:dynamic.:dynamic"],
+      safe_consideration: ["request.body.payload.:dynamic.:dynamic"],
     });
     expect(result.fixtureMatches.every((match) => match.truncated === false)).toBeTrue();
     const rendered = JSON.stringify(result);
@@ -713,7 +1330,7 @@ describe("private derivation review", () => {
       {
         har: jsonExchangeHar({ payload: { metadata: oversizedObject } }),
         visible: "object-visible-fixture",
-        visibleLocation: "request.body.payload.metadata.:dynamic.text",
+        visibleLocation: "request.body.payload.metadata.:dynamic.:dynamic",
         hidden: "object-hidden-fixture",
       },
       {

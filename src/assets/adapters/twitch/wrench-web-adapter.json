@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 4,
+  "id": "twitch-web",
+  "version": "1.0.0",
+  "displayName": "Twitch (Authenticated Web API)",
+  "surfaceId": "twitch",
+  "origins": [
+    "https://www.twitch.tv"
+  ],
+  "browserDomains": [
+    "www.twitch.tv"
+  ],
+  "operations": {
+    "profiles.read": {
+      "description": "Read one exact follower count through fixed authenticated current-viewer and target-bound Twitch About-panel registered queries.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Exact lowercase Twitch login without @",
+            "minLength": 4,
+            "maxLength": 25
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "webSession": {
+        "site": "twitch",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}

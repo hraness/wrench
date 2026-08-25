@@ -4,6 +4,7 @@ import {
   INTERNAL_HAR_REVIEW_BOUNDS,
   isReviewedLinkedInArticleRoute,
   isReviewedInternalDynamicMapField,
+  isReviewedTwitchGraphQlRoute,
   parseBoundedInternalHarUrl,
   reviewedInternalFieldNameForUrl,
   reviewedXGraphQlVariableFieldName,
@@ -18,6 +19,8 @@ const MAX_FIXTURES = 50;
 const MAX_FIXTURE_VALUE_BYTES = 16 * 1024;
 const MAX_FIXTURE_BYTES = 64 * 1024;
 const MAX_MATCHES_PER_FIXTURE = 100;
+const MAX_FIELD_NAMES = 50;
+const MAX_FIELD_NAME_CHARACTERS = 128;
 const MAX_WALK_NODES = 10_000;
 const MAX_WALK_DEPTH = INTERNAL_HAR_REVIEW_BOUNDS.maxTraversalDepth;
 const MAX_ARRAY_ITEMS = INTERNAL_HAR_REVIEW_BOUNDS.maxArrayItems;
@@ -116,11 +119,38 @@ function isSensitiveCredentialKey(value: string): boolean {
   return false;
 }
 
+function isSensitiveCredentialKeyForExchange(
+  twitchGraphQlPostExchange: boolean,
+  value: string,
+): boolean {
+  if (
+    twitchGraphQlPostExchange
+    && (value === "channelLogin" || value === "login")
+  ) return false;
+  return isSensitiveCredentialKey(value);
+}
+
+function isExactMimeType(value: string, expected: string): boolean {
+  return value.split(";", 1)[0]?.trim() === expected;
+}
+
 export type DerivationReviewFixtures = Readonly<Record<string, string>>;
+export type DerivationReviewFieldNames = readonly string[];
 
 export type DerivationReviewSelection =
   | { readonly kind: "list"; readonly offset: number; readonly limit: number }
-  | { readonly kind: "entry"; readonly entryIndex: number; readonly fixtures: DerivationReviewFixtures };
+  | {
+      readonly kind: "entry";
+      readonly entryIndex: number;
+      readonly fixtures: DerivationReviewFixtures;
+      readonly fieldNames?: never;
+    }
+  | {
+      readonly kind: "entry";
+      readonly entryIndex: number;
+      readonly fixtures?: never;
+      readonly fieldNames: DerivationReviewFieldNames;
+    };
 
 export type DerivationReviewListEntry = {
   readonly entryIndex: number;
@@ -140,6 +170,21 @@ export type DerivationReviewMatch = {
   readonly locations: readonly string[];
   readonly truncated: boolean;
 };
+
+export type DerivationReviewFieldNameMatch = {
+  readonly candidateIndex: number;
+  readonly locations: readonly string[];
+  readonly truncated: boolean;
+  readonly valueTypes: readonly DerivationReviewFieldValueType[];
+};
+
+export type DerivationReviewFieldValueType =
+  | "null"
+  | "boolean"
+  | "number"
+  | "string"
+  | "array"
+  | "object";
 
 export type DerivationReviewResult =
   | {
@@ -162,6 +207,7 @@ export type DerivationReviewResult =
       readonly entryIndex: number;
       readonly structure: InternalHarCandidate;
       readonly fixtureMatches: readonly DerivationReviewMatch[];
+      readonly fieldNameMatches: readonly DerivationReviewFieldNameMatch[];
       readonly warnings: readonly string[];
     };
 
@@ -205,6 +251,49 @@ function parseReviewFixtures(
 
 export function parseDerivationReviewFixtures(value: unknown): DerivationReviewFixtures {
   return parseReviewFixtures(value, 1);
+}
+
+export function parseDerivationReviewFieldNames(
+  value: unknown,
+): DerivationReviewFieldNames {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_FIELD_NAMES) {
+    throw new Error(`review field names must be a JSON array containing 1-${MAX_FIELD_NAMES} unique strings`);
+  }
+  const ownKeys = Reflect.ownKeys(Object.getOwnPropertyDescriptors(value));
+  if (
+    ownKeys.some((key) =>
+      typeof key !== "string"
+      || (key !== "length" && !/^(?:0|[1-9][0-9]*)$/u.test(key)))
+    || ownKeys.length !== value.length + 1
+  ) {
+    throw new Error("review field names must be a plain JSON array");
+  }
+  const names: string[] = [];
+  const unique = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new Error("review field name entries must be plain values");
+    }
+    const candidate = descriptor.value;
+    if (
+      typeof candidate !== "string"
+      || candidate.length < 1
+      || candidate.length > MAX_FIELD_NAME_CHARACTERS
+      || !/^[_A-Za-z$][_0-9A-Za-z$.-]{0,127}$/u.test(candidate)
+    ) {
+      throw new Error("review field names must be bounded schema-key strings");
+    }
+    if (isSensitiveCredentialKey(candidate)) {
+      throw new Error("review field names must not identify credential-like schema keys");
+    }
+    if (unique.has(candidate)) {
+      throw new Error("review field names must be unique exact strings");
+    }
+    unique.add(candidate);
+    names.push(candidate);
+  }
+  return Object.freeze(names);
 }
 
 function parseHarEntries(value: unknown): readonly unknown[] {
@@ -264,6 +353,11 @@ type MatchState = {
   readonly values: readonly { readonly label: string; readonly value: string }[];
   readonly locations: Map<string, Set<string>>;
   readonly truncated: Set<string>;
+  readonly fieldNames: readonly string[];
+  readonly fieldNameLocations: readonly Set<string>[];
+  readonly fieldNameTruncated: Set<number>;
+  readonly fieldNameValueTypes: readonly Set<DerivationReviewFieldValueType>[];
+  readonly twitchGraphQlPostExchange: boolean;
   readonly xGraphQlRequest: boolean;
   readonly url: URL;
   readonly maximumDepth: number;
@@ -285,9 +379,50 @@ function addMatch(state: MatchState, label: string, location: string): void {
 
 function truncateEveryFixture(state: MatchState): void {
   for (const fixture of state.values) state.truncated.add(fixture.label);
+  for (let candidateIndex = 0; candidateIndex < state.fieldNames.length; candidateIndex += 1) {
+    state.fieldNameTruncated.add(candidateIndex);
+  }
 }
 
-function hasSearchableContent(value: unknown): boolean {
+function matchObjectKey(
+  state: MatchState,
+  key: string,
+  location: string,
+  redactObjectKeys: boolean,
+  value: unknown,
+): void {
+  if (redactObjectKeys) return;
+  const valueType: DerivationReviewFieldValueType | null = value === null
+    ? "null"
+    : Array.isArray(value)
+      ? "array"
+      : typeof value === "boolean"
+        ? "boolean"
+        : typeof value === "number"
+          ? "number"
+          : typeof value === "string"
+            ? "string"
+            : isRecord(value)
+              ? "object"
+              : null;
+  for (let candidateIndex = 0; candidateIndex < state.fieldNames.length; candidateIndex += 1) {
+    if (key !== state.fieldNames[candidateIndex]) continue;
+    if (valueType === null) {
+      state.fieldNameTruncated.add(candidateIndex);
+      continue;
+    }
+    state.fieldNameValueTypes[candidateIndex]?.add(valueType);
+    const locations = state.fieldNameLocations[candidateIndex];
+    if (locations === undefined || locations.has(location)) continue;
+    if (locations.size >= MAX_MATCHES_PER_FIXTURE) {
+      state.fieldNameTruncated.add(candidateIndex);
+      continue;
+    }
+    locations.add(location);
+  }
+}
+
+function hasSearchableContent(state: MatchState, value: unknown): boolean {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
   if (Array.isArray(value)) return value.length > 0;
   if (!isRecord(value)) return false;
@@ -297,7 +432,7 @@ function hasSearchableContent(value: unknown): boolean {
     if (inspected >= MAX_OBJECT_KEY_INSPECTIONS) return true;
     inspected += 1;
     if (key.length > INTERNAL_HAR_REVIEW_BOUNDS.maxFieldNameCharacters) return true;
-    if (!isSensitiveCredentialKey(key)) return true;
+    if (!isSensitiveCredentialKeyForExchange(state.twitchGraphQlPostExchange, key)) return true;
   }
   return false;
 }
@@ -319,11 +454,11 @@ function walkJson(
   keyReview: JsonObjectKeyReview = "structural",
 ): void {
   if (depth >= state.maximumDepth) {
-    if (hasSearchableContent(value)) truncateEveryFixture(state);
+    if (hasSearchableContent(state, value)) truncateEveryFixture(state);
     return;
   }
   if (state.visited >= MAX_WALK_NODES) {
-    if (hasSearchableContent(value)) truncateEveryFixture(state);
+    if (hasSearchableContent(state, value)) truncateEveryFixture(state);
     return;
   }
   state.visited += 1;
@@ -333,7 +468,10 @@ function walkJson(
     if (value.length > items.length) truncateEveryFixture(state);
     for (let index = 0; index < items.length; index += 1) {
       walkJson(state, items[index], `${location}[]`, depth + 1, false, "structural");
-      if (state.visited >= MAX_WALK_NODES && items.slice(index + 1).some(hasSearchableContent)) {
+      if (
+        state.visited >= MAX_WALK_NODES
+        && items.slice(index + 1).some((candidate) => hasSearchableContent(state, candidate))
+      ) {
         truncateEveryFixture(state);
         return;
       }
@@ -356,7 +494,7 @@ function walkJson(
       rawKeyOverflow = true;
       continue;
     }
-    if (isSensitiveCredentialKey(key)) continue;
+    if (isSensitiveCredentialKeyForExchange(state.twitchGraphQlPostExchange, key)) continue;
     if (searchedEntries.length >= MAX_OBJECT_ENTRIES) {
       safeEntryOverflow = true;
       break;
@@ -377,6 +515,13 @@ function walkJson(
       : keyReview === "x-graphql-variable"
         ? reviewedXGraphQlVariableFieldName(key)
         : reviewedInternalFieldNameForUrl(state.url, key);
+    matchObjectKey(
+      state,
+      key,
+      `${location}.:candidate-field`,
+      redactObjectKeys,
+      child,
+    );
     const childLocation = `${location}.${renderedKey}`;
     const childKeyReview = state.xGraphQlRequest
       && location === "request.body"
@@ -388,12 +533,16 @@ function walkJson(
       child,
       childLocation,
       depth + 1,
-      !redactObjectKeys && isRecord(child) && isReviewedInternalDynamicMapField(key),
+      !redactObjectKeys
+        && isRecord(child)
+        && (isReviewedInternalDynamicMapField(key) || renderedKey === ":dynamic"),
       childKeyReview,
     );
     if (
       state.visited >= MAX_WALK_NODES
-      && searchedEntries.slice(index + 1).some(([, candidate]) => hasSearchableContent(candidate))
+      && searchedEntries
+        .slice(index + 1)
+        .some(([, candidate]) => hasSearchableContent(state, candidate))
     ) {
       truncateEveryFixture(state);
       return;
@@ -506,17 +655,30 @@ function matchReviewedHeaderFixtures(
   }
 }
 
-function matchEntryFixtures(
+function matchEntryProbes(
   entry: JsonRecord,
   boundedUrl: BoundedInternalHarUrl,
   fixtures: DerivationReviewFixtures,
-): readonly DerivationReviewMatch[] {
+  fieldNames: DerivationReviewFieldNames,
+): {
+  readonly fixtureMatches: readonly DerivationReviewMatch[];
+  readonly fieldNameMatches: readonly DerivationReviewFieldNameMatch[];
+} {
   const { url } = boundedUrl;
   const values = Object.entries(fixtures).map(([label, value]) => ({ label, value }));
   const state: MatchState = {
     values,
     locations: new Map(values.map(({ label }) => [label, new Set<string>()])),
     truncated: new Set(),
+    fieldNames,
+    fieldNameLocations: fieldNames.map(() => new Set<string>()),
+    fieldNameTruncated: new Set(),
+    fieldNameValueTypes: fieldNames.map(
+      () => new Set<DerivationReviewFieldValueType>(),
+    ),
+    twitchGraphQlPostExchange: isRecord(entry.request)
+      && entry.request.method === "POST"
+      && isReviewedTwitchGraphQlRoute(url),
     xGraphQlRequest: isRecord(entry.request)
       && entry.request.method === "POST"
       && url.origin === "https://x.com"
@@ -648,6 +810,13 @@ function matchEntryFixtures(
         || Buffer.byteLength(request.postData.text, "utf8") > MAX_JSON_TEXT_BYTES
       ) {
         truncateEveryFixture(state);
+      } else if (
+        state.twitchGraphQlPostExchange
+        && isExactMimeType(mimeType, "text/plain")
+      ) {
+        const parsed = parsedJsonText(request.postData.text);
+        if (parsed.kind === "parsed") walkJson(state, parsed.value, "request.body");
+        else if (parsed.kind === "oversized") truncateEveryFixture(state);
       } else if (mimeType.includes("application/x-www-form-urlencoded")) {
         matchFormUrlEncodedText(state, request.postData.text);
       } else if (mimeType.includes("multipart/form-data")) {
@@ -684,11 +853,19 @@ function matchEntryFixtures(
     }
   }
 
-  return values.map(({ label }) => ({
-    label,
-    locations: [...(state.locations.get(label) ?? [])].sort(),
-    truncated: state.truncated.has(label),
-  }));
+  return {
+    fixtureMatches: values.map(({ label }) => ({
+      label,
+      locations: [...(state.locations.get(label) ?? [])].sort(),
+      truncated: state.truncated.has(label),
+    })),
+    fieldNameMatches: fieldNames.map((_name, candidateIndex) => ({
+      candidateIndex,
+      locations: [...(state.fieldNameLocations[candidateIndex] ?? [])].sort(),
+      truncated: state.fieldNameTruncated.has(candidateIndex),
+      valueTypes: [...(state.fieldNameValueTypes[candidateIndex] ?? [])].sort(),
+    })),
+  };
 }
 
 const warnings = [
@@ -713,7 +890,21 @@ export function reviewDerivationHarValue(
     if (reviewable === null || candidate === null) {
       throw new Error("selected HAR entry is not a reviewable first-party API exchange");
     }
-    const fixtures = parseReviewFixtures(selection.fixtures, 0);
+    if (selection.fixtures !== undefined && selection.fieldNames !== undefined) {
+      throw new Error("private review entry probes are mutually exclusive");
+    }
+    const fixtures = selection.fixtures === undefined
+      ? Object.freeze({})
+      : parseReviewFixtures(selection.fixtures, 0);
+    const fieldNames = selection.fieldNames === undefined
+      ? Object.freeze([])
+      : parseDerivationReviewFieldNames(selection.fieldNames);
+    const matches = matchEntryProbes(
+      reviewable.entry,
+      reviewable,
+      fixtures,
+      fieldNames,
+    );
     return {
       schemaVersion: 1,
       kind: "entry",
@@ -721,7 +912,8 @@ export function reviewDerivationHarValue(
       totalHarEntries: entries.length,
       entryIndex: selection.entryIndex,
       structure: candidate,
-      fixtureMatches: matchEntryFixtures(reviewable.entry, reviewable, fixtures),
+      fixtureMatches: matches.fixtureMatches,
+      fieldNameMatches: matches.fieldNameMatches,
       warnings,
     };
   }
