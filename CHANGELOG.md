@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.5 - 2026-08-24
+
+- Add the Hraness Twitch channel to the package-owned social-statistics
+  manifest with an exact-only categorical-gap contract until its reviewed
+  capability and eligible authenticated source are available.
+
 ## 0.13.4 - 2026-08-24
 
 - Add a credential-free, target-bound GitHub organization read that binds the
