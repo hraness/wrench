@@ -70,6 +70,7 @@ wrench adapter sync-bundled --json
 wrench doctor</code></pre>
           </div>
           <p>The global install pins the public GitHub repository to the current immutable tag. <code>adapter sync-bundled</code> atomically installs the reviewed data manifests shipped by that exact package version. It upgrades only an exact bundled baseline and preserves an independently modified install.</p>
+          <p>Wrench is not currently published on npm, Homebrew, or another package repository. Use the checked GitHub tag above for the CLI and SDK. The Agent Skill remains available through skills.sh.</p>
         </section>
 
         <section aria-labelledby="first-read">
@@ -88,6 +89,40 @@ wrench platforms --json
 wrench plugin doctor --json</code></pre></div>
           <p><code>wrench capabilities</code> is the local source of truth. It reports the semantic operations that are installed and observed on this machine. A <code>capture-required</code> operation is an inert reservation, not partial support and not permission to improvise with a browser fallback.</p>
           <p>Review the <a href="/provider-capabilities/">provider capability attestation</a> before adding account credentials. It lists every bundled adapter operation and the reviewed completeness of that contract.</p>
+        </section>
+
+        <section id="demo" aria-labelledby="first-capture-demo">
+          <h2 id="first-capture-demo">Watch one complete read</h2>
+          <p>This silent 12-second demo typesets the output from a successful Wrench {{WRENCH_VERSION}} run on August 25, 2026. <code>wrench read</code> fetches the public page, prints bounded Markdown, and does not add the result to a vault.</p>
+          <figure class="demo-media">
+            <video aria-label="Wrench first capture demo" controls height="720" poster="/wrench-first-capture.png" preload="metadata" width="1280">
+              <source src="/wrench-first-capture.webm" type="video/webm">
+              <source src="/wrench-first-capture.mp4" type="video/mp4">
+              <track kind="captions" label="English" src="/wrench-first-capture.vtt" srclang="en">
+              <a href="/wrench-first-capture.gif">View the animated Wrench first capture demo.</a>
+            </video>
+            <figcaption>The terminal text is actual CLI output. The presentation is typeset for legibility and contains no private state, account data, or provider credentials.</figcaption>
+          </figure>
+          <p>Reuse the <a download href="/wrench-first-capture.gif">animated GIF</a> or <a download href="/wrench-first-capture.png">PNG preview</a>. Both show the same successful public-page read.</p>
+          <details class="demo-transcript">
+            <summary>Read the demo transcript</summary>
+            <div class="command-panel"><pre><code>$ wrench read https://example.com
+Capturing https://example.com/ (auto, auto) ...
+---
+title: "Example Domain"
+source: "https://example.com/"
+clipped: "2026-08-25"
+platform: "generic"
+capture_status: "complete"
+capture_method: "http"
+capture_scope: "page"
+---
+# Example Domain
+
+This domain is for use in documentation examples without needing permission. Avoid use in operations.
+
+[Learn more](https://iana.org/domains/example)</code></pre></div>
+          </details>
         </section>
 
         <section aria-labelledby="sdk">
@@ -114,6 +149,7 @@ const plugin = candidate satisfies ProviderPluginDefinitionV1</code></pre></div>
             <li><a href="/getting-started/">Install the Wrench CLI and TypeScript SDK</a></li>
             <li><a href="/">Install the Wrench Agent Skill</a> with <code>npx skills add hraness/wrench</code></li>
             <li><a href="/capture-and-archives/">Capture URLs and create verified media archives</a></li>
+            <li><a href="/getting-started/#demo">Watch and download the first-capture demo</a></li>
             <li><a href="/provider-capabilities/">Provider capability attestation</a></li>
             <li><a href="/security/">Security and local custody</a></li>
             <li><a href="/plugins/">Author and verify provider plugins</a></li>

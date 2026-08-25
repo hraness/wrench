@@ -27,7 +27,7 @@ wrench capabilities
 wrench plugin list
 ```
 
-[Project site](https://wrench.rip) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md)
+[Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md)
 
 ## What Wrench does
 
@@ -62,6 +62,11 @@ frameworks. Those tools own interfaces, transports, models, and planning. Wrench
 owns the narrow capability boundary that can sit beneath them.
 
 ## Install
+
+The CLI and SDK use the immutable GitHub release tag shown below. Wrench is not
+currently published on npm, Homebrew, or another package repository, so those
+registries are not supported install paths. The Agent Skill remains available
+through skills.sh.
 
 Install the single Wrench Agent Skill with either runner:
 
