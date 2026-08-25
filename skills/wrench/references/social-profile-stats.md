@@ -32,6 +32,7 @@ credentials. Wrench probes and binds each authenticated provider subject.
 | `linkedin-personal` | `linkedin-web profiles.read` | `linkedin-chrome` | `{"profile_url":"https://www.linkedin.com/in/hraness","include_connections":true}` | followers, connections |
 | `linkedin-company-hraness` | `linkedin-web organizations.read` | `linkedin-chrome` | `{"organization_url":"https://www.linkedin.com/company/hraness"}` | followers |
 | `youtube-hraness` | `youtube-web profiles.read` | `youtube-chrome` | `{"profile":"@hraness"}` | subscribers, videos, views |
+| `twitch-hranessdotcom` | `twitch-web profiles.read` | `twitch-chrome` | `{"profile":"hranessdotcom"}` | followers |
 | `bluesky-hraness` | `bluesky-web profiles.read` | public | `{"handle":"hraness.bsky.social"}` | followers, following, posts |
 | `instagram-hraness` | `instagram-web profiles.read` | `instagram-chrome` | `{"profile":"hraness"}` | followers, following, posts |
 | `threads-hraness` | `threads-web profiles.read` | `threads-chrome` | `{"profile":"hraness"}` | followers, recentViews |
@@ -46,6 +47,13 @@ Bluesky and GitHub profile and organization statistics come from public target-b
 Invoke these rows without `--auth`. Wrench assigns each reviewed operation a
 deterministic public authority for receipts and exact R1 caching. Supplying an
 auth locator is an error.
+
+The Twitch row targets exactly
+`https://www.twitch.tv/hranessdotcom`. Until `twitch-web profiles.read` is an
+installed observed capability and `twitch-chrome` resolves to an eligible,
+target-bound auth source, record Twitch followers as a categorical gap. Do not
+substitute browser automation, raw HTTP, a rounded public display, a cached
+value, or an estimate.
 
 Keep the two X calls sequential, both LinkedIn calls sequential, and both
 Substack calls sequential because each pair shares one authenticated realm.

@@ -75,10 +75,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.13.4` tag:
+Install the current immutable CLI release from the `v0.13.5` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.13.4
+bun add --global github:hraness/wrench#v0.13.5
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -102,7 +102,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.13.4
+bun add github:hraness/wrench#v0.13.5
 ```
 
 ```ts
