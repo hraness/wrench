@@ -130,6 +130,7 @@ describe("wrench.rip static site", () => {
     expect(html.match(/data-analytics-event="project link opened"/gu)).toHaveLength(2);
     expect(html.match(new RegExp(`href="${REPOSITORY_URL}"`, "gu"))).toHaveLength(2);
     expect(html).toContain("Privacy: cookieless PostHog analytics");
+    expect(html).toContain('href="/compare/personal-agents-browser-use/"');
     expect(html).toContain(`href="${PUBLISHER_URL}">Hraness GitHub organization</a>`);
     expect(notFound).toContain('<meta name="robots" content="noindex, nofollow">');
     expect(notFound).toContain(
@@ -151,6 +152,7 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain("## Wrench developer resources");
     expect(llms).toContain("Do not use Wrench as an AI agent");
     expect(llms).toContain(`${SITE_ORIGIN}/getting-started/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
     expect(llms).toContain("npx skills add hraness/wrench");
     expect(llms).toContain("Accept: text/markdown");
     expect(llms).not.toContain("{{");
@@ -375,6 +377,30 @@ describe("wrench.rip static site", () => {
     expect(providerCapabilities?.html).toContain("Telegram is absent from those manifests");
     expect(providerCapabilities?.html).not.toContain("<th scope=\"row\">Telegram</th>");
     expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");
+
+    const personalAgents = pages.find((page) =>
+      page.definition.canonicalPath === "/compare/personal-agents-browser-use/");
+    expect(personalAgents?.html).toContain(
+      "<h1>Browser-using personal agents still need attested web operations.</h1>",
+    );
+    expect(personalAgents?.html).toContain(
+      "https://hraness.com/reading/personal-agents-notes-instinct-grok-bots-chatgpt-work",
+    );
+    expect(personalAgents?.html).toContain("https://wrench.rip/");
+    expect(personalAgents?.html).toContain("https://wrench.rip/provider-capabilities/");
+    expect(personalAgents?.html).toContain("https://wrench.rip/security/");
+    expect(personalAgents?.html).toContain(
+      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+    );
+    expect(personalAgents?.html).toContain(
+      `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
+    );
+    expect(personalAgents?.html).toContain("Telegram is absent from those manifests");
+    expect(personalAgents?.html).toContain("Instinct");
+    expect(personalAgents?.html).toContain("Grok Bots");
+    expect(personalAgents?.html).toContain("ChatGPT Work");
+    expect(personalAgents?.html).toContain("never switches to a browser fallback silently");
+    expect(personalAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
     const software = (graph as ReadonlyArray<Readonly<Record<string, unknown>>>).find((node) =>
       node["@id"] === `${SITE_ORIGIN}/#software`);
     expect(software).toMatchObject({
