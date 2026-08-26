@@ -114,6 +114,14 @@ export const PUBLIC_PAGES = [
     sourceFile: "compare-personal-agents-browser-use.html",
     title: "Browser-using personal agents, and which web operations Wrench attests",
   },
+  {
+    canonicalPath: "/agentic-web-spoofing/",
+    description:
+      "Known Agents measures inbound bot impersonation when a claimed identity fails its supported authentication. That check does not attest an outbound Wrench operation, name its operator, or make a capture-required reservation ready.",
+    outputFile: "agentic-web-spoofing/index.html",
+    sourceFile: "agentic-web-spoofing.html",
+    title: "Agentic-web index spoofing, and why attested operations still matter",
+  },
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];

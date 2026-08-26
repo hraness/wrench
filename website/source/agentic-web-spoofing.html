@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+    <title>Agentic-web index spoofing, and why attested operations still matter</title>
+    <meta name="description" content="Known Agents measures inbound bot impersonation when a claimed identity fails its supported authentication. That check does not attest an outbound Wrench operation, name its operator, or make a capture-required reservation ready.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/agentic-web-spoofing/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Agentic-web index spoofing, and why attested operations still matter">
+    <meta property="og:description" content="Known Agents measures inbound bot impersonation when a claimed identity fails its supported authentication. That check does not attest an outbound Wrench operation, name its operator, or make a capture-required reservation ready.">
+    <meta property="og:url" content="https://wrench.rip/agentic-web-spoofing/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Agentic-web index spoofing, and why attested operations still matter">
+    <meta name="twitter:description" content="Known Agents measures inbound bot impersonation when a claimed identity fails its supported authentication. That check does not attest an outbound Wrench operation, name its operator, or make a capture-required reservation ready.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Index spoofing and attested operations</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Argument · Wrench {{WRENCH_VERSION}}</p>
+          <h1>A claimed agent name is not an attested web operation.</h1>
+          <p class="answer-lede"><a href="https://knownagents.com/insights">The Agentic Web Index</a> counts inbound impersonation when a request claims a recognized agent identity and then fails that identity's supported authentication. That measurement is useful and bounded. It still leaves the outbound problem that <a href="https://wrench.rip/">Wrench</a> answers: name the job, bind the account and transport, and refuse to treat a familiar bot string, live browser, or missing contract as proof.</p>
+          <p class="review-note">This argument uses the live Known Agents insights page fetched for this draft, the dated <a href="https://hraness.com/reading/agentic-web-index-spoofing-and-security">Hraness Reading digest of that index</a>, and the public {{WRENCH_RELEASE}} pages for the <a href="https://wrench.rip/">Wrench home</a>, <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>, <a href="https://wrench.rip/security/">security guide</a>, and <a href="https://wrench.rip/compare/personal-agents-browser-use/">personal-agents comparison</a>. Operation counts are the current release attestation, substituted at site build time. The live spoofing chart does not publish an operator name beside every rate, so this page does not invent those names.</p>
+        </header>
+
+        <section aria-labelledby="spoofed-visit">
+          <h2 id="spoofed-visit">A spoofed visit fails a check, not an attribution</h2>
+          <p>Known Agents defines the unit on <a href="https://knownagents.com/insights">The Agentic Web Index</a>: “A visit is considered spoofed when it claims a recognized agent identity but fails that agent's supported authentication method, such as verified IP or Web Bot Auth.” The index is therefore a comparison between a claimed name and a supported proof. A user-agent string that merely looks like a listed crawler or assistant is not enough to enter the measurement as authentic traffic.</p>
+          <p>The same methodology page keeps detection separate from blame: “A failed check indicates that the visit was likely impersonating the named agent; it does not identify the software or operator that actually made the request.” A site that logs a spoofed Googlebot hit still does not know which crawler, scanner, or person sent it. The named identity is the costume. The operator stays unknown.</p>
+          <p>The measurement also has a hard edge: “Agents without a supported authentication method are not included in these measurements.” Unauthenticated traffic can still arrive. The index simply refuses to score impersonation for identities that cannot be checked. That is the same refusal Wrench makes on the outbound side when a contract is missing: absence of proof is not treated as a passing grade.</p>
+          <p>The live insights page updates daily. In the snapshot fetched for this draft, the highest listed spoofed-traffic rate was 0.5% for a Search Engine Crawler identity. An AI Assistant identity sat at 0.2%. Several AI Search Crawler and AI Data Scraper identities sat at 0.1%. An AI Agent identity appeared in the same list at 0.0%. Those figures are displayed rates on participating sites, not a ranked operator table, and they are not copied from the dated digest below.</p>
+          <p>The 12 August 2026 <a href="https://hraness.com/reading/agentic-web-index-spoofing-and-security">Hraness Reading digest</a> recorded a different completed-day snapshot: Googlebot at 0.5% of impersonated traffic, and several AI-related identities at 0.1% or less. That digest is a dated reading of the same public index, published from <a href="https://hraness.com">hraness.com</a>. It is not this page, and this page does not reprint its idea list. Both snapshots stay directional. Known Agents writes: “Results characterize the observed network and broader directional trends; they should not be interpreted as a precise census of global web traffic.” The index draws completed days from more than 5,000 participating websites whose composition can change.</p>
+        </section>
+
+        <section aria-labelledby="credential-paths">
+          <h2 id="credential-paths">Credential paths are now ordinary web targets</h2>
+          <p>The live index also publishes an active-threat note beside the spoofing charts: “We are observing a widespread campaign impersonating AI bots to scan websites for vulnerabilities.” The next sentence names the object of those scans: “The attacker appears to be targeting credential and configuration paths used by AI coding tools.” Impersonation is the cover. The payload is a request for files that an agent, cloud account, or deployment environment might leave on a reachable origin.</p>
+          <p>The same section lists recent top targeted paths. The fetched examples include <code>/.config/anthropic/credentials/default.json</code>, <code>/.claude/settings.json</code>, <code>/.hermes/.env</code>, <code>/.openclaw/.env</code>, <code>/.codex/config.toml</code>, <code>/.aws/credentials</code>, <code>/.npmrc</code>, and several <code>.env</code> variants. Those paths are public in the index. They are not Wrench operations, and they are not evidence that any listed coding tool authorized the request.</p>
+          <p>This is inbound reconnaissance wearing a bot name. It does not grant the sender those secrets, and it does not tell a receiving site who sent the probe. It does tell an operator something narrower: agent tooling has a public filesystem vocabulary, and scanners are already asking the web for it. A local capability layer that keeps credentials opaque still matters after you have read that list.</p>
+        </section>
+
+        <section aria-labelledby="outbound-bind">
+          <h2 id="outbound-bind">Attested operations bind the request before it leaves</h2>
+          <p>The <a href="https://wrench.rip/">Wrench home</a> states the product boundary in one sentence: each authenticated operation is typed, bounded, and tied to one account and transport. The caller brings the model and interface. Wrench supplies the local capability and custody layer. It is not an AI agent, planner, or approval shell. The home page also states the fail-closed rule in public: Wrench never switches to a browser fallback silently.</p>
+          <p>The <a href="https://wrench.rip/security/">security guide</a> makes the bind exact. An authenticated Wrench operation binds one named outcome to an exact provider, transport, account realm, contract version, implementation, input, and risk. Credentials stay opaque to the caller. When those facts drift, the operation stops instead of changing transports or falling back to general browser control. The same guide keeps writes behind an exact preview and confirmation, and it refuses to retry an indeterminate dispatch.</p>
+          <p>The current release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled public adapters. {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>. {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} remain <code>capture-required</code>. Those figures are the same release-bound counts published on the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>. This page does not add a provider, invent an extra operation, or treat a reservation as ready. Telegram is absent from those manifests. Wrench does not install a Telegram Bot API substitute or claim Telegram contact access.</p>
+          <p><code>observed</code> means the current contract can plan and execute after local doctor and auth checks pass. <code>capture-required</code> is an inert reservation. The attestation page says a missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control. That is the outbound counterpart of the index rule that excludes identities with no supported authentication method.</p>
+        </section>
+
+        <section aria-labelledby="two-proofs">
+          <h2 id="two-proofs">Inbound authentication and outbound attestation answer different questions</h2>
+          <p>The personal-agents comparison asks whether a persistent browser loop can stand in for a named contract. This page asks a different question: whether a claimed inbound identity, or a low displayed spoofing rate, can stand in for that same contract. Both pages refuse a substitution. They refuse different substitutes.</p>
+          <div class="table-scroll" role="region" aria-labelledby="two-proofs" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Decision</th>
+                  <th scope="col">Agentic Web Index spoofing check</th>
+                  <th scope="col">Wrench attested operation</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">What is named</th>
+                  <td>A recognized inbound agent identity</td>
+                  <td>A named outbound outcome such as <code>messaging.list</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">What proves it</th>
+                  <td>That identity's supported authentication method, such as verified IP or Web Bot Auth</td>
+                  <td>Exact provider, transport, account realm, contract version, implementation, input, and risk</td>
+                </tr>
+                <tr>
+                  <th scope="row">Failed check</th>
+                  <td>The visit is counted as spoofed. The real operator stays unknown</td>
+                  <td>The operation stops. A <code>capture-required</code> reservation stays inert</td>
+                </tr>
+                <tr>
+                  <th scope="row">No supported method</th>
+                  <td>The identity is excluded from the spoofing measurement</td>
+                  <td>The reservation cannot plan or execute, and Wrench does not invent a browser fallback</td>
+                </tr>
+                <tr>
+                  <th scope="row">Secrets</th>
+                  <td>Recent probes request agent, cloud, package, and environment credential paths</td>
+                  <td>Credentials stay opaque to the caller and terminate only at sinks declared by the capability</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>A displayed 0.5% or 0.1% spoofed-traffic rate does not make an unreviewed Wrench operation safe to invent. The index is an inbound sample with a changing participant set. The attestation is a finite outbound catalog. Neighboring surfaces still do not inherit authority: LinkedIn's official contact adapter does not grant its consumer-web inbox adapter, and an Instagram inbox summary does not authorize an individual thread read. Those examples are published on the security page so a gap stays visible.</p>
+          <p>The <a href="https://wrench.rip/compare/personal-agents-browser-use/">comparison of browser-using personal agents with attested Wrench operations</a> covers Instinct, Grok Bots, ChatGPT Work, and the password-reset recovery that finished a broken browser job. Read that page for the product-loop argument. Read this page for the inbound-identity argument. Neither page reprints the other.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="spoofing-next">
+          <h2 id="spoofing-next">Read the live index, then the current contract</h2>
+          <p>Start with <a href="https://knownagents.com/insights">The Agentic Web Index on Known Agents</a>. Keep the dated <a href="https://hraness.com/reading/agentic-web-index-spoofing-and-security">Hraness Reading digest</a> as a 12 August snapshot, and the rest of <a href="https://hraness.com">hraness.com</a> as the publisher of that digest. Then read the <a href="https://wrench.rip/">Wrench home</a> for the capability-layer claim, the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a> for every current operation and completeness mark, the <a href="https://wrench.rip/security/">security guide</a> before binding an account, and the <a href="https://wrench.rip/compare/personal-agents-browser-use/">personal-agents comparison</a> when the question is browser use rather than inbound spoofing.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>

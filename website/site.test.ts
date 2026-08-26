@@ -131,6 +131,7 @@ describe("wrench.rip static site", () => {
     expect(html.match(new RegExp(`href="${REPOSITORY_URL}"`, "gu"))).toHaveLength(2);
     expect(html).toContain("Privacy: cookieless PostHog analytics");
     expect(html).toContain('href="/compare/personal-agents-browser-use/"');
+    expect(html).toContain('href="/agentic-web-spoofing/"');
     expect(html).toContain(`href="${PUBLISHER_URL}">Hraness GitHub organization</a>`);
     expect(notFound).toContain('<meta name="robots" content="noindex, nofollow">');
     expect(notFound).toContain(
@@ -153,6 +154,7 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain("Do not use Wrench as an AI agent");
     expect(llms).toContain(`${SITE_ORIGIN}/getting-started/`);
     expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).toContain("npx skills add hraness/wrench");
     expect(llms).toContain("Accept: text/markdown");
     expect(llms).not.toContain("{{");
@@ -400,7 +402,50 @@ describe("wrench.rip static site", () => {
     expect(personalAgents?.html).toContain("Grok Bots");
     expect(personalAgents?.html).toContain("ChatGPT Work");
     expect(personalAgents?.html).toContain("never switches to a browser fallback silently");
+    expect(personalAgents?.html).toContain("https://wrench.rip/agentic-web-spoofing/");
     expect(personalAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
+
+    const agenticWebSpoofing = pages.find((page) =>
+      page.definition.canonicalPath === "/agentic-web-spoofing/");
+    expect(agenticWebSpoofing?.html).toContain(
+      "<h1>A claimed agent name is not an attested web operation.</h1>",
+    );
+    expect(agenticWebSpoofing?.html).toContain("https://knownagents.com/insights");
+    expect(agenticWebSpoofing?.html).toContain(
+      "https://hraness.com/reading/agentic-web-index-spoofing-and-security",
+    );
+    expect(agenticWebSpoofing?.html).toContain("https://hraness.com");
+    expect(agenticWebSpoofing?.html).toContain("https://wrench.rip/");
+    expect(agenticWebSpoofing?.html).toContain("https://wrench.rip/provider-capabilities/");
+    expect(agenticWebSpoofing?.html).toContain("https://wrench.rip/security/");
+    expect(agenticWebSpoofing?.html).toContain(
+      "https://wrench.rip/compare/personal-agents-browser-use/",
+    );
+    expect(agenticWebSpoofing?.html).toContain(
+      "A visit is considered spoofed when it claims a recognized agent identity but fails that agent's supported authentication method, such as verified IP or Web Bot Auth.",
+    );
+    expect(agenticWebSpoofing?.html).toContain(
+      "A failed check indicates that the visit was likely impersonating the named agent; it does not identify the software or operator that actually made the request.",
+    );
+    expect(agenticWebSpoofing?.html).toContain(
+      "Agents without a supported authentication method are not included in these measurements.",
+    );
+    expect(agenticWebSpoofing?.html).toContain(
+      "Results characterize the observed network and broader directional trends; they should not be interpreted as a precise census of global web traffic.",
+    );
+    expect(agenticWebSpoofing?.html).toContain(
+      "We are observing a widespread campaign impersonating AI bots to scan websites for vulnerabilities.",
+    );
+    expect(agenticWebSpoofing?.html).toContain(
+      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+    );
+    expect(agenticWebSpoofing?.html).toContain(
+      `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
+    );
+    expect(agenticWebSpoofing?.html).toContain("Telegram is absent from those manifests");
+    expect(agenticWebSpoofing?.html).toContain("this page does not invent those names");
+    expect(agenticWebSpoofing?.html).toContain("Neither page reprints the other.");
+    expect(agenticWebSpoofing?.html).not.toContain("{{PROVIDER_CAPABILITY");
     const software = (graph as ReadonlyArray<Readonly<Record<string, unknown>>>).find((node) =>
       node["@id"] === `${SITE_ORIGIN}/#software`);
     expect(software).toMatchObject({

@@ -172,6 +172,16 @@
       "source": "/compare/personal-agents-browser-use/index.html",
       "destination": "/compare/personal-agents-browser-use/",
       "permanent": true
+    },
+    {
+      "source": "/agentic-web-spoofing",
+      "destination": "/agentic-web-spoofing/",
+      "permanent": true
+    },
+    {
+      "source": "/agentic-web-spoofing/index.html",
+      "destination": "/agentic-web-spoofing/",
+      "permanent": true
     }
   ]
 }
