@@ -39,6 +39,7 @@ automation.
 - Diagnose state: `wrench operator doctor --json`.
 - Invoke a supported semantic operation: `wrench invoke <adapter> <operation>` or its printed shorthand.
 - Collect exact daily social-account statistics into a checked consumer snapshot: follow [social profile statistics](references/social-profile-stats.md).
+- Export the signed-in X account's bookmarks as a bounded JSON page keyed by `post_id`: follow [X authenticated web API adapter](references/x-adapter.md#export-bookmarks).
 - Read a previously validated exact query without a provider roundtrip: repeat the subject-bound R1 invocation with `--cache-only`; omit that flag to revalidate it explicitly.
 - Read a normalized cross-provider inbox without a provider roundtrip: `wrench omni read --input <json|@file|-> --cache-only --json`; use `--from-exact-cache` to rebuild from exact ciphertext or omit the mode to revalidate supported sources.
 - Save one private native article draft, including supported plan-bound covers, inline images, and destination-safe source-post references: inspect `articles.draft.save`, then follow [native article drafts](references/article-drafts.md). Keep a provider cover outside the body document; on an exact LinkedIn replacement, omit it only to preserve the independently read existing banner. Never substitute `articles.publish`.

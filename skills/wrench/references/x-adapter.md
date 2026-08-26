@@ -10,6 +10,7 @@ First-party traffic is not the same as a documented public API. Use this local c
 - [Save an Article draft](#save-an-article-draft)
 - [Configure and bind the signed-in realm](#configure-and-bind-the-signed-in-realm)
 - [Use observed contracts](#use-observed-contracts)
+- [Export bookmarks](#export-bookmarks)
 - [Resolve current X material](#resolve-current-x-material)
 - [Preserve capture-required mutations](#preserve-capture-required-mutations)
 - [Other capture-required operations](#other-capture-required-operations)
@@ -115,7 +116,7 @@ Before private reads or mutations, resolve the current stable X user ID through 
 
 The current registry marks these code-owned reads observed:
 
-- `feeds.read`: one bounded For You, Following, user, List, search, or bookmarks page;
+- `feeds.read`: one bounded For You, Following, user, List, search, or bookmarks page; bookmarks pages also emit stable `items` keyed by `post_id`;
 - `posts.read`: one exact post through the current TweetDetail query;
 - `comments.read`: one bounded TweetDetail conversation/reply page.
 
@@ -154,6 +155,66 @@ wrench x-web comments.read \
 One page is not a completeness claim. Return a provider cursor only after projecting the complete provider page. If X returns more matching posts or replies than the requested projection limit, fail without exposing the end cursor instead of silently skipping unseen entries. User and List feeds additionally require the response to echo exactly the requested user/List identity. Keep inbox listing separate from conversation read so the R1 contract can exclude acknowledgement traffic.
 
 DM folder/conversation reads remain `capture-required` because current X Chat events are encrypted. They require the separate reviewed key-recovery, plaintext projection, and acknowledgement-free contract. Native X Article read remains `capture-required` until the entitlement-specific detail exchange is captured and projected.
+
+## Export bookmarks
+
+`x-web feeds.read` with `feed:"bookmarks"` reads one bounded page of the
+signed-in account's bookmarks through the captured Bookmarks GraphQL query. It
+does not scrape the x.com DOM. Use this page when a daily digest needs a stable
+JSON list it can upsert by post ID.
+
+```sh
+wrench auth add x-main --cookie-source arc
+wrench auth bind x-main --site x
+wrench capabilities x-web --json
+
+wrench x-web feeds.read \
+  --input '{"feed":"bookmarks","limit":25}' \
+  --auth x-main --json
+```
+
+A succeeded JSON result has `output.feed` equal to `"bookmarks"`. Upsert
+`output.items`. Each item has this exact shape:
+
+```json
+{
+  "post_id": "2078889282404569267",
+  "url": "https://x.com/i/status/2078889282404569267",
+  "author_username": "hraness",
+  "author_name": "Hraness",
+  "text": "Exact status text",
+  "created_at": "Tue Jul 22 12:00:00 +0000 2026",
+  "folder_id": null,
+  "bookmarked_at": null
+}
+```
+
+`post_id` is the stable X status ID. Treat a repeated `post_id` as the same
+bookmark. `url` is the `/i/status/{post_id}` permalink, so it stays valid if
+the author handle changes. `author_username` and `author_name` are null when
+the GraphQL page omits the author nest. `folder_id` and `bookmarked_at` are
+present and null on the current Bookmarks page; do not invent folder or
+timestamp values.
+
+Pass the previous page's `output.cursor` as `cursor` to read the next page:
+
+```sh
+wrench x-web feeds.read \
+  --input '{"feed":"bookmarks","limit":25,"cursor":"PREVIOUS_PAGE_CURSOR"}' \
+  --auth x-main --json
+```
+
+Stop when `output.cursor` is null, when `terminatedDirections` includes
+`Bottom`, or when every returned `post_id` is already in the store. If the
+provider page contains more matching posts than `limit`, the command fails
+closed or returns `cursor: null` instead of skipping unseen entries. Bind the
+signed-in account before the read; an account mismatch fails before the
+Bookmarks query. This is an R1 read and does not change unlabeled-copy or Made
+with AI publish behavior.
+
+The same invocation still returns `output.posts` with the shared camelCase feed
+projection (`id` equals `post_id`). Prefer `output.items` for an external
+sqlite upsert.
 
 ## Resolve current X material
 

@@ -13,6 +13,11 @@ import {
   extractXWebUrtBottomCursor,
   normalizeXWebGraphQlTimelineResponse,
   normalizeXWebProfileHandle,
+  parseXWebBookmarkExportPage,
+  parseXWebBookmarkExportRecord,
+  projectXWebBookmarkExportPage,
+  projectXWebBookmarkExportRecord,
+  projectXWebFeedPost,
   projectXWebProfileStats,
   normalizeXWebUrtTimeline,
   resolveUniqueXWebBundleDescriptor,
@@ -1245,6 +1250,225 @@ describe("URT timeline normalization and cursor extraction", () => {
       { instructions: [{ type: "TimelineTerminateTimeline" }] },
     ];
     for (const candidate of cases) expect(() => normalizeXWebUrtTimeline(candidate)).toThrow();
+  });
+});
+
+describe("X bookmark export projection", () => {
+  const createdAt = "Tue Jul 22 12:00:00 +0000 2026";
+
+  function tweetResult(
+    id: string,
+    options: {
+      readonly text?: string;
+      readonly createdAt?: string;
+      readonly author?: { readonly id: string; readonly username: string; readonly name: string };
+      readonly core?: unknown;
+    } = {},
+  ): unknown {
+    return {
+      __typename: "Tweet",
+      rest_id: id,
+      ...(options.core === undefined && options.author === undefined
+        ? {}
+        : {
+            core: options.core ?? {
+              user_results: {
+                result: {
+                  __typename: "User",
+                  rest_id: options.author!.id,
+                  core: {
+                    name: options.author!.name,
+                    screen_name: options.author!.username,
+                  },
+                },
+              },
+            },
+          }),
+      legacy: {
+        full_text: options.text ?? `text-${id}`,
+        created_at: options.createdAt ?? createdAt,
+        ...(options.author === undefined ? {} : { user_id_str: options.author.id }),
+      },
+    };
+  }
+
+  function bookmarksResponse(...entries: readonly unknown[]): unknown {
+    return {
+      data: {
+        bookmark_timeline_v2: {
+          timeline: timeline(...entries),
+        },
+      },
+    };
+  }
+
+  test("extracts author identity from GraphQL core.user_results and projects a stable export record", () => {
+    const normalized = normalizeXWebUrtTimeline(timeline(
+      timelineItemEntry("tweet-1", tweetResult("800", {
+        text: "bookmarked post",
+        author: { id: "42", username: "Hraness", name: "Hraness" },
+      })),
+    ));
+    expect(normalized.items[0]).toMatchObject({
+      kind: "tweet",
+      tweetId: "800",
+      author: { id: "42", username: "hraness", name: "Hraness" },
+    });
+    const post = projectXWebFeedPost(normalized.items[0]!);
+    expect(post).toEqual({
+      kind: "post",
+      id: "800",
+      text: "bookmarked post",
+      createdAt,
+      authorId: "42",
+      authorUsername: "hraness",
+      authorName: "Hraness",
+      replyToPostId: null,
+      liked: null,
+      reposted: null,
+      saved: null,
+      metrics: { replies: null, reposts: null, likes: null, bookmarks: null },
+      url: "https://x.com/i/status/800",
+    });
+    expect(projectXWebBookmarkExportRecord(post!)).toEqual({
+      post_id: "800",
+      url: "https://x.com/i/status/800",
+      author_username: "hraness",
+      author_name: "Hraness",
+      text: "bookmarked post",
+      created_at: createdAt,
+      folder_id: null,
+      bookmarked_at: null,
+    });
+  });
+
+  test("keeps author fields null when the tweet omits core.user_results", () => {
+    const normalized = normalizeXWebUrtTimeline(timeline(
+      timelineItemEntry("tweet-1", tweetResult("801", { text: "no author nest" })),
+    ));
+    expect(normalized.items[0]).toMatchObject({
+      kind: "tweet",
+      author: { id: null, username: null, name: null },
+    });
+  });
+
+  test("fails closed when author ids or handles disagree", () => {
+    expect(() => normalizeXWebUrtTimeline(timeline(
+      timelineItemEntry("tweet-mismatch-id", {
+        __typename: "Tweet",
+        rest_id: "802",
+        core: {
+          user_results: {
+            result: {
+              __typename: "User",
+              rest_id: "1",
+              core: { name: "A", screen_name: "alpha" },
+            },
+          },
+        },
+        legacy: { full_text: "x", user_id_str: "2" },
+      }),
+    ))).toThrow("author id disagreed");
+    expect(() => normalizeXWebUrtTimeline(timeline(
+      timelineItemEntry("tweet-mismatch-handle", {
+        __typename: "Tweet",
+        rest_id: "803",
+        core: {
+          user_results: {
+            result: {
+              __typename: "User",
+              rest_id: "1",
+              core: { name: "A", screen_name: "alpha" },
+              legacy: { screen_name: "beta" },
+            },
+          },
+        },
+        legacy: { full_text: "x", user_id_str: "1" },
+      }),
+    ))).toThrow("author handle disagreed");
+    expect(() => normalizeXWebUrtTimeline(timeline(
+      timelineItemEntry("tweet-bad-handle", tweetResult("804", {
+        author: { id: "1", username: "not a handle", name: "A" },
+      })),
+    ))).toThrow("valid X handle");
+  });
+
+  test("pages bookmarks with a next cursor and hides that cursor after truncation", () => {
+    const response = bookmarksResponse(
+      timelineItemEntry("tweet-1", tweetResult("11", {
+        author: { id: "1", username: "one", name: "One" },
+      })),
+      timelineItemEntry("tweet-2", tweetResult("12", {
+        author: { id: "2", username: "two", name: "Two" },
+      })),
+      cursorEntry("cursor-bottom", "Bottom", "next-bookmarks-page"),
+    );
+    const complete = projectXWebBookmarkExportPage(response, 2);
+    expect(complete).toEqual({
+      feed: "bookmarks",
+      items: [
+        {
+          post_id: "11",
+          url: "https://x.com/i/status/11",
+          author_username: "one",
+          author_name: "One",
+          text: "text-11",
+          created_at: createdAt,
+          folder_id: null,
+          bookmarked_at: null,
+        },
+        {
+          post_id: "12",
+          url: "https://x.com/i/status/12",
+          author_username: "two",
+          author_name: "Two",
+          text: "text-12",
+          created_at: createdAt,
+          folder_id: null,
+          bookmarked_at: null,
+        },
+      ],
+      posts: [
+        expect.objectContaining({ id: "11", authorUsername: "one" }),
+        expect.objectContaining({ id: "12", authorUsername: "two" }),
+      ],
+      cursor: "next-bookmarks-page",
+      terminatedDirections: [],
+    });
+    expect(parseXWebBookmarkExportPage(complete)).toEqual(complete);
+    const truncated = projectXWebBookmarkExportPage(response, 1);
+    expect(truncated.items.map((item) => item.post_id)).toEqual(["11"]);
+    expect(truncated.cursor).toBeNull();
+    expect(JSON.stringify(truncated)).not.toContain("next-bookmarks-page");
+    expect(parseXWebBookmarkExportPage(truncated).items[0]!.post_id).toBe("11");
+  });
+
+  test("fails without exposing a cursor when an over-limit bookmark page has no continuation", () => {
+    expect(() => projectXWebBookmarkExportPage(bookmarksResponse(
+      timelineItemEntry("tweet-1", tweetResult("21")),
+      timelineItemEntry("tweet-2", tweetResult("22")),
+    ), 1)).toThrow("no continuation cursor was exposed");
+  });
+
+  test("rejects extra fields, duplicate post ids, and a mismatched feed on the export page", () => {
+    const page = projectXWebBookmarkExportPage(bookmarksResponse(
+      timelineItemEntry("tweet-1", tweetResult("31", {
+        author: { id: "3", username: "three", name: "Three" },
+      })),
+    ), 10);
+    expect(() => parseXWebBookmarkExportRecord({ ...page.items[0], extra: true }))
+      .toThrow("unsupported field");
+    expect(() => parseXWebBookmarkExportPage({ ...page, feed: "for-you" }))
+      .toThrow("must be bookmarks");
+    expect(() => parseXWebBookmarkExportPage({
+      ...page,
+      items: [...page.items, page.items[0]],
+      posts: [...page.posts, page.posts[0]],
+    })).toThrow("duplicate post_id");
+    expect(() => parseXWebBookmarkExportRecord({
+      ...page.items[0],
+      url: "https://x.com/three/status/31",
+    })).toThrow("status permalink");
   });
 });
 
