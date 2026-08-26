@@ -1416,6 +1416,12 @@ export function authorizeXWebLegacyDmR1Read(input: XWebLegacyDmReadRequest): XWe
   });
 }
 
+export type XWebNormalizedTweetAuthor = {
+  readonly id: string | null;
+  readonly username: string | null;
+  readonly name: string | null;
+};
+
 export type XWebNormalizedTweet = {
   readonly kind: "tweet";
   readonly entryId: string;
@@ -1424,6 +1430,7 @@ export type XWebNormalizedTweet = {
   readonly tweetId: string;
   readonly typename: "Tweet" | "TweetWithVisibilityResults" | "TweetPreviewDisplay";
   readonly legacy: Readonly<JsonRecord> | null;
+  readonly author: XWebNormalizedTweetAuthor;
 };
 
 export type XWebNormalizedUnavailable = {
@@ -1479,6 +1486,87 @@ function timelineEntry(value: unknown, label: string): JsonRecord {
   if (entryId.length > 512 || hasAsciiControl(entryId)) throw new Error(`${label}.entryId is invalid`);
   record(entry.content, `${label}.content`);
   return entry;
+}
+
+function exactTweetId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !/^[0-9]{1,19}$/u.test(value)) {
+    throw new Error(`${label} must be an exact 1-19 digit identifier`);
+  }
+  return value;
+}
+
+function optionalTweetId(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  return exactTweetId(value, label);
+}
+
+function optionalAuthorName(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length < 1 || value.length > 1_000 || hasAsciiControl(value)) {
+    throw new Error(`${label} must be bounded public text`);
+  }
+  return value;
+}
+
+function optionalAuthorHandle(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  try {
+    return normalizeXWebProfileHandle(value);
+  } catch {
+    throw new Error(`${label} must be a valid X handle`);
+  }
+}
+
+function projectXWebTweetAuthor(
+  tweet: JsonRecord,
+  legacy: Readonly<JsonRecord> | null,
+  label: string,
+): XWebNormalizedTweetAuthor {
+  const legacyId = legacy === null ? null : optionalTweetId(legacy.user_id_str, `${label}.legacy.user_id_str`);
+  if (tweet.core === undefined || tweet.core === null) {
+    return Object.freeze({ id: legacyId, username: null, name: null });
+  }
+  const core = record(tweet.core, `${label}.core`);
+  if (core.user_results === undefined || core.user_results === null) {
+    return Object.freeze({ id: legacyId, username: null, name: null });
+  }
+  const userResults = record(core.user_results, `${label}.core.user_results`);
+  if (userResults.result === undefined || userResults.result === null) {
+    return Object.freeze({ id: legacyId, username: null, name: null });
+  }
+  const user = record(userResults.result, `${label}.core.user_results.result`);
+  const typename = typeof user.__typename === "string" ? user.__typename : null;
+  if (typename === "UserUnavailable") {
+    return Object.freeze({ id: legacyId, username: null, name: null });
+  }
+  if (typename !== null && typename !== "User") {
+    throw new Error(`${label} author had an unreviewed typename`);
+  }
+  const userId = optionalTweetId(user.rest_id, `${label} author rest_id`);
+  if (legacyId !== null && userId !== null && legacyId !== userId) {
+    throw new Error(`${label} author id disagreed with tweet legacy.user_id_str`);
+  }
+  const userCore = user.core === undefined || user.core === null
+    ? null
+    : record(user.core, `${label} author core`);
+  const userLegacy = user.legacy === undefined || user.legacy === null
+    ? null
+    : record(user.legacy, `${label} author legacy`);
+  const coreHandle = userCore === null ? null : optionalAuthorHandle(userCore.screen_name, `${label} author core.screen_name`);
+  const legacyHandle = userLegacy === null ? null : optionalAuthorHandle(userLegacy.screen_name, `${label} author legacy.screen_name`);
+  if (coreHandle !== null && legacyHandle !== null && coreHandle !== legacyHandle) {
+    throw new Error(`${label} author handle disagreed across core and legacy`);
+  }
+  const coreName = userCore === null ? null : optionalAuthorName(userCore.name, `${label} author core.name`);
+  const legacyName = userLegacy === null ? null : optionalAuthorName(userLegacy.name, `${label} author legacy.name`);
+  if (coreName !== null && legacyName !== null && coreName !== legacyName) {
+    throw new Error(`${label} author name disagreed across core and legacy`);
+  }
+  return Object.freeze({
+    id: userId ?? legacyId,
+    username: coreHandle ?? legacyHandle,
+    name: coreName ?? legacyName,
+  });
 }
 
 function unwrapTweetResult(value: JsonRecord, label: string): {
@@ -1538,8 +1626,7 @@ function normalizeItemContent(
       reason: unwrapped.reason,
     });
   }
-  const tweetId = requiredString(unwrapped.result, "rest_id", `X URT tweet ${entryId}`);
-  if (!/^[0-9]{1,19}$/u.test(tweetId)) throw new Error(`X URT tweet ${entryId} had an invalid rest_id`);
+  const tweetId = exactTweetId(unwrapped.result.rest_id, `X URT tweet ${entryId}.rest_id`);
   const legacy = unwrapped.result.legacy === undefined || unwrapped.result.legacy === null
     ? null
     : Object.freeze(record(unwrapped.result.legacy, `X URT tweet ${entryId}.legacy`));
@@ -1551,6 +1638,7 @@ function normalizeItemContent(
     tweetId,
     typename: unwrapped.typename as XWebNormalizedTweet["typename"],
     legacy,
+    author: projectXWebTweetAuthor(unwrapped.result, legacy, `X URT tweet ${entryId}`),
   });
 }
 
@@ -1661,6 +1749,318 @@ export function normalizeXWebUrtTimeline(value: unknown): XWebNormalizedTimeline
 
 export function extractXWebUrtBottomCursor(value: unknown): string | null {
   return normalizeXWebUrtTimeline(value).cursors.bottom?.value ?? null;
+}
+
+const X_STATUS_ORIGIN = "https://x.com";
+const X_BOOKMARK_EXPORT_RECORD_KEYS = Object.freeze([
+  "post_id",
+  "url",
+  "author_username",
+  "author_name",
+  "text",
+  "created_at",
+  "folder_id",
+  "bookmarked_at",
+] as const);
+const X_BOOKMARK_EXPORT_PAGE_KEYS = Object.freeze([
+  "feed",
+  "items",
+  "posts",
+  "cursor",
+  "terminatedDirections",
+] as const);
+const X_FEED_POST_KEYS = Object.freeze([
+  "kind",
+  "id",
+  "text",
+  "createdAt",
+  "authorId",
+  "authorUsername",
+  "authorName",
+  "replyToPostId",
+  "liked",
+  "reposted",
+  "saved",
+  "metrics",
+  "url",
+] as const);
+
+export type XWebProjectedPostMetrics = {
+  readonly replies: number | null;
+  readonly reposts: number | null;
+  readonly likes: number | null;
+  readonly bookmarks: number | null;
+};
+
+export type XWebProjectedPost = {
+  readonly kind: "post";
+  readonly id: string;
+  readonly text: string;
+  readonly createdAt: string | null;
+  readonly authorId: string | null;
+  readonly authorUsername: string | null;
+  readonly authorName: string | null;
+  readonly replyToPostId: string | null;
+  readonly liked: boolean | null;
+  readonly reposted: boolean | null;
+  readonly saved: boolean | null;
+  readonly metrics: XWebProjectedPostMetrics;
+  readonly url: string;
+};
+
+export type XWebBookmarkExportRecord = {
+  readonly post_id: string;
+  readonly url: string;
+  readonly author_username: string | null;
+  readonly author_name: string | null;
+  readonly text: string;
+  readonly created_at: string | null;
+  readonly folder_id: string | null;
+  readonly bookmarked_at: string | null;
+};
+
+export type XWebBookmarkExportPage = {
+  readonly feed: "bookmarks";
+  readonly items: readonly XWebBookmarkExportRecord[];
+  readonly posts: readonly XWebProjectedPost[];
+  readonly cursor: string | null;
+  readonly terminatedDirections: readonly string[];
+};
+
+export type XWebFeedPage = {
+  readonly posts: readonly XWebProjectedPost[];
+  readonly cursor: string | null;
+  readonly terminatedDirections: readonly string[];
+};
+
+function optionalBoundedText(value: unknown, label: string, maximum: number): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length > maximum || hasAsciiControl(value)) {
+    throw new Error(`${label} must be bounded public text`);
+  }
+  return value;
+}
+
+function optionalBoolean(value: unknown, label: string): boolean | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
+  return value;
+}
+
+function optionalMetric(value: unknown, label: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`${label} must be an exact nonnegative safe integer`);
+  }
+  return value as number;
+}
+
+function optionalCursor(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length < 1 || value.length > 16_384 || hasAsciiControl(value)) {
+    throw new Error(`${label} must be an opaque provider cursor`);
+  }
+  return value;
+}
+
+function xWebStatusUrl(postId: string): string {
+  return `${X_STATUS_ORIGIN}/i/status/${postId}`;
+}
+
+/** Keep the provider cursor unpublished when the page was truncated. */
+export function boundXWebProviderPage<T>(
+  items: readonly T[],
+  limit: number,
+  continuationAvailable: boolean,
+  label: string,
+): { readonly items: readonly T[]; readonly truncated: boolean } {
+  if (items.length <= limit) return { items, truncated: false };
+  if (!continuationAvailable) {
+    throw new Error(`${label} returned more entries than the requested limit; no continuation cursor was exposed`);
+  }
+  return { items: items.slice(0, limit), truncated: true };
+}
+
+export function projectXWebFeedPost(
+  item: XWebNormalizedTimelineItem,
+): XWebProjectedPost | null {
+  if (item.kind !== "tweet") return null;
+  const legacy = item.legacy;
+  const createdAt = optionalBoundedText(legacy?.created_at, "X post createdAt", 128);
+  const text = typeof legacy?.full_text === "string"
+    ? optionalBoundedText(legacy.full_text, "X post text", 32_768) ?? ""
+    : "";
+  return Object.freeze({
+    kind: "post",
+    id: item.tweetId,
+    text,
+    createdAt,
+    authorId: item.author.id,
+    authorUsername: item.author.username,
+    authorName: item.author.name,
+    replyToPostId: optionalTweetId(legacy?.in_reply_to_status_id_str, "X post replyToPostId"),
+    liked: optionalBoolean(legacy?.favorited, "X post liked"),
+    reposted: optionalBoolean(legacy?.retweeted, "X post reposted"),
+    saved: optionalBoolean(legacy?.bookmarked, "X post saved"),
+    metrics: Object.freeze({
+      replies: optionalMetric(legacy?.reply_count, "X post reply_count"),
+      reposts: optionalMetric(legacy?.retweet_count, "X post retweet_count"),
+      likes: optionalMetric(legacy?.favorite_count, "X post favorite_count"),
+      bookmarks: optionalMetric(legacy?.bookmark_count, "X post bookmark_count"),
+    }),
+    url: xWebStatusUrl(item.tweetId),
+  });
+}
+
+export function projectXWebBookmarkExportRecord(
+  post: XWebProjectedPost,
+): XWebBookmarkExportRecord {
+  return Object.freeze({
+    post_id: post.id,
+    url: post.url,
+    author_username: post.authorUsername,
+    author_name: post.authorName,
+    text: post.text,
+    created_at: post.createdAt,
+    folder_id: null,
+    bookmarked_at: null,
+  });
+}
+
+export function projectXWebFeedPage(
+  operationId: XWebSemanticOperationId,
+  response: unknown,
+  limit: number,
+): XWebFeedPage {
+  const normalized = normalizeXWebGraphQlTimelineResponse(operationId, response);
+  const posts = normalized.items
+    .map(projectXWebFeedPost)
+    .filter((row): row is XWebProjectedPost => row !== null);
+  const page = boundXWebProviderPage(
+    posts,
+    limit,
+    normalized.cursors.bottom !== null,
+    "X feed page",
+  );
+  return Object.freeze({
+    posts: Object.freeze(page.items),
+    cursor: page.truncated ? null : normalized.cursors.bottom?.value ?? null,
+    terminatedDirections: normalized.terminatedDirections,
+  });
+}
+
+export function projectXWebBookmarkExportPage(
+  response: unknown,
+  limit: number,
+): XWebBookmarkExportPage {
+  const page = projectXWebFeedPage("feeds.bookmarks", response, limit);
+  return Object.freeze({
+    feed: "bookmarks",
+    items: Object.freeze(page.posts.map(projectXWebBookmarkExportRecord)),
+    posts: page.posts,
+    cursor: page.cursor,
+    terminatedDirections: page.terminatedDirections,
+  });
+}
+
+function parseXWebProjectedPost(value: unknown, label: string): XWebProjectedPost {
+  const post = record(value, label);
+  exactKeys(post, X_FEED_POST_KEYS, label);
+  if (post.kind !== "post") throw new Error(`${label}.kind must be post`);
+  const id = exactTweetId(post.id, `${label}.id`);
+  const url = requiredString(post, "url", label);
+  if (url !== xWebStatusUrl(id)) throw new Error(`${label}.url must be the status permalink for id`);
+  const metrics = record(post.metrics, `${label}.metrics`);
+  exactKeys(metrics, ["replies", "reposts", "likes", "bookmarks"], `${label}.metrics`);
+  const text = post.text;
+  if (typeof text !== "string" || text.length > 32_768 || hasAsciiControl(text)) {
+    throw new Error(`${label}.text must be bounded public text`);
+  }
+  return Object.freeze({
+    kind: "post",
+    id,
+    text,
+    createdAt: optionalBoundedText(post.createdAt, `${label}.createdAt`, 128),
+    authorId: optionalTweetId(post.authorId, `${label}.authorId`),
+    authorUsername: optionalAuthorHandle(post.authorUsername, `${label}.authorUsername`),
+    authorName: optionalAuthorName(post.authorName, `${label}.authorName`),
+    replyToPostId: optionalTweetId(post.replyToPostId, `${label}.replyToPostId`),
+    liked: optionalBoolean(post.liked, `${label}.liked`),
+    reposted: optionalBoolean(post.reposted, `${label}.reposted`),
+    saved: optionalBoolean(post.saved, `${label}.saved`),
+    metrics: Object.freeze({
+      replies: optionalMetric(metrics.replies, `${label}.metrics.replies`),
+      reposts: optionalMetric(metrics.reposts, `${label}.metrics.reposts`),
+      likes: optionalMetric(metrics.likes, `${label}.metrics.likes`),
+      bookmarks: optionalMetric(metrics.bookmarks, `${label}.metrics.bookmarks`),
+    }),
+    url,
+  });
+}
+
+export function parseXWebBookmarkExportRecord(value: unknown): XWebBookmarkExportRecord {
+  const item = record(value, "X bookmark export record");
+  exactKeys(item, X_BOOKMARK_EXPORT_RECORD_KEYS, "X bookmark export record");
+  const postId = exactTweetId(item.post_id, "X bookmark export record.post_id");
+  const url = requiredString(item, "url", "X bookmark export record");
+  if (url !== xWebStatusUrl(postId)) {
+    throw new Error("X bookmark export record.url must be the status permalink for post_id");
+  }
+  const text = item.text;
+  if (typeof text !== "string" || text.length > 32_768 || hasAsciiControl(text)) {
+    throw new Error("X bookmark export record.text must be bounded public text");
+  }
+  return Object.freeze({
+    post_id: postId,
+    url,
+    author_username: optionalAuthorHandle(item.author_username, "X bookmark export record.author_username"),
+    author_name: optionalAuthorName(item.author_name, "X bookmark export record.author_name"),
+    text,
+    created_at: optionalBoundedText(item.created_at, "X bookmark export record.created_at", 128),
+    folder_id: optionalTweetId(item.folder_id, "X bookmark export record.folder_id"),
+    bookmarked_at: optionalBoundedText(item.bookmarked_at, "X bookmark export record.bookmarked_at", 128),
+  });
+}
+
+export function parseXWebBookmarkExportPage(value: unknown): XWebBookmarkExportPage {
+  const page = record(value, "X bookmark export page");
+  exactKeys(page, X_BOOKMARK_EXPORT_PAGE_KEYS, "X bookmark export page");
+  if (page.feed !== "bookmarks") throw new Error("X bookmark export page.feed must be bookmarks");
+  if (!Array.isArray(page.items)) throw new Error("X bookmark export page.items must be an array");
+  if (!Array.isArray(page.posts)) throw new Error("X bookmark export page.posts must be an array");
+  if (page.items.length !== page.posts.length) {
+    throw new Error("X bookmark export page items and posts must have the same length");
+  }
+  if (!Array.isArray(page.terminatedDirections)
+    || !page.terminatedDirections.every((direction) => typeof direction === "string" && direction.length > 0 && direction.length <= 32)
+  ) {
+    throw new Error("X bookmark export page.terminatedDirections must be a string array");
+  }
+  const items = page.items.map((item) => parseXWebBookmarkExportRecord(item));
+  const posts = page.posts.map((post, index) => parseXWebProjectedPost(post, `X bookmark export page.posts[${index}]`));
+  for (const [index, item] of items.entries()) {
+    const post = posts[index]!;
+    if (item.post_id !== post.id || item.url !== post.url || item.text !== post.text) {
+      throw new Error("X bookmark export page items did not bind the projected posts");
+    }
+    if (item.author_username !== post.authorUsername || item.author_name !== post.authorName) {
+      throw new Error("X bookmark export page items did not bind the projected posts");
+    }
+    if (item.created_at !== post.createdAt) {
+      throw new Error("X bookmark export page items did not bind the projected posts");
+    }
+  }
+  const ids = items.map((item) => item.post_id);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error("X bookmark export page contained duplicate post_id values");
+  }
+  return Object.freeze({
+    feed: "bookmarks",
+    items: Object.freeze(items),
+    posts: Object.freeze(posts),
+    cursor: optionalCursor(page.cursor, "X bookmark export page.cursor"),
+    terminatedDirections: Object.freeze([...page.terminatedDirections]),
+  });
 }
 
 export type XWebDesiredStateKind = "like" | "bookmark" | "repost";

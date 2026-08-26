@@ -147,7 +147,13 @@ function tweetByIdResponse(id: string, favorited: boolean): unknown {
   };
 }
 
-function tweetEntry(id: string, text: string, authorId = VIEWER_ID, replyTo: string | null = null): unknown {
+function tweetEntry(
+  id: string,
+  text: string,
+  authorId = VIEWER_ID,
+  replyTo: string | null = null,
+  author: { readonly username: string; readonly name: string } | null = null,
+): unknown {
   return {
     entryId: `tweet-${id}`,
     sortIndex: id,
@@ -159,6 +165,19 @@ function tweetEntry(id: string, text: string, authorId = VIEWER_ID, replyTo: str
           result: {
             __typename: "Tweet",
             rest_id: id,
+            ...(author === null
+              ? {}
+              : {
+                  core: {
+                    user_results: {
+                      result: {
+                        __typename: "User",
+                        rest_id: authorId,
+                        core: { name: author.name, screen_name: author.username },
+                      },
+                    },
+                  },
+                }),
             legacy: {
               full_text: text,
               user_id_str: authorId,
@@ -171,6 +190,16 @@ function tweetEntry(id: string, text: string, authorId = VIEWER_ID, replyTo: str
             },
           },
         },
+      },
+    },
+  };
+}
+
+function bookmarksFeedResponse(...entries: readonly unknown[]): unknown {
+  return {
+    data: {
+      bookmark_timeline_v2: {
+        timeline: timeline(...entries),
       },
     },
   };
@@ -815,6 +844,150 @@ describe("X authenticated internal-API runtime", () => {
     ));
     expect(message).toContain("more entries than the requested limit");
     expect(message).toContain("no continuation cursor was exposed");
+  });
+
+  test("exports a bounded bookmarks page with stable post ids and a next cursor", async () => {
+    const logicalChunk = "shared~bundle.BookmarkFolders~bundle.Bookmarks";
+    const html = `${homeHtml()}<script>p.u=e=>({101:"unrelated",202:"${logicalChunk}"})[e]||e)+"."+({101:"1111111",202:"deadbee"})[e]+"a.js"</script>`;
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.hostname === "abs.twimg.com" && request.url.href !== MAIN_URL) {
+        return new Response(descriptor("Bookmarks", "LoLaMO4GuHLEPJOhH9kjAw", "query"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/Bookmarks")) {
+        expect(JSON.parse(request.url.searchParams.get("variables") ?? "null")).toEqual({
+          count: 25,
+          includePromotedContent: false,
+        });
+        return jsonResponse(bookmarksFeedResponse(
+          tweetEntry(FOCAL_POST_ID, "first bookmark", VIEWER_ID, null, {
+            username: "hraness",
+            name: "Hraness",
+          }),
+          tweetEntry(CREATED_POST_ID, "second bookmark", "54", null, {
+            username: "other",
+            name: "Other",
+          }),
+          cursorEntry("next-bookmarks-page"),
+        ));
+      }
+      throw new Error(`unexpected test request ${request.url.href}`);
+    });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "bookmarks", limit: 25 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalUrl: "https://x.com/i/bookmarks",
+      dispatchStarted: false,
+      output: {
+        feed: "bookmarks",
+        items: [
+          {
+            post_id: FOCAL_POST_ID,
+            url: `https://x.com/i/status/${FOCAL_POST_ID}`,
+            author_username: "hraness",
+            author_name: "Hraness",
+            text: "first bookmark",
+            created_at: "Tue Jul 22 12:00:00 +0000 2026",
+            folder_id: null,
+            bookmarked_at: null,
+          },
+          {
+            post_id: CREATED_POST_ID,
+            url: `https://x.com/i/status/${CREATED_POST_ID}`,
+            author_username: "other",
+            author_name: "Other",
+            text: "second bookmark",
+            created_at: "Tue Jul 22 12:00:00 +0000 2026",
+            folder_id: null,
+            bookmarked_at: null,
+          },
+        ],
+        cursor: "next-bookmarks-page",
+      },
+    });
+    expect((result.output as { posts: readonly { id: string }[] }).posts.map((post) => post.id))
+      .toEqual([FOCAL_POST_ID, CREATED_POST_ID]);
+  });
+
+  test("forwards a bookmark cursor and fails closed when the viewer no longer matches", async () => {
+    const logicalChunk = "shared~bundle.BookmarkFolders~bundle.Bookmarks";
+    const html = `${homeHtml()}<script>p.u=e=>({101:"unrelated",202:"${logicalChunk}"})[e]||e)+"."+({101:"1111111",202:"deadbee"})[e]+"a.js"</script>`;
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.hostname === "abs.twimg.com" && request.url.href !== MAIN_URL) {
+        return new Response(descriptor("Bookmarks", "LoLaMO4GuHLEPJOhH9kjAw", "query"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/Bookmarks")) {
+        expect(JSON.parse(request.url.searchParams.get("variables") ?? "null")).toEqual({
+          count: 10,
+          includePromotedContent: false,
+          cursor: "next-bookmarks-page",
+        });
+        return jsonResponse(bookmarksFeedResponse(
+          tweetEntry(QUOTED_POST_ID, "page two"),
+        ));
+      }
+      throw new Error(`unexpected test request ${request.url.href}`);
+    });
+    expect(await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "bookmarks", limit: 10, cursor: "next-bookmarks-page" },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    )).toMatchObject({
+      status: "succeeded",
+      output: {
+        feed: "bookmarks",
+        items: [{ post_id: QUOTED_POST_ID }],
+        cursor: null,
+      },
+    });
+
+    const mismatched = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse("999"));
+      throw new Error(`unexpected request after viewer mismatch ${request.url.href}`);
+    });
+    expect(await rejectionMessage(executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "bookmarks", limit: 10 },
+      xAuth,
+      { dependencies: mismatched },
+    ))).toContain("viewer no longer matches");
   });
 
   test("bootstraps the current bearer including terminal equals and performs one exact direct TweetDetail read", async () => {

@@ -39,7 +39,7 @@
       }
     },
     "feeds.read": {
-      "description": "Observed contract: read one complete bounded X For You, Following, user, List, search, or bookmarks provider page through its current captured first-party GraphQL query; user/List responses must echo the requested identity and an over-limit page fails without exposing its end cursor.",
+      "description": "Observed contract: read one complete bounded X For You, Following, user, List, search, or bookmarks provider page through its current captured first-party GraphQL query; bookmarks pages emit stable export items keyed by post_id plus a next-page cursor; user/List responses must echo the requested identity and an over-limit page fails without exposing its end cursor.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",

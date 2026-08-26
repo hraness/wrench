@@ -55,19 +55,24 @@ import {
   authorizeXWebR1GraphQlRequest,
   bindXWebOperationMetadataValues,
   enforceXWebHeaderSinkPolicy,
+  boundXWebProviderPage,
   extractXWebGraphQlReadResponseRoot,
   normalizeXWebProfileHandle,
   normalizeXWebGraphQlTimelineResponse,
+  projectXWebBookmarkExportPage,
+  projectXWebFeedPage,
+  projectXWebFeedPost,
   projectXWebProfileStats,
   resolveUniqueXWebBundleDescriptor,
   validateXWebDesiredStateMutation,
   validateXWebRichArticleContentState,
   xWebQueryDescriptorEvidenceSnapshot,
   type XWebBundleQueryDescriptor,
+  type XWebMutationOperationId,
   type XWebOperationType,
+  type XWebProjectedPost,
   type XWebQueryDescriptorEvidence,
   type XWebSemanticOperationId,
-  type XWebMutationOperationId,
 } from "./x-web";
 
 const X_ORIGIN = "https://x.com";
@@ -917,62 +922,16 @@ function assertFeedTargetBound(
   }
 }
 
-function requireCompleteProviderPage<T>(
-  items: readonly T[],
-  limit: number,
-  label: string,
-  continuationAvailable: boolean,
-): { readonly items: readonly T[]; readonly truncated: boolean } {
-  if (items.length <= limit) return { items, truncated: false };
-  if (!continuationAvailable) {
-    throw new Error(`${label} returned more entries than the requested limit; no continuation cursor was exposed`);
-  }
-  // Keep the provider cursor unpublished. It points past the unseen suffix.
-  return { items: items.slice(0, limit), truncated: true };
-}
-
-function normalizedPost(item: ReturnType<typeof normalizeXWebGraphQlTimelineResponse>["items"][number]): Readonly<Record<string, unknown>> {
-  if (item.kind !== "tweet") return item;
-  const legacy = item.legacy;
-  return Object.freeze({
-    kind: "post",
-    id: item.tweetId,
-    text: typeof legacy?.full_text === "string" ? legacy.full_text : "",
-    createdAt: typeof legacy?.created_at === "string" ? legacy.created_at : null,
-    authorId: typeof legacy?.user_id_str === "string" ? legacy.user_id_str : null,
-    replyToPostId: typeof legacy?.in_reply_to_status_id_str === "string" ? legacy.in_reply_to_status_id_str : null,
-    liked: typeof legacy?.favorited === "boolean" ? legacy.favorited : null,
-    reposted: typeof legacy?.retweeted === "boolean" ? legacy.retweeted : null,
-    saved: typeof legacy?.bookmarked === "boolean" ? legacy.bookmarked : null,
-    metrics: {
-      replies: typeof legacy?.reply_count === "number" ? legacy.reply_count : null,
-      reposts: typeof legacy?.retweet_count === "number" ? legacy.retweet_count : null,
-      likes: typeof legacy?.favorite_count === "number" ? legacy.favorite_count : null,
-      bookmarks: typeof legacy?.bookmark_count === "number" ? legacy.bookmark_count : null,
-    },
-    url: `${X_ORIGIN}/i/status/${item.tweetId}`,
-  });
-}
-
 async function readFeed(bootstrap: XBootstrap, input: OperationInput): Promise<unknown> {
   const request = feedRequest(bootstrap, input);
   const descriptor = await resolveDescriptor(bootstrap, request.operationName, "query");
   const response = await graphQl(bootstrap, descriptor, request.variables, request.method, request.operationId);
   assertFeedTargetBound(request, input, response);
-  const normalized = normalizeXWebGraphQlTimelineResponse(request.operationId, response);
   const limit = integerInput(input, "limit", DEFAULT_LIMIT, 1, 100);
-  const posts = normalized.items.map(normalizedPost).filter((row) => row.kind === "post");
-  const page = requireCompleteProviderPage(
-    posts,
-    limit,
-    "X feed page",
-    normalized.cursors.bottom !== null,
-  );
-  return {
-    posts: page.items,
-    cursor: page.truncated ? null : normalized.cursors.bottom?.value ?? null,
-    terminatedDirections: normalized.terminatedDirections,
-  };
+  if (request.operationId === "feeds.bookmarks") {
+    return projectXWebBookmarkExportPage(response, limit);
+  }
+  return projectXWebFeedPage(request.operationId, response, limit);
 }
 
 async function readProfile(
@@ -1026,29 +985,31 @@ async function readConversation(bootstrap: XBootstrap, input: OperationInput, co
   const descriptor = await resolveDescriptor(bootstrap, "TweetDetail", "query");
   const response = await graphQl(bootstrap, descriptor, tweetDetailVariables(bootstrap, id, input), "GET", "posts.detail");
   const normalized = normalizeXWebGraphQlTimelineResponse("posts.detail", response);
-  const posts = normalized.items.map(normalizedPost).filter((row) => row.kind === "post");
+  const posts = normalized.items
+    .map(projectXWebFeedPost)
+    .filter((row): row is NonNullable<typeof row> => row !== null);
   const root = posts.find((row) => row.id === id);
   if (root === undefined) throw new Error("X TweetDetail response did not contain the requested focal post");
   if (!commentsOnly) return { post: root };
   const limit = integerInput(input, "limit", DEFAULT_LIMIT, 1, 100);
-  const descendants: Readonly<Record<string, unknown>>[] = [];
+  const descendants: XWebProjectedPost[] = [];
   const acceptedIds = new Set([id]);
   let changed = true;
   while (changed) {
     changed = false;
     for (const row of posts) {
-      if (row.id === id || acceptedIds.has(row.id as string)) continue;
-      if (typeof row.replyToPostId !== "string" || !acceptedIds.has(row.replyToPostId)) continue;
-      acceptedIds.add(row.id as string);
+      if (row.id === id || acceptedIds.has(row.id)) continue;
+      if (row.replyToPostId === null || !acceptedIds.has(row.replyToPostId)) continue;
+      acceptedIds.add(row.id);
       descendants.push(row);
       changed = true;
     }
   }
-  const page = requireCompleteProviderPage(
+  const page = boundXWebProviderPage(
     descendants,
     limit,
-    "X conversation page",
     normalized.cursors.bottom !== null,
+    "X conversation page",
   );
   return {
     comments: page.items,
@@ -3182,10 +3143,11 @@ export async function executeXWebOperation(
   );
   if (recipe.action === "feeds.read") {
     await requireBoundViewer(bootstrap, auth);
+    const output = await readFeed(bootstrap, input);
     return {
       status: "succeeded",
-      output: await readFeed(bootstrap, input),
-      finalUrl: `${X_ORIGIN}/home`,
+      output,
+      finalUrl: stringInput(input, "feed") === "bookmarks" ? `${X_ORIGIN}/i/bookmarks` : `${X_ORIGIN}/home`,
       dispatchStarted: false,
       dispatch: { planned: 0, started: 0, verified: 0 },
     };
