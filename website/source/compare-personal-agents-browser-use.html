@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+    <title>Browser-using personal agents, and which web operations Wrench attests</title>
+    <meta name="description" content="Compare persistent personal agents that use a general browser with Wrench's attested operation set: named contracts, current observed counts, and capture-required reservations that stay unavailable.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/compare/personal-agents-browser-use/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Browser-using personal agents, and which web operations Wrench attests">
+    <meta property="og:description" content="Compare persistent personal agents that use a general browser with Wrench's attested operation set: named contracts, current observed counts, and capture-required reservations that stay unavailable.">
+    <meta property="og:url" content="https://wrench.rip/compare/personal-agents-browser-use/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Browser-using personal agents, and which web operations Wrench attests">
+    <meta name="twitter:description" content="Compare persistent personal agents that use a general browser with Wrench's attested operation set: named contracts, current observed counts, and capture-required reservations that stay unavailable.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Personal agents and attested operations</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Comparison · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Browser-using personal agents still need attested web operations.</h1>
+          <p class="answer-lede"><a href="https://hraness.com/reading/personal-agents-notes-instinct-grok-bots-chatgpt-work">Anish Acharya's notes on Instinct, Grok Bots, and ChatGPT Work</a> describe persistent personal agents with cloud(ish) computers, browser access, cached credentials, and recurring loops. <a href="https://wrench.rip/">Wrench</a> is not that agent. It is a local capability and custody layer that exposes named operations and keeps general browser control behind the contract.</p>
+          <p class="review-note">This comparison uses only Acharya's published notes and the public {{WRENCH_RELEASE}} pages for <a href="https://wrench.rip/">Wrench home</a>, <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>, and <a href="https://wrench.rip/security/">security</a>. Operation counts are the current release attestation, substituted at site build time.</p>
+        </header>
+
+        <section aria-labelledby="acharya-notes">
+          <h2 id="acharya-notes">Persistent personal agents treat the browser as the work surface</h2>
+          <p>Acharya names three products: Instinct, Grok Bots, and ChatGPT Work. He reads them as a distillation of earlier OpenClaw patterns: persistent agents with cloud(ish) computers, browser access, cached credentials, recurring loops, and a top-level orchestrator that can see other agents and dispatch work.</p>
+          <p>He writes that browser use is now good enough for most web-based work, with CAPTCHAs, 2FA, and occasional brittle flows as the remaining friction. The product variable he watches is presumptuousness and resourcefulness: how much permission the agent assumes, and how it recovers when a flow breaks.</p>
+          <p>Instinct and Grok Bots are the aggressive pair in those notes. Acharya had both shop and purchase overnight. When Instinct could not reach one website, it reset the password and finished the task. ChatGPT Work is the least aggressive of the three. He records reluctance around credentials, payments, and consequential actions, and treats that as a compliance choice rather than a missing browser.</p>
+          <p>The question he leaves open is product design and distribution: which first loop earns enough trust, context, and permission to expand into the rest of a life. This page does not answer that product question. It asks a narrower one that Wrench can answer from its public contract: which web operations are attested, and what happens when they are not.</p>
+        </section>
+
+        <section aria-labelledby="attested-set">
+          <h2 id="attested-set">Wrench attests a finite operation set</h2>
+          <p>The current release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled public adapters. {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>. {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} remain <code>capture-required</code>. Those figures are the same release-bound counts published on the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>. This page does not add a provider, invent an extra operation, or treat a reservation as ready.</p>
+          <p><code>observed</code> means the current contract can plan and execute after local doctor and auth checks pass. <code>capture-required</code> is an inert reservation. It cannot plan or execute until authorized evidence establishes a newly reviewed contract. Telegram is absent from those manifests. Wrench does not install a Telegram Bot API substitute or claim Telegram contact access.</p>
+          <p>The <a href="https://wrench.rip/">Wrench home</a> states the same boundary in product terms. Wrench lets an agent capture pages, preserve media, read supported connected services, and invoke reviewed account operations. Each authenticated operation is typed, bounded, and tied to one account and transport. The caller brings the model and interface. Wrench supplies the local capability and custody layer. It is not an AI agent, planner, or approval shell.</p>
+        </section>
+
+        <section aria-labelledby="browser-vs-named">
+          <h2 id="browser-vs-named">General browser use is a different contract</h2>
+          <p>Acharya's agents keep a live browser, cached credentials, and a recurring loop. Wrench begins with the exact outcome an agent may request. It exposes a small semantic operation such as <code>messaging.list</code> and keeps the browser, provider plumbing, account session, and credentials inside a local kernel. The <a href="https://wrench.rip/security/">security guide</a> states that credentials stay opaque to the caller, and that Wrench does not silently move between an official API, browser session, linked-device store, or portable plugin.</p>
+          <div class="table-scroll" role="region" aria-labelledby="browser-vs-named" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Decision</th>
+                  <th scope="col">Persistent personal agent with browser use</th>
+                  <th scope="col">Wrench attested operation</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">What the caller asks for</th>
+                  <td>A loop that can drive the live web, including recovery when a flow breaks</td>
+                  <td>A named outcome such as <code>messaging.list</code>, not cookies, selectors, scripts, arbitrary HTTP, or every signed-in tab</td>
+                </tr>
+                <tr>
+                  <th scope="row">Credentials</th>
+                  <td>Cached credentials on a cloud computer that the agent can keep using</td>
+                  <td>Opaque to the caller and bound to one account realm, provider target, and transport</td>
+                </tr>
+                <tr>
+                  <th scope="row">Missing or drifted capability</th>
+                  <td>Recover in the browser. Acharya records a password reset that completed the original task</td>
+                  <td>Stop and return to <code>capture-required</code>. Wrench never switches to a browser fallback silently</td>
+                </tr>
+                <tr>
+                  <th scope="row">Consequential write</th>
+                  <td>Product-dependent presumptuousness, including overnight purchase in the Instinct and Grok notes</td>
+                  <td>R2 and R3 writes need an exact short-lived preview and confirmation. An indeterminate dispatch is not retried</td>
+                </tr>
+                <tr>
+                  <th scope="row">Completeness</th>
+                  <td>Browser use is good enough for most web work, modulo CAPTCHAs, 2FA, and brittle flows</td>
+                  <td>Incomplete reads stay incomplete. A reservation stays inert until a newly reviewed contract exists</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The home page already places browser automation in that split. Browser tools remain useful for visual workflows, UI testing, and exploratory interaction. What Wrench adds is a reviewed semantic operation with no hidden DOM-action fallback.</p>
+        </section>
+
+        <section aria-labelledby="reservations">
+          <h2 id="reservations">Capture-required reservations stay unavailable</h2>
+          <p>When an origin, account proof, request, status, field, or response shape changes, the affected operation returns to <code>capture-required</code>. That is the fail-closed rule on both the <a href="https://wrench.rip/security/">security</a> and <a href="https://wrench.rip/provider-capabilities/">attestation</a> pages. The reservation cannot plan or execute until authorized evidence establishes a newly reviewed contract.</p>
+          <p>The same rule keeps neighboring surfaces from inheriting authority. LinkedIn's official contact adapter does not grant authority to its separate consumer-web inbox adapter. An Instagram inbox summary does not authorize an individual thread read. Those examples are published on the security page so a gap stays visible instead of being filled by the next available tab.</p>
+          <p>Acharya's password-reset recovery is the opposite move: the agent used the live site to create a new path to the original job. Wrench refuses that substitution. A missing, blocked, or drifted contract stays a reservation. It does not become general browser control, caller-selected HTTP, or another transport.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="compare-next">
+          <h2 id="compare-next">Read the notes, then the current contract</h2>
+          <p>Start with <a href="https://hraness.com/reading/personal-agents-notes-instinct-grok-bots-chatgpt-work">Acharya's Instinct, Grok Bots, and ChatGPT Work notes</a>. Then read the <a href="https://wrench.rip/">Wrench home</a> for the capability-layer claim, the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a> for every current operation and completeness mark, and the <a href="https://wrench.rip/security/">security guide</a> before binding an account.</p>
+        </aside>
+      </article>
+    </main>
+    <footer class="footer guide-footer">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </footer>
+  </body>
+</html>

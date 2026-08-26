@@ -106,6 +106,14 @@ export const PUBLIC_PAGES = [
     sourceFile: "privacy.html",
     title: "Wrench privacy and data custody: CLI, providers, and website",
   },
+  {
+    canonicalPath: "/compare/personal-agents-browser-use/",
+    description:
+      "Compare persistent personal agents that use a general browser with Wrench's attested operation set: named contracts, current observed counts, and capture-required reservations that stay unavailable.",
+    outputFile: "compare/personal-agents-browser-use/index.html",
+    sourceFile: "compare-personal-agents-browser-use.html",
+    title: "Browser-using personal agents, and which web operations Wrench attests",
+  },
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];
@@ -365,28 +373,25 @@ function renderTemplate(
       "{{PROVIDER_CAPABILITY_ATTESTATION_TABLE}}",
       options.attestationTable,
     );
-    rendered = replaceRequired(
-      rendered,
-      "{{PROVIDER_CAPABILITY_ADAPTER_COUNT}}",
-      String(options.attestation.adapterCount),
-    );
-    rendered = replaceRequired(
-      rendered,
+  } else if (rendered.includes("{{PROVIDER_CAPABILITY_ATTESTATION_TABLE}}")) {
+    throw new Error("Only the provider capability page may include the attestation table.");
+  }
+  const attestationCounts = new Map([
+    ["{{PROVIDER_CAPABILITY_ADAPTER_COUNT}}", String(options.attestation.adapterCount)],
+    [
       "{{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}}",
       String(options.attestation.captureRequiredCount),
-    );
-    rendered = replaceRequired(
-      rendered,
-      "{{PROVIDER_CAPABILITY_OBSERVED_COUNT}}",
-      String(options.attestation.observedCount),
-    );
-    rendered = replaceRequired(
-      rendered,
-      "{{PROVIDER_CAPABILITY_OPERATION_COUNT}}",
-      String(options.attestation.operationCount),
-    );
-  } else if (rendered.includes("{{PROVIDER_CAPABILITY")) {
-    throw new Error("Only the provider capability page may include attestation placeholders.");
+    ],
+    ["{{PROVIDER_CAPABILITY_OBSERVED_COUNT}}", String(options.attestation.observedCount)],
+    ["{{PROVIDER_CAPABILITY_OPERATION_COUNT}}", String(options.attestation.operationCount)],
+  ]);
+  for (const [placeholder, value] of attestationCounts) {
+    if (rendered.includes(placeholder)) {
+      rendered = replaceRequired(rendered, placeholder, value);
+    }
+  }
+  if (rendered.includes("{{PROVIDER_CAPABILITY")) {
+    throw new Error("Unknown provider capability placeholder.");
   }
   const optionalValues = new Map([
     ["{{WRENCH_DESCRIPTION}}", identity.description],
