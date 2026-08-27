@@ -11,6 +11,11 @@ import {
   rawBeeperConversationId,
   rawBeeperMessageId,
 } from "./beeper-omni";
+import { imsgDirectMessagingDefinition } from "./imessage-direct-messaging";
+import {
+  imsgConversationProviderId,
+  imsgMessageProviderId,
+} from "./imessage-direct-omni";
 import {
   whatsappMessagingDefinition,
 } from "./whatsapp-messaging";
@@ -110,6 +115,31 @@ function baseMessage(value: ProviderMessageV1) {
     providerRevision: value.providerRevision,
     orderedAt: value.orderedAt,
     messageSha256: sha256(canonicalJson(value)),
+  });
+}
+
+function imessageMessage(
+  guid: string,
+  rowId: number,
+  body: string,
+  orderedAt: string,
+): ProviderMessageV1 {
+  return Object.freeze({
+    kind: "message",
+    providerId: imsgMessageProviderId(guid),
+    providerRevision: `${rowId}:${guid}`,
+    orderedAt,
+    conversationProviderId: imsgConversationProviderId("iMessage;+;fixture-chat"),
+    sender: null,
+    recipients: Object.freeze([]),
+    direction: "outgoing",
+    subject: null,
+    body,
+    bodyTruncated: false,
+    unread: null,
+    replyToProviderId: null,
+    state: "active",
+    attachments: Object.freeze([]),
   });
 }
 
@@ -365,6 +395,71 @@ describe("provider messaging coordinate codecs", () => {
       .toThrow("only messaging.send");
     await expect(runtime.executeMessagingPart!("messaging.send", {}, auth, attempt))
       .rejects.toThrow("account_id");
+  });
+
+  test("proves the exact iMessage prefix and bounded eviction without replies", () => {
+    if (imsgDirectMessagingDefinition.action.state !== "supported") {
+      throw new Error("direct iMessage action changed state");
+    }
+    const first = imessageMessage(
+      "base-guid",
+      10,
+      "earlier",
+      "2026-08-27T12:00:00.000Z",
+    );
+    const acceptedMessage = imessageMessage(
+      "accepted-guid",
+      11,
+      "one bubble",
+      "2026-08-27T12:01:00.000Z",
+    );
+    const accepted = Object.freeze([Object.freeze({
+      providerMessageId: acceptedMessage.providerId,
+      providerRevision: acceptedMessage.providerRevision,
+      direction: "outgoing" as const,
+      bodySha256: sha256("one bubble"),
+      replyToProviderId: null,
+    })]);
+    const base = Object.freeze({
+      exactDataRevision: "base-data",
+      latestMessageRevision: "base-latest",
+      contextLimit: 1,
+      messages: Object.freeze([baseMessage(first)]),
+    });
+    expect(imsgDirectMessagingDefinition.action.proveExpectedOwnPrefix({
+      base,
+      current: {
+        exactDataRevision: "base-data",
+        latestMessageRevision: "base-latest",
+        messages: Object.freeze([first]),
+      },
+      accepted,
+    })).toBe("proven");
+    expect(imsgDirectMessagingDefinition.action.proveExpectedOwnPrefix({
+      base,
+      current: {
+        exactDataRevision: "after-data",
+        latestMessageRevision: "after-latest",
+        messages: Object.freeze([acceptedMessage]),
+      },
+      accepted,
+    })).toBe("proven");
+    expect(imsgDirectMessagingDefinition.action.proveExpectedOwnPrefix({
+      base,
+      current: {
+        exactDataRevision: "after-data",
+        latestMessageRevision: "after-latest",
+        messages: Object.freeze([
+          imessageMessage(
+            "foreign-guid",
+            12,
+            "foreign",
+            "2026-08-27T12:02:00.000Z",
+          ),
+        ]),
+      },
+      accepted,
+    })).toBe("drift");
   });
 
   test("binds an exact WhatsApp JID and remains historical-only", () => {
