@@ -411,6 +411,43 @@ describe("X authenticated internal-API runtime", () => {
     );
   });
 
+  test("resolves the reviewed Bookmarks family through a 16-hex current hash map", () => {
+    const html = [
+      "prefix;p.u=e=>({202:\"shared~bundle.BookmarkFolders~bundle.Bookmarks\"}",
+      ")[e]||e)+\".\"+({202:\"9886449ab816b84b\"}",
+      ")[e]+\"a.js\";suffix",
+    ].join("");
+
+    expect(resolveCurrentXWebChunkUrl(
+      html,
+      "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
+    ).href).toBe(
+      "https://abs.twimg.com/responsive-web/client-web/shared~bundle.BookmarkFolders~bundle.Bookmarks.9886449ab816b84ba.js",
+    );
+  });
+
+  test("fails closed when the current hash map omits a reviewed-width binding", () => {
+    const omitted = [
+      "prefix;p.u=e=>({202:\"shared~bundle.BookmarkFolders~bundle.Bookmarks\"}",
+      ")[e]||e)+\".\"+({101:\"1111111\"}",
+      ")[e]+\"a.js\";suffix",
+    ].join("");
+    expect(() => resolveCurrentXWebChunkUrl(
+      omitted,
+      "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
+    )).toThrow("omitted the reviewed logical chunk hash");
+
+    const unexpectedWidth = [
+      "prefix;p.u=e=>({202:\"shared~bundle.BookmarkFolders~bundle.Bookmarks\"}",
+      ")[e]||e)+\".\"+({202:\"9886449ab816b84\"}",
+      ")[e]+\"a.js\";suffix",
+    ].join("");
+    expect(() => resolveCurrentXWebChunkUrl(
+      unexpectedWidth,
+      "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
+    )).toThrow("omitted the reviewed logical chunk hash");
+  });
+
   test("resolves a reviewed Bookmarks family after X inserts a loader member", () => {
     const html = [
       "prefix;p.u=e=>({202:\"shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica\"}",
