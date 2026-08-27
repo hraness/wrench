@@ -571,6 +571,19 @@ version, commit and binary digest, source and provider versions, transform,
 completeness, counts, and exact summary digest. It is returned only after
 operation-owned private shards have been cleaned up.
 
+Current source also defines the fail-closed Message Like Me handoff seam. The
+SDK derives a domain-separated coordinate digest only from an exact
+`conversations.read` projection. The private context exposes that digest with
+its contract ID and schema version, never the raw account or conversation
+coordinate. The same digest is bound into the client intent and body-free
+receipt. Native Messages coordinates remain unsupported by this Beeper
+producer.
+
+This source contract is not part of the immutable v0.15.0 release. Consumers
+must not claim an installed Wrench producer until a later immutable release
+contains it. No tag, package publication, provider action, or message send is
+performed by adding the source contract.
+
 The released schema-1 contact-interaction writer remains macOS arm64-only
 because its receipt immutably names that platform and executable digest. It
 fails before creating private export state elsewhere, while its parser remains

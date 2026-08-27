@@ -78,6 +78,31 @@ export type {
 } from "./provider-plugin-cleanup-resource";
 
 export {
+  MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_CONTRACT_ID,
+  MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_SCHEMA_VERSION,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_FORMAT,
+  createBeeperMessageLikeMeContextBindingV1,
+  createWrenchMessagingReceiptBindingV1,
+  messageLikeMeSourceConversationCoordinateBindingV1,
+  parseMessageLikeMeSourceConversationCoordinateV1,
+} from "./message-like-me-agentic-messaging";
+
+export type {
+  MessageLikeMeSourceConversationCoordinateBindingV1,
+  MessageLikeMeSourceConversationCoordinateV1,
+  WrenchMessagingContextBindingV1,
+  WrenchMessagingReceiptBindingV1,
+  WrenchMessagingReceiptStateV1,
+} from "./message-like-me-agentic-messaging";
+
+export {
   startProviderPluginCleanupTrackedOperation,
 } from "./provider-plugin-cleanup-execution";
 
