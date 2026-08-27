@@ -3629,6 +3629,14 @@ function freezeBinding(
     binding.surfaceId,
   );
   if (
+    messaging?.action.state === "supported"
+    && binding.transport === "provider-api"
+  ) {
+    throw new Error(
+      `provider plugin surface ${binding.surfaceId} messaging actions require a cleanup-qualified session or local CLI transport`,
+    );
+  }
+  if (
     typeof binding.subject !== "object"
     || binding.subject === null
     || typeof binding.subject.format !== "string"

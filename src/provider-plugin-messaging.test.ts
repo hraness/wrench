@@ -6,7 +6,9 @@ import type { MessagingRouteCoordinateV1 } from "./messaging-types";
 import type { ProviderMaterializedPageV1 } from "./omni-model";
 import {
   defineProviderPlugin,
+  lazyProviderApiRuntime,
   lazyWebSessionRuntime,
+  type ProviderApiPluginOperationDefinitionV1,
   type ProviderPluginMessagingDefinitionV1,
   type WebSessionPluginOperationDefinitionV1,
 } from "./provider-plugin";
@@ -206,6 +208,45 @@ const messaging = Object.freeze({
 } satisfies ProviderPluginMessagingDefinitionV1);
 
 describe("provider messaging SPI conformance", () => {
+  test("rejects provider API actions without cleanup-qualified execution", () => {
+    const providerOperations = [
+      operation("messaging.list"),
+      operation("messaging.read"),
+      operation("messaging.send"),
+    ].map((definition) => Object.freeze({
+      ...definition,
+      requiredScopeSets: Object.freeze([Object.freeze(["synthetic.messages"])]),
+      coverage: Object.freeze([`synthetic ${definition.name}`]),
+    }) satisfies ProviderApiPluginOperationDefinitionV1);
+    expect(() => defineProviderPlugin({
+      apiVersion: 1,
+      id: "synthetic-provider-api-messaging",
+      version: "1.0.0",
+      displayName: "Synthetic Provider API Messaging",
+      sourceKind: "source",
+      implementationSources: [{
+        label: "plugin.ts",
+        url: new URL("./provider-plugin-test-fixture.ts", import.meta.url),
+      }],
+      bindings: [{
+        transport: "provider-api",
+        surfaceId: "synthetic-provider-api",
+        origin: "https://synthetic-provider-api.example",
+        runtimeOrigins: ["https://synthetic-provider-api.example"],
+        authKinds: ["oauth-token-file"],
+        operations: providerOperations,
+        messaging,
+        subject: {
+          format: "synthetic-provider-api:<id>",
+          matches: (value) => value === "synthetic-provider-api:account",
+        },
+        runtime: lazyProviderApiRuntime(() => Promise.resolve({
+          execute: () => Promise.resolve(),
+        })),
+      }],
+    })).toThrow("require a cleanup-qualified session or local CLI transport");
+  });
+
   test("conforms a synthetic fourth provider without kernel provider branching", () => {
     const plugin = defineProviderPlugin({
       apiVersion: 1,

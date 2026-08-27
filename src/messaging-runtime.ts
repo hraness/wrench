@@ -40,7 +40,10 @@ import {
 } from "./model";
 import { runLocalCliOperationWithDeadline } from "./local-cli-execution";
 import { parseMaterializedPageV1, type ProviderMaterializedPageV1, type ProviderMessageV1 } from "./omni-model";
-import { OperationDeadline } from "./operation-deadline";
+import {
+  OperationDeadline,
+  type OperationDeadlineClock,
+} from "./operation-deadline";
 import { withLocalCliProviderCleanupAdmission } from "./local-cli-admission";
 import type {
   ProviderPluginBindingV1,
@@ -74,6 +77,13 @@ import {
   type MessagingRunSnapshotV1,
 } from "./messaging-action-store";
 import { isWrenchStatePath, writePrivateJson } from "./storage";
+import {
+  runWebSessionOperationWithDeadline,
+} from "./web-session-execution";
+import {
+  withWebSessionCleanupAdmission,
+  type WebSessionCleanupAdmissionIdentity,
+} from "./web-session-cleanup-admission";
 
 const ROUTE_TTL_MS = 15 * 60_000;
 const CONTEXT_TTL_MS = 5 * 60_000;
@@ -85,6 +95,8 @@ export type MessagingRuntimeOptions = {
   readonly registry?: ProviderPluginRegistry;
   readonly now?: Date;
   readonly signal?: AbortSignal;
+  /** Internal deterministic-clock seam for the per-bubble total deadline. */
+  readonly deadlineClock?: OperationDeadlineClock;
 };
 
 type MessagingResolution = ProviderPluginOperationResolutionV1 & {
@@ -265,6 +277,37 @@ function implementationIdentity(
     artifactSha256: registry.artifactSha256(binding),
     ...(binding.transport === "local-cli" ? { tool: binding.tool } : {}),
   }));
+}
+
+function messagingWebCleanupAdmissionIdentity(
+  invocation: PreparedInvocation,
+  resolution: MessagingResolution,
+  registry: ProviderPluginRegistry,
+  runId: string,
+  partIndex: number,
+): WebSessionCleanupAdmissionIdentity {
+  return Object.freeze({
+    runId,
+    pluginId: resolution.plugin.id,
+    pluginVersion: resolution.plugin.version,
+    pluginImplementationHash: registry
+      .implementationHash(resolution.binding)
+      .toString("hex"),
+    adapterId: invocation.manifest.id,
+    adapterHash: manifestHash(invocation.manifest),
+    surfaceId: resolution.binding.surfaceId,
+    authId: invocation.auth.id,
+    authHash: sha256(canonicalJson(invocation.auth)),
+    transport: "web-session-api" as const,
+    executionIdentityHash: sha256(canonicalJson({
+      schemaVersion: 1,
+      kind: "messaging",
+      runId,
+      partIndex,
+      operation: invocation.operationId,
+      binding: implementationIdentity(resolution.binding, registry),
+    })),
+  });
 }
 
 function identityFor(
@@ -1329,6 +1372,32 @@ function stopMessagingAfterError(
   throw new Error("messaging run error state could not be classified");
 }
 
+function stopMessagingAfterCaughtError(
+  snapshot: MessagingRunSnapshotV1,
+  options: MessagingRuntimeOptions,
+): MessagingRunSnapshotV1 {
+  try {
+    return stopMessagingAfterError(snapshot, options);
+  } catch {
+    const environment = options.environment ?? process.env;
+    const latest = readMessagingRun(snapshot.run.runId, environment);
+    if (latest.run.state !== "pending") return latest;
+    const active = latest.run.parts[latest.run.provenPartCount];
+    if (active?.state === "dispatching") {
+      return stopMessagingIndeterminate(
+        latest,
+        "journal-recovery-required",
+        options,
+      );
+    }
+    return stopMessagingBeforeDispatch(
+      latest,
+      "journal-recovery-required",
+      options,
+    );
+  }
+}
+
 /**
  * Execute one already-owned and consumed composite confirmation. The caller
  * owns the outer confirmation claim and ordinary receipt projection. This
@@ -1359,23 +1428,26 @@ export async function executeMessagingCompositeInternal(
   if (actionResolution.binding.executeMessagingPart === undefined) {
     throw new Error("messaging provider has no private action executor");
   }
+  if (actionResolution.binding.transport === "provider-api") {
+    throw new Error(
+      "messaging actions require a cleanup-qualified session or local CLI transport",
+    );
+  }
+  const operation = invocation.manifest.operations[invocation.operationId];
+  if (operation === undefined) {
+    throw new Error("messaging action lost its exact operation recipe");
+  }
+  const actionTimeoutMs = isLocalCliOperation(operation)
+    ? operation.localCli.timeoutMs
+    : isWebSessionOperation(operation)
+      ? operation.webSession.timeoutMs
+      : null;
+  if (actionTimeoutMs === null) {
+    throw new Error("messaging action has no cleanup-qualified bounded recipe");
+  }
   const boundAuth = invocation.auth;
   requireBoundAuth(actionResolution.binding, boundAuth);
   let snapshot = initialSnapshot;
-  try {
-    await requireRuntimeReady(
-      actionResolution.binding,
-      invocation.auth,
-      environment,
-      registry,
-    );
-  } catch {
-    return stopMessagingBeforeDispatch(
-      snapshot,
-      "prefix-freshness-unproven",
-      options,
-    );
-  }
   for (let index = snapshot.run.provenPartCount; index < composite.parts.length; index += 1) {
     if (snapshot.run.state !== "pending" || snapshot.run.provenPartCount !== index) {
       return snapshot;
@@ -1387,254 +1459,315 @@ export async function executeMessagingCompositeInternal(
         options,
       );
     }
-    let record: MessagingRouteRecordV1;
-    let routeResolution: MessagingResolution;
-    let current: Awaited<ReturnType<typeof currentContextPage>>;
-    let routeStateRevision: string;
+    const operationDeadline = new OperationDeadline(actionTimeoutMs, {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.deadlineClock === undefined
+        ? {}
+        : { clock: options.deadlineClock }),
+    });
     try {
-      const route = await resolveCurrentRoute(
-        composite.routeRef,
-        now(options),
-        environment,
-        registry,
-      );
-      record = route.record;
-      routeResolution = route.resolution;
-      if (
-        routeResolution.binding !== actionResolution.binding
-        || routeResolution.plugin.id !== actionResolution.plugin.id
-        || routeResolution.messaging.contractId !== actionResolution.messaging.contractId
-      ) {
-        return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
-      }
-      current = await currentContextPage(
-        record,
-        routeResolution,
-        composite.contextLimit,
-        environment,
-        registry,
-        options.signal,
-      );
-      routeStateRevision = await currentMessagingRouteStateRevision(
-        record,
-        routeResolution,
-        environment,
-        registry,
-        options.signal,
-      );
-    } catch {
-      return stopMessagingBeforeDispatch(
-        snapshot,
-        "prefix-freshness-unproven",
-        options,
-      );
-    }
-    if (routeStateRevision !== composite.baseRouteStateRevision) {
-      return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
-    }
-    let proof: ProviderPluginMessagingExpectedOwnPrefixProofV1;
-    try {
-      const accepted = messagingExpectedOwnPrefix(snapshot.run);
-      proof = parseExpectedOwnPrefixProof(action.proveExpectedOwnPrefix(Object.freeze({
-        base: Object.freeze({
-          exactDataRevision: composite.baseExactDataRevision,
-          latestMessageRevision: composite.baseLatestMessageRevision,
-          contextLimit: composite.contextLimit,
-          messages: composite.baseMessages,
-        }),
-        current: Object.freeze({
-          exactDataRevision: current.exactDataRevision,
-          latestMessageRevision: current.latestMessageRevision,
-          messages: current.messages,
-        }),
-        accepted,
-      })), accepted.length);
-    } catch {
-      return stopMessagingBeforeDispatch(
-        snapshot,
-        "prefix-freshness-unproven",
-        options,
-      );
-    }
-    if (
-      proof.state !== "proven"
-      || proof.matchedAcceptedPrefixCount < snapshot.run.observedAcceptedPrefixCount
-    ) {
-      return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
-    }
-    snapshot = updateMessagingRun(snapshot, {
-      type: "claimed",
-      index,
-      observedAcceptedPrefixCount: proof.matchedAcceptedPrefixCount,
-      at: messagingTransitionTime(snapshot, options),
-    }, environment);
-    let crossedExternalBoundary = false;
-    try {
-      const operation = invocation.manifest.operations[invocation.operationId];
-      if (operation === undefined) {
-        throw new Error("messaging action lost its exact operation recipe");
-      }
-      const recordPrivateIndeterminateOutcome = async (
-        code: string,
-      ): Promise<void> => {
-        if (!crossedExternalBoundary) {
-          throw new Error("messaging provider outcome preceded its durable dispatch boundary");
-        }
-        snapshot = stopMessagingIndeterminate(
-          snapshot,
-          "provider-result-indeterminate",
-          options,
-          Object.freeze({
-            schemaVersion: 1,
-            messagingContractId: actionResolution.messaging.contractId,
-            code,
-          }),
-        );
-      };
-      const beforeExternalBegin = async (): Promise<void> => {
-        if (crossedExternalBoundary) {
-          throw new Error("messaging provider attempted more than one dispatch boundary");
-        }
-        snapshot = updateMessagingRun(snapshot, {
-          type: "dispatching",
-          index,
-          at: messagingTransitionTime(snapshot, options),
-        }, environment);
-        crossedExternalBoundary = true;
-      };
-      const executePart = (
-        operationDeadline: Parameters<
-          NonNullable<typeof actionResolution.binding.executeMessagingPart>
-        >[3]["operationDeadline"],
-        registerCleanupBarrier?: Parameters<
-          NonNullable<typeof actionResolution.binding.executeMessagingPart>
-        >[3]["registerCleanupBarrier"],
-      ) => actionResolution.binding.executeMessagingPart!(
-          action.operation,
-          composite.parts[index]!.input,
-          boundAuth,
-          Object.freeze({
-            beforeExternalBegin,
-            recordPrivateIndeterminateOutcome,
-            operationDeadline,
-            signal: operationDeadline.signal,
-            ...(registerCleanupBarrier === undefined
-              ? {}
-              : { registerCleanupBarrier }),
+      snapshot = await operationDeadline.run(async () => {
+        try {
+          await requireRuntimeReady(
+            actionResolution.binding,
+            boundAuth,
             environment,
-          }),
-        );
-      const output = actionResolution.binding.transport === "local-cli"
-        ? await (() => {
-            if (!isLocalCliOperation(operation)) {
-              throw new Error("local CLI messaging action lost its exact operation recipe");
-            }
-            return withLocalCliProviderCleanupAdmission(
-              {
-                registry,
-                binding: actionResolution.binding,
-                auth: boundAuth,
-                purpose: {
-                  kind: "messaging",
-                  action: operation.localCli.action,
-                  contractVersion: operation.localCli.contractVersion,
-                  messagingRunId: snapshot.run.runId,
-                  partIndex: index,
-                },
-                environment,
-                ...(options.now === undefined ? {} : { now: options.now }),
-              },
-              (registerCleanupBarrier) => runLocalCliOperationWithDeadline(
-                operation.localCli,
-                {
-                  environment,
-                  ...(options.signal === undefined ? {} : { signal: options.signal }),
-                  registerCleanupBarrier,
-                },
-                (boundedOptions) => {
-                  const operationDeadline = boundedOptions.operationDeadline;
-                  if (operationDeadline === undefined) {
-                    throw new Error("local CLI messaging deadline is unavailable");
-                  }
-                  return executePart(
-                    operationDeadline,
-                    boundedOptions.registerCleanupBarrier,
-                  );
-                },
-              ),
-            );
-          })()
-        : await (() => {
-            const timeoutMs = isProviderOperation(operation)
-              ? operation.provider.timeoutMs
-              : isWebSessionOperation(operation)
-                ? operation.webSession.timeoutMs
-                : null;
-            if (timeoutMs === null) {
-              throw new Error("messaging action has no bounded provider recipe");
-            }
-            const operationDeadline = new OperationDeadline(timeoutMs, {
-              ...(options.signal === undefined ? {} : { signal: options.signal }),
-            });
-            return operationDeadline.run(
-              () => executePart(operationDeadline),
-              "messaging provider action",
-            ).finally(() => operationDeadline.dispose());
-          })();
-      if (snapshot.run.state !== "pending") return snapshot;
-      if (!crossedExternalBoundary) {
-        throw new Error("messaging provider returned without crossing its durable dispatch boundary");
-      }
-      const accepted = action.mapAcceptedResult(output);
-      if (
-        accepted.state !== "submitted"
-        || typeof accepted.providerMessageId !== "string"
-        || accepted.providerMessageId.length < 1
-        || Buffer.byteLength(accepted.providerMessageId, "utf8") > 4_096
-        || /[\0\r\n]/u.test(accepted.providerMessageId)
-        || accepted.providerRevision !== null
-          && (typeof accepted.providerRevision !== "string"
-            || accepted.providerRevision.length < 1
-            || Buffer.byteLength(accepted.providerRevision, "utf8") > 4_096
-            || /[\0\r\n]/u.test(accepted.providerRevision))
-      ) throw new Error("messaging provider returned malformed acceptance evidence");
-      const existingProviderMessageIds = new Set([
-        ...composite.baseMessages.map((message) => message.providerMessageId),
-        ...snapshot.run.parts
-          .slice(0, snapshot.run.provenPartCount)
-          .flatMap((part) => part.providerMessageId === null ? [] : [part.providerMessageId]),
-      ]);
-      if (existingProviderMessageIds.has(accepted.providerMessageId)) {
-        throw new Error("messaging provider reused an existing message identity for acceptance");
-      }
-      snapshot = updateMessagingRun(snapshot, {
-        type: "accepted",
-        index,
-        providerMessageId: accepted.providerMessageId,
-        providerRevision: accepted.providerRevision,
-        at: messagingTransitionTime(snapshot, options),
-      }, environment);
-    } catch {
-      try {
-        return stopMessagingAfterError(snapshot, options);
-      } catch {
-        const latest = readMessagingRun(snapshot.run.runId, environment);
-        if (latest.run.state !== "pending") return latest;
-        const active = latest.run.parts[latest.run.provenPartCount];
-        if (active?.state === "dispatching") {
-          return stopMessagingIndeterminate(
-            latest,
-            "journal-recovery-required",
+            registry,
+          );
+        } catch {
+          operationDeadline.throwIfUnavailable("messaging provider action");
+          return stopMessagingBeforeDispatch(
+            snapshot,
+            "prefix-freshness-unproven",
             options,
           );
         }
-        return stopMessagingBeforeDispatch(
-          latest,
-          "journal-recovery-required",
-          options,
-        );
-      }
+        let record: MessagingRouteRecordV1;
+        let routeResolution: MessagingResolution;
+        let current: Awaited<ReturnType<typeof currentContextPage>>;
+        let routeStateRevision: string;
+        try {
+          const route = await resolveCurrentRoute(
+            composite.routeRef,
+            now(options),
+            environment,
+            registry,
+          );
+          record = route.record;
+          routeResolution = route.resolution;
+          if (
+            routeResolution.binding !== actionResolution.binding
+            || routeResolution.plugin.id !== actionResolution.plugin.id
+            || routeResolution.messaging.contractId !== actionResolution.messaging.contractId
+          ) {
+            return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
+          }
+          current = await currentContextPage(
+            record,
+            routeResolution,
+            composite.contextLimit,
+            environment,
+            registry,
+            operationDeadline.signal,
+          );
+          routeStateRevision = await currentMessagingRouteStateRevision(
+            record,
+            routeResolution,
+            environment,
+            registry,
+            operationDeadline.signal,
+          );
+        } catch {
+          operationDeadline.throwIfUnavailable("messaging provider action");
+          return stopMessagingBeforeDispatch(
+            snapshot,
+            "prefix-freshness-unproven",
+            options,
+          );
+        }
+        if (routeStateRevision !== composite.baseRouteStateRevision) {
+          return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
+        }
+        let proof: ProviderPluginMessagingExpectedOwnPrefixProofV1;
+        try {
+          const accepted = messagingExpectedOwnPrefix(snapshot.run);
+          proof = parseExpectedOwnPrefixProof(action.proveExpectedOwnPrefix(Object.freeze({
+            base: Object.freeze({
+              exactDataRevision: composite.baseExactDataRevision,
+              latestMessageRevision: composite.baseLatestMessageRevision,
+              contextLimit: composite.contextLimit,
+              messages: composite.baseMessages,
+            }),
+            current: Object.freeze({
+              exactDataRevision: current.exactDataRevision,
+              latestMessageRevision: current.latestMessageRevision,
+              messages: current.messages,
+            }),
+            accepted,
+          })), accepted.length);
+        } catch {
+          operationDeadline.throwIfUnavailable("messaging provider action");
+          return stopMessagingBeforeDispatch(
+            snapshot,
+            "prefix-freshness-unproven",
+            options,
+          );
+        }
+        operationDeadline.throwIfUnavailable("messaging provider action");
+        if (
+          proof.state !== "proven"
+          || proof.matchedAcceptedPrefixCount < snapshot.run.observedAcceptedPrefixCount
+        ) {
+          return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
+        }
+        snapshot = updateMessagingRun(snapshot, {
+          type: "claimed",
+          index,
+          observedAcceptedPrefixCount: proof.matchedAcceptedPrefixCount,
+          at: messagingTransitionTime(snapshot, options),
+        }, environment);
+        operationDeadline.throwIfUnavailable("messaging provider action");
+        let crossedExternalBoundary = false;
+        try {
+          const recordPrivateIndeterminateOutcome = async (
+            code: string,
+          ): Promise<void> => {
+            if (!crossedExternalBoundary) {
+              throw new Error(
+                "messaging provider outcome preceded its durable dispatch boundary",
+              );
+            }
+            snapshot = stopMessagingIndeterminate(
+              snapshot,
+              "provider-result-indeterminate",
+              options,
+              Object.freeze({
+                schemaVersion: 1,
+                messagingContractId: actionResolution.messaging.contractId,
+                code,
+              }),
+            );
+          };
+          const beforeExternalBegin = async (): Promise<void> => {
+            operationDeadline.throwIfUnavailable("messaging provider action");
+            if (crossedExternalBoundary) {
+              throw new Error(
+                "messaging provider attempted more than one dispatch boundary",
+              );
+            }
+            snapshot = updateMessagingRun(snapshot, {
+              type: "dispatching",
+              index,
+              at: messagingTransitionTime(snapshot, options),
+            }, environment);
+            crossedExternalBoundary = true;
+            operationDeadline.throwIfUnavailable("messaging provider action");
+          };
+          const executePart = (
+            deadline: Parameters<
+              NonNullable<typeof actionResolution.binding.executeMessagingPart>
+            >[3]["operationDeadline"],
+            registerCleanupBarrier?: Parameters<
+              NonNullable<typeof actionResolution.binding.executeMessagingPart>
+            >[3]["registerCleanupBarrier"],
+          ) => actionResolution.binding.executeMessagingPart!(
+            action.operation,
+            composite.parts[index]!.input,
+            boundAuth,
+            Object.freeze({
+              beforeExternalBegin,
+              recordPrivateIndeterminateOutcome,
+              operationDeadline: deadline,
+              signal: deadline.signal,
+              ...(registerCleanupBarrier === undefined
+                ? {}
+                : { registerCleanupBarrier }),
+              environment,
+            }),
+          );
+          const output = actionResolution.binding.transport === "local-cli"
+            ? await (() => {
+                if (!isLocalCliOperation(operation)) {
+                  throw new Error(
+                    "local CLI messaging action lost its exact operation recipe",
+                  );
+                }
+                return withLocalCliProviderCleanupAdmission(
+                  {
+                    registry,
+                    binding: actionResolution.binding,
+                    auth: boundAuth,
+                    purpose: {
+                      kind: "messaging",
+                      action: operation.localCli.action,
+                      contractVersion: operation.localCli.contractVersion,
+                      messagingRunId: snapshot.run.runId,
+                      partIndex: index,
+                    },
+                    environment,
+                    ...(options.now === undefined ? {} : { now: options.now }),
+                  },
+                  (registerCleanupBarrier) => runLocalCliOperationWithDeadline(
+                    operation.localCli,
+                    {
+                      environment,
+                      signal: operationDeadline.signal,
+                      operationDeadline,
+                      registerCleanupBarrier,
+                    },
+                    (boundedOptions) => {
+                      const boundedDeadline = boundedOptions.operationDeadline;
+                      if (boundedDeadline === undefined) {
+                        throw new Error(
+                          "local CLI messaging deadline is unavailable",
+                        );
+                      }
+                      return executePart(
+                        boundedDeadline,
+                        boundedOptions.registerCleanupBarrier,
+                      );
+                    },
+                  ),
+                );
+              })()
+            : await (() => {
+                if (!isWebSessionOperation(operation)) {
+                  throw new Error(
+                    "session messaging action lost its exact operation recipe",
+                  );
+                }
+                return withWebSessionCleanupAdmission(
+                  messagingWebCleanupAdmissionIdentity(
+                    invocation,
+                    actionResolution,
+                    registry,
+                    snapshot.run.runId,
+                    index,
+                  ),
+                  environment,
+                  (registerCleanupBarrier) =>
+                    runWebSessionOperationWithDeadline(
+                      operation.webSession,
+                      {
+                        environment,
+                        signal: operationDeadline.signal,
+                        operationDeadline,
+                        registerCleanupBarrier,
+                      },
+                      (boundedOptions) => {
+                        const boundedDeadline = boundedOptions.operationDeadline;
+                        if (boundedDeadline === undefined) {
+                          throw new Error(
+                            "session messaging deadline is unavailable",
+                          );
+                        }
+                        return executePart(
+                          boundedDeadline,
+                          boundedOptions.registerCleanupBarrier,
+                        );
+                      },
+                    ),
+                  options.now,
+                );
+              })();
+          if (snapshot.run.state !== "pending") return snapshot;
+          operationDeadline.throwIfUnavailable("messaging provider action");
+          if (!crossedExternalBoundary) {
+            throw new Error(
+              "messaging provider returned without crossing its durable dispatch boundary",
+            );
+          }
+          const accepted = action.mapAcceptedResult(output);
+          if (
+            accepted.state !== "submitted"
+            || typeof accepted.providerMessageId !== "string"
+            || accepted.providerMessageId.length < 1
+            || Buffer.byteLength(accepted.providerMessageId, "utf8") > 4_096
+            || /[\0\r\n]/u.test(accepted.providerMessageId)
+            || accepted.providerRevision !== null
+              && (typeof accepted.providerRevision !== "string"
+                || accepted.providerRevision.length < 1
+                || Buffer.byteLength(accepted.providerRevision, "utf8") > 4_096
+                || /[\0\r\n]/u.test(accepted.providerRevision))
+          ) {
+            throw new Error(
+              "messaging provider returned malformed acceptance evidence",
+            );
+          }
+          const existingProviderMessageIds = new Set([
+            ...composite.baseMessages.map((message) =>
+              message.providerMessageId),
+            ...snapshot.run.parts
+              .slice(0, snapshot.run.provenPartCount)
+              .flatMap((part) => part.providerMessageId === null
+                ? []
+                : [part.providerMessageId]),
+          ]);
+          if (existingProviderMessageIds.has(accepted.providerMessageId)) {
+            throw new Error(
+              "messaging provider reused an existing message identity for acceptance",
+            );
+          }
+          operationDeadline.throwIfUnavailable("messaging provider action");
+          snapshot = updateMessagingRun(snapshot, {
+            type: "accepted",
+            index,
+            providerMessageId: accepted.providerMessageId,
+            providerRevision: accepted.providerRevision,
+            at: messagingTransitionTime(snapshot, options),
+          }, environment);
+          operationDeadline.throwIfUnavailable("messaging provider action");
+          return snapshot;
+        } catch {
+          return stopMessagingAfterCaughtError(snapshot, options);
+        }
+      }, "messaging provider action");
+    } catch {
+      snapshot = stopMessagingAfterCaughtError(snapshot, options);
+    } finally {
+      operationDeadline.dispose();
     }
+    if (snapshot.run.state !== "pending") return snapshot;
   }
   return snapshot;
 }

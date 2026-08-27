@@ -60,6 +60,7 @@ import type {
 } from "./local-cli-execution";
 import { runLocalCliOperationWithDeadline } from "./local-cli-execution";
 import { localCliToolArtifactForCurrentRuntime } from "./local-cli-tool-identity";
+import type { OperationDeadlineClock } from "./operation-deadline";
 import {
   getProviderContract,
   providerContractHash,
@@ -5561,6 +5562,8 @@ export async function confirmMessagingInvocation(
     readonly loadManifest?: typeof loadInstalledManifest;
     readonly now?: Date;
     readonly signal?: AbortSignal;
+    /** Internal deterministic-clock seam for per-bubble deadline tests. */
+    readonly deadlineClock?: OperationDeadlineClock;
   } = {},
 ): Promise<MessagingConfirmationResult> {
   const environment = options.environment ?? process.env;
@@ -5630,6 +5633,9 @@ export async function confirmMessagingInvocation(
           environment,
           registry,
           ...(options.signal === undefined ? {} : { signal: options.signal }),
+          ...(options.deadlineClock === undefined
+            ? {}
+            : { deadlineClock: options.deadlineClock }),
         },
       );
       run = snapshot.run;
