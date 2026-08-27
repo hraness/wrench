@@ -29,6 +29,7 @@ import {
 
 const MAIN_URL = "https://abs.twimg.com/responsive-web/client-web/main.abcdef12.js";
 const VIEWER_QUERY_ID = "5XShkXk2oO2J7SYmTu6pvw";
+const BOOKMARKS_QUERY_ID = "iblrFnKr6PZUR-dWpfXG6g";
 const ARTICLE_QUERY_ID = "btD9FyMDa3_vydVp7fr87Q";
 const ARTICLE_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/bundle.TwitterArticles.305538ca.js";
 const ARTICLE_RESULT_QUERY_ID = "rPdndX2XxQoXIMUafLSSJQ";
@@ -420,7 +421,7 @@ describe("X authenticated internal-API runtime", () => {
 
     expect(resolveCurrentXWebChunkUrl(
       html,
-      "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
+      "shared~bundle.BookmarkFolders~bundle.Bookmarks.9886449ab816b84ba.js",
     ).href).toBe(
       "https://abs.twimg.com/responsive-web/client-web/shared~bundle.BookmarkFolders~bundle.Bookmarks.9886449ab816b84ba.js",
     );
@@ -914,7 +915,7 @@ describe("X authenticated internal-API runtime", () => {
         });
       }
       if (request.url.hostname === "abs.twimg.com" && request.url.href !== MAIN_URL) {
-        return new Response(descriptor("Bookmarks", "LoLaMO4GuHLEPJOhH9kjAw", "query"), {
+        return new Response(descriptor("Bookmarks", BOOKMARKS_QUERY_ID, "query"), {
           headers: { "content-type": "application/javascript" },
         });
       }
@@ -996,7 +997,7 @@ describe("X authenticated internal-API runtime", () => {
         request.url.href
           === "https://abs.twimg.com/responsive-web/client-web/shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js"
       ) {
-        return new Response(descriptor("Bookmarks", "LoLaMO4GuHLEPJOhH9kjAw", "query"), {
+        return new Response(descriptor("Bookmarks", BOOKMARKS_QUERY_ID, "query"), {
           headers: { "content-type": "application/javascript" },
         });
       }
@@ -1106,7 +1107,7 @@ describe("X authenticated internal-API runtime", () => {
         });
       }
       if (request.url.hostname === "abs.twimg.com" && request.url.href !== MAIN_URL) {
-        return new Response(descriptor("Bookmarks", "LoLaMO4GuHLEPJOhH9kjAw", "query"), {
+        return new Response(descriptor("Bookmarks", BOOKMARKS_QUERY_ID, "query"), {
           headers: { "content-type": "application/javascript" },
         });
       }
