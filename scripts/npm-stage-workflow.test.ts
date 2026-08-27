@@ -24,6 +24,40 @@ const readmeUrl = new URL("../README.md", import.meta.url);
 const npmRegistry = "https://registry.npmjs.org";
 const repository = fileURLToPath(new URL("../", import.meta.url));
 
+function workflowStepScript(workflow: string, name: string): string {
+  const stepMarker = `      - name: ${name}\n`;
+  const stepStart = workflow.indexOf(stepMarker);
+  if (stepStart < 0) throw new Error(`Workflow step not found: ${name}`);
+  const runMarker = "        run: |\n";
+  const runStart = workflow.indexOf(runMarker, stepStart);
+  if (runStart < 0) throw new Error(`Workflow step has no run script: ${name}`);
+  const lines = workflow.slice(runStart + runMarker.length).split("\n");
+  const script: string[] = [];
+  for (const line of lines) {
+    if (!line.startsWith("          ")) break;
+    script.push(line.slice(10));
+  }
+  return script.join("\n");
+}
+
+async function runWorkflowScript(
+  script: string,
+  environment: Readonly<Record<string, string>>,
+): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> {
+  const child = Bun.spawn(["/bin/bash", "-c", script], {
+    cwd: repository,
+    env: { ...process.env, ...environment },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stderr, stdout] = await Promise.all([
+    child.exited,
+    new Response(child.stderr).text(),
+    new Response(child.stdout).text(),
+  ]);
+  return Object.freeze({ exitCode, stderr, stdout });
+}
+
 async function run(command: readonly string[], cwd: string): Promise<void> {
   const child = Bun.spawn([...command], { cwd, stderr: "inherit", stdout: "inherit" });
   const exitCode = await child.exited;
@@ -180,7 +214,7 @@ describe("npm publication contract", () => {
       "--archive \"$tarball\"",
       "--pack-json \"$pack_json\"",
       "sha256sum \"$tarball\"",
-      'artifact_name="npm-package-$version-$GITHUB_SHA"',
+      'artifact_name="npm-package-$version-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
       "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
       "name: ${{ steps.pack.outputs.artifact_name }}",
       "path: ${{ runner.temp }}/wrench-npm-package",
@@ -197,16 +231,28 @@ describe("npm publication contract", () => {
     for (const required of [
       "name: Stage exact package",
       "needs: verify",
-      "permissions:\n      contents: read\n      id-token: write",
+      "permissions:\n      id-token: write",
       "timeout-minutes: 10",
       "node-version: \"24\"",
       "package-manager-cache: false",
       "npm@11.19.0",
-      "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
-      "name: ${{ needs.verify.outputs.artifact_name }}",
-      "path: ${{ runner.temp }}/wrench-npm-package",
+      "name: Bind verified artifact identity",
+      "EXPECTED_ARTIFACT_NAME: ${{ needs.verify.outputs.artifact_name }}",
+      "EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}",
       "EXPECTED_TARBALL_NAME: ${{ needs.verify.outputs.tarball_name }}",
       "EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}",
+      '[[ ! "$EXPECTED_VERSION" =~ ^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]',
+      '[[ ! "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ || "$EXPECTED_SOURCE_SHA" != "$GITHUB_SHA" ]]',
+      '[[ ! "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ || ! "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]',
+      'tarball_name="hraness-wrench-$EXPECTED_VERSION.tgz"',
+      '"$EXPECTED_TARBALL_NAME" != "$tarball_name"',
+      'artifact_name="npm-package-$EXPECTED_VERSION-$EXPECTED_SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
+      '"$EXPECTED_ARTIFACT_NAME" != "$artifact_name"',
+      "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+      "name: ${{ steps.package_identity.outputs.artifact_name }}",
+      "path: ${{ runner.temp }}/wrench-npm-package",
+      "EXPECTED_TARBALL_NAME: ${{ steps.package_identity.outputs.tarball_name }}",
+      "EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}",
       'pack_json="$artifact_directory/npm-pack.json"',
       'sha256_file="$artifact_directory/npm-package.sha256"',
       'tarball="$artifact_directory/$EXPECTED_TARBALL_NAME"',
@@ -228,7 +274,7 @@ describe("npm publication contract", () => {
       "Downloaded npm-package.sha256 is invalid",
       "Downloaded tarball does not match the verified SHA-256",
       "sha256=%s\\ntarball=%s\\n",
-      "EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}",
+      "EXPECTED_SOURCE_SHA: ${{ steps.package_identity.outputs.source_sha }}",
       "EXPECTED_TARBALL_SHA256: ${{ steps.artifact.outputs.sha256 }}",
       "TARBALL: ${{ steps.artifact.outputs.tarball }}",
       'git init --quiet "$current_main"',
@@ -247,6 +293,7 @@ describe("npm publication contract", () => {
 
     expect(workflow.match(/id-token: write/gu) ?? []).toHaveLength(1);
     expect(stageJob).not.toContain("actions/checkout@");
+    expect(stageJob).not.toContain("contents: read");
     expect(stageJob).not.toContain("setup-bun@");
     expect(stageJob).not.toMatch(/\bbun\b/u);
     expect(stageJob).not.toContain("./scripts/");
@@ -287,6 +334,49 @@ describe("npm publication contract", () => {
     expect(fetchedHeadIndex).toBeGreaterThan(fetchIndex);
     expect(secondHashIndex).toBeGreaterThan(fetchedHeadIndex);
     expect(stageIndex).toBeGreaterThan(secondHashIndex);
+  });
+
+  test("rejects unsafe or cross-run npm artifact outputs before download", async () => {
+    const workflow = await readFile(stageWorkflowUrl, "utf8");
+    const script = workflowStepScript(workflow, "Bind verified artifact identity");
+    const directory = await mkdtemp(join(tmpdir(), "wrench-stage-identity-"));
+    const sourceSha = "a".repeat(40);
+    const baseEnvironment = Object.freeze({
+      EXPECTED_ARTIFACT_NAME: `npm-package-0.15.1-${sourceSha}-123456-2`,
+      EXPECTED_SOURCE_SHA: sourceSha,
+      EXPECTED_TARBALL_NAME: "hraness-wrench-0.15.1.tgz",
+      EXPECTED_VERSION: "0.15.1",
+      GITHUB_OUTPUT: join(directory, "github-output.txt"),
+      GITHUB_RUN_ATTEMPT: "2",
+      GITHUB_RUN_ID: "123456",
+      GITHUB_SHA: sourceSha,
+    });
+
+    try {
+      const accepted = await runWorkflowScript(script, baseEnvironment);
+      expect(accepted.exitCode).toBe(0);
+      expect(await readFile(baseEnvironment.GITHUB_OUTPUT, "utf8")).toBe(
+        `artifact_name=${baseEnvironment.EXPECTED_ARTIFACT_NAME}\n`
+        + `tarball_name=${baseEnvironment.EXPECTED_TARBALL_NAME}\n`
+        + `version=${baseEnvironment.EXPECTED_VERSION}\n`
+        + `source_sha=${baseEnvironment.EXPECTED_SOURCE_SHA}\n`,
+      );
+
+      for (const environment of [
+        { ...baseEnvironment, EXPECTED_VERSION: "0.15.1/../../escape" },
+        { ...baseEnvironment, EXPECTED_TARBALL_NAME: "../../escape.tgz" },
+        { ...baseEnvironment, EXPECTED_SOURCE_SHA: "../unsafe-source" },
+        { ...baseEnvironment, EXPECTED_ARTIFACT_NAME: `${baseEnvironment.EXPECTED_ARTIFACT_NAME}-other` },
+        { ...baseEnvironment, GITHUB_RUN_ID: "123456/other" },
+        { ...baseEnvironment, GITHUB_RUN_ATTEMPT: "0" },
+      ] as const) {
+        const rejected = await runWorkflowScript(script, environment);
+        expect(rejected.exitCode).not.toBe(0);
+        expect(`${rejected.stdout}${rejected.stderr}`).toContain("::error::");
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   test("validates and npm-installs the exact reported tarball", async () => {

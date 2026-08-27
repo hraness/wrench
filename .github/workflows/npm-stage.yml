@@ -125,7 +125,7 @@ jobs:
             --archive "$tarball" \
             --pack-json "$pack_json"
           sha256sum "$tarball" | awk '{ print $1 }' > "$sha256_file"
-          artifact_name="npm-package-$version-$GITHUB_SHA"
+          artifact_name="npm-package-$version-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           printf 'artifact_name=%s\ntarball_name=%s\nversion=%s\n' \
             "$artifact_name" "$tarball_name" "$version" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -139,7 +139,6 @@ jobs:
     name: Stage exact package
     needs: verify
     permissions:
-      contents: read
       id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -156,15 +155,48 @@ jobs:
             --ignore-scripts \
             --registry=https://registry.npmjs.org
           test "$(npm --version)" = "11.19.0"
+      - name: Bind verified artifact identity
+        id: package_identity
+        env:
+          EXPECTED_ARTIFACT_NAME: ${{ needs.verify.outputs.artifact_name }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_TARBALL_NAME: ${{ needs.verify.outputs.tarball_name }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Verified package version is not stable semantic version"
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ || "$EXPECTED_SOURCE_SHA" != "$GITHUB_SHA" ]]; then
+            echo "::error::Verified source SHA does not match this workflow revision"
+            exit 1
+          fi
+          if [[ ! "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ || ! "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::GitHub run identity is invalid"
+            exit 1
+          fi
+          tarball_name="hraness-wrench-$EXPECTED_VERSION.tgz"
+          if [[ "$EXPECTED_TARBALL_NAME" != "$tarball_name" ]]; then
+            echo "::error::Verified tarball name does not match the package version"
+            exit 1
+          fi
+          artifact_name="npm-package-$EXPECTED_VERSION-$EXPECTED_SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [[ "$EXPECTED_ARTIFACT_NAME" != "$artifact_name" ]]; then
+            echo "::error::Verified artifact name does not match this workflow run"
+            exit 1
+          fi
+          printf 'artifact_name=%s\ntarball_name=%s\nversion=%s\nsource_sha=%s\n' \
+            "$artifact_name" "$tarball_name" "$EXPECTED_VERSION" "$EXPECTED_SOURCE_SHA" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: ${{ needs.verify.outputs.artifact_name }}
+          name: ${{ steps.package_identity.outputs.artifact_name }}
           path: ${{ runner.temp }}/wrench-npm-package
       - name: Bind downloaded artifact
         id: artifact
         env:
-          EXPECTED_TARBALL_NAME: ${{ needs.verify.outputs.tarball_name }}
-          EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
+          EXPECTED_TARBALL_NAME: ${{ steps.package_identity.outputs.tarball_name }}
+          EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}
         run: |
           set -euo pipefail
           artifact_directory="$RUNNER_TEMP/wrench-npm-package"
@@ -218,7 +250,7 @@ jobs:
       - name: Revalidate current main and stage exact package
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_SOURCE_SHA: ${{ steps.package_identity.outputs.source_sha }}
           EXPECTED_TARBALL_SHA256: ${{ steps.artifact.outputs.sha256 }}
           TARBALL: ${{ steps.artifact.outputs.tarball }}
         run: |
