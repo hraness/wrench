@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "format": "wrench.whatsapp-private-transport-source-manifest",
+  "qualification": "prototype-not-production-qualified",
+  "qualificationDocument": "README.md",
+  "wacli": {
+    "repository": "https://github.com/openclaw/wacli",
+    "version": "0.13.0",
+    "commit": "1e15f646d23598ef5db2bdb4659ac39cc5188ad2",
+    "sourceArchiveUrl": "https://codeload.github.com/openclaw/wacli/tar.gz/1e15f646d23598ef5db2bdb4659ac39cc5188ad2",
+    "sourceArchiveSha256": "0b6df982b3980f622df2c4aa38791a8918149d2d8fa096a3302cc9a9d3525c92",
+    "reviewedPatchSourceCommit": "c901a3c7ae0cb92c748becd4e8575e8d8ba28eb2",
+    "patchFile": "wacli-1e15f646d23598ef5db2bdb4659ac39cc5188ad2-wrench-private.patch",
+    "patchSha256": "ffa7fb2a6100bfff1a4cfed300fb0f854d0d3254058d8e33d87073ad0c0bac9f",
+    "license": "MIT",
+    "licenseFile": "LICENSE.wacli",
+    "licenseSha256": "14293556b79940745123d0160c71d27ed0e9fe9b8a848093f3ed78f4853caafe"
+  },
+  "whatsmeow": {
+    "module": "go.mau.fi/whatsmeow",
+    "version": "v0.0.0-20260716095330-85d99080dee8",
+    "commit": "85d99080dee8ebd10ca7021751fe432d880d3b76",
+    "sourceArchiveUrl": "https://proxy.golang.org/go.mau.fi/whatsmeow/@v/v0.0.0-20260716095330-85d99080dee8.zip",
+    "sourceArchiveSha256": "5fcf5195593e4b3cec63ee9798e66369fa713fead6f55b3e8e717279fac02f9e",
+    "goModuleSum": "h1:7RQA3v4pCZcmgHaEQXKfHKLVSqPThizkApt6Uw+DcA8=",
+    "patchFile": "whatsmeow-85d99080dee8-wrench-private.patch",
+    "patchSha256": "cbf6f0b72963b365ca4c81f86993cf8a77a7eec6ffcd973d13aa68fe7331fcdc",
+    "license": "MPL-2.0",
+    "licenseFile": "LICENSE.whatsmeow",
+    "licenseSha256": "32ee9dbf6196874fc9d406c54a888a6c4cbb9aa4a7f35b46befeaff43a78fe85"
+  },
+  "toolchain": {
+    "implementation": "Go",
+    "version": "1.25.12",
+    "platform": "darwin-arm64",
+    "archiveUrl": "https://go.dev/dl/go1.25.12.darwin-arm64.tar.gz",
+    "archiveSha256": "fa2c88bbcf64bd3b2aef355f026cfec6d3a4a01c132f999c8f8c964eb767164f"
+  },
+  "currentPlatformCompiler": {
+    "implementation": "Apple clang",
+    "version": "21.0.0",
+    "build": "clang-2100.1.1.101",
+    "target": "arm64-apple-darwin25.5.0"
+  },
+  "build": {
+    "goos": "darwin",
+    "goarch": "arm64",
+    "cgoEnabled": true,
+    "cgoCflags": "-Wno-error=missing-braces",
+    "tags": [
+      "sqlite_fts5",
+      "wrench_private_transport"
+    ],
+    "flags": [
+      "-trimpath",
+      "-buildvcs=false"
+    ],
+    "binarySha256": "526eba2dce946afb6cefc852b9080245e0f03f79b5c0472879b17c145b24a667",
+    "installRelativePath": "tools/wacli/0.13.0/wrench-private-v1/wacli"
+  },
+  "protocol": {
+    "schemaVersion": 1,
+    "descriptor": "{\"format\":\"wacli.wrench-private-send\",\"schemaVersion\":1,\"binding\":[\"protocolHash\",\"toolHash\",\"storeSubject\",\"authSubject\",\"daemonPid\",\"daemonStartedAt\",\"connectionEpoch\"],\"requests\":[\"send\",\"status_barrier\"],\"transport\":\"owner-only-unix-socket+hmac-sha256\",\"payload\":\"stdin-or-0600-file\"}",
+    "descriptorSha256": "6032c414835e4370de96718d9cc5add08e7f9f59354217e3e46d73a97d3e2ba1"
+  }
+}

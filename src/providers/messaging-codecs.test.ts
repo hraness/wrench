@@ -11,7 +11,10 @@ import {
   rawBeeperConversationId,
   rawBeeperMessageId,
 } from "./beeper-omni";
-import { whatsappMessagingDefinition } from "./whatsapp-messaging";
+import {
+  qualifiedWhatsAppPrivateMessagingDefinition,
+  whatsappMessagingDefinition,
+} from "./whatsapp-messaging";
 
 const accountId = "account-signal";
 const rawConversationId = "!chat:beeper.local";
@@ -393,7 +396,24 @@ describe("provider messaging coordinate codecs", () => {
       state: "unavailable",
       reply: "unsupported",
       reason:
-        "capture-required: the pinned wacli write transport does not yet satisfy private-payload and no-ambiguous-retry qualification",
+        "capture-required: the checked private no-retry transport still needs a controlled live fixture, fresh context proof, and exact accepted-message reconciliation",
     });
+    expect(qualifiedWhatsAppPrivateMessagingDefinition.action.state).toBe(
+      "supported",
+    );
+    if (qualifiedWhatsAppPrivateMessagingDefinition.action.state !== "supported") {
+      throw new Error("qualified WhatsApp private action changed state");
+    }
+    expect(qualifiedWhatsAppPrivateMessagingDefinition.action.compileTurnPart(
+      { conversationJid: "15551234567@s.whatsapp.net" },
+      { partId: "part-1", text: "hello", replyToProviderId: null },
+    )).toEqual({
+      conversation_jid: "15551234567@s.whatsapp.net",
+      body: "hello",
+    });
+    expect(() => qualifiedWhatsAppPrivateMessagingDefinition.action.compileTurnPart(
+      { conversationJid: "15551234567@s.whatsapp.net" },
+      { partId: "part-1", text: "hello", replyToProviderId: "MSG-1" },
+    )).toThrow("has not qualified replies");
   });
 });
