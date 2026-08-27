@@ -4224,7 +4224,19 @@ async function runPreparedCore(
             afterDispatchVerified: (event) => persistDispatchProgress(event, "verified"),
           },
         );
-    execution = boundedExecutionResult(rawExecution, executionKind, maxOutputBytes);
+    try {
+      execution = boundedExecutionResult(rawExecution, executionKind, maxOutputBytes);
+    } catch {
+      const { started } = durableReceipt.dispatch;
+      execution = {
+        status: started > 0 ? "indeterminate" : "failed",
+        output: null,
+        finalUrl: null,
+        dispatchStarted: started > 0,
+        dispatch: durableReceipt.dispatch,
+        error: GENERIC_EXECUTOR_TERMINATION,
+      };
+    }
   } catch (error) {
     const { started } = durableReceipt.dispatch;
     const preservedArtifactsError =

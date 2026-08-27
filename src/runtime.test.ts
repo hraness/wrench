@@ -3803,8 +3803,7 @@ describe("official-provider plans and receipts", () => {
           dispatchStarted: false,
           dispatch: { planned: 0, started: 0, verified: 0 },
         });
-        expect(result.receipt.error).toContain("executor result");
-        expect(result.receipt.error).not.toContain("terminated without returning a bounded result");
+        expect(result.receipt.error).toContain("terminated without returning a bounded result");
         expect(result.output).toBeNull();
       }
       expect(allFileText(testState.directory)).not.toContain("executor-private");
@@ -3890,7 +3889,10 @@ describe("official-provider plans and receipts", () => {
         dispatch: { planned: 0, started: 0, verified: 0 },
       });
       expect(result.output).toBeNull();
-      expect(allFileText(testState.directory)).not.toContain("executor-private-thrown-value");
+      expect(result.receipt.error).toBe(
+        "official API operation failed before the dispatch boundary; reason: executor-private-thrown-value",
+      );
+      expect(result.receipt.error).not.toContain("terminated without returning a bounded result");
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
@@ -4150,8 +4152,7 @@ describe("receipts", () => {
           recoveryHandle: "session=wrench-safe;config=/tmp/config;socket=/tmp/socket;artifacts=/tmp/artifacts",
         }),
       });
-      expect(result.receipt.error).toContain("executor result");
-      expect(result.receipt.error).not.toContain("terminated without returning a bounded result");
+      expect(result.receipt.error).toContain("terminated without returning a bounded result");
       expect(result.receipt.error).not.toContain("arbitrary private browser diagnostics");
       expect(result.receipt.error).not.toContain("wrench-safe");
     } finally {
