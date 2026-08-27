@@ -1939,9 +1939,10 @@ function dispatchEvent(
  * Full response/readback accounting for the future mutation transport.
  *
  * This function is intentionally unreachable while every mutation contract is
- * capture-required. The audited wacli 0.13.0 CLI retries selected send errors
- * once and carries text in process argv, so promotion also requires a no-retry
- * private payload transport rather than merely flipping contract state.
+ * capture-required. Text send has a checked stdin-only no-retry transport
+ * candidate below; the registered contract still lacks its controlled live
+ * freshness and reconciliation qualification. Other mutations retain their
+ * original reviewed planners without an executable private transport.
  */
 async function executeMutation(
   runtime: Awaited<ReturnType<typeof boundRuntime>>,

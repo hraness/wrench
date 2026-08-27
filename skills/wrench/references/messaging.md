@@ -32,6 +32,13 @@ invalid after auth, adapter, plugin, tool, account, participant, or provider
 drift. Do not persist it outside the checked private state and explicit private
 artifacts.
 
+Current action qualification is provider-specific. Beeper supports exact text
+turns and provider replies. Direct iMessage supports exact text turns through
+the device-default Messages account with SMS fallback disabled; threaded
+replies are unavailable. WhatsApp remains read-only at this facade while its
+checked private transport awaits controlled live freshness and reconciliation
+qualification. X archives are analysis evidence and never routes.
+
 ## Read fresh context
 
 ```text
@@ -129,7 +136,8 @@ uncertainty from an approximate match.
 
 Body-bearing or capability-bearing requests come only from stdin or a checked
 owner-only regular file. Exact artifacts go only to explicit absolute
-mode-`0600` output files. Keep message bodies, names, provider coordinates,
+mode-`0600` output files. Each output must be distinct and outside the Wrench
+state root. Keep message bodies, names, provider coordinates,
 reply references, route and context references, auth selectors, credentials,
 and local paths out of ordinary output, diagnostics, logs, telemetry, and Git.
 

@@ -33,6 +33,9 @@ counts, and timestamps. Wrench encrypts route, context, preview, and execution
 state at rest with authenticated reference binding. Authentication failure,
 expiry, restored-state generation drift, or implementation drift makes those
 records unusable; it never falls back to plaintext or an approximate route.
+Explicit messaging output paths must be distinct and outside the Wrench state
+root, so a plaintext export cannot replace an encryption key, plan, run,
+receipt, or other recovery record.
 
 A messaging turn is one composite confirmation and one ordered, prefix-durable
 run. Wrench checks current provider state before every remaining part and stops

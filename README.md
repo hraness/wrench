@@ -44,7 +44,7 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-Wrench v0.15.0 ships attested adapter surfaces for Beeper, Bluesky, Facebook,
+Wrench v0.16.0 ships attested adapter surfaces for Beeper, Bluesky, Facebook,
 Facebook Groups, Facebook Marketplace, Facebook Pages, GitHub, Gmail, Hacker
 News, Instagram, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp,
 X, and YouTube. Eighteen of those surfaces have at least one `observed`
@@ -109,10 +109,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.15.0` tag:
+Install the current immutable CLI release from the `v0.16.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.15.0
+bun add --global github:hraness/wrench#v0.16.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -136,7 +136,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.15.0
+bun add github:hraness/wrench#v0.16.0
 ```
 
 ```ts
@@ -527,6 +527,13 @@ wrench messaging preview --input @/absolute/private/turn.json \
   --private-output /absolute/private/preview.json --json
 ```
 
+| Provider | Agentic action status |
+| --- | --- |
+| Beeper Desktop | Qualified for exact text turns and exact provider replies through one bound local account and conversation |
+| iMessage | Qualified for exact text turns through the device-default Messages account, with SMS fallback disabled and threaded replies unavailable |
+| WhatsApp | Readable from its bounded linked-device projection; sending remains unavailable pending controlled live freshness and reconciliation qualification |
+| X archive | Local analysis evidence only; an archive can never become a live route or action |
+
 The private preview shows the exact recipient, conversation, provider, ordered
 bubbles, and reply targets. An agent must default to draft-only and stop there.
 Confirmation is permitted only after the owner sees that exact preview and
@@ -714,7 +721,8 @@ every connected network has finished backfilling its remote history.
 ### Direct iMessage through a reviewed private transport
 
 The built-in `imessage` local-CLI plugin reads bounded current context from
-`chat.db` and can submit one confirmed text bubble to an exact live chat GUID.
+`chat.db` and can submit a confirmed one-to-eight-bubble turn to an exact live
+chat GUID.
 It wraps `openclaw/imsg` 0.14.1 plus a vendored reviewed patch stack. The
 outer child argv is fixed to `imsg rpc`; the body enters only through JSON-RPC
 stdin. The nested `osascript` argv contains only fixed interpreter switches and
@@ -728,6 +736,15 @@ prove which account will send. AppleScript does not return a message GUID, so
 Wrench reports submission only after imsg independently observes an exact
 matching outgoing `chat.db` row. Otherwise the result remains non-retryable
 uncertainty.
+
+Each bubble crosses its own durable no-retry fence. Before every remaining
+bubble, Wrench rereads the exact chat and bounded message window. It continues
+only when the route is unchanged and the visible history is either the exact
+preview base, that same base while an accepted bubble is not yet visible, or
+the exact accepted own-message prefix with only bounded-window eviction.
+Incoming or unrelated outgoing messages, edits, deletions, reorderings, or a
+reused provider message identity stop the suffix. Threaded replies remain
+unsupported.
 
 Build provenance, the exact macOS arm64 executable digest, checked installer,
 permission setup, and outcome limits are in

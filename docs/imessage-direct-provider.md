@@ -1,8 +1,8 @@
 # Direct iMessage provider
 
 The `imessage` source plugin wraps one exact reviewed `openclaw/imsg` build. It
-supports bounded local chat and message reads plus one confirmed text bubble to
-an exact live chat GUID. The mutation path is fixed to AppleScript and
+supports bounded local chat and message reads plus confirmed one-to-eight-bubble
+turns to an exact live chat GUID. The mutation path is fixed to AppleScript and
 `iMessage`, with SMS fallback disabled.
 
 The plugin does not select an Apple ID. Messages chooses the device-default
@@ -19,8 +19,8 @@ The vendored patch stack applies to `openclaw/imsg` 0.14.1 at commit
 `292db82d89293867ef847a2875667fea0fdd5dc1`, isolates AppleScript payloads.
 The second, `c5994f00d17969fd7772fd2772e7b3591089513a`, adds the read-only exact
 `chats.get(chat_id)` lookup required to revalidate a route without relying on a
-bounded recent-chat scan. Patch SHA-256 values and changed files are recorded in
-The full artifact and review boundary are recorded in
+bounded recent-chat scan. Patch SHA-256 values, changed files, and the full
+artifact review boundary are recorded in
 `src/plugins/imessage-direct/vendor/provenance.json`.
 
 AppleScript source remains on standard input. Recipient, text, service,
@@ -33,7 +33,7 @@ files and the checked directory.
 
 The Wrench runtime adds an outer boundary. Every RPC child is a fresh detached
 process group with fixed argv `imsg rpc`, bounded stdin/stdout/stderr, a fixed
-minimal environment, a total deadline, and durable cleanup admission. One
+minimal environment, a total deadline, and durable cleanup admission. Each
 confirmed bubble produces one separately journaled send process and exactly one
 send request. Private message text appears only in that process's RPC stdin.
 Timeout, signal, malformed output, or lost output after spawn is indeterminate.
@@ -94,11 +94,13 @@ the Wrench boundary. The separately requested `messaging.delivery.read`
 operation can inspect only a GUID already obtained from exact accepted evidence.
 A missing row is not proof that an unobserved send did not happen.
 
-Threaded replies are unsupported because AppleScript cannot express them. A
-turn currently contains one bubble because the generic messaging facade does
-not yet expose a composite per-part journal. Supporting several bubbles safely
-requires a generic receipt with a proven prefix, one uncertain current part,
-and an unattempted suffix, stopping immediately on uncertainty. The provider
-does not simulate that missing kernel contract. Its dedicated one-bubble hook
-is `executeImsgDirectMessagingPart`; it rejects non-send recipes and delegates
-to the same supervised at-most-once operation boundary.
+Threaded replies are unsupported because AppleScript cannot express them. The
+generic messaging facade owns one composite confirmation and a per-part
+journal with a proven accepted prefix, at most one uncertain current part, and
+an unattempted suffix. Before each remaining bubble it rereads the exact chat
+and bounded history, accepting only the unchanged preview base, that same base
+while an accepted bubble is not yet visible, or the exact visible own-message
+prefix with bounded-window eviction. Foreign activity, edits, deletions,
+reordering, or identity reuse stops the suffix. The provider hook
+`executeImsgDirectMessagingPart` rejects non-send recipes and delegates every
+bubble to the same supervised at-most-once operation boundary.

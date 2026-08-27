@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.16.0 - 2026-08-27
+
+- Add a provider-neutral agentic messaging facade that keeps exact routes,
+  current context, prose, replies, and receipts in encrypted state and
+  explicit owner-only artifacts. One private preview authorizes one ordered
+  one-to-eight-bubble turn; the durable journal preserves submitted, failed,
+  partial, and indeterminate outcomes without retrying uncertain work.
+- Qualify Beeper Desktop for exact live agentic actions through its loopback
+  API. Wrench binds one account and conversation, checks participants and the
+  exact expected own-message prefix before every remaining bubble, and stops
+  on foreign activity, edits, deletions, reorderings, or provider drift.
+- Add a reviewed direct iMessage local transport with fixed JSON-RPC stdin,
+  exact chat-row revalidation, AppleScript private files, disabled SMS
+  fallback, and independent outgoing `chat.db` acceptance evidence. Threaded
+  replies remain unsupported and every bubble has a separate no-retry fence.
+- Vendor and verify a patched Wacli/Whatsmeow stdin-only private transport.
+  The registered WhatsApp action remains unavailable until controlled live
+  freshness, acceptance, and reconciliation qualification is complete.
+
 ## 0.15.0 - 2026-08-27
 
 - Add a source-only `local-cli` provider transport with schema-v6 adapter
