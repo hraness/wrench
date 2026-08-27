@@ -11,10 +11,12 @@ import { join } from "node:path";
 import { createAuth, saveAuth } from "./auth";
 import { canonicalJson, sha256 } from "./canonical-json";
 import { parseRuntimeManifest, type InputSchema, type OperationInput } from "./model";
+import type { OperationDeadlineClock } from "./operation-deadline";
 import {
   previewMessagingTurnInternal,
   readMessagingContextInternal,
   resolveMessagingRouteInternal,
+  showMessagingRunInternal,
 } from "./messaging-runtime";
 import type { ProviderMessageV1, ProviderMaterializedPageV1 } from "./omni-model";
 import {
@@ -63,7 +65,10 @@ type Behavior =
   | "private-outcome-after-fence"
   | "invalid-private-outcome-after-fence"
   | "omit-fence"
-  | "double-fence";
+  | "double-fence"
+  | "expire-before-fence"
+  | "expire-after-fence"
+  | "capture-fence";
 
 type HarnessOptions = {
   readonly behavior?: (attempt: number) => Behavior;
@@ -72,9 +77,43 @@ type HarnessOptions = {
     proof: ProviderPluginMessagingExpectedOwnPrefixV1,
   ) => ProviderPluginMessagingExpectedOwnPrefixProofV1;
   readonly afterContextRead?: () => void;
+  readonly beforeFence?: () => void;
+  readonly afterFence?: () => void;
   readonly contextLimit?: number;
   readonly privateOutcomeCode?: string;
 };
+
+class ManualDeadlineClock implements OperationDeadlineClock {
+  #nowMs = 0;
+  #nextId = 1;
+  readonly #scheduled = new Map<number, {
+    readonly at: number;
+    readonly callback: () => void;
+  }>();
+
+  readonly now = (): number => this.#nowMs;
+
+  readonly schedule = (callback: () => void, delayMs: number): (() => void) => {
+    const id = this.#nextId;
+    this.#nextId += 1;
+    this.#scheduled.set(id, { at: this.#nowMs + delayMs, callback });
+    return () => {
+      this.#scheduled.delete(id);
+    };
+  };
+
+  advance(milliseconds: number): void {
+    this.#nowMs += milliseconds;
+    for (;;) {
+      const due = [...this.#scheduled.entries()]
+        .filter(([, scheduled]) => scheduled.at <= this.#nowMs)
+        .sort((left, right) => left[1].at - right[1].at || left[0] - right[0])[0];
+      if (due === undefined) return;
+      this.#scheduled.delete(due[0]);
+      due[1].callback();
+    }
+  }
+}
 
 function message(
   providerId: string,
@@ -334,6 +373,11 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
   ];
   let attempts = 0;
   let dispatches = 0;
+  let capturedFence: (() => Promise<void>) | null = null;
+  let resolveCapturedFence: ((fence: () => Promise<void>) => void) | null = null;
+  const capturedFenceReady = new Promise<() => Promise<void>>((resolve) => {
+    resolveCapturedFence = resolve;
+  });
   activePrefixProof = options.prefixProof ?? proveExactSuffix;
   activeRouteParticipantFingerprint = participantFingerprint;
   activeAfterContextRead = options.afterContextRead ?? null;
@@ -358,8 +402,15 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
       await attempt.recordPrivateIndeterminateOutcome("still_in_flight");
     }
     if (behavior === "omit-fence") return { pendingId };
+    if (behavior === "capture-fence") {
+      capturedFence = attempt.beforeExternalBegin;
+      resolveCapturedFence?.(attempt.beforeExternalBegin);
+      return new Promise<never>(() => undefined);
+    }
+    if (behavior === "expire-before-fence") options.beforeFence?.();
     await attempt.beforeExternalBegin();
     dispatches += 1;
+    if (behavior === "expire-after-fence") options.afterFence?.();
     const acceptedMessage = message(
       pendingId,
       input.text as string,
@@ -565,6 +616,8 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     messages,
     attempts: () => attempts,
     dispatches: () => dispatches,
+    capturedFence: () => capturedFence,
+    capturedFenceReady,
   });
 }
 
@@ -926,6 +979,85 @@ describe("generic messaging composite execution", () => {
       terminalReason: "provider-result-indeterminate",
     });
     expect(doubled.dispatches()).toBe(1);
+  });
+
+  test("uses one total deadline across preflight and effect and expires before the fence", async () => {
+    const clock = new ManualDeadlineClock();
+    let contextReads = 0;
+    let effectReached = false;
+    const setup = await harness(1, {
+      behavior: () => "expire-before-fence",
+      afterContextRead: () => {
+        contextReads += 1;
+        clock.advance(30_000);
+      },
+      beforeFence: () => {
+        effectReached = true;
+        clock.advance(30_000);
+      },
+    });
+    const result = await confirmMessagingInvocation(setup.preview.planDigest, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+      deadlineClock: clock,
+    });
+    expect(result.run).toMatchObject({
+      state: "failed",
+      provenPartCount: 0,
+      terminalReason: "provider-failed-before-dispatch",
+    });
+    expect(contextReads).toBe(1);
+    expect(effectReached).toBeTrue();
+    expect(setup.attempts()).toBe(1);
+    expect(setup.dispatches()).toBe(0);
+  });
+
+  test("classifies expiry after the durable fence as indeterminate", async () => {
+    const clock = new ManualDeadlineClock();
+    const setup = await harness(1, {
+      behavior: () => "expire-after-fence",
+      afterFence: () => clock.advance(60_000),
+    });
+    const result = await confirmMessagingInvocation(setup.preview.planDigest, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+      deadlineClock: clock,
+    });
+    expect(result.run).toMatchObject({
+      state: "indeterminate",
+      provenPartCount: 0,
+      possibleSubmittedPartIndex: 0,
+      terminalReason: "provider-result-indeterminate",
+    });
+    expect(setup.attempts()).toBe(1);
+    expect(setup.dispatches()).toBe(1);
+  });
+
+  test("rejects a captured fence after expiry terminalizes the run", async () => {
+    const clock = new ManualDeadlineClock();
+    const setup = await harness(1, { behavior: () => "capture-fence" });
+    const confirmation = confirmMessagingInvocation(setup.preview.planDigest, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+      deadlineClock: clock,
+    });
+    const capturedFence = await setup.capturedFenceReady;
+    expect(setup.capturedFence()).toBe(capturedFence);
+    clock.advance(60_000);
+    const result = await confirmation;
+    expect(result.run).toMatchObject({
+      state: "failed",
+      provenPartCount: 0,
+      terminalReason: "provider-failed-before-dispatch",
+    });
+    await expect(capturedFence()).rejects.toThrow();
+    expect(setup.dispatches()).toBe(0);
+    expect(showMessagingRunInternal(result.run.runId, {
+      environment: setup.environment,
+    }).run).toEqual(result.run);
   });
 
   test("racing confirmations cannot duplicate any provider mutation", async () => {
