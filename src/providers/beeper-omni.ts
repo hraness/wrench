@@ -115,12 +115,104 @@ function encoded(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");
 }
 
-function conversationProviderId(accountId: string, conversationId: string): string {
-  return `beeper:${encoded(accountId)}:chat:${encoded(conversationId)}`;
+function hasWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
 }
 
-function messageProviderId(accountId: string, messageId: string): string {
-  return `beeper:${encoded(accountId)}:message:${encoded(messageId)}`;
+function beeperRawIdentifier(
+  value: unknown,
+  label: string,
+  maximum: number,
+): string {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || Buffer.byteLength(value, "utf8") > maximum
+    || !hasWellFormedUnicode(value)
+    || /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+  ) throw new Error(`${label} must be one bounded Beeper identifier`);
+  return value;
+}
+
+function beeperProviderId(
+  accountIdValue: unknown,
+  kind: "chat" | "message",
+  rawIdValue: unknown,
+): string {
+  const accountId = beeperRawIdentifier(accountIdValue, "Beeper account ID", 512);
+  const rawId = beeperRawIdentifier(rawIdValue, `Beeper ${kind} ID`, 2_048);
+  return `beeper:${encoded(accountId)}:${kind}:${encoded(rawId)}`;
+}
+
+function rawBeeperProviderId(
+  accountIdValue: unknown,
+  providerIdValue: unknown,
+  kind: "chat" | "message",
+): string {
+  const accountId = beeperRawIdentifier(accountIdValue, "Beeper account ID", 512);
+  const providerId = beeperRawIdentifier(
+    providerIdValue,
+    `normalized Beeper ${kind} ID`,
+    4_096,
+  );
+  const prefix = `beeper:${encoded(accountId)}:${kind}:`;
+  if (!providerId.startsWith(prefix)) {
+    throw new Error(`normalized Beeper ${kind} ID does not belong to the exact account`);
+  }
+  const source = providerId.slice(prefix.length);
+  if (!/^[A-Za-z0-9_-]+$/u.test(source)) {
+    throw new Error(`normalized Beeper ${kind} ID has a malformed encoding`);
+  }
+  let raw: string;
+  try {
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(
+      Buffer.from(source, "base64url"),
+    );
+  } catch {
+    throw new Error(`normalized Beeper ${kind} ID is not canonical UTF-8`);
+  }
+  if (encoded(raw) !== source) {
+    throw new Error(`normalized Beeper ${kind} ID is not canonically encoded`);
+  }
+  return beeperRawIdentifier(raw, `Beeper ${kind} ID`, 2_048);
+}
+
+export function normalizeBeeperConversationProviderId(
+  accountId: unknown,
+  conversationId: unknown,
+): string {
+  return beeperProviderId(accountId, "chat", conversationId);
+}
+
+export function rawBeeperConversationId(
+  accountId: unknown,
+  providerId: unknown,
+): string {
+  return rawBeeperProviderId(accountId, providerId, "chat");
+}
+
+export function normalizeBeeperMessageProviderId(
+  accountId: unknown,
+  messageId: unknown,
+): string {
+  return beeperProviderId(accountId, "message", messageId);
+}
+
+export function rawBeeperMessageId(
+  accountId: unknown,
+  providerId: unknown,
+): string {
+  return rawBeeperProviderId(accountId, providerId, "message");
 }
 
 function userProviderId(accountId: string, userId: string): string {
@@ -336,8 +428,8 @@ function conversation(value: unknown, path: string): ProviderConversationV1 {
   boolean(participants.hasMore, `${path}.participants.hasMore`);
   return Object.freeze({
     kind: "conversation",
-    providerId: conversationProviderId(accountId, id),
-    providerRevision: orderedAt,
+    providerId: normalizeBeeperConversationProviderId(accountId, id),
+    providerRevision: null,
     orderedAt,
     detail: "summary",
     title,
@@ -436,7 +528,7 @@ function message(
   const senderId = string(source.senderId, `${path}.senderId`, 2_048);
   const senderName = nullableString(source.senderName, `${path}.senderName`, 2_048);
   const isSender = nullableBoolean(source.isSender, `${path}.isSender`);
-  const sortKey = string(source.sortKey, `${path}.sortKey`, 2_048);
+  string(source.sortKey, `${path}.sortKey`, 2_048);
   const orderedAt = timestamp(source.timestamp, `${path}.timestamp`);
   const editedTimestamp = nullableTimestamp(source.editedTimestamp, `${path}.editedTimestamp`);
   const body = nullableString(source.text, `${path}.text`, 1_048_576);
@@ -460,10 +552,10 @@ function message(
         : "active";
   return Object.freeze({
     kind: "message",
-    providerId: messageProviderId(accountId, id),
-    providerRevision: editedTimestamp ?? sortKey,
+    providerId: normalizeBeeperMessageProviderId(accountId, id),
+    providerRevision: editedTimestamp,
     orderedAt,
-    conversationProviderId: conversationProviderId(accountId, conversationId),
+    conversationProviderId: normalizeBeeperConversationProviderId(accountId, conversationId),
     sender: Object.freeze({
       providerId: userProviderId(accountId, senderId),
       displayName: senderName,
@@ -474,7 +566,9 @@ function message(
     subject: null,
     body,
     unread,
-    replyToProviderId: replyId === null ? null : messageProviderId(accountId, replyId),
+    replyToProviderId: replyId === null
+      ? null
+      : normalizeBeeperMessageProviderId(accountId, replyId),
     state,
     attachments: Object.freeze(attachments),
   });

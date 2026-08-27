@@ -196,6 +196,16 @@ export const beeperLinkedDevicePlugin = defineProviderPlugin({
         probe: runtime.probeBeeperLocalSubject,
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeBeeperLocalOperation(recipe, input, auth, options),
+        executeMessagingPart: (operation, input, auth, attempt) => {
+          if (operation !== "messaging.send") {
+            throw new Error("Beeper direct messaging runtime accepts only messaging.send");
+          }
+          return runtime.executeBeeperDirectMessagingPart(input, auth, {
+            beforeExternalBegin: attempt.beforeExternalBegin,
+            ...(attempt.signal === undefined ? {} : { signal: attempt.signal }),
+            environment: attempt.environment,
+          });
+        },
         reconcile: runtime.reconcileBeeperLocalOperation,
       };
     }),

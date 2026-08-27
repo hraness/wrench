@@ -232,4 +232,70 @@ describe("Beeper direct messaging transport", () => {
     expect(boundary).toBe(0);
     expect(posts).toBe(0);
   });
+
+  test("does not start a request when the caller signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("synthetic already cancelled"));
+    let requests = 0;
+    let boundary = 0;
+    const promise = executeBeeperDirectMessagingPart({
+      account_id: "account-1",
+      conversation_id: "!room:beeper.com",
+      kind: "text",
+      text: "never requested",
+    }, fixtureAuth(), {
+      beforeExternalBegin: () => {
+        boundary += 1;
+        return Promise.resolve();
+      },
+      signal: controller.signal,
+      dependencies: {
+        fetch: () => {
+          requests += 1;
+          return Promise.resolve(jsonResponse(info()));
+        },
+      },
+    });
+    await expect(promise).rejects.toThrow("synthetic already cancelled");
+    expect(requests).toBe(0);
+    expect(boundary).toBe(0);
+  });
+
+  test("keeps the request deadline active through the bounded response body", async () => {
+    let requests = 0;
+    let cancelled = false;
+    let boundary = 0;
+    const promise = executeBeeperDirectMessagingPart({
+      account_id: "account-1",
+      conversation_id: "!room:beeper.com",
+      kind: "text",
+      text: "never sent after body stall",
+    }, fixtureAuth(), {
+      beforeExternalBegin: () => {
+        boundary += 1;
+        return Promise.resolve();
+      },
+      dependencies: {
+        requestTimeoutMs: 10,
+        fetch: () => {
+          requests += 1;
+          return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+            start(stream) {
+              stream.enqueue(new TextEncoder().encode('{"app":'));
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }));
+        },
+      },
+    });
+    await expect(promise).rejects.toThrow("Beeper Desktop direct info timed out");
+    expect(requests).toBe(1);
+    expect(cancelled).toBeTrue();
+    expect(boundary).toBe(0);
+  });
 });

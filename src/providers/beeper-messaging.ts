@@ -1,11 +1,18 @@
+import { canonicalJson, sha256 } from "../canonical-json";
 import type { OperationInput } from "../model";
+import type { ProviderMessageV1 } from "../omni-model";
 import type { MessagingRouteCoordinateV1 } from "../messaging-types";
 import type {
   ProviderPluginMessagingDefinitionV1,
   ProviderPluginMessagingTargetV1,
 } from "../provider-plugin";
 import { parseBeeperOperationInput } from "./beeper-local";
-import { materializeBeeperExactConversation } from "./beeper-omni";
+import {
+  materializeBeeperExactConversation,
+  normalizeBeeperMessageProviderId,
+  rawBeeperConversationId,
+  rawBeeperMessageId,
+} from "./beeper-omni";
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
@@ -73,6 +80,62 @@ function targetField(
   return value;
 }
 
+function exactConversationFromOutput(output: unknown) {
+  const envelope = record(output, "Beeper exact conversation output");
+  exactKeys(
+    envelope,
+    ["provider", "operation", "accountSubject", "conversation"],
+    "Beeper exact conversation output",
+  );
+  const rawConversation = record(
+    envelope.conversation,
+    "Beeper exact conversation output conversation",
+  );
+  const accountId = bounded(
+    rawConversation.accountId,
+    "Beeper exact conversation output account",
+    512,
+  );
+  const conversationId = bounded(
+    rawConversation.id,
+    "Beeper exact conversation output conversation ID",
+    2_048,
+  );
+  return materializeBeeperExactConversation(Object.freeze({
+    account_id: accountId,
+    conversation_id: conversationId,
+    max_participants: 500,
+  }), output);
+}
+
+function canonicalMessages(messages: readonly ProviderMessageV1[]): readonly ProviderMessageV1[] {
+  return Object.freeze([...messages].sort((left, right) =>
+    (left.orderedAt ?? "").localeCompare(right.orderedAt ?? "")
+      || left.providerId.localeCompare(right.providerId)));
+}
+
+function exactAcceptedMessage(
+  message: ProviderMessageV1,
+  expected: {
+    readonly providerMessageId: string;
+    readonly providerRevision: string | null;
+    readonly direction: "outgoing";
+    readonly bodySha256: string;
+    readonly replyToProviderId: string | null;
+  },
+): boolean {
+  return message.providerId === expected.providerMessageId
+    && message.providerRevision === expected.providerRevision
+    && message.direction === "outgoing"
+    && message.state === "active"
+    && message.subject === null
+    && message.body !== null
+    && message.bodyTruncated !== true
+    && sha256(message.body) === expected.bodySha256
+    && message.replyToProviderId === expected.replyToProviderId
+    && message.attachments.length === 0;
+}
+
 export const beeperMessagingDefinition = Object.freeze({
   schemaVersion: 1,
   contractId: "wrench.provider-messaging.beeper.v1",
@@ -95,7 +158,10 @@ export const beeperMessagingDefinition = Object.freeze({
       return Object.freeze({
         target: Object.freeze({
           accountId: parsed.accountId as string,
-          conversationId: entity.providerId,
+          conversationId: rawBeeperConversationId(
+            parsed.accountId,
+            entity.providerId,
+          ),
         }),
         conversationProviderId: entity.providerId,
         conversationKind: "unknown" as const,
@@ -179,9 +245,148 @@ export const beeperMessagingDefinition = Object.freeze({
     });
   },
   action: Object.freeze({
-    state: "unavailable",
-    reply: "unsupported",
-    reason:
-      "private-payload unavailable: Beeper CLI and RPC expose message bodies in child argv; the bounded Wrench-owned Beeper Desktop API executor is not integrated with the mutation kernel",
+    state: "supported",
+    operation: "messaging.send",
+    reply: "supported",
+    livePreflight: Object.freeze({
+      operation: "conversations.read",
+      input: (target: ProviderPluginMessagingTargetV1) => {
+        const parsed = parseBeeperMessagingTarget(target);
+        return Object.freeze({
+          account_id: targetField(parsed, "accountId"),
+          conversation_id: targetField(parsed, "conversationId"),
+          max_participants: 500,
+        });
+      },
+      snapshot: (output: unknown) => {
+        const entity = exactConversationFromOutput(output);
+        return Object.freeze({
+          conversationProviderId: entity.providerId,
+          participantFingerprint: sha256(canonicalJson(entity.participants)),
+          providerRevision: null,
+        });
+      },
+    }),
+    compileTurnPart: (target, part) => {
+      const parsed = parseBeeperMessagingTarget(target);
+      const accountId = targetField(parsed, "accountId");
+      const input = Object.freeze({
+        account_id: accountId,
+        conversation_id: targetField(parsed, "conversationId"),
+        kind: "text" as const,
+        text: part.text,
+        ...(part.replyToProviderId === null
+          ? {}
+          : { reply_to: rawBeeperMessageId(accountId, part.replyToProviderId) }),
+      });
+      parseBeeperOperationInput("messaging.send", input);
+      return input;
+    },
+    mapAcceptedResult: (output: unknown) => {
+      const source = record(output, "Beeper direct messaging acceptance");
+      exactKeys(source, [
+        "provider",
+        "operation",
+        "accountSubject",
+        "accountId",
+        "conversationId",
+        "pendingMessageId",
+        "providerRevision",
+      ], "Beeper direct messaging acceptance");
+      if (
+        source.provider !== "beeper"
+        || source.operation !== "messaging.send"
+        || source.providerRevision !== null
+        || typeof source.accountSubject !== "string"
+        || !/^beeper:local:[a-f0-9]{64}$/u.test(source.accountSubject)
+      ) throw new Error("Beeper direct messaging acceptance changed contract");
+      const accountId = bounded(
+        source.accountId,
+        "Beeper direct messaging acceptance account",
+        512,
+      );
+      bounded(
+        source.conversationId,
+        "Beeper direct messaging acceptance conversation",
+        2_048,
+      );
+      return Object.freeze({
+        state: "submitted" as const,
+        providerMessageId: normalizeBeeperMessageProviderId(
+          accountId,
+          bounded(
+            source.pendingMessageId,
+            "Beeper direct messaging acceptance pending message",
+            2_048,
+          ),
+        ),
+        providerRevision: null,
+      });
+    },
+    proveExpectedOwnPrefix: ({ base, current, accepted }) => {
+      if (
+        accepted.length === 0
+        || current.exactDataRevision === base.exactDataRevision
+        || current.latestMessageRevision === base.latestMessageRevision
+      ) return "drift" as const;
+      const baseIds = base.messages.map((message) => message.providerMessageId);
+      const acceptedIds = accepted.map((message) => message.providerMessageId);
+      if (
+        new Set(baseIds).size !== baseIds.length
+        || new Set(acceptedIds).size !== acceptedIds.length
+        || acceptedIds.some((id) => baseIds.includes(id))
+      ) return "drift" as const;
+      const currentMessages = canonicalMessages(current.messages);
+      const currentIds = currentMessages.map((message) => message.providerId);
+      if (new Set(currentIds).size !== currentIds.length) return "drift" as const;
+      const expectedIds = [...baseIds, ...acceptedIds];
+      if (
+        currentIds.length > expectedIds.length
+        || currentIds.length !== expectedIds.length
+          && currentIds.length !== baseIds.length
+      ) return "drift" as const;
+      const expectedSuffix = expectedIds.slice(expectedIds.length - currentIds.length);
+      if (currentIds.some((id, index) => id !== expectedSuffix[index])) {
+        return "drift" as const;
+      }
+      const baseById = new Map(base.messages.map((message) => [
+        message.providerMessageId,
+        message,
+      ]));
+      const acceptedById = new Map(accepted.map((message) => [
+        message.providerMessageId,
+        message,
+      ]));
+      for (const message of currentMessages) {
+        const baseMessage = baseById.get(message.providerId);
+        if (baseMessage !== undefined) {
+          if (
+            message.providerRevision !== baseMessage.providerRevision
+            || message.orderedAt !== baseMessage.orderedAt
+            || sha256(canonicalJson(message)) !== baseMessage.messageSha256
+          ) return "drift" as const;
+          continue;
+        }
+        const expected = acceptedById.get(message.providerId);
+        if (expected === undefined || !exactAcceptedMessage(message, expected)) {
+          return "drift" as const;
+        }
+      }
+      return "proven" as const;
+    },
+    reconciliation: (target, accepted) => {
+      const parsed = parseBeeperMessagingTarget(target);
+      const accountId = targetField(parsed, "accountId");
+      const input = Object.freeze({
+        account_id: accountId,
+        conversation_id: targetField(parsed, "conversationId"),
+        message_id: rawBeeperMessageId(accountId, accepted.providerMessageId),
+      });
+      parseBeeperOperationInput("messaging.message.read", input);
+      return Object.freeze({
+        operation: "messaging.message.read",
+        input,
+      });
+    },
   }),
 } satisfies ProviderPluginMessagingDefinitionV1);

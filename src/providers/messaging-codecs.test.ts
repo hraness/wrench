@@ -1,21 +1,128 @@
 import { describe, expect, test } from "bun:test";
 
+import { canonicalJson, sha256 } from "../canonical-json";
+import type { WrenchAuth } from "../auth";
+import type { ProviderMessageV1 } from "../omni-model";
+import { beeperLinkedDevicePlugin } from "../plugins/beeper-linked-device/plugin";
 import { beeperMessagingDefinition, parseBeeperMessagingTarget } from "./beeper-messaging";
+import {
+  normalizeBeeperConversationProviderId,
+  normalizeBeeperMessageProviderId,
+  rawBeeperConversationId,
+  rawBeeperMessageId,
+} from "./beeper-omni";
 import { whatsappMessagingDefinition } from "./whatsapp-messaging";
+
+const accountId = "account-signal";
+const rawConversationId = "!chat:beeper.local";
+const normalizedConversationId = normalizeBeeperConversationProviderId(
+  accountId,
+  rawConversationId,
+);
+
+function rawConversation(lastActivity: string | null = "2026-08-27T12:00:00.000Z") {
+  return {
+    id: rawConversationId,
+    localChatId: null,
+    accountId,
+    network: "Signal",
+    title: "Exact Friend",
+    type: "single",
+    description: null,
+    descriptionObserved: true,
+    hasAvatar: false,
+    avatarObserved: true,
+    lastReadMessageSortKey: null,
+    lastActivity,
+    unreadCount: 0,
+    unreadMentionsCount: 0,
+    isMarkedUnread: false,
+    isArchived: false,
+    isLowPriority: false,
+    isMuted: false,
+    isPinned: false,
+    isReadOnly: false,
+    messageExpirySeconds: null,
+    messageExpiryObserved: true,
+    draft: null,
+    draftObserved: true,
+    reminder: null,
+    reminderObserved: true,
+    participants: {
+      items: [{
+        id: "@friend:beeper.local",
+        fullName: "Exact Friend",
+        username: "friend",
+        phoneNumber: null,
+        email: null,
+        isSelf: false,
+        cannotMessage: false,
+        isAdmin: false,
+        isNetworkBot: false,
+        isPending: false,
+      }],
+      total: 1,
+      hasMore: false,
+    },
+  };
+}
+
+function exactConversationOutput(lastActivity?: string | null): unknown {
+  return {
+    provider: "beeper",
+    operation: "conversations.read",
+    accountSubject: `beeper:local:${"a".repeat(64)}`,
+    conversation: rawConversation(lastActivity),
+  };
+}
+
+function message(
+  rawId: string,
+  body: string,
+  orderedAt: string,
+  overrides: Partial<ProviderMessageV1> = {},
+): ProviderMessageV1 {
+  return Object.freeze({
+    kind: "message",
+    providerId: normalizeBeeperMessageProviderId(accountId, rawId),
+    providerRevision: null,
+    orderedAt,
+    conversationProviderId: normalizedConversationId,
+    sender: null,
+    recipients: Object.freeze([]),
+    direction: "outgoing",
+    subject: null,
+    body,
+    unread: false,
+    replyToProviderId: null,
+    state: "active",
+    attachments: Object.freeze([]),
+    ...overrides,
+  });
+}
+
+function baseMessage(value: ProviderMessageV1) {
+  return Object.freeze({
+    providerMessageId: value.providerId,
+    providerRevision: value.providerRevision,
+    orderedAt: value.orderedAt,
+    messageSha256: sha256(canonicalJson(value)),
+  });
+}
 
 describe("provider messaging coordinate codecs", () => {
   test("binds a Beeper network/chat coordinate to one exact account read", () => {
-    const listInput = { account_id: "account-signal", limit: 100 } as const;
+    const listInput = { account_id: accountId, limit: 100 } as const;
     const coordinate = {
       kind: "beeperConversation",
       network: "Signal",
-      conversationId: "!chat:beeper.local",
+      conversationId: rawConversationId,
     } as const;
     expect(beeperMessagingDefinition.coordinateKind).toBe("beeperConversation");
     expect(beeperMessagingDefinition.resolveRoute.operation).toBe("conversations.read");
     expect(beeperMessagingDefinition.resolveRoute.input(listInput, coordinate)).toEqual({
-      account_id: "account-signal",
-      conversation_id: "!chat:beeper.local",
+      account_id: accountId,
+      conversation_id: rawConversationId,
       max_participants: 500,
     });
     expect(() => beeperMessagingDefinition.resolveRoute.input(listInput, {
@@ -23,21 +130,218 @@ describe("provider messaging coordinate codecs", () => {
       jid: "15551234567@s.whatsapp.net",
     })).toThrow("requires a Beeper coordinate");
     expect(parseBeeperMessagingTarget({
-      accountId: "account-signal",
-      conversationId: "!chat:beeper.local",
+      accountId,
+      conversationId: rawConversationId,
     })).toEqual({
-      accountId: "account-signal",
-      conversationId: "!chat:beeper.local",
+      accountId,
+      conversationId: rawConversationId,
     });
     expect(beeperMessagingDefinition.action).toMatchObject({
-      state: "unavailable",
-      reply: "unsupported",
+      state: "supported",
+      operation: "messaging.send",
+      reply: "supported",
     });
-    if (beeperMessagingDefinition.action.state !== "unavailable") {
-      throw new Error("Beeper action unexpectedly became available");
+  });
+
+  test("round-trips raw IDs only inside the exact Beeper account scope", () => {
+    const rawIds = [
+      "!chat:beeper.local",
+      "$event:beeper.local",
+      "colon:slash/plus+unicode-🐝",
+    ];
+    for (const rawId of rawIds) {
+      const conversation = normalizeBeeperConversationProviderId(accountId, rawId);
+      const event = normalizeBeeperMessageProviderId(accountId, rawId);
+      expect(rawBeeperConversationId(accountId, conversation)).toBe(rawId);
+      expect(rawBeeperMessageId(accountId, event)).toBe(rawId);
+      expect(() => rawBeeperConversationId("foreign-account", conversation))
+        .toThrow("exact account");
+      expect(() => rawBeeperMessageId("foreign-account", event))
+        .toThrow("exact account");
     }
-    expect(beeperMessagingDefinition.action.reason).toContain("Desktop API executor");
-    expect(beeperMessagingDefinition.action.reason).not.toContain("rpc stdio");
+    expect(() => rawBeeperMessageId(accountId, `beeper:YWNjb3VudC1zaWduYWw:message:%%%`))
+      .toThrow("malformed encoding");
+    expect(() => normalizeBeeperMessageProviderId(accountId, "bad\ud800id"))
+      .toThrow("bounded Beeper identifier");
+    expect(() => normalizeBeeperConversationProviderId(accountId, "bad\nid"))
+      .toThrow("bounded Beeper identifier");
+  });
+
+  test("keeps raw route targets private and route revisions stable across activity", () => {
+    const page = {
+      schemaVersion: 1 as const,
+      partition: "fixture",
+      completeness: { kind: "bounded-local" as const, reason: null },
+      cursor: { direction: "none" as const, request: null, nextInput: null },
+      entities: [{
+        kind: "conversation" as const,
+        providerId: normalizedConversationId,
+        providerRevision: null,
+        orderedAt: "2026-08-27T12:00:00.000Z",
+        detail: "summary" as const,
+        title: "Exact Friend",
+        summary: null,
+        participants: [],
+        unread: false,
+        unreadCount: 0,
+        archived: false,
+        pending: null,
+      }],
+      tombstones: [],
+    };
+    expect(beeperMessagingDefinition.enumerateRoutes(
+      { account_id: accountId, limit: 100 },
+      page,
+    )[0]).toMatchObject({
+      target: { accountId, conversationId: rawConversationId },
+      conversationProviderId: normalizedConversationId,
+      providerRevision: null,
+    });
+    if (beeperMessagingDefinition.action.state !== "supported") {
+      throw new Error("Beeper messaging action must be supported");
+    }
+    const first = beeperMessagingDefinition.action.livePreflight.snapshot(
+      exactConversationOutput("2026-08-27T12:00:00.000Z"),
+    );
+    const later = beeperMessagingDefinition.action.livePreflight.snapshot(
+      exactConversationOutput("2026-08-27T12:05:00.000Z"),
+    );
+    expect(first).toEqual(later);
+    expect(first).toMatchObject({
+      conversationProviderId: normalizedConversationId,
+      providerRevision: null,
+    });
+  });
+
+  test("compiles exact replies, normalizes acceptance, and reconciles by exact raw ID", () => {
+    if (beeperMessagingDefinition.action.state !== "supported") {
+      throw new Error("Beeper messaging action must be supported");
+    }
+    const action = beeperMessagingDefinition.action;
+    const target = { accountId, conversationId: rawConversationId };
+    const reply = normalizeBeeperMessageProviderId(accountId, "$reply:beeper.local");
+    expect(action.compileTurnPart(target, {
+      partId: "part-1",
+      text: "exact private reply",
+      replyToProviderId: reply,
+    })).toEqual({
+      account_id: accountId,
+      conversation_id: rawConversationId,
+      kind: "text",
+      text: "exact private reply",
+      reply_to: "$reply:beeper.local",
+    });
+    expect(() => action.compileTurnPart(target, {
+      partId: "part-1",
+      text: "wrong realm",
+      replyToProviderId: normalizeBeeperMessageProviderId("foreign", "$reply"),
+    })).toThrow("exact account");
+    const accepted = action.mapAcceptedResult({
+      provider: "beeper",
+      operation: "messaging.send",
+      accountSubject: `beeper:local:${"a".repeat(64)}`,
+      accountId,
+      conversationId: rawConversationId,
+      pendingMessageId: "$pending:beeper.local",
+      providerRevision: null,
+    });
+    expect(accepted).toEqual({
+      state: "submitted",
+      providerMessageId: normalizeBeeperMessageProviderId(
+        accountId,
+        "$pending:beeper.local",
+      ),
+      providerRevision: null,
+    });
+    expect(action.reconciliation(target, accepted)).toEqual({
+      operation: "messaging.message.read",
+      input: {
+        account_id: accountId,
+        conversation_id: rawConversationId,
+        message_id: "$pending:beeper.local",
+      },
+    });
+  });
+
+  test("proves only the exact multi-part own suffix across bounded-window eviction", () => {
+    if (beeperMessagingDefinition.action.state !== "supported") {
+      throw new Error("Beeper messaging action must be supported");
+    }
+    const action = beeperMessagingDefinition.action;
+    const old1 = message("old-1", "older", "2026-08-27T12:00:00.000Z", {
+      direction: "incoming",
+    });
+    const old2 = message("old-2", "newer", "2026-08-27T12:01:00.000Z", {
+      direction: "incoming",
+    });
+    const own1 = message("pending-1", "part one", "2026-08-27T12:02:00.000Z");
+    const own2 = message("pending-2", "part two", "2026-08-27T12:03:00.000Z", {
+      replyToProviderId: own1.providerId,
+    });
+    const proof = {
+      base: {
+        exactDataRevision: "a".repeat(64),
+        latestMessageRevision: "b".repeat(64),
+        messages: [baseMessage(old1), baseMessage(old2)],
+      },
+      current: {
+        exactDataRevision: "c".repeat(64),
+        latestMessageRevision: "d".repeat(64),
+        messages: [own1, own2],
+      },
+      accepted: [{
+        providerMessageId: own1.providerId,
+        providerRevision: null,
+        direction: "outgoing" as const,
+        bodySha256: sha256("part one"),
+        replyToProviderId: null,
+      }, {
+        providerMessageId: own2.providerId,
+        providerRevision: null,
+        direction: "outgoing" as const,
+        bodySha256: sha256("part two"),
+        replyToProviderId: own1.providerId,
+      }],
+    } as const;
+    expect(action.proveExpectedOwnPrefix(proof)).toBe("proven");
+    expect(action.proveExpectedOwnPrefix({
+      ...proof,
+      current: { ...proof.current, messages: [old1, old2, own1, own2] },
+    })).toBe("proven");
+    for (const messages of [
+      [old2, own1, own2],
+      [own1, { ...own2, providerRevision: "edited" }],
+      [own1, { ...own2, state: "revoked" as const }],
+      [own1, { ...own2, direction: "incoming" as const }],
+      [own1, own2, message("foreign", "other outgoing", "2026-08-27T12:04:00.000Z")],
+    ]) {
+      expect(action.proveExpectedOwnPrefix({
+        ...proof,
+        current: { ...proof.current, messages },
+      })).toBe("drift");
+    }
+  });
+
+  test("exposes only the exact direct Beeper messaging runtime operation", async () => {
+    const binding = beeperLinkedDevicePlugin.bindings[0]!;
+    const runtime = await binding.loadRuntime();
+    expect(typeof runtime.executeMessagingPart).toBe("function");
+    const auth: WrenchAuth = Object.freeze({
+      schemaVersion: 1,
+      id: "beeper-main",
+      kind: "linked-device-store",
+      provider: "beeper",
+      path: "/not-read-for-malformed-input",
+      subject: `beeper:local:${"a".repeat(64)}`,
+    });
+    const attempt = Object.freeze({
+      beforeExternalBegin: () => Promise.resolve(),
+      environment: Object.freeze({}),
+    });
+    expect(() => runtime.executeMessagingPart!("messaging.edit", {}, auth, attempt))
+      .toThrow("only messaging.send");
+    await expect(runtime.executeMessagingPart!("messaging.send", {}, auth, attempt))
+      .rejects.toThrow("account_id");
   });
 
   test("binds an exact WhatsApp JID and remains historical-only", () => {

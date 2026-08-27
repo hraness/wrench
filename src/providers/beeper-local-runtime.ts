@@ -159,6 +159,8 @@ export type BeeperDirectMessagingDependencies = Readonly<{
     input: string | URL | Request,
     init?: RequestInit,
   ) => Promise<Response>;
+  /** Test-only deadline override; production always uses the reviewed bound. */
+  requestTimeoutMs?: number;
 }>;
 
 export type BeeperDirectMessagingAttempt = Readonly<{
@@ -2003,13 +2005,27 @@ async function readBoundedStream(
   stream: ReadableStream<Uint8Array>,
   maximum: number,
   label: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let byteLength = 0;
+  let rejectAbort: ((reason: Error) => void) | null = null;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = (): void => {
+    const reason = signal?.reason;
+    rejectAbort?.(reason instanceof Error ? reason : new Error(`${label} was cancelled`));
+    void reader.cancel(reason).catch(() => undefined);
+  };
+  if (signal?.aborted === true) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   try {
     for (;;) {
-      const item = await reader.read();
+      const item = signal === undefined
+        ? await reader.read()
+        : await Promise.race([reader.read(), aborted]);
       if (item.done) break;
       if (item.value.byteLength > maximum - byteLength) {
         throw new Error(`${label} exceeded its byte bound`);
@@ -2018,6 +2034,7 @@ async function readBoundedStream(
       byteLength += item.value.byteLength;
     }
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
   const output = new Uint8Array(byteLength);
@@ -2096,33 +2113,45 @@ async function beeperDirectJsonRequest(
   const request = dependencies?.fetch ?? fetch;
   const controller = new AbortController();
   const onAbort = (): void => controller.abort(signal?.reason);
-  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted === true) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  if (controller.signal.aborted) {
+    throw controller.signal.reason instanceof Error
+      ? controller.signal.reason
+      : new Error(`${label} was cancelled`);
+  }
+  const timeoutMs = dependencies?.requestTimeoutMs
+    ?? BEEPER_DIRECT_REQUEST_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+    throw new Error("Beeper direct request timeout override is invalid");
+  }
   const timeout = setTimeout(
     () => controller.abort(new Error(`${label} timed out`)),
-    BEEPER_DIRECT_REQUEST_TIMEOUT_MS,
+    timeoutMs,
   );
-  let response: Response;
+  let text: string;
   try {
-    response = await request(url, {
+    const response = await request(url, {
       ...init,
       redirect: "error",
       signal: controller.signal,
     });
+    if (
+      response.redirected
+      || response.url !== "" && response.url !== url
+      || response.status !== 200
+      || response.body === null
+    ) throw new Error(`${label} did not return one exact successful response`);
+    text = await readBoundedStream(
+      response.body,
+      BEEPER_DIRECT_RESPONSE_BYTES,
+      `${label} response`,
+      controller.signal,
+    );
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
   }
-  if (
-    response.redirected
-    || response.url !== "" && response.url !== url
-    || response.status !== 200
-    || response.body === null
-  ) throw new Error(`${label} did not return one exact successful response`);
-  const text = await readBoundedStream(
-    response.body,
-    BEEPER_DIRECT_RESPONSE_BYTES,
-    `${label} response`,
-  );
   let value: unknown;
   try {
     value = JSON.parse(text) as unknown;
