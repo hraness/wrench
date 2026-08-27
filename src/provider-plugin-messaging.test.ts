@@ -185,8 +185,11 @@ const messaging = Object.freeze({
         && message.body !== null
         && sha256(message.body) === expected.bodySha256
         && message.bodyTruncated !== true))
-      ? "proven" as const
-      : "drift" as const,
+      ? Object.freeze({
+          state: "proven" as const,
+          matchedAcceptedPrefixCount: accepted.length,
+        })
+      : Object.freeze({ state: "drift" as const }),
     reconciliation: (value, accepted) => {
       const parsed = target(value);
       return Object.freeze({
@@ -302,7 +305,10 @@ describe("provider messaging SPI conformance", () => {
         replyToProviderId: "reply-1",
       }],
     } as const;
-    expect(conformed!.action.proveExpectedOwnPrefix(proof)).toBe("proven");
+    expect(conformed!.action.proveExpectedOwnPrefix(proof)).toEqual({
+      state: "proven",
+      matchedAcceptedPrefixCount: 1,
+    });
     for (const accepted of [
       { ...proof.accepted[0], providerMessageId: "other" },
       { ...proof.accepted[0], providerRevision: "other" },
@@ -310,12 +316,12 @@ describe("provider messaging SPI conformance", () => {
       { ...proof.accepted[0], replyToProviderId: "other" },
     ]) {
       expect(conformed!.action.proveExpectedOwnPrefix({ ...proof, accepted: [accepted] }))
-        .toBe("drift");
+        .toEqual({ state: "drift" });
     }
     expect(conformed!.action.proveExpectedOwnPrefix({
       ...proof,
       current: { ...proof.current, messages: [{ ...message, direction: "incoming" }] },
-    })).toBe("drift");
+    })).toEqual({ state: "drift" });
     expect(conformed!.action.reconciliation(exactTarget, submitted).operation)
       .toBe("messaging.read");
   });

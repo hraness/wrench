@@ -227,6 +227,14 @@ export type ProviderPluginMessagingExpectedOwnPrefixV1 = {
   }[];
 };
 
+export type ProviderPluginMessagingExpectedOwnPrefixProofV1 =
+  | {
+      readonly state: "proven";
+      /** Total accepted prefix represented by this exact live window. */
+      readonly matchedAcceptedPrefixCount: number;
+    }
+  | { readonly state: "drift" };
+
 export type ProviderPluginMessagingLiveRouteStateV1 = {
   readonly conversationProviderId: string;
   readonly participantFingerprint: string;
@@ -290,7 +298,7 @@ export type ProviderPluginMessagingActionDefinitionV1 =
       /** Prove that live state contains exactly the accepted own-message prefix and no drift. */
       readonly proveExpectedOwnPrefix: (
         value: ProviderPluginMessagingExpectedOwnPrefixV1,
-      ) => "proven" | "drift";
+      ) => ProviderPluginMessagingExpectedOwnPrefixProofV1;
       /**
        * Build one explicit checked provider read. The generic facade never
        * invokes this implicitly and never changes existing runs reconciliation.

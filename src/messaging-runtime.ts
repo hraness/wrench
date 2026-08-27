@@ -44,6 +44,7 @@ import { withLocalCliProviderCleanupAdmission } from "./local-cli-admission";
 import type {
   ProviderPluginBindingV1,
   ProviderPluginMessagingDefinitionV1,
+  ProviderPluginMessagingExpectedOwnPrefixProofV1,
 } from "./provider-plugin";
 import { requireProviderPluginAuth } from "./provider-plugin-auth";
 import type {
@@ -88,6 +89,46 @@ export type MessagingRuntimeOptions = {
 type MessagingResolution = ProviderPluginOperationResolutionV1 & {
   readonly messaging: ProviderPluginMessagingDefinitionV1;
 };
+
+function parseExpectedOwnPrefixProof(
+  value: unknown,
+  acceptedCount: number,
+): ProviderPluginMessagingExpectedOwnPrefixProofV1 {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype
+  ) throw new Error("messaging provider returned a malformed prefix proof");
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).some((key) => typeof key !== "string")) {
+    throw new Error("messaging provider returned a malformed prefix proof");
+  }
+  for (const descriptor of Object.values(descriptors)) {
+    if (!descriptor.enumerable || !("value" in descriptor)) {
+      throw new Error("messaging provider returned a malformed prefix proof");
+    }
+  }
+  const source = value as Record<string, unknown>;
+  const keys = Object.keys(source).sort();
+  if (source.state === "drift" && keys.length === 1 && keys[0] === "state") {
+    return Object.freeze({ state: "drift" as const });
+  }
+  if (
+    source.state !== "proven"
+    || keys.length !== 2
+    || keys[0] !== "matchedAcceptedPrefixCount"
+    || keys[1] !== "state"
+    || typeof source.matchedAcceptedPrefixCount !== "number"
+    || !Number.isSafeInteger(source.matchedAcceptedPrefixCount)
+    || source.matchedAcceptedPrefixCount < 0
+    || source.matchedAcceptedPrefixCount > acceptedCount
+  ) throw new Error("messaging provider returned a malformed prefix proof");
+  return Object.freeze({
+    state: "proven" as const,
+    matchedAcceptedPrefixCount: source.matchedAcceptedPrefixCount,
+  });
+}
 
 export type MessagingPrivateOutputReceiptV1 = {
   readonly schemaVersion: 1;
@@ -1352,17 +1393,17 @@ export async function executeMessagingCompositeInternal(
       ) {
         return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
       }
-      routeStateRevision = await currentMessagingRouteStateRevision(
-        record,
-        routeResolution,
-        environment,
-        registry,
-        options.signal,
-      );
       current = await currentContextPage(
         record,
         routeResolution,
         composite.contextLimit,
+        environment,
+        registry,
+        options.signal,
+      );
+      routeStateRevision = await currentMessagingRouteStateRevision(
+        record,
+        routeResolution,
         environment,
         registry,
         options.signal,
@@ -1377,9 +1418,10 @@ export async function executeMessagingCompositeInternal(
     if (routeStateRevision !== composite.baseRouteStateRevision) {
       return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
     }
-    let proof: "proven" | "drift";
+    let proof: ProviderPluginMessagingExpectedOwnPrefixProofV1;
     try {
-      proof = action.proveExpectedOwnPrefix(Object.freeze({
+      const accepted = messagingExpectedOwnPrefix(snapshot.run);
+      proof = parseExpectedOwnPrefixProof(action.proveExpectedOwnPrefix(Object.freeze({
         base: Object.freeze({
           exactDataRevision: composite.baseExactDataRevision,
           latestMessageRevision: composite.baseLatestMessageRevision,
@@ -1391,8 +1433,8 @@ export async function executeMessagingCompositeInternal(
           latestMessageRevision: current.latestMessageRevision,
           messages: current.messages,
         }),
-        accepted: messagingExpectedOwnPrefix(snapshot.run),
-      }));
+        accepted,
+      })), accepted.length);
     } catch {
       return stopMessagingBeforeDispatch(
         snapshot,
@@ -1400,12 +1442,16 @@ export async function executeMessagingCompositeInternal(
         options,
       );
     }
-    if (proof !== "proven") {
+    if (
+      proof.state !== "proven"
+      || proof.matchedAcceptedPrefixCount < snapshot.run.observedAcceptedPrefixCount
+    ) {
       return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
     }
     snapshot = updateMessagingRun(snapshot, {
       type: "claimed",
       index,
+      observedAcceptedPrefixCount: proof.matchedAcceptedPrefixCount,
       at: messagingTransitionTime(snapshot, options),
     }, environment);
     let crossedExternalBoundary = false;

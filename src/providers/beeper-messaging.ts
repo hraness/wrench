@@ -330,17 +330,19 @@ export const beeperMessagingDefinition = Object.freeze({
         base.contextLimit < 1
         || base.contextLimit > 200
         || base.messages.length > base.contextLimit
-      ) return "drift" as const;
+      ) return Object.freeze({ state: "drift" as const });
       const baseIds = base.messages.map((message) => message.providerMessageId);
       const acceptedIds = accepted.map((message) => message.providerMessageId);
       if (
         new Set(baseIds).size !== baseIds.length
         || new Set(acceptedIds).size !== acceptedIds.length
         || acceptedIds.some((id) => baseIds.includes(id))
-      ) return "drift" as const;
+      ) return Object.freeze({ state: "drift" as const });
       const currentMessages = canonicalMessages(current.messages);
       const currentIds = currentMessages.map((message) => message.providerId);
-      if (new Set(currentIds).size !== currentIds.length) return "drift" as const;
+      if (new Set(currentIds).size !== currentIds.length) {
+        return Object.freeze({ state: "drift" as const });
+      }
       const baseById = new Map(base.messages.map((message) => [
         message.providerMessageId,
         message,
@@ -362,7 +364,10 @@ export const beeperMessagingDefinition = Object.freeze({
         exactBaseWindow
         && current.exactDataRevision === base.exactDataRevision
         && current.latestMessageRevision === base.latestMessageRevision
-      ) return "proven" as const;
+      ) return Object.freeze({
+        state: "proven" as const,
+        matchedAcceptedPrefixCount: 0,
+      });
       let visibleAcceptedCount = 0;
       for (let count = 1; count <= accepted.length; count += 1) {
         const visibleIds = [...baseIds, ...acceptedIds.slice(0, count)];
@@ -381,7 +386,7 @@ export const beeperMessagingDefinition = Object.freeze({
         visibleAcceptedCount === 0
         || current.exactDataRevision === base.exactDataRevision
         || current.latestMessageRevision === base.latestMessageRevision
-      ) return "drift" as const;
+      ) return Object.freeze({ state: "drift" as const });
       for (const message of currentMessages) {
         const baseMessage = baseById.get(message.providerId);
         if (baseMessage !== undefined) {
@@ -389,15 +394,18 @@ export const beeperMessagingDefinition = Object.freeze({
             message.providerRevision !== baseMessage.providerRevision
             || message.orderedAt !== baseMessage.orderedAt
             || sha256(canonicalJson(message)) !== baseMessage.messageSha256
-          ) return "drift" as const;
+          ) return Object.freeze({ state: "drift" as const });
           continue;
         }
         const expected = acceptedById.get(message.providerId);
         if (expected === undefined || !exactAcceptedMessage(message, expected)) {
-          return "drift" as const;
+          return Object.freeze({ state: "drift" as const });
         }
       }
-      return "proven" as const;
+      return Object.freeze({
+        state: "proven" as const,
+        matchedAcceptedPrefixCount: visibleAcceptedCount,
+      });
     },
     reconciliation: (target, accepted) => {
       const parsed = parseBeeperMessagingTarget(target);

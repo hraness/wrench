@@ -280,6 +280,8 @@ export type MessagingRunV1 = {
   readonly state: "pending" | "submitted" | "failed" | "partial" | "indeterminate";
   readonly partCount: number;
   readonly provenPartCount: number;
+  /** Durable high-water mark for accepted own messages proven in live context. */
+  readonly observedAcceptedPrefixCount: number;
   readonly possibleSubmittedPartIndex: number | null;
   readonly terminalReason:
     | null

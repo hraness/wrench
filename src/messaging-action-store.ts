@@ -35,7 +35,12 @@ export type MessagingRunSnapshotV1 = {
 };
 
 export type MessagingRunEventV1 =
-  | { readonly type: "claimed"; readonly index: number; readonly at: string }
+  | {
+      readonly type: "claimed";
+      readonly index: number;
+      readonly observedAcceptedPrefixCount: number;
+      readonly at: string;
+    }
   | { readonly type: "dispatching"; readonly index: number; readonly at: string }
   | {
       readonly type: "accepted";
@@ -153,6 +158,9 @@ function assertRun(run: MessagingRunV1): void {
     || run.partCount !== run.parts.length
     || run.provenPartCount < 0
     || run.provenPartCount > run.partCount
+    || !Number.isSafeInteger(run.observedAcceptedPrefixCount)
+    || run.observedAcceptedPrefixCount < 0
+    || run.observedAcceptedPrefixCount > run.provenPartCount
     || run.parts.slice(0, run.provenPartCount).some((part) => part.state !== "accepted")
     || acceptedProviderMessageIds.some((providerMessageId) => providerMessageId === null)
     || new Set(acceptedProviderMessageIds).size !== acceptedProviderMessageIds.length
@@ -220,8 +228,8 @@ function parseRun(value: unknown): MessagingRunV1 {
   exactKeys(source, [
     "schemaVersion", "format", "runId", "planDigest", "routeRef", "contextRef",
     "clientIntentSha256", "turnDigest", "previewDigest", "state", "partCount",
-    "provenPartCount", "possibleSubmittedPartIndex", "terminalReason", "parts",
-    "startedAt", "recordedAt",
+    "provenPartCount", "observedAcceptedPrefixCount", "possibleSubmittedPartIndex",
+    "terminalReason", "parts", "startedAt", "recordedAt",
   ], "messaging run");
   if (
     source.schemaVersion !== 1
@@ -245,6 +253,10 @@ function parseRun(value: unknown): MessagingRunV1 {
     || !Number.isSafeInteger(source.provenPartCount)
     || source.provenPartCount < 0
     || source.provenPartCount > source.partCount
+    || typeof source.observedAcceptedPrefixCount !== "number"
+    || !Number.isSafeInteger(source.observedAcceptedPrefixCount)
+    || source.observedAcceptedPrefixCount < 0
+    || source.observedAcceptedPrefixCount > source.provenPartCount
     || source.possibleSubmittedPartIndex !== null
       && (typeof source.possibleSubmittedPartIndex !== "number"
         || !Number.isSafeInteger(source.possibleSubmittedPartIndex)
@@ -332,6 +344,7 @@ function parseRun(value: unknown): MessagingRunV1 {
     state: source.state,
     partCount: source.partCount,
     provenPartCount: source.provenPartCount,
+    observedAcceptedPrefixCount: source.observedAcceptedPrefixCount,
     possibleSubmittedPartIndex: source.possibleSubmittedPartIndex as number | null,
     terminalReason: source.terminalReason as MessagingRunV1["terminalReason"],
     parts: Object.freeze(parts),
@@ -397,6 +410,7 @@ export function initializeMessagingRun(
     state: "pending",
     partCount: plan.parts.length,
     provenPartCount: 0,
+    observedAcceptedPrefixCount: 0,
     possibleSubmittedPartIndex: null,
     terminalReason: null,
     parts: plan.parts.map((part) => ({
@@ -486,10 +500,17 @@ export function transitionMessagingRun(
   let providerRevision = current.providerRevision;
   let state: MessagingRunV1["state"] = run.state;
   let provenPartCount = run.provenPartCount;
+  let observedAcceptedPrefixCount = run.observedAcceptedPrefixCount;
   let possibleSubmittedPartIndex = run.possibleSubmittedPartIndex;
   let terminalReason = run.terminalReason;
   if (event.type === "claimed") {
     if (current.state !== "unattempted") throw new Error("messaging part was already claimed");
+    if (
+      !Number.isSafeInteger(event.observedAcceptedPrefixCount)
+      || event.observedAcceptedPrefixCount < observedAcceptedPrefixCount
+      || event.observedAcceptedPrefixCount > run.provenPartCount
+    ) throw new Error("messaging accepted-prefix observation is not monotonic");
+    observedAcceptedPrefixCount = event.observedAcceptedPrefixCount;
     nextState = "claimed";
   } else if (event.type === "dispatching") {
     if (current.state !== "claimed") throw new Error("messaging part was not claimed");
@@ -527,6 +548,7 @@ export function transitionMessagingRun(
     ...run,
     state,
     provenPartCount,
+    observedAcceptedPrefixCount,
     possibleSubmittedPartIndex,
     terminalReason,
     parts,

@@ -338,16 +338,24 @@ describe("provider messaging coordinate codecs", () => {
         replyToProviderId: own1.providerId,
       }],
     } as const;
-    expect(action.proveExpectedOwnPrefix(proof)).toBe("proven");
+    expect(action.proveExpectedOwnPrefix(proof)).toEqual({
+      state: "proven",
+      matchedAcceptedPrefixCount: 2,
+    });
     expect(action.proveExpectedOwnPrefix({
       ...proof,
       current: { ...proof.current, messages: [old1, old2, own1, own2] },
-    })).toBe("drift");
+    })).toEqual({ state: "drift" });
     expect(action.proveExpectedOwnPrefix({
       ...proof,
       base: { ...proof.base, contextLimit: 4 },
       current: { ...proof.current, messages: [old1, old2, own1, own2] },
-    })).toBe("proven");
+    })).toEqual({ state: "proven", matchedAcceptedPrefixCount: 2 });
+    expect(action.proveExpectedOwnPrefix({
+      ...proof,
+      base: { ...proof.base, contextLimit: 4 },
+      current: { ...proof.current, messages: [old1, old2, own1] },
+    })).toEqual({ state: "proven", matchedAcceptedPrefixCount: 1 });
     const exactBase = {
       exactDataRevision: proof.base.exactDataRevision,
       latestMessageRevision: proof.base.latestMessageRevision,
@@ -357,11 +365,11 @@ describe("provider messaging coordinate codecs", () => {
       ...proof,
       current: exactBase,
       accepted: [],
-    })).toBe("proven");
+    })).toEqual({ state: "proven", matchedAcceptedPrefixCount: 0 });
     expect(action.proveExpectedOwnPrefix({
       ...proof,
       current: exactBase,
-    })).toBe("proven");
+    })).toEqual({ state: "proven", matchedAcceptedPrefixCount: 0 });
     for (const messages of [
       [old2, own1, own2],
       [own1, { ...own2, providerRevision: "edited" }],
@@ -372,7 +380,7 @@ describe("provider messaging coordinate codecs", () => {
       expect(action.proveExpectedOwnPrefix({
         ...proof,
         current: { ...proof.current, messages },
-      })).toBe("drift");
+      })).toEqual({ state: "drift" });
     }
   });
 
@@ -442,7 +450,7 @@ describe("provider messaging coordinate codecs", () => {
         messages: Object.freeze([first]),
       },
       accepted,
-    })).toBe("proven");
+    })).toEqual({ state: "proven", matchedAcceptedPrefixCount: 0 });
     expect(imsgDirectMessagingDefinition.action.proveExpectedOwnPrefix({
       base,
       current: {
@@ -451,7 +459,7 @@ describe("provider messaging coordinate codecs", () => {
         messages: Object.freeze([acceptedMessage]),
       },
       accepted,
-    })).toBe("proven");
+    })).toEqual({ state: "proven", matchedAcceptedPrefixCount: 1 });
     expect(imsgDirectMessagingDefinition.action.proveExpectedOwnPrefix({
       base,
       current: {
@@ -467,7 +475,7 @@ describe("provider messaging coordinate codecs", () => {
         ]),
       },
       accepted,
-    })).toBe("drift");
+    })).toEqual({ state: "drift" });
   });
 
   test("binds an exact WhatsApp JID and remains historical-only", () => {

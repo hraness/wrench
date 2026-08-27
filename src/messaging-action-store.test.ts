@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { assertProperty, fc } from "./test-support";
 import { sha256 } from "./canonical-json";
 import {
   initializeMessagingRun,
@@ -68,6 +69,24 @@ function plan(): MessagingCompositeInvocationPlanV1 {
   });
 }
 
+function threePartPlan(): MessagingCompositeInvocationPlanV1 {
+  const base = plan();
+  return Object.freeze({
+    ...base,
+    parts: Object.freeze([
+      ...base.parts,
+      Object.freeze({
+        partId: "part-3",
+        text: "private third body",
+        replyRef: null,
+        replyToProviderId: null,
+        input: Object.freeze({ text: "private third body" }),
+        inputHash: "3".repeat(64),
+      }),
+    ]),
+  });
+}
+
 const runId = "123e4567-e89b-42d3-a456-426614174000";
 const startedAt = "2026-08-27T12:00:00.000Z";
 
@@ -81,6 +100,7 @@ describe("messaging composite run journal", () => {
       testState.environment,
       startedAt,
     );
+    expect(first.run.observedAcceptedPrefixCount).toBe(0);
     const raw = readFileSync(join(testState.root, "messaging", "runs", `${runId}.json`), "utf8");
     expect(raw).toContain('"encryption":"aes-256-gcm"');
     expect(raw).not.toContain("private first body");
@@ -88,15 +108,76 @@ describe("messaging composite run journal", () => {
     const claimed = updateMessagingRun(first, {
       type: "claimed",
       index: 0,
+      observedAcceptedPrefixCount: 0,
       at: "2026-08-27T12:00:01.000Z",
     }, testState.environment);
     expect(claimed.run.parts[0]!.state).toBe("claimed");
     expect(() => updateMessagingRun(first, {
       type: "claimed",
       index: 0,
+      observedAcceptedPrefixCount: 0,
       at: "2026-08-27T12:00:02.000Z",
     }, testState.environment)).toThrow("changed concurrently");
     expect(readMessagingRun(runId, testState.environment).run).toEqual(claimed.run);
+  });
+
+  test("persists only monotonic accepted-prefix observations before dispatch", () => {
+    const base = initializeMessagingRun(
+      runId,
+      "9".repeat(64),
+      threePartPlan(),
+      state().environment,
+      startedAt,
+    ).run;
+    const claim = (
+      run: typeof base,
+      index: number,
+      observedAcceptedPrefixCount: number,
+      second: number,
+    ) => transitionMessagingRun(run, {
+      type: "claimed",
+      index,
+      observedAcceptedPrefixCount,
+      at: `2026-08-27T12:00:0${second}.000Z`,
+    });
+    const dispatch = (run: typeof base, index: number, second: number) =>
+      transitionMessagingRun(run, {
+        type: "dispatching",
+        index,
+        at: `2026-08-27T12:00:0${second}.000Z`,
+      });
+    const accept = (run: typeof base, index: number, second: number) =>
+      transitionMessagingRun(run, {
+        type: "accepted",
+        index,
+        providerMessageId: `provider-${index + 1}`,
+        providerRevision: `revision-${index + 1}`,
+        at: `2026-08-27T12:00:0${second}.000Z`,
+      });
+
+    expect(() => claim(base, 0, 1, 1)).toThrow("not monotonic");
+    const acceptedFirst = accept(dispatch(claim(base, 0, 0, 1), 0, 2), 0, 3);
+    const acceptedSecond = accept(
+      dispatch(claim(acceptedFirst, 1, 1, 4), 1, 5),
+      1,
+      6,
+    );
+    expect(acceptedSecond.observedAcceptedPrefixCount).toBe(1);
+    expect(() => claim(acceptedSecond, 2, 0, 7)).toThrow("not monotonic");
+    expect(() => claim(acceptedSecond, 2, 3, 7)).toThrow("not monotonic");
+    expect(claim(acceptedSecond, 2, 2, 7).observedAcceptedPrefixCount).toBe(2);
+
+    assertProperty(fc.property(
+      fc.integer({ min: -2, max: 4 }),
+      (candidate) => {
+        const transition = () => claim(acceptedSecond, 2, candidate, 7);
+        if (candidate >= 1 && candidate <= 2) {
+          expect(transition().observedAcceptedPrefixCount).toBe(candidate);
+        } else {
+          expect(transition).toThrow("not monotonic");
+        }
+      },
+    ));
   });
 
   test("implements all four frozen proven-prefix terminal states", () => {
@@ -109,7 +190,7 @@ describe("messaging composite run journal", () => {
     ).run;
     const at = (second: number) => `2026-08-27T12:00:0${second}.000Z`;
     const claim = (run: typeof base, index: number, second: number) => transitionMessagingRun(run, {
-      type: "claimed", index, at: at(second),
+      type: "claimed", index, observedAcceptedPrefixCount: index, at: at(second),
     });
     const dispatch = (run: typeof base, index: number, second: number) => transitionMessagingRun(run, {
       type: "dispatching", index, at: at(second),
@@ -198,6 +279,16 @@ describe("messaging composite run journal", () => {
       startedAt,
     ).run;
     expect(() => parseMessagingRunV1({ ...base, unexpected: true })).toThrow("unsupported fields");
+    const { observedAcceptedPrefixCount: _omitted, ...withoutObservation } = base;
+    expect(() => parseMessagingRunV1(withoutObservation)).toThrow("unsupported fields");
+    expect(() => parseMessagingRunV1({
+      ...base,
+      observedAcceptedPrefixCount: -1,
+    })).toThrow("malformed");
+    expect(() => parseMessagingRunV1({
+      ...base,
+      observedAcceptedPrefixCount: 1,
+    })).toThrow("malformed");
     expect(() => parseMessagingRunV1({
       ...base,
       state: "submitted",

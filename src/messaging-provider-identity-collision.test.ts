@@ -22,6 +22,7 @@ import {
   type ProviderPluginMessagingDefinitionV1,
   type ProviderPluginMessagingActionExecutorV1,
   type ProviderPluginMessagingExpectedOwnPrefixV1,
+  type ProviderPluginMessagingExpectedOwnPrefixProofV1,
   type WebSessionPluginOperationDefinitionV1,
 } from "./provider-plugin";
 import { createProviderPluginRegistry } from "./provider-plugin-registry";
@@ -98,10 +99,10 @@ function baseMessage(message_: ProviderMessageV1) {
 
 function proveExactSuffix(
   proof: ProviderPluginMessagingExpectedOwnPrefixV1,
-): "proven" | "drift" {
+): ProviderPluginMessagingExpectedOwnPrefixProofV1 {
   const { base, current, accepted } = proof;
   if (current.messages.length > base.contextLimit || accepted.length > current.messages.length) {
-    return "drift";
+    return Object.freeze({ state: "drift" as const });
   }
   const suffixStart = current.messages.length - accepted.length;
   const visibleBase = current.messages.slice(0, suffixStart);
@@ -109,10 +110,12 @@ function proveExactSuffix(
   if (
     evictedBaseCount < 0
     || evictedBaseCount > 0 && current.messages.length !== base.contextLimit
-  ) return "drift";
+  ) return Object.freeze({ state: "drift" as const });
   if (visibleBase.some((candidate, index) =>
     canonicalJson(baseMessage(candidate))
-      !== canonicalJson(base.messages[evictedBaseCount + index]))) return "drift";
+      !== canonicalJson(base.messages[evictedBaseCount + index]))) {
+    return Object.freeze({ state: "drift" as const });
+  }
   const visibleAccepted = current.messages.slice(suffixStart);
   if (visibleAccepted.some((candidate, index) => {
     const expected = accepted[index]!;
@@ -124,8 +127,11 @@ function proveExactSuffix(
       || candidate.bodyTruncated === true
       || candidate.state !== "active"
       || sha256(candidate.body) !== expected.bodySha256;
-  })) return "drift";
-  return "proven";
+  })) return Object.freeze({ state: "drift" as const });
+  return Object.freeze({
+    state: "proven" as const,
+    matchedAcceptedPrefixCount: accepted.length,
+  });
 }
 
 function inputSchema(name: "messaging.list" | "messaging.read" | "messaging.send"): InputSchema {

@@ -23,6 +23,7 @@ import {
   type ProviderPluginMessagingDefinitionV1,
   type ProviderPluginMessagingActionExecutorV1,
   type ProviderPluginMessagingExpectedOwnPrefixV1,
+  type ProviderPluginMessagingExpectedOwnPrefixProofV1,
   type WebSessionPluginOperationDefinitionV1,
 } from "./provider-plugin";
 import { createProviderPluginRegistry } from "./provider-plugin-registry";
@@ -42,6 +43,10 @@ const participants = Object.freeze([participant]);
 const participantFingerprint = sha256(canonicalJson(participants));
 let activePage: ((limit: number) => ProviderMaterializedPageV1) | null = null;
 let activePartExecutor: ProviderPluginMessagingActionExecutorV1 | null = null;
+let activePrefixProof = proveExactSuffix;
+let activeRouteParticipantFingerprint = participantFingerprint;
+let activeAfterContextRead: (() => void) | null = null;
+let confirmationReadsActive = false;
 let cachedRegistry: ReturnType<typeof createProviderPluginRegistry> | null = null;
 
 afterAll(() => {
@@ -60,6 +65,10 @@ type Behavior =
 type HarnessOptions = {
   readonly behavior?: (attempt: number) => Behavior;
   readonly afterMutation?: (messages: ProviderMessageV1[], attempt: number) => void;
+  readonly prefixProof?: (
+    proof: ProviderPluginMessagingExpectedOwnPrefixV1,
+  ) => ProviderPluginMessagingExpectedOwnPrefixProofV1;
+  readonly afterContextRead?: () => void;
   readonly contextLimit?: number;
 };
 
@@ -100,10 +109,10 @@ function baseMessage(message_: ProviderMessageV1) {
 
 function proveExactSuffix(
   proof: ProviderPluginMessagingExpectedOwnPrefixV1,
-): "proven" | "drift" {
+): ProviderPluginMessagingExpectedOwnPrefixProofV1 {
   const { base, current, accepted } = proof;
   if (current.messages.length > base.contextLimit || accepted.length > current.messages.length) {
-    return "drift";
+    return Object.freeze({ state: "drift" as const });
   }
   const suffixStart = current.messages.length - accepted.length;
   const visibleBase = current.messages.slice(0, suffixStart);
@@ -111,10 +120,12 @@ function proveExactSuffix(
   if (
     evictedBaseCount < 0
     || evictedBaseCount > 0 && current.messages.length !== base.contextLimit
-  ) return "drift";
+  ) return Object.freeze({ state: "drift" as const });
   if (visibleBase.some((candidate, index) =>
     canonicalJson(baseMessage(candidate))
-      !== canonicalJson(base.messages[evictedBaseCount + index]))) return "drift";
+      !== canonicalJson(base.messages[evictedBaseCount + index]))) {
+    return Object.freeze({ state: "drift" as const });
+  }
   const visibleAccepted = current.messages.slice(suffixStart);
   if (visibleAccepted.some((candidate, index) => {
     const expected = accepted[index]!;
@@ -126,8 +137,73 @@ function proveExactSuffix(
       || candidate.bodyTruncated === true
       || candidate.state !== "active"
       || sha256(candidate.body) !== expected.bodySha256;
-  })) return "drift";
-  return "proven";
+  })) return Object.freeze({ state: "drift" as const });
+  return Object.freeze({
+    state: "proven" as const,
+    matchedAcceptedPrefixCount: accepted.length,
+  });
+}
+
+function proveLagTolerantPrefix(
+  proof: ProviderPluginMessagingExpectedOwnPrefixV1,
+): ProviderPluginMessagingExpectedOwnPrefixProofV1 {
+  const { base, current, accepted } = proof;
+  const baseIds = base.messages.map((candidate) => candidate.providerMessageId);
+  const acceptedIds = accepted.map((candidate) => candidate.providerMessageId);
+  const currentIds = current.messages.map((candidate) => candidate.providerId);
+  if (
+    base.contextLimit < 1
+    || base.messages.length > base.contextLimit
+    || new Set([...baseIds, ...acceptedIds]).size !== baseIds.length + acceptedIds.length
+    || new Set(currentIds).size !== currentIds.length
+  ) return Object.freeze({ state: "drift" as const });
+  const baseById = new Map(base.messages.map((candidate) => [
+    candidate.providerMessageId,
+    candidate,
+  ]));
+  const acceptedById = new Map(accepted.map((candidate) => [
+    candidate.providerMessageId,
+    candidate,
+  ]));
+  const exactMessage = (candidate: ProviderMessageV1): boolean => {
+    const baseCandidate = baseById.get(candidate.providerId);
+    if (baseCandidate !== undefined) {
+      return canonicalJson(baseMessage(candidate)) === canonicalJson(baseCandidate);
+    }
+    const acceptedCandidate = acceptedById.get(candidate.providerId);
+    return acceptedCandidate !== undefined
+      && candidate.providerRevision === acceptedCandidate.providerRevision
+      && candidate.direction === "outgoing"
+      && candidate.replyToProviderId === acceptedCandidate.replyToProviderId
+      && candidate.body !== null
+      && candidate.bodyTruncated !== true
+      && candidate.state === "active"
+      && sha256(candidate.body) === acceptedCandidate.bodySha256;
+  };
+  if (
+    currentIds.length === baseIds.length
+    && currentIds.every((id, index) => id === baseIds[index])
+    && current.messages.every(exactMessage)
+    && current.exactDataRevision === base.exactDataRevision
+    && current.latestMessageRevision === base.latestMessageRevision
+  ) return Object.freeze({
+    state: "proven" as const,
+    matchedAcceptedPrefixCount: 0,
+  });
+  for (let count = 1; count <= accepted.length; count += 1) {
+    const expectedWindow = [...baseIds, ...acceptedIds.slice(0, count)].slice(
+      -base.contextLimit,
+    );
+    if (
+      currentIds.length === expectedWindow.length
+      && currentIds.every((id, index) => id === expectedWindow[index])
+      && current.messages.every(exactMessage)
+    ) return Object.freeze({
+      state: "proven" as const,
+      matchedAcceptedPrefixCount: count,
+    });
+  }
+  return Object.freeze({ state: "drift" as const });
 }
 
 function inputSchema(name: "messaging.list" | "messaging.read" | "messaging.send"): InputSchema {
@@ -254,6 +330,10 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
   ];
   let attempts = 0;
   let dispatches = 0;
+  activePrefixProof = options.prefixProof ?? proveExactSuffix;
+  activeRouteParticipantFingerprint = participantFingerprint;
+  activeAfterContextRead = options.afterContextRead ?? null;
+  confirmationReadsActive = false;
 
   const page = (limit: number): ProviderMaterializedPageV1 => Object.freeze({
     schemaVersion: 1,
@@ -333,15 +413,14 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
       operation: "messaging.send",
       reply: "supported",
       livePreflight: Object.freeze({
-        operation: "messaging.read",
+        operation: "messaging.list",
         input: () => Object.freeze({
           account_id: "account",
-          conversation_id: roomId,
           limit: contextLimit,
         }),
         snapshot: () => Object.freeze({
           conversationProviderId: roomId,
-          participantFingerprint,
+          participantFingerprint: activeRouteParticipantFingerprint,
           providerRevision: "route-revision-1",
         }),
       }),
@@ -366,7 +445,9 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
           providerRevision: `revision-${(output as { pendingId: string }).pendingId}`,
         });
       },
-      proveExpectedOwnPrefix: proveExactSuffix,
+      proveExpectedOwnPrefix: (
+        proof: ProviderPluginMessagingExpectedOwnPrefixV1,
+      ) => activePrefixProof(proof),
       reconciliation: () => Object.freeze({
         operation: "messaging.read",
         input: Object.freeze({ account_id: "account", conversation_id: roomId, limit: contextLimit }),
@@ -395,11 +476,15 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
         },
         runtime: lazyWebSessionRuntime(() => Promise.resolve({
           probe: () => Promise.resolve("synthetic-fourth:account"),
-          execute: (_manifest, _recipe, input) => {
+          execute: (_manifest, recipe, input) => {
             if (activePage === null) throw new Error("synthetic page harness is unavailable");
+            const output = activePage(typeof input.limit === "number" ? input.limit : 3);
+            if (confirmationReadsActive && recipe.action === "messaging.read") {
+              activeAfterContextRead?.();
+            }
             return Promise.resolve({
               status: "succeeded" as const,
-              output: activePage(typeof input.limit === "number" ? input.limit : 3),
+              output,
               finalUrl: "https://synthetic-fourth.example/messages",
               dispatchStarted: false,
               dispatch: { planned: 0, started: 0, verified: 0 },
@@ -455,6 +540,7 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
       replyRef: null,
     })),
   }, { environment, registry, now: observation });
+  confirmationReadsActive = true;
   return Object.freeze({
     root,
     environment,
@@ -480,6 +566,7 @@ describe("generic messaging composite execution", () => {
         state: "submitted",
         partCount,
         provenPartCount: partCount,
+        observedAcceptedPrefixCount: Math.max(0, partCount - 1),
       });
       expect(new Set(result.run.parts.map((part) => part.providerMessageId)).size).toBe(partCount);
       expect(setup.attempts()).toBe(partCount);
@@ -490,6 +577,7 @@ describe("generic messaging composite execution", () => {
         receiptBinding: result.receiptBinding,
         ordinaryReceipt: result.ordinaryReceipt,
       });
+      expect(publicBytes).not.toContain("observedAcceptedPrefixCount");
       for (let index = 1; index <= partCount; index += 1) {
         expect(publicBytes).not.toContain(`private bubble ${index}`);
         expect(publicBytes).not.toContain(`accepted-${index}`);
@@ -502,6 +590,87 @@ describe("generic messaging composite execution", () => {
       expect(encrypted).not.toContain("accepted-");
     });
   }
+
+  test("allows initial provider lag before any accepted prefix has been observed", async () => {
+    const setup = await harness(2, {
+      prefixProof: proveLagTolerantPrefix,
+      afterMutation: (messages, index) => {
+        if (index === 0) messages.pop();
+      },
+    });
+    const result = await confirmMessagingInvocation(setup.preview.planDigest, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+    });
+    expect(result.run).toMatchObject({
+      state: "submitted",
+      provenPartCount: 2,
+      observedAcceptedPrefixCount: 0,
+    });
+    expect(setup.dispatches()).toBe(2);
+  });
+
+  test("stops when a previously observed accepted prefix regresses", async () => {
+    const setup = await harness(3, {
+      prefixProof: proveLagTolerantPrefix,
+      afterMutation: (messages, index) => {
+        if (index === 1) messages.splice(2);
+      },
+    });
+    const result = await confirmMessagingInvocation(setup.preview.planDigest, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+    });
+    expect(result.run).toMatchObject({
+      state: "partial",
+      provenPartCount: 2,
+      observedAcceptedPrefixCount: 1,
+      terminalReason: "context-drift",
+    });
+    expect(setup.dispatches()).toBe(2);
+  });
+
+  test("rejects malformed accepted-prefix proof counts before dispatch", async () => {
+    const setup = await harness(1, {
+      prefixProof: () => ({
+        state: "proven",
+        matchedAcceptedPrefixCount: "invalid",
+      } as unknown as ProviderPluginMessagingExpectedOwnPrefixProofV1),
+    });
+    const result = await confirmMessagingInvocation(setup.preview.planDigest, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+    });
+    expect(result.run).toMatchObject({
+      state: "failed",
+      provenPartCount: 0,
+      observedAcceptedPrefixCount: 0,
+      terminalReason: "prefix-freshness-unproven",
+    });
+    expect(setup.dispatches()).toBe(0);
+  });
+
+  test("rechecks route participants after reading the current context", async () => {
+    const setup = await harness(1, {
+      afterContextRead: () => {
+        activeRouteParticipantFingerprint = "f".repeat(64);
+      },
+    });
+    const result = await confirmMessagingInvocation(setup.preview.planDigest, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+    });
+    expect(result.run).toMatchObject({
+      state: "failed",
+      provenPartCount: 0,
+      terminalReason: "prefix-freshness-unproven",
+    });
+    expect(setup.dispatches()).toBe(0);
+  });
 
   for (const [name, mutate] of [
     ["incoming suffix", (messages: ProviderMessageV1[]) => messages.push(message(
