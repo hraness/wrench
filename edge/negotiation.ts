@@ -5,6 +5,10 @@ const PLAIN_CONTENT_TYPE = "text/plain; charset=utf-8" as const;
 const STATIC_ASSET = /\.[a-z0-9]+$/iu;
 
 export type DocumentRepresentation = "html" | "markdown";
+type DocumentRepresentations = readonly [
+  DocumentRepresentation,
+  ...DocumentRepresentation[],
+];
 
 export type DocumentNegotiation =
   | { readonly kind: "html" }
@@ -21,10 +25,13 @@ type MediaRange = Readonly<{
   type: string;
 }>;
 
-const DOCUMENT_REPRESENTATIONS = [
-  { preference: 0, representation: "html", subtype: "html", type: "text" },
-  { preference: 1, representation: "markdown", subtype: "markdown", type: "text" },
-] as const;
+const REPRESENTATION_CANDIDATES = {
+  html: { preference: 0, representation: "html", subtype: "html", type: "text" },
+  markdown: { preference: 1, representation: "markdown", subtype: "markdown", type: "text" },
+} as const;
+
+const DOCUMENT_REPRESENTATIONS = ["html", "markdown"] as const;
+const HTML_ONLY_REPRESENTATIONS = ["html"] as const;
 
 function parseQuality(value: string | undefined): number | null {
   if (value === undefined) return 1000;
@@ -103,6 +110,7 @@ function bestRangeFor(
 
 export function negotiateDocumentRepresentation(
   acceptHeader: string | null,
+  representations: DocumentRepresentations = DOCUMENT_REPRESENTATIONS,
 ): DocumentNegotiation {
   const ranges = parseAcceptMediaRanges(acceptHeader);
   if (ranges.length === 0) return { kind: "html" };
@@ -115,7 +123,8 @@ export function negotiateDocumentRepresentation(
     specificity: number;
   } | null = null;
 
-  for (const candidate of DOCUMENT_REPRESENTATIONS) {
+  for (const representation of representations) {
+    const candidate = REPRESENTATION_CANDIDATES[representation];
     const range = bestRangeFor(ranges, candidate.type, candidate.subtype);
     if (range === null || range.q === 0) continue;
     const next = {
@@ -150,15 +159,25 @@ export function negotiateDocumentRepresentation(
   return { kind: selected.representation };
 }
 
-export function notAcceptableBody(accept: string): string {
+export function notAcceptableBody(
+  accept: string,
+  representations: DocumentRepresentations = DOCUMENT_REPRESENTATIONS,
+): string {
   return [
     "This resource is available in:",
-    `- ${HTML_MEDIA_TYPE}`,
-    `- ${MARKDOWN_MEDIA_TYPE}`,
+    ...representations.map((representation) => (
+      `- ${representation === "html" ? HTML_MEDIA_TYPE : MARKDOWN_MEDIA_TYPE}`
+    )),
     "",
     `You requested: ${accept}`,
     "",
   ].join("\n");
+}
+
+export function isHtmlOnlyDocumentPath(pathname: string): boolean {
+  return pathname === "/preview"
+    || pathname === "/preview/"
+    || pathname === "/preview/index.html";
 }
 
 export function isNegotiableDocumentPath(pathname: string): boolean {
@@ -166,7 +185,11 @@ export function isNegotiableDocumentPath(pathname: string): boolean {
 }
 
 export function markdownAssetPath(pathname: string): string | null {
-  if (!isNegotiableDocumentPath(pathname) || pathname.includes("..")) return null;
+  if (
+    isHtmlOnlyDocumentPath(pathname)
+    || !isNegotiableDocumentPath(pathname)
+    || pathname.includes("..")
+  ) return null;
   if (pathname === "/") return "/index.md";
   const trimmed = pathname.replace(/\/+$/u, "");
   if (trimmed === "" || !trimmed.startsWith("/") || trimmed.includes("//")) return null;
@@ -200,15 +223,30 @@ export async function handleDocumentNegotiation(
 ): Promise<Response | null> {
   if (request.method !== "GET" && request.method !== "HEAD") return null;
   const url = new URL(request.url);
-  if (url.pathname.startsWith("/assets/") || STATIC_ASSET.test(url.pathname)) return null;
+  const htmlOnly = isHtmlOnlyDocumentPath(url.pathname);
+  if (
+    url.pathname.startsWith("/assets/")
+    || (STATIC_ASSET.test(url.pathname) && !htmlOnly)
+  ) return null;
 
-  const decision = negotiateDocumentRepresentation(request.headers.get("accept"));
+  const representations = htmlOnly
+    ? HTML_ONLY_REPRESENTATIONS
+    : DOCUMENT_REPRESENTATIONS;
+  const decision = negotiateDocumentRepresentation(
+    request.headers.get("accept"),
+    representations,
+  );
   if (decision.kind === "html") return null;
   if (decision.kind === "not-acceptable") {
-    return new Response(request.method === "HEAD" ? null : notAcceptableBody(decision.accept), {
-      headers: notAcceptableHeaders(),
-      status: 406,
-    });
+    return new Response(
+      request.method === "HEAD"
+        ? null
+        : notAcceptableBody(decision.accept, representations),
+      {
+        headers: notAcceptableHeaders(),
+        status: 406,
+      },
+    );
   }
 
   const assetPath = markdownAssetPath(url.pathname);
