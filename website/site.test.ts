@@ -81,11 +81,12 @@ describe("wrench.rip static site", () => {
       NEXT_PUBLIC_POSTHOG_HOST: DEFAULT_POSTHOG_HOST,
       NEXT_PUBLIC_POSTHOG_KEY: "phc_public_project_token",
     });
-    const [pages, notFound, notFoundMarkdown, llms, robots, sitemap, indexNowKey, favicon, sourceCss, demoFiles, vercel, middleware] = await Promise.all([
+    const [pages, preview, notFound, notFoundMarkdown, llms, robots, sitemap, indexNowKey, favicon, sourceCss, demoFiles, vercel, middleware] = await Promise.all([
       Promise.all(PUBLIC_PAGES.map(async (page) => ({
         definition: page,
         html: await readFile(join(websiteRoot, "dist", page.outputFile), "utf8"),
       }))),
+      readFile(join(websiteRoot, "dist/preview/index.html"), "utf8"),
       readFile(join(websiteRoot, "dist/404.html"), "utf8"),
       readFile(join(websiteRoot, "dist/404.md"), "utf8"),
       readFile(join(websiteRoot, "dist/llms.txt"), "utf8"),
@@ -153,6 +154,22 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('src="/favicon.svg"');
     expect(html).not.toContain("🔧");
     expect(html).toContain(`href="${PUBLISHER_URL}">Hraness GitHub organization</a>`);
+    expect(preview).toContain("<title>Wrench preview</title>");
+    expect(preview).toContain('<meta name="robots" content="noindex, nofollow">');
+    expect(preview).toContain('<link rel="canonical" href="https://wrench.rip/">');
+    expect(preview).toContain(`<link rel="stylesheet" href="${cssAsset}">`);
+    expect(preview).toContain('<body class="preview-body">');
+    expect(preview).toContain("Precise web capabilities for AI agents.");
+    expect(preview).toContain("Capture pages, preserve media, and run reviewed provider operations");
+    expect(preview.match(/<h1\b/gu)).toHaveLength(1);
+    expect(preview).not.toContain("{{");
+    expect(preview).not.toMatch(/<(?:a|button|form|input|script)\b/iu);
+    expect(preview).not.toContain("data-analytics");
+    expect(preview).not.toContain("PostHog");
+    expect(preview).not.toContain('type="application/ld+json"');
+    expect(preview).not.toContain('rel="alternate"');
+    expect(preview).not.toMatch(/\b(?:account|authentication|log in|sign in|user data)\b/iu);
+    expect(await Bun.file(join(websiteRoot, "dist/preview.md")).exists()).toBe(false);
     expect(notFound).toContain('<meta name="robots" content="noindex, nofollow">');
     expect(notFound).toContain(
       '<meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">',
@@ -190,6 +207,8 @@ describe("wrench.rip static site", () => {
     expect(sitemap).not.toContain("<changefreq>");
     expect(sitemap).not.toContain("<priority>");
     expect(sitemap).not.toContain("hraness.com");
+    expect(sitemap).not.toContain("/preview/");
+    expect(llms).not.toContain("/preview/");
     expect(indexNowKey).toBe("dc84ee4863539f2fff50ef5f0a164168\n");
     expect(favicon).toContain('viewBox="0 0 64 64"');
     expect(sourceCss).toContain("@media (prefers-reduced-motion: reduce)");
@@ -247,13 +266,55 @@ describe("wrench.rip static site", () => {
         source: "/:path*/",
       },
     ]));
+    const commonHeaders = vercel.headers.find((rule: { source: string }) =>
+      rule.source === "/(.*)");
+    expect(commonHeaders?.headers).toEqual([
+      {
+        key: "Permissions-Policy",
+        value: "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+      },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "Vary", value: "Accept" },
+    ]);
+
+    const frameDenyHeaders = vercel.headers.find((rule: { source: string }) =>
+      rule.source === "/((?!preview/$).*)");
+    expect(frameDenyHeaders?.headers).toEqual([
+      { key: "X-Frame-Options", value: "DENY" },
+    ]);
+    const frameDenyPattern = /^\/((?!preview\/$).*)$/u;
+    expect(frameDenyPattern.test("/preview/")).toBe(false);
+    for (const deniedPath of [
+      "/",
+      "/preview",
+      "/preview/index.html",
+      "/preview/anything",
+      "/security/",
+      "/assets/example.css",
+    ]) {
+      expect(frameDenyPattern.test(deniedPath)).toBe(true);
+    }
+
+    const previewHeaders = vercel.headers.find((rule: { source: string }) =>
+      rule.source === "/preview/");
+    expect(previewHeaders?.headers).toEqual([
+      {
+        key: "Content-Security-Policy",
+        value: "default-src 'none'; img-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors https://hraness.com https://www.hraness.com",
+      },
+      { key: "X-Robots-Tag", value: "noindex, nofollow" },
+    ]);
+    expect(vercel.headers.filter((rule: { headers: Array<{ key: string }> }) =>
+      rule.headers.some((header) => header.key === "X-Frame-Options"))).toEqual([
+      frameDenyHeaders,
+    ]);
+    expect(vercel.headers.filter((rule: { headers: Array<{ key: string }> }) =>
+      rule.headers.some((header) => header.key === "Content-Security-Policy"))).toEqual([
+      previewHeaders,
+    ]);
+
     expect(vercel.headers).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        headers: expect.arrayContaining([
-          expect.objectContaining({ key: "Vary", value: "Accept" }),
-        ]),
-        source: "/(.*)",
-      }),
       expect.objectContaining({
         headers: expect.arrayContaining([
           expect.objectContaining({
@@ -269,6 +330,8 @@ describe("wrench.rip static site", () => {
     expect(middleware).not.toContain("website/");
     expect(vercel.redirects).toEqual(expect.arrayContaining([
       { destination: "/", permanent: true, source: "/index.html" },
+      { destination: "/preview/", permanent: true, source: "/preview" },
+      { destination: "/preview/", permanent: true, source: "/preview/index.html" },
       ...PUBLIC_PAGES.slice(1).map((page) => ({
         destination: page.canonicalPath,
         permanent: true,
