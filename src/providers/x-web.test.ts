@@ -121,7 +121,7 @@ describe("X query descriptor revision evidence", () => {
     const bookmarks = evidence("Bookmarks");
     expect(bookmarks).toMatchObject({
       queryId: "iblrFnKr6PZUR-dWpfXG6g",
-      sourceChunk: "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
+      sourceChunk: "shared~bundle.BookmarkFolders~bundle.Bookmarks.9886449ab816b84ba.js",
       observedOn: "2026-08-27",
     });
     expect(bookmarks.queryId).not.toBe("LoLaMO4GuHLEPJWrenchH9kjAw");

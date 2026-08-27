@@ -421,7 +421,7 @@ describe("X authenticated internal-API runtime", () => {
 
     expect(resolveCurrentXWebChunkUrl(
       html,
-      "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
+      "shared~bundle.BookmarkFolders~bundle.Bookmarks.9886449ab816b84ba.js",
     ).href).toBe(
       "https://abs.twimg.com/responsive-web/client-web/shared~bundle.BookmarkFolders~bundle.Bookmarks.9886449ab816b84ba.js",
     );

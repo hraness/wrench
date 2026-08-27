@@ -4,7 +4,7 @@ import { assertProperty, fc } from "../test-support";
 import { resolveCurrentXWebChunkUrl } from "./x-web-runtime";
 
 const BOOKMARKS_FAMILY = "shared~bundle.BookmarkFolders~bundle.Bookmarks";
-const REVIEWED_SOURCE_CHUNK = `${BOOKMARKS_FAMILY}.12fa7b2a.js`;
+const REVIEWED_SOURCE_CHUNK = `${BOOKMARKS_FAMILY}.9886449ab816b84ba.js`;
 const HEX = "0123456789abcdef";
 
 const hexOfWidth = (width: number) =>
@@ -39,6 +39,33 @@ test("current webpack hash maps fail closed for unreviewed hash widths", () => {
         webpackMapHtml(pad.slice(0, width)),
         REVIEWED_SOURCE_CHUNK,
       )).toThrow("omitted the reviewed logical chunk hash");
+    },
+  ));
+});
+
+test("revision evidence accepts historical 8-hex and current 17-hex asset names", () => {
+  assertProperty(fc.property(
+    fc.oneof(hexOfWidth(8), hexOfWidth(17)),
+    (assetHash) => {
+      expect(resolveCurrentXWebChunkUrl(
+        webpackMapHtml("deadbee"),
+        `${BOOKMARKS_FAMILY}.${assetHash}.js`,
+      ).href).toBe(
+        `https://abs.twimg.com/responsive-web/client-web/${BOOKMARKS_FAMILY}.deadbeea.js`,
+      );
+    },
+  ));
+});
+
+test("revision evidence fails closed for unreviewed asset-name hash widths", () => {
+  assertProperty(fc.property(
+    fc.integer({ min: 1, max: 24 }).filter((width) => width !== 8 && width !== 17),
+    hexOfWidth(24),
+    (width, pad) => {
+      expect(() => resolveCurrentXWebChunkUrl(
+        webpackMapHtml("deadbee"),
+        `${BOOKMARKS_FAMILY}.${pad.slice(0, width)}.js`,
+      )).toThrow("source chunk is not a reviewed hashed JavaScript asset");
     },
   ));
 });
