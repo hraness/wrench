@@ -211,6 +211,17 @@ describe("messaging composite run journal", () => {
     })).toThrow("part is malformed");
     expect(() => parseMessagingRunV1({
       ...base,
+      state: "submitted",
+      provenPartCount: 2,
+      parts: base.parts.map((part) => ({
+        ...part,
+        state: "accepted",
+        providerMessageId: "reused-provider-id",
+        providerRevision: "reused-provider-revision",
+      })),
+    })).toThrow("ordered-prefix invariant");
+    expect(() => parseMessagingRunV1({
+      ...base,
       parts: base.parts.map((part, index) => index === 0
         ? { ...part, bodySha256: "0".repeat(64) }
         : part),

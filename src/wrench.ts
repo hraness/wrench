@@ -2023,6 +2023,10 @@ async function runCommand(
     || arguments_.command === "messaging-context"
     || arguments_.command === "messaging-preview"
   ) {
+    const privateOutput = validateMessagingPrivateOutputPath(
+      arguments_.privateOutput,
+      environment,
+    );
     const request = await readMessagingInput(arguments_.inputSource);
     const options = {
       environment,
@@ -2037,8 +2041,9 @@ async function runCommand(
           ? await readMessagingContextInternal(request, options)
           : await previewMessagingTurnInternal(request, options);
     const receipt = writeMessagingPrivateOutput(
-      arguments_.privateOutput,
+      privateOutput,
       artifact,
+      environment,
     );
     output.stdout(exactTerminalJson(receipt));
     return 0;
@@ -3106,9 +3111,11 @@ async function runCommand(
       loadMessagingPreviewForConfirmationInternal(arguments_.digest, { environment });
       const privateOutput = validateMessagingPrivateOutputPath(
         arguments_.privateOutput,
+        environment,
       );
       const receiptBindingOutput = validateMessagingPrivateOutputPath(
         arguments_.receiptBindingOutput,
+        environment,
       );
       if (privateOutput === receiptBindingOutput) {
         throw new Error(
@@ -3120,10 +3127,11 @@ async function runCommand(
         registry: dependencies.providerPluginRegistry,
         ...(signal === undefined ? {} : { signal }),
       });
-      writeMessagingPrivateOutput(privateOutput, result.run);
+      writeMessagingPrivateOutput(privateOutput, result.run, environment);
       writeMessagingPrivateOutput(
         receiptBindingOutput,
         result.receiptBinding,
+        environment,
       );
       output.stdout(exactTerminalJson(result.receipt));
       return result.receipt.state === "submitted"
@@ -3245,9 +3253,11 @@ async function runCommand(
       );
       const privateOutput = validateMessagingPrivateOutputPath(
         arguments_.privateOutput,
+        environment,
       );
       const receiptBindingOutput = validateMessagingPrivateOutputPath(
         arguments_.receiptBindingOutput,
+        environment,
       );
       if (privateOutput === receiptBindingOutput) {
         throw new Error(
@@ -3255,10 +3265,11 @@ async function runCommand(
         );
       }
       const result = showMessagingRunInternal(arguments_.runId, { environment });
-      writeMessagingPrivateOutput(privateOutput, result.run);
+      writeMessagingPrivateOutput(privateOutput, result.run, environment);
       writeMessagingPrivateOutput(
         receiptBindingOutput,
         result.receiptBinding,
+        environment,
       );
       output.stdout(exactTerminalJson(result.receipt));
       return result.receipt.state === "indeterminate" ? 5 : result.receipt.state === "submitted" ? 0 : 3;

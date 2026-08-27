@@ -392,6 +392,15 @@ function stateRootFor(path: string): string | null {
   return selected;
 }
 
+/** True when a path resolves at or below the selected, validated Wrench state root. */
+export function isWrenchStatePath(
+  path: string,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  const root = wrenchStateHome(environment);
+  return stateRootFor(path) === root;
+}
+
 function sameIdentity(left: StateRootIdentity | null, right: StateRootIdentity | null): boolean {
   return left === null || right === null
     ? left === right

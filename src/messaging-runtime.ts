@@ -69,7 +69,7 @@ import {
   updateMessagingRun,
   type MessagingRunSnapshotV1,
 } from "./messaging-action-store";
-import { writePrivateJson } from "./storage";
+import { isWrenchStatePath, writePrivateJson } from "./storage";
 
 const ROUTE_TTL_MS = 15 * 60_000;
 const CONTEXT_TTL_MS = 5 * 60_000;
@@ -428,13 +428,21 @@ function publicMessages(
   }));
 }
 
-export function validateMessagingPrivateOutputPath(path: string): string {
+export function validateMessagingPrivateOutputPath(
+  path: string,
+  environment: Environment = process.env,
+): string {
   if (
     !isAbsolute(path)
     || resolve(path) !== path
     || Buffer.byteLength(path, "utf8") > 4_096
     || /[\0\r\n]/u.test(path)
   ) throw new Error("messaging private output path must be normalized and absolute");
+  if (isWrenchStatePath(path, environment)) {
+    throw new Error(
+      "messaging private output path must be outside WRENCH_STATE_HOME",
+    );
+  }
   return path;
 }
 
@@ -447,8 +455,9 @@ export function writeMessagingPrivateOutput(
     | MessagingPreviewV1
     | MessagingRunV1
     | MessagingReceiptBindingV1,
+  environment: Environment = process.env,
 ): MessagingPrivateOutputReceiptV1 {
-  const outputPath = validateMessagingPrivateOutputPath(path);
+  const outputPath = validateMessagingPrivateOutputPath(path, environment);
   writePrivateJson(outputPath, artifact, { privateParent: true });
   const artifactSha256 = sha256(canonicalJson(artifact));
   const expiresAt = artifact.format === "wrench.messaging-context"
@@ -1434,6 +1443,15 @@ export async function executeMessagingCompositeInternal(
             || Buffer.byteLength(accepted.providerRevision, "utf8") > 4_096
             || /[\0\r\n]/u.test(accepted.providerRevision))
       ) throw new Error("messaging provider returned malformed acceptance evidence");
+      const existingProviderMessageIds = new Set([
+        ...composite.baseMessages.map((message) => message.providerMessageId),
+        ...snapshot.run.parts
+          .slice(0, snapshot.run.provenPartCount)
+          .flatMap((part) => part.providerMessageId === null ? [] : [part.providerMessageId]),
+      ]);
+      if (existingProviderMessageIds.has(accepted.providerMessageId)) {
+        throw new Error("messaging provider reused an existing message identity for acceptance");
+      }
       snapshot = updateMessagingRun(snapshot, {
         type: "accepted",
         index,

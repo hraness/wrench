@@ -3692,6 +3692,9 @@ export function repairInterruptedConfirmationClaims(
         environment,
       );
       if (messaging !== null) {
+        if (messaging.run.planDigest !== claim.claim.digest) {
+          throw new Error("messaging run belongs to another confirmation claim");
+        }
         const run = messaging.run.state === "pending"
           ? terminalizeMessagingRecovery(
               claim.claim.runId,
@@ -3707,6 +3710,15 @@ export function repairInterruptedConfirmationClaims(
           ordinary = messagingReceiptForPlan(stored, run);
         }
         writeReceipt(projectMessagingReceipt(ordinary, run), environment);
+        // Run creation elects the one durable execution for this digest. A
+        // crash can occur before the normal confirmation path removes the
+        // plan, so consume any survivor before releasing its ownership claim.
+        // Repeating this ordering is safe after a later crash: both receipt
+        // projection and absent-plan removal are idempotent.
+        removePrivateStateFile(
+          planPath(claim.claim.digest, environment),
+          environment,
+        );
         if (releaseConfirmationClaim(claim, environment)) released += 1;
         continue;
       }

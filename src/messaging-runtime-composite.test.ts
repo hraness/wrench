@@ -150,7 +150,10 @@ describe("messaging composite preview binding", () => {
     const validEnvironment = state();
     const stored = storedPlan();
     saveInvocationPlan(stored, validEnvironment);
-    const privateOutput = join(validEnvironment.WRENCH_STATE_HOME!, "private", "same.json");
+    const outputRoot = mkdtempSync(join(tmpdir(), "wrench-messaging-preview-output-"));
+    chmodSync(outputRoot, 0o700);
+    roots.push(outputRoot);
+    const privateOutput = join(outputRoot, "same.json");
     const stderr: string[] = [];
     expect(await main([
       "confirm",

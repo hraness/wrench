@@ -142,6 +142,9 @@ function denseArray(value: unknown, label: string, maximum: number): readonly un
 }
 
 function assertRun(run: MessagingRunV1): void {
+  const acceptedProviderMessageIds = run.parts
+    .slice(0, run.provenPartCount)
+    .map((part) => part.providerMessageId);
   if (
     run.schemaVersion !== 1
     || run.format !== "wrench.messaging-run"
@@ -151,6 +154,8 @@ function assertRun(run: MessagingRunV1): void {
     || run.provenPartCount < 0
     || run.provenPartCount > run.partCount
     || run.parts.slice(0, run.provenPartCount).some((part) => part.state !== "accepted")
+    || acceptedProviderMessageIds.some((providerMessageId) => providerMessageId === null)
+    || new Set(acceptedProviderMessageIds).size !== acceptedProviderMessageIds.length
     || run.parts.slice(run.provenPartCount).some((part, offset) =>
       offset > 0 && part.state !== "unattempted")
   ) throw new Error("messaging run violates its ordered-prefix invariant");
