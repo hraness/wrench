@@ -1,5 +1,3 @@
-/// <reference path="./assets.d.ts" />
-
 import { spawn } from "node:child_process";
 import {
   createHash,
