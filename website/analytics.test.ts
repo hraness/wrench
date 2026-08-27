@@ -132,6 +132,7 @@ describe("Wrench browser analytics", () => {
       ["/about/", "about"],
       ["/contact/", "contact"],
       ["/privacy/", "privacy"],
+      ["/vms-cannot-contain-agents/", "vms_cannot_contain_agents"],
     ] as const;
 
     for (const [path, pageKind] of routes) {

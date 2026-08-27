@@ -20,6 +20,10 @@ const CANONICAL_ROUTES = new Map<string, Readonly<{ canonicalPath: string; pageK
     pageKind: "provider_capabilities",
   }],
   ["/security", { canonicalPath: "/security/", pageKind: "security" }],
+  ["/vms-cannot-contain-agents", {
+    canonicalPath: "/vms-cannot-contain-agents/",
+    pageKind: "vms_cannot_contain_agents",
+  }],
 ]);
 
 const ALLOWED_EVENTS = new Set([
