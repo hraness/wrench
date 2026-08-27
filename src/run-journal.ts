@@ -13,6 +13,10 @@ import {
   type PortableOperationIdentityV1,
 } from "./provider-plugin-portable-identity";
 import {
+  parseLocalCliContractIdentityV1,
+  type LocalCliContractIdentityV1,
+} from "./local-cli-contracts";
+import {
   createPrivateJsonIfAbsent,
   ensurePrivateStateDirectory,
   wrenchStateHome,
@@ -50,6 +54,10 @@ export type RunJournalContract =
   | {
       readonly transport: "portable-provider-plugin";
       readonly identity: PortableOperationIdentityV1;
+    }
+  | {
+      readonly transport: "local-cli";
+      readonly identity: LocalCliContractIdentityV1;
     };
 
 export type RunJournalDispatch = {
@@ -374,6 +382,13 @@ function parseContract(value: unknown): RunJournalContract {
     return Object.freeze({
       transport: "portable-provider-plugin",
       identity: parsePortableOperationIdentityV1(record.identity),
+    });
+  }
+  if (record.transport === "local-cli") {
+    exactKeys(record, ["transport", "identity"], "run journal contract");
+    return Object.freeze({
+      transport: "local-cli",
+      identity: parseLocalCliContractIdentityV1(record.identity),
     });
   }
   exactKeys(record, ["transport", "hash"], "run journal contract");
@@ -804,16 +819,23 @@ export function parseRunJournal(value: unknown): RunJournal {
   if (Buffer.byteLength(canonicalJson(journal), "utf8") > MAX_RUN_JOURNAL_BYTES) {
     throw new Error("run journal exceeds its byte bound");
   }
+  const frozenContract: RunJournalContract = journal.contract.transport
+      === "portable-provider-plugin"
+    ? Object.freeze({
+        transport: "portable-provider-plugin",
+        identity: journal.contract.identity,
+      })
+    : journal.contract.transport === "local-cli"
+      ? Object.freeze({
+          transport: "local-cli",
+          identity: journal.contract.identity,
+        })
+      : Object.freeze({ ...journal.contract });
   return Object.freeze({
     ...journal,
     adapter: Object.freeze({ ...journal.adapter }),
     auth: Object.freeze({ ...journal.auth }),
-    contract: journal.contract.transport === "portable-provider-plugin"
-      ? Object.freeze({
-          transport: journal.contract.transport,
-          identity: journal.contract.identity,
-        })
-      : Object.freeze({ ...journal.contract }),
+    contract: frozenContract,
     ...(journal.duplicateIntent === undefined
       ? {}
       : { duplicateIntent: Object.freeze({ ...journal.duplicateIntent }) }),

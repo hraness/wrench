@@ -39,9 +39,8 @@ describe("provider plugin omni declarations", () => {
     expect(observed).toEqual(supported);
   });
 
-  test("provider-owned materializer files are in each supported closure", () => {
+  test("legacy explicit roots retain each provider-owned materializer", () => {
     const expectedLabels = new Map([
-      ["beeper-linked-device", "providers/beeper-omni.ts"],
       ["gmail-official", "providers/gmail-omni.ts"],
       ["meta-web", "providers/meta-omni.ts"],
       ["reddit-web", "providers/reddit-omni.ts"],

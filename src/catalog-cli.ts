@@ -9,6 +9,7 @@ import { join } from "node:path";
 import {
   canonicalJson,
   DOM_ACTION_TRANSPORT_DISABLED_MESSAGE,
+  isLocalCliOperation,
   isProviderOperation,
   isReviewedTemplateOperation,
   isWebSessionOperation,
@@ -20,6 +21,10 @@ import {
   getProviderContract,
   providerContractHash,
 } from "./provider-contracts";
+import {
+  getLocalCliContract,
+  localCliContractHash,
+} from "./local-cli-contracts";
 import type {
   ProviderPluginOperationV1,
   ProviderPluginV1,
@@ -157,6 +162,9 @@ function providerPluginView(plugin: ProviderPluginV1): Record<string, unknown> {
       ...(binding.transport === "provider-api"
         ? { runtimeOrigins: binding.runtimeOrigins }
         : {}),
+      ...(binding.transport === "local-cli"
+        ? { localCliTool: binding.tool }
+        : {}),
       manifestOrigins: binding.manifestOrigins,
       protectedHostnameFamilies: binding.protectedHostnameFamilies,
       authKinds: binding.authKinds,
@@ -230,10 +238,29 @@ function renderProviderPluginText(plugin: ProviderPluginV1): string {
     const runtimeOriginLine = binding.transport === "provider-api"
       ? [`      Credential-bearing runtime origins: ${binding.runtimeOrigins.join(", ")}`]
       : [];
+    const localCliToolLines = binding.transport === "local-cli"
+      ? [
+          `      Tool: ${binding.tool.id}@${binding.tool.version} (${binding.tool.versionScheme}; ${binding.tool.implementation})`,
+          `      Provenance: ${[
+            binding.tool.releaseCommit === undefined
+              ? null
+              : `commit ${binding.tool.releaseCommit}`,
+            binding.tool.releaseManifestSha256 === undefined
+              ? null
+              : `manifest ${binding.tool.releaseManifestSha256}`,
+            binding.tool.sourceUrl === undefined
+              ? null
+              : `source ${binding.tool.sourceUrl}`,
+          ].filter((value): value is string => value !== null).join("; ") || "not declared"}`,
+          `      Artifacts: ${binding.tool.artifacts.map((artifact) =>
+            `${artifact.platform}/${artifact.arch}:${artifact.executableSha256}`).join(", ")}`,
+        ]
+      : [];
     lines.push(
       `    - ${binding.transport}/${binding.surfaceId}`,
       `      Origin: ${binding.origin}`,
       ...runtimeOriginLine,
+      ...localCliToolLines,
       `      Manifest origins: ${binding.manifestOrigins.join(", ")}`,
       `      Protected host families: ${binding.protectedHostnameFamilies.join(", ")}`,
       `      Auth: ${binding.authKinds.join(", ")}`,
@@ -290,9 +317,10 @@ function renderPortableProviderPluginText(
 
 function installedOperationTransport(
   operation: WrenchOperation,
-): "provider-api" | "web-session-api" | "reviewed-template-api" {
+): "provider-api" | "web-session-api" | "local-cli" | "reviewed-template-api" {
   if (isProviderOperation(operation)) return "provider-api";
   if (isWebSessionOperation(operation)) return "web-session-api";
+  if (isLocalCliOperation(operation)) return "local-cli";
   if (isReviewedTemplateOperation(operation)) return "reviewed-template-api";
   throw new Error(DOM_ACTION_TRANSPORT_DISABLED_MESSAGE);
 }
@@ -347,6 +375,9 @@ function capabilitySummary(
               const webSession = isWebSessionOperation(operation)
                 ? getWebSessionContract(operation.webSession, registry)
                 : null;
+              const localCli = isLocalCliOperation(operation)
+                ? getLocalCliContract(operation.localCli, registry)
+                : null;
               const reviewedTemplate = isReviewedTemplateOperation(operation)
                 ? operation.reviewedTemplate
                 : null;
@@ -390,6 +421,20 @@ function capabilitySummary(
                       ),
                       state: webSession.state,
                       implementation: webSession.implementation,
+                    }),
+                ...(localCli === null
+                  ? {}
+                  : {
+                      surface: localCli.surface,
+                      localCliAction: localCli.operation,
+                      localCliContractVersion: localCli.contractVersion,
+                      localCliContractHash: localCliContractHash(
+                        localCli,
+                        registry,
+                      ),
+                      localCliTool: localCli.tool,
+                      state: localCli.state,
+                      implementation: localCli.implementation,
                     }),
                 ...(reviewedTemplate === null
                   ? {}

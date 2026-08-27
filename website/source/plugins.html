@@ -59,6 +59,7 @@
           <h2 id="plugin-forms">Two plugin forms share one semantic catalog</h2>
           <p>A source plugin ships with Wrench, loads in process, and may implement a reviewed provider transport. It is trusted application code. A portable plugin is independently authored, content-addressed, installed into local state after an explicit code-trust decision, and run through a versioned, denied-by-default child-process protocol.</p>
           <p>Neither plugin form can redefine Wrench's custody rules. The kernel owns input resolution, auth selection, risk, preview and confirmation, dispatch journals, recovery, receipts, bounds, redaction, activation, and lifecycle serialization. A plugin owns the exact provider identity, operation descriptors, request and response contracts, account probes, execution, and reconciliation logic.</p>
+          <p>A source plugin may use <code>local-cli</code> to place an exact official provider executable behind semantic operations. That binding pins each supported executable and archive digest, isolates ambient CLI and plugin state, and owns fixed argument and output contracts. Portable protocol v1 cannot request native process authority, and neither plugin form exposes a generic command runner.</p>
         </section>
 
         <section aria-labelledby="initialize">

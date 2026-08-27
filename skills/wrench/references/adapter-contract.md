@@ -1,12 +1,16 @@
 # Adapter contract
 
-Use a strict, secret-free manifest to select a code-owned semantic operation. For a signed-in site capability, prefer schema-v4 `webSession` transport. A manifest never contains the captured request.
+Use a strict, secret-free manifest to select a code-owned semantic operation.
+For a signed-in site capability, prefer schema-v4 `webSession`. Use
+schema-v6 `localCli` only for an exact source-plugin-owned provider executable.
+A manifest never contains a captured request or command line.
 
 ## Contents
 
 - [Transport versions](#transport-versions)
 - [Manifest identity](#manifest-identity)
 - [Semantic operation and input](#semantic-operation-and-input)
+- [Schema-v6 local CLI selector](#schema-v6-local-cli-selector)
 - [Schema-v4 selector](#schema-v4-selector)
 - [Code-owned request template](#code-owned-request-template)
 - [Dynamic token boundary](#dynamic-token-boundary)
@@ -16,10 +20,13 @@ Use a strict, secret-free manifest to select a code-owned semantic operation. Fo
 
 ## Transport versions
 
+- Schema version 6 selects one exact, source-plugin-owned `local-cli` contract.
+  Its binding pins the reviewed executable artifacts independently from the
+  operation's semantic `contractVersion`. It never exposes argv or a shell.
 - Schema version 5 reserves generic-site derivation work only. Version-1 `reviewedTemplate` operations must remain `capture-required`; manifest validation rejects `reviewed`, and neither state supplies an executable request. A future contract version 2 must add a current-account identity preflight and response-scope binding before generic execution can be considered.
 - Schema version 4 selects one reviewed first-party authenticated web contract and uses `web-session-api` at runtime.
 - Schema version 3 selects one reviewed official `provider-api` contract with OAuth auth.
-- Schema version 2 is a retired semantic browser-recipe grammar retained only to diagnose old files. Any schema-v1/v2 DOM operation is install- and runtime-inert: adapter validation, installation, planning, execution, and the direct recipe executor fail closed for every origin. A supported operation must use schema 4 or an appropriate schema-3 provider contract.
+- Schema version 2 is a retired semantic browser-recipe grammar retained only to diagnose old files. Any schema-v1/v2 DOM operation is install- and runtime-inert: adapter validation, installation, planning, execution, and the direct recipe executor fail closed for every origin. A supported operation must use schema 6, schema 4, or an appropriate schema-3 provider contract.
 - Schema version 1 exists only for the exact archived LinkedIn migration fixture.
 
 Never retry or fall back across these transports. A browser may help schema 4 acquire session state or current dynamic material, but it does not execute the semantic action by clicking the site.
@@ -52,6 +59,33 @@ Do not expose `graphql.call`, `voyager.request`, `restli.post`, `selector.click`
 Declare bounded typed inputs. Apply exact enums and realistic length, number, array, file-size, and media-type limits. Require every field used by the owned request contract. Keep provider identifiers opaque but syntactically bounded; do not accept an arbitrary URL when a conversation, post, user, or list ID is the actual target.
 
 Bind ordered thread items and attachment bytes into the encrypted plan before preview. The preview may show content hashes, sizes, and detected media types rather than mutable paths.
+
+## Schema-v6 local CLI selector
+
+Each operation selects one installed semantic contract:
+
+```json
+{
+  "localCli": {
+    "surface": "beeper",
+    "action": "messaging.send",
+    "contractVersion": 1,
+    "timeoutMs": 60000,
+    "maxOutputBytes": 10485760
+  }
+}
+```
+
+Require `surface` to match `surfaceId`, `action` to match the operation ID, and
+risk/input schema to match the code-owned registry. The source-plugin binding,
+not the manifest, owns the exact tool identity and fixed command template. The
+contract hash binds both, so changing reviewed executable bytes invalidates an
+old preview without pretending that an unchanged semantic projection needs a
+new `contractVersion`.
+
+Never put an executable path, argument array, environment variable, account
+default, target URL, or output path in the manifest. See
+[provider plugins](provider-plugins.md) for the source runtime boundary.
 
 ## Schema-v4 selector
 

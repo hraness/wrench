@@ -6,7 +6,7 @@ Use this guide to select capture evidence, operation semantics, and risk; it is 
 
 Implement a supported signed-in operation as a code-owned first-party internal API contract. Use a browser only to capture the exchange, bootstrap an authenticated realm, and recover a reviewed current dynamic token or registered-operation revision. Do not ship DOM clicking as the operation or fallback.
 
-Prefer a public protocol or documented official API when it exposes the exact required surface and account authority. Keep it as a distinct `provider-api` contract. A pinned linked-device protocol runtime, such as WhatsApp's, is also a distinct auth and transport realm. Do not silently switch among it, an official API, and the consumer site's `web-session-api` contract.
+Prefer a public protocol or documented official API when it exposes the exact required surface and account authority. Keep it as a distinct `provider-api` contract. A pinned linked-device protocol runtime, such as WhatsApp's, and an exact native provider CLI, such as Beeper's, are also distinct auth and transport realms. A local CLI must remain a source-plugin-owned semantic wrapper over exact executable bytes, never a generic command runner. Do not silently switch among these transports and the consumer site's `web-session-api` contract.
 
 Add operations in this order:
 

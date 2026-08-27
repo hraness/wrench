@@ -239,6 +239,23 @@ describe("portable provider plugin manifest", () => {
     expect(getterCalls).toBe(0);
   });
 
+  test("rejects local CLI bindings from the portable v1 package grammar", () => {
+    const candidate = structuredClone(manifest()) as unknown as {
+      bindings: Array<Record<string, unknown>>;
+    };
+    const binding = candidate.bindings[0];
+    if (binding === undefined) throw new Error("missing portable binding fixture");
+    binding.transport = "local-cli";
+
+    const parsed = parsePortableProviderPluginManifest(candidate);
+    expect(parsed.ok).toBeFalse();
+    if (!parsed.ok) {
+      expect(parsed.issues).toContain(
+        "plugin binding transport is unsupported",
+      );
+    }
+  });
+
   test("admits only host-api-v1 session materials executable by a binding", () => {
     const base = manifest();
     expect(parsePortableProviderPluginManifest(base).ok).toBeTrue();

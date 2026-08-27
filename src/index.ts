@@ -33,6 +33,11 @@ export type {
 } from "./provider-plugin-identifiers";
 
 export type {
+  LocalCliPluginBindingDefinitionV1,
+  LocalCliPluginOperationDefinitionV1,
+  LocalCliPluginRuntimeHooksV1,
+  LocalCliPluginRuntimeStatusV1,
+  LocalCliPluginRuntimeV1,
   LinkedDevicePluginBindingDefinitionV1,
   PortableProviderPluginProjectionDefinitionV1,
   ProviderApiPluginBindingDefinitionV1,
@@ -48,11 +53,52 @@ export type {
   ProviderPluginOperationDefinitionV1,
   ProviderPluginReconciliationDefinitionV1,
   ProviderPluginReconciliationContextV1,
+  ProviderPluginReconciliationOptionsV1,
   ProviderPluginSubjectDefinitionV1,
   ProviderPluginTransport,
   WebSessionApiPluginBindingDefinitionV1,
   WebSessionPluginOperationDefinitionV1,
 } from "./provider-plugin";
+
+export {
+  localCliToolArtifactForCurrentRuntime,
+  parseLocalCliToolIdentityV1,
+} from "./local-cli-tool-identity";
+
+export type {
+  LocalCliToolArtifactIdentityV1,
+  LocalCliToolIdentityV1,
+} from "./local-cli-tool-identity";
+
+export type {
+  LocalCliCleanupResourceIdentityV1,
+  LocalCliPrivateRootIdentityV1,
+  LocalCliProcessGroupIdentityV1,
+  ProviderPluginCleanupResourceIdentity,
+} from "./provider-plugin-cleanup-resource";
+
+export {
+  startProviderPluginCleanupTrackedOperation,
+} from "./provider-plugin-cleanup-execution";
+
+export type {
+  ProviderPluginCleanupBarrierRegistrar,
+  ProviderPluginCleanupProofController,
+  ProviderPluginCleanupResourcePublisher,
+} from "./provider-plugin-cleanup-execution";
+
+export type {
+  LocalCliDispatchEvent,
+  LocalCliExecution,
+  LocalCliExecutionOptions,
+  LocalCliFileResolver,
+  LocalCliOperationDeadline,
+  LocalCliOperationExecutor,
+  LocalCliProviderAcceptedMutationTargetEvent,
+  LocalCliProviderBoundMutationTargetEvent,
+} from "./local-cli-execution";
+
+export type { LocalCliRecipe } from "./model";
 
 export type {
   PortableLinkedDevicePluginBindingV1,

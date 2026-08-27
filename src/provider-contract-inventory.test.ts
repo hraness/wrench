@@ -31,11 +31,12 @@ const moduleUrl = (name: string) => pathToFileURL(
 
 const inventoryProgram = `
 import { createHash } from "node:crypto";
-const [{ createProviderPluginRegistry }, { generatedProviderPlugins }, providerContracts, webContracts] = await Promise.all([
+const [{ createProviderPluginRegistry }, { generatedProviderPlugins }, providerContracts, webContracts, localContracts] = await Promise.all([
   import(${JSON.stringify(moduleUrl("provider-plugin-registry.ts"))}),
   import(${JSON.stringify(moduleUrl("provider-plugins.generated.ts"))}),
   import(${JSON.stringify(moduleUrl("provider-contracts.ts"))}),
   import(${JSON.stringify(moduleUrl("web-session-contracts.ts"))}),
+  import(${JSON.stringify(moduleUrl("local-cli-contracts.ts"))}),
 ]);
 const registry = createProviderPluginRegistry(generatedProviderPlugins);
 const rows = [];
@@ -76,7 +77,7 @@ function legacyHash(contract, implementationHash, web) {
 }
 function isCurrentOnlyRow(row) {
   return (row[0] === "provider-api" && row[1] === "gmail")
-    || (row[0] === "linked-device" && row[1] === "beeper")
+    || (row[0] === "local-cli" && row[1] === "beeper")
     || (row[0] === "web-session-api" && row[1] === "github")
     || (row[0] === "web-session-api" && row[1] === "twitch");
 }
@@ -118,6 +119,28 @@ for (const plugin of registry.list()) {
             });
           }
           rejectedUnknown &&= !providerContracts.isCompatibleProviderContractHash(
+            contract, "f".repeat(64), registry,
+          );
+        } else if (binding.transport === "local-cli") {
+          const contract = localContracts.getLocalCliContract({
+            surface: binding.surfaceId,
+            action: operation.name,
+            contractVersion,
+            timeoutMs: 60_000,
+            maxOutputBytes: 2 * 1024 * 1024,
+          }, registry);
+          const includePredecessorInventory = appendCurrentRow([
+            binding.transport,
+            binding.surfaceId,
+            operation.name,
+            contractVersion,
+            localContracts.localCliContractHash(contract, registry),
+            contract.tool,
+          ]);
+          if (includePredecessorInventory) {
+            throw new Error("local CLI route unexpectedly entered predecessor inventory");
+          }
+          rejectedUnknown &&= !localContracts.isCompatibleLocalCliContractHash(
             contract, "f".repeat(64), registry,
           );
         } else {
@@ -238,8 +261,8 @@ describe("durable provider contract inventory", () => {
       expect(inventory).toEqual({
         rows: 317,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 12,
-        currentOnlySha256: "70e333b83b73574c8d090fc8b371e2e9ece2e5cc8541164945f59ed49a612fc7",
+        currentOnlyRows: 39,
+        currentOnlySha256: "4c7cc8f8cbcdbc70dc15c4b6973cda191ed6eb4e640b7c539d57a2f585cc7e65",
         legacyRows: [
           317,
           317,

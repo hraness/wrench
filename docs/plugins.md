@@ -21,6 +21,15 @@ locator is established with `wrench auth add ... --linked-device ...
 --device-store ...`, then account-bound with `wrench auth bind`; Wrench must not
 suggest pairing or syncing a lifecycle the plugin does not declare.
 
+A source plugin may also bind a reviewed native provider client through the
+`local-cli` transport. This is an exact, versioned executable mechanism behind
+semantic operations, not a generic command runner. The binding records every
+supported release artifact digest, and each operation owns a fixed command
+template, strict input and output contracts, target and account proof, process
+bounds, and mutation lifecycle. Portable protocol v1 cannot request native
+process authority. See [local CLI provider transports](local-cli-providers.md)
+for the versioning and execution contract.
+
 ## Start inert
 
 Create a portable package with one `capture-required` reservation:

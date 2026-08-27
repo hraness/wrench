@@ -24,6 +24,10 @@ import {
   type PortableOperationIdentityV1,
 } from "./provider-plugin-portable-identity";
 import {
+  parseLocalCliContractIdentityV1,
+  type LocalCliContractIdentityV1,
+} from "./local-cli-contracts";
+import {
   createPrivateJsonIfAbsent,
   ensurePrivateStateDirectory,
   listPrivateStateDirectory,
@@ -76,6 +80,10 @@ export type RecoveryContractIdentity =
   | {
       readonly transport: "portable-provider-plugin";
       readonly identity: PortableOperationIdentityV1;
+    }
+  | {
+      readonly transport: "local-cli";
+      readonly identity: LocalCliContractIdentityV1;
     };
 
 export type RecoveryCapsule = {
@@ -150,7 +158,7 @@ export type ProviderAcceptedMutationTargetEvidence = {
   readonly auth: RecoveryCapsule["auth"];
   readonly contract: Extract<
     RecoveryContractIdentity,
-    { readonly transport: "web-session-api" }
+    { readonly transport: "web-session-api" | "local-cli" }
   >;
   readonly dispatch: ProviderAcceptedMutationTargetDispatch;
   readonly target: ProviderAcceptedMutationTarget;
@@ -315,6 +323,13 @@ function parseContract(value: unknown): RecoveryContractIdentity {
       identity: parsePortableOperationIdentityV1(record.identity),
     });
   }
+  if (record.transport === "local-cli") {
+    exactKeys(record, ["transport", "identity"], "recovery capsule contract");
+    return Object.freeze({
+      transport: "local-cli",
+      identity: parseLocalCliContractIdentityV1(record.identity),
+    });
+  }
   if (record.transport === "provider-api") {
     exactKeys(record, ["transport", "provider", "action", "version", "hash"], "recovery capsule contract");
     if (!isProviderPluginSurfaceId(record.provider)) {
@@ -372,7 +387,9 @@ export function recoveryContractHash(
     ? sha256(
         `${PORTABLE_RECOVERY_CONTRACT_HASH_DOMAIN}${canonicalJson(contract)}`,
       )
-    : contract.hash;
+    : contract.transport === "local-cli"
+      ? contract.identity.hash
+      : contract.hash;
 }
 
 function parseCapsule(value: unknown): RecoveryCapsule {
@@ -592,12 +609,18 @@ export function parseProviderAcceptedMutationTargetEvidence(
   assertAuthKind(auth.kind);
 
   const contract = parseContract(record.contract);
-  if (contract.transport !== "web-session-api") {
+  if (
+    contract.transport !== "web-session-api"
+    && contract.transport !== "local-cli"
+  ) {
     throw new Error(
-      "provider-accepted mutation target requires a web-session contract",
+      "provider-accepted mutation target requires a session or local CLI contract",
     );
   }
-  if (contract.action !== record.operation) {
+  const contractAction = contract.transport === "local-cli"
+    ? contract.identity.action
+    : contract.action;
+  if (contractAction !== record.operation) {
     throw new Error(
       "provider-accepted mutation target operation does not match its contract",
     );
@@ -1101,9 +1124,12 @@ function providerAcceptedMutationTargetBindingFromCapsule(
   dispatchValue: unknown,
 ): ProviderAcceptedMutationTargetBinding {
   const capsule = parseCapsule(capsuleValue);
-  if (capsule.contract.transport !== "web-session-api") {
+  if (
+    capsule.contract.transport !== "web-session-api"
+    && capsule.contract.transport !== "local-cli"
+  ) {
     throw new Error(
-      "provider-accepted mutation target requires a web-session recovery capsule",
+      "provider-accepted mutation target requires a session or local CLI recovery capsule",
     );
   }
   return {

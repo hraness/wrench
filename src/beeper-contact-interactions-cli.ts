@@ -38,6 +38,18 @@ export type BeeperContactInteractionCliRequest = Readonly<{
   onProgress?: (progress: BeeperContactInteractionCliProgress) => void;
 }>;
 
+/** Preserve the exact platform identity published by the schema-1 receipt. */
+export function assertBeeperContactInteractionExportRuntime(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): void {
+  if (platform !== "darwin" || arch !== "arm64") {
+    throw new Error(
+      "Beeper contact interaction summary: schema-1 export requires the pinned darwin/arm64 Beeper CLI artifact",
+    );
+  }
+}
+
 async function disposeSource(
   dispose: (() => Promise<void>) | undefined,
   onProgress: BeeperContactInteractionCliRequest["onProgress"],
@@ -67,6 +79,7 @@ async function disposeSource(
 export async function exportBeeperContactInteractionsFromAuth(
   request: BeeperContactInteractionCliRequest,
 ): Promise<BeeperContactInteractionExportResult> {
+  assertBeeperContactInteractionExportRuntime();
   const startedAt = new Date().toISOString();
   try {
     const environment = request.environment ?? process.env;

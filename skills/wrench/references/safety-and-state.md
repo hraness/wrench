@@ -7,6 +7,7 @@ Use this reference before recording signed-in traffic, resolving browser-held se
 - [Separate authority from mechanism](#separate-authority-from-mechanism)
 - [Bind the authenticated account](#bind-the-authenticated-account)
 - [Use persistent reads without changing their meaning](#use-persistent-reads-without-changing-their-meaning)
+- [Constrain native provider CLIs](#constrain-native-provider-clis)
 - [Keep browser authority narrow](#keep-browser-authority-narrow)
 - [Constrain first-party HTTP](#constrain-first-party-http)
 - [Minimize HAR exposure](#minimize-har-exposure)
@@ -89,6 +90,32 @@ or that marker remains. If the key is irretrievably lost, remove exactly
 `read-projections/`, `omni-read-projections/`, `.projection-encryption-key`, and
 `read-projection-control/store-key.json` beneath `WRENCH_STATE_HOME`, retain the
 other control records, and rebuild snapshots through live revalidation.
+
+## Constrain native provider CLIs
+
+Treat a provider CLI as one reviewed transport, not as a shell. Require a
+schema-v6 `localCli` selector backed by a source-plugin tool identity that pins
+the final executable digest for the current platform. A package-manager name,
+version range, release tag, reported version, or launcher digest is not enough.
+
+Use only operation-owned fixed argument templates. Strip ambient credentials,
+targets, account defaults, proxies, update settings, debug state, and user
+plugin discovery from the child environment. Give the process private bounded
+config, data, cache, and temporary roots. Require exact account, target,
+conversation, message, and other resource IDs. Never use an interactive picker
+or fuzzy selector for a mutation.
+
+Parse stdout and stderr strictly from `unknown`; cap both and enforce a
+Wrench-owned deadline because an upstream timeout flag may not be effective.
+Do not log or persist argv. When the upstream CLI accepts private text only in
+argv, document the same-account process-inspection exposure and minimize the
+child lifetime.
+
+For a mutation, enter the durable dispatch boundary before process start. A
+timeout, signal, malformed response, or lost response after that point is
+indeterminate. Never let an upstream retry option or a new process invocation
+bypass Wrench's at-most-once fence. Reconcile only through a separate exact
+read declared by the semantic operation.
 
 ## Keep browser authority narrow
 

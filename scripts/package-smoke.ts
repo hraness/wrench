@@ -13,6 +13,63 @@ const binNames = ["wrench"];
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";
 const sweetCookieVerificationIntegrity = "sha512-HddZketABRWbHiLYqMbGlYuqEaWdtqAjES28eKHr2cPDdPvrXiF4JQxD4pl9WzSOre6p/B3zA4Z3uIsCHo/+uQ==";
 const verificationPackages = [`@steipete/sweet-cookie@${sweetCookieVerificationUrl}`,"@types/bun@^1.3.14","fast-check@^4.8.0"];
+const inertRootImportProgram = `
+  import fs from "node:fs";
+  import fsPromises from "node:fs/promises";
+  import http from "node:http";
+  import https from "node:https";
+  import net from "node:net";
+  import dns from "node:dns";
+  import { syncBuiltinESMExports } from "node:module";
+  const forbidden = (name) => () => { throw new Error("package root import attempted " + name); };
+  const loaderOnly = (name, implementation) => function (...args) {
+    const stack = new Error().stack ?? "";
+    const immediateCaller = stack.split("\\n")[2] ?? "";
+    if (
+      !immediateCaller.includes("node:internal/modules/")
+      && !immediateCaller.includes("(node:fs:")
+    ) {
+      throw new Error("package root import attempted filesystem access via " + name);
+    }
+    return Reflect.apply(implementation, fs, args);
+  };
+  for (const name of ["accessSync", "existsSync", "lstatSync", "openSync", "readFileSync", "realpathSync", "statSync"]) {
+    Object.defineProperty(fs, name, {
+      configurable: true,
+      value: loaderOnly(name, fs[name]),
+    });
+  }
+  for (const name of ["access", "lstat", "open", "readFile", "realpath", "stat"]) {
+    Object.defineProperty(fsPromises, name, {
+      configurable: true,
+      value: forbidden("filesystem access via promises." + name),
+    });
+  }
+  Object.defineProperty(http, "request", { configurable: true, value: forbidden("HTTP access") });
+  Object.defineProperty(http, "get", { configurable: true, value: forbidden("HTTP access") });
+  Object.defineProperty(https, "request", { configurable: true, value: forbidden("HTTPS access") });
+  Object.defineProperty(https, "get", { configurable: true, value: forbidden("HTTPS access") });
+  Object.defineProperty(net, "connect", { configurable: true, value: forbidden("network access") });
+  Object.defineProperty(net, "createConnection", { configurable: true, value: forbidden("network access") });
+  Object.defineProperty(dns, "lookup", { configurable: true, value: forbidden("DNS access") });
+  globalThis.fetch = forbidden("fetch access");
+  syncBuiltinESMExports();
+  for (const probe of [
+    () => fs.readFileSync(process.execPath),
+    () => http.request("http://127.0.0.1"),
+  ]) {
+    let blocked = false;
+    try {
+      probe();
+    } catch (error) {
+      blocked = error instanceof Error
+        && error.message.startsWith("package root import attempted");
+      if (!blocked) throw error;
+    }
+    if (!blocked) throw new Error("package root inertness guard is ineffective");
+  }
+  await import(${JSON.stringify(packageName)});
+`;
 
 async function assertSweetCookieLock(lockPath: string, label: string): Promise<void> {
   const record = (await Bun.file(lockPath).text())
@@ -211,7 +268,7 @@ try {
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
   await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
   await verifyPackagedSkill(repository, consumer);
-  await run(["node", "--input-type=module", "-e", `await import(${JSON.stringify(packageName)})`], consumer);
+  await run(["node", "--input-type=module", "-e", inertRootImportProgram], consumer);
   for (const binName of binNames) {
     await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);
   }

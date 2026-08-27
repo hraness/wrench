@@ -4,6 +4,7 @@ import { canonicalJson, sha256 } from "./canonical-json";
 import { loadAuthSnapshotIfPresent } from "./auth";
 import {
   isProviderOperation,
+  isLocalCliOperation,
   isWebSessionOperation,
 } from "./model";
 import {
@@ -367,6 +368,14 @@ function resolvePluginOperation(
       operation.webSession.contractVersion,
     );
   }
+  if (isLocalCliOperation(operation)) {
+    return registry.requireOperationDefinition(
+      "local-cli",
+      operation.localCli.surface,
+      operation.localCli.action,
+      operation.localCli.contractVersion,
+    );
+  }
   return null;
 }
 
@@ -471,16 +480,23 @@ function prepareSource(
     plugin: sourceIdentity.plugin,
     materializers: descriptors,
   });
+  const omniContract = exactQuery.identity.contract.transport === "local-cli"
+    ? Object.freeze({
+        transport: "local-cli" as const,
+        hash: sha256(canonicalJson(aggregateIdentity)),
+        tool: exactQuery.identity.contract.tool,
+      })
+    : Object.freeze({
+        transport: exactQuery.identity.contract.transport,
+        hash: sha256(canonicalJson(aggregateIdentity)),
+      });
   const omniQuery = createOmniProjectionQuery({
     adapter: exactQuery.identity.adapter,
     operation: "omni.source.v1",
     input: aggregateIdentity,
     inputHash: sha256(canonicalJson(aggregateIdentity)),
     auth: exactQuery.identity.auth,
-    contract: Object.freeze({
-      transport: exactQuery.identity.contract.transport,
-      hash: sha256(canonicalJson(aggregateIdentity)),
-    }),
+    contract: omniContract,
   }, environment);
   return Object.freeze({
     request,

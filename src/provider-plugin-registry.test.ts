@@ -39,6 +39,7 @@ import {
 } from "./provider-plugin-registry";
 import { providerPluginRegistry } from "./provider-plugins";
 import {
+  isLocalCliOperation,
   isProviderOperation,
   isWebSessionOperation,
   parseDiagnosticManifest,
@@ -756,7 +757,11 @@ describe("provider plugin definition and registry", () => {
   test("rejects raw runtime loaders that bypass the identity-aware helper", () => {
     const definition = pluginDefinition("raw-runtime");
     const binding = definition.bindings[0];
-    if (binding === undefined || binding.transport === "provider-api") {
+    if (
+      binding === undefined
+      || binding.transport === "provider-api"
+      || binding.transport === "local-cli"
+    ) {
       throw new Error("raw runtime fixture is unavailable");
     }
     expect(() => defineProviderPlugin({
@@ -3201,7 +3206,6 @@ describe("provider plugin definition and registry", () => {
       const labels = plugin.implementationSources.map((source) => source.label);
       expect(labels).not.toContain("kernel/provider-contract-definitions.ts");
       expect(labels).not.toContain("kernel/web-session-contract-definitions.ts");
-      expect(labels).toContain("kernel/provider-contract-semantic-identity.ts");
       for (const binding of plugin.bindings) {
         expect(binding.operations.length).toBeGreaterThan(0);
         for (const descriptor of binding.operations) {
@@ -3253,7 +3257,15 @@ describe("provider plugin definition and registry", () => {
       "meta-web",
       "whatsapp-linked-device",
     ]);
-    expect(sharedProjectionProviderIds).toEqual(observedContactProviderIds);
+    expect(sharedProjectionProviderIds).toEqual(
+      observedContactProviderIds.filter(
+        (pluginId) => pluginId !== "beeper-linked-device",
+      ),
+    );
+
+    const beeper = providerPluginRegistry.get("beeper-linked-device");
+    expect(beeper?.implementationSources.map((source) => source.label))
+      .toEqual(["plugin.ts"]);
 
     const whatsapp = providerPluginRegistry.get("whatsapp-linked-device");
     expect(whatsapp).toBeDefined();
@@ -3271,9 +3283,27 @@ describe("provider plugin definition and registry", () => {
     }
   });
 
-  test("resolves every installed bundled schema-v3/v4 operation at its durable route version", () => {
+  test("resolves every installed bundled code-owned operation at its durable route version", () => {
     const root = join(import.meta.dir, "assets", "adapters");
     const retiredDiagnosticOnlyManifests = new Map<string, readonly string[]>([
+      [
+        join(root, "beeper", "wrench-web-adapter.v1.0.0.json"),
+        [
+          "authenticated web contract beeper/contacts.list@1 is not installed",
+          "authenticated web contract beeper/messaging.list@1 is not installed",
+          "authenticated web contract beeper/messaging.read@1 is not installed",
+        ],
+      ],
+      [
+        join(root, "beeper", "wrench-web-adapter.v1.1.0.json"),
+        [
+          "authenticated web contract beeper/contacts.list@1 is not installed",
+          "authenticated web contract beeper/contacts.search@1 is not installed",
+          "authenticated web contract beeper/messaging.list@1 is not installed",
+          "authenticated web contract beeper/messaging.search@1 is not installed",
+          "authenticated web contract beeper/messaging.read@1 is not installed",
+        ],
+      ],
       [
         join(root, "bluesky", "wrench-web-adapter.v1.0.0.json"),
         [
@@ -3456,7 +3486,11 @@ describe("provider plugin definition and registry", () => {
         || raw === null
         || Array.isArray(raw)
         || !("schemaVersion" in raw)
-        || (raw.schemaVersion !== 3 && raw.schemaVersion !== 4)
+        || (
+          raw.schemaVersion !== 3
+          && raw.schemaVersion !== 4
+          && raw.schemaVersion !== 6
+        )
       ) continue;
       const parsed = parseDiagnosticManifest(raw, providerPluginRegistry);
       expect(parsed.ok, path).toBeTrue();
@@ -3489,6 +3523,14 @@ describe("provider plugin definition and registry", () => {
             candidate.webSession.site,
             candidate.webSession.action,
             candidate.webSession.contractVersion,
+          ), path).toBeDefined();
+          checked += 1;
+        } else if (isLocalCliOperation(candidate)) {
+          expect(providerPluginRegistry.resolveOperationDefinition(
+            "local-cli",
+            candidate.localCli.surface,
+            candidate.localCli.action,
+            candidate.localCli.contractVersion,
           ), path).toBeDefined();
           checked += 1;
         }

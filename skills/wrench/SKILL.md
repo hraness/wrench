@@ -8,8 +8,9 @@ description: >-
   reconcile text, image, and video posts through observed installed social
   capabilities; inspect or develop bounded provider contracts for X, LinkedIn,
   Bluesky, Substack Notes, Threads, TikTok, Instagram, and YouTube Shorts; save
-  private native article drafts; and build or run typed provider plugins from
-  recorded browser-session APIs. Trigger for web capture,
+  private native article drafts; operate reviewed Beeper messaging actions
+  through an exact pinned native CLI; and build or run typed provider plugins
+  from recorded browser-session APIs or versioned provider CLIs. Trigger for web capture,
   URL clipping, authenticated sites, social media posting or cross-posting,
   media download or archiving, transcription, email and messaging integrations,
   HAR-to-API workflows, browser-session API automation, semantic operations,
@@ -36,6 +37,8 @@ automation.
 - Archive media: `wrench archive <url>` or `wrench audio|video|transcript <url>`.
 - Discover supported article embeds through the provider's bounded semantic media read, then archive each exact returned finite item separately. Do not treat a collection page as one media item or scrape its DOM to manufacture asset routes.
 - Inspect support: `wrench plugin list`, `wrench plugin show <id>`, and `wrench capabilities [adapter]`.
+- Operate Beeper: inspect `wrench capabilities beeper-local --json`, then use
+  only its typed read or action operation with the bound local Desktop realm.
 - Diagnose state: `wrench operator doctor --json`.
 - Invoke a supported semantic operation: `wrench invoke <adapter> <operation>` or its printed shorthand.
 - Collect exact daily social-account statistics into a checked consumer snapshot: follow [social profile statistics](references/social-profile-stats.md).
@@ -50,6 +53,9 @@ automation.
 - Derive a reviewed first-party contract from authorized HAR evidence: follow [the derivation guide](references/derivation.md).
 
 Do not expose raw requests, endpoints, GraphQL, Rest.li, JavaScript, selectors, cookies, headers, storage, arbitrary paths, or unrestricted file transfer. A capability is a bounded semantic operation with an exact transport, origin, account binding, input schema, risk, side effect, and response projection.
+For a native provider CLI, do not expose argv, a shell, ambient environment,
+package-manager channels, target defaults, or plugin installation. Require an
+exact source-plugin-owned executable identity and fixed operation templates.
 
 Wrench admits at most two locally owned fresh or profile-backed page-capture
 browsers across processes sharing its state home. Let capture wait for the
@@ -122,7 +128,7 @@ wrench auth bind example-main --site example
 wrench auth list --json
 ```
 
-Use OAuth only for a reviewed `provider-api` plugin. Use browser cookies or a private profile only for a reviewed `web-session-api` plugin. Never silently switch transports. A profile snapshot requires the source browser to be closed and may require `--browser-executable` plus explicit `--trust-profile-egress` because a path-backed browser has no domain-containment boundary.
+Use OAuth only for a reviewed `provider-api` plugin. Use browser cookies or a private profile only for a reviewed `web-session-api` plugin. Use a linked-device store locator for the reviewed Beeper `local-cli` binding; that locator selects the already-authorized Desktop realm, not arbitrary process authority. Never silently switch transports. A profile snapshot requires the source browser to be closed and may require `--browser-executable` plus explicit `--trust-profile-egress` because a path-backed browser has no domain-containment boundary.
 
 For Gmail/Google Contacts, prefer managed native OAuth:
 

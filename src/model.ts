@@ -37,6 +37,7 @@ export const WRENCH_MANIFEST_SCHEMA_VERSION = 2 as const;
 export const WRENCH_PROVIDER_MANIFEST_SCHEMA_VERSION = 3 as const;
 export const WRENCH_WEB_SESSION_MANIFEST_SCHEMA_VERSION = 4 as const;
 export const WRENCH_REVIEWED_TEMPLATE_MANIFEST_SCHEMA_VERSION = 5 as const;
+export const WRENCH_LOCAL_CLI_MANIFEST_SCHEMA_VERSION = 6 as const;
 export const WRENCH_LEGACY_MANIFEST_SCHEMA_VERSION = 1 as const;
 /** Canonical manifest hash of the sole schema-v1 LinkedIn migration fixture. */
 export const WRENCH_LEGACY_LINKEDIN_MANIFEST_HASH = "bbdd1f8c1a532d621a367776770c968fd06cb7cf3b343d64ccda4b53690bb42f";
@@ -192,6 +193,15 @@ export type WebSessionRecipe = {
   readonly maxOutputBytes: number;
 };
 
+export type LocalCliRecipe = {
+  /** Names one code-owned provider surface; the exact tool identity lives on its binding. */
+  readonly surface: OfficialProviderId;
+  readonly action: ProviderPluginOperationName;
+  readonly contractVersion: number;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+};
+
 export type ReviewedTemplateRecipe =
   | {
       readonly state: "capture-required";
@@ -224,6 +234,7 @@ export type BrowserWrenchOperation = WrenchOperationCommon & {
   readonly provider?: never;
   readonly webSession?: never;
   readonly reviewedTemplate?: never;
+  readonly localCli?: never;
 };
 
 export type ProviderWrenchOperation = WrenchOperationCommon & {
@@ -231,6 +242,7 @@ export type ProviderWrenchOperation = WrenchOperationCommon & {
   readonly provider: ProviderRecipe;
   readonly webSession?: never;
   readonly reviewedTemplate?: never;
+  readonly localCli?: never;
 };
 
 export type WebSessionWrenchOperation = WrenchOperationCommon & {
@@ -238,6 +250,7 @@ export type WebSessionWrenchOperation = WrenchOperationCommon & {
   readonly provider?: never;
   readonly webSession: WebSessionRecipe;
   readonly reviewedTemplate?: never;
+  readonly localCli?: never;
 };
 
 export type ReviewedTemplateWrenchOperation = WrenchOperationCommon & {
@@ -245,13 +258,23 @@ export type ReviewedTemplateWrenchOperation = WrenchOperationCommon & {
   readonly provider?: never;
   readonly webSession?: never;
   readonly reviewedTemplate: ReviewedTemplateRecipe;
+  readonly localCli?: never;
+};
+
+export type LocalCliWrenchOperation = WrenchOperationCommon & {
+  readonly browser?: never;
+  readonly provider?: never;
+  readonly webSession?: never;
+  readonly reviewedTemplate?: never;
+  readonly localCli: LocalCliRecipe;
 };
 
 export type WrenchOperation =
   | BrowserWrenchOperation
   | ProviderWrenchOperation
   | WebSessionWrenchOperation
-  | ReviewedTemplateWrenchOperation;
+  | ReviewedTemplateWrenchOperation
+  | LocalCliWrenchOperation;
 
 export function isProviderOperation(operation: WrenchOperation): operation is ProviderWrenchOperation {
   return operation.provider !== undefined;
@@ -265,6 +288,12 @@ export function isReviewedTemplateOperation(operation: WrenchOperation): operati
   return operation.reviewedTemplate !== undefined;
 }
 
+export function isLocalCliOperation(
+  operation: WrenchOperation,
+): operation is LocalCliWrenchOperation {
+  return operation.localCli !== undefined;
+}
+
 export function isBrowserOperation(operation: WrenchOperation): operation is BrowserWrenchOperation {
   return operation.browser !== undefined;
 }
@@ -274,6 +303,7 @@ export type WrenchManifest = {
     | typeof WRENCH_PROVIDER_MANIFEST_SCHEMA_VERSION
     | typeof WRENCH_WEB_SESSION_MANIFEST_SCHEMA_VERSION
     | typeof WRENCH_REVIEWED_TEMPLATE_MANIFEST_SCHEMA_VERSION
+    | typeof WRENCH_LOCAL_CLI_MANIFEST_SCHEMA_VERSION
     | typeof WRENCH_MANIFEST_SCHEMA_VERSION
     | typeof WRENCH_LEGACY_MANIFEST_SCHEMA_VERSION;
   readonly id: string;
@@ -370,6 +400,7 @@ function hasCodeOwnedPluginSurface(
   registry: ProviderPluginRegistry,
 ): boolean {
   return registry.resolveRoute("provider-api", surfaceId) !== undefined
+    || registry.resolveRoute("local-cli", surfaceId) !== undefined
     || registry.resolveSessionRoute(surfaceId) !== undefined;
 }
 
@@ -1263,7 +1294,7 @@ function parseOperation(
   value: unknown,
   path: string,
   issues: string[],
-  schemaVersion: 1 | 2 | 3 | 4 | 5,
+  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6,
   allowedOrigins: readonly string[],
 ): WrenchOperation | null {
   if (!isRecord(value)) {
@@ -1283,6 +1314,7 @@ function parseOperation(
       ...(schemaVersion === 3 ? ["provider"] : []),
       ...(schemaVersion === 4 ? ["webSession"] : []),
       ...(schemaVersion === 5 ? ["reviewedTemplate"] : []),
+      ...(schemaVersion === 6 ? ["localCli"] : []),
     ],
     path,
     issues,
@@ -1300,7 +1332,13 @@ function parseOperation(
     value.input,
     `${path}.input`,
     issues,
-    schemaVersion === WRENCH_PROVIDER_MANIFEST_SCHEMA_VERSION && value.provider !== undefined ? 100 : 25,
+    (
+      schemaVersion === WRENCH_PROVIDER_MANIFEST_SCHEMA_VERSION
+      && value.provider !== undefined
+    ) || (
+      schemaVersion === WRENCH_LOCAL_CLI_MANIFEST_SCHEMA_VERSION
+      && value.localCli !== undefined
+    ) ? 100 : 25,
   );
   if (schemaVersion === 1 && input !== null && Object.values(input.properties).some((field) => field.type === "file" || field.type === "array")) {
     issues.push(`${path}.input file and array fields require schemaVersion 2`);
@@ -1341,6 +1379,19 @@ function parseOperation(
       .filter((candidate) => candidate !== undefined);
     if (transports.length !== 1 || value.reviewedTemplate === undefined) {
       issues.push(`${path} must declare exactly one reviewedTemplate transport in schemaVersion 5`);
+      return null;
+    }
+  }
+  if (schemaVersion === 6) {
+    const transports = [
+      value.browser,
+      value.provider,
+      value.webSession,
+      value.reviewedTemplate,
+      value.localCli,
+    ].filter((candidate) => candidate !== undefined);
+    if (transports.length !== 1 || value.localCli === undefined) {
+      issues.push(`${path} must declare exactly one localCli transport in schemaVersion 6`);
       return null;
     }
   }
@@ -1435,6 +1486,78 @@ function parseOperation(
       input,
       webSession: {
         site,
+        action,
+        contractVersion,
+        timeoutMs,
+        maxOutputBytes,
+      },
+    };
+  }
+
+  if (schemaVersion === 6 && value.localCli !== undefined) {
+    if (!isRecord(value.localCli)) {
+      issues.push(`${path}.localCli must be an object`);
+      return null;
+    }
+    exactKeys(
+      value.localCli,
+      ["surface", "action", "contractVersion", "timeoutMs", "maxOutputBytes"],
+      `${path}.localCli`,
+      issues,
+    );
+    const surface = value.localCli.surface;
+    if (!isProviderPluginSurfaceId(surface)) {
+      issues.push(`${path}.localCli.surface must be a bounded lowercase kebab-case provider surface ID`);
+    }
+    const action = value.localCli.action;
+    if (!isProviderPluginOperationName(action)) {
+      issues.push(`${path}.localCli.action must name a bounded dotted provider operation`);
+    }
+    const contractVersion = safeInteger(
+      value.localCli.contractVersion,
+      `${path}.localCli.contractVersion`,
+      1,
+      1_000_000,
+      issues,
+    );
+    const timeoutMs = safeInteger(
+      value.localCli.timeoutMs,
+      `${path}.localCli.timeoutMs`,
+      1_000,
+      10 * 60_000,
+      issues,
+    );
+    const maxOutputBytes = safeInteger(
+      value.localCli.maxOutputBytes,
+      `${path}.localCli.maxOutputBytes`,
+      1_024,
+      10 * 1024 * 1024,
+      issues,
+    );
+    if (
+      description === null
+      || sideEffect === null
+      || typeof risk !== "string"
+      || !operationRisks.includes(risk as OperationRisk)
+      || typeof idempotency !== "string"
+      || !idempotencyKinds.includes(idempotency as IdempotencyKind)
+      || input === null
+      || dedupeWindowMs === null
+      || !isProviderPluginSurfaceId(surface)
+      || !isProviderPluginOperationName(action)
+      || contractVersion === null
+      || timeoutMs === null
+      || maxOutputBytes === null
+    ) return null;
+    return {
+      description,
+      risk: risk as OperationRisk,
+      sideEffect,
+      idempotency: idempotency as IdempotencyKind,
+      dedupeWindowMs,
+      input,
+      localCli: {
+        surface,
         action,
         contractVersion,
         timeoutMs,
@@ -1660,20 +1783,22 @@ type ManifestPluginContract = {
 
 function resolveManifestPluginContract(
   registry: ProviderPluginRegistry,
-  transport: "provider-api" | "session-api",
+  transport: "provider-api" | "session-api" | "local-cli",
   surfaceId: string,
   operationName: string,
   contractVersion: number,
   requireCurrent: boolean,
 ): ManifestPluginContract | undefined {
-  const binding = transport === "provider-api"
-    ? registry.resolveRoute("provider-api", surfaceId)
-    : registry.resolveSessionRoute(surfaceId);
+  const binding = transport === "session-api"
+    ? registry.resolveSessionRoute(surfaceId)
+    : registry.resolveRoute(transport, surfaceId);
   if (
     binding === undefined
     || (transport === "provider-api"
       ? binding.transport !== "provider-api"
-      : binding.transport === "provider-api")
+      : transport === "local-cli"
+        ? binding.transport !== "local-cli"
+        : binding.transport === "provider-api" || binding.transport === "local-cli")
   ) {
     return undefined;
   }
@@ -1725,7 +1850,10 @@ function validateManifestPluginOrigins(
 
 function validateManifestPluginSemantics(
   operationId: string,
-  manifestOperation: ProviderWrenchOperation | WebSessionWrenchOperation,
+  manifestOperation:
+    | ProviderWrenchOperation
+    | WebSessionWrenchOperation
+    | LocalCliWrenchOperation,
   descriptor: ProviderPluginOperationV1,
   contractLabel: string,
   riskLabel: string,
@@ -1768,6 +1896,8 @@ function parseManifestWithContractValidation(
   exactKeys(value, ["schemaVersion", "id", "version", "displayName", "surfaceId", "origins", "browserDomains", "operations"], "manifest", issues);
   const schemaVersion = value.schemaVersion === WRENCH_LEGACY_MANIFEST_SCHEMA_VERSION
     ? WRENCH_LEGACY_MANIFEST_SCHEMA_VERSION
+    : value.schemaVersion === WRENCH_LOCAL_CLI_MANIFEST_SCHEMA_VERSION
+      ? WRENCH_LOCAL_CLI_MANIFEST_SCHEMA_VERSION
     : value.schemaVersion === WRENCH_REVIEWED_TEMPLATE_MANIFEST_SCHEMA_VERSION
       ? WRENCH_REVIEWED_TEMPLATE_MANIFEST_SCHEMA_VERSION
     : value.schemaVersion === WRENCH_WEB_SESSION_MANIFEST_SCHEMA_VERSION
@@ -1781,8 +1911,9 @@ function parseManifestWithContractValidation(
     && value.schemaVersion !== WRENCH_PROVIDER_MANIFEST_SCHEMA_VERSION
     && value.schemaVersion !== WRENCH_WEB_SESSION_MANIFEST_SCHEMA_VERSION
     && value.schemaVersion !== WRENCH_REVIEWED_TEMPLATE_MANIFEST_SCHEMA_VERSION
+    && value.schemaVersion !== WRENCH_LOCAL_CLI_MANIFEST_SCHEMA_VERSION
   ) {
-    issues.push("manifest.schemaVersion must be 1, 2, 3, 4, or 5");
+    issues.push("manifest.schemaVersion must be 1, 2, 3, 4, 5, or 6");
   }
   const id = boundedString(value.id, "manifest.id", issues, 1, 48);
   if (id !== null && !/^[a-z][a-z0-9-]*$/u.test(id)) issues.push("manifest.id must be lowercase kebab-case");
@@ -1798,6 +1929,7 @@ function parseManifestWithContractValidation(
     } else if (
       schemaVersion === WRENCH_PROVIDER_MANIFEST_SCHEMA_VERSION
       || schemaVersion === WRENCH_WEB_SESSION_MANIFEST_SCHEMA_VERSION
+      || schemaVersion === WRENCH_LOCAL_CLI_MANIFEST_SCHEMA_VERSION
     ) {
       if (!isProviderPluginSurfaceId(value.surfaceId)) {
         issues.push("manifest.surfaceId must be a bounded lowercase kebab-case provider surface ID");
@@ -1860,6 +1992,31 @@ function parseManifestWithContractValidation(
       if (parsed !== null) operations[operationId] = parsed;
     }
   }
+  // These two frozen manifests predate the source-only local-CLI binding. They
+  // remain parseable only as exact inert migration evidence: no synthetic
+  // session route is installed and parseRuntimeManifest still rejects them.
+  const retiredBeeperDiagnosticHash =
+    !requireCurrentCodeOwnedContracts
+      && schemaVersion === WRENCH_WEB_SESSION_MANIFEST_SCHEMA_VERSION
+      && id !== null
+      && version !== null
+      && displayName !== null
+      ? sha256(canonicalJson({
+          schemaVersion,
+          id,
+          version,
+          displayName,
+          ...(surfaceId === undefined ? {} : { surfaceId }),
+          origins,
+          browserDomains,
+          operations,
+        }))
+      : null;
+  const isExactRetiredBeeperDiagnostic =
+    retiredBeeperDiagnosticHash ===
+      "2662d0b8f1580ce19085bc5f0b6b03e8f30e7a143f385a64ab6ecdea7fc0f3bd"
+    || retiredBeeperDiagnosticHash ===
+      "7da2914ae8660108e31be2032c10678a5deee2129fd02186a2844329808754fa";
   const matchingKnownSurfaces = platformSurfaceIds.filter((candidate) =>
     origins.some((origin) => socialPlatformCatalog[candidate].originPolicy.exactOrigins.includes(origin as `https://${string}`)));
   if (schemaVersion === WRENCH_LEGACY_MANIFEST_SCHEMA_VERSION && matchingKnownSurfaces.length > 0) {
@@ -2061,6 +2218,7 @@ function parseManifestWithContractValidation(
         requireCurrentCodeOwnedContracts,
       );
       if (descriptor === undefined) {
+        if (isExactRetiredBeeperDiagnostic) continue;
         issues.push(
           `authenticated web contract ${operation.webSession.site}/${operation.webSession.action}@${operation.webSession.contractVersion} is not installed`,
         );
@@ -2073,6 +2231,58 @@ function parseManifestWithContractValidation(
           descriptor.operation,
           `authenticated web contract ${operation.webSession.site}/${operationId}@${operation.webSession.contractVersion}`,
           "authenticated web contract",
+          issues,
+        );
+      }
+    }
+  }
+  if (schemaVersion === WRENCH_LOCAL_CLI_MANIFEST_SCHEMA_VERSION) {
+    const hasLocalCliOperation = Object.values(operations).some(isLocalCliOperation);
+    if (hasLocalCliOperation && surfaceId === undefined) {
+      issues.push("manifest.surfaceId is required for schemaVersion 6 local CLI adapters");
+    }
+    if (
+      requireCurrentCodeOwnedContracts
+      && hasLocalCliOperation
+      && surfaceId !== undefined
+    ) {
+      const binding = registry.resolveRoute("local-cli", surfaceId);
+      if (binding !== undefined) {
+        validateManifestPluginOrigins(binding, origins, browserDomains, issues);
+      }
+    }
+    for (const [operationId, operation] of Object.entries(operations)) {
+      if (!isLocalCliOperation(operation)) {
+        issues.push(`manifest.operations.${operationId} must use a code-owned localCli contract in schemaVersion 6`);
+        continue;
+      }
+      if (surfaceId !== operation.localCli.surface) {
+        issues.push(`manifest.operations.${operationId}.localCli.surface must match manifest.surfaceId`);
+      }
+      if (operation.localCli.action !== operationId) {
+        issues.push(`manifest.operations.${operationId}.localCli.action must equal its canonical operation ID`);
+      }
+      const descriptor = resolveManifestPluginContract(
+        registry,
+        "local-cli",
+        operation.localCli.surface,
+        operation.localCli.action,
+        operation.localCli.contractVersion,
+        requireCurrentCodeOwnedContracts,
+      );
+      if (descriptor === undefined) {
+        issues.push(
+          `local CLI contract ${operation.localCli.surface}/${operation.localCli.action}@${operation.localCli.contractVersion} is not installed`,
+        );
+        continue;
+      }
+      if (requireCurrentCodeOwnedContracts) {
+        validateManifestPluginSemantics(
+          operationId,
+          operation,
+          descriptor.operation,
+          `local CLI contract ${operation.localCli.surface}/${operationId}@${operation.localCli.contractVersion}`,
+          "local CLI contract",
           issues,
         );
       }

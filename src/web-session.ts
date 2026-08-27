@@ -81,7 +81,10 @@ export function createWebSessionOperationExecutor(
       // failure and an indeterminate post-dispatch outcome. Do not flatten an
       // unexpected throw here: runPrepared will conservatively reconcile it
       // against the durable dispatch ledger.
-      if (binding.transport === "provider-api") {
+      if (
+        binding.transport !== "web-session-api"
+        && binding.transport !== "linked-device"
+      ) {
         return unavailable("authenticated web site operation resolved to the wrong plugin transport");
       }
       return binding.execute(manifest, recipe, input, auth, boundedOptions);
