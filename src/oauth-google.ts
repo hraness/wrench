@@ -1,3 +1,6 @@
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- packed source types must include Bun asset modules
+/// <reference path="./assets.d.ts" />
+
 import { spawn } from "node:child_process";
 import {
   createHash,
@@ -10,12 +13,15 @@ import {
   fstatSync,
   lstatSync,
   openSync,
+  readFileSync,
   readSync,
   type BigIntStats,
 } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
+import nebulaSansBookAsset from "./assets/fonts/nebula-sans/NebulaSans-Book.woff2" with { type: "file" };
 import {
   createAuth,
   loadAuthSnapshotIfPresent,
@@ -52,6 +58,20 @@ const GOOGLE_AUTHORIZATION_TIMEOUT_MS = 10 * 60_000;
 const MAX_GOOGLE_CLIENT_FILE_BYTES = 64 * 1024;
 const MAX_GOOGLE_RESPONSE_BYTES = 64 * 1024;
 const CALLBACK_PATH = "/oauth2/callback";
+const GOOGLE_OAUTH_NEBULA_SANS_PATH = isAbsolute(nebulaSansBookAsset)
+  ? nebulaSansBookAsset
+  : fileURLToPath(new URL(nebulaSansBookAsset, import.meta.url));
+const GOOGLE_OAUTH_NEBULA_SANS_BYTES = readFileSync(GOOGLE_OAUTH_NEBULA_SANS_PATH);
+const GOOGLE_OAUTH_NEBULA_SANS_SHA256 = "4d396c7c7f93b3f9d8e90d5a8c5e28b29266243946d4320783abc3628d9ef8df";
+if (
+  GOOGLE_OAUTH_NEBULA_SANS_BYTES.byteLength !== 70_652
+  || createHash("sha256").update(GOOGLE_OAUTH_NEBULA_SANS_BYTES).digest("hex")
+    !== GOOGLE_OAUTH_NEBULA_SANS_SHA256
+) {
+  throw new Error("Google OAuth completion font did not match the reviewed Nebula Sans release");
+}
+const GOOGLE_OAUTH_NEBULA_SANS_DATA_URL =
+  `data:font/woff2;base64,${GOOGLE_OAUTH_NEBULA_SANS_BYTES.toString("base64")}`;
 
 export const GOOGLE_GMAIL_READ_SCOPES = Object.freeze([
   "https://www.googleapis.com/auth/contacts.other.readonly",
@@ -322,12 +342,12 @@ async function openSystemBrowser(url: string): Promise<void> {
 function callbackHtml(response: ServerResponse, status: number, message: string): void {
   response.writeHead(status, {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+    "Content-Security-Policy": "default-src 'none'; font-src data:; style-src 'unsafe-inline'",
     "Content-Type": "text/html; charset=utf-8",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
   });
-  response.end(`<!doctype html><meta charset="utf-8"><title>Wrench Google login</title><style>body{font:18px system-ui;max-width:36rem;margin:15vh auto;padding:2rem;line-height:1.5}</style><p>${message}</p>`);
+  response.end(`<!doctype html><meta charset="utf-8"><title>Wrench Google login</title><style>@font-face{font-family:"Nebula Sans";src:url("${GOOGLE_OAUTH_NEBULA_SANS_DATA_URL}") format("woff2");font-style:normal;font-weight:400;font-display:swap}body{font:18px/1.5 "Nebula Sans",ui-sans-serif,system-ui,sans-serif;max-width:36rem;margin:15vh auto;padding:2rem}</style><p>${message}</p>`);
 }
 
 async function defaultAuthorize(
