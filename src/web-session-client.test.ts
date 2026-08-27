@@ -95,13 +95,19 @@ async function rejectionMessage(action: Promise<unknown>): Promise<string> {
 function stalledDependencies(contentType: string): {
   readonly dependencies: WebSessionNetworkDependencies;
   readonly signal: () => AbortSignal | null;
+  readonly started: Promise<void>;
 } {
   let observed: AbortSignal | null = null;
+  let markStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
   const acquireCookies: CookieRecordReader = () => Promise.resolve({ cookies, warnings: [] });
   const fetch: WebSessionNetworkDependencies["fetch"] = (_value, init) => {
     const signal = init?.signal;
     if (!(signal instanceof AbortSignal)) throw new Error("expected abort signal");
     observed = signal;
+    markStarted?.();
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         signal.addEventListener("abort", () => controller.error(new DOMException("deadline", "AbortError")), { once: true });
@@ -109,7 +115,7 @@ function stalledDependencies(contentType: string): {
     });
     return Promise.resolve(new Response(stream, { status: 200, headers: { "content-type": contentType } }));
   };
-  return { dependencies: { acquireCookies, fetch }, signal: () => observed };
+  return { dependencies: { acquireCookies, fetch }, signal: () => observed, started };
 }
 
 describe("authenticated web-session client deadlines", () => {
@@ -166,42 +172,61 @@ describe("authenticated web-session client deadlines", () => {
 
   test("cover JSON and text response body streaming", async () => {
     for (const mode of ["json", "text"] as const) {
+      const clock = new FakeMonotonicClock();
+      const deadline = new OperationDeadline(20, { clock });
       const stalled = stalledDependencies(mode === "json" ? "application/json" : "text/html");
-      const client = await createWebSessionClient("https://x.com", auth, {
-        timeoutMs: 20,
-        dependencies: stalled.dependencies,
-      });
-      const action = mode === "json"
-        ? client.requestJson({
-          url: new URL("https://x.com/i/api/test"),
-          method: "GET",
-          headers: { accept: "application/json" },
-          maxBytes: 1_024,
-        })
-        : client.requestText({
-          url: new URL("https://x.com/home"),
-          headers: { accept: "text/html" },
-          expectedContentTypes: ["text/html"],
-          maxBytes: 1_024,
+      try {
+        const client = await createWebSessionClient("https://x.com", auth, {
+          timeoutMs: 20,
+          operationDeadline: deadline,
+          dependencies: stalled.dependencies,
         });
-      expect(await rejectionMessage(action)).toContain("deadline");
-      expect(stalled.signal()?.aborted).toBeTrue();
+        const action = mode === "json"
+          ? client.requestJson({
+            url: new URL("https://x.com/i/api/test"),
+            method: "GET",
+            headers: { accept: "application/json" },
+            maxBytes: 1_024,
+          })
+          : client.requestText({
+            url: new URL("https://x.com/home"),
+            headers: { accept: "text/html" },
+            expectedContentTypes: ["text/html"],
+            maxBytes: 1_024,
+          });
+        await stalled.started;
+        clock.advance(20);
+        expect(await rejectionMessage(action)).toContain("deadline");
+        expect(stalled.signal()?.aborted).toBeTrue();
+      } finally {
+        deadline.dispose();
+      }
     }
   });
 
   test("covers public first-party asset body streaming", async () => {
+    const clock = new FakeMonotonicClock();
+    const deadline = new OperationDeadline(20, { clock });
     const stalled = stalledDependencies("application/javascript");
-    expect(await rejectionMessage(fetchPublicWebAsset(
-      new URL("https://abs.twimg.com/responsive-web/client-web/main.test.js"),
-      {
-        allowedOrigin: "https://abs.twimg.com",
-        contentTypes: ["application/javascript"],
-        maxBytes: 1_024,
-        timeoutMs: 20,
-        dependencies: stalled.dependencies,
-      },
-    ))).toContain("deadline");
-    expect(stalled.signal()?.aborted).toBeTrue();
+    try {
+      const action = fetchPublicWebAsset(
+        new URL("https://abs.twimg.com/responsive-web/client-web/main.test.js"),
+        {
+          allowedOrigin: "https://abs.twimg.com",
+          contentTypes: ["application/javascript"],
+          maxBytes: 1_024,
+          timeoutMs: 20,
+          operationDeadline: deadline,
+          dependencies: stalled.dependencies,
+        },
+      );
+      await stalled.started;
+      clock.advance(20);
+      expect(await rejectionMessage(action)).toContain("deadline");
+      expect(stalled.signal()?.aborted).toBeTrue();
+    } finally {
+      deadline.dispose();
+    }
   });
 });
 

@@ -349,7 +349,9 @@ function currentMainUrl(html: string): URL {
 }
 
 function sourceChunkLogicalName(sourceChunk: string): string {
-  const match = /^([A-Za-z0-9_~.-]{1,240})\.[a-f0-9]{8}\.js$/u.exec(sourceChunk);
+  // Historical 7-hex webpack-map hashes produced 8-hex asset names after the
+  // fixed trailing `a`; current 16-hex hashes produce 17-hex asset names.
+  const match = /^([A-Za-z0-9_~.-]{1,240})\.(?:[a-f0-9]{8}|[a-f0-9]{17})\.js$/u.exec(sourceChunk);
   if (match?.[1] === undefined) throw new Error("X revision evidence source chunk is not a reviewed hashed JavaScript asset");
   return match[1];
 }
