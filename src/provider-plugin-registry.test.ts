@@ -1744,6 +1744,8 @@ describe("provider plugin definition and registry", () => {
         "wrench-registry-occurrence-owner-alpha",
         {
           dependencies: { "wrench-registry-shared-occurrence": "1.0.0" },
+          source:
+            'import "wrench-registry-shared-occurrence";\nexport const owner = "alpha";\n',
         },
       );
       const zetaOwner = writeInstalledDependency(
@@ -1751,13 +1753,16 @@ describe("provider plugin definition and registry", () => {
         "wrench-registry-occurrence-owner-zeta",
         {
           dependencies: { "wrench-registry-shared-occurrence": "1.0.0" },
+          source:
+            'import "wrench-registry-shared-occurrence";\nexport const owner = "zeta";\n',
         },
       );
       const alpha = writeInstalledDependency(
         alphaOwner.root,
         "wrench-registry-shared-occurrence",
         {
-          source: "export const occurrence = 'alpha';\n",
+          source:
+            'import "wrench-registry-occurrence-peer";\nexport const occurrence = "alpha";\n',
           peerDependencies: { "wrench-registry-occurrence-peer": "*" },
         },
       );
@@ -1765,7 +1770,8 @@ describe("provider plugin definition and registry", () => {
         zetaOwner.root,
         "wrench-registry-shared-occurrence",
         {
-          source: "export const occurrence = 'zeta';\n",
+          source:
+            'import "wrench-registry-occurrence-peer";\nexport const occurrence = "zeta";\n',
           peerDependencies: { "wrench-registry-occurrence-peer": "*" },
         },
       );
@@ -1802,7 +1808,10 @@ describe("provider plugin definition and registry", () => {
         repeated.requireSessionRoute("installed-occurrence-site"),
       ).toString("hex")).toBe(firstHash);
 
-      writeFileSync(alpha.entry, "export const occurrence = 'ALPHA';\n");
+      writeFileSync(
+        alpha.entry,
+        'import "wrench-registry-occurrence-peer";\nexport const occurrence = "ALPHA";\n',
+      );
       const changed = createProviderPluginRegistry([definition()]);
       expect(changed.implementationHash(
         changed.requireSessionRoute("installed-occurrence-site"),
@@ -2822,6 +2831,83 @@ describe("provider plugin definition and registry", () => {
         .toThrow(
           "installed dependency changed after its definition was evaluated",
         );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "excludes nested node_modules bin links from package-owned identity",
+    () => {
+      const directory = mkdtempSync(
+        join(import.meta.dir, "plugins", "evaluation-install-topology-test-"),
+      );
+      const pluginPath = join(directory, "plugin.ts");
+      try {
+        const dependency = writeInstalledDependency(
+          directory,
+          "wrench-evaluation-install-topology",
+        );
+        const binDirectory = join(dependency.root, "node_modules", ".bin");
+        mkdirSync(binDirectory, { recursive: true });
+        symlinkSync("../../index.js", join(binDirectory, "topology-tool"));
+        writeFileSync(
+          pluginPath,
+          'import "wrench-evaluation-install-topology";\nexport const plugin = true;\n',
+        );
+
+        const evaluated = defineProviderPlugin(pluginDefinition(
+          "evaluation-install-topology",
+          undefined,
+          pathToFileURL(pluginPath),
+        ));
+        expect(() => createProviderPluginRegistry([evaluated])).not.toThrow();
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("hashes statically imported nested dependency packages independently", () => {
+    const directory = mkdtempSync(
+      join(import.meta.dir, "plugins", "evaluation-nested-package-test-"),
+    );
+    const pluginPath = join(directory, "plugin.ts");
+    try {
+      const dependency = writeInstalledDependency(
+        directory,
+        "wrench-evaluation-nested-parent",
+        {
+          dependencies: { "wrench-evaluation-nested-child": "1.0.0" },
+          source:
+            'import "wrench-evaluation-nested-child";\nexport const parent = true;\n',
+        },
+      );
+      const child = writeInstalledDependency(
+        dependency.root,
+        "wrench-evaluation-nested-child",
+      );
+      writeFileSync(
+        pluginPath,
+        'import "wrench-evaluation-nested-parent";\nexport const plugin = true;\n',
+      );
+      const registry = () => createProviderPluginRegistry([
+        defineProviderPlugin(pluginDefinition(
+          "evaluation-nested-package",
+          undefined,
+          pathToFileURL(pluginPath),
+        )),
+      ]);
+
+      const before = registry();
+      const beforeHash = before.implementationHash(
+        before.requireSessionRoute("evaluation-nested-package-site"),
+      ).toString("hex");
+      writeFileSync(child.entry, "export const value = 2;\n");
+      const after = registry();
+      expect(after.implementationHash(
+        after.requireSessionRoute("evaluation-nested-package-site"),
+      ).toString("hex")).not.toBe(beforeHash);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

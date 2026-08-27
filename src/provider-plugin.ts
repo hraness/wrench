@@ -1375,6 +1375,11 @@ function walkProviderPluginEvaluationPackageTree(
           );
         }
         if (stats.isDirectory()) {
+          // A dependency's nested node_modules directory describes the
+          // installation topology, not that package's owned payload. Static
+          // imports reached through it are resolved and snapshotted as their
+          // own exact installed-package identities below.
+          if (name === "node_modules") continue;
           visit(path, relativePath, depth + 1);
           continue;
         }
