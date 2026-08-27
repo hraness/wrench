@@ -406,7 +406,24 @@ describe("X authenticated internal-API runtime", () => {
     ).href).toBe(
       "https://abs.twimg.com/responsive-web/client-web/shared~bundle.LoggedInMain~bundle.HomeTimeline.deadbeea.js",
     );
-    expect(() => resolveCurrentXWebChunkUrl(html, "missing.12345678.js")).toThrow("one unique reviewed logical chunk");
+    expect(() => resolveCurrentXWebChunkUrl(html, "missing.12345678.js")).toThrow(
+      "one unique reviewed logical chunk; reviewed evidence is stale",
+    );
+  });
+
+  test("resolves a reviewed Bookmarks family after X inserts a loader member", () => {
+    const html = [
+      "prefix;p.u=e=>({202:\"shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica\"}",
+      ")[e]||e)+\".\"+({202:\"3b894e0\"}",
+      ")[e]+\"a.js\";suffix",
+    ].join("");
+
+    expect(resolveCurrentXWebChunkUrl(
+      html,
+      "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
+    ).href).toBe(
+      "https://abs.twimg.com/responsive-web/client-web/shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js",
+    );
   });
 
   test("resolves a reviewed shared-chunk family after X appends one bundle member", () => {
@@ -449,7 +466,7 @@ describe("X authenticated internal-API runtime", () => {
     expect(() => resolveCurrentXWebChunkUrl(
       substringOnly,
       "shared~bundle.LoggedInMain~bundle.HomeTimeline.e992705a.js",
-    )).toThrow("one unique reviewed logical chunk");
+    )).toThrow("one unique reviewed logical chunk; reviewed evidence is stale");
 
     const ambiguous = [
       "prefix;p.u=e=>({202:\"shared~bundle.LoggedInMain~bundle.HomeTimeline~bundle.Compose\",",
@@ -460,7 +477,7 @@ describe("X authenticated internal-API runtime", () => {
     expect(() => resolveCurrentXWebChunkUrl(
       ambiguous,
       "shared~bundle.LoggedInMain~bundle.HomeTimeline.e992705a.js",
-    )).toThrow("one unique reviewed logical chunk");
+    )).toThrow("one unique reviewed logical chunk; reviewed evidence is stale");
   });
 
   test("rejects duplicate webpack name and hash bindings", () => {
@@ -923,6 +940,119 @@ describe("X authenticated internal-API runtime", () => {
     });
     expect((result.output as { posts: readonly { id: string }[] }).posts.map((post) => post.id))
       .toEqual([FOCAL_POST_ID, CREATED_POST_ID]);
+  });
+
+  test("exports bookmarks through a current shared-chunk family that inserted a loader member", async () => {
+    const logicalChunk = "shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica";
+    const html = `${homeHtml()}<script>p.u=e=>({202:"${logicalChunk}"})[e]||e)+"."+({202:"3b894e0"})[e]+"a.js"</script>`;
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (
+        request.url.href
+          === "https://abs.twimg.com/responsive-web/client-web/shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js"
+      ) {
+        return new Response(descriptor("Bookmarks", "LoLaMO4GuHLEPJOhH9kjAw", "query"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Bookmarks")) {
+        return jsonResponse(bookmarksFeedResponse(
+          tweetEntry(FOCAL_POST_ID, "family bookmark", VIEWER_ID, null, {
+            username: "hraness",
+            name: "Hraness",
+          }),
+        ));
+      }
+      throw new Error(`unexpected test request ${request.url.href}`);
+    });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "bookmarks", limit: 25 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalUrl: "https://x.com/i/bookmarks",
+      dispatchStarted: false,
+      output: {
+        feed: "bookmarks",
+        items: [{
+          post_id: FOCAL_POST_ID,
+          url: `https://x.com/i/status/${FOCAL_POST_ID}`,
+          author_username: "hraness",
+          author_name: "Hraness",
+          text: "family bookmark",
+          folder_id: null,
+          bookmarked_at: null,
+        }],
+      },
+    });
+  });
+
+  test("fails closed when the current Bookmarks query ID drifted", async () => {
+    const logicalChunk = "shared~bundle.BookmarkFolders~bundle.Bookmarks";
+    const html = `${homeHtml()}<script>p.u=e=>({202:"${logicalChunk}"})[e]||e)+"."+({202:"deadbee"})[e]+"a.js"</script>`;
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.hostname === "abs.twimg.com" && request.url.href !== MAIN_URL) {
+        return new Response(descriptor("Bookmarks", "ChangedQueryId_12345", "query"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      throw new Error(`unexpected Bookmarks dispatch ${request.url.href}`);
+    });
+    const message = await rejectionMessage(executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "bookmarks", limit: 25 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    ));
+    expect(message).toContain("query-ID drift");
+    expect(message).toContain("Bookmarks:query");
+    expect(message).toContain("reviewed evidence is stale");
+    expect(message).not.toContain("ChangedQueryId_12345");
+    expect(message).not.toContain("LoLaMO4GuHLEPJWrenchH9kjAw");
+  });
+
+  test("fails closed when the current bootstrap omits the Bookmarks chunk family", async () => {
+    const html = `${homeHtml()}<script>p.u=e=>({101:"unrelated"})[e]||e)+"."+({101:"1111111"})[e]+"a.js"</script>`;
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      throw new Error(`unexpected Bookmarks dispatch ${request.url.href}`);
+    });
+    const message = await rejectionMessage(executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "bookmarks", limit: 25 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    ));
+    expect(message).toContain("one unique reviewed logical chunk");
+    expect(message).toContain("reviewed evidence is stale");
   });
 
   test("forwards a bookmark cursor and fails closed when the viewer no longer matches", async () => {
