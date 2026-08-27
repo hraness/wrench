@@ -160,13 +160,27 @@ function exactKeys(value: PlainObject, expected: readonly string[], label: strin
   ) return fail(`${label} must contain exactly ${sortedExpected.join(", ")}`);
 }
 
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function text(value: unknown, label: string, maximumBytes = 2_048): string {
   if (
     typeof value !== "string"
     || value.length === 0
     || Buffer.byteLength(value, "utf8") > maximumBytes
     || /[\u0000-\u001f\u007f-\u009f]/u.test(value)
-    || value !== value.toWellFormed()
+    || !isWellFormedUnicode(value)
   ) return fail(`${label} must be bounded well-formed text without controls`);
   return value;
 }
@@ -239,11 +253,19 @@ export function parseMessageLikeMeSourceConversationCoordinateV1(
     if (source.sourceAccountId !== null) {
       return fail("Message Like Me iMessage sourceAccountId must be null");
     }
-    const observedChatRowId = coordinate.observedChatRowId;
-    if (
-      observedChatRowId !== null
-      && (!Number.isSafeInteger(observedChatRowId) || observedChatRowId < 1)
-    ) return fail("Message Like Me iMessage observedChatRowId must be a positive safe integer or null");
+    let observedChatRowId: number | null;
+    if (coordinate.observedChatRowId === null) {
+      observedChatRowId = null;
+    } else if (
+      typeof coordinate.observedChatRowId === "number"
+      && Number.isFinite(coordinate.observedChatRowId)
+      && Number.isSafeInteger(coordinate.observedChatRowId)
+      && coordinate.observedChatRowId >= 1
+    ) {
+      observedChatRowId = coordinate.observedChatRowId;
+    } else {
+      return fail("Message Like Me iMessage observedChatRowId must be a positive safe integer or null");
+    }
     return Object.freeze({
       sourceAccountId: null,
       sourceExternalId,
