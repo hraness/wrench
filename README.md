@@ -4,7 +4,7 @@
 
 [![skills.sh](https://skills.sh/b/hraness/wrench)](https://skills.sh/hraness/wrench)
 
-**Give your agent a precise handle on the web.**
+**Give agents bounded access to pages, media, and connected accounts.**
 
 Wrench is an open-source, bring-your-own-agent CLI and TypeScript SDK. It is the
 capability and custody layer beneath any AI agent that can run a command: a way
@@ -41,6 +41,35 @@ wrench plugin list
   browser or contacting the provider.
 - **Add one capability.** Turn a reviewed first-party exchange into a typed,
   semantic operation with strict inputs, bounded outputs, and explicit trust.
+
+## Built-in provider catalog
+
+Wrench v0.15.0 ships attested adapter surfaces for Beeper, Bluesky, Facebook,
+Facebook Groups, Facebook Marketplace, Facebook Pages, GitHub, Gmail, Hacker
+News, Instagram, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp,
+X, and YouTube. Eighteen of those surfaces have at least one `observed`
+operation; Facebook Pages is currently reservation-only, with zero executable
+operations. LinkedIn and X each have separate official and authenticated-web
+adapters. The [release-bound provider directory](https://wrench.rip/provider-capabilities/)
+puts each `observed` and `capture-required` count beside the provider instead of
+treating a catalog entry as a generic support badge.
+
+Beeper is Wrench's first pinned local-CLI provider. Its 32 observed operations
+read accounts, contacts, conversations, and messages; manage reactions, drafts,
+reminders, and conversation state; and preview and confirm sends, edits, group
+changes, and presence. Wrench accepts only the reviewed official Beeper CLI
+0.6.2 executable and one bound Desktop target. It does not expose a generic
+command runner, and submission is not a claim of network delivery.
+
+```sh
+wrench beeper-local messaging.list --auth beeper-main \
+  --input '{"limit":100}' --json
+wrench beeper-local messaging.send --auth beeper-main --preview --json \
+  --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","kind":"text","text":"Hello from Wrench"}'
+```
+
+Read the focused [Beeper guide](https://wrench.rip/providers/beeper/) for setup,
+version identities, action boundaries, export workflows, and exclusions.
 
 ## Why Wrench is different
 
@@ -80,10 +109,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.14.0` tag:
+Install the current immutable CLI release from the `v0.15.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.14.0
+bun add --global github:hraness/wrench#v0.15.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -107,7 +136,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.14.0
+bun add github:hraness/wrench#v0.15.0
 ```
 
 ```ts

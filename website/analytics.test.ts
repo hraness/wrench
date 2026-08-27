@@ -127,6 +127,7 @@ describe("Wrench browser analytics", () => {
       ["/getting-started/", "getting_started"],
       ["/capture-and-archives/", "capture_and_archives"],
       ["/provider-capabilities/", "provider_capabilities"],
+      ["/providers/beeper/", "provider_beeper"],
       ["/security/", "security"],
       ["/plugins/", "plugin_authoring"],
       ["/about/", "about"],

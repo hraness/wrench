@@ -9,6 +9,13 @@ runner.
 Portable plugin protocol v1 cannot declare `local-cli`. Native process authority
 and executable provenance remain code-owned source-plugin responsibilities.
 
+The built-in Beeper adapter is the first production example. It turns the
+pinned official Beeper CLI 0.6.2 artifacts into 32 named operations while the
+source plugin owns executable verification, Desktop-target and account binding,
+strict projections, process bounds, and mutation recovery. See the public
+[Beeper provider guide](https://wrench.rip/providers/beeper/) and the current
+release's [operation attestation](https://wrench.rip/provider-capabilities/#provider-beeper).
+
 ## Keep three versions separate
 
 Every local CLI binding has three independent version boundaries:

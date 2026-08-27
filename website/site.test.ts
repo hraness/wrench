@@ -27,8 +27,13 @@ import {
 import { handleDocumentNegotiation } from "../edge/negotiation";
 import {
   loadProviderCapabilityAttestation,
-  renderProviderCapabilityAttestationTable,
 } from "./provider-capability-attestation";
+import {
+  createBeeperPresentationFacts,
+  createProviderDirectory,
+  renderProviderAttestationGroups,
+  renderProviderOverviewCards,
+} from "./provider-presentation";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const websiteRoot = import.meta.dir;
@@ -142,6 +147,11 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/compare/personal-agents-browser-use/"');
     expect(html).toContain('href="/agentic-web-spoofing/"');
     expect(html).toContain('href="/vms-cannot-contain-agents/"');
+    expect(html).toContain('href="/providers/beeper/"');
+    expect(html).toContain("Give agents bounded access to pages, media, and connected accounts.");
+    expect(html).toContain("Know which operations can run before you bind an account.");
+    expect(html).toContain('src="/favicon.svg"');
+    expect(html).not.toContain("🔧");
     expect(html).toContain(`href="${PUBLISHER_URL}">Hraness GitHub organization</a>`);
     expect(notFound).toContain('<meta name="robots" content="noindex, nofollow">');
     expect(notFound).toContain(
@@ -166,6 +176,8 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
     expect(llms).toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
+    expect(llms).toContain("submission is not a delivery claim");
     expect(llms).toContain("npx skills add hraness/wrench");
     expect(llms).toContain("Accept: text/markdown");
     expect(llms).not.toContain("{{");
@@ -395,14 +407,25 @@ describe("wrench.rip static site", () => {
     const providerCapabilities = pages.find((page) =>
       page.definition.canonicalPath === "/provider-capabilities/");
     const attestation = await loadProviderCapabilityAttestation(repositoryRoot);
-    expect(providerCapabilities?.html).toContain(
-      `Wrench ${packageIdentity.version} provider capability attestation is checked against the bundled public adapter manifests`,
+    const providerDirectory = createProviderDirectory(attestation);
+    const providerCards = renderProviderOverviewCards(providerDirectory);
+    const providerGroups = renderProviderAttestationGroups(providerDirectory, attestation);
+    const providerMarkdown = await readFile(
+      join(websiteRoot, "dist", markdownSiblingPath("/provider-capabilities/").slice(1)),
+      "utf8",
     );
-    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Provider</th>");
+    expect(providerCapabilities?.html).toContain(
+      `Wrench ${packageIdentity.version} joins its built-in provider plugins to the bundled public adapter manifests`,
+    );
+    expect(html).toContain(providerCards);
+    expect(providerCapabilities?.html).toContain(providerCards);
+    expect(providerCapabilities?.html).toContain(providerGroups);
     expect(providerCapabilities?.html).toContain("<th scope=\"col\">Operation</th>");
     expect(providerCapabilities?.html).toContain("<th scope=\"col\">Completeness</th>");
+    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Risk</th>");
+    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Contract</th>");
+    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Transport</th>");
     expect(providerCapabilities?.html).toContain("<th scope=\"col\">Limit</th>");
-    expect(providerCapabilities?.html).toContain(renderProviderCapabilityAttestationTable(attestation));
     expect(providerCapabilities?.html).toContain(`<code>gmail</code>`);
     expect(providerCapabilities?.html).toContain(`<code>contacts.list</code>`);
     expect(providerCapabilities?.html).toContain(`<code>observed</code>`);
@@ -410,6 +433,41 @@ describe("wrench.rip static site", () => {
     expect(providerCapabilities?.html).toContain("Telegram is absent from those manifests");
     expect(providerCapabilities?.html).not.toContain("<th scope=\"row\">Telegram</th>");
     expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");
+    expect(providerMarkdown).toContain(
+      "### Beeper (Pinned Local CLI) `beeper-local` · v2.0.0 · 32 of 32 observed",
+    );
+
+    const beeper = pages.find((page) => page.definition.canonicalPath === "/providers/beeper/");
+    const beeperFacts = createBeeperPresentationFacts(providerDirectory);
+    expect(beeper?.html).toContain(`<title>${beeperFacts.pageTitle}</title>`);
+    expect(beeper?.html).toContain(
+      `<meta name="description" content="${beeperFacts.pageDescription}">`,
+    );
+    expect(beeper?.html).toContain(
+      `<h1>Beeper through ${beeperFacts.observedOperationCount} observed operations.</h1>`,
+    );
+    expect(beeper?.html).toContain(`adapter <code>beeper-local</code> ${beeperFacts.adapterVersion}`);
+    expect(beeper?.html).toContain(`official Beeper CLI ${beeperFacts.cliVersion}`);
+    expect(beeper?.html).toContain(
+      `href="${beeperFacts.cliReleaseUrl}">official ${beeperFacts.cliVersion} release</a>`,
+    );
+    expect(beeper?.html).toContain(
+      `${beeperFacts.semanticContractVersionLabel} across the current ${beeperFacts.observedOperationCount} operations`,
+    );
+    expect(beeper?.html).toContain(beeperFacts.artifactTable);
+    expect(beeper?.html).toContain(
+      `&lt;WRENCH_STATE_HOME&gt;/tools/beeper/${beeperFacts.cliVersion}/beeper`,
+    );
+    expect(beeper?.html).toContain('aria-current="location" href="/provider-capabilities/"');
+    expect(beeper?.html).toContain("evidence of submission, not network delivery");
+    expect(beeper?.html).toContain("Wrench does not retry it");
+    expect(beeper?.html).toContain(`all ${beeperFacts.cliCommandCount} canonical CLI commands`);
+    expect(beeper?.html).toContain("These workflows are not part of the 32 adapter operations");
+    expect(beeper?.html).not.toMatch(/all Beeper (?:CLI )?features/iu);
+    expect(beeper?.html).not.toMatch(/all (?:your )?chats/iu);
+    expect(beeper?.html).not.toContain("exactly once");
+    expect(beeper?.html).not.toContain("seamless");
+    expect(beeper?.html).not.toContain("Provider capabilities attestation");
 
     const personalAgents = pages.find((page) =>
       page.definition.canonicalPath === "/compare/personal-agents-browser-use/");
@@ -521,6 +579,7 @@ describe("wrench.rip static site", () => {
         "Verified finite-item media archives",
         "Encrypted exact-query read snapshots",
         "Typed and bounded provider operations",
+        "Pinned Beeper CLI operations",
         "Fail-closed provider contract drift",
       ],
       softwareVersion: packageIdentity.version,
