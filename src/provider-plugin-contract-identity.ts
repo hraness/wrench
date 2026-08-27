@@ -93,6 +93,14 @@ const identities = Object.freeze({
       development: "ff716adff5a4f962a765020474325037d0d4795c61f086c13e5d2adc61484ec8",
     },
   },
+  "imessage-direct": {
+    schemaVersion: 1,
+    pluginVersion: "1.0.0",
+    implementationSha256: "00ef9201e77ffe5258f13b81a5e934af0ccf6317e095644ccfcec258c6928e8d",
+    legacyCurrentReadImplementationSha256: [],
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
+  },
   "linkedin-official": {
     schemaVersion: 1,
     pluginVersion: "1.0.0",

@@ -259,6 +259,23 @@ function writeInstalledDependency(
 }
 
 describe("provider plugin definition and registry", () => {
+  test("registers iMessage as a current-only durable local-CLI identity", () => {
+    const plugin = providerPluginRegistry.get("imessage-direct");
+    const binding = providerPluginRegistry.requireRoute("local-cli", "imessage");
+    expect(plugin?.version).toBe("1.0.0");
+    expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
+      .toBe("00ef9201e77ffe5258f13b81a5e934af0ccf6317e095644ccfcec258c6928e8d");
+    for (const operation of binding.operations) {
+      for (const contractVersion of operation.contractVersions) {
+        expect(providerPluginRegistry.legacyContractImplementationHashes(
+          binding,
+          operation.name,
+          contractVersion,
+        )).toEqual([]);
+      }
+    }
+  });
+
   test("registers Twitch as a current-only durable authenticated-web identity", () => {
     const plugin = providerPluginRegistry.get("twitch-web");
     const binding = plugin?.bindings.find(({ surfaceId }) =>
