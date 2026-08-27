@@ -16,8 +16,8 @@ Do not use Wrench as an AI agent, hosted HTTP API, OpenAPI surface, OAuth develo
 - [Install the Wrench Agent Skill](https://wrench.rip/): `npx skills add hraness/wrench` adds the capture, archive, provider, and publishing guide to a command-capable agent
 - [Capture URLs and create verified media archives](https://wrench.rip/capture-and-archives/): choose inspection, durable Markdown, or one finite media archive
 - [First-capture demo](https://wrench.rip/getting-started/#demo): a 12-second successful public-page read with reusable video, GIF, PNG, and a text transcript
-- [Provider capability attestation](https://wrench.rip/provider-capabilities/): every bundled adapter operation with its reviewed completeness and limit
-- [Beeper support](https://wrench.rip/providers/beeper/): 32 observed operations through the pinned official CLI, including previewed and confirmed message actions
+- [Provider support](https://wrench.rip/provider-capabilities/): every action supported by the current release, grouped by service and access method
+- [Beeper support](https://wrench.rip/providers/beeper/): 32 supported actions through the official local CLI, including previewed and confirmed message actions
 - [Personal agents and attested operations](https://wrench.rip/compare/personal-agents-browser-use/): persistent browser-using agents versus Wrench's named, attested operation set
 - [Agentic-web index spoofing](https://wrench.rip/agentic-web-spoofing/): inbound bot impersonation on the Known Agents index, and why a claimed identity still does not attest an outbound Wrench operation
 - [VMs cannot contain agents](https://wrench.rip/vms-cannot-contain-agents/): Trail of Bits' containment argument from the Wednesday 26 August 2026 rough.day tech edition, and why a guest machine still does not attest a Wrench operation
@@ -40,4 +40,4 @@ Public content pages serve HTML by default. Request the same URL with `Accept: t
 
 ## Usage
 
-Use Wrench only with material and accounts you are authorized to access. It does not bypass login, payment, access controls, or DRM. Public page capture is the smallest first run. Authenticated providers stay unavailable until `wrench doctor` and `wrench capabilities` say they are ready. Beeper is a pinned local-CLI provider with 32 observed semantic operations. Sends and other mutations require Wrench preview and confirmation; submission is not a delivery claim.
+Use Wrench only with material and accounts you are authorized to access. It does not bypass login, payment, access controls, or DRM. Public page capture is the smallest first run. Authenticated providers stay unavailable until `wrench doctor` and `wrench capabilities` say they are ready. Beeper provides 32 supported semantic actions through its official local CLI. Sends and other mutations require Wrench preview and confirmation; submission is not a delivery claim.
