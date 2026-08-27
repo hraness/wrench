@@ -3069,7 +3069,7 @@ describe("local at-most-once dispatch ledger", () => {
       const result = await confirmInvocation(stored.digest, {
         headed: false,
         environment: testState.environment,
-        executeProvider: () => Promise.reject(new Error("private unexpected diagnostic")),
+        executeProvider: () => Promise.reject(new Error("X Bookmarks query-ID drift; reviewed evidence is stale")),
       });
       expect(result.receipt).toMatchObject({
         status: "failed",
@@ -3077,10 +3077,69 @@ describe("local at-most-once dispatch ledger", () => {
         dispatch: { planned: 1, started: 0, verified: 0 },
       });
       expect(result.receipt.error).toBe(
-        "official API operation failed before the dispatch boundary; reason: provider executor terminated without returning a bounded result",
+        "official API operation failed before the dispatch boundary; reason: X Bookmarks query-ID drift; reviewed evidence is stale",
       );
-      expect(JSON.stringify(readRunReceipt(result.receipt.runId, testState.environment))).not.toContain("private unexpected diagnostic");
+      expect(result.receipt.error).not.toContain("terminated without returning a bounded result");
+      expect(JSON.stringify(readRunReceipt(result.receipt.runId, testState.environment)))
+        .toContain("X Bookmarks query-ID drift; reviewed evidence is stale");
       expect(readdirSync(join(testState.directory, "recovery", "capsules"))).toEqual([]);
+
+      const secretStored = createInvocationPlan(prepared(testState, "secret-bearer-throw"));
+      saveInvocationPlan(secretStored, testState.environment);
+      const secretResult = await confirmInvocation(secretStored.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeProvider: () => Promise.reject(
+          new Error("request failed with Authorization: Bearer private-message-value"),
+        ),
+      });
+      expect(secretResult.receipt.error).toContain("official API operation failed before the dispatch boundary");
+      expect(secretResult.receipt.error).not.toContain("terminated without returning a bounded result");
+      expect(JSON.stringify(readRunReceipt(secretResult.receipt.runId, testState.environment)))
+        .not.toContain("private-message-value");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("surfaces a thrown x-web bookmarks pre-dispatch reason on the receipt", async () => {
+    const testState = state();
+    try {
+      const selectedManifest = xWebManifest();
+      const selectedAuth = createAuth("x-web-test", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "123",
+      });
+      installManifest(selectedManifest, {
+        force: false,
+        environment: testState.environment,
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const invocation = prepareInvocation(
+        "x-web",
+        "feeds.read",
+        { feed: "bookmarks", limit: 25 },
+        selectedAuth.id,
+        testState.environment,
+      );
+      const result = await executeReadInvocation(invocation, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: () => Promise.reject(
+          new Error("X query-ID drift for Bookmarks:query; reviewed evidence is stale"),
+        ),
+      });
+      expect(result.receipt).toMatchObject({
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      });
+      expect(result.receipt.error).toBe(
+        "authenticated web API operation failed before the dispatch boundary; reason: X query-ID drift for Bookmarks:query; reviewed evidence is stale",
+      );
+      expect(result.receipt.error).not.toContain("terminated without returning a bounded result");
+      expect(result.output).toBeNull();
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }
@@ -3744,7 +3803,8 @@ describe("official-provider plans and receipts", () => {
           dispatchStarted: false,
           dispatch: { planned: 0, started: 0, verified: 0 },
         });
-        expect(result.receipt.error).toContain("terminated without returning a bounded result");
+        expect(result.receipt.error).toContain("executor result");
+        expect(result.receipt.error).not.toContain("terminated without returning a bounded result");
         expect(result.output).toBeNull();
       }
       expect(allFileText(testState.directory)).not.toContain("executor-private");
@@ -4090,7 +4150,8 @@ describe("receipts", () => {
           recoveryHandle: "session=wrench-safe;config=/tmp/config;socket=/tmp/socket;artifacts=/tmp/artifacts",
         }),
       });
-      expect(result.receipt.error).toContain("terminated without returning a bounded result");
+      expect(result.receipt.error).toContain("executor result");
+      expect(result.receipt.error).not.toContain("terminated without returning a bounded result");
       expect(result.receipt.error).not.toContain("arbitrary private browser diagnostics");
       expect(result.receipt.error).not.toContain("wrench-safe");
     } finally {
