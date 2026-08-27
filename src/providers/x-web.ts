@@ -246,7 +246,7 @@ export const xWebQueryDescriptorEvidenceSnapshot = Object.freeze({
     { operationName: "HomeLatestTimeline", operationType: "query", queryId: "BLQWpfVqtgBqAqwRRJcJjA", sourceChunk: "shared~bundle.LoggedInMain~bundle.HomeTimeline.c12c8a9a.js", observedOn: "2026-08-20" },
     { operationName: "ListLatestTweetsTimeline", operationType: "query", queryId: "LV64djPRhnsVhGCK76s13w", sourceChunk: "shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js" },
     { operationName: "ListRankedTweetsTimeline", operationType: "query", queryId: "dPN7GrkxeMF4SUYCo9D9YA", sourceChunk: "shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica.3b894e0a.js" },
-    { operationName: "Bookmarks", operationType: "query", queryId: "LoLaMO4GuHLEPJOhH9kjAw", sourceChunk: "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js" },
+    { operationName: "Bookmarks", operationType: "query", queryId: "iblrFnKr6PZUR-dWpfXG6g", sourceChunk: "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js", observedOn: "2026-08-27" },
     { operationName: "BookmarkSearchTimeline", operationType: "query", queryId: "SpDsqmz6FfYESd1e7TPcAw", sourceChunk: "main.9929b02a.js" },
     { operationName: "SearchTimeline", operationType: "query", queryId: "hz_94eVAtrtQo_vO3my7Rw", sourceChunk: "main.9929b02a.js" },
     { operationName: "NotificationsTimeline", operationType: "query", queryId: "dDSNxYH-uWwVo2r3Y5VVqg", sourceChunk: "bundle.Notifications.eea6257a.js" },

@@ -117,9 +117,13 @@ describe("X query descriptor revision evidence", () => {
     }
   });
 
-  test("preserves the opaque Bookmarks query ID across product renames", () => {
+  test("records the current reviewed Bookmarks observation", () => {
     const bookmarks = evidence("Bookmarks");
-    expect(bookmarks.queryId).toBe("LoLaMO4GuHLEPJOhH9kjAw");
+    expect(bookmarks).toMatchObject({
+      queryId: "iblrFnKr6PZUR-dWpfXG6g",
+      sourceChunk: "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
+      observedOn: "2026-08-27",
+    });
     expect(bookmarks.queryId).not.toBe("LoLaMO4GuHLEPJWrenchH9kjAw");
     expect(JSON.stringify(xWebQueryDescriptorEvidenceSnapshot))
       .not.toContain("LoLaMO4GuHLEPJWrenchH9kjAw");
