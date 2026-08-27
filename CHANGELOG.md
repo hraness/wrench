@@ -9,6 +9,8 @@
   later releases.
 - Declare Wrench's authenticated browser and provider capabilities as dual-use
   content and ship the required disclosure in every package.
+- Admit TAB, LF, and CR in projected X post bodies. Request headers, cursors,
+  timestamps, every other C0 control, and DEL remain fail-closed.
 
 ## 0.15.0 - 2026-08-27
 
@@ -32,9 +34,6 @@
 - Publish a focused Beeper guide that binds its 32 observed operations to the
   official CLI, adapter, semantic contracts, Desktop realm, executable hashes,
   preview and dispatch rules, export boundaries, and explicit exclusions.
-- Admit TAB, LF, and CR in projected X post bodies. Request headers, cursors,
-  timestamps, every other C0 control, and DEL remain fail-closed.
-
 ## 0.14.0 - 2026-08-26
 
 - Add a versioned, body-free Beeper direct-contact interaction summary over
