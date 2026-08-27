@@ -3,6 +3,7 @@ import {
   lazyLocalCliRuntime,
   type LocalCliPluginOperationDefinitionV1,
 } from "../../provider-plugin";
+import type { LocalCliRecipe } from "../../model";
 import {
   linkedDeviceAuthKinds,
   providerImplementationEntry,
@@ -29,6 +30,7 @@ type ManifestOperationProjection = Readonly<{
   sideEffect: string;
   idempotency: "none" | "local-at-most-once";
   dedupeWindowMs: number;
+  localCli: LocalCliRecipe;
 }>;
 
 const manifestOperations = imsgManifest.operations as unknown as Readonly<
@@ -154,6 +156,27 @@ export const imessageDirectPlugin = defineProviderPlugin({
         probe: runtime.probeImsgDirectSubject,
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeImsgDirectOperation(recipe, input, auth, options),
+        executeMessagingPart: async (operation, input, auth, attempt) => {
+          if (operation !== "messaging.send") {
+            throw new Error("direct iMessage messaging runtime accepts only messaging.send");
+          }
+          const result = await runtime.executeImsgDirectMessagingPart(
+            manifestOperations["messaging.send"].localCli,
+            input,
+            auth,
+            {
+              environment: attempt.environment,
+              ...(attempt.signal === undefined ? {} : { signal: attempt.signal }),
+              beforeDispatch: async () => attempt.beforeExternalBegin(),
+            },
+          );
+          if (result.status !== "succeeded" || result.output === null) {
+            throw new Error(
+              "direct iMessage messaging dispatch lacks exact accepted evidence",
+            );
+          }
+          return result.output;
+        },
         reconcile: runtime.reconcileImsgDirectOperation,
       };
     }),

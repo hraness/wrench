@@ -28,7 +28,10 @@ import {
   installReviewedImsgBinary,
 } from "./providers/imessage-direct-install";
 import { imsgDirectMessagingDefinition } from "./providers/imessage-direct-messaging";
-import { materializeImsgMessagingRead } from "./providers/imessage-direct-omni";
+import {
+  imsgMessageProviderId,
+  materializeImsgMessagingRead,
+} from "./providers/imessage-direct-omni";
 import {
   executeImsgDirectOperation,
   executeImsgDirectMessagingPart,
@@ -307,7 +310,7 @@ describe("reviewed direct iMessage provider", () => {
         imsgDirectMessagingDefinition.action.mapAcceptedResult(result.output),
       ).toEqual({
         state: "submitted",
-        providerMessageId: MESSAGE_GUID,
+        providerMessageId: imsgMessageProviderId(MESSAGE_GUID),
         providerRevision: `99:${MESSAGE_GUID}`,
       });
       expect(events).toEqual(["durable-dispatch", "accepted-target", "verified"]);

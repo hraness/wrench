@@ -1,5 +1,7 @@
+import { canonicalJson, sha256 } from "../canonical-json";
 import type { OperationInput } from "../model";
 import type { MessagingRouteCoordinateV1 } from "../messaging-types";
+import type { ProviderMessageV1 } from "../omni-model";
 import type {
   ProviderPluginMessagingDefinitionV1,
   ProviderPluginMessagingTargetV1,
@@ -14,6 +16,7 @@ import {
 } from "./imessage-direct";
 import {
   imsgConversationProviderId,
+  imsgMessageProviderId,
   materializeImsgExactConversation,
 } from "./imessage-direct-omni";
 
@@ -55,6 +58,15 @@ function positiveRowId(value: unknown, label: string): number {
     throw new Error(`${label} must be a positive decimal row ID`);
   }
   return parsed;
+}
+
+function positiveNumericRowId(value: unknown, label: string): number {
+  if (
+    typeof value !== "number"
+    || !Number.isSafeInteger(value)
+    || value < 1
+  ) throw new Error(`${label} must be a positive row ID`);
+  return value;
 }
 
 function targetField(
@@ -117,6 +129,77 @@ function rowIdFromRevision(revision: string | null): number {
   return positiveRowId(revision.slice(0, separator), "iMessage conversation row revision");
 }
 
+function exactConversationFromOutput(output: unknown) {
+  const envelope = record(output, "direct iMessage exact conversation output");
+  const rawConversation = record(
+    envelope.conversation,
+    "direct iMessage exact conversation output conversation",
+  );
+  if (rawConversation.service !== IMSG_SERVICE) {
+    throw new Error("direct iMessage exact conversation changed service");
+  }
+  return materializeImsgExactConversation(Object.freeze({
+    chat_guid: boundedImsgString(
+      rawConversation.guid,
+      "direct iMessage exact conversation GUID",
+      2_048,
+    ),
+    service: IMSG_SERVICE,
+    observed_chat_row_id: positiveNumericRowId(
+      rawConversation.id,
+      "direct iMessage exact conversation row ID",
+    ),
+  }), output);
+}
+
+function rawImsgMessageGuid(providerId: string): string {
+  const prefix = "imessage:message:";
+  if (!providerId.startsWith(prefix)) {
+    throw new Error("iMessage message provider ID is malformed");
+  }
+  let decoded: string;
+  try {
+    decoded = Buffer.from(providerId.slice(prefix.length), "base64url").toString("utf8");
+  } catch {
+    throw new Error("iMessage message provider ID is malformed");
+  }
+  if (imsgMessageProviderId(decoded) !== providerId) {
+    throw new Error("iMessage message provider ID is noncanonical");
+  }
+  return boundedImsgString(decoded, "iMessage message GUID", 2_048);
+}
+
+function canonicalMessages(messages: readonly ProviderMessageV1[]): readonly ProviderMessageV1[] {
+  return Object.freeze([...messages].sort((left, right) => {
+    const leftKey = `${left.orderedAt ?? ""}\0${left.providerId}`;
+    const rightKey = `${right.orderedAt ?? ""}\0${right.providerId}`;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  }));
+}
+
+function exactAcceptedMessage(
+  message: ProviderMessageV1,
+  expected: {
+    readonly providerMessageId: string;
+    readonly providerRevision: string | null;
+    readonly direction: "outgoing";
+    readonly bodySha256: string;
+    readonly replyToProviderId: string | null;
+  },
+): boolean {
+  return message.providerId === expected.providerMessageId
+    && message.providerRevision === expected.providerRevision
+    && message.direction === "outgoing"
+    && message.state === "active"
+    && message.subject === null
+    && message.body !== null
+    && message.bodyTruncated !== true
+    && sha256(message.body) === expected.bodySha256
+    && expected.replyToProviderId === null
+    && message.replyToProviderId === null
+    && message.attachments.length === 0;
+}
+
 export const imsgDirectMessagingDefinition = Object.freeze({
   schemaVersion: 1,
   contractId: "wrench.provider-messaging.imessage-direct.v1",
@@ -144,7 +227,9 @@ export const imsgDirectMessagingDefinition = Object.freeze({
           : "unknown" as const,
         title: entity.title,
         participants: entity.participants,
-        providerRevision: entity.providerRevision,
+        // The chat row's last-message timestamp changes after every send. Route
+        // identity is the exact GUID, row ID, service, and participant set.
+        providerRevision: null,
       });
     }),
   ),
@@ -190,7 +275,7 @@ export const imsgDirectMessagingDefinition = Object.freeze({
           : "unknown" as const,
         title: entity.title,
         participants: entity.participants,
-        providerRevision: entity.providerRevision,
+        providerRevision: null,
       })]);
     },
   }),
@@ -211,6 +296,28 @@ export const imsgDirectMessagingDefinition = Object.freeze({
     state: "supported",
     operation: "messaging.send",
     reply: "unsupported",
+    livePreflight: Object.freeze({
+      operation: "conversations.read",
+      input: (target: ProviderPluginMessagingTargetV1) => {
+        const parsed = parseImsgMessagingTarget(target);
+        return Object.freeze({
+          chat_guid: targetField(parsed, "chatGuid"),
+          service: targetField(parsed, "service"),
+          observed_chat_row_id: positiveRowId(
+            targetField(parsed, "observedChatRowId"),
+            "iMessage live preflight row ID",
+          ),
+        });
+      },
+      snapshot: (output: unknown) => {
+        const entity = exactConversationFromOutput(output);
+        return Object.freeze({
+          conversationProviderId: entity.providerId,
+          participantFingerprint: sha256(canonicalJson(entity.participants)),
+          providerRevision: null,
+        });
+      },
+    }),
     compileTurnPart: (target, part) => {
       if (part.replyToProviderId !== null) {
         throw new Error("AppleScript iMessage transport does not support threaded replies");
@@ -266,9 +373,83 @@ export const imsgDirectMessagingDefinition = Object.freeze({
       ) throw new Error("direct iMessage accepted message row is malformed");
       return Object.freeze({
         state: "submitted" as const,
-        providerMessageId: messageGuid,
+        providerMessageId: imsgMessageProviderId(messageGuid),
         providerRevision: `${source.messageRowId}:${messageGuid}`,
       });
+    },
+    proveExpectedOwnPrefix: ({ base, current, accepted }) => {
+      if (
+        base.contextLimit < 1
+        || base.contextLimit > 200
+        || base.messages.length > base.contextLimit
+      ) return "drift" as const;
+      const baseIds = base.messages.map((message) => message.providerMessageId);
+      const acceptedIds = accepted.map((message) => message.providerMessageId);
+      if (
+        new Set(baseIds).size !== baseIds.length
+        || new Set(acceptedIds).size !== acceptedIds.length
+        || acceptedIds.some((id) => baseIds.includes(id))
+      ) return "drift" as const;
+      const currentMessages = canonicalMessages(current.messages);
+      const currentIds = currentMessages.map((message) => message.providerId);
+      if (new Set(currentIds).size !== currentIds.length) return "drift" as const;
+      const baseById = new Map(base.messages.map((message) => [
+        message.providerMessageId,
+        message,
+      ]));
+      const acceptedById = new Map(accepted.map((message) => [
+        message.providerMessageId,
+        message,
+      ]));
+      const exactBaseWindow = currentIds.length === baseIds.length
+        && currentIds.every((id, index) => id === baseIds[index])
+        && currentMessages.every((message) => {
+          const expected = baseById.get(message.providerId);
+          return expected !== undefined
+            && message.providerRevision === expected.providerRevision
+            && message.orderedAt === expected.orderedAt
+            && sha256(canonicalJson(message)) === expected.messageSha256;
+        });
+      if (
+        exactBaseWindow
+        && current.exactDataRevision === base.exactDataRevision
+        && current.latestMessageRevision === base.latestMessageRevision
+      ) return "proven" as const;
+      let visibleAcceptedCount = 0;
+      for (let count = 1; count <= accepted.length; count += 1) {
+        const visibleIds = [...baseIds, ...acceptedIds.slice(0, count)];
+        const expectedWindow = visibleIds.slice(
+          Math.max(0, visibleIds.length - base.contextLimit),
+        );
+        if (
+          currentIds.length === expectedWindow.length
+          && currentIds.every((id, index) => id === expectedWindow[index])
+        ) {
+          visibleAcceptedCount = count;
+          break;
+        }
+      }
+      if (
+        visibleAcceptedCount === 0
+        || current.exactDataRevision === base.exactDataRevision
+        || current.latestMessageRevision === base.latestMessageRevision
+      ) return "drift" as const;
+      for (const message of currentMessages) {
+        const baseMessage = baseById.get(message.providerId);
+        if (baseMessage !== undefined) {
+          if (
+            message.providerRevision !== baseMessage.providerRevision
+            || message.orderedAt !== baseMessage.orderedAt
+            || sha256(canonicalJson(message)) !== baseMessage.messageSha256
+          ) return "drift" as const;
+          continue;
+        }
+        const expected = acceptedById.get(message.providerId);
+        if (expected === undefined || !exactAcceptedMessage(message, expected)) {
+          return "drift" as const;
+        }
+      }
+      return "proven" as const;
     },
     reconciliation: (target, accepted) => {
       const parsed = parseImsgMessagingTarget(target);
@@ -281,7 +462,7 @@ export const imsgDirectMessagingDefinition = Object.freeze({
             targetField(parsed, "observedChatRowId"),
             "iMessage reconciliation row ID",
           ),
-          message_guid: accepted.providerMessageId,
+          message_guid: rawImsgMessageGuid(accepted.providerMessageId),
         }),
       });
     },
