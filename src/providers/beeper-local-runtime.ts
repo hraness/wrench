@@ -1,37 +1,67 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
 import {
+  chmod,
   lstat,
-  mkdtemp,
+  mkdir,
   open,
   realpath,
-  rm,
+  unlink,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { extname, isAbsolute, join } from "node:path";
 import { types as nodeTypes } from "node:util";
 
 import type { WrenchAuth } from "../auth";
-import type { OperationInput, WebSessionRecipe } from "../model";
-import { OperationDeadline } from "../operation-deadline";
-import { wrenchStateHome } from "../storage";
+import { canonicalJson } from "../canonical-json";
+import type { LocalCliRecipe, OperationInput } from "../model";
 import type {
-  WebSessionCleanupBarrierRegistrar,
-  WebSessionExecution,
+  LocalCliExecution,
+  LocalCliExecutionOptions,
+} from "../local-cli-execution";
+import { OperationDeadline } from "../operation-deadline";
+import { summarizePlanFile } from "../plan-assets";
+import type {
+  LocalCliPluginRuntimeStatusV1,
+  ProviderPluginReconciliationContextV1,
+  ProviderPluginReconciliationOptionsV1,
+  ProviderPluginReconciliationReadbackV1,
+} from "../provider-plugin";
+import {
+  attachLocalCliCleanupProcessGroup,
+  captureLocalCliCleanupResource,
+  localCliCleanupProcessGroupStatus,
+  type LocalCliCleanupResourceIdentityV1,
+} from "../provider-plugin-cleanup-resource";
+import type { ProviderPluginCleanupProofController } from "../provider-plugin-cleanup-execution";
+import { removePrivateDirectoryTree, wrenchStateHome } from "../storage";
+import type {
+  ProviderPluginCleanupResourcePublisher,
   WebSessionOperationDeadline,
 } from "../web-session-execution";
-import { startWebSessionCleanupTrackedOperation } from "../web-session-execution";
+import { startProviderPluginCleanupTrackedOperation } from "../web-session-execution";
 import {
   BEEPER_CLI_PIN,
+  BEEPER_DESKTOP_BUNDLE_IDS,
   BEEPER_DESKTOP_TARGET,
+  BEEPER_MAX_FILE_BYTES,
   BEEPER_LOCAL_OPERATIONS,
   BEEPER_ORIGIN,
+  beeperCliArtifactForRuntime,
   isBeeperLocalOperation,
   parseBeeperOperationInput,
   planBeeperAccountsListCommand,
+  planBeeperOperationCommand,
+  planBeeperPresenceCommands,
   planBeeperReadCommand,
+  planBeeperTargetStatusCommand,
+  planBeeperVersionCommand,
+  type BeeperCommand,
   type BeeperLocalOperationName,
   type BeeperContactsSearchInput,
+  type BeeperContactsListInput,
+  type BeeperMessagingListInput,
   type BeeperMessagingSearchInput,
   type BeeperMessagingReadInput,
   type BeeperOperationInput,
@@ -45,8 +75,34 @@ const MAX_USERS = 200;
 const MAX_CHATS = 200;
 const MAX_MESSAGES = 200;
 const MAX_TEXT_BYTES = 1_048_576;
-const OPERATION_LABEL = "Beeper local read operation";
+const OPERATION_LABEL = "Beeper local CLI operation";
 const SUBJECT_PROBE_TIMEOUT_MS = 120_000;
+
+class BeeperLocalCleanupUnverifiedError extends Error {
+  constructor() {
+    super("Beeper local CLI cleanup could not be proven; retry remains unsafe");
+    this.name = "BeeperLocalCleanupUnverifiedError";
+  }
+}
+
+async function createBeeperOperationRoot(): Promise<string> {
+  const parent = await realpath(tmpdir());
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const path = join(parent, `wrench-beeper-cli-${randomBytes(16).toString("hex")}`);
+    try {
+      await mkdir(path, { mode: 0o700 });
+      return path;
+    } catch (error) {
+      if (
+        typeof error !== "object"
+        || error === null
+        || !("code" in error)
+        || error.code !== "EEXIST"
+      ) throw error;
+    }
+  }
+  throw new Error("Beeper local CLI operation root allocation failed");
+}
 
 type BeeperAuth = Extract<WrenchAuth, { readonly kind: "linked-device-store" }>;
 type JsonRecord = Readonly<Record<string, unknown>>;
@@ -77,6 +133,10 @@ export type BeeperCliInvocation = Readonly<{
   maxOutputBytes: number;
   maxStderrBytes: number;
   signal?: AbortSignal;
+  /** Awaited after durable dispatch fencing and immediately before Bun.spawn. */
+  beforeSpawn?: () => Promise<void>;
+  /** Production-only cleanup admission extension, called synchronously after spawn. */
+  afterSpawn?: (pid: number) => void;
 }>;
 
 export type BeeperCliInvocationResult = Readonly<{
@@ -136,6 +196,10 @@ export type BeeperConversationProjection = Readonly<{
   title: string;
   type: "single" | "group";
   description: string | null;
+  descriptionObserved: boolean;
+  hasAvatar: boolean;
+  avatarObserved: boolean;
+  lastReadMessageSortKey: string | null;
   lastActivity: string | null;
   unreadCount: number;
   unreadMentionsCount: number | null;
@@ -146,6 +210,22 @@ export type BeeperConversationProjection = Readonly<{
   isPinned: boolean | null;
   isReadOnly: boolean | null;
   messageExpirySeconds: number | null;
+  messageExpiryObserved: boolean;
+  draft: Readonly<{
+    text: string;
+    attachments: readonly Readonly<{
+      type: "file" | "gif" | "recorded_audio";
+      fileName: string | null;
+      fileSizeBytes: number | null;
+      mimeType: string | null;
+    }>[];
+  }> | null;
+  draftObserved: boolean;
+  reminder: Readonly<{
+    when: string | null;
+    dismissOnMessage: boolean | null;
+  }> | null;
+  reminderObserved: boolean;
   participants: Readonly<{
     items: readonly BeeperParticipantProjection[];
     total: number;
@@ -185,7 +265,7 @@ export type BeeperMessageProjection = Readonly<{
   conversationId: string;
   senderId: string;
   senderName: string | null;
-  isSender: boolean;
+  isSender: boolean | null;
   sortKey: string;
   timestamp: string;
   editedTimestamp: string | null;
@@ -258,10 +338,22 @@ function strictArray(value: unknown, label: string, maximum: number): readonly u
     || Object.getPrototypeOf(value) !== Array.prototype
     || value.length > maximum
   ) throw new Error(`${label} must be an array of at most ${maximum} items`);
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== value.length + 1
+    || keys.some((key) => typeof key !== "string" || (key !== "length" && !/^(0|[1-9][0-9]*)$/u.test(key)))
+  ) throw new Error(`${label} must contain only dense array entries`);
+  const snapshot: unknown[] = [];
   for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) throw new Error(`${label} must not be sparse`);
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (
+      descriptor === undefined
+      || !("value" in descriptor)
+      || descriptor.enumerable !== true
+    ) throw new Error(`${label} must contain dense enumerable data-only entries`);
+    snapshot.push(descriptor.value);
   }
-  return value;
+  return Object.freeze(snapshot);
 }
 
 function boundedString(
@@ -408,7 +500,9 @@ function parseAccount(value: unknown, label: string): BeeperAccountProjection {
     "network",
     "statusText",
   ], label);
-  if (source.capabilities !== undefined) strictRecord(source.capabilities, `${label}.capabilities`);
+  if (source.capabilities !== undefined) {
+    boundedPlainJson(source.capabilities, `${label}.capabilities`, 0);
+  }
   optionalBoolean(source.default, `${label}.default`);
   const bridge = strictRecord(source.bridge, `${label}.bridge`);
   exactKeys(bridge, ["id", "provider", "type"], [], `${label}.bridge`);
@@ -419,6 +513,17 @@ function parseAccount(value: unknown, label: string): BeeperAccountProjection {
     && provider !== "local"
     && provider !== "platform-sdk"
   ) throw new Error(`${label}.bridge.provider is unsupported`);
+  const status = boundedString(source.status, `${label}.status`, 128);
+  if (![
+    "connected",
+    "connecting",
+    "backfilling",
+    "connection_required",
+    "reconnect_required",
+    "attention_required",
+    "disconnected",
+    "disabled",
+  ].includes(status)) throw new Error(`${label}.status is unsupported`);
   const userSource = strictRecord(source.user, `${label}.user`);
   const projection: BeeperAccountProjection = {
     accountId: boundedString(source.accountID, `${label}.accountID`, 512),
@@ -437,7 +542,7 @@ function parseAccount(value: unknown, label: string): BeeperAccountProjection {
     }),
     network: nullableString(source.network, `${label}.network`, 512),
     loginId: nullableString(source.loginID, `${label}.loginID`, 512),
-    status: boundedString(source.status, `${label}.status`, 128),
+    status,
     statusText: nullableString(source.statusText, `${label}.statusText`, 2_048),
     user: parseUser(source.user, `${label}.user`),
   };
@@ -478,6 +583,90 @@ export function beeperSubjectFromAccounts(
     .update(account.user.id, "utf8")
     .digest("hex");
   return `beeper:local:${digest}`;
+}
+
+export function beeperSubjectFromAccountsAndTarget(
+  accounts: readonly BeeperAccountProjection[],
+  targetBaseUrl: string,
+  targetBundleId: typeof BEEPER_DESKTOP_BUNDLE_IDS[number],
+  targetVersion: string,
+): string {
+  const accountSubject = beeperSubjectFromAccounts(accounts);
+  const reviewedBaseUrl = localDesktopBaseUrl(
+    targetBaseUrl,
+    "Beeper bound target base URL",
+  );
+  if (reviewedBaseUrl === undefined) {
+    throw new Error("Beeper bound target base URL is required");
+  }
+  if (!BEEPER_DESKTOP_BUNDLE_IDS.includes(targetBundleId)) {
+    throw new Error("Beeper bound target bundle ID is unsupported");
+  }
+  const reviewedVersion = boundedString(
+    targetVersion,
+    "Beeper bound target version",
+    256,
+  );
+  const digest = createHash("sha256")
+    .update(accountSubject, "utf8")
+    .update("\0desktop\0desktop\0", "utf8")
+    .update(reviewedBaseUrl, "utf8")
+    .update("\0", "utf8")
+    .update(targetBundleId, "utf8")
+    .update("\0", "utf8")
+    .update(reviewedVersion, "utf8")
+    .digest("hex");
+  return `beeper:local:${digest}`;
+}
+
+export type BeeperTargetRealmProof = Readonly<{
+  baseUrl: string;
+  bundleId: typeof BEEPER_DESKTOP_BUNDLE_IDS[number];
+  version: string;
+}>;
+
+/** Strictly validates the private `targets status desktop --json` realm proof. */
+export function parseBeeperTargetRealmProof(
+  value: unknown,
+  expectedBaseUrl: string,
+): BeeperTargetRealmProof {
+  const source = strictRecord(value, "Beeper Desktop target status");
+  exactKeys(source, [
+    "target",
+    "reachable",
+    "version",
+    "bundleID",
+    "actualType",
+  ], [], "Beeper Desktop target status");
+  const target = strictRecord(source.target, "Beeper Desktop target status.target");
+  exactKeys(target, ["id", "type", "baseURL", "auth", "managed"], [], "Beeper Desktop target status.target");
+  const reviewedBaseUrl = localDesktopBaseUrl(
+    expectedBaseUrl,
+    "Beeper expected Desktop target base URL",
+  );
+  if (
+    reviewedBaseUrl === undefined
+    || target.id !== BEEPER_DESKTOP_TARGET
+    || target.type !== "desktop"
+    || target.baseURL !== reviewedBaseUrl
+    || target.managed !== false
+    || source.reachable !== true
+    || source.actualType !== "desktop"
+  ) throw new Error("Beeper Desktop target status did not bind the fixed reachable Desktop realm");
+  storedBeeperAuth(target.auth, "Beeper Desktop target status.target.auth");
+  const bundleId = boundedString(
+    source.bundleID,
+    "Beeper Desktop target status.bundleID",
+    256,
+  );
+  if (!BEEPER_DESKTOP_BUNDLE_IDS.includes(
+    bundleId as typeof BEEPER_DESKTOP_BUNDLE_IDS[number],
+  )) throw new Error("Beeper Desktop target status returned an unsupported bundle ID");
+  return Object.freeze({
+    baseUrl: reviewedBaseUrl,
+    bundleId: bundleId as typeof BEEPER_DESKTOP_BUNDLE_IDS[number],
+    version: boundedString(source.version, "Beeper Desktop target status.version", 256),
+  });
 }
 
 function parseParticipant(value: unknown, label: string): BeeperParticipantProjection {
@@ -547,13 +736,23 @@ function parseConversation(
   if (!accountIds.has(accountId) || (expectedAccountId !== null && accountId !== expectedAccountId)) {
     throw new Error(`${label}.accountID did not bind the requested account realm`);
   }
-  if (source.capabilities !== undefined) strictRecord(source.capabilities, `${label}.capabilities`);
-  if (source.draft !== undefined && source.draft !== null) strictRecord(source.draft, `${label}.draft`);
-  nullableString(source.imgURL, `${label}.imgURL`, 16_384);
-  nullableString(source.lastReadMessageSortKey, `${label}.lastReadMessageSortKey`, 2_048);
-  if (source.preview !== undefined) strictRecord(source.preview, `${label}.preview`);
-  if (source.reminder !== undefined && source.reminder !== null) strictRecord(source.reminder, `${label}.reminder`);
-  if (source.snooze !== undefined && source.snooze !== null) strictRecord(source.snooze, `${label}.snooze`);
+  if (source.capabilities !== undefined) {
+    validateChatCapabilities(source.capabilities, `${label}.capabilities`);
+  }
+  const draft = parseChatDraftProjection(source.draft, `${label}.draft`);
+  const imageUrl = nullableString(source.imgURL, `${label}.imgURL`, 16_384);
+  const lastReadMessageSortKey = nullableString(
+    source.lastReadMessageSortKey,
+    `${label}.lastReadMessageSortKey`,
+    2_048,
+  );
+  if (source.preview !== undefined) {
+    boundedPlainJson(source.preview, `${label}.preview`, 0);
+  }
+  const reminder = parseChatReminderProjection(source.reminder, `${label}.reminder`);
+  if (source.snooze !== undefined && source.snooze !== null) {
+    validateChatSnooze(source.snooze, `${label}.snooze`);
+  }
   const type = boundedString(source.type, `${label}.type`, 32);
   if (type !== "single" && type !== "group") throw new Error(`${label}.type is unsupported`);
   const participants = strictRecord(source.participants, `${label}.participants`);
@@ -561,7 +760,7 @@ function parseConversation(
   const participantItems = strictArray(
     participants.items,
     `${label}.participants.items`,
-    2_000,
+    500,
   ).map((item, index) =>
     parseParticipant(item, `${label}.participants.items[${index}]`));
   return Object.freeze({
@@ -572,6 +771,10 @@ function parseConversation(
     title: boundedString(source.title, `${label}.title`, 4_096, true),
     type,
     description: nullableString(source.description, `${label}.description`, 65_536, true),
+    descriptionObserved: Object.hasOwn(source, "description"),
+    hasAvatar: imageUrl !== null,
+    avatarObserved: Object.hasOwn(source, "imgURL"),
+    lastReadMessageSortKey,
     lastActivity: optionalTimestamp(source.lastActivity, `${label}.lastActivity`),
     unreadCount: integer(source.unreadCount, `${label}.unreadCount`, 0, 100_000_000),
     unreadMentionsCount: optionalInteger(
@@ -592,6 +795,11 @@ function parseConversation(
       0,
       Number.MAX_SAFE_INTEGER,
     ),
+    messageExpiryObserved: Object.hasOwn(source, "messageExpirySeconds"),
+    draft,
+    draftObserved: Object.hasOwn(source, "draft"),
+    reminder,
+    reminderObserved: Object.hasOwn(source, "reminder"),
     participants: Object.freeze({
       items: Object.freeze(participantItems),
       total: integer(participants.total, `${label}.participants.total`, 0, 100_000_000),
@@ -760,7 +968,6 @@ function parseMessage(
     "accountID",
     "chatID",
     "senderID",
-    "isSender",
     "sortKey",
     "timestamp",
   ], [
@@ -768,6 +975,7 @@ function parseMessage(
     "editedTimestamp",
     "isDeleted",
     "isHidden",
+    "isSender",
     "isUnread",
     "linkedMessageID",
     "links",
@@ -816,7 +1024,13 @@ function parseMessage(
       "message",
       "reason",
     ], `${label}.sendStatus`);
-    boundedString(status.status, `${label}.sendStatus.status`, 64);
+    const sendStatus = boundedString(status.status, `${label}.sendStatus.status`, 64);
+    if (![
+      "SUCCESS",
+      "PENDING",
+      "FAIL_RETRIABLE",
+      "FAIL_PERMANENT",
+    ].includes(sendStatus)) throw new Error(`${label}.sendStatus.status is unsupported`);
     timestamp(status.timestamp, `${label}.sendStatus.timestamp`);
     nullableString(status.internalError, `${label}.sendStatus.internalError`, 65_536, true);
     nullableString(status.message, `${label}.sendStatus.message`, 65_536, true);
@@ -848,7 +1062,7 @@ function parseMessage(
     conversationId,
     senderId: boundedString(source.senderID, `${label}.senderID`, 2_048),
     senderName: nullableString(source.senderName, `${label}.senderName`, 2_048),
-    isSender: requiredBoolean(source.isSender, `${label}.isSender`),
+    isSender: optionalBoolean(source.isSender, `${label}.isSender`),
     sortKey: boundedString(source.sortKey, `${label}.sortKey`, 1_024),
     timestamp: timestamp(source.timestamp, `${label}.timestamp`),
     editedTimestamp: optionalTimestamp(source.editedTimestamp, `${label}.editedTimestamp`),
@@ -1112,6 +1326,49 @@ function validateChatDraft(value: unknown, label: string): void {
   }
 }
 
+function parseChatDraftProjection(
+  value: unknown,
+  label: string,
+): BeeperConversationProjection["draft"] {
+  if (value === undefined || value === null) return null;
+  validateChatDraft(value, label);
+  const source = strictRecord(value, label);
+  const attachments = source.attachments === undefined
+    ? []
+    : Object.values(strictRecord(source.attachments, `${label}.attachments`)).map(
+        (item, index) => {
+          const attachment = strictRecord(item, `${label}.attachments[${index}]`);
+          const type = boundedString(attachment.type, `${label}.attachments[${index}].type`, 32);
+          if (type !== "file" && type !== "gif" && type !== "recorded_audio") {
+            throw new Error(`${label}.attachments[${index}].type is unsupported`);
+          }
+          return Object.freeze({
+            type,
+            fileName: nullableString(
+              attachment.fileName,
+              `${label}.attachments[${index}].fileName`,
+              4_096,
+            ),
+            fileSizeBytes: optionalInteger(
+              attachment.fileSize,
+              `${label}.attachments[${index}].fileSize`,
+              0,
+              Number.MAX_SAFE_INTEGER,
+            ),
+            mimeType: nullableString(
+              attachment.mimeType,
+              `${label}.attachments[${index}].mimeType`,
+              256,
+            ),
+          });
+        },
+      );
+  return Object.freeze({
+    text: boundedString(source.text, `${label}.text`, MAX_TEXT_BYTES, true, true),
+    attachments: Object.freeze(attachments),
+  });
+}
+
 function validateChatReminder(value: unknown, label: string): void {
   const source = strictRecord(value, label);
   exactKeys(source, [], ["dismissOnIncomingMessage", "remindAt"], label);
@@ -1119,6 +1376,22 @@ function validateChatReminder(value: unknown, label: string): void {
     requiredBoolean(source.dismissOnIncomingMessage, `${label}.dismissOnIncomingMessage`);
   }
   if (source.remindAt !== undefined) timestamp(source.remindAt, `${label}.remindAt`);
+}
+
+function parseChatReminderProjection(
+  value: unknown,
+  label: string,
+): BeeperConversationProjection["reminder"] {
+  if (value === undefined || value === null) return null;
+  validateChatReminder(value, label);
+  const source = strictRecord(value, label);
+  return Object.freeze({
+    when: source.remindAt === undefined ? null : timestamp(source.remindAt, `${label}.remindAt`),
+    dismissOnMessage: optionalBoolean(
+      source.dismissOnIncomingMessage,
+      `${label}.dismissOnIncomingMessage`,
+    ),
+  });
 }
 
 function validateChatSnooze(value: unknown, label: string): void {
@@ -1267,7 +1540,10 @@ function sha256File(path: string): Promise<string> {
   });
 }
 
-async function pinnedBinaryCandidate(path: string): Promise<string | null> {
+async function pinnedBinaryCandidate(
+  path: string,
+  executableSha256: string,
+): Promise<string | null> {
   let canonical: string;
   try {
     canonical = await realpath(path);
@@ -1280,10 +1556,8 @@ async function pinnedBinaryCandidate(path: string): Promise<string | null> {
     || (stats.mode & 0o022) !== 0
     || (stats.mode & 0o111) === 0
     || (stats.uid !== process.getuid?.() && stats.uid !== 0)
-    || process.platform !== "darwin"
-    || process.arch !== "arm64"
   ) return null;
-  return await sha256File(canonical) === BEEPER_CLI_PIN.darwinArm64BinarySha256
+  return await sha256File(canonical) === executableSha256
     ? canonical
     : null;
 }
@@ -1291,18 +1565,100 @@ async function pinnedBinaryCandidate(path: string): Promise<string | null> {
 export async function resolvePinnedBeeperCliBinary(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<string> {
+  const artifact = beeperCliArtifactForRuntime();
+  const platformCandidates = process.platform === "darwin"
+    ? process.arch === "arm64"
+      ? ["/opt/homebrew/bin/beeper", "/usr/local/bin/beeper"]
+      : ["/usr/local/bin/beeper", "/opt/homebrew/bin/beeper"]
+    : process.platform === "linux"
+      ? ["/usr/local/bin/beeper", "/usr/bin/beeper", "/opt/beeper/bin/beeper"]
+      : [];
   const candidates = [
     join(wrenchStateHome(environment), "tools", "beeper", BEEPER_CLI_PIN.version, "beeper"),
-    "/opt/homebrew/bin/beeper",
-    "/usr/local/bin/beeper",
+    ...platformCandidates,
   ];
   for (const candidate of candidates) {
-    const found = await pinnedBinaryCandidate(candidate);
+    const found = await pinnedBinaryCandidate(candidate, artifact.executableSha256);
     if (found !== null) return found;
   }
   throw new Error(
     `pinned Beeper CLI ${BEEPER_CLI_PIN.version} is not installed or failed integrity verification`,
   );
+}
+
+export async function materializePinnedBeeperCliBinary(
+  sourcePath: string,
+  operationRoot: string,
+  expectedSha256: string,
+): Promise<string> {
+  if (!isAbsolute(sourcePath) || !isAbsolute(operationRoot)) {
+    throw new Error("Beeper CLI executable materialization requires absolute paths");
+  }
+  const source = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const destinationPath = join(operationRoot, "beeper");
+  let destination;
+  try {
+    const before = await source.stat();
+    if (
+      !before.isFile()
+      || before.size < 1
+      || before.size > 256 * 1024 * 1024
+      || (before.mode & 0o022) !== 0
+      || (before.mode & 0o111) === 0
+      || (before.uid !== process.getuid?.() && before.uid !== 0)
+    ) throw new Error("Beeper CLI executable source is unsafe");
+    destination = await open(
+      destinationPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+      0o600,
+    );
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let offset = 0;
+    while (offset < before.size) {
+      const read = await source.read(
+        buffer,
+        0,
+        Math.min(buffer.byteLength, before.size - offset),
+        offset,
+      );
+      if (read.bytesRead < 1) throw new Error("Beeper CLI executable changed while copied");
+      const chunk = buffer.subarray(0, read.bytesRead);
+      hash.update(chunk);
+      let written = 0;
+      while (written < chunk.byteLength) {
+        const result = await destination.write(
+          chunk,
+          written,
+          chunk.byteLength - written,
+          offset + written,
+        );
+        if (result.bytesWritten < 1) throw new Error("Beeper CLI private executable copy failed");
+        written += result.bytesWritten;
+      }
+      offset += read.bytesRead;
+    }
+    const overflow = Buffer.allocUnsafe(1);
+    const extra = await source.read(overflow, 0, 1, offset);
+    const after = await source.stat();
+    if (
+      extra.bytesRead !== 0
+      || before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || hash.digest("hex") !== expectedSha256
+    ) throw new Error("Beeper CLI executable changed or failed its exact pin while copied");
+  } finally {
+    await destination?.close();
+    await source.close();
+  }
+  await chmod(destinationPath, 0o500);
+  if (await sha256File(destinationPath) !== expectedSha256) {
+    throw new Error("Beeper CLI private executable copy failed its exact pin");
+  }
+  return destinationPath;
 }
 
 function localDesktopBaseUrl(value: unknown, label: string): string | undefined {
@@ -1429,7 +1785,13 @@ async function readPrivateJsonFile(path: string, label: string): Promise<JsonRec
   }
 }
 
-async function validateBeeperCliStoreInternal(path: string): Promise<string> {
+type ValidatedBeeperCliStore = Readonly<{
+  canonical: string;
+  effectiveAuth: JsonRecord;
+  targetBaseUrl: string;
+}>;
+
+async function validateBeeperCliStoreInternal(path: string): Promise<ValidatedBeeperCliStore> {
   if (!isAbsolute(path)) throw new Error("Beeper CLI config directory must be absolute");
   const canonical = await realpath(path);
   if (canonical !== path) throw new Error("Beeper CLI config directory must be canonical");
@@ -1491,6 +1853,9 @@ async function validateBeeperCliStoreInternal(path: string): Promise<string> {
       throw new Error("Beeper Desktop target must identify the fixed desktop realm");
     }
     targetBaseUrl = localDesktopBaseUrl(target.baseURL, "Beeper Desktop target.baseURL");
+    const targetBasePort = targetBaseUrl === undefined
+      ? null
+      : Number(new URL(targetBaseUrl).port);
     if (
       (target.managed !== undefined && target.managed !== false)
       || target.dataDir !== undefined
@@ -1500,7 +1865,10 @@ async function validateBeeperCliStoreInternal(path: string): Promise<string> {
       throw new Error("Beeper Desktop target contains an active endpoint override");
     }
     if (target.port !== undefined) {
-      integer(target.port, "Beeper Desktop target.port", 23_373, 23_392);
+      const declaredPort = integer(target.port, "Beeper Desktop target.port", 23_373, 23_392);
+      if (declaredPort !== targetBasePort) {
+        throw new Error("Beeper Desktop target.port did not match its exact base URL");
+      }
     }
     if (target.runtime !== undefined) {
       const runtime = strictRecord(target.runtime, "Beeper Desktop target.runtime");
@@ -1508,12 +1876,15 @@ async function validateBeeperCliStoreInternal(path: string): Promise<string> {
       if (runtime.install !== "desktop") {
         throw new Error("Beeper Desktop target.runtime.install is unsupported");
       }
-      integer(
+      const runtimePort = integer(
         runtime.port,
         "Beeper Desktop target.runtime.port",
         23_373,
         23_392,
       );
+      if (runtimePort !== targetBasePort) {
+        throw new Error("Beeper Desktop target.runtime.port did not match its exact base URL");
+      }
     }
     if (target.name !== undefined) {
       boundedString(target.name, "Beeper Desktop target.name", 2_048);
@@ -1533,18 +1904,70 @@ async function validateBeeperCliStoreInternal(path: string): Promise<string> {
   if (effectiveAuth === undefined) {
     throw new Error("Beeper CLI config directory has no effective stored access token");
   }
-  return canonical;
+  if (targetBaseUrl === undefined) {
+    throw new Error("Beeper Desktop target has no exact loopback base URL");
+  }
+  const [rootAfter, targetsAfter, rootRealpathAfter, targetsRealpathAfter] = await Promise.all([
+    lstat(canonical),
+    lstat(targetsPath),
+    realpath(canonical),
+    realpath(targetsPath),
+  ]);
+  if (
+    rootRealpathAfter !== canonical
+    || targetsRealpathAfter !== targetsPath
+    || !rootAfter.isDirectory()
+    || !targetsAfter.isDirectory()
+    || rootAfter.isSymbolicLink()
+    || targetsAfter.isSymbolicLink()
+    || rootAfter.dev !== stats.dev
+    || rootAfter.ino !== stats.ino
+    || rootAfter.mtimeMs !== stats.mtimeMs
+    || rootAfter.ctimeMs !== stats.ctimeMs
+    || targetsAfter.dev !== targetDirectoryStats.dev
+    || targetsAfter.ino !== targetDirectoryStats.ino
+    || targetsAfter.mtimeMs !== targetDirectoryStats.mtimeMs
+    || targetsAfter.ctimeMs !== targetDirectoryStats.ctimeMs
+  ) throw new Error("Beeper CLI config store changed while its exact snapshot was read");
+  return Object.freeze({ canonical, effectiveAuth, targetBaseUrl });
 }
 
 export async function validateBeeperCliStore(path: string): Promise<string> {
   try {
-    return await validateBeeperCliStoreInternal(path);
+    return (await validateBeeperCliStoreInternal(path)).canonical;
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Beeper ")) {
       throw error;
     }
     throw new Error("Beeper CLI config directory could not be validated safely");
   }
+}
+
+async function materializePrivateBeeperCliStore(
+  sourcePath: string,
+  operationRoot: string,
+): Promise<Readonly<{ path: string; targetBaseUrl: string }>> {
+  const snapshot = await validateBeeperCliStoreInternal(sourcePath);
+  const configDirectory = join(operationRoot, "beeper-config");
+  const targetsDirectory = join(configDirectory, "targets");
+  await mkdir(targetsDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(configDirectory, "config.json"),
+    `${JSON.stringify({ defaultTarget: BEEPER_DESKTOP_TARGET })}\n`,
+    { encoding: "utf8", flag: "wx", mode: 0o600 },
+  );
+  await writeFile(
+    join(targetsDirectory, "desktop.json"),
+    `${JSON.stringify({
+      id: BEEPER_DESKTOP_TARGET,
+      type: "desktop",
+      baseURL: snapshot.targetBaseUrl,
+      auth: snapshot.effectiveAuth,
+      managed: false,
+    })}\n`,
+    { encoding: "utf8", flag: "wx", mode: 0o600 },
+  );
+  return Object.freeze({ path: configDirectory, targetBaseUrl: snapshot.targetBaseUrl });
 }
 
 async function readBoundedStream(
@@ -1580,7 +2003,9 @@ async function readBoundedStream(
 async function runBeeperCli(
   invocation: BeeperCliInvocation,
 ): Promise<BeeperCliInvocationResult> {
-  if (invocation.signal?.aborted === true) throw new Error("Beeper CLI command was cancelled");
+  throwIfBeeperCliCancelled(invocation.signal);
+  await invocation.beforeSpawn?.();
+  throwIfBeeperCliCancelled(invocation.signal);
   const ownsProcessGroup = process.platform !== "win32";
   const child = Bun.spawn([invocation.binary, ...invocation.arguments], {
     env: { ...invocation.environment },
@@ -1589,6 +2014,18 @@ async function runBeeperCli(
     stderr: "pipe",
     detached: ownsProcessGroup,
   });
+  try {
+    invocation.afterSpawn?.(child.pid);
+  } catch (error) {
+    try {
+      if (ownsProcessGroup) process.kill(-child.pid, "SIGKILL");
+      else child.kill("SIGKILL");
+    } catch {
+      // The unadmitted process already exited.
+    }
+    await child.exited;
+    throw error;
+  }
   let timedOut = false;
   let cancelled = false;
   let forceKill: ReturnType<typeof setTimeout> | null = null;
@@ -1633,6 +2070,10 @@ async function runBeeperCli(
   }
 }
 
+function throwIfBeeperCliCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw new Error("Beeper CLI command was cancelled");
+}
+
 function remainingTimeoutMs(
   timeoutMs: number,
   deadline: WebSessionOperationDeadline | undefined,
@@ -1645,15 +2086,24 @@ function remainingTimeoutMs(
 
 function environmentForBeeper(
   configDirectory: string,
-  cacheDirectory: string,
+  operationRoot: string,
+  mutation: boolean,
 ): Readonly<Record<string, string>> {
   return Object.freeze({
     PATH: "/usr/bin:/bin",
     LANG: "C.UTF-8",
     CI: "1",
+    HOME: join(operationRoot, "home"),
+    TMPDIR: join(operationRoot, "tmp"),
+    XDG_CONFIG_HOME: join(operationRoot, "xdg-config"),
+    XDG_DATA_HOME: join(operationRoot, "xdg-data"),
+    XDG_CACHE_HOME: join(operationRoot, "xdg-cache"),
     BEEPER_CLI_CONFIG_DIR: configDirectory,
-    BEEPER_CLI_BINARY_CACHE_DIR: cacheDirectory,
-    BEEPER_READONLY: "1",
+    BEEPER_CLI_BINARY_CACHE_DIR: join(operationRoot, "binary-cache"),
+    BEEPER_DATA_DIR: join(operationRoot, "oclif-data"),
+    BEEPER_CONFIG_DIR: join(operationRoot, "oclif-config"),
+    BEEPER_CACHE_DIR: join(operationRoot, "oclif-cache"),
+    ...(mutation ? {} : { BEEPER_READONLY: "1" }),
     BEEPER_QUIET: "1",
     BEEPER_SKIP_UPDATE_CHECK: "1",
     NO_UPDATE_NOTIFIER: "1",
@@ -1668,6 +2118,8 @@ async function executeCommand(
   maxOutputBytes: number,
   dependencies: BeeperLocalRuntimeDependencies | undefined,
   deadline: WebSessionOperationDeadline | undefined,
+  beforeSpawn?: () => Promise<void>,
+  afterSpawn?: (pid: number) => void,
 ): Promise<unknown> {
   const run = dependencies?.run ?? runBeeperCli;
   const invoke = () => run({
@@ -1677,6 +2129,8 @@ async function executeCommand(
     timeoutMs: remainingTimeoutMs(timeoutMs, deadline),
     maxOutputBytes,
     maxStderrBytes: MAX_STDERR_BYTES,
+    ...(beforeSpawn === undefined ? {} : { beforeSpawn }),
+    ...(afterSpawn === undefined ? {} : { afterSpawn }),
     ...(deadline === undefined ? {} : { signal: deadline.signal }),
   });
   const result = deadline === undefined
@@ -1684,7 +2138,7 @@ async function executeCommand(
     : await deadline.run(invoke, OPERATION_LABEL);
   deadline?.throwIfUnavailable(OPERATION_LABEL);
   if (result.exitCode !== 0 || result.stderr.trim().length !== 0) {
-    throw new Error("Beeper CLI read failed before producing reviewed output");
+    throw new Error("Beeper CLI operation failed before producing reviewed output");
   }
   return parseJsonOutput(result.stdout, `Beeper CLI ${command.action}`);
 }
@@ -1696,62 +2150,151 @@ async function withRuntime<T>(
   dependencies: BeeperLocalRuntimeDependencies | undefined,
   environment: Readonly<Record<string, string | undefined>>,
   deadline: WebSessionOperationDeadline | undefined,
+  publishCleanupResource: ProviderPluginCleanupResourcePublisher | undefined,
+  cleanup: ProviderPluginCleanupProofController,
+  durableCleanupAdmissionRequired: boolean,
   operation: (context: Readonly<{
     binary: string;
-    environment: Readonly<Record<string, string>>;
+    operationRoot: string;
     accounts: readonly BeeperAccountProjection[];
     subject: string;
-    run: (command: BeeperReadCommand, maximum?: number) => Promise<unknown>;
+    run: (
+      command: BeeperCommand,
+      maximum?: number,
+      beforeSpawn?: () => Promise<void>,
+    ) => Promise<unknown>;
   }>) => Promise<T>,
 ): Promise<T> {
-  const configDirectory = await validateBeeperCliStore(auth.path);
-  const binary = dependencies?.binaryPath ?? await resolvePinnedBeeperCliBinary(environment);
-  if (dependencies?.binaryPath !== undefined && !isAbsolute(binary)) {
-    throw new Error("test Beeper CLI binary path must be absolute");
+  if (durableCleanupAdmissionRequired && publishCleanupResource === undefined) {
+    const error = new BeeperLocalCleanupUnverifiedError();
+    cleanup.unsafe(error);
+    throw error;
   }
   const createCache = dependencies?.createCacheDirectory
-    ?? (() => mkdtemp(join(tmpdir(), "wrench-beeper-cli-")));
-  const removeCache = dependencies?.removeCacheDirectory
-    ?? ((path: string) => rm(path, { recursive: true, force: true }));
-  const cacheDirectory = await createCache();
-  if (!isAbsolute(cacheDirectory)) throw new Error("Beeper CLI cache directory must be absolute");
-  const childEnvironment = environmentForBeeper(configDirectory, cacheDirectory);
-  const run = (command: BeeperReadCommand, maximum = maxOutputBytes): Promise<unknown> =>
-    executeCommand(
-      binary,
-      command,
-      childEnvironment,
-      timeoutMs,
-      maximum,
-      dependencies,
-      deadline,
-    );
+    ?? createBeeperOperationRoot;
+  let cacheDirectory: string | undefined;
+  let cleanupResource: LocalCliCleanupResourceIdentityV1 | undefined;
+  let productionSpawnAttempted = false;
   try {
+    cacheDirectory = await createCache();
+    if (!isAbsolute(cacheDirectory)) throw new Error("Beeper CLI cache directory must be absolute");
+    await mkdir(cacheDirectory, { recursive: true, mode: 0o700 });
+    await chmod(cacheDirectory, 0o700);
+    cleanupResource = captureLocalCliCleanupResource(cacheDirectory);
+    publishCleanupResource?.(cleanupResource);
+    const afterSpawn = dependencies?.run === undefined && publishCleanupResource !== undefined
+      ? (pid: number): void => {
+          productionSpawnAttempted = true;
+          cleanupResource = attachLocalCliCleanupProcessGroup(cleanupResource!, pid);
+          publishCleanupResource(cleanupResource);
+        }
+      : undefined;
+    for (const name of [
+      "binary-cache",
+      "oclif-data",
+      "oclif-config",
+      "oclif-cache",
+      "home",
+      "tmp",
+      "xdg-config",
+      "xdg-data",
+      "xdg-cache",
+    ]) {
+      await mkdir(join(cacheDirectory, name), { mode: 0o700 });
+    }
+    const binarySource = dependencies?.binaryPath
+      ?? await resolvePinnedBeeperCliBinary(environment);
+    if (dependencies?.binaryPath !== undefined && !isAbsolute(binarySource)) {
+      throw new Error("test Beeper CLI binary path must be absolute");
+    }
+    const binary = dependencies?.binaryPath !== undefined
+      ? binarySource
+      : await materializePinnedBeeperCliBinary(
+          binarySource,
+          cacheDirectory,
+          beeperCliArtifactForRuntime().executableSha256,
+        );
+    const privateStore = await materializePrivateBeeperCliStore(auth.path, cacheDirectory);
+    const readEnvironment = environmentForBeeper(privateStore.path, cacheDirectory, false);
+    const run = (
+      command: BeeperCommand,
+      maximum = maxOutputBytes,
+      beforeSpawn?: () => Promise<void>,
+    ): Promise<unknown> =>
+      executeCommand(
+        binary,
+        command,
+        environmentForBeeper(privateStore.path, cacheDirectory!, command.mutation),
+        timeoutMs,
+        maximum,
+        dependencies,
+        deadline,
+        beforeSpawn,
+        afterSpawn,
+      );
     const version = await executeCommand(
       binary,
-      Object.freeze({
-        action: "accounts.list",
-        argv: Object.freeze(["version", "--read-only", "--json", "--quiet"]),
-      }),
-      childEnvironment,
+      planBeeperVersionCommand(),
+      readEnvironment,
       timeoutMs,
       4_096,
       dependencies,
       deadline,
+      undefined,
+      afterSpawn,
     );
     const versionRecord = strictRecord(version, "Beeper CLI version");
     exactKeys(versionRecord, ["name", "version"], [], "Beeper CLI version");
     if (versionRecord.name !== "@beeper/cli" || versionRecord.version !== BEEPER_CLI_PIN.version) {
       throw new Error("Beeper CLI runtime version did not match its pin");
     }
+    const targetProof = parseBeeperTargetRealmProof(
+      await run(planBeeperTargetStatusCommand(timeoutMs), 64 * 1024),
+      privateStore.targetBaseUrl,
+    );
     const accounts = parseAccounts(await run(planBeeperAccountsListCommand(timeoutMs), 8 * 1024 * 1024));
-    const subject = beeperSubjectFromAccounts(accounts);
+    const subject = beeperSubjectFromAccountsAndTarget(
+      accounts,
+      privateStore.targetBaseUrl,
+      targetProof.bundleId,
+      targetProof.version,
+    );
     if (auth.subject !== undefined && auth.subject !== subject) {
       throw new Error("Beeper CLI current account did not match the bound auth realm");
     }
-    return await operation(Object.freeze({ binary, environment: childEnvironment, accounts, subject, run }));
+    return await operation(Object.freeze({
+      binary,
+      operationRoot: cacheDirectory,
+      accounts,
+      subject,
+      run,
+    }));
   } finally {
-    await removeCache(cacheDirectory);
+    try {
+      if (cacheDirectory === undefined) {
+        cleanup.verified();
+      } else if (dependencies?.removeCacheDirectory !== undefined) {
+        await dependencies.removeCacheDirectory(cacheDirectory);
+      } else if (cleanupResource !== undefined) {
+        const processGroups = cleanupResource.processGroups ?? [];
+        if (
+          (productionSpawnAttempted && processGroups.length === 0)
+          || (processGroups.length > 0
+            && localCliCleanupProcessGroupStatus(cleanupResource) !== "quiescent")
+        ) throw new BeeperLocalCleanupUnverifiedError();
+        const removed = removePrivateDirectoryTree(cacheDirectory, {
+          device: cleanupResource.root.device,
+          inode: cleanupResource.root.inode,
+          birthtimeNs: cleanupResource.root.birthtimeNs,
+        });
+        if (!removed) throw new BeeperLocalCleanupUnverifiedError();
+      }
+      cleanup.verified();
+    } catch {
+      const error = new BeeperLocalCleanupUnverifiedError();
+      cleanup.unsafe(error);
+      if (!durableCleanupAdmissionRequired) throw error;
+    }
   }
 }
 
@@ -1761,6 +2304,7 @@ export async function probeBeeperLocalSubject(
     readonly signal?: AbortSignal;
     readonly dependencies?: BeeperLocalRuntimeDependencies;
     readonly environment?: Readonly<Record<string, string | undefined>>;
+    readonly registerCleanupBarrier?: LocalCliExecutionOptions["registerCleanupBarrier"];
   } = {},
 ): Promise<string> {
   const auth = requireBeeperAuth(authValue);
@@ -1768,15 +2312,274 @@ export async function probeBeeperLocalSubject(
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   try {
-    return await withRuntime(
-      auth,
-      SUBJECT_PROBE_TIMEOUT_MS,
-      8 * 1024 * 1024,
-      options.dependencies,
-      options.environment ?? process.env,
-      deadline,
-      async ({ subject }) => subject,
+    return await startProviderPluginCleanupTrackedOperation(
+      options.registerCleanupBarrier,
+      async (publishCleanupResource, cleanup) => withRuntime(
+        auth,
+        SUBJECT_PROBE_TIMEOUT_MS,
+        8 * 1024 * 1024,
+        options.dependencies,
+        options.environment ?? process.env,
+        deadline,
+        publishCleanupResource,
+        cleanup,
+        options.registerCleanupBarrier !== undefined,
+        async ({ subject }) => subject,
+      ),
     );
+  } catch (error) {
+    if (error instanceof BeeperLocalCleanupUnverifiedError) throw error;
+    throw new Error("Beeper subject probe failed at a protected local boundary");
+  } finally {
+    deadline.dispose();
+  }
+}
+
+export async function inspectBeeperLocalRuntime(
+  environment: Readonly<Record<string, string | undefined>>,
+): Promise<LocalCliPluginRuntimeStatusV1> {
+  const artifact = beeperCliArtifactForRuntime();
+  try {
+    await resolvePinnedBeeperCliBinary(environment);
+    return Object.freeze({
+      ready: true,
+      platform: artifact.platform,
+      arch: artifact.arch,
+      version: BEEPER_CLI_PIN.version,
+      executableSha256: artifact.executableSha256,
+      reason: null,
+    });
+  } catch {
+    return Object.freeze({
+      ready: false,
+      platform: process.platform,
+      arch: process.arch,
+      version: null,
+      executableSha256: null,
+      reason: "the exact pinned Beeper CLI executable is unavailable or failed integrity verification",
+    });
+  }
+}
+
+function acceptedReconciliationTarget(
+  context: ProviderPluginReconciliationContextV1 | undefined,
+  action: "messaging.send" | "conversations.start",
+): JsonRecord {
+  if (context?.kind !== "provider-accepted-target-presence") {
+    throw new Error("Beeper accepted-target reconciliation requires exact durable target evidence");
+  }
+  const identifier = boundedString(
+    context.target.identifier,
+    "Beeper accepted reconciliation target",
+    8_192,
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(identifier) as unknown;
+  } catch {
+    throw new Error("Beeper accepted reconciliation target is malformed");
+  }
+  if (canonicalJson(parsed) !== identifier) {
+    throw new Error("Beeper accepted reconciliation target is not canonical");
+  }
+  const target = strictRecord(parsed, "Beeper accepted reconciliation target");
+  exactKeys(
+    target,
+    action === "messaging.send"
+      ? ["accountId", "conversationId", "pendingMessageId"]
+      : ["accountId", "conversationId"],
+    [],
+    "Beeper accepted reconciliation target",
+  );
+  boundedString(target.accountId, "Beeper accepted reconciliation account", 512);
+  boundedString(target.conversationId, "Beeper accepted reconciliation chat", 2_048);
+  if (action === "messaging.send") {
+    boundedString(
+      target.pendingMessageId,
+      "Beeper accepted reconciliation pending message",
+      2_048,
+    );
+  }
+  return target;
+}
+
+function requireObservedConversationState(
+  action: BeeperLocalOperationName,
+  conversation: BeeperConversationProjection,
+): void {
+  if (action === "conversations.description.set" && !conversation.descriptionObserved) {
+    throw new Error("Beeper description reconciliation is inconclusive");
+  }
+  if (action === "conversations.disappearing.set" && !conversation.messageExpiryObserved) {
+    throw new Error("Beeper disappearing-message reconciliation is inconclusive");
+  }
+  if (action === "conversations.reminder.set" && !conversation.reminderObserved) {
+    throw new Error("Beeper reminder reconciliation is inconclusive");
+  }
+}
+
+export async function reconcileBeeperLocalOperation(
+  operation: string,
+  inputValue: OperationInput,
+  authValue: WrenchAuth,
+  context?: ProviderPluginReconciliationContextV1,
+  options: ProviderPluginReconciliationOptionsV1 & Readonly<{
+    dependencies?: BeeperLocalRuntimeDependencies;
+  }> = {},
+): Promise<ProviderPluginReconciliationReadbackV1> {
+  if (!isBeeperLocalOperation(operation)) {
+    throw new Error("Beeper reconciliation operation is not installed");
+  }
+  const action = operation;
+  const input = parseBeeperOperationInput(action, inputValue);
+  const value = operationInputRecord(input);
+  const auth = requireBeeperAuth(authValue);
+  if (auth.subject === undefined) {
+    throw new Error("Beeper reconciliation requires an exact bound account realm");
+  }
+  const deadline = new OperationDeadline(SUBJECT_PROBE_TIMEOUT_MS, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+  try {
+    return await startProviderPluginCleanupTrackedOperation(
+      options.registerCleanupBarrier,
+      async (publishCleanupResource, cleanup) => withRuntime(
+        auth,
+        SUBJECT_PROBE_TIMEOUT_MS,
+        10 * 1024 * 1024,
+        options.dependencies,
+        options.environment ?? process.env,
+        deadline,
+        publishCleanupResource,
+        cleanup,
+        options.registerCleanupBarrier !== undefined,
+        async ({ accounts, run }) => {
+          if (action === "messaging.send" || action === "conversations.start") {
+            const target = acceptedReconciliationTarget(context, action);
+            const accountId = target.accountId as string;
+            const conversationId = target.conversationId as string;
+            requireBoundAccount(accounts, accountId, action);
+            if (action === "conversations.start") {
+              const readInput = parseBeeperOperationInput("conversations.read", {
+                account_id: accountId,
+                conversation_id: conversationId,
+                max_participants: 500,
+              });
+              exactConversation(
+                await run(planBeeperReadCommand("conversations.read", readInput, SUBJECT_PROBE_TIMEOUT_MS)),
+                accounts,
+                accountId,
+                conversationId,
+                "Beeper started conversation reconciliation",
+              );
+              return Object.freeze({
+                actualState: true,
+                reason: "the exact provider-accepted conversation is present",
+              });
+            }
+            const pendingMessageId = target.pendingMessageId as string;
+            const readInput = parseBeeperOperationInput("messaging.message.read", {
+              account_id: accountId,
+              conversation_id: conversationId,
+              message_id: pendingMessageId,
+            });
+            const raw = await run(planBeeperReadCommand(
+              "messaging.message.read",
+              readInput,
+              SUBJECT_PROBE_TIMEOUT_MS,
+            ));
+            const message = parseMessage(raw, "Beeper accepted send reconciliation", {
+              accountId,
+              conversationId,
+              beforeCursor: null,
+              afterCursor: null,
+              limit: 1,
+            });
+            if (
+              message.isSender !== true
+              || message.isDeleted
+              || message.isHidden
+              || ((value.kind === "text" || value.kind === "file")
+                && value.text !== null
+                && message.text !== value.text)
+              || (value.kind !== "text" && message.attachments.length < 1)
+              || (value.kind === "sticker"
+                && !message.attachments.some((attachment) => attachment.isSticker))
+              || (value.kind === "voice"
+                && !message.attachments.some((attachment) => attachment.isVoiceNote))
+            ) {
+              throw new Error("Beeper accepted send reconciliation is inconclusive");
+            }
+            return Object.freeze({
+              actualState: true,
+              reason: "the provider accepted pending target resolved to an exact outgoing message",
+            });
+          }
+          if (context !== undefined) {
+            throw new Error("Beeper desired-state reconciliation does not accept target context");
+          }
+          const accountId = value.accountId as string;
+          requireBoundAccount(accounts, accountId, action);
+          if (
+            (action === "conversations.avatar.set" && value.file !== null)
+            || (action === "conversations.draft.set" && value.file !== null)
+            || (action === "conversations.read-state.set" && value.messageId !== null)
+          ) {
+            throw new Error("Beeper operation has no exact reconciliation readback for this input variant");
+          }
+          if (action === "reactions.set" || action === "messaging.edit") {
+            const readInput = parseBeeperOperationInput("messaging.message.read", {
+              account_id: accountId,
+              conversation_id: value.conversationId as string,
+              message_id: value.messageId as string,
+            });
+            const message = exactMessage(
+              await run(planBeeperReadCommand("messaging.message.read", readInput, SUBJECT_PROBE_TIMEOUT_MS)),
+              accountId,
+              value.conversationId as string,
+              value.messageId as string,
+              "Beeper message reconciliation",
+            );
+            const actualState = action === "messaging.edit"
+              ? message.isSender === true && message.text === value.text
+              : message.reactions.some((reaction) =>
+                  reaction.participantId === requireBoundAccount(accounts, accountId, action).user.id
+                  && reaction.reactionKey === value.reaction);
+            return Object.freeze({
+              actualState,
+              reason: "the exact message projection supplied a definitive desired-state readback",
+            });
+          }
+          if (typeof value.conversationId !== "string") {
+            throw new Error("Beeper reconciliation operation has no exact chat target");
+          }
+          const readInput = parseBeeperOperationInput("conversations.read", {
+            account_id: accountId,
+            conversation_id: value.conversationId,
+            max_participants: 500,
+          });
+          const conversation = exactConversation(
+            await run(planBeeperReadCommand("conversations.read", readInput, SUBJECT_PROBE_TIMEOUT_MS)),
+            accounts,
+            accountId,
+            value.conversationId,
+            "Beeper conversation reconciliation",
+          );
+          requireObservedConversationState(action, conversation);
+          const actualState = desiredChatState(action, value, conversation);
+          if (actualState === null) {
+            throw new Error("Beeper operation has no exact reconciliation readback");
+          }
+          return Object.freeze({
+            actualState,
+            reason: "the exact conversation projection supplied a definitive desired-state readback",
+          });
+        },
+      ),
+    );
+  } catch (error) {
+    if (error instanceof BeeperLocalCleanupUnverifiedError) throw error;
+    throw new Error("Beeper reconciliation could not obtain definitive protected evidence");
   } finally {
     deadline.dispose();
   }
@@ -1890,7 +2693,7 @@ function contactOutput(
 function conversationOutput(
   accounts: readonly BeeperAccountProjection[],
   subject: string,
-  input: Extract<BeeperOperationInput, { readonly limit: number }>,
+  input: BeeperMessagingListInput,
   raw: unknown,
 ) {
   const accountId = "accountId" in input ? input.accountId : null;
@@ -1905,6 +2708,17 @@ function conversationOutput(
       accountIds,
       accountId,
     ));
+  for (const conversation of conversations) {
+    if (
+      (input.archived !== null && (conversation.isArchived === true) !== input.archived)
+      || (input.pinned !== null && (conversation.isPinned === true) !== input.pinned)
+      || (input.muted !== null && (conversation.isMuted === true) !== input.muted)
+      || (input.lowPriority !== null
+        && (conversation.isLowPriority === true) !== input.lowPriority)
+      || (input.unread !== null
+        && (conversation.unreadCount > 0 || conversation.isMarkedUnread === true) !== input.unread)
+    ) throw new Error("Beeper conversation output did not satisfy the exact requested state filters");
+  }
   if (conversations.length > input.limit) {
     throw new Error("Beeper conversations exceeded the requested result bound");
   }
@@ -1957,7 +2771,7 @@ function contactSearchOutput(
     "contacts.search",
   );
   const accountIds = new Set(byAccountId.keys());
-  const contacts = parseContacts(raw, accountIds, input.accountId).map((contact) => {
+  const candidates = parseContacts(raw, accountIds, input.accountId).map((contact) => {
     const account = byAccountId.get(contact.accountId);
     if (account === undefined) {
       throw new Error("contacts.search result escaped the bound Beeper realm");
@@ -1971,13 +2785,11 @@ function contactSearchOutput(
       isSelf: contact.user.isSelf,
     });
   });
-  if (contacts.length > input.limit) {
-    throw new Error("Beeper contact search exceeded the requested result bound");
-  }
-  const ids = contacts.map((contact) => `${contact.accountId}\0${contact.id}`);
+  const ids = candidates.map((contact) => `${contact.accountId}\0${contact.id}`);
   if (new Set(ids).size !== ids.length) {
     throw new Error("Beeper contact search repeated an account-scoped identity");
   }
+  const contacts = candidates.slice(0, input.limit);
   return Object.freeze({
     provider: "beeper",
     operation: "contacts.search",
@@ -1991,7 +2803,7 @@ function contactSearchOutput(
       resultWindowComplete: false,
       remoteContactSetComplete: false,
       continuationAvailable: false,
-      requestedLimitReached: contacts.length >= input.limit,
+      requestedLimitReached: candidates.length >= input.limit,
       warnings: Object.freeze([
         "beeper-cli-v0.6.2-search-results-are-fuzzy-candidates",
         "beeper-cli-v0.6.2-contact-search-result-window-has-no-continuation",
@@ -2128,78 +2940,970 @@ function messageOutput(
   });
 }
 
+function operationInputRecord(input: BeeperOperationInput): JsonRecord {
+  return input as unknown as JsonRecord;
+}
+
+function requireBoundAccount(
+  accounts: readonly BeeperAccountProjection[],
+  id: string,
+  operation: string,
+): BeeperAccountProjection {
+  const account = accounts.find((candidate) => candidate.accountId === id);
+  if (account === undefined) throw new Error(`${operation} requested an account outside the bound Beeper realm`);
+  return account;
+}
+
+function exactConversation(
+  raw: unknown,
+  accounts: readonly BeeperAccountProjection[],
+  accountId: string,
+  conversationId: string,
+  label: string,
+): BeeperConversationProjection {
+  requireBoundAccount(accounts, accountId, label);
+  const source = strictRecord(raw, label);
+  if (Object.hasOwn(source, "preview")) {
+    throw new Error(`${label} returned a list-only preview field in an exact chat response`);
+  }
+  const actualId = boundedString(source.id, `${label}.id`, 2_048);
+  if (actualId !== conversationId) throw new Error(`${label}.id did not match the exact requested chat`);
+  return parseConversation(raw, label, new Set(accounts.map((account) => account.accountId)), accountId);
+}
+
+function bridgeProjection(
+  raw: unknown,
+  accounts: readonly BeeperAccountProjection[],
+  label: string,
+  expectedId: string | null,
+) {
+  const source = strictRecord(raw, label);
+  exactKeys(source, [
+    "id", "accounts", "activeAccountCount", "displayName", "provider",
+    "status", "supportsMultipleAccounts", "type",
+  ], ["network", "statusText", "loginFlows", "capabilities"], label);
+  const id = boundedString(source.id, `${label}.id`, 512);
+  if (expectedId !== null && id !== expectedId) {
+    throw new Error(`${label}.id did not match the exact requested bridge`);
+  }
+  const provider = boundedString(source.provider, `${label}.provider`, 32);
+  if (!["cloud", "self-hosted", "local", "platform-sdk"].includes(provider)) {
+    throw new Error(`${label}.provider is unsupported`);
+  }
+  const status = boundedString(source.status, `${label}.status`, 64);
+  if (!["available", "connected", "limit_reached", "temporarily_unavailable", "disabled"].includes(status)) {
+    throw new Error(`${label}.status is unsupported`);
+  }
+  const connected = strictArray(source.accounts, `${label}.accounts`, MAX_ACCOUNTS)
+    .map((item, index) => parseAccount(item, `${label}.accounts[${index}]`));
+  const realm = new Set(accounts.map((account) => account.accountId));
+  if (connected.some((account) => !realm.has(account.accountId))) {
+    throw new Error(`${label}.accounts escaped the bound account realm`);
+  }
+  let loginFlows: readonly Readonly<{ id: string; name: string | null; description: string | null }>[] = [];
+  if (source.loginFlows !== undefined) {
+    loginFlows = Object.freeze(strictArray(source.loginFlows, `${label}.loginFlows`, 64).map((item, index) => {
+      const flow = strictRecord(item, `${label}.loginFlows[${index}]`);
+      exactKeys(flow, ["id"], ["name", "description"], `${label}.loginFlows[${index}]`);
+      return Object.freeze({
+        id: boundedString(flow.id, `${label}.loginFlows[${index}].id`, 512),
+        name: nullableString(flow.name, `${label}.loginFlows[${index}].name`, 2_048),
+        description: nullableString(flow.description, `${label}.loginFlows[${index}].description`, 8_192, true),
+      });
+    }));
+  }
+  // Capabilities are provider-keyed and version-extensible. Keep them out of
+  // output, but require one bounded plain JSON tree rather than trusting them.
+  if (source.capabilities !== undefined) {
+    boundedPlainJson(source.capabilities, `${label}.capabilities`, 0);
+  }
+  return Object.freeze({
+    id,
+    activeAccountCount: integer(source.activeAccountCount, `${label}.activeAccountCount`, 0, MAX_ACCOUNTS),
+    displayName: boundedString(source.displayName, `${label}.displayName`, 2_048),
+    provider,
+    status,
+    supportsMultipleAccounts: requiredBoolean(source.supportsMultipleAccounts, `${label}.supportsMultipleAccounts`),
+    type: boundedString(source.type, `${label}.type`, 512),
+    network: nullableString(source.network, `${label}.network`, 512),
+    statusText: nullableString(source.statusText, `${label}.statusText`, 8_192, true),
+    accounts: publicAccountProjections(connected),
+    loginFlows,
+  });
+}
+
+function boundedPlainJson(value: unknown, label: string, depth: number): void {
+  if (depth > 8) throw new Error(`${label} exceeds its nesting bound`);
+  if (value === null || typeof value === "boolean") return;
+  if (typeof value === "string") {
+    boundedString(value, label, 65_536, true, true);
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`${label} contains a non-finite number`);
+    return;
+  }
+  if (Array.isArray(value) || nodeTypes.isProxy(value)) {
+    const items = strictArray(value, label, 2_000);
+    items.forEach((item, index) => boundedPlainJson(item, `${label}[${index}]`, depth + 1));
+    return;
+  }
+  const source = strictRecord(value, label);
+  if (Object.keys(source).length > 2_000) throw new Error(`${label} contains too many fields`);
+  for (const [key, item] of Object.entries(source)) {
+    boundedString(key, `${label} key`, 512);
+    boundedPlainJson(item, `${label}.${key}`, depth + 1);
+  }
+}
+
+function exactMessage(
+  raw: unknown,
+  accountId: string,
+  conversationId: string,
+  messageIdValue: string,
+  label: string,
+): BeeperMessageProjection {
+  const message = parseMessage(raw, label, {
+    accountId,
+    conversationId,
+    beforeCursor: null,
+    afterCursor: null,
+    limit: 1,
+  });
+  if (message.id !== messageIdValue) throw new Error(`${label}.id did not match the exact requested message`);
+  return message;
+}
+
+function contactReadOutput(
+  accounts: readonly BeeperAccountProjection[],
+  subject: string,
+  input: JsonRecord,
+  raw: unknown,
+) {
+  const accountId = input.accountId as string;
+  const contactId = input.contactId as string;
+  requireBoundAccount(accounts, accountId, "contacts.read");
+  const source = strictRecord(raw, "Beeper contact");
+  exactKeys(source, ["accountID", "contact"], [], "Beeper contact");
+  if (source.accountID !== accountId) throw new Error("Beeper contact account did not match the exact request");
+  const contact = parseUser(source.contact, "Beeper contact.contact");
+  if (contact.id !== contactId) throw new Error("Beeper contact ID did not match the exact request");
+  return Object.freeze({
+    provider: "beeper",
+    operation: "contacts.read",
+    accountSubject: subject,
+    accountId,
+    contact,
+  });
+}
+
+function exactConversationReadOutput(
+  accounts: readonly BeeperAccountProjection[],
+  subject: string,
+  input: JsonRecord,
+  raw: unknown,
+) {
+  const conversation = exactConversation(
+    raw,
+    accounts,
+    input.accountId as string,
+    input.conversationId as string,
+    "Beeper conversation",
+  );
+  return Object.freeze({
+    provider: "beeper",
+    operation: "conversations.read",
+    accountSubject: subject,
+    conversation,
+  });
+}
+
+function messageSearchOutput(
+  accounts: readonly BeeperAccountProjection[],
+  subject: string,
+  input: JsonRecord,
+  raw: unknown,
+) {
+  const realm = new Set(accounts.map((account) => account.accountId));
+  const messages = strictArray(raw, "Beeper searched messages", MAX_MESSAGES).map((item, index) => {
+    const source = strictRecord(item, `Beeper searched messages[${index}]`);
+    const accountId = boundedString(source.accountID, `Beeper searched messages[${index}].accountID`, 512);
+    const conversationId = boundedString(source.chatID, `Beeper searched messages[${index}].chatID`, 2_048);
+    if (!realm.has(accountId)) throw new Error("Beeper searched message escaped the bound account realm");
+    if (input.accountId !== null && accountId !== input.accountId) throw new Error("Beeper searched message escaped the requested account");
+    if (input.conversationId !== null && conversationId !== input.conversationId) throw new Error("Beeper searched message escaped the requested conversation");
+    return parseMessage(item, `Beeper searched messages[${index}]`, {
+      accountId,
+      conversationId,
+      beforeCursor: null,
+      afterCursor: null,
+      limit: input.limit as number,
+    });
+  });
+  if (messages.length > (input.limit as number)) throw new Error("Beeper message search exceeded its requested bound");
+  return Object.freeze({
+    provider: "beeper",
+    operation: "messaging.content.search",
+    accountSubject: subject,
+    messages: Object.freeze(messages),
+    completeness: Object.freeze({
+      resultWindowComplete: false,
+      continuationAvailable: false,
+      requestedLimitReached: messages.length >= (input.limit as number),
+    }),
+  });
+}
+
+async function executeRead(
+  action: BeeperLocalOperationName,
+  input: BeeperOperationInput,
+  accounts: readonly BeeperAccountProjection[],
+  subject: string,
+  raw: unknown,
+): Promise<unknown> {
+  const value = operationInputRecord(input);
+  if (action === "accounts.list") {
+    const parsed = parseAccounts(raw);
+    if (beeperSubjectFromAccounts(parsed) !== beeperSubjectFromAccounts(accounts)) {
+      throw new Error("Beeper account list changed the bound account realm");
+    }
+    return Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, accounts: publicAccountProjections(parsed) });
+  }
+  if (action === "accounts.read") {
+    const account = parseAccount(raw, "Beeper account");
+    if (account.accountId !== value.accountId) throw new Error("Beeper account ID did not match the exact request");
+    requireBoundAccount(accounts, account.accountId, action);
+    return Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, account: publicAccountProjection(account) });
+  }
+  if (action === "bridges.list") {
+    const providerBridges = strictArray(raw, "Beeper bridges", 128).map((item, index) =>
+      bridgeProjection(item, accounts, `Beeper bridges[${index}]`, null));
+    if (providerBridges.some((bridge) =>
+      (value.provider !== null && bridge.provider !== value.provider)
+      || (value.available !== null
+        && (bridge.status === "available") !== value.available))) {
+      throw new Error("Beeper bridge output did not satisfy the exact requested filters");
+    }
+    const ids = providerBridges.map((bridge) => bridge.id);
+    if (new Set(ids).size !== ids.length) throw new Error("Beeper bridges repeat an exact bridge ID");
+    const limit = value.limit as number;
+    const bridges = providerBridges.slice(0, limit);
+    return Object.freeze({
+      provider: "beeper",
+      operation: action,
+      accountSubject: subject,
+      bridges: Object.freeze(bridges),
+      completeness: Object.freeze({
+        providerCatalogComplete: true,
+        projectedCatalogComplete: providerBridges.length <= limit,
+        requestedLimitReached: providerBridges.length >= limit,
+        truncated: providerBridges.length > limit,
+      }),
+    });
+  }
+  if (action === "bridges.read") {
+    return Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, bridge: bridgeProjection(raw, accounts, "Beeper bridge", value.bridgeId as string) });
+  }
+  if (action === "contacts.list") return contactOutput(accounts, subject, input as BeeperContactsListInput, raw);
+  if (action === "contacts.search") return contactSearchOutput(accounts, subject, input as BeeperContactsSearchInput, raw);
+  if (action === "contacts.read") return contactReadOutput(accounts, subject, value, raw);
+  if (action === "messaging.list") return conversationOutput(accounts, subject, input as BeeperMessagingListInput, raw);
+  if (action === "messaging.search") return messagingSearchOutput(accounts, subject, input as BeeperMessagingSearchInput, raw);
+  if (action === "conversations.read") return exactConversationReadOutput(accounts, subject, value, raw);
+  if (action === "messaging.read") return messageOutput(accounts, subject, input as BeeperMessagingReadInput, raw);
+  if (action === "messaging.content.search") return messageSearchOutput(accounts, subject, value, raw);
+  if (action === "messaging.message.read") {
+    const message = exactMessage(raw, value.accountId as string, value.conversationId as string, value.messageId as string, "Beeper message");
+    return Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, message });
+  }
+  const source = strictRecord(raw, "Beeper message context");
+  exactKeys(source, ["chatID", "messageID", "before", "after"], [], "Beeper message context");
+  if (source.chatID !== value.conversationId || source.messageID !== value.messageId) throw new Error("Beeper message context did not bind the exact target");
+  const before = strictArray(source.before, "Beeper message context.before", 100).map((item, index) =>
+    parseMessage(item, `Beeper message context.before[${index}]`, {
+      accountId: value.accountId as string,
+      conversationId: value.conversationId as string,
+      beforeCursor: null,
+      afterCursor: null,
+      limit: value.before as number,
+    }));
+  const after = strictArray(source.after, "Beeper message context.after", 100).map((item, index) =>
+    parseMessage(item, `Beeper message context.after[${index}]`, {
+      accountId: value.accountId as string,
+      conversationId: value.conversationId as string,
+      beforeCursor: null,
+      afterCursor: null,
+      limit: value.after as number,
+    }));
+  if (before.length > (value.before as number) || after.length > (value.after as number)) throw new Error("Beeper message context exceeded its requested bounds");
+  return Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, accountId: value.accountId, conversationId: value.conversationId, messageId: value.messageId, before: Object.freeze(before), after: Object.freeze(after) });
+}
+
+type BeeperPlanBoundFileExpectation = Readonly<{
+  bytes: number;
+  sha256: string;
+}>;
+
+async function copyVerifiedPlanBoundFile(
+  sourcePath: string,
+  operationRoot: string,
+  expected: BeeperPlanBoundFileExpectation,
+  afterSourceOpened?: () => Promise<void>,
+  checkDeadline?: () => void,
+): Promise<string> {
+  if (!isAbsolute(sourcePath) || !isAbsolute(operationRoot)) {
+    throw new Error("Beeper plan-bound file paths must be absolute");
+  }
+  const extension = extname(sourcePath).toLowerCase();
+  const safeExtension = /^\.[a-z0-9]{1,8}$/u.test(extension) ? extension : ".bin";
+  const destinationDirectory = join(operationRoot, "plan-files");
+  const destinationPath = join(destinationDirectory, `attachment${safeExtension}`);
+  await mkdir(destinationDirectory, { mode: 0o700 });
+  await chmod(destinationDirectory, 0o700);
+  let source;
+  let destination;
+  let completed = false;
+  try {
+    source = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = await source.stat();
+    const pathBefore = await lstat(sourcePath);
+    if (
+      !before.isFile()
+      || pathBefore.isSymbolicLink()
+      || pathBefore.dev !== before.dev
+      || pathBefore.ino !== before.ino
+      || before.size !== expected.bytes
+      || before.size < 1
+      || before.size > BEEPER_MAX_FILE_BYTES
+    ) throw new Error("Beeper plan-bound file did not match its confirmed identity and size");
+    await afterSourceOpened?.();
+    destination = await open(
+      destinationPath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let total = 0;
+    while (total < before.size) {
+      checkDeadline?.();
+      const read = await source.read(
+        buffer,
+        0,
+        Math.min(buffer.byteLength, before.size - total),
+        total,
+      );
+      if (read.bytesRead === 0) throw new Error("Beeper plan-bound file changed while copied");
+      hash.update(buffer.subarray(0, read.bytesRead));
+      let written = 0;
+      while (written < read.bytesRead) {
+        const result = await destination.write(
+          buffer,
+          written,
+          read.bytesRead - written,
+          total + written,
+        );
+        if (result.bytesWritten === 0) {
+          throw new Error("Beeper private plan-bound snapshot stopped accepting bytes");
+        }
+        written += result.bytesWritten;
+      }
+      total += read.bytesRead;
+    }
+    const overflow = Buffer.allocUnsafe(1);
+    const extra = await source.read(overflow, 0, 1, total);
+    const after = await source.stat();
+    const pathAfter = await lstat(sourcePath);
+    if (
+      extra.bytesRead !== 0
+      || total !== expected.bytes
+      || hash.digest("hex") !== expected.sha256
+      || before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || pathAfter.isSymbolicLink()
+      || pathAfter.dev !== after.dev
+      || pathAfter.ino !== after.ino
+    ) throw new Error("Beeper plan-bound file changed while its private snapshot was created");
+    await destination.sync();
+    await destination.chmod(0o400);
+    const copied = await destination.stat();
+    if (!copied.isFile() || copied.size !== expected.bytes || (copied.mode & 0o777) !== 0o400) {
+      throw new Error("Beeper private plan-bound snapshot failed its final bounds");
+    }
+    completed = true;
+    return destinationPath;
+  } finally {
+    await destination?.close().catch(() => undefined);
+    await source?.close().catch(() => undefined);
+    if (!completed) await unlink(destinationPath).catch(() => undefined);
+  }
+}
+
+/** @internal Exported only for immutable plan-file snapshot regression tests. */
+export async function materializeBeeperPlanBoundFileForTest(
+  sourcePath: string,
+  operationRoot: string,
+  expected: BeeperPlanBoundFileExpectation,
+  afterSourceOpened?: () => Promise<void>,
+): Promise<string> {
+  return copyVerifiedPlanBoundFile(
+    sourcePath,
+    operationRoot,
+    expected,
+    afterSourceOpened,
+  );
+}
+
+async function resolvePlanBoundFile(
+  input: BeeperOperationInput,
+  options: LocalCliExecutionOptions,
+  operationRoot: string,
+): Promise<string | undefined> {
+  const value = operationInputRecord(input);
+  const descriptor = value.file ?? value.attachment;
+  if (descriptor === undefined || descriptor === null) return undefined;
+  if (options.fileResolver === undefined) throw new Error("Beeper file operation requires the plan-bound file resolver");
+  const resolve = () => options.fileResolver!([descriptor as import("../model").FileInputValue]);
+  const paths = options.operationDeadline === undefined
+    ? await resolve()
+    : await options.operationDeadline.run(resolve, OPERATION_LABEL);
+  if (paths.length !== 1 || typeof paths[0] !== "string" || !isAbsolute(paths[0])) {
+    throw new Error("Beeper file resolver did not return exactly one absolute file");
+  }
+  const summary = summarizePlanFile(
+    descriptor as import("../model").FileInputValue,
+  );
+  return copyVerifiedPlanBoundFile(
+    paths[0],
+    operationRoot,
+    Object.freeze({ bytes: summary.bytes, sha256: summary.sha256 }),
+    undefined,
+    () => options.operationDeadline?.throwIfUnavailable(OPERATION_LABEL),
+  );
+}
+
+function desiredChatState(
+  action: BeeperLocalOperationName,
+  input: JsonRecord,
+  chat: BeeperConversationProjection,
+): boolean | null {
+  if (action === "conversations.archive.set") return (chat.isArchived ?? false) === input.enabled;
+  if (action === "conversations.pin.set") return (chat.isPinned ?? false) === input.enabled;
+  if (action === "conversations.mute.set") return (chat.isMuted ?? false) === input.enabled;
+  if (action === "conversations.priority.set") {
+    return input.level === "low"
+      ? (chat.isLowPriority ?? false) === true
+      : (chat.isLowPriority ?? false) === false && (chat.isArchived ?? false) === false;
+  }
+  if (action === "conversations.title.set") return chat.title === input.value;
+  if (action === "conversations.description.set") {
+    return chat.descriptionObserved && chat.description === input.value;
+  }
+  if (action === "conversations.disappearing.set") {
+    return chat.messageExpiryObserved
+      && (chat.messageExpirySeconds ?? 0) === input.seconds;
+  }
+  if (action === "conversations.read-state.set") {
+    if (input.messageId !== null) return false;
+    return input.unread === true
+      ? chat.isMarkedUnread === true
+      : chat.unreadCount === 0 && chat.isMarkedUnread !== true;
+  }
+  if (action === "conversations.avatar.set") {
+    if (input.file !== null) return false;
+    return chat.avatarObserved && chat.hasAvatar === (input.file !== null);
+  }
+  if (action === "conversations.draft.set") {
+    if (!chat.draftObserved) return false;
+    if (input.clear === true) return chat.draft === null;
+    if (input.file !== null) return false;
+    if (chat.draft === null || chat.draft.text !== input.text) return false;
+    if (input.file === null) return chat.draft.attachments.length === 0;
+    if (chat.draft.attachments.length !== 1) return false;
+    const attachment = chat.draft.attachments[0]!;
+    return (input.filename === null || attachment.fileName === input.filename)
+      && (input.mimeType === null || attachment.mimeType === input.mimeType);
+  }
+  if (action === "conversations.reminder.set") {
+    if (!chat.reminderObserved) return false;
+    const reminder = chat.reminder;
+    return input.when === null
+      ? reminder === null
+      : reminder !== null
+        && reminder.when === input.when
+        && (reminder.dismissOnMessage ?? false) === input.dismissOnMessage;
+  }
+  return null;
+}
+
+/** @internal Exported only for pinned desired-state regression tests. */
+export function beeperDesiredChatStateForTest(
+  action: BeeperLocalOperationName,
+  input: Readonly<Record<string, unknown>>,
+  chat: BeeperConversationProjection,
+): boolean | null {
+  return desiredChatState(action, input, chat);
+}
+
+function dispatchEvent(
+  id: string,
+  index: number,
+  planned: number,
+  started: number,
+  verified: number,
+) {
+  return Object.freeze({ id, index, progress: Object.freeze({ planned, started, verified }) });
+}
+
+function parseSendAcceptance(raw: unknown, input: JsonRecord) {
+  const source = strictRecord(raw, "Beeper message acceptance");
+  exactKeys(source, ["accepted", "state", "chatID", "pendingMessageID", "hint"], [], "Beeper message acceptance");
+  if (
+    source.accepted !== true
+    || source.state !== "accepted"
+    || source.chatID !== input.conversationId
+    || source.hint !== "Desktop accepted the send request. Pass --wait to wait for the final message or failure."
+  ) {
+    throw new Error("Beeper message send did not return an exact acceptance");
+  }
+  return Object.freeze({
+    accepted: true as const,
+    state: "accepted" as const,
+    accountId: input.accountId as string,
+    conversationId: input.conversationId as string,
+    pendingMessageId: boundedString(source.pendingMessageID, "Beeper message acceptance.pendingMessageID", 2_048),
+  });
+}
+
+function parseReactionAck(raw: unknown, input: JsonRecord): void {
+  const source = strictRecord(raw, "Beeper reaction acknowledgement");
+  exactKeys(
+    source,
+    input.enabled === true
+      ? ["chatID", "messageID", "reactionKey", "success", "transactionID"]
+      : ["chatID", "messageID", "reactionKey", "success"],
+    [],
+    "Beeper reaction acknowledgement",
+  );
+  if (source.chatID !== input.conversationId || source.messageID !== input.messageId || source.reactionKey !== input.reaction || source.success !== true) {
+    throw new Error("Beeper reaction acknowledgement did not bind the exact request");
+  }
+  if (input.enabled === true) {
+    boundedString(
+      source.transactionID,
+      "Beeper reaction acknowledgement.transactionID",
+      2_048,
+    );
+  }
+}
+
+async function delayPresence(seconds: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted === true) throw new Error("Beeper presence sequence was cancelled");
+  await new Promise<void>((resolve, reject) => {
+    const finish = (): void => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timeout = setTimeout(finish, seconds * 1_000);
+    const abort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      reject(new Error("Beeper presence sequence was cancelled"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function executeMutation(
+  action: BeeperLocalOperationName,
+  input: BeeperOperationInput,
+  accounts: readonly BeeperAccountProjection[],
+  subject: string,
+  recipe: LocalCliRecipe,
+  options: LocalCliExecutionOptions,
+  operationRoot: string,
+  run: (
+    command: BeeperCommand,
+    maximum?: number,
+    beforeSpawn?: () => Promise<void>,
+  ) => Promise<unknown>,
+): Promise<LocalCliExecution> {
+  const value = operationInputRecord(input);
+  const accountId = value.accountId as string;
+  requireBoundAccount(accounts, accountId, action);
+  let preflightChat: BeeperConversationProjection | null = null;
+  let preflightTargetMessage: BeeperMessageProjection | null = null;
+  if (typeof value.conversationId === "string") {
+    const preflightInput = parseBeeperOperationInput("conversations.read", {
+      account_id: accountId,
+      conversation_id: value.conversationId,
+      max_participants: 500,
+    });
+    const raw = await run(planBeeperReadCommand("conversations.read", preflightInput, recipe.timeoutMs));
+    preflightChat = exactConversation(raw, accounts, accountId, value.conversationId, "Beeper mutation preflight chat");
+    if (
+      preflightChat.isReadOnly === true
+      && [
+        "messaging.send",
+        "messaging.edit",
+        "reactions.set",
+        "presence.set",
+        "conversations.notify",
+      ].includes(action)
+    ) {
+      throw new Error("Beeper cannot dispatch this messaging action to an exact read-only chat");
+    }
+    if (
+      action === "conversations.notify"
+      && requireBoundAccount(accounts, accountId, action).bridge.type !== "imessage"
+    ) {
+      throw new Error("Beeper Notify Anyway is restricted to an exact iMessage conversation");
+    }
+    if (
+      [
+        "conversations.title.set",
+        "conversations.description.set",
+        "conversations.avatar.set",
+      ].includes(action)
+      && preflightChat.type !== "group"
+    ) throw new Error("Beeper conversation profile mutations require an exact group chat");
+    if (Array.isArray(value.mentions)) {
+      const participants = new Set(preflightChat.participants.items.map((participant) => participant.id));
+      if (value.mentions.some((mention) => !participants.has(mention))) throw new Error("Beeper message mention was not an exact chat participant");
+    }
+  }
+  const secondaryMessageIds = [value.messageId, value.replyTo].filter((item): item is string => typeof item === "string");
+  for (const targetMessageId of secondaryMessageIds) {
+    const readInput = parseBeeperOperationInput("messaging.message.read", {
+      account_id: accountId,
+      conversation_id: value.conversationId as string,
+      message_id: targetMessageId,
+    });
+    const raw = await run(planBeeperReadCommand("messaging.message.read", readInput, recipe.timeoutMs));
+    const message = exactMessage(
+      raw,
+      accountId,
+      value.conversationId as string,
+      targetMessageId,
+      "Beeper mutation preflight message",
+    );
+    if (action === "messaging.edit" && targetMessageId === value.messageId && !message.isSender) {
+      throw new Error("Beeper only permits editing a message authored by the bound account");
+    }
+    if (targetMessageId === value.messageId) preflightTargetMessage = message;
+  }
+  if (action === "conversations.start") {
+    const contactInput = parseBeeperOperationInput("contacts.read", {
+      account_id: accountId,
+      contact_id: value.userId as string,
+    });
+    const raw = await run(planBeeperReadCommand("contacts.read", contactInput, recipe.timeoutMs));
+    const contactProjection = contactReadOutput(
+      accounts,
+      subject,
+      operationInputRecord(contactInput),
+      raw,
+    );
+    if (contactProjection.contact.cannotMessage === true) {
+      throw new Error("Beeper cannot start a conversation with an exact non-messageable contact");
+    }
+  }
+  if (
+    action === "conversations.draft.set"
+    && value.clear === false
+    && preflightChat?.draft !== null
+    && preflightChat?.draft !== undefined
+    && (preflightChat.draft.text !== "" || preflightChat.draft.attachments.length > 0)
+    && desiredChatState(action, value, preflightChat) !== true
+  ) {
+    throw new Error("Beeper requires an existing nonempty draft to be cleared in a separate confirmed operation");
+  }
+  if (
+    preflightChat !== null
+    && desiredChatState(action, value, preflightChat) === true
+  ) {
+    return Object.freeze({
+      status: "succeeded",
+      output: Object.freeze({ provider: "beeper", operation: action, effect: "already-satisfied" }),
+      finalUrl: BEEPER_ORIGIN,
+      noOp: true,
+      dispatchStarted: false,
+      dispatch: Object.freeze({ planned: 1, started: 0, verified: 0 }),
+    });
+  }
+  if (action === "reactions.set" && preflightTargetMessage !== null) {
+    const selfId = requireBoundAccount(accounts, accountId, action).user.id;
+    const present = preflightTargetMessage.reactions.some(
+      (reaction) => reaction.participantId === selfId && reaction.reactionKey === value.reaction,
+    );
+    if (present === value.enabled) {
+      return Object.freeze({
+        status: "succeeded",
+        output: Object.freeze({ provider: "beeper", operation: action, effect: "already-satisfied" }),
+        finalUrl: BEEPER_ORIGIN,
+        noOp: true,
+        dispatchStarted: false,
+        dispatch: Object.freeze({ planned: 1, started: 0, verified: 0 }),
+      });
+    }
+  }
+  const resolvedFile = await resolvePlanBoundFile(input, options, operationRoot);
+  const commands = action === "presence.set"
+    ? planBeeperPresenceCommands(input, recipe.timeoutMs)
+    : Object.freeze([planBeeperOperationCommand(action, input, recipe.timeoutMs, resolvedFile)]);
+  const planned = commands.length;
+  let started = 0;
+  let verified = 0;
+  let output: unknown = null;
+  try {
+    for (const [offset, plannedCommand] of commands.entries()) {
+      const index = offset + 1;
+      const id = planned === 1 ? action : `${action}[${index}]`;
+      if (action === "presence.set" && index === 2) {
+        await delayPresence(value.durationSeconds as number, options.operationDeadline?.signal);
+      }
+      const raw = await run(plannedCommand, recipe.maxOutputBytes, async () => {
+        await options.beforeDispatch?.(dispatchEvent(id, index, planned, started, verified));
+        started = index;
+      });
+      if (started !== index) throw new Error("Beeper CLI runner omitted dispatch spawn accounting");
+      if (action === "messaging.send") {
+        const accepted = parseSendAcceptance(raw, value);
+        output = Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, ...accepted });
+        await options.afterProviderAcceptedMutationTarget?.({
+          id,
+          index,
+          target: Object.freeze({
+            schemaVersion: 1,
+            identifier: canonicalJson({
+              accountId: accepted.accountId,
+              conversationId: accepted.conversationId,
+              pendingMessageId: accepted.pendingMessageId,
+            }),
+          }),
+        });
+      } else if (action === "reactions.set") {
+        parseReactionAck(raw, value);
+        const readInput = parseBeeperOperationInput("messaging.message.read", {
+          account_id: accountId,
+          conversation_id: value.conversationId as string,
+          message_id: value.messageId as string,
+        });
+        const readback = await run(planBeeperReadCommand("messaging.message.read", readInput, recipe.timeoutMs));
+        const message = exactMessage(readback, accountId, value.conversationId as string, value.messageId as string, "Beeper reaction readback");
+        const selfId = requireBoundAccount(accounts, accountId, action).user.id;
+        const present = message.reactions.some((reaction) => reaction.participantId === selfId && reaction.reactionKey === value.reaction);
+        if (present !== value.enabled) throw new Error("Beeper reaction desired state was not independently verified");
+        output = Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, accountId, conversationId: value.conversationId, messageId: value.messageId, reaction: value.reaction, enabled: value.enabled });
+      } else if (action === "messaging.edit") {
+        const edit = strictRecord(raw, "Beeper edited message");
+        exactKeys(edit, ["id", "accountID", "chatID", "senderID", "sortKey", "timestamp", "messageID", "success"], ["attachments", "editedTimestamp", "isDeleted", "isHidden", "isSender", "isUnread", "linkedMessageID", "links", "mentions", "reactions", "seen", "senderName", "sendStatus", "text", "type"], "Beeper edited message");
+        if (
+          edit.id !== value.messageId
+          || edit.messageID !== value.messageId
+          || edit.accountID !== accountId
+          || edit.chatID !== value.conversationId
+          || edit.success !== true
+        ) throw new Error("Beeper edit acknowledgement did not bind the exact account, chat, and message");
+        const readInput = parseBeeperOperationInput("messaging.message.read", { account_id: accountId, conversation_id: value.conversationId as string, message_id: value.messageId as string });
+        const readback = await run(planBeeperReadCommand("messaging.message.read", readInput, recipe.timeoutMs));
+        const message = exactMessage(readback, accountId, value.conversationId as string, value.messageId as string, "Beeper edit readback");
+        if (!message.isSender || message.text !== value.text) throw new Error("Beeper edit was not independently verified");
+        output = Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, message });
+      } else if (action === "conversations.start") {
+        const response = strictRecord(raw, "Beeper started conversation");
+        exactKeys(response, ["id", "accountID", "network", "participants", "title", "type", "unreadCount", "chatID"], ["status", "capabilities", "description", "draft", "imgURL", "isArchived", "isLowPriority", "isMarkedUnread", "isMuted", "isPinned", "isReadOnly", "lastActivity", "lastReadMessageSortKey", "localChatID", "messageExpirySeconds", "reminder", "snooze", "unreadMentionsCount"], "Beeper started conversation");
+        if (response.chatID !== response.id || ![undefined, "existing", "created"].includes(response.status as string | undefined)) throw new Error("Beeper started conversation returned inconsistent identity");
+        const base = Object.freeze(Object.fromEntries(Object.entries(response).filter(([key]) => key !== "chatID" && key !== "status")));
+        const conversation = parseConversation(base, "Beeper started conversation", new Set(accounts.map((account) => account.accountId)), accountId);
+        if (!conversation.participants.items.some((participant) => participant.id === value.userId)) throw new Error("Beeper started conversation did not include the exact requested user");
+        await options.afterProviderAcceptedMutationTarget?.({
+          id,
+          index,
+          target: Object.freeze({
+            schemaVersion: 1,
+            identifier: canonicalJson({
+              accountId,
+              conversationId: conversation.id,
+            }),
+          }),
+        });
+        output = Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, conversation });
+      } else if (action === "conversations.reminder.set") {
+        const ack = strictRecord(raw, "Beeper reminder acknowledgement");
+        exactKeys(ack, ["message", "chatID"], value.when === null ? [] : ["detail", "remindAt"], "Beeper reminder acknowledgement");
+        if (
+          ack.chatID !== value.conversationId
+          || ack.message !== (value.when === null ? "Reminder cleared" : "Reminder set")
+          || (
+            value.when !== null
+            && (ack.detail !== value.when || ack.remindAt !== value.when)
+          )
+        ) throw new Error("Beeper reminder acknowledgement did not bind the exact request");
+      } else if (action === "conversations.focus") {
+        const ack = strictRecord(raw, "Beeper focus acknowledgement");
+        exactKeys(ack, ["success"], [], "Beeper focus acknowledgement");
+        if (ack.success !== true) throw new Error("Beeper Desktop did not acknowledge focus");
+        output = Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, accountId, conversationId: value.conversationId, focused: true });
+      } else if (action === "presence.set") {
+        const ack = strictRecord(raw, "Beeper presence acknowledgement");
+        exactKeys(ack, ["message", "chatID", "state"], [], "Beeper presence acknowledgement");
+        const expectedState = index === 2 ? "paused" : value.state;
+        if (
+          ack.chatID !== value.conversationId
+          || ack.state !== expectedState
+          || ack.message !== `Sent ${String(expectedState)} indicator`
+        ) throw new Error("Beeper presence acknowledgement did not bind the exact request");
+        output = Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, accountId, conversationId: value.conversationId, state: ack.state });
+      } else {
+        const acknowledgement = exactConversation(raw, accounts, accountId, value.conversationId as string, "Beeper mutation acknowledgement chat");
+        if (
+          action === "conversations.avatar.set"
+          && value.file !== null
+          && (!acknowledgement.avatarObserved || !acknowledgement.hasAvatar)
+        ) throw new Error("Beeper avatar response did not acknowledge an applied avatar");
+        if (action === "conversations.draft.set" && value.file !== null) {
+          const draft = acknowledgement.draft;
+          if (
+            !acknowledgement.draftObserved
+            || draft === null
+            || draft.text !== value.text
+            || draft.attachments.length < 1
+          ) throw new Error("Beeper draft response did not acknowledge the requested attachment draft");
+        }
+        output = Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, conversation: acknowledgement });
+      }
+      if (
+        typeof value.conversationId === "string"
+        && !["messaging.send", "messaging.edit", "reactions.set", "conversations.focus", "presence.set", "conversations.notify"].includes(action)
+        && !(action === "conversations.avatar.set" && value.file !== null)
+        && !(action === "conversations.draft.set" && value.file !== null)
+        && !(action === "conversations.read-state.set" && value.messageId !== null)
+      ) {
+        const readInput = parseBeeperOperationInput("conversations.read", { account_id: accountId, conversation_id: value.conversationId, max_participants: 500 });
+        const readbackRaw = await run(planBeeperReadCommand("conversations.read", readInput, recipe.timeoutMs));
+        const readback = exactConversation(readbackRaw, accounts, accountId, value.conversationId, "Beeper mutation readback chat");
+        const satisfied = desiredChatState(action, value, readback);
+        if (satisfied !== true) {
+          throw new Error("Beeper conversation desired state was not independently verified");
+        }
+        output = Object.freeze({ provider: "beeper", operation: action, accountSubject: subject, conversation: readback });
+      }
+      const nextVerified = index;
+      await options.afterDispatchVerified?.(
+        dispatchEvent(id, index, planned, started, nextVerified),
+      );
+      verified = nextVerified;
+    }
+    return Object.freeze({
+      status: "succeeded",
+      output,
+      finalUrl: BEEPER_ORIGIN,
+      dispatchStarted: started > 0,
+      dispatch: Object.freeze({ planned, started, verified }),
+    });
+  } catch {
+    const exactPartial = verified > 0 && started === verified && verified < planned;
+    return Object.freeze({
+      status: exactPartial ? "partial" : started > 0 ? "indeterminate" : "failed",
+      output: null,
+      finalUrl: BEEPER_ORIGIN,
+      dispatchStarted: started > 0,
+      dispatch: Object.freeze({ planned, started, verified }),
+      error: exactPartial
+        ? "Beeper completed and durably verified only the reported prefix of the confirmed dispatch schedule"
+        : started > 0
+        ? "Beeper may have changed the requested state but exact evidence was not durably verified; reconcile before retrying"
+        : "Beeper local CLI operation failed before dispatch",
+    });
+  }
+}
+
 export async function executeBeeperLocalOperation(
-  recipe: WebSessionRecipe,
+  recipe: LocalCliRecipe,
   inputValue: OperationInput,
   authValue: WrenchAuth,
-  options: {
-    readonly dependencies?: BeeperLocalRuntimeDependencies;
-    readonly environment?: Readonly<Record<string, string | undefined>>;
-    readonly operationDeadline?: WebSessionOperationDeadline;
-    readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
-  } = {},
-): Promise<WebSessionExecution> {
+  options: LocalCliExecutionOptions & Readonly<{
+    dependencies?: BeeperLocalRuntimeDependencies;
+  }> = {},
+): Promise<LocalCliExecution> {
   if (
-    recipe.site !== "beeper"
+    recipe.surface !== "beeper"
     || recipe.contractVersion !== 1
     || !isBeeperLocalOperation(recipe.action)
-  ) throw new Error("Beeper local read recipe is not installed");
+  ) throw new Error("Beeper local CLI recipe is not installed");
   const action: BeeperLocalOperationName = recipe.action;
   const contract = BEEPER_LOCAL_OPERATIONS[action];
-  if (contract.state !== "observed" || contract.effect !== "read") {
-    throw new Error(`Beeper local operation ${action} is not executable`);
-  }
   const input = parseBeeperOperationInput(action, inputValue);
   const auth = requireBeeperAuth(authValue);
   options.operationDeadline?.throwIfUnavailable(OPERATION_LABEL);
-  return startWebSessionCleanupTrackedOperation(
-    options.registerCleanupBarrier,
-    async () => withRuntime(
+  try {
+    return await startProviderPluginCleanupTrackedOperation(
+      options.registerCleanupBarrier,
+      async (publishCleanupResource, cleanup) => withRuntime(
       auth,
       recipe.timeoutMs,
       recipe.maxOutputBytes,
       options.dependencies,
       options.environment ?? process.env,
       options.operationDeadline,
-      async ({ accounts, subject, run }) => {
-        if (auth.subject === undefined) {
-          throw new Error("Beeper auth must be account-bound before private reads");
+      publishCleanupResource,
+      cleanup,
+      options.registerCleanupBarrier !== undefined,
+      async ({ accounts, operationRoot, subject, run }) => {
+        if (auth.subject === undefined) throw new Error("Beeper auth must be account-bound before private operations");
+        const parsedInput = operationInputRecord(input);
+        if (typeof parsedInput.accountId === "string") {
+          requireBoundAccount(accounts, parsedInput.accountId, action);
         }
-        const raw = await run(planBeeperReadCommand(action, input, recipe.timeoutMs));
-        const output = action === "contacts.list"
-          ? contactOutput(accounts, subject, input, raw)
-          : action === "contacts.search"
-            ? contactSearchOutput(
+        if (contract.effect === "read") {
+          if (action === "bridges.read") {
+            const listInput = parseBeeperOperationInput("bridges.list", { limit: 128 });
+            const candidates = strictArray(
+              await run(planBeeperReadCommand("bridges.list", listInput, recipe.timeoutMs)),
+              "Beeper bridge candidates",
+              128,
+            ).map((candidate, index) => bridgeProjection(
+              candidate,
               accounts,
-              subject,
-              input as BeeperContactsSearchInput,
-              raw,
-            )
-            : action === "messaging.list"
-              ? conversationOutput(accounts, subject, input, raw)
-              : action === "messaging.search"
-                ? messagingSearchOutput(
-                  accounts,
-                  subject,
-                  input as BeeperMessagingSearchInput,
-                  raw,
-                )
-                : messageOutput(accounts, subject, input as BeeperMessagingReadInput, raw);
-        const encoded = Buffer.from(JSON.stringify(output), "utf8");
-        if (encoded.byteLength > recipe.maxOutputBytes) {
-          throw new Error("Beeper local projection exceeded the reviewed output bound");
+              `Beeper bridge candidates[${index}]`,
+              null,
+            ));
+            if (!candidates.some((candidate) => candidate.id === parsedInput.bridgeId)) {
+              throw new Error("Beeper bridge ID was not present in the exact bridge candidate set");
+            }
+          }
+          const raw = await run(planBeeperReadCommand(action, input, recipe.timeoutMs));
+          const output = await executeRead(action, input, accounts, subject, raw);
+          if (Buffer.byteLength(JSON.stringify(output), "utf8") > recipe.maxOutputBytes) {
+            throw new Error("Beeper local projection exceeded the reviewed output bound");
+          }
+          return Object.freeze({
+            status: "succeeded" as const,
+            output,
+            finalUrl: BEEPER_ORIGIN,
+            dispatchStarted: false,
+            dispatch: Object.freeze({ planned: 0, started: 0, verified: 0 }),
+          });
         }
-        return Object.freeze({
-          status: "succeeded" as const,
-          output,
-          finalUrl: BEEPER_ORIGIN,
-          dispatchStarted: false,
-          dispatch: Object.freeze({ planned: 0, started: 0, verified: 0 }),
-        });
+        return executeMutation(
+          action,
+          input,
+          accounts,
+          subject,
+          recipe,
+          options,
+          operationRoot,
+          run,
+        );
       },
-    ),
-    async (operation) => {
-      await operation.then(() => undefined, () => undefined);
-    },
-  );
+      ),
+    );
+  } catch (error) {
+    if (error instanceof BeeperLocalCleanupUnverifiedError) throw error;
+    throw new Error("Beeper local CLI execution failed at a protected local boundary");
+  }
 }

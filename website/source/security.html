@@ -58,7 +58,7 @@
         <section aria-labelledby="threat-boundary">
           <h2 id="threat-boundary">Foreign data is parsed; authority is selected separately</h2>
           <p>Wrench treats CLI input, URLs, manifests, packages, plugin messages, provider responses, browser output, files, durable state, and subprocess diagnostics as untrusted. Foreign values are strictly parsed and bounded, and sensitive values are redacted from terminal output, receipts, and diagnostics.</p>
-          <p>Operations expose semantic jobs such as <code>messaging.list</code>, not raw cookies, selectors, scripts, arbitrary HTTP, or every signed-in tab. The exact auth locator is bound to one provider account and transport. Wrench does not silently move between an official API, browser session, linked-device store, or portable plugin.</p>
+          <p>Operations expose semantic jobs such as <code>messaging.list</code>, not raw cookies, selectors, scripts, arbitrary HTTP, native command arguments, or every signed-in tab. The exact auth locator is bound to one provider account and transport. Wrench does not silently move between an official API, browser session, linked-device store, pinned local CLI, or portable plugin.</p>
         </section>
 
         <section aria-labelledby="custody">
@@ -82,6 +82,12 @@
           <h2 id="drift">Provider drift fails closed</h2>
           <p>A changed origin, account proof, request, status, field, or response shape returns the affected operation to <code>capture-required</code>. That state is an inert reservation. It cannot plan or execute until authorized evidence establishes a newly reviewed contract.</p>
           <p>This rule keeps capability gaps visible. For example, LinkedIn's official contact adapter does not grant authority to its separate consumer-web inbox adapter, and an Instagram inbox summary does not authorize an individual thread read. Review current state in the <a href="/provider-capabilities/">provider capability attestation</a>.</p>
+        </section>
+
+        <section aria-labelledby="native-cli">
+          <h2 id="native-cli">A provider CLI is pinned bytes behind a semantic contract</h2>
+          <p>A source plugin can use the <code>local-cli</code> transport only when it records the exact executable SHA-256 for every supported platform and binds every upstream archive or release-manifest artifact that the provider publishes. Each operation owns a fixed argument template and strict projection. Callers cannot select a command, flag, endpoint, target, environment variable, plugin, or output path.</p>
+          <p>Wrench starts the exact executable without a shell under private config, data, cache, and temporary roots. It strips ambient credentials and defaults, enforces its own deadline and byte bounds, and treats a lost or malformed post-dispatch response as indeterminate. A version range, package-manager channel, tag, launcher, or reported version cannot replace executable-byte identity.</p>
         </section>
 
         <section aria-labelledby="plugins-boundary">

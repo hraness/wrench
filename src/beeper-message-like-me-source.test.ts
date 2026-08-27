@@ -33,17 +33,15 @@ import {
   createBeeperMessageLikeMeDirectoryLease,
   releaseBeeperMessageLikeMeDirectoryLease,
 } from "./beeper-message-like-me-recovery";
-import { parseBeeperExportAccounts } from "./providers/beeper-local-runtime";
+import {
+  beeperSubjectFromAccountsAndTarget,
+  parseBeeperExportAccounts,
+} from "./providers/beeper-local-runtime";
 
 const ACCOUNT_ID = "account-beeper";
 const NETWORK_ACCOUNT_ID = "account-whatsapp";
 const SELF_ID = "@self:beeper.local";
 const CHAT_ID = "chat-synthetic";
-const SUBJECT = `beeper:local:${createHash("sha256")
-  .update(ACCOUNT_ID, "utf8")
-  .update("\0", "utf8")
-  .update(SELF_ID, "utf8")
-  .digest("hex")}`;
 
 function privateDirectory(prefix: string): string {
   const path = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -72,7 +70,7 @@ function configStore(parent: string): string {
       id: "desktop",
       managed: false,
       name: "Desktop",
-      runtime: { install: "desktop", port: 23_373 },
+      runtime: { install: "desktop", port: 23_380 },
       type: "desktop",
     })}\n`,
     { mode: 0o600 },
@@ -96,7 +94,7 @@ function accounts(): readonly unknown[] {
     accountID: ACCOUNT_ID,
     bridge: { id: "beeper", provider: "cloud", type: "matrix" },
     network: "Beeper",
-    status: "CONNECTED",
+    status: "connected",
     user: {
       fullName: "Fixture Self",
       id: SELF_ID,
@@ -106,7 +104,7 @@ function accounts(): readonly unknown[] {
     accountID: NETWORK_ACCOUNT_ID,
     bridge: { id: "whatsapp", provider: "cloud", type: "whatsapp" },
     network: "WhatsApp Personal",
-    status: "CONNECTED",
+    status: "connected",
     user: {
       fullName: "Fixture Self",
       id: "whatsapp:self",
@@ -115,6 +113,13 @@ function accounts(): readonly unknown[] {
     },
   }];
 }
+
+const SUBJECT = beeperSubjectFromAccountsAndTarget(
+  parseBeeperExportAccounts(accounts()),
+  "http://127.0.0.1:23380",
+  "com.automattic.beeper.desktop",
+  "4.2.0-fixture",
+);
 
 function chat() {
   return {
@@ -243,6 +248,28 @@ function fixtureCli(invocation: BeeperExportCliInvocation): Promise<{
   expect((privateTarget.auth as Record<string, unknown>).tokenType).toBe("Bearer");
   expect(typeof (privateTarget.auth as Record<string, unknown>).accessToken).toBe("string");
   expect(privateConfig.auth).toBeUndefined();
+
+  if (
+    invocation.arguments[0] === "targets"
+    && invocation.arguments[1] === "status"
+  ) {
+    expect(invocation.arguments.slice(0, 3)).toEqual(["targets", "status", "desktop"]);
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: `${JSON.stringify({
+        success: true,
+        data: {
+          target: privateTarget,
+          reachable: true,
+          version: "4.2.0-fixture",
+          bundleID: "com.automattic.beeper.desktop",
+          actualType: "desktop",
+        },
+        error: null,
+      })}\n`,
+      stderr: "",
+    });
+  }
 
   if (
     invocation.arguments[0] === "accounts"
@@ -699,13 +726,13 @@ describe("Beeper Message Like Me source", () => {
       accountID: selectedId,
       bridge: { id: "selected", provider: "cloud", type: "signal" },
       network: "Signal",
-      status: "CONNECTED",
+      status: "connected",
       user: { fullName: "Selected Person", id: "selected:self", isSelf: true },
     }, {
       accountID: "account-other",
       bridge: { id: "other", provider: "cloud", type: "whatsapp" },
       network: "WhatsApp",
-      status: "CONNECTED",
+      status: "connected",
       user: { fullName: "Other Person", id: "other:self", isSelf: true },
     }] as const;
     for (const field of ["displayName", "name"] as const) {
@@ -1018,9 +1045,11 @@ describe("Beeper Message Like Me source", () => {
       expect(existsSync(working)).toBeFalse();
       expect(invocations.map((invocation) =>
         invocation.arguments.slice(0, 2).join(" "))).toEqual([
+        "targets status",
         "accounts list",
         "export --out",
         "export --out",
+        "targets status",
         "accounts list",
       ]);
       const exportInvocations = invocations.filter((invocation) =>
@@ -1391,6 +1420,7 @@ describe("Beeper Message Like Me source", () => {
                 })}\n`,
               };
             }
+            if (invocation.arguments[0] !== "export") return result;
             const outputRoot = invocationOutputRoot(invocation);
             writeJson(join(outputRoot, "accounts.json"), conflictingAccounts);
             const manifest = JSON.parse(
@@ -2334,9 +2364,9 @@ describe("Beeper Message Like Me source", () => {
           },
         },
       });
-      const result = await exportBeeperMessageLikeMeBundle({ outputRoot: output, source });
-      expect(result.manifest.counts.account).toBe(2);
-      expect(existsSync(join(output, "manifest.json"))).toBeTrue();
+      await expect(exportBeeperMessageLikeMeBundle({ outputRoot: output, source }))
+        .rejects.toThrow("exceeds its nesting bound");
+      expect(existsSync(join(output, "manifest.json"))).toBeFalse();
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }

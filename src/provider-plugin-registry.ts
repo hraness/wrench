@@ -47,11 +47,14 @@ import {
   providerPluginPackageRoot,
   providerPluginRepositoryRoot,
   type ProviderPluginBindingV1,
+  type LocalCliPluginOperationV1,
+  type ProviderApiPluginOperationV1,
   type ProviderPluginDefinitionV1,
   type ProviderPluginOperationV1,
   type ProviderPluginTransport,
   type ProviderPluginV1,
   type ProviderPluginRuntimeLoadIdentityPhase,
+  type WebSessionPluginOperationV1,
 } from "./provider-plugin";
 import type { WrenchManifest } from "./model";
 import type {
@@ -68,6 +71,30 @@ export type ProviderPluginOperationResolutionV1 = {
   readonly portableIdentity: PortableOperationIdentityV1 | null;
 };
 
+export type ProviderPluginBindingForTransportV1<
+  Transport extends ProviderPluginTransport,
+> = Extract<ProviderPluginBindingV1, { readonly transport: Transport }>;
+
+export type ProviderPluginOperationForTransportV1<
+  Transport extends ProviderPluginTransport,
+> = Transport extends "provider-api"
+  ? ProviderApiPluginOperationV1
+  : Transport extends "local-cli"
+    ? LocalCliPluginOperationV1
+    : WebSessionPluginOperationV1;
+
+export type ProviderPluginOperationResolutionForTransportV1<
+  Transport extends ProviderPluginTransport,
+> = Omit<ProviderPluginOperationResolutionV1, "binding" | "operation"> & {
+  readonly binding: ProviderPluginBindingForTransportV1<Transport>;
+  readonly operation: ProviderPluginOperationForTransportV1<Transport>;
+};
+
+export type ProviderPluginSessionBindingV1 = Extract<
+  ProviderPluginBindingV1,
+  { readonly transport: "web-session-api" | "linked-device" }
+>;
+
 export type ProviderPluginRegistry = {
   readonly list: () => readonly ProviderPluginV1[];
   readonly get: (pluginId: string) => ProviderPluginV1 | undefined;
@@ -79,8 +106,10 @@ export type ProviderPluginRegistry = {
     transport: ProviderPluginTransport,
     surfaceId: string,
   ) => ProviderPluginBindingV1;
-  readonly resolveSessionRoute: (surfaceId: string) => ProviderPluginBindingV1 | undefined;
-  readonly requireSessionRoute: (surfaceId: string) => ProviderPluginBindingV1;
+  readonly resolveSessionRoute: (surfaceId: string) => ProviderPluginSessionBindingV1 | undefined;
+  readonly requireSessionRoute: (surfaceId: string) => ProviderPluginSessionBindingV1;
+  readonly resolveAccountRoute: (surfaceId: string) => ProviderPluginBindingV1 | undefined;
+  readonly requireAccountRoute: (surfaceId: string) => ProviderPluginBindingV1;
   readonly resolveOperation: (
     transport: ProviderPluginTransport,
     surfaceId: string,
@@ -555,7 +584,6 @@ const reviewedDormantDynamicLoaderPolicy =
 const reviewedDynamicInstalledModuleIdentities =
   reviewedMetaDynamicInstalledModuleIdentities;
 const reviewedKbDynamicInstalledPluginIds = new Set([
-  "beeper-linked-device",
   "bluesky-web",
   "github-web",
   "hacker-news-web",
@@ -2612,7 +2640,8 @@ function createProviderPluginRegistryInternal(
 
   const pluginsById = new Map(plugins.map((plugin) => [plugin.id, plugin]));
   const routes = new Map<string, ProviderPluginBindingV1>();
-  const sessionRoutes = new Map<string, ProviderPluginBindingV1>();
+  const sessionRoutes = new Map<string, ProviderPluginSessionBindingV1>();
+  const accountRoutes = new Map<string, ProviderPluginBindingV1>();
   const operations = new Map<string, ProviderPluginOperationResolutionV1>();
   const ownerByBinding = new Map<ProviderPluginBindingV1, ProviderPluginV1>();
   const implementationSourceSnapshots =
@@ -2801,6 +2830,19 @@ function createProviderPluginRegistryInternal(
         );
       }
       if (binding.transport !== "provider-api") {
+        const existingAccount = accountRoutes.get(binding.surfaceId);
+        if (existingAccount !== undefined) {
+          const existingOwner = ownerByBinding.get(existingAccount);
+          throw new Error(
+            `duplicate provider plugin account route ${binding.surfaceId}: ${existingOwner?.id ?? "unknown"} and ${plugin.id}`,
+          );
+        }
+        accountRoutes.set(binding.surfaceId, binding);
+      }
+      if (
+        binding.transport === "web-session-api"
+        || binding.transport === "linked-device"
+      ) {
         const existingSession = sessionRoutes.get(binding.surfaceId);
         if (existingSession !== undefined) {
           const existingOwner = ownerByBinding.get(existingSession);
@@ -3098,11 +3140,20 @@ function createProviderPluginRegistryInternal(
     if (binding === undefined) throw new Error(`provider plugin route ${routeKey(transport, surfaceId)} is not installed`);
     return binding;
   };
-  const resolveSessionRoute = (surfaceId: string): ProviderPluginBindingV1 | undefined =>
+  const resolveSessionRoute = (surfaceId: string): ProviderPluginSessionBindingV1 | undefined =>
     sessionRoutes.get(surfaceId);
-  const requireSessionRoute = (surfaceId: string): ProviderPluginBindingV1 => {
+  const requireSessionRoute = (surfaceId: string): ProviderPluginSessionBindingV1 => {
     const binding = resolveSessionRoute(surfaceId);
     if (binding === undefined) throw new Error(`provider plugin session route ${surfaceId} is not installed`);
+    return binding;
+  };
+  const resolveAccountRoute = (surfaceId: string): ProviderPluginBindingV1 | undefined =>
+    accountRoutes.get(surfaceId);
+  const requireAccountRoute = (surfaceId: string): ProviderPluginBindingV1 => {
+    const binding = resolveAccountRoute(surfaceId);
+    if (binding === undefined) {
+      throw new Error(`provider plugin account route ${surfaceId} is not installed`);
+    }
     return binding;
   };
   const resolveOperation = (
@@ -3160,6 +3211,8 @@ function createProviderPluginRegistryInternal(
     requireRoute,
     resolveSessionRoute,
     requireSessionRoute,
+    resolveAccountRoute,
+    requireAccountRoute,
     resolveOperation,
     requireOperation,
     resolveOperationDefinition,

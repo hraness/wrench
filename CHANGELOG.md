@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add a source-only `local-cli` provider transport with schema-v6 adapter
+  selectors, exact per-platform executable identity, implementation-bound
+  plans and receipts, strict subprocess lifecycles, and no generic argv or
+  portable native-process authority.
+- Expand the pinned Beeper Desktop integration from five reads to typed account,
+  bridge, contact, conversation, message, send, edit, reaction, conversation
+  state, metadata, reminder, draft, focus, and presence operations. Bind all
+  four official 0.6.2 platform artifacts, isolate oclif user plugins and ambient
+  targets, and account for all 101 upstream commands in a checked coverage
+  ledger while leaving administrative, destructive, raw, and arbitrary-path
+  commands unavailable or R4.
+- Preserve the released schema-1 contact-interaction receipt on its exact
+  macOS arm64 writer while keeping its 2,000-participant request ceiling;
+  cross-platform Beeper operations use the new versioned local-CLI contracts.
+
 ## 0.14.0 - 2026-08-26
 
 - Add a versioned, body-free Beeper direct-contact interaction summary over

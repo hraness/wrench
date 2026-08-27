@@ -182,6 +182,16 @@ function source(
   return Object.freeze({ label, url: new URL(relativePath, base) });
 }
 
+/**
+ * Declare one trusted source-plugin entrypoint. The registry derives and binds
+ * its complete eager and lazy value-dependency closure automatically.
+ */
+export function providerImplementationEntry(
+  base: string,
+): readonly ProviderPluginImplementationSourceDefinitionV1[] {
+  return Object.freeze([source(base, "plugin.ts", "./plugin.ts")]);
+}
+
 export function officialImplementationSources(
   base: string,
   implementation: "linkedin" | "x",

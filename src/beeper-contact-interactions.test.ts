@@ -15,6 +15,9 @@ import {
   parseBeeperContactInteractionSummary,
   summarizeBeeperContactInteractions,
 } from "./beeper-contact-interactions";
+import {
+  assertBeeperContactInteractionExportRuntime,
+} from "./beeper-contact-interactions-cli";
 import type {
   BeeperMessageLikeMeExportSource,
   BeeperMessageLikeMeMessage,
@@ -277,6 +280,19 @@ function fixture(options: Readonly<{
 }
 
 describe("Beeper contact interaction summary", () => {
+  test("keeps the released schema-1 writer on its exact pinned platform", () => {
+    expect(() => assertBeeperContactInteractionExportRuntime("darwin", "arm64"))
+      .not.toThrow();
+    for (const [platform, arch] of [
+      ["darwin", "x64"],
+      ["linux", "arm64"],
+      ["linux", "x64"],
+    ] as const) {
+      expect(() => assertBeeperContactInteractionExportRuntime(platform, arch))
+        .toThrow("schema-1 export requires the pinned darwin/arm64 Beeper CLI artifact");
+    }
+  });
+
   test("derives exact content-free direct relationship lower bounds", async () => {
     const summary = await summarizeBeeperContactInteractions(fixture());
     expect(summary.accounts).toEqual([expect.objectContaining({

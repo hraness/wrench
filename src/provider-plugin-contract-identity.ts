@@ -27,20 +27,9 @@ export interface ReviewedBuiltInContractIdentityV1 {
 const identities = Object.freeze({
   "beeper-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "e1a2abc8b5dc045635768388987c664319f5f6af942d5f1138eb0a6848e60148",
+    pluginVersion: "2.0.0",
+    implementationSha256: "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
     legacyCurrentReadImplementationSha256: [],
-    legacyRouteReadImplementationSha256: {
-      "contacts.list@1": [
-        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
-      ],
-      "messaging.list@1": [
-        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
-      ],
-      "messaging.read@1": [
-        "1110e1a6b99720c912451fa44d764f2f48590cbf7f2568aa199068adedf1c9f0",
-      ],
-    },
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
   },

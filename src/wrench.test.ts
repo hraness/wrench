@@ -1132,6 +1132,7 @@ describe("auth CLI", () => {
         "--json",
       ], testState.environment, wrench.output, {
         loadBeeperContactInteractionCliRuntime: () => Promise.resolve({
+          assertBeeperContactInteractionExportRuntime: () => {},
           encodeBeeperContactInteractionExportResult: (value) =>
             `${JSON.stringify(value)}\n`,
           exportBeeperContactInteractionsFromAuth: (request) => {
@@ -1167,6 +1168,39 @@ describe("auth CLI", () => {
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
       rmSync(deviceStore, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects unsupported contact export runtimes before private state or auth access", async () => {
+    const testState = state();
+    try {
+      const wrench = capture();
+      const code = await main([
+        "beeper",
+        "export-contact-interactions",
+        "--auth",
+        "missing-beeper-auth",
+        "--json",
+      ], testState.environment, wrench.output, {
+        loadBeeperContactInteractionCliRuntime: () => Promise.resolve({
+          assertBeeperContactInteractionExportRuntime: () => {
+            throw new Error(
+              "Beeper contact interaction summary: schema-1 export requires the pinned darwin/arm64 Beeper CLI artifact",
+            );
+          },
+          encodeBeeperContactInteractionExportResult: () => "unreachable\n",
+          exportBeeperContactInteractionsFromAuth: () => {
+            throw new Error("unsupported runtime reached private auth");
+          },
+        }),
+      });
+      expect(code).toBe(3);
+      expect(wrench.stderr()).toContain(
+        "schema-1 export requires the pinned darwin/arm64 Beeper CLI artifact",
+      );
+      expect(readdirSync(testState.directory)).toEqual([]);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
     }
   });
 
@@ -2080,7 +2114,7 @@ describe("doctor authenticated API readiness", () => {
             repaired: 0,
             retained: 1,
             invalid: 0,
-            issues: [{ kind: "cleanup-unsafe" }],
+            issues: [{ kind: "resource-active" }],
           },
         },
       });

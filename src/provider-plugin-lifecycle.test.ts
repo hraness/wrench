@@ -1227,7 +1227,7 @@ describe("portable provider plugin lifecycle", () => {
       );
 
       expect(() => checkPortableProviderPlugin(source)).toThrow(
-        "duplicate provider plugin session route",
+        "duplicate provider plugin account route",
       );
     });
   });

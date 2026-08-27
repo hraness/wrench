@@ -32,7 +32,7 @@ const output = await summarizeBeeperContactInteractions({
 const requestedBounds = Object.freeze({
   limitChats: 100,
   limitMessages: null,
-  maxParticipants: 500,
+  maxParticipants: 2_000,
 });
 const makeResult = (
   authId: string,
@@ -57,6 +57,7 @@ const responses = [
 ];
 let responseIndex = 0;
 const observedArguments: Array<readonly string[]> = [];
+const observedArgumentCount = (): number => observedArguments.length;
 
 await mock.module("node:child_process", () => ({
   ...childProcess,
@@ -76,10 +77,25 @@ await mock.module("node:child_process", () => ({
 }));
 
 const { exportBeeperContactInteractionsSync } = await import("./beeper-client");
+let overBoundMessage = "";
+try {
+  exportBeeperContactInteractionsSync(Object.freeze({
+    authId: "beeper-main",
+    maxParticipants: 2_001,
+  }));
+} catch (error) {
+  overBoundMessage = error instanceof Error ? error.message : String(error);
+}
+if (
+  overBoundMessage
+    !== "Wrench Beeper client: maxParticipants must be an integer from 1 through 2000"
+  || observedArgumentCount() !== 0
+) throw new Error("public Beeper client changed its released participant bound");
+
 const request = Object.freeze({
   authId: "beeper-main",
   limitChats: 100,
-  maxParticipants: 500,
+  maxParticipants: 2_000,
 });
 const result = exportBeeperContactInteractionsSync(request);
 if (
@@ -108,7 +124,7 @@ for (const expectedMessage of [
 }
 
 if (
-  observedArguments.length !== 3
+  observedArgumentCount() !== 3
   || observedArguments.some((arguments_) => !arguments_.includes("--limit-chats"))
   || observedArguments.some((arguments_) => arguments_.includes("--limit-messages"))
   || observedArguments.some((arguments_) => !arguments_.includes("--max-participants"))

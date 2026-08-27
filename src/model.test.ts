@@ -1530,6 +1530,31 @@ describe("schemaVersion 3 transport and provider binding", () => {
 });
 
 describe("schemaVersion 4 authenticated web-session binding", () => {
+  test("keeps exact retired Beeper manifests diagnostic-only", () => {
+    for (const version of ["1.0.0", "1.1.0"] as const) {
+      const archived = JSON.parse(readFileSync(join(
+        import.meta.dir,
+        "assets",
+        "adapters",
+        "beeper",
+        `wrench-web-adapter.v${version}.json`,
+      ), "utf8")) as Record<string, unknown>;
+      expect(parseDiagnosticManifest(archived).ok).toBeTrue();
+      expect(parseManifest(archived).ok).toBeFalse();
+      expect(parseRuntimeManifest(archived).ok).toBeFalse();
+
+      const lookalike = structuredClone(archived);
+      const operations = lookalike.operations as Record<
+        string,
+        Record<string, unknown>
+      >;
+      const first = Object.values(operations)[0];
+      if (first === undefined) throw new Error("missing archived Beeper operation");
+      first.description = `${String(first.description)} changed`;
+      expect(parseDiagnosticManifest(lookalike).ok).toBeFalse();
+    }
+  });
+
   test("keeps every bundled LinkedIn and X web operation bound to its code-owned contract", () => {
     for (const site of ["linkedin", "x"] as const) {
       const result = parseManifest(webSessionManifest(site));

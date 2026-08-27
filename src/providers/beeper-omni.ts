@@ -227,6 +227,10 @@ function conversation(value: unknown, path: string): ProviderConversationV1 {
     "title",
     "type",
     "description",
+    "descriptionObserved",
+    "hasAvatar",
+    "avatarObserved",
+    "lastReadMessageSortKey",
     "lastActivity",
     "unreadCount",
     "unreadMentionsCount",
@@ -237,6 +241,11 @@ function conversation(value: unknown, path: string): ProviderConversationV1 {
     "isPinned",
     "isReadOnly",
     "messageExpirySeconds",
+    "messageExpiryObserved",
+    "draft",
+    "draftObserved",
+    "reminder",
+    "reminderObserved",
     "participants",
   ], [], path);
   const accountId = string(source.accountId, `${path}.accountId`, 512);
@@ -247,6 +256,10 @@ function conversation(value: unknown, path: string): ProviderConversationV1 {
   const type = string(source.type, `${path}.type`, 32);
   if (type !== "single" && type !== "group") drift(`${path}.type`, "must be single or group");
   const description = nullableString(source.description, `${path}.description`, 65_536);
+  boolean(source.descriptionObserved, `${path}.descriptionObserved`);
+  boolean(source.hasAvatar, `${path}.hasAvatar`);
+  boolean(source.avatarObserved, `${path}.avatarObserved`);
+  nullableString(source.lastReadMessageSortKey, `${path}.lastReadMessageSortKey`, 2_048);
   const orderedAt = nullableTimestamp(source.lastActivity, `${path}.lastActivity`);
   const unreadCount = integer(source.unreadCount, `${path}.unreadCount`, 0, 100_000_000);
   nullableInteger(source.unreadMentionsCount, `${path}.unreadMentionsCount`, 0, 100_000_000);
@@ -257,9 +270,34 @@ function conversation(value: unknown, path: string): ProviderConversationV1 {
   nullableBoolean(source.isPinned, `${path}.isPinned`);
   nullableBoolean(source.isReadOnly, `${path}.isReadOnly`);
   nullableInteger(source.messageExpirySeconds, `${path}.messageExpirySeconds`, 0, Number.MAX_SAFE_INTEGER);
+  boolean(source.messageExpiryObserved, `${path}.messageExpiryObserved`);
+  if (source.draft !== null) {
+    const draft = record(source.draft, `${path}.draft`);
+    exactKeys(draft, ["text", "attachments"], [], `${path}.draft`);
+    string(draft.text, `${path}.draft.text`, 65_536, true);
+    array(draft.attachments, `${path}.draft.attachments`, 32).forEach((item, index) => {
+      const attachment = record(item, `${path}.draft.attachments[${index}]`);
+      exactKeys(attachment, ["type", "fileName", "fileSizeBytes", "mimeType"], [], `${path}.draft.attachments[${index}]`);
+      const type = string(attachment.type, `${path}.draft.attachments[${index}].type`, 32);
+      if (type !== "file" && type !== "gif" && type !== "recorded_audio") {
+        drift(`${path}.draft.attachments[${index}].type`, "is unsupported");
+      }
+      nullableString(attachment.fileName, `${path}.draft.attachments[${index}].fileName`, 4_096);
+      nullableInteger(attachment.fileSizeBytes, `${path}.draft.attachments[${index}].fileSizeBytes`, 0, Number.MAX_SAFE_INTEGER);
+      nullableString(attachment.mimeType, `${path}.draft.attachments[${index}].mimeType`, 512);
+    });
+  }
+  boolean(source.draftObserved, `${path}.draftObserved`);
+  if (source.reminder !== null) {
+    const reminder = record(source.reminder, `${path}.reminder`);
+    exactKeys(reminder, ["when", "dismissOnMessage"], [], `${path}.reminder`);
+    nullableString(reminder.when, `${path}.reminder.when`, 512);
+    nullableBoolean(reminder.dismissOnMessage, `${path}.reminder.dismissOnMessage`);
+  }
+  boolean(source.reminderObserved, `${path}.reminderObserved`);
   const participants = record(source.participants, `${path}.participants`);
   exactKeys(participants, ["items", "total", "hasMore"], [], `${path}.participants`);
-  const items = array(participants.items, `${path}.participants.items`, 2_000)
+  const items = array(participants.items, `${path}.participants.items`, 500)
     .map((item, index) => participant(item, `${path}.participants.items[${index}]`, accountId));
   integer(participants.total, `${path}.participants.total`, 0, 100_000_000);
   boolean(participants.hasMore, `${path}.participants.hasMore`);
@@ -364,7 +402,7 @@ function message(
   const id = string(source.id, `${path}.id`, 2_048);
   const senderId = string(source.senderId, `${path}.senderId`, 2_048);
   const senderName = nullableString(source.senderName, `${path}.senderName`, 2_048);
-  const isSender = boolean(source.isSender, `${path}.isSender`);
+  const isSender = nullableBoolean(source.isSender, `${path}.isSender`);
   const sortKey = string(source.sortKey, `${path}.sortKey`, 2_048);
   const orderedAt = timestamp(source.timestamp, `${path}.timestamp`);
   const editedTimestamp = nullableTimestamp(source.editedTimestamp, `${path}.editedTimestamp`);
@@ -399,7 +437,7 @@ function message(
       handle: null,
     }),
     recipients: Object.freeze([]),
-    direction: isSender ? "outgoing" : "incoming",
+    direction: isSender === null ? "unknown" : isSender ? "outgoing" : "incoming",
     subject: null,
     body,
     unread,

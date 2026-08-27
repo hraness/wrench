@@ -4,6 +4,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -39,6 +40,15 @@ import {
   ensurePrivateStateDirectory,
   wrenchStateHome,
 } from "./storage";
+import {
+  startProviderPluginCleanupTrackedOperation,
+} from "./provider-plugin-cleanup-execution";
+import {
+  captureLocalCliCleanupResource,
+  inspectLocalCliCleanupFilesystemReadiness,
+  localCliCleanupResourceExtends,
+  parseLocalCliCleanupResourceIdentityV1,
+} from "./provider-plugin-cleanup-resource";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -92,8 +102,9 @@ function writeAdmissionFixture(
     readonly processStartId?: string;
   } = {},
   resources?: readonly WebSessionCleanupAdmissionResource[],
+  identityOverrides: Partial<WebSessionCleanupAdmissionIdentity> = {},
 ): void {
-  const selectedIdentity = identity();
+  const selectedIdentity = identity(identityOverrides);
   const processIdentity = currentProcessStartIdentity();
   const realmKey = webSessionCleanupRealmKey(
     selectedIdentity.surfaceId,
@@ -344,6 +355,148 @@ describe("web-session cleanup admission", () => {
         environment,
       );
       expect(unrelated.current.claim.authId).toBe("other-account");
+    });
+  });
+
+  test("separates ordinary work failure from verified cleanup proof", async () => {
+    await withState(async (environment) => {
+      const execution = withWebSessionCleanupAdmission(
+        identity(),
+        environment,
+        (register) => startProviderPluginCleanupTrackedOperation(
+          register,
+          async (_publish, cleanup) => {
+            cleanup.verified();
+            throw new Error("ordinary provider work failure");
+          },
+        ),
+      );
+
+      await expect(execution).rejects.toThrow("ordinary provider work failure");
+      expect(listWebSessionCleanupAdmissions(environment)).toEqual([]);
+    });
+  });
+
+  test("preserves durable admission when the cleanup controller reports unsafe", async () => {
+    await withState(async (environment) => {
+      const result = await withWebSessionCleanupAdmission(
+        identity(),
+        environment,
+        (register) => startProviderPluginCleanupTrackedOperation(
+          register,
+          async (_publish, cleanup) => {
+            cleanup.unsafe(new Error("private root could not be verified"));
+            return "provider-result";
+          },
+        ),
+      );
+
+      expect(result).toBe("provider-result");
+      expect(listWebSessionCleanupAdmissions(environment)).toMatchObject([{
+        claim: { containment: { status: "cleanup-unsafe" } },
+      }]);
+      expect(() => acquireWebSessionCleanupAdmission(
+        identity({ runId: randomUUID() }),
+        environment,
+      )).toThrow("active or cleanup-unsafe state");
+    });
+  });
+
+  test("accepts only monotonic multi-process-group local cleanup histories", () => {
+    const root = join(
+      realpathSync(tmpdir()),
+      `wrench-local-groups-${randomUUID()}`,
+    );
+    mkdirSync(root, { mode: 0o700 });
+    try {
+      const captured = captureLocalCliCleanupResource(root);
+      const group = (pid: number, fill: string) => ({
+        kind: "posix-process-group-v1" as const,
+        platform: process.platform === "linux" ? "linux" as const : "darwin" as const,
+        processGroupId: pid,
+        leader: {
+          pid,
+          bootId: fill.repeat(64),
+          processStartId: (fill === "a" ? "b" : "c").repeat(64),
+        },
+      });
+      const first = parseLocalCliCleanupResourceIdentityV1({
+        ...captured,
+        processGroups: [group(101, "a")],
+      });
+      const second = parseLocalCliCleanupResourceIdentityV1({
+        ...captured,
+        processGroups: [group(101, "a"), group(202, "d")],
+      });
+      const replaced = parseLocalCliCleanupResourceIdentityV1({
+        ...captured,
+        processGroups: [group(303, "e"), group(202, "d")],
+      });
+
+      expect(second.processGroups).toHaveLength(2);
+      expect(localCliCleanupResourceExtends(captured, first)).toBeTrue();
+      expect(localCliCleanupResourceExtends(first, second)).toBeTrue();
+      expect(localCliCleanupResourceExtends(second, first)).toBeFalse();
+      expect(localCliCleanupResourceExtends(first, replaced)).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("requires an immutable private-root generation before local CLI readiness", () => {
+    const readiness = inspectLocalCliCleanupFilesystemReadiness();
+    expect(readiness).toEqual({ ready: true, reason: null });
+
+    const root = join(
+      realpathSync(tmpdir()),
+      `wrench-local-generation-${randomUUID()}`,
+    );
+    mkdirSync(root, { mode: 0o700 });
+    try {
+      const captured = captureLocalCliCleanupResource(root);
+      expect(() => parseLocalCliCleanupResourceIdentityV1({
+        ...captured,
+        root: { ...captured.root, birthtimeNs: "0" },
+      })).toThrow("birth time is malformed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("retains a same-boot local private root with no published process group", async () => {
+    await withState((environment) => {
+      const root = join(
+        realpathSync(tmpdir()),
+        `wrench-local-recovery-${randomUUID()}`,
+      );
+      mkdirSync(root, { mode: 0o700 });
+      try {
+        const current = currentProcessStartIdentity();
+        writeAdmissionFixture(
+          environment,
+          { status: "resource-active" },
+          { processStartId: differentDigest(current.processStartId) },
+          [{
+            resourceId: randomUUID(),
+            status: "active",
+            identity: captureLocalCliCleanupResource(root),
+          }],
+          {
+            transport: "local-cli",
+            executionIdentityHash: "4".repeat(64),
+          },
+        );
+
+        expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+          scanned: 1,
+          repaired: 0,
+          retained: 1,
+          issues: [{ kind: "cleanup-unsafe" }],
+        });
+        expect(existsSync(root)).toBeTrue();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     });
   });
 
@@ -640,7 +793,10 @@ describe("web-session cleanup admission", () => {
         scanned: 1,
         repaired: 0,
         retained: 1,
-        issues: [{ kind: "cleanup-unsafe" }],
+        // The public entry point ignores the forged second argument and uses
+        // the real process probe, which correctly observes this test owner as
+        // live even though the retained claim is cleanup-unsafe.
+        issues: [{ kind: "resource-active" }],
       });
     });
   });

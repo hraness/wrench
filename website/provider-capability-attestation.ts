@@ -25,7 +25,7 @@ export type ProviderCapabilityAttestationRow = Readonly<{
   completeness: ProviderCapabilityCompleteness;
   contractVersion: number;
   displayName: string;
-  kind: "official-api" | "authenticated-web";
+  kind: "official-api" | "authenticated-web" | "local-cli";
   limit: string;
   operation: string;
   pluginId: string;
@@ -71,17 +71,25 @@ function isOperationRisk(value: unknown): value is OperationRisk {
   return typeof value === "string" && (operationRisks as readonly string[]).includes(value);
 }
 
-function adapterKind(fileName: CurrentAdapterManifestFile): ProviderCapabilityAttestationRow["kind"] {
+function adapterKind(
+  fileName: CurrentAdapterManifestFile,
+  transport: ProviderPluginTransport,
+): ProviderCapabilityAttestationRow["kind"] {
+  if (transport === "local-cli") return "local-cli";
   return fileName === OFFICIAL_ADAPTER_FILE ? "official-api" : "authenticated-web";
 }
 
+type AdapterSelectorTransport = "provider-api" | "session-api" | "local-cli";
+
 function transportMatchesAdapter(
   transport: ProviderPluginTransport,
-  fileName: CurrentAdapterManifestFile,
+  selectorTransport: AdapterSelectorTransport,
 ): boolean {
-  return fileName === OFFICIAL_ADAPTER_FILE
+  return selectorTransport === "provider-api"
     ? transport === "provider-api"
-    : transport === "web-session-api" || transport === "linked-device";
+    : selectorTransport === "local-cli"
+      ? transport === "local-cli"
+      : transport === "web-session-api" || transport === "linked-device";
 }
 
 function parseCurrentAdapterOperation(
@@ -92,6 +100,7 @@ function parseCurrentAdapterOperation(
   contractVersion: number;
   description: string;
   risk: OperationRisk;
+  selectorTransport: AdapterSelectorTransport;
 }> {
   const operation = unknownRecord(value, label);
   const description = requiredString(operation.description, `${label}.description`);
@@ -100,25 +109,38 @@ function parseCurrentAdapterOperation(
   }
   const provider = operation.provider;
   const webSession = operation.webSession;
+  const localCli = operation.localCli;
   if (fileName === OFFICIAL_ADAPTER_FILE) {
-    if (webSession !== undefined) {
-      throw new TypeError(`${label} is an official adapter operation and cannot declare webSession.`);
+    if (webSession !== undefined || localCli !== undefined) {
+      throw new TypeError(`${label} is an official adapter operation and cannot declare webSession or localCli.`);
     }
     const recipe = unknownRecord(provider, `${label}.provider`);
     return Object.freeze({
       contractVersion: requiredSafeInteger(recipe.contractVersion, `${label}.provider.contractVersion`),
       description,
       risk: operation.risk,
+      selectorTransport: "provider-api",
     });
   }
   if (provider !== undefined) {
     throw new TypeError(`${label} is an authenticated-web adapter operation and cannot declare provider.`);
   }
-  const recipe = unknownRecord(webSession, `${label}.webSession`);
+  if ((webSession === undefined) === (localCli === undefined)) {
+    throw new TypeError(`${label} must declare exactly one webSession or localCli selector.`);
+  }
+  const recipeName = localCli === undefined ? "webSession" : "localCli";
+  const recipe = unknownRecord(
+    localCli === undefined ? webSession : localCli,
+    `${label}.${recipeName}`,
+  );
   return Object.freeze({
-    contractVersion: requiredSafeInteger(recipe.contractVersion, `${label}.webSession.contractVersion`),
+    contractVersion: requiredSafeInteger(
+      recipe.contractVersion,
+      `${label}.${recipeName}.contractVersion`,
+    ),
     description,
     risk: operation.risk,
+    selectorTransport: localCli === undefined ? "session-api" : "local-cli",
   });
 }
 
@@ -134,6 +156,7 @@ export function parseCurrentAdapterManifest(
     description: string;
     risk: OperationRisk;
   }>>>;
+  selectorTransport: AdapterSelectorTransport;
   surfaceId: string;
   version: string;
 }> {
@@ -144,23 +167,34 @@ export function parseCurrentAdapterManifest(
     description: string;
     risk: OperationRisk;
   }>> = {};
+  const selectorTransports = new Set<AdapterSelectorTransport>();
   for (const [operationName, operation] of Object.entries(operationsValue)) {
-    if (!/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/u.test(operationName)) {
+    if (!/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/u.test(operationName)) {
       throw new TypeError(`${relativePath}.operations.${operationName} is not a dotted semantic operation.`);
     }
-    operations[operationName] = parseCurrentAdapterOperation(
+    const parsedOperation = parseCurrentAdapterOperation(
       operation,
       `${relativePath}.operations.${operationName}`,
       fileName,
     );
+    selectorTransports.add(parsedOperation.selectorTransport);
+    operations[operationName] = Object.freeze({
+      contractVersion: parsedOperation.contractVersion,
+      description: parsedOperation.description,
+      risk: parsedOperation.risk,
+    });
   }
   if (Object.keys(operations).length < 1) {
     throw new TypeError(`${relativePath} must declare at least one operation.`);
+  }
+  if (selectorTransports.size !== 1) {
+    throw new TypeError(`${relativePath} cannot mix provider, session, and local CLI selectors.`);
   }
   return Object.freeze({
     displayName: requiredString(manifest.displayName, `${relativePath}.displayName`),
     id: requiredString(manifest.id, `${relativePath}.id`),
     operations: Object.freeze(operations),
+    selectorTransport: [...selectorTransports][0]!,
     surfaceId: requiredString(manifest.surfaceId, `${relativePath}.surfaceId`),
     version: requiredString(manifest.version, `${relativePath}.version`),
   });
@@ -169,13 +203,16 @@ export function parseCurrentAdapterManifest(
 function matchingPluginBinding(
   plugins: readonly ProviderPluginV1[],
   surfaceId: string,
-  fileName: CurrentAdapterManifestFile,
+  selectorTransport: AdapterSelectorTransport,
   adapterId: string,
 ): { readonly binding: ProviderPluginBindingV1; readonly plugin: ProviderPluginV1 } {
   const matches: Array<{ readonly binding: ProviderPluginBindingV1; readonly plugin: ProviderPluginV1 }> = [];
   for (const plugin of plugins) {
     for (const binding of plugin.bindings) {
-      if (binding.surfaceId === surfaceId && transportMatchesAdapter(binding.transport, fileName)) {
+      if (
+        binding.surfaceId === surfaceId
+        && transportMatchesAdapter(binding.transport, selectorTransport)
+      ) {
         matches.push({ binding, plugin });
       }
     }
@@ -247,7 +284,7 @@ export async function loadProviderCapabilityAttestation(
       const { binding, plugin } = matchingPluginBinding(
         plugins,
         manifest.surfaceId,
-        fileName,
+        manifest.selectorTransport,
         manifest.id,
       );
       const adapterOperations = Object.keys(manifest.operations).sort((left, right) =>
@@ -291,7 +328,7 @@ export async function loadProviderCapabilityAttestation(
           completeness: pluginOperation.state,
           contractVersion: adapterOperation.contractVersion,
           displayName: manifest.displayName,
-          kind: adapterKind(fileName),
+          kind: adapterKind(fileName, binding.transport),
           limit: adapterOperation.description,
           operation: operationName,
           pluginId: plugin.id,

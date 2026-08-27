@@ -16,9 +16,18 @@ import type {
   RevalidatedCapability,
   RevalidatedCapabilityCurrent,
   WrenchClientInvocationResult,
+  WrenchClientLocalCliContractIdentity,
+  WrenchClientLocalCliToolIdentity,
   WrenchClientPortableOperationIdentity,
   WrenchClientRunReceipt,
 } from "./client-types";
+import {
+  isProviderPluginOperationName,
+  isProviderPluginSurfaceId,
+  PROVIDER_PLUGIN_ID_MAX_LENGTH,
+  PROVIDER_PLUGIN_OPERATION_NAME_MAX_LENGTH,
+} from "./provider-plugin-identifiers";
+import { parsePortableOperationIdentityV1 } from "./provider-plugin-portable-identity";
 
 type JsonRecord = Record<string, unknown>;
 type ReadProjectionCacheHit = Extract<
@@ -161,6 +170,11 @@ type ExecutionIdentity = {
       readonly transport: "portable-provider-plugin";
       readonly portablePluginContract: WrenchClientPortableOperationIdentity;
     }
+  | {
+      readonly schemaVersion: 7;
+      readonly transport: "local-cli";
+      readonly localCliContract: WrenchClientLocalCliContractIdentity;
+    }
 );
 
 type PreviewExecutionIdentity = {
@@ -171,6 +185,7 @@ type PreviewExecutionIdentity = {
   | { readonly transport: "provider-api" }
   | { readonly transport: "web-session-api" }
   | { readonly transport: "reviewed-template-api" }
+  | { readonly transport: "local-cli" }
   | {
       readonly transport: "portable-provider-plugin";
       readonly portablePluginContract: WrenchClientPortableOperationIdentity;
@@ -186,8 +201,26 @@ function isUnknownArray(value: unknown): value is readonly unknown[] {
 }
 
 function record(value: unknown, label: string): JsonRecord {
-  if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  return value;
+  if (
+    !isRecord(value)
+    || nodeTypes.isProxy(value)
+    || (
+      Object.getPrototypeOf(value) !== Object.prototype
+      && Object.getPrototypeOf(value) !== null
+    )
+  ) throw new Error(`${label} must be a plain data object`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).some((key) => typeof key !== "string")) {
+    throw new Error(`${label} must be a plain data object`);
+  }
+  const result: JsonRecord = {};
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!descriptor.enumerable || !("value" in descriptor)) {
+      throw new Error(`${label} must be a plain data object`);
+    }
+    result[key] = descriptor.value;
+  }
+  return result;
 }
 
 function assertExactKeys(
@@ -326,6 +359,26 @@ function safeString(value: unknown, label: string, maximum = 512): string {
     })
   ) throw new Error(`${label} is malformed`);
   return value;
+}
+
+function providerOperationName(value: unknown, label: string): string {
+  const operation = safeString(
+    value,
+    label,
+    PROVIDER_PLUGIN_OPERATION_NAME_MAX_LENGTH,
+  );
+  if (!isProviderPluginOperationName(operation)) {
+    throw new Error(`${label} is malformed`);
+  }
+  return operation;
+}
+
+function providerSurfaceId(value: unknown, label: string): string {
+  const surface = safeString(value, label, PROVIDER_PLUGIN_ID_MAX_LENGTH);
+  if (!isProviderPluginSurfaceId(surface)) {
+    throw new Error(`${label} is malformed`);
+  }
+  return surface;
 }
 
 function boundedUtf8String(
@@ -575,10 +628,9 @@ function prepareRequest(requestValue: CapabilityReadRequest): PreparedRequest {
     "Wrench client adapter ID",
     64,
   );
-  const operationId = safeString(
+  const operationId = providerOperationName(
     request.operationId,
     "Wrench client operation ID",
-    128,
   );
   const authId = Object.hasOwn(request, "authId")
     ? safeString(request.authId, "Wrench client auth ID", 64)
@@ -896,10 +948,9 @@ function parseExecutionPreview(
       "Wrench execution identity preview adapter hash",
     ),
   });
-  const operation = safeString(
+  const operation = providerOperationName(
     value.operation,
     "Wrench execution identity preview operation",
-    128,
   );
   if (adapter.id !== request.adapterId || operation !== request.operationId) {
     throw new Error("Wrench execution identity preview route is malformed");
@@ -963,6 +1014,7 @@ function parseExecutionPreview(
     && transport !== "provider-api"
     && transport !== "web-session-api"
     && transport !== "reviewed-template-api"
+    && transport !== "local-cli"
   ) throw new Error("Wrench execution identity preview transport is malformed");
   return Object.freeze({ adapter, operation, transport });
 }
@@ -1071,12 +1123,28 @@ function parseCatalogExecutionIdentity(
       [],
       "Wrench execution identity provider capability",
     );
+    const catalogSurface = providerSurfaceId(
+      adapterValue.surfaceId,
+      "Wrench execution identity catalog surface",
+    );
+    const provider = providerSurfaceId(
+      operation.provider,
+      "Wrench execution identity provider surface",
+    );
+    const providerAction = providerOperationName(
+      operation.providerAction,
+      "Wrench execution identity provider action",
+    );
     safeInteger(
       operation.providerContractVersion,
       "Wrench execution identity provider contract version",
       1,
-      Number.MAX_SAFE_INTEGER,
+      1_000_000,
     );
+    if (
+      provider !== catalogSurface
+      || providerAction !== preview.operation
+    ) throw new Error("Wrench execution identity provider route is malformed");
     return Object.freeze({
       ...common,
       schemaVersion: 3 as const,
@@ -1102,12 +1170,28 @@ function parseCatalogExecutionIdentity(
       [],
       "Wrench execution identity web-session capability",
     );
+    const catalogSurface = providerSurfaceId(
+      adapterValue.surfaceId,
+      "Wrench execution identity catalog surface",
+    );
+    const site = providerSurfaceId(
+      operation.site,
+      "Wrench execution identity web-session surface",
+    );
+    const webSessionAction = providerOperationName(
+      operation.webSessionAction,
+      "Wrench execution identity web-session action",
+    );
     safeInteger(
       operation.webSessionContractVersion,
       "Wrench execution identity web-session contract version",
       1,
-      Number.MAX_SAFE_INTEGER,
+      1_000_000,
     );
+    if (
+      site !== catalogSurface
+      || webSessionAction !== preview.operation
+    ) throw new Error("Wrench execution identity web-session route is malformed");
     return Object.freeze({
       ...common,
       schemaVersion: 4 as const,
@@ -1116,6 +1200,46 @@ function parseCatalogExecutionIdentity(
         operation.webSessionContractHash,
         "Wrench execution identity web-session contract hash",
       ),
+    });
+  }
+  if (preview.transport === "local-cli") {
+    assertExactKeys(
+      operation,
+      [
+        ...commonKeys,
+        "surface",
+        "localCliAction",
+        "localCliContractVersion",
+        "localCliContractHash",
+        "localCliTool",
+        "state",
+        "implementation",
+      ],
+      [],
+      "Wrench execution identity local CLI capability",
+    );
+    const catalogSurface = providerSurfaceId(
+      adapterValue.surfaceId,
+      "Wrench execution identity catalog surface",
+    );
+    const localCliContract = parseLocalCliContractIdentity({
+      surface: operation.surface,
+      action: operation.localCliAction,
+      version: operation.localCliContractVersion,
+      hash: operation.localCliContractHash,
+      tool: operation.localCliTool,
+    });
+    if (
+      localCliContract.surface !== catalogSurface
+      || localCliContract.action !== preview.operation
+    ) {
+      throw new Error("Wrench execution identity local CLI route is malformed");
+    }
+    return Object.freeze({
+      ...common,
+      schemaVersion: 7 as const,
+      transport: "local-cli" as const,
+      localCliContract,
     });
   }
   assertExactKeys(
@@ -1233,11 +1357,17 @@ function receiptExecutionIdentity(
       reviewedTemplateContractHash: receipt.reviewedTemplateContractHash,
     });
   }
-  return Object.freeze({
+  if (receipt.schemaVersion === 6) return Object.freeze({
     ...common,
     schemaVersion: receipt.schemaVersion,
     transport: receipt.transport,
     portablePluginContract: receipt.portablePluginContract,
+  });
+  return Object.freeze({
+    ...common,
+    schemaVersion: receipt.schemaVersion,
+    transport: receipt.transport,
+    localCliContract: receipt.localCliContract,
   });
 }
 
@@ -1544,54 +1674,276 @@ function parseReceiptStatus(
 function parsePortableOperationIdentity(
   value: unknown,
 ): WrenchClientPortableOperationIdentity {
-  const identity = record(value, "Wrench live portable contract");
+  return parsePortableOperationIdentityV1(value);
+}
+
+function parseLocalCliToolIdentity(
+  value: unknown,
+): WrenchClientLocalCliToolIdentity {
+  const strictRecord = (candidate: unknown, label: string): JsonRecord => {
+    if (
+      typeof candidate !== "object"
+      || candidate === null
+      || Array.isArray(candidate)
+      || nodeTypes.isProxy(candidate)
+      || (
+        Object.getPrototypeOf(candidate) !== Object.prototype
+        && Object.getPrototypeOf(candidate) !== null
+      )
+    ) throw new Error(`${label} is malformed`);
+    const descriptors = Object.getOwnPropertyDescriptors(candidate);
+    if (Reflect.ownKeys(descriptors).some((key) => typeof key !== "string")) {
+      throw new Error(`${label} is malformed`);
+    }
+    const result: JsonRecord = {};
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (!descriptor.enumerable || !("value" in descriptor)) {
+        throw new Error(`${label} is malformed`);
+      }
+      result[key] = descriptor.value;
+    }
+    return result;
+  };
+  const strictArray = (candidate: unknown, label: string): readonly unknown[] => {
+    if (
+      !Array.isArray(candidate)
+      || nodeTypes.isProxy(candidate)
+      || Object.getPrototypeOf(candidate) !== Array.prototype
+      || candidate.length > 16
+    ) throw new Error(`${label} is malformed`);
+    const descriptors = Object.getOwnPropertyDescriptors(candidate);
+    if (
+      Reflect.ownKeys(descriptors).some((key) => typeof key !== "string")
+      || Object.keys(descriptors).length !== candidate.length + 1
+    ) throw new Error(`${label} is malformed`);
+    return Object.freeze(Array.from({ length: candidate.length }, (_unused, index) => {
+      const descriptor = descriptors[String(index)];
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+        throw new Error(`${label} is malformed`);
+      }
+      return descriptor.value;
+    }));
+  };
+  const exactHttpsUrl = (candidate: unknown, label: string): string => {
+    const source = safeString(candidate, label, 2_000);
+    let parsed: URL;
+    try {
+      parsed = new URL(source);
+    } catch {
+      throw new Error(`${label} is malformed`);
+    }
+    if (
+      parsed.protocol !== "https:"
+      || parsed.username !== ""
+      || parsed.password !== ""
+      || parsed.hash !== ""
+      || parsed.search !== ""
+      || parsed.href !== source
+    ) throw new Error(`${label} is malformed`);
+    return source;
+  };
+  const wellFormedVisible = (candidate: string): boolean => {
+    for (let index = 0; index < candidate.length; index += 1) {
+      const code = candidate.charCodeAt(index);
+      if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return false;
+      if (code >= 0xd800 && code <= 0xdbff) {
+        if (index + 1 >= candidate.length) return false;
+        const next = candidate.charCodeAt(index + 1);
+        if (next < 0xdc00 || next > 0xdfff) return false;
+        index += 1;
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const token = (candidate: unknown, label: string): string => {
+    const parsed = safeString(candidate, label, 64);
+    if (!/^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?$/u.test(parsed)) {
+      throw new Error(`${label} is malformed`);
+    }
+    return parsed;
+  };
+  const tool = strictRecord(value, "Wrench local CLI tool identity");
   assertExactKeys(
-    identity,
+    tool,
     [
-      "pluginId",
-      "pluginVersion",
-      "hostApiVersion",
-      "bundleSha256",
-      "manifestSha256",
-      "adapterId",
-      "transport",
-      "surfaceId",
-      "operation",
-      "contractVersion",
-      "descriptorSha256",
+      "schemaVersion",
+      "id",
+      "implementation",
+      "versionScheme",
+      "version",
+      "artifacts",
     ],
-    [],
-    "Wrench live portable contract",
+    [
+      "sourceUrl",
+      "releaseCommit",
+      "releaseManifestSha256",
+      "releaseManifestUrl",
+    ],
+    "Wrench local CLI tool identity",
   );
-  const transport = identity.transport;
+  const artifactValues = strictArray(
+    tool.artifacts,
+    "Wrench local CLI tool artifact table",
+  );
+  if (tool.schemaVersion !== 1) {
+    throw new Error("Wrench local CLI tool identity is malformed");
+  }
+  if (artifactValues.length < 1) {
+    throw new Error("Wrench local CLI tool artifact table is malformed");
+  }
+  const artifacts = artifactValues.map((artifactValue, index) => {
+    const artifact = strictRecord(
+      artifactValue,
+      `Wrench local CLI tool artifact ${index}`,
+    );
+    assertExactKeys(
+      artifact,
+      ["platform", "arch", "executableSha256"],
+      ["archiveSha256", "downloadUrl"],
+      `Wrench local CLI tool artifact ${index}`,
+    );
+    const archiveSha256 = artifact.archiveSha256 === undefined
+      ? undefined
+      : digest(
+          artifact.archiveSha256,
+          `Wrench local CLI tool artifact ${index} archive hash`,
+        );
+    const downloadUrl = artifact.downloadUrl === undefined
+      ? undefined
+      : exactHttpsUrl(
+          artifact.downloadUrl,
+          `Wrench local CLI tool artifact ${index} download URL`,
+        );
+    if ((archiveSha256 === undefined) !== (downloadUrl === undefined)) {
+      throw new Error("Wrench local CLI tool artifact archive provenance is malformed");
+    }
+    return Object.freeze({
+      platform: token(
+        artifact.platform,
+        `Wrench local CLI tool artifact ${index} platform`,
+      ),
+      arch: token(
+        artifact.arch,
+        `Wrench local CLI tool artifact ${index} architecture`,
+      ),
+      executableSha256: digest(
+        artifact.executableSha256,
+        `Wrench local CLI tool artifact ${index} executable hash`,
+      ),
+      ...(archiveSha256 === undefined ? {} : { archiveSha256 }),
+      ...(downloadUrl === undefined ? {} : { downloadUrl }),
+    });
+  });
+  const coordinates = artifacts.map((artifact) =>
+    `${artifact.platform}\0${artifact.arch}`);
   if (
-    transport !== "linked-device"
-    && transport !== "provider-api"
-    && transport !== "web-session-api"
-  ) throw new Error("Wrench live portable contract transport is malformed");
-  if (identity.hostApiVersion !== 1) {
-    throw new Error("Wrench live portable contract host API version is malformed");
+    new Set(coordinates).size !== coordinates.length
+    || coordinates.some((coordinate, index) =>
+      index > 0 && coordinates[index - 1]! >= coordinate)
+  ) throw new Error("Wrench local CLI tool artifact table is not canonical");
+  const sourceUrl = tool.sourceUrl === undefined
+    ? undefined
+    : exactHttpsUrl(tool.sourceUrl, "Wrench local CLI tool source URL");
+  const releaseManifestSha256 = tool.releaseManifestSha256 === undefined
+    ? undefined
+    : digest(
+        tool.releaseManifestSha256,
+        "Wrench local CLI tool release manifest hash",
+      );
+  const releaseManifestUrl = tool.releaseManifestUrl === undefined
+    ? undefined
+    : exactHttpsUrl(
+        tool.releaseManifestUrl,
+        "Wrench local CLI tool release manifest URL",
+      );
+  if (
+    (releaseManifestSha256 === undefined)
+      !== (releaseManifestUrl === undefined)
+  ) throw new Error("Wrench local CLI tool release manifest provenance is malformed");
+  if (tool.versionScheme !== "semver" && tool.versionScheme !== "opaque") {
+    throw new Error("Wrench local CLI tool version scheme is malformed");
+  }
+  if (
+    typeof tool.version !== "string"
+    || tool.version.length < 1
+    || tool.version.length > 128
+  ) throw new Error("Wrench local CLI tool version is malformed");
+  const version = tool.version;
+  if (
+    !wellFormedVisible(version)
+    || (
+      tool.versionScheme === "semver"
+      && !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u.test(version)
+    )
+  ) {
+    throw new Error("Wrench local CLI tool version is malformed");
+  }
+  const hasReleaseCommit = tool.releaseCommit !== undefined;
+  const releaseCommit = hasReleaseCommit
+    ? safeString(
+        tool.releaseCommit,
+        "Wrench local CLI tool release commit",
+        40,
+      )
+    : undefined;
+  if (
+    releaseCommit !== undefined
+    && !/^[a-f0-9]{40}$/u.test(releaseCommit)
+  ) throw new Error("Wrench local CLI tool release commit is malformed");
+  const implementation = safeString(
+    tool.implementation,
+    "Wrench local CLI tool implementation",
+    256,
+  );
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9._/+:-]{0,254}[A-Za-z0-9])?$/u.test(implementation)) {
+    throw new Error("Wrench local CLI tool implementation is malformed");
   }
   return Object.freeze({
-    pluginId: safeString(identity.pluginId, "Wrench live portable plugin ID", 64),
-    pluginVersion: safeString(identity.pluginVersion, "Wrench live portable plugin version", 64),
-    hostApiVersion: 1 as const,
-    bundleSha256: digest(identity.bundleSha256, "Wrench live portable bundle hash"),
-    manifestSha256: digest(identity.manifestSha256, "Wrench live portable manifest hash"),
-    adapterId: safeString(identity.adapterId, "Wrench live portable adapter ID", 64),
-    transport,
-    surfaceId: safeString(identity.surfaceId, "Wrench live portable surface ID", 64),
-    operation: safeString(identity.operation, "Wrench live portable operation", 128),
-    contractVersion: safeInteger(
-      identity.contractVersion,
-      "Wrench live portable contract version",
+    schemaVersion: 1,
+    id: token(tool.id, "Wrench local CLI tool ID"),
+    implementation,
+    versionScheme: tool.versionScheme,
+    version,
+    ...(releaseCommit === undefined ? {} : { releaseCommit }),
+    ...(releaseManifestSha256 === undefined
+      ? {}
+      : { releaseManifestSha256, releaseManifestUrl: releaseManifestUrl! }),
+    ...(sourceUrl === undefined ? {} : { sourceUrl }),
+    artifacts: Object.freeze(artifacts),
+  });
+}
+
+function parseLocalCliContractIdentity(
+  value: unknown,
+): WrenchClientLocalCliContractIdentity {
+  const identity = record(value, "Wrench local CLI contract identity");
+  assertExactKeys(
+    identity,
+    ["surface", "action", "version", "hash", "tool"],
+    [],
+    "Wrench local CLI contract identity",
+  );
+  const surface = providerSurfaceId(
+    identity.surface,
+    "Wrench local CLI surface",
+  );
+  const action = providerOperationName(
+    identity.action,
+    "Wrench local CLI action",
+  );
+  return Object.freeze({
+    surface,
+    action,
+    version: safeInteger(
+      identity.version,
+      "Wrench local CLI contract version",
       1,
-      Number.MAX_SAFE_INTEGER,
+      1_000_000,
     ),
-    descriptorSha256: digest(
-      identity.descriptorSha256,
-      "Wrench live portable descriptor hash",
-    ),
+    hash: digest(identity.hash, "Wrench local CLI contract hash"),
+    tool: parseLocalCliToolIdentity(identity.tool),
   });
 }
 
@@ -1658,6 +2010,16 @@ function parseLiveReceipt(
     assertExactKeys(
       receipt,
       [...commonKeys, "portablePluginContract"],
+      [],
+      "Wrench live receipt",
+    );
+  } else if (
+    receipt.schemaVersion === 7
+    && receipt.transport === "local-cli"
+  ) {
+    assertExactKeys(
+      receipt,
+      [...commonKeys, "localCliContract"],
       [],
       "Wrench live receipt",
     );
@@ -1748,7 +2110,10 @@ function parseLiveReceipt(
       version: safeString(adapter.version, "Wrench live receipt adapter version", 64),
       hash: digest(adapter.hash, "Wrench live receipt adapter hash"),
     }),
-    operation: safeString(receipt.operation, "Wrench live receipt operation", 128),
+    operation: providerOperationName(
+      receipt.operation,
+      "Wrench live receipt operation",
+    ),
     risk: "R1" as const,
     inputHash: digest(receipt.inputHash, "Wrench live receipt input hash"),
     auth: Object.freeze({
@@ -1847,6 +2212,20 @@ function parseLiveReceipt(
       schemaVersion: 6 as const,
       transport: "portable-provider-plugin" as const,
       portablePluginContract,
+    });
+  }
+  if (receipt.schemaVersion === 7 && receipt.transport === "local-cli") {
+    const localCliContract = parseLocalCliContractIdentity(
+      receipt.localCliContract,
+    );
+    if (localCliContract.action !== common.operation) {
+      throw new Error("Wrench live local CLI contract route is malformed");
+    }
+    return Object.freeze({
+      ...common,
+      schemaVersion: 7 as const,
+      transport: "local-cli" as const,
+      localCliContract,
     });
   }
   throw new Error("Wrench live receipt schema and transport are malformed");

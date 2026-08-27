@@ -1,37 +1,259 @@
 // @bun
 import {
+  PROVIDER_PLUGIN_ID_MAX_LENGTH,
+  PROVIDER_PLUGIN_OPERATION_NAME_MAX_LENGTH,
+  isPortableProviderPluginVersion,
+  isProviderPluginId,
+  isProviderPluginOperationName,
+  isProviderPluginSurfaceId
+} from "./index-26yq8q16.js";
+import {
   canonicalJson
 } from "./index-dqv16dt0.js";
 
-// src/provider-plugin-identifiers.ts
-var PROVIDER_PLUGIN_ID_MAX_LENGTH = 63;
-var PROVIDER_PLUGIN_OPERATION_NAME_MAX_LENGTH = 163;
-var strictKebabPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
-var strictKebabSegmentPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
-var portableProviderPluginVersionPattern = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
-function isPortableProviderPluginVersion(value) {
-  if (typeof value !== "string" || value.length > 128)
-    return false;
-  const match = portableProviderPluginVersionPattern.exec(value);
-  if (match === null)
-    return false;
-  const prerelease = match[1];
-  return prerelease === undefined || prerelease.split(".").every((identifier) => !/^[0-9]+$/u.test(identifier) || identifier === "0" || !identifier.startsWith("0"));
-}
-function isProviderPluginId(value) {
-  return typeof value === "string" && value.length <= PROVIDER_PLUGIN_ID_MAX_LENGTH && strictKebabPattern.test(value);
-}
-function isProviderPluginSurfaceId(value) {
-  return isProviderPluginId(value);
-}
-function isProviderPluginOperationName(value) {
-  if (typeof value !== "string" || value.length > PROVIDER_PLUGIN_OPERATION_NAME_MAX_LENGTH) {
-    return false;
+// src/local-cli-tool-identity.ts
+import { types as nodeTypes } from "util";
+var strictSemverPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+var sha256Pattern = /^[a-f0-9]{64}$/u;
+var releaseCommitPattern = /^[a-f0-9]{40}$/u;
+var tokenPattern = /^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?$/u;
+var implementationPattern = /^[A-Za-z0-9](?:[A-Za-z0-9._/+:-]{0,254}[A-Za-z0-9])?$/u;
+function hasWellFormedUnicode(value) {
+  for (let index = 0;index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 55296 && code <= 56319) {
+      if (index + 1 >= value.length)
+        return false;
+      const next = value.charCodeAt(index + 1);
+      if (next < 56320 || next > 57343)
+        return false;
+      index += 1;
+    } else if (code >= 56320 && code <= 57343) {
+      return false;
+    }
   }
-  const segments = value.split(".");
-  return segments.length >= 2 && segments.length <= 4 && segments.every((segment) => segment.length <= 40 && strictKebabSegmentPattern.test(segment));
+  return true;
 }
-
+function record(value, label) {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || nodeTypes.isProxy(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error(`${label} has an unsupported prototype`);
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).some((key) => typeof key !== "string")) {
+    throw new Error(`${label} has unsupported symbol fields`);
+  }
+  const result = {};
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!descriptor.enumerable || !("value" in descriptor) || !hasWellFormedUnicode(key) || /[\u0000-\u001f\u007f-\u009f]/u.test(key)) {
+      throw new Error(`${label} has unsupported accessor fields`);
+    }
+    result[key] = descriptor.value;
+  }
+  return result;
+}
+function denseArray(value, label, maximum) {
+  if (!Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < 1 || value.length > maximum) {
+    throw new Error(`${label} is malformed`);
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).some((key) => typeof key !== "string") || Object.keys(descriptors).length !== value.length + 1) {
+    throw new Error(`${label} is malformed`);
+  }
+  return Object.freeze(Array.from({ length: value.length }, (_unused, index) => {
+    const descriptor = descriptors[String(index)];
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+      throw new Error(`${label} is malformed`);
+    }
+    return descriptor.value;
+  }));
+}
+function exactKeys(value, allowed, label) {
+  const allowedKeys = new Set(allowed);
+  const unexpected = Object.keys(value).filter((key) => !allowedKeys.has(key));
+  if (unexpected.length > 0) {
+    throw new Error(`${label} contains unsupported keys: ${unexpected.join(", ")}`);
+  }
+  for (const key of allowed) {
+    if (!Object.hasOwn(value, key) && key !== "sourceUrl" && key !== "releaseCommit" && key !== "releaseManifestSha256" && key !== "releaseManifestUrl" && key !== "archiveSha256" && key !== "downloadUrl") {
+      throw new Error(`${label}.${key} is required`);
+    }
+  }
+}
+function exactHttpsUrl(value, label) {
+  if (typeof value !== "string" || value.length > 2000) {
+    throw new Error(`${label} must be a bounded exact HTTPS URL`);
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a bounded exact HTTPS URL`);
+  }
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || parsed.hash !== "" || parsed.search !== "" || parsed.href !== value) {
+    throw new Error(`${label} must be a credential-free exact HTTPS URL without a query or fragment`);
+  }
+  return value;
+}
+function optionalDigest(value, label) {
+  if (value === undefined)
+    return;
+  if (typeof value !== "string" || !sha256Pattern.test(value)) {
+    throw new Error(`${label} must be one lowercase SHA-256 digest`);
+  }
+  return value;
+}
+function optionalUrl(value, label) {
+  return value === undefined ? undefined : exactHttpsUrl(value, label);
+}
+function parseLocalCliToolIdentityV1(value) {
+  const tool = record(value, "local CLI tool identity");
+  exactKeys(tool, [
+    "schemaVersion",
+    "id",
+    "implementation",
+    "versionScheme",
+    "version",
+    "releaseCommit",
+    "releaseManifestSha256",
+    "releaseManifestUrl",
+    "sourceUrl",
+    "artifacts"
+  ], "local CLI tool identity");
+  if (tool.schemaVersion !== 1) {
+    throw new Error("local CLI tool identity schemaVersion must be 1");
+  }
+  if (typeof tool.id !== "string" || !tokenPattern.test(tool.id)) {
+    throw new Error("local CLI tool identity id is malformed");
+  }
+  if (typeof tool.implementation !== "string" || !implementationPattern.test(tool.implementation)) {
+    throw new Error("local CLI tool identity implementation is malformed");
+  }
+  if (tool.versionScheme !== "semver" && tool.versionScheme !== "opaque") {
+    throw new Error("local CLI tool identity versionScheme must be semver or opaque");
+  }
+  if (typeof tool.version !== "string" || tool.version.length < 1 || tool.version.length > 128 || /[\u0000-\u001f\u007f-\u009f]/u.test(tool.version) || !hasWellFormedUnicode(tool.version) || tool.versionScheme === "semver" && !strictSemverPattern.test(tool.version)) {
+    throw new Error("local CLI tool identity version is malformed");
+  }
+  const hasReleaseCommit = tool.releaseCommit !== undefined;
+  if (hasReleaseCommit && (typeof tool.releaseCommit !== "string" || !releaseCommitPattern.test(tool.releaseCommit))) {
+    throw new Error("local CLI tool identity releaseCommit must be one lowercase 40-character commit ID");
+  }
+  const releaseManifestSha256 = optionalDigest(tool.releaseManifestSha256, "local CLI tool identity releaseManifestSha256");
+  const sourceUrl = optionalUrl(tool.sourceUrl, "local CLI tool identity sourceUrl");
+  const releaseManifestUrl = optionalUrl(tool.releaseManifestUrl, "local CLI tool identity releaseManifestUrl");
+  if (releaseManifestSha256 === undefined !== (releaseManifestUrl === undefined)) {
+    throw new Error("local CLI tool identity release manifest URL and digest must be declared together");
+  }
+  const rawArtifacts = denseArray(tool.artifacts, "local CLI tool identity artifacts", 16);
+  const artifacts = rawArtifacts.map((rawArtifact, index) => {
+    const artifact = record(rawArtifact, `local CLI tool artifact ${index}`);
+    exactKeys(artifact, [
+      "platform",
+      "arch",
+      "executableSha256",
+      "archiveSha256",
+      "downloadUrl"
+    ], `local CLI tool artifact ${index}`);
+    if (typeof artifact.platform !== "string" || !tokenPattern.test(artifact.platform)) {
+      throw new Error(`local CLI tool artifact ${index}.platform is malformed`);
+    }
+    if (typeof artifact.arch !== "string" || !tokenPattern.test(artifact.arch)) {
+      throw new Error(`local CLI tool artifact ${index}.arch is malformed`);
+    }
+    if (typeof artifact.executableSha256 !== "string" || !sha256Pattern.test(artifact.executableSha256)) {
+      throw new Error(`local CLI tool artifact ${index}.executableSha256 must be one lowercase SHA-256 digest`);
+    }
+    const archiveSha256 = optionalDigest(artifact.archiveSha256, `local CLI tool artifact ${index}.archiveSha256`);
+    const downloadUrl = optionalUrl(artifact.downloadUrl, `local CLI tool artifact ${index}.downloadUrl`);
+    if (archiveSha256 === undefined !== (downloadUrl === undefined)) {
+      throw new Error(`local CLI tool artifact ${index} archive URL and digest must be declared together`);
+    }
+    return Object.freeze({
+      platform: artifact.platform,
+      arch: artifact.arch,
+      executableSha256: artifact.executableSha256,
+      ...archiveSha256 === undefined ? {} : { archiveSha256 },
+      ...downloadUrl === undefined ? {} : { downloadUrl }
+    });
+  }).sort((left, right) => {
+    const leftCoordinate = `${left.platform}\x00${left.arch}`;
+    const rightCoordinate = `${right.platform}\x00${right.arch}`;
+    return leftCoordinate < rightCoordinate ? -1 : leftCoordinate > rightCoordinate ? 1 : 0;
+  });
+  const coordinates = artifacts.map((artifact) => `${artifact.platform}/${artifact.arch}`);
+  if (new Set(coordinates).size !== coordinates.length) {
+    throw new Error("local CLI tool identity repeats a platform/architecture artifact");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    id: tool.id,
+    implementation: tool.implementation,
+    versionScheme: tool.versionScheme,
+    version: tool.version,
+    ...hasReleaseCommit ? { releaseCommit: tool.releaseCommit } : {},
+    ...releaseManifestSha256 === undefined ? {} : { releaseManifestSha256, releaseManifestUrl },
+    ...sourceUrl === undefined ? {} : { sourceUrl },
+    artifacts: Object.freeze(artifacts)
+  });
+}
+function localCliToolArtifactForCurrentRuntime(tool) {
+  const artifact = tool.artifacts.find((candidate) => candidate.platform === process.platform && candidate.arch === process.arch);
+  if (artifact === undefined) {
+    throw new Error(`local CLI tool ${tool.id}@${tool.version} does not support ${process.platform}/${process.arch}`);
+  }
+  return artifact;
+}
+// src/provider-plugin-cleanup-execution.ts
+function startProviderPluginCleanupTrackedOperation(register, start) {
+  if (register === undefined) {
+    return start(undefined, Object.freeze({
+      verified: () => {
+        return;
+      },
+      unsafe: () => {
+        return;
+      }
+    }));
+  }
+  let resolveCleanup;
+  let rejectCleanup;
+  let settled = false;
+  const cleanupBarrier = new Promise((resolve, reject) => {
+    resolveCleanup = resolve;
+    rejectCleanup = reject;
+  });
+  cleanupBarrier.catch(() => {
+    return;
+  });
+  const publishCleanupResource = register(cleanupBarrier);
+  const cleanup = Object.freeze({
+    verified: () => {
+      if (settled)
+        return;
+      settled = true;
+      resolveCleanup?.();
+    },
+    unsafe: (reason) => {
+      if (settled)
+        return;
+      settled = true;
+      rejectCleanup?.(reason instanceof Error ? reason : new Error("provider cleanup could not be verified"));
+    }
+  });
+  try {
+    return Promise.resolve(start(typeof publishCleanupResource === "function" ? publishCleanupResource : undefined, cleanup)).catch((error) => {
+      cleanup.unsafe(error);
+      throw error;
+    });
+  } catch (error) {
+    cleanup.unsafe(error);
+    throw error;
+  }
+}
 // src/article-draft-document.ts
 var ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION = 1;
 var ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION = 2;
@@ -54,12 +276,12 @@ var textBlockTypes = new Set([
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function record(value, label) {
+function record2(value, label) {
   if (!isRecord(value))
     throw new Error(`${label} must be an object`);
   return value;
 }
-function exactKeys(value, keys, label) {
+function exactKeys2(value, keys, label) {
   const actual = Object.keys(value).sort().join(",");
   const expected = [...keys].sort().join(",");
   if (actual !== expected)
@@ -114,8 +336,8 @@ function parseArticleDraftDocument(value, limitsValue) {
   if (canonicalJson(parsed) !== value) {
     throw new Error("input.document must use canonical JSON encoding");
   }
-  const root = record(parsed, "input.document");
-  exactKeys(root, ["schemaVersion", "blocks"], "input.document");
+  const root = record2(parsed, "input.document");
+  exactKeys2(root, ["schemaVersion", "blocks"], "input.document");
   if (root.schemaVersion !== ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION || !Array.isArray(root.blocks)) {
     throw new Error(`input.document must use ArticleDraftDocument schemaVersion ${ARTICLE_DRAFT_DOCUMENT_SCHEMA_VERSION}`);
   }
@@ -126,14 +348,14 @@ function parseArticleDraftDocument(value, limitsValue) {
   let totalCharacters = 0;
   for (const [index, rawBlock] of root.blocks.entries()) {
     const label = `input.document.blocks[${index}]`;
-    const block = record(rawBlock, label);
+    const block = record2(rawBlock, label);
     const allowed = [
       "type",
       "text",
       ...block.links === undefined ? [] : ["links"],
       ...block.styles === undefined ? [] : ["styles"]
     ];
-    exactKeys(block, allowed, label);
+    exactKeys2(block, allowed, label);
     if (typeof block.type !== "string" || !textBlockTypes.has(block.type)) {
       throw new Error(`${label}.type is outside ArticleDraftDocument schemaVersion 1`);
     }
@@ -150,8 +372,8 @@ function parseArticleDraftDocument(value, limitsValue) {
       throw new Error(`${label} ranges exceeded their bounds`);
     const links = rawLinks.map((rawLink, rangeIndex) => {
       const rangeLabel = `${label}.links[${rangeIndex}]`;
-      const link = record(rawLink, rangeLabel);
-      exactKeys(link, ["offset", "length", "url"], rangeLabel);
+      const link = record2(rawLink, rangeLabel);
+      exactKeys2(link, ["offset", "length", "url"], rangeLabel);
       const range = boundedRange(link, block.text, rangeLabel);
       return Object.freeze({ ...range, url: boundedHttpsUrl(link.url, `${rangeLabel}.url`) });
     });
@@ -163,8 +385,8 @@ function parseArticleDraftDocument(value, limitsValue) {
     }
     const styles = rawStyles.map((rawStyle, rangeIndex) => {
       const rangeLabel = `${label}.styles[${rangeIndex}]`;
-      const style = record(rawStyle, rangeLabel);
-      exactKeys(style, ["offset", "length", "style"], rangeLabel);
+      const style = record2(rawStyle, rangeLabel);
+      exactKeys2(style, ["offset", "length", "style"], rangeLabel);
       const range = boundedRange(style, block.text, rangeLabel);
       if (style.style !== "bold" && style.style !== "italic" && style.style !== "strikethrough") {
         throw new Error(`${rangeLabel}.style is outside ArticleDraftDocument schemaVersion 1`);
@@ -236,8 +458,8 @@ function parseArticleDraftDocumentV2(value, limitsValue) {
   if (canonicalJson(parsed) !== value) {
     throw new Error("input.document must use canonical JSON encoding");
   }
-  const root = record(parsed, "input.document");
-  exactKeys(root, ["schemaVersion", "blocks"], "input.document");
+  const root = record2(parsed, "input.document");
+  exactKeys2(root, ["schemaVersion", "blocks"], "input.document");
   if (root.schemaVersion !== ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION || !Array.isArray(root.blocks)) {
     throw new Error(`input.document must use ArticleDraftDocument schemaVersion ${ARTICLE_DRAFT_DOCUMENT_IMAGE_SCHEMA_VERSION}`);
   }
@@ -249,9 +471,9 @@ function parseArticleDraftDocumentV2(value, limitsValue) {
   let totalCharacters = 0;
   for (const [index, rawBlock] of root.blocks.entries()) {
     const label = `input.document.blocks[${index}]`;
-    const block = record(rawBlock, label);
+    const block = record2(rawBlock, label);
     if (block.type === "image") {
-      exactKeys(block, [
+      exactKeys2(block, [
         "type",
         "imageIndex",
         ...block.altText === undefined ? [] : ["altText"],
@@ -388,9 +610,12 @@ var isProviderPluginId2 = isProviderPluginId;
 var isProviderPluginOperationName2 = isProviderPluginOperationName;
 var isProviderPluginSurfaceId2 = isProviderPluginSurfaceId;
 export {
+  startProviderPluginCleanupTrackedOperation,
   projectXStatusArticleEmbed,
+  parseLocalCliToolIdentityV1,
   parseArticleDraftDocumentV2,
   parseArticleDraftDocument,
+  localCliToolArtifactForCurrentRuntime,
   isProviderPluginSurfaceId2 as isProviderPluginSurfaceId,
   isProviderPluginOperationName2 as isProviderPluginOperationName,
   isProviderPluginId2 as isProviderPluginId,

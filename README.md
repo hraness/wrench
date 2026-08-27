@@ -27,7 +27,7 @@ wrench capabilities
 wrench plugin list
 ```
 
-[Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md)
+[Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md) · [Local CLI transport guide](docs/local-cli-providers.md)
 
 ## What Wrench does
 
@@ -376,16 +376,28 @@ Wrench will not install or expose this surface until it can bind the TDLib
 authorization lifecycle, account identity, local database, paging behavior,
 and message-history completeness without weakening the linked-device boundary.
 
-### Beeper local read-only projection
+### Beeper through an exact local CLI contract
 
-The bundled `beeper-linked-device` source plugin reads an existing Beeper
-Desktop authorization through the official Beeper CLI 0.6.2. Wrench accepts
-only the exact pinned macOS arm64 binary, the fixed selected `desktop` target,
-and five JSON operations: `contacts.list`, `contacts.search`,
-`messaging.list`, `messaging.search`, and `messaging.read`. Every child command
-uses Beeper's read-only mode. The plugin
-does not expose raw API calls, targets, media downloads, sends, presence,
-pairing, sync, or other CLI commands.
+The bundled `beeper-linked-device` source plugin operates an existing Beeper
+Desktop authorization through the official Beeper CLI 0.6.2. This is Wrench's
+first `local-cli` transport: the adapter selects semantic operations while its
+source plugin owns exact executable identity, fixed command templates, strict
+input and output projections, account and Desktop-target proof, process bounds,
+and mutation recovery. It is not a generic Beeper command runner.
+
+The adapter covers ordinary Beeper work through 32 operations. R1 reads include
+accounts, bridges, contacts, conversations, message pages, exact messages,
+message context, and bounded searches. R2 desired-state actions include
+reactions, archive, pin, mute, priority, private drafts, reminders, and local
+Desktop focus. R3 actions send text, files, stickers, or voice messages; edit
+an exact message; start a conversation; change the network-visible read state;
+send Notify Anyway; change group metadata; set disappearing timers; and emit
+bounded presence.
+
+`conversations.start` binds only the exact account and canonical user ID.
+Set a group title afterward through the separately confirmed
+`conversations.title.set` operation; Wrench does not hide that rename inside
+conversation creation.
 
 Install the official CLI and authorize it to the local Desktop app first:
 
@@ -398,28 +410,52 @@ wrench auth add beeper-main --linked-device beeper \
 wrench auth bind beeper-main --site beeper
 ```
 
-The export integrity pin is the official macOS arm64 CLI 0.6.2, not the
-moving Homebrew formula name. The command above is sufficient only while
-`beeper version` reports 0.6.2. If the tap has advanced, use the 0.6.2 asset
-from the [official CLI releases](https://github.com/beeper/cli/releases)
-asset and install its `beeper` executable at
+Upgrading from the earlier read-only Beeper adapter intentionally changes the
+bound subject: it now includes the exact Desktop loopback target and verified
+stable/nightly bundle ID as well as the self account. After reviewing the
+active Desktop app, its exact advertised version, and the account, either
+create a new auth ID or explicitly rebind the existing one with
+`wrench auth bind beeper-main --site beeper --force`. Wrench does not silently
+migrate the narrower realm. Ordinary Desktop auto-updates require the same
+review and rebind, then produce a newly bound auth identity and new previews.
+
+The integrity pin is the final official 0.6.2 executable, not the moving
+Homebrew formula, npm launcher, release tag, or reported version. If the tap
+has advanced, install the matching 0.6.2 release executable at
 `<WRENCH_STATE_HOME>/tools/beeper/0.6.2/beeper` (the default state home is
-`~/.local/share/wrench`). The reviewed release archive has SHA-256
-`688ccde7e7d044d33980cd06474bf1ae7215ccf8ca79967262fa3bfb85a2589a`.
-After installation, Wrench enforces executable SHA-256
-`48aa895449129c793a212ea19f69a534adc34a8adc4037ca1d7da9e648716425`
-and rejects every other executable byte sequence before reading private data.
+`~/.local/share/wrench`). Wrench rejects every other executable byte sequence
+before private work.
+
+| Runtime | Archive SHA-256 | Executable SHA-256 |
+| --- | --- | --- |
+| macOS arm64 | `688ccde7e7d044d33980cd06474bf1ae7215ccf8ca79967262fa3bfb85a2589a` | `48aa895449129c793a212ea19f69a534adc34a8adc4037ca1d7da9e648716425` |
+| macOS x64 | `4113a1979cfbd7839f14743158e70c12efa941313afb77ab2b11a08309196186` | `83bb89edb6eeb9c61ebdb6ec940e0db30c90ecbca61d60a7408fe336e255f22e` |
+| Linux arm64 | `2bd37043a4ed863621edc59e28aaa652e8193e55abca0e9477f5aeae1c65d629` | `102b8725bd99b03905dcff9fff645f3742e1697ce8d43ab9d8656896aafd12a8` |
+| Linux x64 | `a881e1d2bc91e31218b251716644ec5f8d161d5ccb30e7eab66cf2ba6410511d` | `723cc3a6c556fa21b6ba11db8377d6a29776aca1660da48f0072883d6452ae3d` |
+
+The binding also records release commit
+`a416af06023449a87312dc11e54643fd9dc94b8c` and release-manifest SHA-256
+`5c52b533180151b97e26138ef687b6b819170687b34a478184e5648335356950`.
+Review the [official 0.6.2 release](https://github.com/beeper/cli/releases/tag/v0%2E6%2E2)
+and [CLI manual](https://github.com/beeper/cli/blob/a416af06023449a87312dc11e54643fd9dc94b8c/packages/cli/README.md)
+for the upstream distribution. The semantic response contract is separately
+reviewed against `@beeper/desktop-api` 5.0.0 at
+[commit `b9c1714410139c2139b597338cd002d785653e85`](https://github.com/beeper/desktop-api-js/tree/b9c1714410139c2139b597338cd002d785653e85);
+the executable digest does not by itself attest independently updated Desktop
+API behavior.
+
+The live Desktop `/v1/info` bundle ID and exact advertised version are also
+part of the bound account realm. An in-place Desktop upgrade therefore
+requires an explicit auth rebind and produces new previews instead of silently
+running an older reviewed contract against a different Desktop build.
 
 Binding hashes the stable local self-account coordinate before storing or
-printing it. The first bind or read may take longer while the pinned CLI unpacks
-its embedded payload into an operation-private cache. List and search results
-are always marked incomplete because CLI 0.6.2 exposes no continuation and may
-apply a provider-defined cap below the requested limit. Search is fuzzy and
-returns candidates, not identity matches. Search output retains only stable
-identity, account, network, directness, and participant metadata; it omits
-message content and private UI state. Read the local account and conversation
-identifiers, search bounded candidates, then request one exact conversation
-page:
+printing it. Every child receives operation-private CLI, oclif plugin, cache,
+and temporary state. Ambient credentials, targets, defaults, proxies, update
+checks, and user plugins cannot change a wrapped command. List and fuzzy search
+results remain explicitly incomplete when CLI 0.6.2 exposes no continuation or
+may apply an upstream cap. Use those reads to obtain exact account,
+conversation, contact, and message IDs before an exact read or action:
 
 ```sh
 wrench beeper-local messaging.list --auth beeper-main \
@@ -431,6 +467,34 @@ wrench beeper-local messaging.search --auth beeper-main \
 wrench beeper-local messaging.read --auth beeper-main \
   --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","limit":100}' --json
 ```
+
+Send one text message through the normal R3 preview and confirmation boundary:
+
+```sh
+wrench beeper-local messaging.send --auth beeper-main --preview --json \
+  --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","kind":"text","text":"Hello from Wrench"}'
+wrench confirm <preview-digest> --json
+```
+
+Wrench invokes sends without Beeper's `--wait`. It durably records the exact
+accepted pending-message target when the CLI returns one, and it never retries
+after the child may have reached Desktop. A timeout, signal, malformed response,
+or lost response after dispatch remains indeterminate until a separately
+reviewed exact read can reconcile it. File, sticker, voice, avatar, draft, and
+focus attachments come only from digest-bound plan assets; callers cannot pass
+an arbitrary child-process path. A file send, avatar update, or attached draft
+is one opaque child dispatch: the CLI may upload an asset before performing the
+final mutation, so an indeterminate result can leave an unreferenced provider
+asset and must never be retried. Beeper 0.6.2 only accepts a nonempty draft when
+the current draft is empty; replacing one is therefore two separately previewed
+and confirmed intents—clear first, then set—not a hidden multi-dispatch fallback.
+
+The checked Beeper coverage ledger accounts for all 101 canonical 0.6.2
+commands. Account setup and removal, authentication and verification, target
+and server lifecycle, configuration and update, plugin lifecycle, raw API/RPC,
+watch/webhook, arbitrary exports, media download, and message deletion remain
+unavailable or R4. Wrench does not turn administrative, destructive,
+caller-selected network, or arbitrary-filesystem commands into agent authority.
 
 Create a private, agent-ready Message Like Me bundle from every connected
 account materialized by Beeper Desktop:
@@ -477,6 +541,12 @@ transport, immutable Wrench release coordinate, verified official Beeper CLI
 version, commit and binary digest, source and provider versions, transform,
 completeness, counts, and exact summary digest. It is returned only after
 operation-owned private shards have been cleaned up.
+
+The released schema-1 contact-interaction writer remains macOS arm64-only
+because its receipt immutably names that platform and executable digest. It
+fails before creating private export state elsewhere, while its parser remains
+platform-neutral. Use the `beeper-local` semantic operations on any of the four
+pinned macOS and Linux artifacts described above.
 
 The command uses the pinned official CLI directly. It enumerates the connected
 account realm, then runs the official `export --no-attachments` command once per

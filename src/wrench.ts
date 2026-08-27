@@ -70,6 +70,7 @@ import {
   canonicalJson,
   DOM_ACTION_TRANSPORT_DISABLED_MESSAGE,
   isProviderOperation,
+  isLocalCliOperation,
   isReviewedTemplateOperation,
   isWebSessionOperation,
   manifestHash,
@@ -80,7 +81,13 @@ import {
 } from "./model";
 import { getProviderContract, providerContractHash } from "./provider-contracts";
 import {
+  getLocalCliContract,
+  localCliContractHash,
+} from "./local-cli-contracts";
+import { withLocalCliProviderCleanupAdmission } from "./local-cli-admission";
+import {
   portableProviderPluginSubjectProbeIdentity,
+  type LocalCliPluginBindingV1,
   type LinkedDevicePluginBindingV1,
   type ProviderPluginBindingV1,
   type ProviderPluginLinkedDeviceAttemptBoundaryV1,
@@ -274,6 +281,8 @@ export type WrenchDependencies = {
     binding: ProviderPluginBindingV1,
     auth: WrenchAuth,
     signal?: AbortSignal,
+    registry?: ProviderPluginRegistry,
+    environment?: Readonly<Record<string, string | undefined>>,
   ) => Promise<string>;
   /** Test seam after subject validation and before the auth snapshot CAS. */
   readonly beforeAuthBindCommit: () => void | Promise<void>;
@@ -324,7 +333,13 @@ const defaultDependencies: WrenchDependencies = {
   loadBeeperMessageLikeMeCliRuntime,
   loadBeeperContactInteractionCliRuntime,
   providerPluginRegistry,
-  probePluginSubject: async (binding, auth, signal) => {
+  probePluginSubject: async (
+    binding,
+    auth,
+    signal,
+    registry = providerPluginRegistry,
+    environment = process.env,
+  ) => {
     requireProviderPluginAuth(binding, auth);
     const probe = binding.subject.probe;
     if (probe === undefined) {
@@ -332,10 +347,25 @@ const defaultDependencies: WrenchDependencies = {
         `provider plugin surface ${binding.surfaceId} has no current-account probe`,
       );
     }
-    const subject = await probe(
-      auth,
-      signal === undefined ? undefined : { signal },
-    );
+    const subject = binding.transport === "local-cli"
+      ? await withLocalCliProviderCleanupAdmission(
+          {
+            registry,
+            binding,
+            auth,
+            purpose: { kind: "subject-probe" },
+            environment,
+          },
+          (registerCleanupBarrier) => probe(auth, {
+            ...(signal === undefined ? {} : { signal }),
+            environment,
+            registerCleanupBarrier,
+          }),
+        )
+      : await probe(
+          auth,
+          signal === undefined ? undefined : { signal, environment },
+        );
     if (!binding.subject.matches(subject)) {
       throw new Error(
         `provider plugin surface ${binding.surfaceId} returned a subject outside ${binding.subject.format}`,
@@ -1019,10 +1049,13 @@ function manifestFromPlatform(adapterId: string, surfaceId: PlatformSurfaceId): 
   };
 }
 
-function installedOperationTransport(operation: WrenchOperation): "provider-api" | "web-session-api" | "reviewed-template-api" {
+function installedOperationTransport(
+  operation: WrenchOperation,
+): "provider-api" | "web-session-api" | "local-cli" | "reviewed-template-api" {
   if (isProviderOperation(operation)) return "provider-api";
   if (isWebSessionOperation(operation)) return "web-session-api";
   if (isReviewedTemplateOperation(operation)) return "reviewed-template-api";
+  if (isLocalCliOperation(operation)) return "local-cli";
   throw new Error(DOM_ACTION_TRANSPORT_DISABLED_MESSAGE);
 }
 
@@ -1044,6 +1077,9 @@ function capabilitySummary(
             : null;
           const webSession = isWebSessionOperation(operation)
             ? getWebSessionContract(operation.webSession, registry)
+            : null;
+          const localCli = isLocalCliOperation(operation)
+            ? getLocalCliContract(operation.localCli, registry)
             : null;
           const reviewedTemplate = isReviewedTemplateOperation(operation) ? operation.reviewedTemplate : null;
           return {
@@ -1074,6 +1110,15 @@ function capabilitySummary(
               ),
               state: webSession.state,
               implementation: webSession.implementation,
+            }),
+            ...(localCli === null ? {} : {
+              surface: localCli.surface,
+              localCliAction: localCli.operation,
+              localCliContractVersion: localCli.contractVersion,
+              localCliContractHash: localCliContractHash(localCli, registry),
+              localCliTool: localCli.tool,
+              state: localCli.state,
+              implementation: localCli.implementation,
             }),
             ...(reviewedTemplate === null ? {} : {
               state: reviewedTemplate.state,
@@ -1194,7 +1239,9 @@ function authenticatedWebSessionReadiness(
     isCookieCapableWebAuth(entry) || entry.kind === "linked-device-store"
   );
   const bindings = registry.list().flatMap((plugin) =>
-    plugin.bindings.filter((binding) => binding.transport !== "provider-api"));
+    plugin.bindings.filter((binding) =>
+      binding.transport === "web-session-api"
+      || binding.transport === "linked-device"));
   return bindings.map((binding) => {
     const site = binding.surfaceId;
     const operations = manifests.flatMap((entry) => {
@@ -1234,6 +1281,89 @@ function authenticatedWebSessionReadiness(
       ready: adapters.length > 0 && accountBoundAuth.length > 0,
     };
   });
+}
+
+type LocalCliReadiness = {
+  readonly surface: string;
+  readonly adapters: readonly string[];
+  readonly operations: readonly string[];
+  readonly accountBoundAuth: readonly string[];
+  readonly tool: LocalCliPluginBindingV1["tool"];
+  readonly runtime: Awaited<ReturnType<LocalCliPluginBindingV1["inspect"]>>;
+  readonly ready: boolean;
+};
+
+async function localCliReadiness(
+  environment: Readonly<Record<string, string | undefined>>,
+  registry: ProviderPluginRegistry,
+): Promise<readonly LocalCliReadiness[]> {
+  const manifests = listRuntimeManifests(environment, registry);
+  const auth = listAuth(environment);
+  const bindings = registry.list().flatMap((plugin) =>
+    plugin.bindings.filter(
+      (binding): binding is LocalCliPluginBindingV1 =>
+        binding.transport === "local-cli",
+    ));
+  return Promise.all(bindings.map(async (binding) => {
+    const installed = manifests.flatMap((entry) => {
+      if (!entry.result.ok || entry.result.value.schemaVersion !== 6) return [];
+      return Object.entries(entry.result.value.operations).flatMap(
+        ([operationId, operation]) =>
+          isLocalCliOperation(operation)
+          && operation.localCli.surface === binding.surfaceId
+            ? [{ adapter: entry.id, operation: operationId }]
+            : [],
+      );
+    });
+    const accountBoundAuth = auth.filter((entry) => {
+      try {
+        requireProviderPluginAuth(binding, entry);
+        return entry.subject !== undefined
+          && binding.subject.matches(entry.subject);
+      } catch {
+        return false;
+      }
+    }).map((entry) => entry.id).sort();
+    let runtime: Awaited<ReturnType<LocalCliPluginBindingV1["inspect"]>>;
+    try {
+      runtime = await withLocalCliProviderCleanupAdmission(
+        {
+          registry,
+          binding,
+          auth: null,
+          purpose: { kind: "inspect" },
+          environment,
+        },
+        (registerCleanupBarrier) => binding.inspect(environment, {
+          registerCleanupBarrier,
+        }),
+      );
+    } catch {
+      runtime = Object.freeze({
+        ready: false,
+        platform: process.platform,
+        arch: process.arch,
+        version: null,
+        executableSha256: null,
+        reason: "inspection-failed",
+      });
+    }
+    const adapters = [...new Set(installed.map((entry) => entry.adapter))]
+      .sort();
+    const operations = [...new Set(installed.map((entry) => entry.operation))]
+      .sort();
+    return Object.freeze({
+      surface: binding.surfaceId,
+      adapters,
+      operations,
+      accountBoundAuth,
+      tool: binding.tool,
+      runtime,
+      ready: runtime.ready
+        && adapters.length > 0
+        && accountBoundAuth.length > 0,
+    });
+  }));
 }
 
 function reviewedTemplateReservationStatus(
@@ -1287,7 +1417,12 @@ async function doctor(
         binding.transport === "linked-device"
         && binding.linkedDeviceLifecycle !== undefined,
     ));
-  const [captureInspection, mediaInspection, linkedDeviceProtocols] = await Promise.all([
+  const [
+    captureInspection,
+    mediaInspection,
+    linkedDeviceProtocols,
+    localCliProviders,
+  ] = await Promise.all([
     dependencies.inspectClipEnvironment(),
     dependencies.loadMediaRuntime().then(async (runtime) => ({
       runtime,
@@ -1309,6 +1444,7 @@ async function doctor(
         };
       }
     })),
+    localCliReadiness(environment, registry),
   ]);
   const capture = captureInspection.report;
   const media = mediaInspection.report;
@@ -1326,10 +1462,11 @@ async function doctor(
   const providerApiReady = officialProviders.some((provider) => provider.ready);
   const webSessionSites = authenticatedWebSessionReadiness(environment, registry);
   const webSessionApiReady = webSessionSites.some((site) => site.ready);
+  const localCliReady = localCliProviders.some((provider) => provider.ready);
   const webSessionAdapters = [...new Set(webSessionSites.flatMap((site) => site.adapters))].sort();
   const reviewedTemplateReservations = reviewedTemplateReservationStatus(environment, registry);
   const reviewedTemplateApiReady = false;
-  const actionReady = providerApiReady || webSessionApiReady;
+  const actionReady = providerApiReady || webSessionApiReady || localCliReady;
   const runRecoveryHealthy = confirmationClaimRecovery.invalid === 0
     && runJournalRecovery.issues.length === 0;
   const webSessionCleanupRecoveryHealthy =
@@ -1351,6 +1488,8 @@ async function doctor(
     webSessionApiReady,
     webSessionAdapters,
     webSessionSites,
+    localCliReady,
+    localCliProviders,
     reviewedTemplateApiReady,
     reviewedTemplateReservations,
     officialProviders,
@@ -1399,7 +1538,7 @@ async function doctor(
       + ` (${runJournalRecovery.repaired} repaired, ${runJournalRecovery.issues.length} unresolved)\n`,
     );
     output.stdout(
-      `- Authenticated-web cleanup recovery: ${webSessionCleanupRecoveryHealthy ? "healthy" : "attention required"}`
+      `- Provider resource cleanup recovery: ${webSessionCleanupRecoveryHealthy ? "healthy" : "attention required"}`
       + ` (${webSessionCleanupAdmissionRecovery.repaired} repaired, ${webSessionCleanupAdmissionRecovery.issues.length} unresolved)\n`,
     );
     output.stdout(
@@ -1410,6 +1549,13 @@ async function doctor(
     output.stdout("- Generic browser/DOM action execution: disabled (internal API contracts only)\n");
     output.stdout(`- Official provider plugin APIs: ${providerApiReady ? "ready" : "not ready"}\n`);
     output.stdout(`- Authenticated internal APIs (any observed contract + account binding): ${webSessionApiReady ? "ready" : "not ready"}\n`);
+    output.stdout(`- Local CLI providers: ${localCliReady ? "ready" : "not ready"}\n`);
+    for (const readiness of localCliProviders) {
+      output.stdout(
+        `- ${safe(readiness.surface)} local CLI: ${readiness.ready ? "ready" : safe(readiness.runtime.reason ?? "not ready")}`
+        + ` (${readiness.operations.length} operation${readiness.operations.length === 1 ? "" : "s"})\n`,
+      );
+    }
     for (const readiness of webSessionSites) {
       const state = readiness.ready
         ? "ready"
@@ -1478,6 +1624,17 @@ function confirmationContractView(plan: ReturnType<typeof createInvocationPlan>[
       action: plan.webSessionContract.action,
       version: plan.webSessionContract.version,
       hash: plan.webSessionContract.hash,
+    };
+  }
+  if (plan.transport === "local-cli") {
+    return {
+      transport: plan.transport,
+      identity: `${plan.localCliContract.surface}/${plan.localCliContract.action}@${plan.localCliContract.version}`,
+      surface: plan.localCliContract.surface,
+      action: plan.localCliContract.action,
+      version: plan.localCliContract.version,
+      hash: plan.localCliContract.hash,
+      tool: plan.localCliContract.tool,
     };
   }
   if (plan.transport === "reviewed-template-api") {
@@ -1706,6 +1863,8 @@ async function runCommand(
     });
   }
   if (arguments_.command === "beeper-export-contact-interactions") {
+    const runtime = await dependencies.loadBeeperContactInteractionCliRuntime();
+    runtime.assertBeeperContactInteractionExportRuntime();
     const admission = acquireReadProjectionAuthAdmission(
       arguments_.authId,
       environment,
@@ -1717,7 +1876,6 @@ async function runCommand(
           "Beeper contact interaction export requires a Beeper linked-device-store auth locator",
         );
       }
-      const runtime = await dependencies.loadBeeperContactInteractionCliRuntime();
       const result = await runtime.exportBeeperContactInteractionsFromAuth({
         auth,
         limits: {
@@ -1909,7 +2067,7 @@ async function runCommand(
   if (arguments_.command === "auth-bind") {
     const authSnapshot = loadAuthSnapshot(arguments_.id, environment);
     const auth = authSnapshot.auth;
-    const binding = dependencies.providerPluginRegistry.requireSessionRoute(
+    const binding = dependencies.providerPluginRegistry.requireAccountRoute(
       arguments_.site,
     );
     requireProviderPluginAuth(binding, auth);
@@ -1933,6 +2091,8 @@ async function runCommand(
         binding,
         auth,
         signal,
+        dependencies.providerPluginRegistry,
+        environment,
       );
       if (!binding.subject.matches(subject)) {
         throw new Error(
@@ -2117,7 +2277,7 @@ async function runCommand(
     const path = saveAuth(auth, environment, { force: arguments_.force });
     output.stdout(`Saved ${safe(auth.id)} auth locator (${auth.kind}) to ${safe(path)}.\n`);
     if (auth.kind === "linked-device-store") {
-      const binding = dependencies.providerPluginRegistry.resolveSessionRoute(
+      const binding = dependencies.providerPluginRegistry.resolveAccountRoute(
         auth.provider,
       );
       if (

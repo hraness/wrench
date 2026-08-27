@@ -40,7 +40,8 @@ describe("provider operation contract parity", () => {
     for (const [site, definitions] of Object.entries(
       webSessionContractDefinitions,
     )) {
-      const binding = providerPluginRegistry.requireSessionRoute(site);
+      const binding = providerPluginRegistry.resolveRoute("local-cli", site)
+        ?? providerPluginRegistry.requireSessionRoute(site);
       const contracts = definitions as Readonly<Record<string, {
         readonly contractVersion: number;
         readonly risk: string;

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { types as nodeTypes } from "node:util";
 
 import { canonicalJson, sha256 } from "./canonical-json";
 import {
@@ -13,6 +14,12 @@ import {
   type ProcessOwnerIdentity,
   type ProcessOwnerStatus,
 } from "./process-identity";
+import {
+  localCliCleanupProcessGroupStatus,
+  localCliCleanupResourceExtends,
+  parseLocalCliCleanupResourceIdentityV1,
+  type ProviderPluginCleanupResourceIdentity,
+} from "./provider-plugin-cleanup-resource";
 import {
   createPrivateJsonIfAbsent,
   ensurePrivateStateDirectory,
@@ -32,7 +39,7 @@ type Environment = Readonly<Record<string, string | undefined>>;
 type JsonRecord = Record<string, unknown>;
 
 const ADMISSION_SCHEMA_VERSION = 1 as const;
-const MAX_ADMISSION_BYTES = 16 * 1024;
+const MAX_ADMISSION_BYTES = 64 * 1024;
 const MAX_ACQUISITION_ATTEMPTS = 8;
 const digestPattern = /^[a-f0-9]{64}$/u;
 const idPattern = /^[a-z][a-z0-9-]{0,127}$/u;
@@ -60,6 +67,10 @@ export type WebSessionCleanupAdmissionIdentity = {
   readonly surfaceId: string;
   readonly authId: string;
   readonly authHash: string;
+  /** Present for new claims; omitted only by bounded predecessor readers. */
+  readonly transport?: "web-session-api" | "local-cli";
+  /** Exact plugin/tool/artifact execution identity for this admitted run. */
+  readonly executionIdentityHash?: string;
 };
 
 export type WebSessionCleanupAdmissionContainment =
@@ -78,7 +89,12 @@ export type WebSessionCleanupAdmissionResource =
     }
   | {
       readonly resourceId: string;
-      readonly status: "active" | "browser-closed-artifacts";
+      readonly status: "active";
+      readonly identity: ProviderPluginCleanupResourceIdentity;
+    }
+  | {
+      readonly resourceId: string;
+      readonly status: "browser-closed-artifacts";
       readonly identity: BrowserCleanupResourceIdentity;
     };
 
@@ -94,6 +110,8 @@ export type WebSessionCleanupAdmissionClaim = {
   readonly surfaceId: string;
   readonly authId: string;
   readonly authHash: string;
+  readonly transport?: "web-session-api" | "local-cli";
+  readonly executionIdentityHash?: string;
   readonly owner: ProcessOwnerIdentity & {
     readonly token: string;
   };
@@ -134,7 +152,12 @@ export type WebSessionCleanupAdmissionRecoveryReport = {
 };
 
 function record(value: unknown, label: string): JsonRecord {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || nodeTypes.isProxy(value)
+  ) {
     throw new Error(`${label} must be an object`);
   }
   const prototype: unknown = Object.getPrototypeOf(value) as unknown;
@@ -291,7 +314,7 @@ function parsePrivateDirectoryIdentity(
   });
 }
 
-function parseCleanupResourceIdentity(
+function parseBrowserCleanupResourceIdentity(
   value: unknown,
 ): BrowserCleanupResourceIdentity {
   const identity = record(
@@ -347,6 +370,26 @@ function parseCleanupResourceIdentity(
   });
 }
 
+function parseCleanupResourceIdentity(
+  value: unknown,
+): ProviderPluginCleanupResourceIdentity {
+  const kind = typeof value === "object"
+      && value !== null
+      && !Array.isArray(value)
+    ? Object.getOwnPropertyDescriptor(value, "kind")
+    : undefined;
+  if (
+    kind === undefined
+    || !kind.enumerable
+    || !("value" in kind)
+  ) {
+    throw new Error("provider cleanup resource identity kind is malformed");
+  }
+  return kind.value === "local-cli-private-root-v1"
+    ? parseLocalCliCleanupResourceIdentityV1(value)
+    : parseBrowserCleanupResourceIdentity(value);
+}
+
 function parseCleanupResources(
   value: unknown,
 ): readonly WebSessionCleanupAdmissionResource[] {
@@ -396,11 +439,17 @@ function parseCleanupResources(
       throw new Error("web-session cleanup resource ID is duplicated");
     }
     resourceIds.add(resourceId);
-    resources.push(Object.freeze({
-      resourceId,
-      status: entry.status,
-      identity: parseCleanupResourceIdentity(entry.identity),
-    }));
+    resources.push(entry.status === "browser-closed-artifacts"
+      ? Object.freeze({
+          resourceId,
+          status: "browser-closed-artifacts" as const,
+          identity: parseBrowserCleanupResourceIdentity(entry.identity),
+        })
+      : Object.freeze({
+          resourceId,
+          status: "active" as const,
+          identity: parseCleanupResourceIdentity(entry.identity),
+        }));
   }
   return Object.freeze(resources);
 }
@@ -448,11 +497,26 @@ export function parseWebSessionCleanupAdmissionClaim(
       "acquiredAt",
       "containment",
       "resources",
+      ...(claim.transport === undefined ? [] : ["transport"]),
+      ...(claim.executionIdentityHash === undefined
+        ? []
+        : ["executionIdentityHash"]),
     ],
     "web-session cleanup admission",
   );
   if (claim.schemaVersion !== ADMISSION_SCHEMA_VERSION) {
     throw new Error("web-session cleanup admission version is unsupported");
+  }
+  if (
+    (claim.transport === undefined)
+      !== (claim.executionIdentityHash === undefined)
+    || (
+      claim.transport !== undefined
+      && claim.transport !== "web-session-api"
+      && claim.transport !== "local-cli"
+    )
+  ) {
+    throw new Error("web-session cleanup execution identity is malformed");
   }
   const pluginVersion = claim.pluginVersion;
   if (
@@ -501,6 +565,15 @@ export function parseWebSessionCleanupAdmissionClaim(
       claim.authHash,
       "web-session cleanup admission auth hash",
     ),
+    ...(claim.transport === undefined
+      ? {}
+      : {
+          transport: claim.transport,
+          executionIdentityHash: digest(
+            claim.executionIdentityHash,
+            "web-session cleanup admission execution identity hash",
+          ),
+        }),
     owner: parseOwner(claim.owner),
     acquiredAt: timestamp(
       claim.acquiredAt,
@@ -520,12 +593,24 @@ export function parseWebSessionCleanupAdmissionClaim(
   for (const resource of parsed.resources) {
     if (
       resource.status !== "unpublished"
+      && resource.identity.kind === "agent-browser-session-v1"
       && !resource.identity.session.startsWith(
         `io-${parsed.owner.pid}-`,
       )
     ) {
       throw new Error(
         "web-session cleanup browser resource does not match its owning process",
+      );
+    }
+    if (
+      resource.status !== "unpublished"
+      && (
+        (parsed.transport === "local-cli")
+          !== (resource.identity.kind === "local-cli-private-root-v1")
+      )
+    ) {
+      throw new Error(
+        "provider cleanup resource does not match its admitted transport",
       );
     }
   }
@@ -772,6 +857,7 @@ function recoverableBrowserResource(
 ): WebSessionCleanupAdmissionResource | null {
   if (
     resource.status !== "active"
+    || resource.identity.kind !== "agent-browser-session-v1"
     || !(reason instanceof PreservedBrowserArtifactsError)
     || reason.cleanupEvidence?.kind
       !== "agent-browser-closed-artifacts-v1"
@@ -877,6 +963,21 @@ function controller(
               === canonicalJson(resourceIdentity)
           ) {
             return resource;
+          }
+          if (
+            resource.status === "active"
+            && resource.identity.kind === "local-cli-private-root-v1"
+            && resourceIdentity.kind === "local-cli-private-root-v1"
+            && localCliCleanupResourceExtends(
+              resource.identity,
+              resourceIdentity,
+            )
+          ) {
+            return Object.freeze({
+              resourceId,
+              status: "active" as const,
+              identity: resourceIdentity,
+            });
           }
           throw new Error(
             "web-session cleanup resource identity changed after publication",
@@ -1002,6 +1103,13 @@ function createClaim(
     surfaceId: identity.surfaceId,
     authId: identity.authId,
     authHash: identity.authHash,
+    ...(identity.transport === undefined
+      || identity.executionIdentityHash === undefined
+      ? {}
+      : {
+          transport: identity.transport,
+          executionIdentityHash: identity.executionIdentityHash,
+        }),
     owner: {
       pid: process.pid,
       token: randomUUID(),
@@ -1063,11 +1171,104 @@ function removeRecoverableBrowserArtifacts(
   return true;
 }
 
+function removeRecoverableLocalCliRoots(
+  claim: WebSessionCleanupAdmissionClaim,
+  inspectOwner: (owner: ProcessOwnerIdentity) => ProcessOwnerStatus,
+): SameBootCleanupUnsafeRecovery {
+  if (
+    claim.resources.length === 0
+    || claim.resources.some((resource) =>
+      resource.status !== "active"
+      || resource.identity.kind !== "local-cli-private-root-v1"
+    )
+  ) {
+    return "proof-unavailable";
+  }
+  const owner = inspectOwner(claim.owner);
+  if (owner === "exact-live-owner") return "live-owner";
+  if (owner === "unknown") return "owner-unknown";
+  for (const resource of claim.resources) {
+    if (
+      resource.status !== "active"
+      || resource.identity.kind !== "local-cli-private-root-v1"
+    ) {
+      return "proof-unavailable";
+    }
+    const groupStatus = localCliCleanupProcessGroupStatus(
+      resource.identity,
+      inspectOwner,
+    );
+    if (groupStatus === "active") return "live-owner";
+    if (groupStatus !== "quiescent") return "proof-unavailable";
+  }
+  try {
+    for (const resource of claim.resources) {
+      if (
+        resource.status !== "active"
+        || resource.identity.kind !== "local-cli-private-root-v1"
+      ) {
+        return "proof-unavailable";
+      }
+      removePrivateDirectoryTree(resource.identity.root.path, {
+        device: resource.identity.root.device,
+        inode: resource.identity.root.inode,
+        birthtimeNs: resource.identity.root.birthtimeNs,
+      });
+    }
+  } catch {
+    return "artifact-conflict";
+  }
+  return "repaired";
+}
+
+function removeRebootQuiescentLocalCliRoots(
+  claim: WebSessionCleanupAdmissionClaim,
+): boolean {
+  try {
+    for (const resource of claim.resources) {
+      if (
+        resource.status === "unpublished"
+        || resource.identity.kind !== "local-cli-private-root-v1"
+      ) {
+        continue;
+      }
+      removePrivateDirectoryTree(resource.identity.root.path, {
+        device: resource.identity.root.device,
+        inode: resource.identity.root.inode,
+        birthtimeNs: resource.identity.root.birthtimeNs,
+      });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function recoverSameBootCleanupUnsafe(
   entry: WebSessionCleanupAdmissionSnapshot,
   environment: Environment,
   inspectOwner: (owner: ProcessOwnerIdentity) => ProcessOwnerStatus,
 ): SameBootCleanupUnsafeRecovery {
+  if (
+    entry.claim.containment.status !== "cleanup-unsafe"
+    && entry.claim.containment.status !== "resource-active"
+  ) {
+    return "proof-unavailable";
+  }
+  if (entry.claim.transport === "local-cli") {
+    const localRecovery = removeRecoverableLocalCliRoots(
+      entry.claim,
+      inspectOwner,
+    );
+    if (localRecovery !== "repaired") return localRecovery;
+    return removePrivateStateFileIfUnchanged(
+      pathFor(entry.claim.realmKey, environment),
+      { expectedCurrentContentSha256: entry.contentSha256 },
+      environment,
+    )
+      ? "repaired"
+      : "claim-conflict";
+  }
   if (entry.claim.containment.status !== "cleanup-unsafe") {
     return "proof-unavailable";
   }
@@ -1095,28 +1296,31 @@ function blockedAdmissionGuidance(
   recovery: SameBootCleanupUnsafeRecovery | null,
 ): string {
   const realm = `${claim.surfaceId}/${claim.authId}`;
+  const transport = claim.transport === "local-cli"
+    ? "local CLI"
+    : "authenticated web";
   if (recovery === "live-owner") {
-    return `web-session auth realm ${realm} has active or cleanup-unsafe state still owned by an active run; wait for it to finish`;
+    return `${transport} auth realm ${realm} has active or cleanup-unsafe state still owned by an active run; wait for it to finish`;
   }
   if (recovery === "owner-unknown") {
-    return `web-session auth realm ${realm} owner liveness cannot be proved; run wrench doctor again, and reboot before retrying if inspection remains unavailable`;
+    return `${transport} auth realm ${realm} owner liveness cannot be proved; run wrench doctor again, and reboot before retrying if inspection remains unavailable`;
   }
   if (recovery === "artifact-conflict") {
-    return `web-session auth realm ${realm} has identity-changed private cleanup artifacts; retry is unsafe until manual recovery or reboot`;
+    return `${transport} auth realm ${realm} has identity-changed private cleanup artifacts; retry is unsafe until manual recovery or reboot`;
   }
   if (recovery === "claim-conflict") {
-    return `web-session auth realm ${realm} cleanup recovery changed concurrently; run wrench doctor before retrying`;
+    return `${transport} auth realm ${realm} cleanup recovery changed concurrently; run wrench doctor before retrying`;
   }
   if (
     claim.containment.status === "cleanup-unsafe"
     && recovery === "proof-unavailable"
   ) {
-    return `web-session auth realm ${realm} has cleanup-unsafe state without exact browser-closed evidence; reboot and run wrench doctor before retrying`;
+    return `${transport} auth realm ${realm} has cleanup-unsafe state without exact quiescence evidence; reboot and run wrench doctor before retrying`;
   }
   if (claim.containment.status === "resource-active") {
-    return `web-session auth realm ${realm} has a resource-active crash boundary; same-boot quiescence cannot be proved, so reboot and run wrench doctor before retrying`;
+    return `${transport} auth realm ${realm} has a resource-active crash boundary; same-boot quiescence cannot be proved, so reboot and run wrench doctor before retrying`;
   }
-  return `web-session auth realm ${realm} has active or cleanup-unsafe state; wait for the active run, or run wrench doctor before retrying`;
+  return `${transport} auth realm ${realm} has active or cleanup-unsafe state; wait for the active run, or run wrench doctor before retrying`;
 }
 
 export function acquireWebSessionCleanupAdmission(
@@ -1143,7 +1347,13 @@ export function acquireWebSessionCleanupAdmission(
         | SameBootCleanupUnsafeRecovery
         | null = null;
       if (
-        containment === "cleanup-unsafe"
+        (
+          containment === "cleanup-unsafe"
+          || (
+            containment === "resource-active"
+            && existing.claim.transport === "local-cli"
+          )
+        )
         && existing.claim.owner.bootId === currentBootId
       ) {
         sameBootUnsafeRecovery = recoverSameBootCleanupUnsafe(
@@ -1154,6 +1364,11 @@ export function acquireWebSessionCleanupAdmission(
         if (sameBootUnsafeRecovery === "repaired") continue;
         if (sameBootUnsafeRecovery === "claim-conflict") continue;
       }
+      const rebootQuiescent = (
+        containment === "resource-active"
+        || containment === "cleanup-unsafe"
+      )
+        && existing.claim.owner.bootId !== currentBootId;
       const automaticallyRepairable = containment === "cleanup-complete"
         || (
           containment === "parent-owned"
@@ -1168,6 +1383,14 @@ export function acquireWebSessionCleanupAdmission(
           && existing.claim.owner.bootId !== currentBootId
         );
       if (automaticallyRepairable) {
+        if (
+          rebootQuiescent
+          && !removeRebootQuiescentLocalCliRoots(existing.claim)
+        ) {
+          throw new Error(
+            blockedAdmissionGuidance(existing.claim, "artifact-conflict"),
+          );
+        }
         removePrivateStateFileIfUnchanged(
           pathFor(claim.realmKey, environment),
           { expectedCurrentContentSha256: existing.contentSha256 },
@@ -1201,7 +1424,7 @@ export function acquireWebSessionCleanupAdmission(
     if (created.created) return controller(claimSnapshot(claim), environment);
   }
   throw new Error(
-    `web-session auth realm ${claim.surfaceId}/${claim.authId} cleanup admission could not be acquired`,
+    `${claim.transport === "local-cli" ? "local CLI" : "authenticated web"} auth realm ${claim.surfaceId}/${claim.authId} cleanup admission could not be acquired`,
   );
 }
 
@@ -1310,8 +1533,19 @@ function recoverWebSessionCleanupAdmissionsCore(
       || containment === "cleanup-unsafe"
     ) {
       if (claim.owner.bootId !== currentBootId) {
+        if (!removeRebootQuiescentLocalCliRoots(claim)) {
+          retained += 1;
+          issues.push({
+            coordinate: claim.realmKey,
+            kind: "recovery-conflict",
+          });
+          continue;
+        }
         repairable = true;
-      } else if (containment === "cleanup-unsafe") {
+      } else if (
+        containment === "cleanup-unsafe"
+        || claim.transport === "local-cli"
+      ) {
         const recovery = recoverSameBootCleanupUnsafe(
           entry,
           environment,
@@ -1326,6 +1560,8 @@ function recoverWebSessionCleanupAdmissionsCore(
           coordinate: claim.realmKey,
           kind: recovery === "owner-unknown"
             ? "owner-unknown"
+            : recovery === "live-owner"
+              ? "resource-active"
             : recovery === "artifact-conflict"
               || recovery === "claim-conflict"
               ? "recovery-conflict"

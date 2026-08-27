@@ -12,6 +12,10 @@ import { join } from "node:path";
 
 import { canonicalJson } from "./canonical-json";
 import {
+  parseLocalCliToolIdentityV1,
+  type LocalCliToolIdentityV1,
+} from "./local-cli-tool-identity";
+import {
   READ_PROJECTION_TRANSITION_SETTLEMENT_WAIT_MS,
   withReadProjectionAuthAdmission,
   withSettledReadProjectionAuthAdmission,
@@ -121,6 +125,10 @@ export type ReadProjectionQueryIdentity = {
       | "reviewed-template-api"
       | "web-session-api";
     readonly hash: string;
+  } | {
+    readonly transport: "local-cli";
+    readonly hash: string;
+    readonly tool: LocalCliToolIdentityV1;
   };
 };
 
@@ -954,7 +962,13 @@ function parseIdentity(value: unknown): ReadProjectionQueryIdentity {
   const auth = record(identity.auth, "read projection auth");
   exactKeys(auth, ["id", "kind", "hash", "subject"], "read projection auth");
   const contract = record(identity.contract, "read projection contract");
-  exactKeys(contract, ["transport", "hash"], "read projection contract");
+  exactKeys(
+    contract,
+    contract.transport === "local-cli"
+      ? ["transport", "hash", "tool"]
+      : ["transport", "hash"],
+    "read projection contract",
+  );
   const input = boundedJson(identity.input, "read projection input");
   const inputHash = hexDigest(identity.inputHash, "read projection input hash");
   if (hashBytes(canonicalJson(input)) !== inputHash) {
@@ -967,7 +981,16 @@ function parseIdentity(value: unknown): ReadProjectionQueryIdentity {
     && transport !== "provider-api"
     && transport !== "reviewed-template-api"
     && transport !== "web-session-api"
+    && transport !== "local-cli"
   ) throw new Error("read projection contract transport is malformed");
+  const contractHash = hexDigest(contract.hash, "read projection contract hash");
+  const parsedContract = transport === "local-cli"
+    ? Object.freeze({
+        transport,
+        hash: contractHash,
+        tool: parseLocalCliToolIdentityV1(contract.tool),
+      })
+    : Object.freeze({ transport, hash: contractHash });
   return Object.freeze({
     adapter: Object.freeze({
       id: safeString(adapter.id, "read projection adapter ID", 64),
@@ -983,10 +1006,7 @@ function parseIdentity(value: unknown): ReadProjectionQueryIdentity {
       hash: hexDigest(auth.hash, "read projection auth hash"),
       subject: safeString(auth.subject, "read projection auth subject", 512),
     }),
-    contract: Object.freeze({
-      transport,
-      hash: hexDigest(contract.hash, "read projection contract hash"),
-    }),
+    contract: parsedContract,
   });
 }
 
