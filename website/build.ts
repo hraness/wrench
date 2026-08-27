@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  cp,
   copyFile,
   mkdir,
   readFile,
@@ -160,6 +161,10 @@ const repositoryRoot = resolve(websiteRoot, "..");
 const sourceRoot = join(websiteRoot, "source");
 const publicRoot = join(websiteRoot, "public");
 const outputRoot = join(websiteRoot, "dist");
+const designKitFontsStylesPath = fileURLToPath(
+  import.meta.resolve("@hraness/design-kit/fonts.css"),
+);
+const designKitFontsDirectory = join(dirname(designKitFontsStylesPath), "fonts");
 
 const supportedPostHogHosts = new Set([
   "https://eu.i.posthog.com",
@@ -490,6 +495,14 @@ function renderTemplate(
   return rendered;
 }
 
+export function renderPreview(template: string, cssAsset: string): string {
+  const rendered = replaceRequired(template, "{{CSS_ASSET}}", escapeHtml(cssAsset));
+  if (/\{\{[A-Z0-9_]+\}\}/u.test(rendered)) {
+    throw new Error("The rendered preview contains an unresolved template value.");
+  }
+  return rendered;
+}
+
 export function renderIndex(template: string, options: RenderOptions): string {
   return renderTemplate(template, options, PUBLIC_PAGES[0]);
 }
@@ -519,10 +532,12 @@ export async function buildWebsite(
   const [
     manifest,
     publicTemplates,
+    previewTemplate,
     notFoundTemplate,
     notFoundMarkdown,
     llmsTemplate,
     css,
+    designKitFontsCss,
     hranessSiteFooterCss,
     analyticsBuild,
     skillInstallBuild,
@@ -530,10 +545,12 @@ export async function buildWebsite(
   ] = await Promise.all([
     Bun.file(join(repositoryRoot, "package.json")).json(),
     Promise.all(PUBLIC_PAGES.map((page) => readFile(join(sourceRoot, page.sourceFile), "utf8"))),
+    readFile(join(sourceRoot, "preview.html"), "utf8"),
     readFile(join(sourceRoot, "404.html"), "utf8"),
     readFile(join(sourceRoot, "404.md"), "utf8"),
     readFile(join(sourceRoot, "llms.txt"), "utf8"),
     readFile(join(sourceRoot, "styles.css"), "utf8"),
+    readFile(designKitFontsStylesPath, "utf8"),
     readFile(
       fileURLToPath(import.meta.resolve("@hraness/site-footer/styles.css")),
       "utf8",
@@ -571,7 +588,7 @@ export async function buildWebsite(
     );
   }
   const postHog = postHogEnvironment(environment);
-  const compiledCss = `${css.trimEnd()}\n\n${hranessSiteFooterCss.trim()}\n`;
+  const compiledCss = `${designKitFontsCss.trim()}\n\n${css.trimEnd()}\n\n${hranessSiteFooterCss.trim()}\n`;
   const cssAsset = `/assets/styles-${contentHash(compiledCss)}.css`;
   const analyticsAsset = `/assets/analytics-${contentHash(analytics)}.js`;
   const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
@@ -594,6 +611,7 @@ export async function buildWebsite(
 
   await rm(outputRoot, { force: true, recursive: true });
   await mkdir(join(outputRoot, "assets"), { recursive: true });
+  await mkdir(join(outputRoot, "preview"), { recursive: true });
   await Promise.all(PUBLIC_PAGES.map((page) => mkdir(dirname(join(outputRoot, page.outputFile)), {
     recursive: true,
   })));
@@ -602,11 +620,16 @@ export async function buildWebsite(
     html: renderTemplate(publicTemplates[index]!, renderOptions, page),
   }));
   await Promise.all([
+    cp(designKitFontsDirectory, join(outputRoot, "assets/fonts"), {
+      dereference: true,
+      recursive: true,
+    }),
     ...renderedPages.map(({ page, html }) => writeFile(join(outputRoot, page.outputFile), html)),
     ...renderedPages.map(({ page, html }) => writeFile(
       join(outputRoot, markdownSiblingPath(page.canonicalPath).slice(1)),
       htmlMainToMarkdown(html, `${SITE_ORIGIN}${page.canonicalPath}`),
     )),
+    writeFile(join(outputRoot, "preview/index.html"), renderPreview(previewTemplate, cssAsset)),
     writeFile(join(outputRoot, "404.html"), renderTemplate(notFoundTemplate, renderOptions)),
     writeFile(join(outputRoot, "404.md"), renderTemplate(notFoundMarkdown, renderOptions)),
     writeFile(join(outputRoot, "llms.txt"), renderTemplate(llmsTemplate, renderOptions)),

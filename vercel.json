@@ -19,12 +19,30 @@
           "value": "nosniff"
         },
         {
-          "key": "X-Frame-Options",
-          "value": "DENY"
-        },
-        {
           "key": "Vary",
           "value": "Accept"
+        }
+      ]
+    },
+    {
+      "source": "/((?!preview/$).*)",
+      "headers": [
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        }
+      ]
+    },
+    {
+      "source": "/preview/",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'none'; img-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors https://hraness.com https://www.hraness.com"
+        },
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
         }
       ]
     },
@@ -66,7 +84,7 @@
       "destination": "/index.md"
     },
     {
-      "source": "/:path*/",
+      "source": "/:path((?!preview/).*)/",
       "has": [
         {
           "type": "header",
@@ -81,6 +99,16 @@
     {
       "source": "/index.html",
       "destination": "/",
+      "permanent": true
+    },
+    {
+      "source": "/preview",
+      "destination": "/preview/",
+      "permanent": true
+    },
+    {
+      "source": "/preview/index.html",
+      "destination": "/preview/",
       "permanent": true
     },
     {

@@ -188,6 +188,10 @@
     "src/assets/code-owned-provider-template/runtime.internal.test.ts.template",
     "src/assets/code-owned-provider-template/runtime.ts.template",
     "src/assets/code-owned-provider-template/wrench-adapter.json.template",
+    "src/assets/fonts/nebula-sans/LICENSE.txt",
+    "src/assets/fonts/nebula-sans/NebulaSans-Book.woff2",
+    "src/assets/fonts/nebula-sans/PROVENANCE.md",
+    "src/assets.d.ts",
     "src/auth.ts",
     "src/beeper-message-like-me-cli.ts",
     "src/beeper-message-bundle-v1.ts",
@@ -465,7 +469,8 @@
     "typescript": "6.0.3"
   },
   "devDependencies": {
-    "@hraness/site-footer": "github:hraness/site-footer#v0.2.2",
+    "@hraness/design-kit": "github:hraness/design-kit#v0.2.1",
+    "@hraness/site-footer": "github:hraness/site-footer#v0.3.1",
     "@steipete/sweet-cookie": "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2",
     "@types/bun": "^1.3.14",
     "fast-check": "^4.8.0"
