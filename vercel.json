@@ -182,6 +182,16 @@
       "source": "/agentic-web-spoofing/index.html",
       "destination": "/agentic-web-spoofing/",
       "permanent": true
+    },
+    {
+      "source": "/vms-cannot-contain-agents",
+      "destination": "/vms-cannot-contain-agents/",
+      "permanent": true
+    },
+    {
+      "source": "/vms-cannot-contain-agents/index.html",
+      "destination": "/vms-cannot-contain-agents/",
+      "permanent": true
     }
   ]
 }

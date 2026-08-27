@@ -124,6 +124,14 @@ export const PUBLIC_PAGES = [
     sourceFile: "agentic-web-spoofing.html",
     title: "Agentic-web index spoofing, and why attested operations still matter",
   },
+  {
+    canonicalPath: "/vms-cannot-contain-agents/",
+    description:
+      "The Wednesday 26 August 2026 rough.day tech edition ranked Trail of Bits' argument that VMs cannot reliably contain cyber-capable AI agents. A guest machine is not a Wrench attestation: named operations stay observed or capture-required.",
+    outputFile: "vms-cannot-contain-agents/index.html",
+    sourceFile: "vms-cannot-contain-agents.html",
+    title: "VMs cannot contain agents, and why attested web operations still matter",
+  },
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];
