@@ -19,6 +19,7 @@ Do not use Wrench as an AI agent, hosted HTTP API, OpenAPI surface, OAuth develo
 - [Provider capability attestation](https://wrench.rip/provider-capabilities/): every bundled adapter operation with its reviewed completeness and limit
 - [Personal agents and attested operations](https://wrench.rip/compare/personal-agents-browser-use/): persistent browser-using agents versus Wrench's named, attested operation set
 - [Agentic-web index spoofing](https://wrench.rip/agentic-web-spoofing/): inbound bot impersonation on the Known Agents index, and why a claimed identity still does not attest an outbound Wrench operation
+- [VMs cannot contain agents](https://wrench.rip/vms-cannot-contain-agents/): Trail of Bits' containment argument from the Wednesday 26 August 2026 rough.day tech edition, and why a guest machine still does not attest a Wrench operation
 - [Security and local custody](https://wrench.rip/security/): account binding, encrypted snapshots, risk levels, and fail-closed drift
 - [Author and verify provider plugins](https://wrench.rip/plugins/): create, check, test, pack, trust, and install one content-addressed bundle
 - [Wrench source repository]({{WRENCH_REPOSITORY}}): public source, issues, and GitHub private vulnerability reporting
