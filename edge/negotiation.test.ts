@@ -3,6 +3,7 @@ import fc from "fast-check";
 
 import {
   handleDocumentNegotiation,
+  isHtmlOnlyDocumentPath,
   markdownAssetPath,
   negotiateDocumentRepresentation,
   notAcceptableBody,
@@ -59,6 +60,22 @@ describe("document Accept negotiation", () => {
     expect(notAcceptableBody("application/pdf")).toContain("You requested: application/pdf");
   });
 
+  test("negotiates an HTML-only document against only its owned representation", () => {
+    expect(negotiateDocumentRepresentation("text/html", ["html"]))
+      .toEqual({ kind: "html" });
+    expect(negotiateDocumentRepresentation("text/html;q=0.5, text/markdown", ["html"]))
+      .toEqual({ kind: "html" });
+    expect(negotiateDocumentRepresentation("text/markdown", ["html"]))
+      .toEqual({ accept: "text/markdown", kind: "not-acceptable" });
+    expect(negotiateDocumentRepresentation("text/html;q=0, text/markdown", ["html"]))
+      .toEqual({
+        accept: "text/html;q=0, text/markdown",
+        kind: "not-acceptable",
+      });
+    expect(notAcceptableBody("text/markdown", ["html"]))
+      .toBe("This resource is available in:\n- text/html\n\nYou requested: text/markdown\n");
+  });
+
   test("property: arbitrary Accept values stay inside the documented decision set", () => {
     fc.assert(
       fc.property(fc.option(fc.string(), { nil: null }), (header) => {
@@ -83,8 +100,39 @@ describe("document negotiation runtime", () => {
     expect(markdownAssetPath("/getting-started/")).toBe("/getting-started.md");
     expect(markdownAssetPath("/getting-started")).toBe("/getting-started.md");
     expect(markdownAssetPath("/about/")).toBe("/about.md");
+    expect(markdownAssetPath("/preview")).toBeNull();
+    expect(markdownAssetPath("/preview/")).toBeNull();
+    expect(markdownAssetPath("/preview/index.html")).toBeNull();
     expect(markdownAssetPath("/llms.txt")).toBeNull();
     expect(markdownAssetPath("/../secret")).toBeNull();
+  });
+
+  test("keeps the preview HTML-only for GET and HEAD", async () => {
+    const retrieve = async (): Promise<Response> => {
+      throw new Error("the HTML-only preview must not resolve a markdown asset");
+    };
+    for (const path of ["/preview", "/preview/", "/preview/index.html"]) {
+      expect(isHtmlOnlyDocumentPath(path)).toBe(true);
+      expect(await handleDocumentNegotiation(request(path, "text/html"), retrieve)).toBeNull();
+
+      const rejected = await handleDocumentNegotiation(
+        request(path, "text/markdown"),
+        retrieve,
+      );
+      expect(rejected?.status).toBe(406);
+      expect(rejected?.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(rejected?.headers.get("vary")).toBe("Accept");
+      expect(await rejected?.text()).toBe(
+        "This resource is available in:\n- text/html\n\nYou requested: text/markdown\n",
+      );
+
+      const head = await handleDocumentNegotiation(
+        request(path, "application/xml", "HEAD"),
+        retrieve,
+      );
+      expect(head?.status).toBe(406);
+      expect(await head?.text()).toBe("");
+    }
   });
 
   test("leaves HTML and static assets to the static origin", async () => {

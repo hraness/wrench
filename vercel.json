@@ -84,7 +84,7 @@
       "destination": "/index.md"
     },
     {
-      "source": "/:path*/",
+      "source": "/:path((?!preview/).*)/",
       "has": [
         {
           "type": "header",

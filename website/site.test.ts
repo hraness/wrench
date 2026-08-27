@@ -263,9 +263,17 @@ describe("wrench.rip static site", () => {
       {
         destination: "/:path.md",
         has: [{ key: "accept", type: "header", value: "text/markdown" }],
-        source: "/:path*/",
+        source: "/:path((?!preview/).*)/",
       },
     ]));
+    const markdownRewrite = vercel.rewrites.find((rule: { source: string }) =>
+      rule.source === "/:path((?!preview/).*)/");
+    expect(markdownRewrite?.destination).toBe("/:path.md");
+    const markdownRewritePattern = /^\/((?!preview\/).*)\/$/u;
+    expect(markdownRewritePattern.test("/preview/")).toBe(false);
+    for (const path of ["/getting-started/", "/providers/beeper/", "/missing/"]) {
+      expect(markdownRewritePattern.test(path)).toBe(true);
+    }
     const commonHeaders = vercel.headers.find((rule: { source: string }) =>
       rule.source === "/(.*)");
     expect(commonHeaders?.headers).toEqual([
