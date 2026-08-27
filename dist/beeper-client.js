@@ -269,7 +269,7 @@ var BEEPER_CLI_COMMAND_COVERAGE = Object.freeze({
 });
 
 // src/version.ts
-var WRENCH_VERSION = "0.15.0";
+var WRENCH_VERSION = "0.15.1";
 
 // src/beeper-contact-interactions.ts
 var BEEPER_CONTACT_INTERACTION_SCHEMA_VERSION = 1;

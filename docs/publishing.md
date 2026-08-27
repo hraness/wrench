@@ -1,0 +1,163 @@
+# Publish Wrench
+
+Wrench uses one interactive first publication and stage-only trusted publishing
+for later versions. npm requires a package to exist before `npm stage publish`
+can use it, so the bootstrap cannot use the staging workflow.
+
+## Bootstrap the npm package
+
+Start from the current `main` commit after the required checks pass. Use Node
+24, npm 11.19.0, and Bun 1.3.14. Do not create the release tag yet.
+
+1. Install the frozen graph without lifecycle scripts.
+
+   ```sh
+   bun install --frozen-lockfile --ignore-scripts
+   ```
+
+2. Run the complete repository gate.
+
+   ```sh
+   bun run check
+   ```
+
+3. Confirm that the build did not change the checked package outputs.
+
+   ```sh
+   git status --porcelain --untracked-files=all -- dist bun.lock
+   ```
+
+   Continue only when this command produces no output.
+
+4. Create and smoke one exact npm tarball.
+
+   ```sh
+   wrench_npm_artifact="$(mktemp -d)"
+   wrench_npm_json="$wrench_npm_artifact/npm-pack.json"
+   npm pack \
+     --ignore-scripts \
+     --json \
+     --pack-destination "$wrench_npm_artifact" \
+     --registry=https://registry.npmjs.org > "$wrench_npm_json"
+   wrench_npm_archive="$wrench_npm_artifact/hraness-wrench-0.15.1.tgz"
+   bun run ./scripts/package-smoke.ts \
+     --archive "$wrench_npm_archive" \
+     --pack-json "$wrench_npm_json"
+   ```
+
+   Review the complete npm inventory, integrity, file count, packed size, and
+   unpacked size. The smoke validates those reported values against the same
+   tarball and installs it with npm in a clean consumer.
+
+5. Publish that reviewed file with the signed-in maintainer session.
+
+   ```sh
+   wrench_npm_cache="$(mktemp -d)"
+   npm publish "$wrench_npm_archive" \
+     --access public \
+     --cache "$wrench_npm_cache" \
+     --ignore-scripts \
+     --registry=https://registry.npmjs.org
+   ```
+
+   Complete npm's interactive two-factor authentication. Never put an npm
+   password, one-time password, recovery code, session cookie, or token in Git,
+   a workflow, a task file, or chat.
+
+## Verify the registry artifact
+
+Download the public package and compare it with the reviewed bootstrap file
+before configuring automation or creating `v0.15.1`.
+
+```sh
+npm view @hraness/wrench@0.15.1 version \
+  --registry=https://registry.npmjs.org
+wrench_registry_artifact="$(mktemp -d)"
+wrench_registry_json="$wrench_registry_artifact/npm-pack.json"
+npm pack @hraness/wrench@0.15.1 \
+  --ignore-scripts \
+  --json \
+  --pack-destination "$wrench_registry_artifact" \
+  --registry=https://registry.npmjs.org > "$wrench_registry_json"
+wrench_registry_archive="$wrench_registry_artifact/hraness-wrench-0.15.1.tgz"
+cmp "$wrench_npm_archive" "$wrench_registry_archive"
+bun run ./scripts/package-smoke.ts \
+  --archive "$wrench_registry_archive" \
+  --pack-json "$wrench_registry_json"
+```
+
+Continue only when `cmp` and the clean-consumer smoke pass. The tag workflow
+repeats this source-to-registry comparison before it creates the immutable
+GitHub Release.
+
+## Configure stage-only trusted publishing
+
+Configure the exact GitHub Actions identity after the first package is public:
+
+```sh
+npm trust github @hraness/wrench \
+  --file npm-stage.yml \
+  --repo hraness/wrench \
+  --allow-stage-publish \
+  --registry=https://registry.npmjs.org
+npm trust list @hraness/wrench \
+  --json \
+  --registry=https://registry.npmjs.org
+npm access set mfa=publish @hraness/wrench \
+  --registry=https://registry.npmjs.org
+```
+
+Complete each interactive two-factor authentication prompt. The trust
+relationship must name `hraness/wrench`, the exact `npm-stage.yml` filename, no
+environment, and only `npm stage publish`. The package access setting must
+require two-factor authentication and disallow traditional publishing tokens.
+Do not add an npm token to GitHub.
+
+## Create the first tag
+
+Create the matching tag on the same `main` commit only after the registry
+artifact and trusted-publisher settings are verified.
+
+```sh
+git tag v0.15.1
+git push origin refs/tags/v0.15.1
+```
+
+The tag is a release request. Wait for the read-only verification job to
+rebuild and compare the exact public npm tarball, then verify that the GitHub
+Release is non-draft, immutable, and Latest.
+
+## Publish later versions
+
+1. Merge the stable version to `main` and wait for the required CI job.
+2. Dispatch **Stage npm package** from the current `main` branch.
+3. Inspect the uploaded tarball and its `npm-pack.json` alongside the staged
+   package.
+4. Approve that stage with two-factor authentication.
+5. Download and smoke the public registry package.
+6. Create the matching `v<version>` tag on the staged source commit.
+
+Use the canonical registry for every inspection and promotion command:
+
+```sh
+npm stage list @hraness/wrench \
+  --json \
+  --registry=https://registry.npmjs.org
+npm stage view <stage-id> \
+  --json \
+  --registry=https://registry.npmjs.org
+npm stage download <stage-id> \
+  --registry=https://registry.npmjs.org
+npm stage approve <stage-id> \
+  --registry=https://registry.npmjs.org
+```
+
+The staging workflow runs on a GitHub-hosted runner with Node 24, npm 11.19.0,
+Bun 1.3.14, disabled package-manager caching, and no stored npm token. It
+refetches `main` before staging and aborts if the verified commit is no longer
+the current default-branch head.
+
+See npm's documentation for [trusted
+publishing](https://docs.npmjs.com/trusted-publishers/), [staged
+publishing](https://docs.npmjs.com/staged-publishing/), and [dual-use package
+publishing](https://docs.npmjs.com/policies/dual-use/).

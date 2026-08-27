@@ -9,6 +9,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1412,6 +1413,211 @@ describe("provider plugin definition and registry", () => {
     }
   });
 
+  test("binds canonical npm binary links and same-content retargeting", () => {
+    const directory = mkdtempSync(
+      join(import.meta.dir, "plugins", "installed-npm-tree-test-"),
+    );
+    const pluginPath = join(directory, "plugin.ts");
+    try {
+      const dependency = writeInstalledDependency(
+        directory,
+        "wrench-registry-npm-tree",
+      );
+      const nestedBin = join(dependency.root, "node_modules", ".bin");
+      const alphaPackage = join(
+        dependency.root,
+        "node_modules",
+        "alpha",
+      );
+      const bravoPackage = join(dependency.root, "node_modules", "bravo");
+      mkdirSync(nestedBin, { recursive: true });
+      mkdirSync(alphaPackage, { recursive: true });
+      mkdirSync(bravoPackage, { recursive: true });
+      writeFileSync(
+        join(alphaPackage, "package.json"),
+        '{"name":"alpha","version":"1.0.0"}\n',
+      );
+      writeFileSync(
+        join(bravoPackage, "package.json"),
+        '{"name":"bravo","version":"1.0.0"}\n',
+      );
+      const alphaCli = join(alphaPackage, "cli.js");
+      const bravoCli = join(bravoPackage, "cli.js");
+      const binaryLink = join(nestedBin, "tool");
+      const wrapper = join(nestedBin, "wrapper.cmd");
+      writeFileSync(alphaCli, "export const value = 1;\n");
+      writeFileSync(bravoCli, "export const value = 1;\n");
+      writeFileSync(wrapper, "wrapper one\n");
+      symlinkSync("../alpha/cli.js", binaryLink);
+      writeFileSync(
+        pluginPath,
+        'import "wrench-registry-npm-tree";\nexport const plugin = true;\n',
+      );
+      const identity = (): string => {
+        const registry = createProviderPluginRegistry([
+          pluginDefinition(
+            "installed-npm-tree",
+            undefined,
+            pathToFileURL(pluginPath),
+          ),
+        ]);
+        return registry.implementationHash(
+          registry.requireSessionRoute("installed-npm-tree-site"),
+        ).toString("hex");
+      };
+
+      const baseline = identity();
+      unlinkSync(binaryLink);
+      symlinkSync("../bravo/cli.js", binaryLink);
+      const retargeted = identity();
+      expect(retargeted).not.toBe(baseline);
+      writeFileSync(bravoCli, "export const value = 2;\n");
+      const targetChanged = identity();
+      expect(targetChanged).not.toBe(retargeted);
+      writeFileSync(wrapper, "wrapper two\n");
+      expect(identity()).not.toBe(targetChanged);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects same-content npm binary retargeting after definition evaluation", () => {
+    const directory = mkdtempSync(
+      join(import.meta.dir, "plugins", "evaluation-npm-link-drift-test-"),
+    );
+    const pluginPath = join(directory, "plugin.ts");
+    try {
+      const dependency = writeInstalledDependency(
+        directory,
+        "wrench-evaluation-npm-link-drift",
+      );
+      const nestedBin = join(dependency.root, "node_modules", ".bin");
+      const alpha = join(dependency.root, "node_modules", "alpha");
+      const bravo = join(dependency.root, "node_modules", "bravo");
+      mkdirSync(nestedBin, { recursive: true });
+      mkdirSync(alpha, { recursive: true });
+      mkdirSync(bravo, { recursive: true });
+      writeFileSync(join(alpha, "cli.js"), "same target bytes\n");
+      writeFileSync(join(bravo, "cli.js"), "same target bytes\n");
+      const binaryLink = join(nestedBin, "tool");
+      symlinkSync("../alpha/cli.js", binaryLink);
+      writeFileSync(
+        pluginPath,
+        'import "wrench-evaluation-npm-link-drift";\nexport const plugin = true;\n',
+      );
+      const evaluated = defineProviderPlugin(pluginDefinition(
+        "evaluation-npm-link-drift",
+        undefined,
+        pathToFileURL(pluginPath),
+      ));
+
+      unlinkSync(binaryLink);
+      symlinkSync("../bravo/cli.js", binaryLink);
+      expect(() => createProviderPluginRegistry([evaluated])).toThrow(
+        "installed dependency changed after its definition was evaluated",
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects same-content npm binary retargeting before lazy runtime load", async () => {
+    const directory = mkdtempSync(
+      join(import.meta.dir, "plugins", "runtime-npm-link-drift-test-"),
+    );
+    const pluginPath = join(directory, "plugin.ts");
+    let runtimeLoads = 0;
+    try {
+      const dependency = writeInstalledDependency(
+        directory,
+        "wrench-runtime-npm-link-drift",
+      );
+      const nestedBin = join(dependency.root, "node_modules", ".bin");
+      const alpha = join(dependency.root, "node_modules", "alpha");
+      const bravo = join(dependency.root, "node_modules", "bravo");
+      mkdirSync(nestedBin, { recursive: true });
+      mkdirSync(alpha, { recursive: true });
+      mkdirSync(bravo, { recursive: true });
+      writeFileSync(join(alpha, "cli.js"), "same target bytes\n");
+      writeFileSync(join(bravo, "cli.js"), "same target bytes\n");
+      const binaryLink = join(nestedBin, "tool");
+      symlinkSync("../alpha/cli.js", binaryLink);
+      writeFileSync(
+        pluginPath,
+        'import "wrench-runtime-npm-link-drift";\nexport const plugin = true;\n',
+      );
+      const registry = createProviderPluginRegistry([
+        pluginDefinition(
+          "runtime-npm-link-drift",
+          [webBinding("runtime-npm-link-drift", [operation()], () => {
+            runtimeLoads += 1;
+          })],
+          pathToFileURL(pluginPath),
+        ),
+      ]);
+      const binding = registry.requireSessionRoute("runtime-npm-link-drift");
+
+      unlinkSync(binaryLink);
+      symlinkSync("../bravo/cli.js", binaryLink);
+      const probe = binding.subject.probe;
+      if (probe === undefined) throw new Error("npm link fixture has no probe");
+      await expect(
+        Reflect.apply(probe, undefined, [{}]) as Promise<string>,
+      ).rejects.toThrow("implementation changed after registry startup");
+      expect(runtimeLoads).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects unsafe or ambiguous npm binary link targets", () => {
+    const cases = [
+      { name: "absolute", target: "absolute" },
+      { name: "escape", target: "../../../outside.js" },
+      { name: "missing", target: "../missing/cli.js" },
+      { name: "directory", target: "../alpha" },
+      { name: "chain", target: "../alpha/relay.js" },
+      { name: "noncanonical", target: "../alpha/./cli.js" },
+    ] as const;
+    for (const fixture of cases) {
+      const directory = mkdtempSync(
+        join(import.meta.dir, "plugins", `unsafe-npm-link-${fixture.name}-`),
+      );
+      const pluginPath = join(directory, "plugin.ts");
+      try {
+        const dependency = writeInstalledDependency(
+          directory,
+          `wrench-unsafe-npm-link-${fixture.name}`,
+        );
+        const nestedBin = join(dependency.root, "node_modules", ".bin");
+        const alpha = join(dependency.root, "node_modules", "alpha");
+        mkdirSync(nestedBin, { recursive: true });
+        mkdirSync(alpha, { recursive: true });
+        const alphaCli = join(alpha, "cli.js");
+        writeFileSync(alphaCli, "target bytes\n");
+        symlinkSync("cli.js", join(alpha, "relay.js"));
+        writeFileSync(join(directory, "outside.js"), "outside bytes\n");
+        symlinkSync(
+          fixture.target === "absolute" ? alphaCli : fixture.target,
+          join(nestedBin, "tool"),
+        );
+        writeFileSync(
+          pluginPath,
+          `import "wrench-unsafe-npm-link-${fixture.name}";\nexport const plugin = true;\n`,
+        );
+        expect(() => createProviderPluginRegistry([
+          pluginDefinition(
+            `unsafe-npm-link-${fixture.name}`,
+            undefined,
+            pathToFileURL(pluginPath),
+          ),
+        ])).toThrow("npm binary link");
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("resolves a Bun-style canonical alias through a parent package manifest", () => {
     const directory = mkdtempSync(
       join(import.meta.dir, "plugins", "installed-canonical-alias-test-"),
@@ -1807,6 +2013,48 @@ describe("provider plugin definition and registry", () => {
       expect(changed.implementationHash(
         changed.requireSessionRoute("installed-occurrence-site"),
       ).toString("hex")).not.toBe(firstHash);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("counts npm binary links across installed package occurrences", () => {
+    const directory = mkdtempSync(
+      join(import.meta.dir, "plugins", "installed-link-closure-bound-test-"),
+    );
+    const pluginPath = join(directory, "plugin.ts");
+    try {
+      const packageCount = 5;
+      const linksPerPackage = 3_275;
+      const imports: string[] = [];
+      for (let packageIndex = 0; packageIndex < packageCount; packageIndex += 1) {
+        const name = `wrench-registry-link-bound-${String(packageIndex)}`;
+        const dependency = writeInstalledDependency(directory, name);
+        const nestedBin = join(dependency.root, "node_modules", ".bin");
+        mkdirSync(nestedBin, { recursive: true });
+        writeFileSync(join(dependency.root, "cli.js"), "target bytes\n");
+        for (let linkIndex = 0; linkIndex < linksPerPackage; linkIndex += 1) {
+          symlinkSync(
+            "../../cli.js",
+            join(nestedBin, `tool-${String(linkIndex).padStart(4, "0")}`),
+          );
+        }
+        imports.push(`import ${JSON.stringify(name)};`);
+      }
+      // Five occurrences contribute only 15 regular files, but 16,375 links
+      // lift the complete closure over its 16,384-entry safety bound.
+      writeFileSync(
+        pluginPath,
+        `${imports.join("\n")}\nexport const plugin = true;\n`,
+      );
+
+      expect(() => createProviderPluginRegistry([
+        pluginDefinition(
+          "installed-link-closure-bound",
+          undefined,
+          pathToFileURL(pluginPath),
+        ),
+      ])).toThrow("installed package closure exceeds its entry bound");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -2807,6 +3055,12 @@ describe("provider plugin definition and registry", () => {
         directory,
         "wrench-evaluation-package-drift",
       );
+      const nestedBin = join(dependency.root, "node_modules", ".bin");
+      const nestedPackage = join(dependency.root, "node_modules", "tool");
+      mkdirSync(nestedBin, { recursive: true });
+      mkdirSync(nestedPackage, { recursive: true });
+      writeFileSync(join(nestedPackage, "cli.js"), "tool bytes\n");
+      symlinkSync("../tool/cli.js", join(nestedBin, "tool"));
       writeFileSync(
         pluginPath,
         'import "wrench-evaluation-package-drift";\nexport const plugin = true;\n',

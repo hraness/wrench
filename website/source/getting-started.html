@@ -69,8 +69,8 @@
 wrench adapter sync-bundled --json
 wrench doctor</code></pre>
           </div>
-          <p>The global install pins the public GitHub repository to the current immutable tag. <code>adapter sync-bundled</code> atomically installs the reviewed data manifests shipped by that exact package version. It upgrades only an exact bundled baseline and preserves an independently modified install.</p>
-          <p>Wrench is not currently published on npm, Homebrew, or another package repository. Use the checked GitHub tag above for the CLI and SDK. The Agent Skill remains available through skills.sh.</p>
+          <p>The global install pins the public npm package to the release version shown above. <code>adapter sync-bundled</code> atomically installs the reviewed data manifests shipped by that exact package version. It upgrades only an exact bundled baseline and preserves an independently modified install.</p>
+          <p>The matching GitHub tag and immutable Release bind the same checked source and package version. The Agent Skill remains available through skills.sh.</p>
         </section>
 
         <section aria-labelledby="first-read">
@@ -128,7 +128,7 @@ This domain is for use in documentation examples without needing permission. Avo
         <section aria-labelledby="sdk">
           <h2 id="sdk">4. Use Wrench from TypeScript</h2>
           <p>Applications can pin the same release and import its side-effect-free package entrypoints:</p>
-          <div class="command-panel"><pre><code>bun add github:hraness/wrench#{{WRENCH_RELEASE}}</code></pre></div>
+          <div class="command-panel"><pre><code>bun add @hraness/wrench@{{WRENCH_VERSION}}</code></pre></div>
           <div class="command-panel"><pre><code>import {
   isProviderPluginId,
   type ProviderPluginDefinitionV1,

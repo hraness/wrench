@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.15.1 - 2026-08-27
+
+- Publish Wrench through the public npm registry with an exact Bun runtime
+  floor, a bounded package inventory, and stage-only trusted publishing for
+  later releases.
+- Declare Wrench's authenticated browser and provider capabilities as dual-use
+  content and ship the required disclosure in every package.
+
 ## 0.15.0 - 2026-08-27
 
 - Add a source-only `local-cli` provider transport with schema-v6 adapter
