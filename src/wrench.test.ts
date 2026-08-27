@@ -1096,6 +1096,80 @@ describe("auth CLI", () => {
     }
   });
 
+  test("prints the body-free Beeper relationship receipt envelope transparently", async () => {
+    const testState = state();
+    const deviceStore = realpathSync(mkdtempSync(join(
+      tmpdir(),
+      "wrench-beeper-contact-device-store-",
+    )));
+    chmodSync(deviceStore, 0o700);
+    try {
+      saveAuth(createAuth("beeper-main", {
+        linkedDeviceProvider: "beeper",
+        deviceStore,
+        subject: `beeper:local:${"a".repeat(64)}`,
+      }), testState.environment);
+      let observed: Record<string, unknown> | undefined;
+      const expected = Object.freeze({
+        receipt: Object.freeze({
+          format: "wrench.beeper-contact-interaction-export-receipt",
+          runId: "00000000-0000-4000-8000-000000000123",
+          output: Object.freeze({ summarySha256: "b".repeat(64) }),
+        }),
+        output: Object.freeze({
+          format: "wrench.contact-interaction-summary",
+          counts: Object.freeze({ directRelationships: 2, interactions: 8 }),
+        }),
+      });
+      const wrench = capture();
+      const code = await main([
+        "beeper",
+        "export-contact-interactions",
+        "--auth",
+        "beeper-main",
+        "--limit-chats",
+        "10",
+        "--json",
+      ], testState.environment, wrench.output, {
+        loadBeeperContactInteractionCliRuntime: () => Promise.resolve({
+          encodeBeeperContactInteractionExportResult: (value) =>
+            `${JSON.stringify(value)}\n`,
+          exportBeeperContactInteractionsFromAuth: (request) => {
+            observed = request as unknown as Record<string, unknown>;
+            request.onProgress?.({
+              phase: "summary-building",
+              elapsedSeconds: 30,
+              records: 50,
+            });
+            request.onProgress?.({
+              phase: "summary-completed",
+              records: 100,
+              relationships: 2,
+              interactions: 8,
+            });
+            return Promise.resolve(expected as never);
+          },
+        }),
+      });
+      expect(code).toBe(0);
+      expect(JSON.parse(wrench.stdout())).toEqual(expected);
+      expect(wrench.stderr()).toContain(
+        "wrench: Beeper export: deriving body-free relationship summary; 50 records; 30s elapsed",
+      );
+      expect(wrench.stderr()).toContain(
+        "wrench: Beeper export: body-free summary complete; 2 relationships, 8 interactions from 100 records",
+      );
+      expect(observed).toMatchObject({
+        auth: { id: "beeper-main", provider: "beeper" },
+        limits: { limitChats: 10 },
+      });
+      expect(wrench.stdout()).not.toContain(deviceStore);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+      rmSync(deviceStore, { recursive: true, force: true });
+    }
+  });
+
   test("persists subjects supplied with cookie-source and cookies-file locators", async () => {
     const testState = state();
     try {

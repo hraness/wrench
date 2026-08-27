@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.14.0 - 2026-08-26
+
+- Add a versioned, body-free Beeper direct-contact interaction summary over
+  the same admitted sequential history as the Message Like Me v1 bundle. The
+  summary preserves exact account-scoped provider coordinates, directional and
+  conversation counts, first and last timestamps, provenance, completeness,
+  and a canonical digest while excluding bodies, media, group messages,
+  credentials, and local paths.
+- Add `wrench beeper export-contact-interactions` plus the synchronous
+  `@hraness/wrench/beeper` client for long-running local relationship imports.
+  Its strict `{ receipt, output }` envelope binds the cleaned summary to the
+  auth identity, requested bounds, linked-device transport, immutable Wrench
+  release and verified official CLI pin, source versions, completeness, and
+  counts.
+- Pin Message Like Me v0.4.0 as the canonical bundle-v1 parser, type, limit,
+  artifact-inventory, and current-manifest authority while preserving the
+  checked legacy exporter bytes.
+- Add async and synchronous `invokeCapability` clients that return Wrench's
+  strictly parsed live receipt and output without requiring consumers to
+  duplicate the CLI protocol parser.
+
 ## 0.13.6 - 2026-08-25
 
 - Scrub JPEG and PNG provenance before X media upload, and fail closed when

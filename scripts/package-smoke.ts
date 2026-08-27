@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const packageName = "@hraness/wrench";
-const importSpecifiers = ["@hraness/wrench","@hraness/wrench/client","@hraness/wrench/omni"];
+const importSpecifiers = [
+  "@hraness/wrench",
+  "@hraness/wrench/client",
+  "@hraness/wrench/beeper",
+  "@hraness/wrench/omni",
+];
 const binNames = ["wrench"];
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";
 const sweetCookieVerificationIntegrity = "sha512-HddZketABRWbHiLYqMbGlYuqEaWdtqAjES28eKHr2cPDdPvrXiF4JQxD4pl9WzSOre6p/B3zA4Z3uIsCHo/+uQ==";
@@ -244,7 +249,7 @@ try {
     "-e",
     `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
   ], consumer);
-  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nimport * as surface1 from \"@hraness/wrench/client\";\nimport * as surface2 from \"@hraness/wrench/omni\";\nvoid [surface0, surface1, surface2];\n");
+  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nimport * as surface1 from \"@hraness/wrench/client\";\nimport * as surface2 from \"@hraness/wrench/omni\";\nimport * as surface3 from \"@hraness/wrench/beeper\";\nvoid [surface0, surface1, surface2, surface3];\n");
   await writeFile(join(consumer, "tsconfig.bundler.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"types\": [\n      \"bun\",\n      \"node\"\n    ],\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"Preserve\",\n    \"moduleResolution\": \"Bundler\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);
 

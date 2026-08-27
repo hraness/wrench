@@ -1,12 +1,13 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.13.6",
+  "version": "0.14.0",
   "description": "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
     "./src/cli.ts",
     "./src/client.ts",
+    "./src/beeper-client.ts",
     "./src/index.ts",
     "./src/omni-client.ts"
   ],
@@ -44,6 +45,10 @@
     "./client": {
       "types": "./src/client-types.ts",
       "import": "./dist/client.js"
+    },
+    "./beeper": {
+      "types": "./src/beeper-client-types.ts",
+      "import": "./dist/beeper-client.js"
     },
     "./omni": {
       "types": "./src/omni-client-types.ts",
@@ -177,9 +182,14 @@
     "src/assets/code-owned-provider-template/wrench-adapter.json.template",
     "src/auth.ts",
     "src/beeper-message-like-me-cli.ts",
+    "src/beeper-message-bundle-v1.ts",
     "src/beeper-message-like-me-export.ts",
     "src/beeper-message-like-me-recovery.ts",
     "src/beeper-message-like-me-source.ts",
+    "src/beeper-contact-interactions.ts",
+    "src/beeper-contact-interactions-cli.ts",
+    "src/beeper-client-types.ts",
+    "src/beeper-client.ts",
     "src/fixtures/beeper-message-like-me-v1",
     "src/browser-admission.ts",
     "src/browser-snapshots.ts",
@@ -372,6 +382,7 @@
     "src/storage.ts",
     "src/transport-policy.ts",
     "src/usage.ts",
+    "src/version.ts",
     "src/web-session-authentication-policy.ts",
     "src/web-session-cleanup-admission.ts",
     "src/web-session-client.ts",
@@ -396,7 +407,7 @@
     "website:test": "bun test ./website ./edge",
     "website:typecheck": "tsc --noEmit --project website/tsconfig.json && tsc --noEmit --project edge/tsconfig.json",
     "website:check": "bun run website:typecheck && bun run website:test && bun run website:build",
-    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts ./src/omni-client.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
+    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts ./src/beeper-client.ts ./src/omni-client.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test --no-orphans --timeout 180000 --max-concurrency \"${GOMAXPROCS:-4}\" ./src --path-ignore-patterns='**/src/omni-runtime.test.ts' && bun test --no-orphans --timeout 180000 --max-concurrency 1 ./src/omni-runtime.test.ts",
     "accept:media:adaptive": "bun run scripts/media/adaptive-vod-acceptance.ts",
@@ -412,6 +423,7 @@
   },
   "dependencies": {
     "@hraness/kb": "github:hraness/kb#v0.15.2",
+    "@hraness/message-like-me": "github:hraness/message-like-me#v0.4.0",
     "buffer-from": "1.1.2",
     "source-map": "0.6.1",
     "source-map-support": "0.5.21",

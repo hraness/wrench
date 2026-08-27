@@ -24,6 +24,7 @@ type InstalledClosurePackage = {
 
 const expectedClosureRuntimeDependencies = Object.freeze({
   "@hraness/kb": "github:hraness/kb#v0.15.2",
+  "@hraness/message-like-me": "github:hraness/message-like-me#v0.4.0",
   "buffer-from": "1.1.2",
   "source-map": "0.6.1",
   "source-map-support": "0.5.21",
@@ -654,6 +655,10 @@ try {
       "@hraness/kb",
       installedPackageRoot,
     );
+    const installedMessageLikeMeRoot = resolveInstalledDependencyRoot(
+      "@hraness/message-like-me",
+      installedPackageRoot,
+    );
     const installedSourceMapSupportRoot = resolveInstalledDependencyRoot(
       "source-map-support",
       installedPackageRoot,
@@ -672,6 +677,14 @@ try {
         root: installedKbRoot,
         sha256: reviewedKbDynamicModuleSha256,
         version: "0.15.2",
+      }),
+      assertInstalledClosurePackage({
+        keyFile: "dist/message-bundle-v1.js",
+        name: "@hraness/message-like-me",
+        root: installedMessageLikeMeRoot,
+        sha256:
+          "aa2c75471ba83b261d656023fc8186ffd413641a87428779da3c7e816be2c9b6",
+        version: "0.4.0",
       }),
       assertInstalledClosurePackage({
         keyFile: "index.js",
@@ -726,7 +739,16 @@ try {
       [
         process.execPath,
         "-e",
-        "import { readCachedCapability, revalidateCapability, staleWhileRevalidateCapability } from '@hraness/wrench/client'; if (![readCachedCapability, revalidateCapability, staleWhileRevalidateCapability].every((value) => typeof value === 'function')) process.exit(1);",
+        "import { invokeCapability, invokeCapabilitySync, readCachedCapability, revalidateCapability, staleWhileRevalidateCapability } from '@hraness/wrench/client'; if (![invokeCapability, invokeCapabilitySync, readCachedCapability, revalidateCapability, staleWhileRevalidateCapability].every((value) => typeof value === 'function')) process.exit(1);",
+      ],
+      consumer,
+    );
+    await runCommand(
+      "import packed body-free Beeper client",
+      [
+        process.execPath,
+        "-e",
+        "import { exportBeeperContactInteractionsSync, parseBeeperContactInteractionExportResult } from '@hraness/wrench/beeper'; if (![exportBeeperContactInteractionsSync, parseBeeperContactInteractionExportResult].every((value) => typeof value === 'function')) process.exit(1);",
       ],
       consumer,
     );
@@ -744,6 +766,8 @@ try {
       [
         "import {",
         "  readCachedCapability,",
+        "  invokeCapability,",
+        "  invokeCapabilitySync,",
         "  revalidateCapability,",
         "  staleWhileRevalidateCapability,",
         "  type CapabilityReadRequest,",
@@ -753,7 +777,20 @@ try {
         "const request: CapabilityReadRequest = { adapterId: 'x', operationId: 'messaging.list' };",
         "const cachedReader: (request: CapabilityReadRequest) => ReadProjectionCacheResult = readCachedCapability;",
         "const revalidator: (request: CapabilityReadRequest) => Promise<RevalidatedCapability> = revalidateCapability;",
-        "void [request, cachedReader, revalidator, staleWhileRevalidateCapability];",
+        "void [request, cachedReader, revalidator, invokeCapability, invokeCapabilitySync, staleWhileRevalidateCapability];",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(consumer, "beeper-typecheck.ts"),
+      [
+        "import {",
+        "  exportBeeperContactInteractionsSync,",
+        "  parseBeeperContactInteractionExportResult,",
+        "  type BeeperContactInteractionExportResult,",
+        "} from '@hraness/wrench/beeper';",
+        "const result: BeeperContactInteractionExportResult | undefined = undefined;",
+        "void [result, exportBeeperContactInteractionsSync, parseBeeperContactInteractionExportResult];",
         "",
       ].join("\n"),
     );
@@ -798,7 +835,7 @@ try {
           skipLibCheck: false,
           types: [],
         },
-        include: ["client-typecheck.ts", "omni-typecheck.ts"],
+        include: ["client-typecheck.ts", "beeper-typecheck.ts", "omni-typecheck.ts"],
       }, null, 2)}\n`,
     );
     await runCommand(

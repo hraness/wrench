@@ -77,6 +77,10 @@ export const wrenchUsage = `Usage:
   wrench beeper export-message-like-me --auth <id> --output <new-absolute-directory>
                 [--limit-chats <n>] [--limit-messages <n>]
                 [--max-participants <n>] [--json]
+  wrench beeper export-contact-interactions --auth <id>
+                [--limit-chats <n>] [--limit-messages <n>]
+                [--max-participants <n>] [--json]
+                # body-free receipt/output envelope on stdout; progress on stderr
 
   wrench adapter init <id> (--origin <https-origin> | --platform <surface-id>)
                              --output <directory> [--force]

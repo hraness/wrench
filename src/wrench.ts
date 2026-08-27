@@ -28,7 +28,9 @@ import {
 } from "./web-session-authentication-policy";
 import { parseWrenchArguments, wrenchUsage, type WrenchArguments } from "./args";
 import type * as BeeperMessageLikeMeCliRuntimeModule from "./beeper-message-like-me-cli";
+import type * as BeeperContactInteractionCliRuntimeModule from "./beeper-contact-interactions-cli";
 import type { BeeperMessageLikeMeProgress } from "./beeper-message-like-me-source";
+import type { BeeperContactInteractionCliProgress } from "./beeper-contact-interactions-cli";
 import type { GmailCaptureRunner } from "./gmail-capture";
 import type * as MediaRuntimeModule from "./media";
 import {
@@ -206,6 +208,8 @@ type Output = {
 
 type MediaRuntime = typeof MediaRuntimeModule;
 type BeeperMessageLikeMeCliRuntime = typeof BeeperMessageLikeMeCliRuntimeModule;
+type BeeperContactInteractionCliRuntime =
+  typeof BeeperContactInteractionCliRuntimeModule;
 
 /**
  * Wrench's stable boundary around the independently versioned KB doctor.
@@ -228,6 +232,8 @@ const defaultOutput: Output = {
 const loadMediaRuntime = (): Promise<MediaRuntime> => import("./media");
 const loadBeeperMessageLikeMeCliRuntime = (): Promise<BeeperMessageLikeMeCliRuntime> =>
   import("./beeper-message-like-me-cli");
+const loadBeeperContactInteractionCliRuntime = (): Promise<BeeperContactInteractionCliRuntime> =>
+  import("./beeper-contact-interactions-cli");
 
 const runDefaultGmailCapture: GmailCaptureRunner = async (...arguments_) => {
   const { runGmailCapture } = await import("./gmail-capture");
@@ -261,6 +267,8 @@ export type WrenchDependencies = {
   readonly loadMediaRuntime: () => Promise<MediaRuntime>;
   readonly loadBeeperMessageLikeMeCliRuntime:
     () => Promise<BeeperMessageLikeMeCliRuntime>;
+  readonly loadBeeperContactInteractionCliRuntime:
+    () => Promise<BeeperContactInteractionCliRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
   readonly probePluginSubject: (
     binding: ProviderPluginBindingV1,
@@ -314,6 +322,7 @@ const defaultDependencies: WrenchDependencies = {
   inspectClipEnvironment: inspectDefaultClipEnvironment,
   loadMediaRuntime,
   loadBeeperMessageLikeMeCliRuntime,
+  loadBeeperContactInteractionCliRuntime,
   providerPluginRegistry,
   probePluginSubject: async (binding, auth, signal) => {
     requireProviderPluginAuth(binding, auth);
@@ -376,6 +385,9 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
     loadBeeperMessageLikeMeCliRuntime:
       overrides.loadBeeperMessageLikeMeCliRuntime
       ?? defaultDependencies.loadBeeperMessageLikeMeCliRuntime,
+    loadBeeperContactInteractionCliRuntime:
+      overrides.loadBeeperContactInteractionCliRuntime
+      ?? defaultDependencies.loadBeeperContactInteractionCliRuntime,
     providerPluginRegistry: overrides.providerPluginRegistry
       ?? defaultDependencies.providerPluginRegistry,
     probePluginSubject: overrides.probePluginSubject
@@ -468,7 +480,7 @@ function plural(count: number, singular: string, plural_: string): string {
 }
 
 function renderBeeperMessageLikeMeProgress(
-  progress: BeeperMessageLikeMeProgress,
+  progress: BeeperMessageLikeMeProgress | BeeperContactInteractionCliProgress,
 ): string {
   if (progress.phase === "recovery-started") {
     return "wrench: Beeper export: checking prior private export state\n";
@@ -552,6 +564,17 @@ function renderBeeperMessageLikeMeProgress(
   if (progress.phase === "private-cleanup") {
     const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
     return `wrench: Beeper export: removing private raw shards; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "summary-building") {
+    const elapsedSeconds = beeperProgressInteger(progress.elapsedSeconds, 0);
+    const records = beeperProgressInteger(progress.records, 0);
+    return `wrench: Beeper export: deriving body-free relationship summary; ${records} ${plural(records, "record", "records")}; ${elapsedSeconds}s elapsed\n`;
+  }
+  if (progress.phase === "summary-completed") {
+    const records = beeperProgressInteger(progress.records, 0);
+    const relationships = beeperProgressInteger(progress.relationships, 0);
+    const interactions = beeperProgressInteger(progress.interactions, 0);
+    return `wrench: Beeper export: body-free summary complete; ${relationships} ${plural(relationships, "relationship", "relationships")}, ${interactions} ${plural(interactions, "interaction", "interactions")} from ${records} ${plural(records, "record", "records")}\n`;
   }
   const exhaustive: never = progress;
   void exhaustive;
@@ -1681,6 +1704,44 @@ async function runCommand(
       environment,
       ...(signal === undefined ? {} : { signal }),
     });
+  }
+  if (arguments_.command === "beeper-export-contact-interactions") {
+    const admission = acquireReadProjectionAuthAdmission(
+      arguments_.authId,
+      environment,
+    );
+    try {
+      const auth = loadAuth(arguments_.authId, environment);
+      if (auth.kind !== "linked-device-store" || auth.provider !== "beeper") {
+        throw new Error(
+          "Beeper contact interaction export requires a Beeper linked-device-store auth locator",
+        );
+      }
+      const runtime = await dependencies.loadBeeperContactInteractionCliRuntime();
+      const result = await runtime.exportBeeperContactInteractionsFromAuth({
+        auth,
+        limits: {
+          ...(arguments_.limitChats === undefined
+            ? {}
+            : { limitChats: arguments_.limitChats }),
+          ...(arguments_.limitMessages === undefined
+            ? {}
+            : { limitMessages: arguments_.limitMessages }),
+          ...(arguments_.maxParticipants === undefined
+            ? {}
+            : { maxParticipants: arguments_.maxParticipants }),
+        },
+        environment,
+        onProgress: (progress) => {
+          output.stderr(renderBeeperMessageLikeMeProgress(progress));
+        },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      output.stdout(runtime.encodeBeeperContactInteractionExportResult(result));
+      return 0;
+    } finally {
+      admission.release();
+    }
   }
   if (arguments_.command === "beeper-export-message-like-me") {
     const admission = acquireReadProjectionAuthAdmission(

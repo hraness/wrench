@@ -201,9 +201,40 @@ export type BeeperMessageLikeMeSourceRequest = Readonly<{
   limits?: BeeperMessageLikeMeSourceLimits;
   signal?: AbortSignal;
   onProgress?: (progress: BeeperMessageLikeMeProgress) => void;
+  /**
+   * Internal projection seam for content-free derivatives of this exact
+   * admitted history. Coordinates never become bundle fields, so the v1
+   * Message Like Me bytes remain unchanged.
+   */
+  onRecordCoordinate?: (
+    record: BeeperMessageLikeMeRecord,
+    coordinate: BeeperMessageLikeMeSourceCoordinate,
+  ) => void;
   environment?: Readonly<Record<string, string | undefined>>;
   dependencies?: BeeperMessageLikeMeSourceDependencies;
 }>;
+
+export type BeeperMessageLikeMeSourceCoordinate =
+  | Readonly<{
+      kind: "account";
+      accountId: string;
+    }>
+  | Readonly<{
+      kind: "participant";
+      accountId: string;
+      participantId: string;
+    }>
+  | Readonly<{
+      kind: "conversation";
+      accountId: string;
+      conversationId: string;
+    }>
+  | Readonly<{
+      kind: "message";
+      accountId: string;
+      conversationId: string;
+      messageId: string;
+    }>;
 
 type ParsedLimits = Readonly<{
   limitChats: number | null;
@@ -215,6 +246,8 @@ type ParsedLimits = Readonly<{
 type ParticipantFact = Readonly<{
   readonly id: string;
   readonly accountId: string;
+  /** Exact account-scoped participant coordinate from the official export. */
+  readonly sourceId: string;
   readonly providerId: string;
   readonly displayName: string | null;
   readonly handle: string | null;
@@ -2444,6 +2477,7 @@ function upsertParticipant(
   const created: ParticipantFact = Object.freeze({
     id,
     accountId: localId("account", account.accountId),
+    sourceId,
     providerId: providerId("participant", account.accountId, sourceId),
     displayName: user.fullName,
     handle,
@@ -2461,6 +2495,7 @@ function mergeParticipantFact(
   if (
     current.id !== incoming.id
     || current.accountId !== incoming.accountId
+    || current.sourceId !== incoming.sourceId
     || current.providerId !== incoming.providerId
   ) return fail("one Beeper participant has conflicting source coordinates");
   if (
@@ -2491,6 +2526,7 @@ function planningParticipantFact(
   return Object.freeze({
     id: localId("participant", account.accountId, sourceId),
     accountId: localId("account", account.accountId),
+    sourceId,
     providerId: providerId("participant", account.accountId, sourceId),
     displayName: user.fullName,
     handle: user.phoneNumber ?? user.email ?? user.username,
@@ -2506,6 +2542,7 @@ function mergePlanningParticipantFact(
   if (
     current.id !== incoming.id
     || current.accountId !== incoming.accountId
+    || current.sourceId !== incoming.sourceId
     || current.providerId !== incoming.providerId
   ) return fail("one Beeper participant has conflicting source coordinates");
   return Object.freeze({
@@ -3679,12 +3716,17 @@ export function createBeeperMessageLikeMeSource(
         left.accountId.localeCompare(right.accountId))) {
         const selfParticipantId = selfParticipantByAccount.get(account.accountId);
         if (selfParticipantId === undefined) return fail("Beeper account has no self participant");
-        yield accountRecord(
+        const record = accountRecord(
           account,
           normalizeNetwork(account.network, account.bridge.type),
           observedAtForAccount(account.accountId),
           selfParticipantId,
         );
+        request.onRecordCoordinate?.(record, Object.freeze({
+          kind: "account",
+          accountId: account.accountId,
+        }));
+        yield record;
       }
       for (const fact of [...selectedParticipantFacts.values()]
         .filter((candidate) => selectedParticipantIds.has(candidate.id))
@@ -3692,12 +3734,18 @@ export function createBeeperMessageLikeMeSource(
         const account = accounts.find((candidate) =>
           localId("account", candidate.accountId) === fact.accountId);
         if (account === undefined) return fail("participant account disappeared");
-        yield participantRecord(
+        const record = participantRecord(
           fact,
           account,
           normalizeNetwork(account.network, account.bridge.type),
           observedAtForAccount(account.accountId),
         );
+        request.onRecordCoordinate?.(record, Object.freeze({
+          kind: "participant",
+          accountId: account.accountId,
+          participantId: fact.sourceId,
+        }));
+        yield record;
       }
       let emittedReactionProviderIdNonUnique = false;
       for (const scan of selectedScans) {
@@ -3705,7 +3753,18 @@ export function createBeeperMessageLikeMeSource(
         const account = accountsById.get(scan.chat.accountId);
         if (account === undefined) return fail("conversation account disappeared");
         const network = normalizeNetwork(account.network, account.bridge.type);
-        yield conversationRecord(scan, account, network, scan.observedAt);
+        const conversation = conversationRecord(
+          scan,
+          account,
+          network,
+          scan.observedAt,
+        );
+        request.onRecordCoordinate?.(conversation, Object.freeze({
+          kind: "conversation",
+          accountId: account.accountId,
+          conversationId: scan.chat.id,
+        }));
+        yield conversation;
         const messagesDocument = await readOwnedJsonDocument(
           scan.messagesPath,
           scan.root,
@@ -3747,7 +3806,7 @@ export function createBeeperMessageLikeMeSource(
         emittedReactionProviderIdNonUnique ||= reactionProviderIdNonUniqueGroups > 0;
         const messageIds = new Set(messages.map((message) => message.id));
         for (const message of messages) {
-          yield messageRecord(
+          const record = messageRecord(
             message,
             scan,
             messageIds,
@@ -3756,6 +3815,13 @@ export function createBeeperMessageLikeMeSource(
             network,
             scan.observedAt,
           );
+          request.onRecordCoordinate?.(record, Object.freeze({
+            kind: "message",
+            accountId: account.accountId,
+            conversationId: scan.chat.id,
+            messageId: message.id,
+          }));
+          yield record;
           for (const reaction of message.reactions) {
             yield reactionRecord(
               reaction,

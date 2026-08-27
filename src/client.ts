@@ -6,6 +6,8 @@ import { types as nodeTypes } from "node:util";
 import { canonicalJson, sha256 } from "./canonical-json";
 import type {
   CapabilityReadRequest,
+  InvokeCapabilityOptions,
+  InvokeCapabilitySyncOptions,
   ReadCapabilityOptions,
   ReadProjectionCacheResult,
   ReadProjectionCacheOutcome,
@@ -473,9 +475,11 @@ function isBrandedAbortSignal(value: unknown): value is AbortSignal {
   }
 }
 
+type ClientOptionsMode = "read" | "revalidation" | "invoke-async" | "invoke-sync";
+
 function snapshotClientOptions(
-  optionsValue: ReadCapabilityOptions,
-  revalidation: boolean,
+  optionsValue: unknown,
+  mode: ClientOptionsMode,
 ): PreparedClientOptions {
   if (
     !isRecord(optionsValue)
@@ -490,12 +494,13 @@ function snapshotClientOptions(
   if (keys.some((key) => typeof key !== "string")) {
     throw new Error("Wrench client options have unsupported symbol fields");
   }
-  const allowed = new Set([
-    "environment",
-    "freshForMs",
-    "now",
-    ...(revalidation ? ["headed", "signal"] : []),
-  ]);
+  const allowed = new Set(mode === "read"
+    ? ["environment", "freshForMs", "now"]
+    : mode === "revalidation"
+      ? ["environment", "freshForMs", "now", "headed", "signal"]
+      : mode === "invoke-async"
+        ? ["environment", "headed", "signal"]
+        : ["environment", "headed"]);
   for (const key of keys as string[]) {
     const descriptor = descriptors[key];
     if (descriptor === undefined || !allowed.has(key)) {
@@ -1308,6 +1313,37 @@ function runLiveCommand(
   });
 }
 
+function runLiveCommandSync(
+  command: PreparedCommand,
+  options: PreparedClientOptions,
+): JsonRecord {
+  requireBunRuntime();
+  const result = spawnSync(process.execPath, command.arguments, {
+    cwd: options.cwd,
+    env: options.environment,
+    input: command.input,
+    encoding: "utf8",
+    maxBuffer: MAX_OUTPUT_BYTES,
+  });
+  if (result.error !== undefined) throw result.error;
+  const code = result.status ?? 3;
+  const stdout = String(result.stdout ?? "");
+  const stderr = String(result.stderr ?? "");
+  if (stdout.trim().length === 0) {
+    throw new Error(
+      boundedMessage(stderr)
+        || `Wrench live invocation exited ${String(code)}`,
+    );
+  }
+  if (code !== 0 && code !== 3 && code !== 5) {
+    throw new Error(
+      boundedMessage(stderr)
+        || `Wrench live invocation exited ${String(code)}`,
+    );
+  }
+  return parseOutput(stdout, "Wrench live response");
+}
+
 function parseFreshness(
   value: unknown,
   options: PreparedClientOptions,
@@ -1869,11 +1905,62 @@ function parseLiveResult(
   });
 }
 
+function assertLiveInvocationFences(
+  request: PreparedRequest,
+  options: PreparedClientOptions,
+  executionIdentityBefore: ExecutionIdentity,
+  identityBefore: ProjectionIdentity,
+  parsed: Readonly<{
+    live: WrenchClientInvocationResult;
+    cache: ReadProjectionCacheOutcome;
+  }>,
+  activity: "invocation" | "revalidation",
+): void {
+  const identityAfter = observeProjectionIdentity(request, options);
+  if (!projectionIdentitiesMatch(identityBefore, identityAfter)) {
+    throw new Error(
+      `Wrench projection identity changed while ${activity} was running; the live result was discarded`,
+    );
+  }
+  if (!executionIdentitiesMatch(
+    executionIdentityBefore,
+    receiptExecutionIdentity(parsed.live.receipt),
+  )) {
+    throw new Error(
+      `Wrench execution identity changed while ${activity} was running; the live result was discarded`,
+    );
+  }
+  if (parsed.live.receipt.auth.hash !== identityBefore.authHash) {
+    throw new Error(
+      `Wrench projection identity changed while ${activity} was running; the live result was discarded`,
+    );
+  }
+  if (identityBefore.status === "unbound") {
+    if (parsed.cache.status !== "skipped") {
+      throw new Error(
+        `Wrench projection identity changed while ${activity} was running; the live result was discarded`,
+      );
+    }
+    return;
+  }
+  if (
+    parsed.cache.status === "skipped"
+    || (
+      parsed.cache.status === "stored"
+      && parsed.cache.publication.key !== identityBefore.key
+    )
+  ) {
+    throw new Error(
+      `Wrench projection identity changed while ${activity} was running; the live result was discarded`,
+    );
+  }
+}
+
 export function readCachedCapability(
   request: CapabilityReadRequest,
   options: ReadCapabilityOptions = {},
 ): ReadProjectionCacheResult {
-  const preparedOptions = snapshotClientOptions(options, false);
+  const preparedOptions = snapshotClientOptions(options, "read");
   const now = validateReadOptions(preparedOptions);
   const prepared = prepareRequest(request);
   return readCachedPreparedCapability(prepared, preparedOptions, now);
@@ -1947,48 +2034,21 @@ async function runRevalidation(
   // frozen options/environment snapshot. Both the projection key and unbound
   // auth token include Wrench's auth incarnation and detect A-to-B-to-A
   // mutations.
-  const identityAfter = observeProjectionIdentity(request, options);
-  if (!projectionIdentitiesMatch(identityBefore, identityAfter)) {
-    throw new Error(
-      "Wrench projection identity changed while revalidation was running; the live result was discarded",
-    );
-  }
-  if (!executionIdentitiesMatch(
+  assertLiveInvocationFences(
+    request,
+    options,
     executionIdentityBefore,
-    receiptExecutionIdentity(parsed.live.receipt),
-  )) {
-    throw new Error(
-      "Wrench execution identity changed while revalidation was running; the live result was discarded",
-    );
-  }
-  if (parsed.live.receipt.auth.hash !== identityBefore.authHash) {
-    throw new Error(
-      "Wrench projection identity changed while revalidation was running; the live result was discarded",
-    );
-  }
+    identityBefore,
+    parsed,
+    "revalidation",
+  );
   if (identityBefore.status === "unbound") {
-    if (parsed.cache.status !== "skipped") {
-      throw new Error(
-        "Wrench projection identity changed while revalidation was running; the live result was discarded",
-      );
-    }
     return Object.freeze({
       cachedBefore: null,
       cachedAfter: null,
       current: selectCurrentCapability(null, null, parsed),
       ...parsed,
     });
-  }
-  if (
-    parsed.cache.status === "skipped"
-    || (
-      parsed.cache.status === "stored"
-      && parsed.cache.publication.key !== identityBefore.key
-    )
-  ) {
-    throw new Error(
-      "Wrench projection identity changed while revalidation was running; the live result was discarded",
-    );
   }
   let cachedAfter: ReadProjectionCacheResult | null = null;
   try {
@@ -2073,11 +2133,91 @@ function scheduleRevalidation(
   });
 }
 
+/**
+ * Invoke one semantic R1 read through the installed CLI and return only the
+ * already-validated live receipt/output envelope. The promise defers every
+ * subprocess until after this function returns.
+ */
+export function invokeCapability(
+  request: CapabilityReadRequest,
+  options: InvokeCapabilityOptions = {},
+): Promise<WrenchClientInvocationResult> {
+  const preparedOptions = snapshotClientOptions(options, "invoke-async");
+  const prepared = prepareRequest(request);
+  return Promise.resolve().then(async () => {
+    const executionIdentityBefore = observeExecutionIdentity(
+      prepared,
+      preparedOptions,
+    );
+    const identityBefore = observeProjectionIdentity(prepared, preparedOptions);
+    const parsed = parseLiveResult(
+      await runLiveCommand(
+        preparedCommand(prepared, {
+          cacheOnly: false,
+          projectionIdentityOnly: false,
+          headed: preparedOptions.headed ?? false,
+        }),
+        preparedOptions,
+      ),
+      prepared,
+      identityBefore.inputHash,
+    );
+    assertLiveInvocationFences(
+      prepared,
+      preparedOptions,
+      executionIdentityBefore,
+      identityBefore,
+      parsed,
+      "invocation",
+    );
+    return parsed.live;
+  });
+}
+
+/**
+ * Synchronous live invocation for CLI applications whose command surface is
+ * synchronous. It uses the same exact request snapshot, receipt parser, cache
+ * outcome validation, and before/after identity fences as the async client.
+ */
+export function invokeCapabilitySync(
+  request: CapabilityReadRequest,
+  options: InvokeCapabilitySyncOptions = {},
+): WrenchClientInvocationResult {
+  const preparedOptions = snapshotClientOptions(options, "invoke-sync");
+  const prepared = prepareRequest(request);
+  const executionIdentityBefore = observeExecutionIdentity(
+    prepared,
+    preparedOptions,
+  );
+  const identityBefore = observeProjectionIdentity(prepared, preparedOptions);
+  const parsed = parseLiveResult(
+    runLiveCommandSync(
+      preparedCommand(prepared, {
+        cacheOnly: false,
+        projectionIdentityOnly: false,
+        headed: preparedOptions.headed ?? false,
+      }),
+      preparedOptions,
+    ),
+    prepared,
+    identityBefore.inputHash,
+  );
+  assertLiveInvocationFences(
+    prepared,
+    preparedOptions,
+    executionIdentityBefore,
+    identityBefore,
+    parsed,
+    "invocation",
+  );
+  return parsed.live;
+}
+
 export function revalidateCapability(
   request: CapabilityReadRequest,
   options: RevalidateCapabilityOptions = {},
 ): Promise<RevalidatedCapability> {
-  const preparedOptions = snapshotClientOptions(options, true);
+  const preparedOptions = snapshotClientOptions(options, "revalidation");
   const now = validateReadOptions(preparedOptions);
   const prepared = prepareRequest(request);
   return scheduleRevalidation(
@@ -2100,7 +2240,7 @@ export function staleWhileRevalidateCapability(
   readonly cached: ReadProjectionCacheResult | null;
   readonly revalidation: Promise<RevalidatedCapability>;
 } {
-  const preparedOptions = snapshotClientOptions(options, true);
+  const preparedOptions = snapshotClientOptions(options, "revalidation");
   const now = validateReadOptions(preparedOptions);
   const prepared = prepareRequest(request);
   let cached: ReadProjectionCacheResult | null = null;
@@ -2123,6 +2263,8 @@ export function staleWhileRevalidateCapability(
 
 export type {
   CapabilityReadRequest,
+  InvokeCapabilityOptions,
+  InvokeCapabilitySyncOptions,
   ReadCapabilityOptions,
   ReadProjectionCacheResult,
   ReadProjectionCacheOutcome,

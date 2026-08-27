@@ -6,6 +6,7 @@
       "name": "@hraness/wrench",
       "dependencies": {
         "@hraness/kb": "github:hraness/kb#v0.15.2",
+        "@hraness/message-like-me": "github:hraness/message-like-me#v0.4.0",
         "buffer-from": "1.1.2",
         "source-map": "0.6.1",
         "source-map-support": "0.5.21",
@@ -22,6 +23,8 @@
     "@hono/node-server": ["@hono/node-server@1.19.17", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ=="],
 
     "@hraness/kb": ["@hraness/kb@github:hraness/kb#102ef24", { "dependencies": { "@steipete/sweet-cookie": "github:hraness/sweet-cookie#v0.4.2", "@tobilu/qmd": "git+https://github.com/hraness/qmd.git#aa993dceb3ef8cfb71d470554ca437570f5a2b3c", "agent-browser": "0.32.3", "defuddle": "0.19.1", "yaml": "^2.9.0", "zod": "^4.4.3" }, "bin": { "kb": "./dist/cli.js", "kb-evaluation-builder": "./dist/evaluation-builder.js" } }, "hraness-kb-102ef24", "sha512-BFxGVS9OUUkUmK+jGnkg/tYdRK3qw2MzhELQmZig+ySgM6qbTlOlOOVcprIyzC0fslHeKZsHX4i5nua2WmrwNg=="],
+
+    "@hraness/message-like-me": ["@hraness/message-like-me@github:hraness/message-like-me#12de709", { "bin": { "messagelikeme": "./dist/cli.js" } }, "hraness-message-like-me-12de709", "sha512-9by+/yqhR2pgoP2PH1akOzTwF6i7ftZo3vdWIzUN6Zy/+VJQ8uncb21MmFI9YDD3P9cm2UmkWxwO9xiWp+MFOQ=="],
 
     "@huggingface/jinja": ["@huggingface/jinja@0.5.9", "", {}, "sha512-uWTG+l3VJRsl7EXxYizuL3P+cCPoc3cRqbWWRcQN0FhejRfbdq0RNhCmbY/YDtnTcz9icdLYuLDjsnz4d8JMuw=="],
 

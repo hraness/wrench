@@ -15,6 +15,9 @@
       "@hraness/wrench/client": [
         "./src/client.ts"
       ],
+      "@hraness/wrench/beeper": [
+        "./src/beeper-client.ts"
+      ],
       "@hraness/wrench/omni": [
         "./src/omni-client.ts"
       ]

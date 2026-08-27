@@ -124,6 +124,44 @@ describe("wrench CLI grammar", () => {
     }
   });
 
+  test("parses the path-free Beeper contact interaction export", () => {
+    expect(parseWrenchArguments([
+      "beeper",
+      "export-contact-interactions",
+      "--auth",
+      "beeper-main",
+      "--limit-chats",
+      "500",
+      "--limit-messages",
+      "10000",
+      "--max-participants",
+      "250",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "beeper-export-contact-interactions",
+        authId: "beeper-main",
+        limitChats: 500,
+        limitMessages: 10000,
+        maxParticipants: 250,
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "beeper",
+      "export-contact-interactions",
+      "--auth",
+      "beeper-main",
+      "--output",
+      "/tmp/must-not-exist",
+    ])).toEqual({
+      ok: false,
+      message:
+        "beeper export-contact-interactions writes its body-free artifact to stdout and does not accept --output",
+    });
+  });
+
   test("parses adapter and capability management", () => {
     expect(parseWrenchArguments(["capabilities", "linkedin", "--json"])).toEqual({
       ok: true,
