@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   lstatSync,
@@ -198,7 +199,20 @@ describe("Google OAuth lifecycle", () => {
 
       expect(login.subject).toBe("person@example.com");
       if (callbackResponse === undefined) throw new Error("loopback callback was not requested");
-      expect((await callbackResponse).status).toBe(200);
+      const response = await callbackResponse;
+      const html = await response.text();
+      const encodedFont = html.match(/data:font\/woff2;base64,([A-Za-z0-9+/=]+)"/u)?.[1];
+      if (encodedFont === undefined) throw new Error("loopback callback omitted its embedded font");
+      const fontBytes = Buffer.from(encodedFont, "base64");
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Security-Policy"))
+        .toBe("default-src 'none'; font-src data:; style-src 'unsafe-inline'");
+      expect(html).toContain('font:18px/1.5 "Nebula Sans",ui-sans-serif,system-ui,sans-serif');
+      expect(html).not.toContain("font:18px system-ui");
+      expect(fontBytes.byteLength).toBe(70_652);
+      expect(createHash("sha256").update(fontBytes).digest("hex"))
+        .toBe("4d396c7c7f93b3f9d8e90d5a8c5e28b29266243946d4320783abc3628d9ef8df");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
