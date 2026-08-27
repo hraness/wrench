@@ -441,7 +441,7 @@
     "prepack": "bun run check"
   },
   "dependencies": {
-    "@hraness/kb": "github:hraness/kb#v0.15.2",
+    "@hraness/kb": "0.17.1",
     "@hraness/message-like-me": "github:hraness/message-like-me#v0.4.0",
     "buffer-from": "1.1.2",
     "source-map": "0.6.1",

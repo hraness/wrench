@@ -87,6 +87,7 @@ jobs:
           registry_directory="$RUNNER_TEMP/wrench-release-registry"
           source_json="$RUNNER_TEMP/wrench-release-source.json"
           registry_json="$RUNNER_TEMP/wrench-release-registry.json"
+          registry_view_json="$RUNNER_TEMP/wrench-release-registry-view.json"
           mkdir -p "$source_directory" "$registry_directory"
 
           npm pack \
@@ -99,6 +100,9 @@ jobs:
             --json \
             --pack-destination "$registry_directory" \
             --registry=https://registry.npmjs.org > "$registry_json"
+          npm view "$package_spec" name version dist \
+            --json \
+            --registry=https://registry.npmjs.org > "$registry_view_json"
 
           source_name="$(node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (!Array.isArray(value) || value.length !== 1 || typeof value[0].filename !== "string") process.exit(1); process.stdout.write(value[0].filename)' "$source_json")"
           registry_name="$(node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (!Array.isArray(value) || value.length !== 1 || typeof value[0].filename !== "string") process.exit(1); process.stdout.write(value[0].filename)' "$registry_json")"
@@ -108,7 +112,14 @@ jobs:
           fi
           source_archive="$source_directory/$source_name"
           registry_archive="$registry_directory/$registry_name"
-          cmp "$source_archive" "$registry_archive"
+          bun run ./scripts/npm-package-identity.ts \
+            --source-archive "$source_archive" \
+            --source-pack-json "$source_json" \
+            --registry-archive "$registry_archive" \
+            --registry-pack-json "$registry_json" \
+            --registry-view-json "$registry_view_json" \
+            --expected-name "$package_name" \
+            --expected-version "$package_version"
           bun run ./scripts/package-smoke.ts \
             --archive "$registry_archive" \
             --pack-json "$registry_json"

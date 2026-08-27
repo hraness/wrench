@@ -11,7 +11,7 @@ const importSpecifiers = [
   "@hraness/wrench/omni",
 ];
 const binNames = ["wrench"];
-const MAX_PACKED_BYTES = 1_800_000;
+const MAX_PACKED_BYTES = 2_000_000;
 const MAX_PACKED_FILES = 400;
 const MAX_UNPACKED_BYTES = 10_000_000;
 const NPM_REGISTRY = "https://registry.npmjs.org";

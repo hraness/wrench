@@ -74,21 +74,36 @@ npm view @hraness/wrench@0.15.1 version \
   --registry=https://registry.npmjs.org
 wrench_registry_artifact="$(mktemp -d)"
 wrench_registry_json="$wrench_registry_artifact/npm-pack.json"
+wrench_registry_view_json="$wrench_registry_artifact/npm-view.json"
 npm pack @hraness/wrench@0.15.1 \
   --ignore-scripts \
   --json \
   --pack-destination "$wrench_registry_artifact" \
   --registry=https://registry.npmjs.org > "$wrench_registry_json"
+npm view @hraness/wrench@0.15.1 name version dist \
+  --json \
+  --registry=https://registry.npmjs.org > "$wrench_registry_view_json"
 wrench_registry_archive="$wrench_registry_artifact/hraness-wrench-0.15.1.tgz"
-cmp "$wrench_npm_archive" "$wrench_registry_archive"
+bun run ./scripts/npm-package-identity.ts \
+  --source-archive "$wrench_npm_archive" \
+  --source-pack-json "$wrench_npm_json" \
+  --registry-archive "$wrench_registry_archive" \
+  --registry-pack-json "$wrench_registry_json" \
+  --registry-view-json "$wrench_registry_view_json" \
+  --expected-name @hraness/wrench \
+  --expected-version 0.15.1
 bun run ./scripts/package-smoke.ts \
   --archive "$wrench_registry_archive" \
   --pack-json "$wrench_registry_json"
 ```
 
-Continue only when `cmp` and the clean-consumer smoke pass. The tag workflow
-repeats this source-to-registry comparison before it creates the immutable
-GitHub Release.
+Continue only when the canonical package-identity comparison and the
+clean-consumer smoke pass. The comparator binds both archives to their own npm
+pack metadata, binds the downloaded archive to canonical registry metadata,
+and requires identical paths, entry types, modes, sizes, and file bytes. It
+deliberately ignores gzip transport headers, archive ownership, timestamps,
+and tar entry ordering. The tag workflow repeats this source-to-registry
+comparison before it creates the immutable GitHub Release.
 
 ## Configure stage-only trusted publishing
 

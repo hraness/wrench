@@ -580,9 +580,10 @@ const reviewedMetaDynamicInstalledModuleIdentities = Object.freeze([
 ]);
 const reviewedKbDynamicInstalledPackage = Object.freeze({
   name: "@hraness/kb",
-  version: "0.15.2",
+  version: "0.17.1",
+  keyFile: "dist/index-qry4vhxk.js",
   sha256:
-    "90dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b",
+    "da69a90f9cf1edbfe82443c5f73226fe9960103522e37a106ff4ec04e3325e97",
 });
 const reviewedKbDynamicResolutionPolicy =
   "createRequire(parentUrl).resolve(`$" +
@@ -650,9 +651,12 @@ function discoverReviewedKbDynamicInstalledModuleIdentity(
     throw new Error(`installed ${snapshot.id} dynamic-resolution module disappeared`);
   }
   const sha256 = createHash("sha256").update(candidate.bytes).digest("hex");
-  if (sha256 !== reviewedKbDynamicInstalledPackage.sha256) {
+  if (
+    candidate.path !== reviewedKbDynamicInstalledPackage.keyFile
+    || sha256 !== reviewedKbDynamicInstalledPackage.sha256
+  ) {
     throw new Error(
-      `installed ${snapshot.id} dynamic-resolution module ${candidate.path} has sha256 ${sha256}, expected ${reviewedKbDynamicInstalledPackage.sha256}`,
+      `installed ${snapshot.id} dynamic-resolution module ${candidate.path} has sha256 ${sha256}, expected ${reviewedKbDynamicInstalledPackage.keyFile} with sha256 ${reviewedKbDynamicInstalledPackage.sha256}`,
     );
   }
   return `${snapshot.id}\u0000${candidate.path}\u0000${sha256}`;
