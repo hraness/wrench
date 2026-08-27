@@ -13,7 +13,7 @@
         "typescript": "6.0.3",
       },
       "devDependencies": {
-        "@hraness/site-footer": "github:hraness/site-footer#v0.2.1",
+        "@hraness/site-footer": "github:hraness/site-footer#v0.2.2",
         "@steipete/sweet-cookie": "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2",
         "@types/bun": "^1.3.14",
         "fast-check": "^4.8.0",
@@ -27,7 +27,7 @@
 
     "@hraness/message-like-me": ["@hraness/message-like-me@github:hraness/message-like-me#12de709", { "bin": { "messagelikeme": "./dist/cli.js" } }, "hraness-message-like-me-12de709", "sha512-9by+/yqhR2pgoP2PH1akOzTwF6i7ftZo3vdWIzUN6Zy/+VJQ8uncb21MmFI9YDD3P9cm2UmkWxwO9xiWp+MFOQ=="],
 
-    "@hraness/site-footer": ["@hraness/site-footer@github:hraness/site-footer#20030a9", { "peerDependencies": { "react": ">=18 <20" }, "optionalPeers": ["react"] }, "hraness-site-footer-20030a9", "sha512-x/6X02B/rAhtO3ULvm5yHIzZkn+h/aKEZMbAAvVamVmoRBied2/MfpHIMfqfLDUbE9Zhey+qljH16YT8BenT0A=="],
+    "@hraness/site-footer": ["@hraness/site-footer@github:hraness/site-footer#5f28e3b", { "peerDependencies": { "react": ">=18 <20" }, "optionalPeers": ["react"] }, "hraness-site-footer-5f28e3b", "sha512-TPDeK69U3jQLzaBLnKUv7syRmOkyT4kSxRlqq4Fw0YpjOG1dHwmWrhz2pYjjEix9oHBdppunPQD1srcoIzcxHA=="],
 
     "@huggingface/jinja": ["@huggingface/jinja@0.5.9", "", {}, "sha512-uWTG+l3VJRsl7EXxYizuL3P+cCPoc3cRqbWWRcQN0FhejRfbdq0RNhCmbY/YDtnTcz9icdLYuLDjsnz4d8JMuw=="],
 
