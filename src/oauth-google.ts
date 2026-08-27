@@ -1,3 +1,6 @@
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- packed source types must include Bun asset modules
+/// <reference path="./assets.d.ts" />
+
 import { spawn } from "node:child_process";
 import {
   createHash,
