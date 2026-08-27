@@ -15,6 +15,7 @@ import {
   updateMessagingRun,
 } from "./messaging-action-store";
 import { messagingTurnDigest, parseMessagingTurnV1 } from "./messaging-types";
+import { sealAuthenticatedPrivatePayload } from "./read-projections";
 import {
   invocationPlanDigest,
   loadInvocationPlan,
@@ -159,6 +160,26 @@ function deadClaim(digest: string, runId: string) {
   });
 }
 
+function writePredecessorMessagingRun(
+  root: string,
+  environment: Readonly<Record<string, string | undefined>>,
+  run: ReturnType<typeof initializeMessagingRun>["run"],
+): void {
+  const {
+    observedAcceptedPrefixCount: _legacyObservation,
+    privateProviderOutcome: _laterPrivateOutcome,
+    ...predecessor
+  } = run;
+  writePrivateJson(
+    join(root, "messaging", "runs", `${run.runId}.json`),
+    sealAuthenticatedPrivatePayload(
+      predecessor,
+      `wrench-messaging-run-v1:${run.runId}`,
+      environment,
+    ),
+  );
+}
+
 describe("messaging confirmation crash recovery ordering", () => {
   for (const [name, receiptExists, planAlreadyRemoved, runId] of [
     [
@@ -224,6 +245,111 @@ describe("messaging confirmation crash recovery ordering", () => {
         dispatch: { planned: 2, started: 0, verified: 0 },
         error: "messaging execution stopped: journal-recovery-required",
       });
+      expect(repairInterruptedConfirmationClaims(testState.environment)).toEqual({
+        inspected: 0,
+        released: 0,
+        invalid: 0,
+        active: 0,
+      });
+    });
+  }
+
+  for (const [activeState, runId, expectedState, expectedStarted] of [
+    [
+      "unattempted",
+      "123e4567-e89b-42d3-a456-426614174020",
+      "partial",
+      1,
+    ],
+    [
+      "claimed",
+      "123e4567-e89b-42d3-a456-426614174021",
+      "partial",
+      1,
+    ],
+    [
+      "dispatching",
+      "123e4567-e89b-42d3-a456-426614174022",
+      "indeterminate",
+      2,
+    ],
+  ] as const) {
+    test(`repairs a predecessor ${activeState} run without dispatch or retry`, () => {
+      const testState = state();
+      const stored = storedPlan();
+      const planPath = saveInvocationPlan(stored, testState.environment);
+      let snapshot = initializeMessagingRun(
+        runId,
+        stored.digest,
+        stored.plan.messagingComposite!,
+        testState.environment,
+        "2026-08-27T12:00:00.000Z",
+      );
+      snapshot = updateMessagingRun(snapshot, {
+        type: "claimed",
+        index: 0,
+        observedAcceptedPrefixCount: 0,
+        at: "2026-08-27T12:00:01.000Z",
+      }, testState.environment);
+      snapshot = updateMessagingRun(snapshot, {
+        type: "dispatching",
+        index: 0,
+        at: "2026-08-27T12:00:02.000Z",
+      }, testState.environment);
+      snapshot = updateMessagingRun(snapshot, {
+        type: "accepted",
+        index: 0,
+        providerMessageId: "accepted-before-upgrade",
+        providerRevision: "revision-before-upgrade",
+        at: "2026-08-27T12:00:03.000Z",
+      }, testState.environment);
+      if (activeState === "claimed" || activeState === "dispatching") {
+        snapshot = updateMessagingRun(snapshot, {
+          type: "claimed",
+          index: 1,
+          observedAcceptedPrefixCount: 1,
+          at: "2026-08-27T12:00:04.000Z",
+        }, testState.environment);
+      }
+      if (activeState === "dispatching") {
+        snapshot = updateMessagingRun(snapshot, {
+          type: "dispatching",
+          index: 1,
+          at: "2026-08-27T12:00:05.000Z",
+        }, testState.environment);
+      }
+      writePredecessorMessagingRun(
+        testState.root,
+        testState.environment,
+        snapshot.run,
+      );
+      const claimPath = join(dirname(planPath), `${stored.digest}.claim.json`);
+      writePrivateJson(claimPath, deadClaim(stored.digest, runId));
+
+      expect(repairInterruptedConfirmationClaims(testState.environment)).toEqual({
+        inspected: 1,
+        released: 1,
+        invalid: 0,
+        active: 0,
+      });
+      expect(readMessagingRun(runId, testState.environment).run).toMatchObject({
+        state: expectedState,
+        provenPartCount: 1,
+        observedAcceptedPrefixCount: 1,
+        terminalReason: "journal-recovery-required",
+        parts: [
+          { state: "accepted", providerMessageId: "accepted-before-upgrade" },
+          { state: activeState === "dispatching" ? "indeterminate" : "failed-permanent" },
+        ],
+      });
+      expect(readRunReceipt(runId, testState.environment)).toMatchObject({
+        status: expectedState,
+        dispatchStarted: true,
+        dispatch: { planned: 2, started: expectedStarted, verified: 1 },
+        error: "messaging execution stopped: journal-recovery-required",
+      });
+      expect(existsSync(planPath)).toBeFalse();
+      expect(existsSync(claimPath)).toBeFalse();
       expect(repairInterruptedConfirmationClaims(testState.environment)).toEqual({
         inspected: 0,
         released: 0,

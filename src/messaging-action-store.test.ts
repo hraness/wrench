@@ -180,6 +180,64 @@ describe("messaging composite run journal", () => {
     ));
   });
 
+  test("normalizes the exact predecessor terminal run to a conservative prefix high-water", () => {
+    const initial = initializeMessagingRun(
+      runId,
+      "9".repeat(64),
+      plan(),
+      state().environment,
+      startedAt,
+    ).run;
+    const claimedFirst = transitionMessagingRun(initial, {
+      type: "claimed",
+      index: 0,
+      observedAcceptedPrefixCount: 0,
+      at: "2026-08-27T12:00:01.000Z",
+    });
+    const dispatchingFirst = transitionMessagingRun(claimedFirst, {
+      type: "dispatching",
+      index: 0,
+      at: "2026-08-27T12:00:02.000Z",
+    });
+    const acceptedFirst = transitionMessagingRun(dispatchingFirst, {
+      type: "accepted",
+      index: 0,
+      providerMessageId: "provider-1",
+      providerRevision: "revision-provider-1",
+      at: "2026-08-27T12:00:03.000Z",
+    });
+    const claimedSecond = transitionMessagingRun(acceptedFirst, {
+      type: "claimed",
+      index: 1,
+      observedAcceptedPrefixCount: 1,
+      at: "2026-08-27T12:00:04.000Z",
+    });
+    const dispatchingSecond = transitionMessagingRun(claimedSecond, {
+      type: "dispatching",
+      index: 1,
+      at: "2026-08-27T12:00:05.000Z",
+    });
+    const submitted = transitionMessagingRun(dispatchingSecond, {
+      type: "accepted",
+      index: 1,
+      providerMessageId: "provider-2",
+      providerRevision: "revision-provider-2",
+      at: "2026-08-27T12:00:06.000Z",
+    });
+    const {
+      observedAcceptedPrefixCount: _legacyObservation,
+      privateProviderOutcome: _laterPrivateOutcome,
+      ...predecessor
+    } = submitted;
+
+    expect(parseMessagingRunV1(predecessor)).toMatchObject({
+      state: "submitted",
+      provenPartCount: 2,
+      observedAcceptedPrefixCount: 2,
+      privateProviderOutcome: null,
+    });
+  });
+
   test("implements all four frozen proven-prefix terminal states", () => {
     const base = initializeMessagingRun(
       runId,

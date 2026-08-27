@@ -267,14 +267,23 @@ function assertRun(run: MessagingRunV1): void {
 
 function parseRun(value: unknown): MessagingRunV1 {
   const source = record(value, "messaging run");
+  const hasObservedAcceptedPrefixCount = Object.hasOwn(
+    source,
+    "observedAcceptedPrefixCount",
+  );
   const hasPrivateProviderOutcome = Object.hasOwn(
     source,
     "privateProviderOutcome",
   );
+  if (!hasObservedAcceptedPrefixCount && hasPrivateProviderOutcome) {
+    throw new Error("messaging run has unsupported fields");
+  }
   exactKeys(source, [
     "schemaVersion", "format", "runId", "planDigest", "routeRef", "contextRef",
     "clientIntentSha256", "turnDigest", "previewDigest", "state", "partCount",
-    "provenPartCount", "observedAcceptedPrefixCount", "possibleSubmittedPartIndex",
+    "provenPartCount",
+    ...(hasObservedAcceptedPrefixCount ? ["observedAcceptedPrefixCount"] : []),
+    "possibleSubmittedPartIndex",
     "terminalReason", "parts",
     ...(hasPrivateProviderOutcome ? ["privateProviderOutcome"] : []),
     "startedAt", "recordedAt",
@@ -301,10 +310,11 @@ function parseRun(value: unknown): MessagingRunV1 {
     || !Number.isSafeInteger(source.provenPartCount)
     || source.provenPartCount < 0
     || source.provenPartCount > source.partCount
-    || typeof source.observedAcceptedPrefixCount !== "number"
-    || !Number.isSafeInteger(source.observedAcceptedPrefixCount)
-    || source.observedAcceptedPrefixCount < 0
-    || source.observedAcceptedPrefixCount > source.provenPartCount
+    || hasObservedAcceptedPrefixCount
+      && (typeof source.observedAcceptedPrefixCount !== "number"
+        || !Number.isSafeInteger(source.observedAcceptedPrefixCount)
+        || source.observedAcceptedPrefixCount < 0
+        || source.observedAcceptedPrefixCount > source.provenPartCount)
     || source.possibleSubmittedPartIndex !== null
       && (typeof source.possibleSubmittedPartIndex !== "number"
         || !Number.isSafeInteger(source.possibleSubmittedPartIndex)
@@ -392,7 +402,9 @@ function parseRun(value: unknown): MessagingRunV1 {
     state: source.state,
     partCount: source.partCount,
     provenPartCount: source.provenPartCount,
-    observedAcceptedPrefixCount: source.observedAcceptedPrefixCount,
+    observedAcceptedPrefixCount: hasObservedAcceptedPrefixCount
+      ? source.observedAcceptedPrefixCount as number
+      : source.provenPartCount,
     possibleSubmittedPartIndex: source.possibleSubmittedPartIndex as number | null,
     privateProviderOutcome: hasPrivateProviderOutcome
       ? source.privateProviderOutcome === null

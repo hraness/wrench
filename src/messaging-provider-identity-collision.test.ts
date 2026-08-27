@@ -487,7 +487,7 @@ describe("messaging accepted provider identity binding", () => {
       now: setup.observation,
     })).rejects.toThrow();
     expect(setup.dispatches()).toBe(1);
-  }, 30_000);
+  });
 
   test("treats reuse of an earlier accepted identity after the next fence as indeterminate", async () => {
     const setup = await harness(2, {
@@ -512,5 +512,5 @@ describe("messaging accepted provider identity binding", () => {
       now: setup.observation,
     })).rejects.toThrow();
     expect(setup.dispatches()).toBe(2);
-  }, 30_000);
+  });
 });
