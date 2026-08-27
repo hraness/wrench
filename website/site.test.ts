@@ -109,6 +109,11 @@ describe("wrench.rip static site", () => {
     const builtCss = await readFile(join(websiteRoot, "dist", cssAsset!.slice(1)), "utf8");
 
     expect(sourceCss).toContain('--font-sans: "Nebula Sans", ui-sans-serif, system-ui');
+    expect(sourceCss).toMatch(/body\s*\{[^}]*font-family:\s*var\(--font-sans\)/su);
+    expect(sourceCss).toMatch(/\.preview-copy h1\s*\{(?![^}]*font-family)[^}]*\}/su);
+    expect(sourceCss).toMatch(/\.preview-copy > p:last-child\s*\{(?![^}]*font-family)[^}]*\}/su);
+    expect(sourceCss).toMatch(/\.preview-eyebrow\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
+    expect(sourceCss).toMatch(/\.preview-flow li\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
     expect(builtCss).toContain('font-family: "Nebula Sans";');
     expect(builtCss).toContain('./fonts/nebula-sans/NebulaSans-Book.woff2');
     expect((await readFile(
