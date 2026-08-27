@@ -14,9 +14,17 @@ import { renderHranessSiteFooter } from "@hraness/site-footer";
 import { htmlMainToMarkdown } from "./html-to-markdown";
 import {
   loadProviderCapabilityAttestation,
-  renderProviderCapabilityAttestationTable,
   type ProviderCapabilityAttestation,
 } from "./provider-capability-attestation";
+import {
+  BEEPER_PAGE_METADATA,
+  createBeeperPresentationFacts,
+  createProviderDirectory,
+  renderProviderAttestationGroups,
+  renderProviderOverviewCards,
+  type BeeperPresentationFacts,
+  type ProviderDirectory,
+} from "./provider-presentation";
 
 export const SITE_ORIGIN = "https://wrench.rip" as const;
 export const SITE_TITLE = "Wrench: precise web capabilities for AI agents" as const;
@@ -26,7 +34,7 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.14.0" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.15.0" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const DEMO_PUBLIC_FILES = [
   "wrench-first-capture.gif",
@@ -67,6 +75,13 @@ export const PUBLIC_PAGES = [
     outputFile: "provider-capabilities/index.html",
     sourceFile: "provider-capabilities.html",
     title: "Wrench provider capability attestation",
+  },
+  {
+    canonicalPath: "/providers/beeper/",
+    description: BEEPER_PAGE_METADATA.description,
+    outputFile: "providers/beeper/index.html",
+    sourceFile: "provider-beeper.html",
+    title: BEEPER_PAGE_METADATA.title,
   },
   {
     canonicalPath: "/security/",
@@ -163,12 +178,15 @@ export type PackageIdentity = Readonly<{
 type RenderOptions = Readonly<{
   analyticsAsset: string;
   attestation: ProviderCapabilityAttestation;
-  attestationTable: string;
+  beeperFacts: BeeperPresentationFacts;
   cssAsset: string;
   hranessSiteFooter: string;
   packageIdentity: PackageIdentity;
   postHogHost: string;
   postHogKey: string;
+  providerAttestationGroups: string;
+  providerDirectory: ProviderDirectory;
+  providerOverviewCards: string;
   skillInstallAsset: string;
 }>;
 
@@ -266,6 +284,7 @@ function sharedJsonLd(identity: PackageIdentity): ReadonlyArray<Readonly<Record<
         "Verified finite-item media archives",
         "Encrypted exact-query read snapshots",
         "Typed and bounded provider operations",
+        "Pinned Beeper CLI operations",
         "Fail-closed provider contract drift",
       ],
       installUrl: `${SITE_ORIGIN}/getting-started/`,
@@ -393,14 +412,32 @@ function renderTemplate(
   }
   rendered = replaceHtmlRequired(rendered, "{{POSTHOG_HOST}}", escapeHtml(options.postHogHost));
   rendered = replaceHtmlRequired(rendered, "{{POSTHOG_KEY}}", escapeHtml(options.postHogKey));
+  if (page?.canonicalPath === "/" || page?.canonicalPath === "/provider-capabilities/") {
+    rendered = replaceRequired(
+      rendered,
+      "{{PROVIDER_OVERVIEW_CARDS}}",
+      options.providerOverviewCards,
+    );
+  } else if (rendered.includes("{{PROVIDER_OVERVIEW_CARDS}}")) {
+    throw new Error("Only the homepage and provider capability page may include provider cards.");
+  }
   if (page?.canonicalPath === "/provider-capabilities/") {
     rendered = replaceRequired(
       rendered,
-      "{{PROVIDER_CAPABILITY_ATTESTATION_TABLE}}",
-      options.attestationTable,
+      "{{PROVIDER_ATTESTATION_GROUPS}}",
+      options.providerAttestationGroups,
     );
-  } else if (rendered.includes("{{PROVIDER_CAPABILITY_ATTESTATION_TABLE}}")) {
-    throw new Error("Only the provider capability page may include the attestation table.");
+  } else if (rendered.includes("{{PROVIDER_ATTESTATION_GROUPS}}")) {
+    throw new Error("Only the provider capability page may include provider operation groups.");
+  }
+  if (page?.canonicalPath === "/providers/beeper/") {
+    rendered = replaceRequired(
+      rendered,
+      "{{BEEPER_ARTIFACT_TABLE}}",
+      options.beeperFacts.artifactTable,
+    );
+  } else if (rendered.includes("{{BEEPER_ARTIFACT_TABLE}}")) {
+    throw new Error("Only the Beeper provider page may include the Beeper artifact table.");
   }
   const attestationCounts = new Map([
     ["{{PROVIDER_CAPABILITY_ADAPTER_COUNT}}", String(options.attestation.adapterCount)],
@@ -410,6 +447,7 @@ function renderTemplate(
     ],
     ["{{PROVIDER_CAPABILITY_OBSERVED_COUNT}}", String(options.attestation.observedCount)],
     ["{{PROVIDER_CAPABILITY_OPERATION_COUNT}}", String(options.attestation.operationCount)],
+    ["{{PROVIDER_SURFACE_COUNT}}", String(options.providerDirectory.providerCount)],
   ]);
   for (const [placeholder, value] of attestationCounts) {
     if (rendered.includes(placeholder)) {
@@ -428,6 +466,18 @@ function renderTemplate(
     ["{{WRENCH_SKILL_INSTALL_COMMAND}}", SKILL_INSTALL_COMMAND],
     ["{{WRENCH_SKILL_INSTALL_COMMAND_BUNX}}", SKILL_INSTALL_COMMAND_BUNX],
     ["{{WRENCH_VERSION}}", identity.version],
+    ["{{BEEPER_ADAPTER_VERSION}}", options.beeperFacts.adapterVersion],
+    ["{{BEEPER_CLI_COMMAND_COUNT}}", String(options.beeperFacts.cliCommandCount)],
+    ["{{BEEPER_CLI_COMMIT}}", options.beeperFacts.cliCommit],
+    ["{{BEEPER_CLI_RELEASE_MANIFEST_SHA256}}", options.beeperFacts.cliReleaseManifestSha256],
+    ["{{BEEPER_CLI_RELEASE_URL}}", options.beeperFacts.cliReleaseUrl],
+    ["{{BEEPER_CLI_VERSION}}", options.beeperFacts.cliVersion],
+    ["{{BEEPER_DESKTOP_API_COMMIT}}", options.beeperFacts.desktopApiCommit],
+    ["{{BEEPER_DESKTOP_API_VERSION}}", options.beeperFacts.desktopApiVersion],
+    ["{{BEEPER_OBSERVED_OPERATION_COUNT}}", String(options.beeperFacts.observedOperationCount)],
+    ["{{BEEPER_PAGE_DESCRIPTION}}", options.beeperFacts.pageDescription],
+    ["{{BEEPER_PAGE_TITLE}}", options.beeperFacts.pageTitle],
+    ["{{BEEPER_SEMANTIC_CONTRACT_VERSION_LABEL}}", options.beeperFacts.semanticContractVersionLabel],
   ]);
   for (const [placeholder, value] of optionalValues) {
     if (rendered.includes(placeholder)) {
@@ -525,15 +575,20 @@ export async function buildWebsite(
   const cssAsset = `/assets/styles-${contentHash(compiledCss)}.css`;
   const analyticsAsset = `/assets/analytics-${contentHash(analytics)}.js`;
   const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
+  const providerDirectory = createProviderDirectory(attestation);
+  const beeperFacts = createBeeperPresentationFacts(providerDirectory);
   const renderOptions = {
     analyticsAsset,
     attestation,
-    attestationTable: renderProviderCapabilityAttestationTable(attestation),
+    beeperFacts,
     cssAsset,
     hranessSiteFooter: renderHranessSiteFooter(),
     packageIdentity: identity,
     postHogHost: postHog.host,
     postHogKey: postHog.key,
+    providerAttestationGroups: renderProviderAttestationGroups(providerDirectory, attestation),
+    providerDirectory,
+    providerOverviewCards: renderProviderOverviewCards(providerDirectory),
     skillInstallAsset,
   } as const;
 

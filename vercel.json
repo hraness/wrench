@@ -114,6 +114,16 @@
       "permanent": true
     },
     {
+      "source": "/providers/beeper",
+      "destination": "/providers/beeper/",
+      "permanent": true
+    },
+    {
+      "source": "/providers/beeper/index.html",
+      "destination": "/providers/beeper/",
+      "permanent": true
+    },
+    {
       "source": "/security",
       "destination": "/security/",
       "permanent": true

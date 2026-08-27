@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.15.0 - 2026-08-27
+
 - Add a source-only `local-cli` provider transport with schema-v6 adapter
   selectors, exact per-platform executable identity, implementation-bound
   plans and receipts, strict subprocess lifecycles, and no generic argv or
@@ -16,6 +18,12 @@
 - Preserve the released schema-1 contact-interaction receipt on its exact
   macOS arm64 writer while keeping its 2,000-participant request ceiling;
   cross-platform Beeper operations use the new versioned local-CLI contracts.
+- Add a manifest-derived provider directory to wrench.rip with exact observed
+  and capture-required counts, grouped operation evidence, and local semantic
+  icons that do not imply provider endorsement.
+- Publish a focused Beeper guide that binds its 32 observed operations to the
+  official CLI, adapter, semantic contracts, Desktop realm, executable hashes,
+  preview and dispatch rules, export boundaries, and explicit exclusions.
 
 ## 0.14.0 - 2026-08-26
 

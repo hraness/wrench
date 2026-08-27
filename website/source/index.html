@@ -57,12 +57,12 @@
         <div aria-hidden="true" class="hero-field">
           <span class="hero-orbit hero-orbit-a"></span>
           <span class="hero-orbit hero-orbit-b"></span>
-          <span class="hero-glyph">🔧</span>
+          <span class="hero-glyph"><img alt="" height="64" src="/favicon.svg" width="64"></span>
         </div>
         <div class="hero-content">
-          <p class="eyebrow">A capability and custody layer for any command-capable agent</p>
+          <p class="eyebrow">Local CLI and TypeScript SDK for command-capable agents</p>
           <h1 id="brand-name"><span>W</span>rench</h1>
-          <p class="hero-statement">Give your agent a precise handle on the web.</p>
+          <p class="hero-statement">Give agents bounded access to pages, media, and connected accounts.</p>
           <div class="skill-install" data-skill-install>
             <p class="skill-install-label" id="hero-skill-install-label">
               Install the Agent Skill
@@ -105,17 +105,18 @@
             ></p>
           </div>
           <p class="hero-explainer">
-            Wrench lets an AI capture pages, preserve media, read supported connected
-            services, and invoke reviewed account operations. Each authenticated
-            operation is typed, bounded, and tied to one account and transport.
+            Capture public pages, preserve finite media, and run reviewed operations
+            for Beeper, Gmail, LinkedIn, X, and other providers. Each authenticated
+            operation binds one account, transport, contract version, implementation,
+            and risk.
           </p>
           <p class="hero-explainer">
-            Bring the model and interface you prefer. Wrench supplies the local
-            capability and custody layer.
+            Bring the model and interface you prefer. Wrench supplies the local CLI,
+            SDK, encrypted snapshots, and execution receipts.
           </p>
           <div class="action-row">
-            <a class="button button-primary" href="#start">Get started</a>
-            <a class="button button-secondary" href="#how">See how it works</a>
+            <a class="button button-primary" href="#providers">Browse providers</a>
+            <a class="button button-secondary" href="#start">Install Wrench</a>
             <a
               class="button button-quiet"
               data-analytics-event="project link opened"
@@ -125,19 +126,59 @@
             >GitHub <span aria-hidden="true">↗</span></a>
           </div>
           <ul aria-label="Project facts" class="proof-list">
-            <li>Free and open source</li>
-            <li>MIT licensed</li>
+            <li>{{PROVIDER_CAPABILITY_OBSERVED_COUNT}} observed provider operations</li>
+            <li>{{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} unavailable reservations</li>
+            <li>Free and MIT licensed</li>
             <li>macOS + Linux</li>
-            <li>CLI + TypeScript SDK</li>
           </ul>
         </div>
       </section>
 
       <div class="content">
+        <section aria-labelledby="providers-title" class="section provider-section" id="providers">
+          <div class="section-heading section-heading-wide">
+            <p class="eyebrow">Provider support in {{WRENCH_RELEASE}}</p>
+            <h2 id="providers-title">Know which operations can run before you bind an account.</h2>
+            <p>
+              This release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations
+              across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled adapters.
+              {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>.
+              {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} are
+              <code>capture-required</code> reservations and cannot run.
+            </p>
+          </div>
+          <div class="provider-directory">
+            {{PROVIDER_OVERVIEW_CARDS}}
+          </div>
+          <div class="provider-channel-grid">
+            <article>
+              <h3>Official APIs</h3>
+              <p>Fixed auth scopes, request templates, account proof, and response contracts for named provider operations.</p>
+            </article>
+            <article>
+              <h3>Pinned local CLIs</h3>
+              <p>Exact executable bytes behind semantic operations, with no caller-selected commands or flags. Beeper is the current local-CLI provider.</p>
+            </article>
+            <article>
+              <h3>Authenticated sessions and linked devices</h3>
+              <p>Named operations use one bound transport and stop when the reviewed contract drifts.</p>
+            </article>
+          </div>
+          <p class="provider-status-note">
+            <code>observed</code> means a current contract can plan and run after its
+            local doctor and authentication checks pass. Provider names identify
+            compatible surfaces and do not imply endorsement.
+          </p>
+          <div class="action-row provider-actions">
+            <a class="button button-primary" href="/provider-capabilities/">Browse the provider directory</a>
+            <a class="button button-secondary" href="/providers/beeper/">See Beeper support</a>
+          </div>
+        </section>
+
         <section aria-labelledby="use-cases-title" class="section">
           <div class="section-heading">
-            <p class="eyebrow">Useful on the first command. Rigorous when it matters.</p>
-            <h2 id="use-cases-title">What can you do with it?</h2>
+            <p class="eyebrow">Capture, preserve, read, and act</p>
+            <h2 id="use-cases-title">Four bounded jobs from one CLI.</h2>
             <p>
               Start with a public URL. Add authenticated capabilities only when you
               need them. The same command surface scales from a readable page capture
@@ -231,7 +272,7 @@ wrench capabilities</code></pre>
         <section aria-labelledby="philosophy-title" class="section">
           <div class="section-heading section-heading-wide">
             <p class="eyebrow">Design philosophy</p>
-            <h2 id="philosophy-title">Power comes from the boundary.</h2>
+            <h2 id="philosophy-title">Each capability owns an inspectable boundary.</h2>
             <p>
               Wrench is useful because its kernel refuses broad authority. The
               capability stays small enough to inspect, test, cache, revoke, and
@@ -251,7 +292,7 @@ wrench capabilities</code></pre>
         <section aria-labelledby="technical-title" class="section technical-section">
           <div class="section-heading">
             <p class="eyebrow">For technical readers</p>
-            <h2 id="technical-title">Small surface. Strong invariants.</h2>
+            <h2 id="technical-title">The runtime checks the boundaries it documents.</h2>
             <p>
               Each rule closes a specific failure mode: confused accounts, ambient
               credentials, provider drift, stale state, duplicated mutations, or
@@ -306,7 +347,7 @@ wrench capabilities</code></pre>
         </section>
 
         <section aria-labelledby="final-title" class="section final-section">
-          <div><p class="eyebrow">Bring the intelligence</p><h2 id="final-title">Give it better boundaries.</h2></div>
+          <div><p class="eyebrow">Bring the intelligence</p><h2 id="final-title">Install Wrench for the agent you already use.</h2></div>
           <div class="action-row">
             <a class="button button-primary" href="#start">Install Wrench</a>
             <a
