@@ -9,6 +9,8 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { renderHranessSiteFooter } from "@hraness/site-footer";
+
 import { htmlMainToMarkdown } from "./html-to-markdown";
 import {
   loadProviderCapabilityAttestation,
@@ -155,6 +157,7 @@ type RenderOptions = Readonly<{
   attestation: ProviderCapabilityAttestation;
   attestationTable: string;
   cssAsset: string;
+  hranessSiteFooter: string;
   packageIdentity: PackageIdentity;
   postHogHost: string;
   postHogKey: string;
@@ -360,6 +363,13 @@ function renderTemplate(
   let rendered = template;
   rendered = replaceHtmlRequired(rendered, "{{ANALYTICS_ASSET}}", escapeHtml(options.analyticsAsset));
   rendered = replaceHtmlRequired(rendered, "{{CSS_ASSET}}", escapeHtml(options.cssAsset));
+  if (rendered.includes("{{HRANESS_SITE_FOOTER}}")) {
+    rendered = replaceRequired(
+      rendered,
+      "{{HRANESS_SITE_FOOTER}}",
+      options.hranessSiteFooter,
+    );
+  }
   if (page) {
     const structuredData = JSON.stringify(jsonLd(identity, page)).replaceAll("<", "\\u003c");
     rendered = replaceRequired(rendered, "{{JSON_LD}}", structuredData);
@@ -455,6 +465,7 @@ export async function buildWebsite(
     notFoundMarkdown,
     llmsTemplate,
     css,
+    hranessSiteFooterCss,
     analyticsBuild,
     skillInstallBuild,
     attestation,
@@ -464,7 +475,11 @@ export async function buildWebsite(
     readFile(join(sourceRoot, "404.html"), "utf8"),
     readFile(join(sourceRoot, "404.md"), "utf8"),
     readFile(join(sourceRoot, "llms.txt"), "utf8"),
-    readFile(join(sourceRoot, "styles.css")),
+    readFile(join(sourceRoot, "styles.css"), "utf8"),
+    readFile(
+      fileURLToPath(import.meta.resolve("@hraness/site-footer/styles.css")),
+      "utf8",
+    ),
     Bun.build({
       entrypoints: [join(sourceRoot, "analytics.ts")],
       format: "esm",
@@ -498,7 +513,8 @@ export async function buildWebsite(
     );
   }
   const postHog = postHogEnvironment(environment);
-  const cssAsset = `/assets/styles-${contentHash(css)}.css`;
+  const compiledCss = `${css.trimEnd()}\n\n${hranessSiteFooterCss.trim()}\n`;
+  const cssAsset = `/assets/styles-${contentHash(compiledCss)}.css`;
   const analyticsAsset = `/assets/analytics-${contentHash(analytics)}.js`;
   const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
   const renderOptions = {
@@ -506,6 +522,7 @@ export async function buildWebsite(
     attestation,
     attestationTable: renderProviderCapabilityAttestationTable(attestation),
     cssAsset,
+    hranessSiteFooter: renderHranessSiteFooter(),
     packageIdentity: identity,
     postHogHost: postHog.host,
     postHogKey: postHog.key,
@@ -530,7 +547,7 @@ export async function buildWebsite(
     writeFile(join(outputRoot, "404.html"), renderTemplate(notFoundTemplate, renderOptions)),
     writeFile(join(outputRoot, "404.md"), renderTemplate(notFoundMarkdown, renderOptions)),
     writeFile(join(outputRoot, "llms.txt"), renderTemplate(llmsTemplate, renderOptions)),
-    writeFile(join(outputRoot, cssAsset.slice(1)), css),
+    writeFile(join(outputRoot, cssAsset.slice(1)), compiledCss),
     writeFile(join(outputRoot, analyticsAsset.slice(1)), analytics),
     writeFile(join(outputRoot, skillInstallAsset.slice(1)), skillInstall),
     writeFile(

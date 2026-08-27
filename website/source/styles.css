@@ -858,10 +858,9 @@ code:not(pre code) {
   justify-content: space-between;
 }
 
-.footer {
+.site-disclosure {
   align-items: center;
   background: var(--dark-background);
-  border-top: 1px solid var(--dark-line);
   color: var(--dark-muted);
   display: flex;
   font-size: 0.78rem;
@@ -871,7 +870,7 @@ code:not(pre code) {
   padding: 1.5rem max(var(--page-inline), env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom)) max(var(--page-inline), env(safe-area-inset-left));
 }
 
-.footer p {
+.site-disclosure p {
   margin: 0;
 }
 
@@ -880,7 +879,7 @@ code:not(pre code) {
   max-width: 48rem;
 }
 
-.footer a {
+.site-disclosure a {
   color: var(--dark-foreground);
 }
 
@@ -1044,10 +1043,6 @@ code:not(pre code) {
 .guide-callout p {
   margin: 0;
   max-width: 52rem;
-}
-
-.guide-footer {
-  margin-top: 0;
 }
 
 .guide-cluster .card {
@@ -1224,12 +1219,12 @@ code:not(pre code) {
   }
 
   .final-section,
-  .footer {
+  .site-disclosure {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .footer {
+  .site-disclosure {
     justify-content: center;
   }
 }
@@ -1288,7 +1283,7 @@ code:not(pre code) {
 @media (forced-colors: active) {
   .hero,
   .section-dark,
-  .footer,
+  .site-disclosure,
   .topbar {
     background: Canvas;
     color: CanvasText;

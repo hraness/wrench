@@ -3,6 +3,12 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import {
+  HRANESS_HOME_URL,
+  HRANESS_NEWSLETTER_URL,
+  hranessSocialLinks,
+} from "@hraness/site-footer";
+
+import {
   buildWebsite,
   CONTENT_REVIEWED_RELEASE,
   DEFAULT_POSTHOG_HOST,
@@ -70,7 +76,7 @@ describe("wrench.rip static site", () => {
       NEXT_PUBLIC_POSTHOG_HOST: DEFAULT_POSTHOG_HOST,
       NEXT_PUBLIC_POSTHOG_KEY: "phc_public_project_token",
     });
-    const [pages, notFound, notFoundMarkdown, llms, robots, sitemap, indexNowKey, favicon, css, demoFiles, vercel, middleware] = await Promise.all([
+    const [pages, notFound, notFoundMarkdown, llms, robots, sitemap, indexNowKey, favicon, sourceCss, demoFiles, vercel, middleware] = await Promise.all([
       Promise.all(PUBLIC_PAGES.map(async (page) => ({
         definition: page,
         html: await readFile(join(websiteRoot, "dist", page.outputFile), "utf8"),
@@ -92,6 +98,9 @@ describe("wrench.rip static site", () => {
       readFile(join(repositoryRoot, "middleware.ts"), "utf8"),
     ]);
     const html = pages[0]!.html;
+    const cssAsset = /<link rel="stylesheet" href="([^"?]+)">/u.exec(html)?.[1];
+    expect(cssAsset).toMatch(/^\/assets\/styles-[a-f0-9]{12}\.css$/u);
+    const builtCss = await readFile(join(websiteRoot, "dist", cssAsset!.slice(1)), "utf8");
 
     expect(html).toContain(`<title>${SITE_TITLE}</title>`);
     expect(html).toContain(`<meta name="description" content="${SITE_DESCRIPTION}">`);
@@ -169,8 +178,28 @@ describe("wrench.rip static site", () => {
     expect(sitemap).not.toContain("hraness.com");
     expect(indexNowKey).toBe("dc84ee4863539f2fff50ef5f0a164168\n");
     expect(favicon).toContain('viewBox="0 0 64 64"');
-    expect(css).toContain("@media (prefers-reduced-motion: reduce)");
-    expect(css).toContain("@media (forced-colors: active)");
+    expect(sourceCss).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(sourceCss).toContain("@media (forced-colors: active)");
+    expect(sourceCss).not.toContain(".footer {");
+    expect(builtCss).toContain(".hraness-site-footer {");
+    expect(builtCss).toContain("@media (pointer: coarse)");
+    const expectedFooterHrefs = [
+      HRANESS_HOME_URL,
+      HRANESS_NEWSLETTER_URL,
+      ...hranessSocialLinks.map(({ href }) => href),
+    ];
+    for (const document of [...pages.map(({ html: pageHtml }) => pageHtml), notFound]) {
+      expect(document.match(/<footer\b/gu)).toHaveLength(1);
+      const footer = /<footer\b[\s\S]*?<\/footer>/u.exec(document)?.[0];
+      expect(footer).toBeDefined();
+      expect(footer).toContain('data-slot="hraness-site-footer"');
+      expect(footer?.match(/data-slot="hraness-mark"/gu)).toHaveLength(1);
+      expect(footer?.match(/data-slot="social-icon"/gu)).toHaveLength(10);
+      expect(
+        [...(footer?.matchAll(/<a\b[^>]*\shref="([^"]+)"/gu) ?? [])]
+          .map((match) => match[1]),
+      ).toEqual(expectedFooterHrefs);
+    }
     for (const demo of demoFiles) expect(demo.output).toEqual(demo.source);
     const demoPng = demoFiles.find(({ file }) => file.endsWith(".png"))?.output;
     const demoGif = demoFiles.find(({ file }) => file.endsWith(".gif"))?.output;
