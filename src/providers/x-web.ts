@@ -1833,6 +1833,23 @@ export type XWebFeedPage = {
   readonly terminatedDirections: readonly string[];
 };
 
+/** Admit TAB, LF, and CR in tweet bodies. Headers and cursors stay on hasAsciiControl. */
+function hasForbiddenPublicTextControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x09 || code === 0x0a || code === 0x0d) continue;
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function requireBoundedPublicText(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== "string" || value.length > maximum || hasForbiddenPublicTextControl(value)) {
+    throw new Error(`${label} must be bounded public text`);
+  }
+  return value;
+}
+
 function optionalBoundedText(value: unknown, label: string, maximum: number): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "string" || value.length > maximum || hasAsciiControl(value)) {
@@ -1888,7 +1905,7 @@ export function projectXWebFeedPost(
   const legacy = item.legacy;
   const createdAt = optionalBoundedText(legacy?.created_at, "X post createdAt", 128);
   const text = typeof legacy?.full_text === "string"
-    ? optionalBoundedText(legacy.full_text, "X post text", 32_768) ?? ""
+    ? requireBoundedPublicText(legacy.full_text, "X post text", 32_768)
     : "";
   return Object.freeze({
     kind: "post",
@@ -1972,10 +1989,7 @@ function parseXWebProjectedPost(value: unknown, label: string): XWebProjectedPos
   if (url !== xWebStatusUrl(id)) throw new Error(`${label}.url must be the status permalink for id`);
   const metrics = record(post.metrics, `${label}.metrics`);
   exactKeys(metrics, ["replies", "reposts", "likes", "bookmarks"], `${label}.metrics`);
-  const text = post.text;
-  if (typeof text !== "string" || text.length > 32_768 || hasAsciiControl(text)) {
-    throw new Error(`${label}.text must be bounded public text`);
-  }
+  const text = requireBoundedPublicText(post.text, `${label}.text`, 32_768);
   return Object.freeze({
     kind: "post",
     id,
@@ -2006,10 +2020,7 @@ export function parseXWebBookmarkExportRecord(value: unknown): XWebBookmarkExpor
   if (url !== xWebStatusUrl(postId)) {
     throw new Error("X bookmark export record.url must be the status permalink for post_id");
   }
-  const text = item.text;
-  if (typeof text !== "string" || text.length > 32_768 || hasAsciiControl(text)) {
-    throw new Error("X bookmark export record.text must be bounded public text");
-  }
+  const text = requireBoundedPublicText(item.text, "X bookmark export record.text", 32_768);
   return Object.freeze({
     post_id: postId,
     url,

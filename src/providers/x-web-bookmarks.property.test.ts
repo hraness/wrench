@@ -75,7 +75,7 @@ const nameArb = fc.string({ minLength: 1, maxLength: 40 }).filter((value) =>
   !/[\u0000-\u001f\u007f]/u.test(value)
 );
 const textArb = fc.string({ minLength: 0, maxLength: 80 }).filter((value) =>
-  !/[\u0000-\u001f\u007f]/u.test(value)
+  !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
 );
 const cursorArb = fc.uuid().map((value) => `bookmark-cursor-${value}`);
 
@@ -144,6 +144,29 @@ test("bookmark pages preserve unique post_id order and never leak a truncated cu
         expect(page.cursor).toBe(cursor);
       }
       expect(parseXWebBookmarkExportPage(page)).toEqual(page);
+    },
+  ));
+});
+
+test("property: tweet body text admits TAB, LF, and CR and rejects every other C0 or DEL", () => {
+  assertProperty(fc.property(
+    postIdArb,
+    fc.string({ minLength: 0, maxLength: 40 }),
+    (postId, raw) => {
+      const allowed = !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(raw);
+      const response = bookmarksResponse([
+        timelineItem(postId, tweetResult(postId, { id: "1", username: "a", name: "A" }, raw)),
+      ]);
+      if (allowed) {
+        const page = projectXWebBookmarkExportPage(response, 1);
+        expect(page.posts[0]!.text).toBe(raw);
+        expect(page.items[0]!.text).toBe(raw);
+        expect(parseXWebBookmarkExportPage(page).posts[0]!.text).toBe(raw);
+        return;
+      }
+      expect(() => projectXWebBookmarkExportPage(response, 1)).toThrow(
+        "X post text must be bounded public text",
+      );
     },
   ));
 });

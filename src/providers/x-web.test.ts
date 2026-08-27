@@ -458,6 +458,14 @@ describe("X browser-session header sink policy", () => {
     }
   });
 
+  test("rejects LF in request header values after public tweet text admits newlines", () => {
+    expect(() => enforceXWebHeaderSinkPolicy({
+      source: "in-origin-session",
+      sink: "network-request",
+      headers: { "X-CSRF-Token": "valid_value_123456\nsmuggled" },
+    })).toThrow("X request header x-csrf-token had an invalid value");
+  });
+
   test("classifies names for evidence without accepting or returning values", () => {
     expect(classifyXWebHeaderNamesForEvidence([
       "X-CSRF-Token",
@@ -1445,6 +1453,41 @@ describe("X bookmark export projection", () => {
     expect(truncated.cursor).toBeNull();
     expect(JSON.stringify(truncated)).not.toContain("next-bookmarks-page");
     expect(parseXWebBookmarkExportPage(truncated).items[0]!.post_id).toBe("11");
+  });
+
+  test("admits TAB, LF, and CR in post text while rejecting NUL and keeping createdAt strict", () => {
+    const multiline = "line one\nline two\rwith tab\there";
+    const page = projectXWebBookmarkExportPage(bookmarksResponse(
+      timelineItemEntry("tweet-1", tweetResult("900", {
+        text: multiline,
+        author: { id: "9", username: "nine", name: "Nine" },
+      })),
+    ), 10);
+    expect(page.posts[0]!.text).toBe(multiline);
+    expect(page.items[0]!.text).toBe(multiline);
+    expect(parseXWebBookmarkExportPage(page)).toEqual(page);
+
+    const empty = projectXWebBookmarkExportPage(bookmarksResponse(
+      timelineItemEntry("tweet-empty", tweetResult("903", { text: "" })),
+    ), 10);
+    expect(empty.posts[0]!.text).toBe("");
+    expect(parseXWebBookmarkExportPage(empty)).toEqual(empty);
+
+    expect(() => projectXWebBookmarkExportPage(bookmarksResponse(
+      timelineItemEntry("tweet-nul", tweetResult("901", { text: "before\0after" })),
+    ), 10)).toThrow("X post text must be bounded public text");
+
+    expect(() => parseXWebBookmarkExportRecord({
+      ...page.items[0]!,
+      text: "before\0after",
+    })).toThrow("X bookmark export record.text must be bounded public text");
+
+    expect(() => projectXWebBookmarkExportPage(bookmarksResponse(
+      timelineItemEntry("tweet-created", tweetResult("904", {
+        text: "ok",
+        createdAt: `${createdAt}\n`,
+      })),
+    ), 10)).toThrow("X post createdAt must be bounded public text");
   });
 
   test("fails without exposing a cursor when an over-limit bookmark page has no continuation", () => {
