@@ -35,7 +35,7 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.15.1" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.16.0" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const DEMO_PUBLIC_FILES = [
   "wrench-first-capture.gif",

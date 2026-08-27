@@ -1,6 +1,6 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "description": "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations.",
   "license": "MIT",
   "type": "module",
@@ -140,6 +140,7 @@
     "src/assets/adapters/reddit/wrench-web-adapter.v1.7.0.json",
     "src/assets/adapters/reddit/wrench-web-adapter.v1.8.0.json",
     "src/assets/adapters/reddit/wrench-web-adapter.v1.9.0.json",
+    "src/assets/adapters/reddit/wrench-web-adapter.v1.10.0.json",
     "src/assets/adapters/substack/wrench-web-adapter.json",
     "src/assets/adapters/substack/wrench-web-adapter.v1.0.0.json",
     "src/assets/adapters/substack/wrench-web-adapter.v1.1.0.json",
@@ -178,6 +179,7 @@
     "src/assets/adapters/x/wrench-web-adapter.v1.8.0.json",
     "src/assets/adapters/x/wrench-web-adapter.v1.9.0.json",
     "src/assets/adapters/x/wrench-web-adapter.v1.10.0.json",
+    "src/assets/adapters/x/wrench-web-adapter.v1.11.0.json",
     "src/assets/adapters/youtube/wrench-web-adapter.json",
     "src/assets/adapters/youtube/wrench-web-adapter.v1.0.0.json",
     "src/assets/adapters/youtube/wrench-web-adapter.v1.1.0.json",
