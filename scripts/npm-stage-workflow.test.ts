@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -276,11 +276,18 @@ describe("npm publication contract", () => {
       "sha256=%s\\ntarball=%s\\n",
       "EXPECTED_SOURCE_SHA: ${{ steps.package_identity.outputs.source_sha }}",
       "EXPECTED_TARBALL_SHA256: ${{ steps.artifact.outputs.sha256 }}",
+      "EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}",
       "TARBALL: ${{ steps.artifact.outputs.tarball }}",
       'git init --quiet "$current_main"',
       '"https://github.com/$GITHUB_REPOSITORY.git"',
       'default_head="$(git -C "$current_main" rev-parse FETCH_HEAD)"',
       '"$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA"',
+      'tag_error="$RUNNER_TEMP/wrench-current-tag-error.txt"',
+      "git ls-remote --exit-code --refs --tags",
+      '"refs/tags/v$EXPECTED_VERSION"',
+      'case "$tag_status" in',
+      "Tag v$EXPECTED_VERSION was created after package verification",
+      "Could not prove that remote tag v$EXPECTED_VERSION is absent",
       'current_tarball_sha256="$(sha256sum "$TARBALL"',
       '"$current_tarball_sha256" != "$EXPECTED_TARBALL_SHA256"',
       "npm stage publish \"$TARBALL\"",
@@ -327,12 +334,14 @@ describe("npm publication contract", () => {
     const firstHashIndex = stageJob.indexOf('actual_sha256="$(sha256sum "$tarball"');
     const fetchIndex = stageJob.indexOf('git -C "$current_main" fetch');
     const fetchedHeadIndex = stageJob.indexOf("rev-parse FETCH_HEAD");
+    const tagLookupIndex = stageJob.indexOf("git ls-remote --exit-code --refs --tags");
     const secondHashIndex = stageJob.indexOf('current_tarball_sha256="$(sha256sum "$TARBALL"');
     const stageIndex = stageJob.indexOf('npm stage publish "$TARBALL"');
     expect(firstHashIndex).toBeGreaterThan(downloadIndex);
     expect(fetchIndex).toBeGreaterThan(firstHashIndex);
     expect(fetchedHeadIndex).toBeGreaterThan(fetchIndex);
-    expect(secondHashIndex).toBeGreaterThan(fetchedHeadIndex);
+    expect(tagLookupIndex).toBeGreaterThan(fetchedHeadIndex);
+    expect(secondHashIndex).toBeGreaterThan(tagLookupIndex);
     expect(stageIndex).toBeGreaterThan(secondHashIndex);
   });
 
@@ -373,6 +382,72 @@ describe("npm publication contract", () => {
         const rejected = await runWorkflowScript(script, environment);
         expect(rejected.exitCode).not.toBe(0);
         expect(`${rejected.stdout}${rejected.stderr}`).toContain("::error::");
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("rechecks exact remote-tag absence at the terminal staging boundary", async () => {
+    const workflow = await readFile(stageWorkflowUrl, "utf8");
+    const script = workflowStepScript(workflow, "Revalidate current main and stage exact package");
+    const directory = await mkdtemp(join(tmpdir(), "wrench-stage-tag-"));
+    const binaryDirectory = join(directory, "bin");
+    const commandLog = join(directory, "commands.log");
+    const publishMarker = join(directory, "published.txt");
+    const tarball = join(directory, "hraness-wrench-0.15.1.tgz");
+    const sourceSha = "b".repeat(40);
+    const tarballSha256 = "c".repeat(64);
+    const gitStub = join(binaryDirectory, "git");
+    const npmStub = join(binaryDirectory, "npm");
+    const sha256Stub = join(binaryDirectory, "sha256sum");
+
+    try {
+      await mkdir(binaryDirectory, { recursive: true });
+      await writeFile(tarball, "reviewed tarball fixture\n", "utf8");
+      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\nif [[ "\${1-}" == "ls-remote" ]]; then\n  case "$GIT_TAG_STATUS" in\n    absent) exit 2 ;;\n    present) printf '%s\\trefs/tags/v0.15.1\\n' "$GITHUB_SHA"; exit 0 ;;\n    failure) echo 'simulated remote lookup failure' >&2; exit 128 ;;\n  esac\nfi\nif [[ "$*" == *"rev-parse FETCH_HEAD"* ]]; then\n  printf '%s\\n' "$GITHUB_SHA"\nfi\n`, "utf8");
+      await writeFile(sha256Stub, `#!/bin/bash\nset -euo pipefail\nprintf 'sha256sum %s\\n' "$*" >> "$COMMAND_LOG"\nprintf '%s  %s\\n' "$EXPECTED_TARBALL_SHA256" "$1"\n`, "utf8");
+      await writeFile(npmStub, `#!/bin/bash\nset -euo pipefail\nprintf 'npm %s\\n' "$*" >> "$COMMAND_LOG"\nprintf 'published\\n' > "$PUBLISH_MARKER"\n`, "utf8");
+      await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755)]);
+
+      const baseEnvironment = Object.freeze({
+        COMMAND_LOG: commandLog,
+        DEFAULT_BRANCH: "main",
+        EXPECTED_SOURCE_SHA: sourceSha,
+        EXPECTED_TARBALL_SHA256: tarballSha256,
+        EXPECTED_VERSION: "0.15.1",
+        GITHUB_REPOSITORY: "hraness/wrench",
+        GITHUB_SHA: sourceSha,
+        PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
+        PUBLISH_MARKER: publishMarker,
+        RUNNER_TEMP: directory,
+        TARBALL: tarball,
+      });
+
+      const absent = await runWorkflowScript(script, { ...baseEnvironment, GIT_TAG_STATUS: "absent" });
+      expect(absent.exitCode).toBe(0);
+      expect(await readFile(publishMarker, "utf8")).toBe("published\n");
+      const commands = await readFile(commandLog, "utf8");
+      const fetchIndex = commands.indexOf("fetch --quiet --no-tags --depth=1");
+      const tagIndex = commands.indexOf("git ls-remote --exit-code --refs --tags");
+      const hashIndex = commands.indexOf("sha256sum");
+      const publishIndex = commands.indexOf("npm stage publish");
+      expect(fetchIndex).toBeGreaterThan(-1);
+      expect(tagIndex).toBeGreaterThan(fetchIndex);
+      expect(hashIndex).toBeGreaterThan(tagIndex);
+      expect(publishIndex).toBeGreaterThan(hashIndex);
+
+      for (const tagStatus of ["present", "failure"] as const) {
+        await rm(commandLog, { force: true });
+        await rm(publishMarker, { force: true });
+        const rejected = await runWorkflowScript(script, { ...baseEnvironment, GIT_TAG_STATUS: tagStatus });
+        expect(rejected.exitCode).not.toBe(0);
+        expect(`${rejected.stdout}${rejected.stderr}`).toContain(
+          tagStatus === "present"
+            ? "Tag v0.15.1 was created after package verification"
+            : "Could not prove that remote tag v0.15.1 is absent",
+        );
+        expect(await Bun.file(publishMarker).exists()).toBe(false);
       }
     } finally {
       await rm(directory, { force: true, recursive: true });

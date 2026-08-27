@@ -252,6 +252,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EXPECTED_SOURCE_SHA: ${{ steps.package_identity.outputs.source_sha }}
           EXPECTED_TARBALL_SHA256: ${{ steps.artifact.outputs.sha256 }}
+          EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}
           TARBALL: ${{ steps.artifact.outputs.tarball }}
         run: |
           set -euo pipefail
@@ -265,6 +266,34 @@ jobs:
             echo "::error::$DEFAULT_BRANCH advanced to $default_head after package verification"
             exit 1
           fi
+          tag_error="$RUNNER_TEMP/wrench-current-tag-error.txt"
+          set +e
+          tag_lookup="$(git ls-remote --exit-code --refs --tags \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            "refs/tags/v$EXPECTED_VERSION" 2>"$tag_error")"
+          tag_status=$?
+          set -e
+          case "$tag_status" in
+            0)
+              if [[ -z "$tag_lookup" ]]; then
+                echo "::error::Remote tag lookup succeeded without returning the exact tag"
+              else
+                echo "::error::Tag v$EXPECTED_VERSION was created after package verification"
+              fi
+              exit 1
+              ;;
+            2)
+              if [[ -n "$tag_lookup" ]]; then
+                echo "::error::Remote tag lookup returned an ambiguous absence result"
+                exit 1
+              fi
+              ;;
+            *)
+              cat "$tag_error"
+              echo "::error::Could not prove that remote tag v$EXPECTED_VERSION is absent"
+              exit 1
+              ;;
+          esac
           current_tarball_sha256="$(sha256sum "$TARBALL" | awk '{ print $1 }')"
           if [[ "$current_tarball_sha256" != "$EXPECTED_TARBALL_SHA256" ]]; then
             echo "::error::Downloaded tarball changed after current-$DEFAULT_BRANCH verification"
