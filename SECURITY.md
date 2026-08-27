@@ -24,6 +24,25 @@ transport. Wrench does not silently switch between official API, browser
 session, linked-device, or portable transports. Mutations require durable
 dispatch evidence and do not retry after a partial or indeterminate result.
 
+Agentic messaging adds capability-sensitive route, context, reply, and provider
+references plus private conversation prose. These values enter through stdin
+or checked owner-only files and leave only through explicit atomic mode-`0600`
+artifacts. Ordinary terminal output, receipts, diagnostics, and durable public
+projections contain only contract identities, hashes, categorical states,
+counts, and timestamps. Wrench encrypts route, context, preview, and execution
+state at rest with authenticated reference binding. Authentication failure,
+expiry, restored-state generation drift, or implementation drift makes those
+records unusable; it never falls back to plaintext or an approximate route.
+
+A messaging turn is one composite confirmation and one ordered, prefix-durable
+run. Wrench checks current provider state before every remaining part and stops
+on foreign activity, edit, retraction, participant drift, provider drift,
+permanent failure, partial work, or possible completion. Accepted or submitted
+does not mean delivered or read. A same-turn human authorization requirement is
+normative Agent Skill policy because the same calling process can invoke
+`wrench confirm`; the digest itself is not a technical proof that a human saw
+the private preview.
+
 Wrench caps locally owned browser acquisition at two across processes sharing
 one state home for fresh and profile-backed page capture. Admission claims use
 atomic create and conditional removal, bind a random token to an exact

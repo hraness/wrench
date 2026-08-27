@@ -1,4 +1,4 @@
 interface:
   display_name: "Wrench"
-  short_description: "Capture web, archive media, and run provider operations"
-  default_prompt: "Use $wrench to capture or archive this source, work with a bounded signed-in provider, cross-post social media, query cached inbox data, or author a provider plugin."
+  short_description: "Capture, archive, and run bounded provider operations"
+  default_prompt: "Use $wrench to capture or archive this source, work with a bounded signed-in provider, inspect or act on an exact live conversation through private messaging artifacts, cross-post social media, query cached inbox data, or author a provider plugin."

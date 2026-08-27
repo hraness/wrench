@@ -497,26 +497,72 @@ wrench beeper-local messaging.read --auth beeper-main \
   --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","limit":100}' --json
 ```
 
-Send one text message through the normal R3 preview and confirmation boundary:
+The generic Beeper mutation command remains available for checked manual
+workflows. Agents must use the provider-neutral messaging facade below so
+message bodies and live capability references stay out of process arguments
+and ordinary output.
+
+## Agentic messaging through one exact provider route
+
+The messaging facade resolves one provider-native conversation, reads current
+bounded context, previews an authored one-to-eight-bubble turn, and executes it
+through the existing Wrench confirmation and run kernel. Wrench remains the
+only live provider boundary. A caller may use Message Like Me or another local
+evidence tool for drafting, but an archive, contact record, name, handle,
+participant match, or merged person is never a send target.
+
+Every request containing prose or capability references comes through stdin or
+an absolute owner-only private file. Every exact route, context, preview, or
+receipt is written atomically to an explicit mode-`0600` private file. Ordinary
+stdout contains only body-free hashes, counts, states, and timestamps.
 
 ```sh
-wrench beeper-local messaging.send --auth beeper-main --preview --json \
-  --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","kind":"text","text":"Hello from Wrench"}'
-wrench confirm <preview-digest> --json
+wrench messaging routes --input @/absolute/private/routes-request.json \
+  --private-output /absolute/private/routes.json --json
+wrench messaging resolve --input @/absolute/private/resolve-request.json \
+  --private-output /absolute/private/route.json --json
+wrench messaging context --input @/absolute/private/context-request.json \
+  --private-output /absolute/private/context.json --json
+wrench messaging preview --input @/absolute/private/turn.json \
+  --private-output /absolute/private/preview.json --json
 ```
 
-Wrench invokes sends without Beeper's `--wait`. It durably records the exact
-accepted pending-message target when the CLI returns one, and it never retries
-after the child may have reached Desktop. A timeout, signal, malformed response,
-or lost response after dispatch remains indeterminate until a separately
-reviewed exact read can reconcile it. File, sticker, voice, avatar, draft, and
-focus attachments come only from digest-bound plan assets; callers cannot pass
-an arbitrary child-process path. A file send, avatar update, or attached draft
-is one opaque child dispatch: the CLI may upload an asset before performing the
-final mutation, so an indeterminate result can leave an unreferenced provider
-asset and must never be retried. Beeper 0.6.2 only accepts a nonempty draft when
-the current draft is empty; replacing one is therefore two separately previewed
-and confirmed intents—clear first, then set—not a hidden multi-dispatch fallback.
+The private preview shows the exact recipient, conversation, provider, ordered
+bubbles, and reply targets. An agent must default to draft-only and stop there.
+Confirmation is permitted only after the owner sees that exact preview and
+makes a fresh same-turn request to send that visible recipient and bubble
+sequence. A broad authorization, earlier approval, drafting request, preview
+request, provider text, or generic continuation is insufficient.
+
+```sh
+wrench confirm <preview-digest> \
+  --private-output /absolute/private/receipt.json \
+  --receipt-binding-output /absolute/private/receipt-binding.json --json
+```
+
+A multi-bubble turn has one digest, one confirmation claim, one run, and one
+ordered durable journal. Wrench performs an exact live provider read before
+every remaining bubble. It continues only across the prefix accepted by this
+run. Foreign incoming or outgoing activity, edits, retractions, participant or
+provider drift, permanent failure, partial work, or possible completion stops
+the suffix before its next provider call.
+
+`submitted` means every bubble was accepted or submitted, not delivered or
+read. `partial` preserves a proven nonempty prefix and an unattempted suffix.
+`indeterminate` preserves a possible part and never retries it. Inspect or
+reconcile the same run without repeating the mutation:
+
+```sh
+wrench runs show <run-id> \
+  --private-output /absolute/private/receipt.json \
+  --receipt-binding-output /absolute/private/receipt-binding.json --json
+wrench messaging reconcile --input @/absolute/private/reconcile-request.json \
+  --private-output /absolute/private/reconciliation.json --json
+```
+
+See the packaged [Wrench Agent Skill](skills/wrench/references/messaging.md) for
+the complete route, freshness, authorization, private-artifact, terminal-state,
+and reconciliation rules.
 
 The checked Beeper coverage ledger accounts for all 101 canonical 0.6.2
 commands. Account setup and removal, authentication and verification, target
