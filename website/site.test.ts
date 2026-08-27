@@ -141,6 +141,7 @@ describe("wrench.rip static site", () => {
     expect(html).toContain("Privacy: cookieless PostHog analytics");
     expect(html).toContain('href="/compare/personal-agents-browser-use/"');
     expect(html).toContain('href="/agentic-web-spoofing/"');
+    expect(html).toContain('href="/vms-cannot-contain-agents/"');
     expect(html).toContain(`href="${PUBLISHER_URL}">Hraness GitHub organization</a>`);
     expect(notFound).toContain('<meta name="robots" content="noindex, nofollow">');
     expect(notFound).toContain(
@@ -164,6 +165,7 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain(`${SITE_ORIGIN}/getting-started/`);
     expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
     expect(llms).toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
     expect(llms).toContain("npx skills add hraness/wrench");
     expect(llms).toContain("Accept: text/markdown");
     expect(llms).not.toContain("{{");
@@ -432,6 +434,7 @@ describe("wrench.rip static site", () => {
     expect(personalAgents?.html).toContain("ChatGPT Work");
     expect(personalAgents?.html).toContain("never switches to a browser fallback silently");
     expect(personalAgents?.html).toContain("https://wrench.rip/agentic-web-spoofing/");
+    expect(personalAgents?.html).toContain("https://wrench.rip/vms-cannot-contain-agents/");
     expect(personalAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
 
     const agenticWebSpoofing = pages.find((page) =>
@@ -473,8 +476,42 @@ describe("wrench.rip static site", () => {
     );
     expect(agenticWebSpoofing?.html).toContain("Telegram is absent from those manifests");
     expect(agenticWebSpoofing?.html).toContain("this page does not invent those names");
-    expect(agenticWebSpoofing?.html).toContain("Neither page reprints the other.");
+    expect(agenticWebSpoofing?.html).toContain("The pages do not reprint one another.");
+    expect(agenticWebSpoofing?.html).toContain("https://wrench.rip/vms-cannot-contain-agents/");
     expect(agenticWebSpoofing?.html).not.toContain("{{PROVIDER_CAPABILITY");
+
+    const vmsCannotContainAgents = pages.find((page) =>
+      page.definition.canonicalPath === "/vms-cannot-contain-agents/");
+    expect(vmsCannotContainAgents?.html).toContain(
+      "<h1>A VM is not an attested web operation.</h1>",
+    );
+    expect(vmsCannotContainAgents?.html).toContain(
+      "https://blog.trailofbits.com/2026/08/26/vms-wont-contain-cyber-capable-agents/",
+    );
+    expect(vmsCannotContainAgents?.html).toContain("VMs won’t contain cyber-capable agents");
+    expect(vmsCannotContainAgents?.html).toContain("https://rough.day");
+    expect(vmsCannotContainAgents?.html).toContain("https://rough.day/info");
+    expect(vmsCannotContainAgents?.html).toContain("Wednesday 26 August 2026");
+    expect(vmsCannotContainAgents?.html).toContain("Trail of Bits argues VMs cannot reliably contain cyber-capable AI agents");
+    expect(vmsCannotContainAgents?.html).toContain("https://hraness.com");
+    expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/");
+    expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/provider-capabilities/");
+    expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/agentic-web-spoofing/");
+    expect(vmsCannotContainAgents?.html).toContain(
+      "https://wrench.rip/compare/personal-agents-browser-use/",
+    );
+    expect(vmsCannotContainAgents?.html).toContain(
+      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+    );
+    expect(vmsCannotContainAgents?.html).toContain(
+      `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
+    );
+    expect(vmsCannotContainAgents?.html).toContain("Telegram is absent from those manifests");
+    expect(vmsCannotContainAgents?.html).toContain("does not sell a hypervisor, a microVM, or a hostile-code sandbox");
+    expect(vmsCannotContainAgents?.html).toContain("None of the three reprints the others.");
+    expect(vmsCannotContainAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
+    expect(vmsCannotContainAgents?.html).not.toContain("stripedex.com");
+    expect(vmsCannotContainAgents?.html).not.toContain("spongeresearch.com");
     const software = (graph as ReadonlyArray<Readonly<Record<string, unknown>>>).find((node) =>
       node["@id"] === `${SITE_ORIGIN}/#software`);
     expect(software).toMatchObject({
