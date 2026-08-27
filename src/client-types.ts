@@ -106,6 +106,35 @@ export type WrenchClientPortableOperationIdentity = {
   readonly descriptorSha256: string;
 };
 
+export type WrenchClientLocalCliToolArtifactIdentity = {
+  readonly platform: string;
+  readonly arch: string;
+  readonly executableSha256: string;
+  readonly archiveSha256?: string;
+  readonly downloadUrl?: string;
+};
+
+export type WrenchClientLocalCliToolIdentity = {
+  readonly schemaVersion: 1;
+  readonly id: string;
+  readonly implementation: string;
+  readonly versionScheme: "semver" | "opaque";
+  readonly version: string;
+  readonly releaseCommit?: string;
+  readonly releaseManifestSha256?: string;
+  readonly releaseManifestUrl?: string;
+  readonly sourceUrl?: string;
+  readonly artifacts: readonly WrenchClientLocalCliToolArtifactIdentity[];
+};
+
+export type WrenchClientLocalCliContractIdentity = {
+  readonly surface: string;
+  readonly action: string;
+  readonly version: number;
+  readonly hash: string;
+  readonly tool: WrenchClientLocalCliToolIdentity;
+};
+
 export type WrenchClientRunReceiptCommon = {
   readonly runId: string;
   readonly planDigest: null;
@@ -165,6 +194,11 @@ export type WrenchClientRunReceipt = WrenchClientRunReceiptCommon & (
       readonly schemaVersion: 6;
       readonly transport: "portable-provider-plugin";
       readonly portablePluginContract: WrenchClientPortableOperationIdentity;
+    }
+  | {
+      readonly schemaVersion: 7;
+      readonly transport: "local-cli";
+      readonly localCliContract: WrenchClientLocalCliContractIdentity;
     }
 );
 

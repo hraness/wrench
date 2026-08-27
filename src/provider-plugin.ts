@@ -39,6 +39,13 @@ import type {
   ScalarInputField,
 } from "./model";
 import type { ProviderActionContext } from "./provider-context";
+import type { LocalCliOperationExecutor } from "./local-cli-execution";
+import {
+  localCliToolArtifactForCurrentRuntime,
+  parseLocalCliToolIdentityV1,
+  type LocalCliToolArtifactIdentityV1,
+  type LocalCliToolIdentityV1,
+} from "./local-cli-tool-identity";
 import {
   isProviderPluginId,
   isProviderPluginOperationName,
@@ -56,8 +63,14 @@ import {
 import {
   assertKernelPortableProviderPluginBindingProjection,
 } from "./provider-plugin-portable-authority";
-import type { WebSessionOperationExecutor } from "./web-session-execution";
-import type { PublicWebSessionOperationExecutor } from "./web-session-execution";
+import {
+  inspectLocalCliCleanupFilesystemReadiness,
+} from "./provider-plugin-cleanup-resource";
+import type {
+  ProviderPluginCleanupBarrierRegistrar,
+  PublicWebSessionOperationExecutor,
+  WebSessionOperationExecutor,
+} from "./web-session-execution";
 
 export const PROVIDER_PLUGIN_API_VERSION = 1 as const;
 
@@ -65,6 +78,7 @@ export const providerPluginTransports = [
   "provider-api",
   "web-session-api",
   "linked-device",
+  "local-cli",
 ] as const;
 
 export type ProviderPluginTransport = (typeof providerPluginTransports)[number];
@@ -163,9 +177,13 @@ export type WebSessionPluginOperationDefinitionV1 =
   readonly coverage?: never;
 };
 
+export type LocalCliPluginOperationDefinitionV1 =
+  WebSessionPluginOperationDefinitionV1;
+
 export type ProviderPluginOperationDefinitionV1 =
   | ProviderApiPluginOperationDefinitionV1
-  | WebSessionPluginOperationDefinitionV1;
+  | WebSessionPluginOperationDefinitionV1
+  | LocalCliPluginOperationDefinitionV1;
 
 /** Validated registry projection. `contractVersions` is CLI compatibility only. */
 export type ProviderApiPluginOperationV1 =
@@ -178,9 +196,12 @@ export type WebSessionPluginOperationV1 =
     readonly contractVersions: readonly number[];
   };
 
+export type LocalCliPluginOperationV1 = WebSessionPluginOperationV1;
+
 export type ProviderPluginOperationV1 =
   | ProviderApiPluginOperationV1
-  | WebSessionPluginOperationV1;
+  | WebSessionPluginOperationV1
+  | LocalCliPluginOperationV1;
 
 export const MAX_PROVIDER_PLUGIN_PLAN_DISPATCHES = 25;
 export const MAX_PROVIDER_PLUGIN_PLAN_BYTES = 16 * 1024;
@@ -535,6 +556,15 @@ export type ProviderPluginSubjectDefinitionV1 = {
 export type ProviderPluginSubjectProbeOptionsV1 = {
   /** Caller-owned cancellation propagated through probe network/process work. */
   readonly signal?: AbortSignal;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  /** Kernel-owned durable publication for operation-private resources. */
+  readonly registerCleanupBarrier?: ProviderPluginCleanupBarrierRegistrar;
+};
+
+export type ProviderPluginReconciliationOptionsV1 = {
+  readonly signal?: AbortSignal;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly registerCleanupBarrier?: ProviderPluginCleanupBarrierRegistrar;
 };
 
 export type ProviderPluginSubjectV1 = ProviderPluginSubjectDefinitionV1 & {
@@ -653,6 +683,36 @@ export type WebSessionPluginRuntimeV1 = {
   readonly linkedDeviceLifecycle?: ProviderPluginLinkedDeviceLifecycleRuntimeV1;
 };
 
+export type LocalCliPluginRuntimeV1 = {
+  readonly inspect: (
+    environment: Readonly<Record<string, string | undefined>>,
+    options?: {
+      readonly registerCleanupBarrier?: ProviderPluginCleanupBarrierRegistrar;
+    },
+  ) => Promise<LocalCliPluginRuntimeStatusV1>;
+  readonly probe: (
+    auth: WrenchAuth,
+    options?: ProviderPluginSubjectProbeOptionsV1,
+  ) => Promise<string>;
+  readonly execute: LocalCliOperationExecutor;
+  readonly reconcile?: (
+    operation: string,
+    input: OperationInput,
+    auth: WrenchAuth,
+    context?: ProviderPluginReconciliationContextV1,
+    options?: ProviderPluginReconciliationOptionsV1,
+  ) => Promise<ProviderPluginReconciliationReadbackV1>;
+};
+
+export type LocalCliPluginRuntimeStatusV1 = {
+  readonly ready: boolean;
+  readonly platform: string;
+  readonly arch: string;
+  readonly version: string | null;
+  readonly executableSha256: string | null;
+  readonly reason: string | null;
+};
+
 export type ProviderApiPluginRuntimeHooksV1 = {
   readonly loadRuntime: () => Promise<ProviderApiPluginRuntimeV1>;
 };
@@ -661,9 +721,18 @@ export type WebSessionPluginRuntimeHooksV1 = {
   readonly loadRuntime: () => Promise<WebSessionPluginRuntimeV1>;
 };
 
+export type LocalCliPluginRuntimeHooksV1 = {
+  readonly loadRuntime: () => Promise<LocalCliPluginRuntimeV1>;
+};
+
 type ProviderPluginBindingDefinitionBaseV1 = {
   readonly surfaceId: string;
-  /** Exact transport endpoint used by the code-owned runtime. */
+  /**
+   * Canonical provider/service authority used by manifests, receipts, and
+   * account realms. For network transports this is also the primary endpoint;
+   * local-cli bindings keep child/loopback endpoints private to code-owned
+   * runtime logic and never expose them as manifest authority.
+   */
   readonly origin: `https://${string}`;
   /**
    * Exact public origins an adapter manifest must declare. Defaults to
@@ -711,10 +780,19 @@ export type LinkedDevicePluginBindingDefinitionV1 =
   readonly runtime: WebSessionPluginRuntimeHooksV1;
 };
 
+export type LocalCliPluginBindingDefinitionV1 =
+  ProviderPluginBindingDefinitionBaseV1 & {
+  readonly transport: "local-cli";
+  readonly tool: LocalCliToolIdentityV1;
+  readonly operations: readonly LocalCliPluginOperationDefinitionV1[];
+  readonly runtime: LocalCliPluginRuntimeHooksV1;
+};
+
 export type ProviderPluginBindingDefinitionV1 =
   | ProviderApiPluginBindingDefinitionV1
   | WebSessionApiPluginBindingDefinitionV1
-  | LinkedDevicePluginBindingDefinitionV1;
+  | LinkedDevicePluginBindingDefinitionV1
+  | LocalCliPluginBindingDefinitionV1;
 
 export type ProviderPluginDefinitionV1 = {
   readonly apiVersion: typeof PROVIDER_PLUGIN_API_VERSION;
@@ -776,10 +854,22 @@ export type LinkedDevicePluginBindingV1 = ProviderPluginBindingBaseV1 & {
   readonly linkedDeviceLifecycle?: ProviderPluginLinkedDeviceLifecycleRuntimeV1;
 };
 
+export type LocalCliPluginBindingV1 = ProviderPluginBindingBaseV1 & {
+  readonly transport: "local-cli";
+  readonly tool: LocalCliToolIdentityV1;
+  readonly operations: readonly LocalCliPluginOperationV1[];
+  readonly loadRuntime: LocalCliPluginRuntimeHooksV1["loadRuntime"];
+  readonly inspect: LocalCliPluginRuntimeV1["inspect"];
+  readonly execute: LocalCliPluginRuntimeV1["execute"];
+  readonly reconcile?: NonNullable<LocalCliPluginRuntimeV1["reconcile"]>;
+};
+
 export type ProviderPluginBindingV1 =
   | ProviderApiPluginBindingV1
   | WebSessionApiPluginBindingV1
-  | LinkedDevicePluginBindingV1;
+  | LinkedDevicePluginBindingV1
+  | LocalCliPluginBindingV1;
+
 
 export type ProviderPluginV1 = Omit<
   ProviderPluginDefinitionV1,
@@ -2740,6 +2830,32 @@ function validateWebRuntime(value: WebSessionPluginRuntimeV1): WebSessionPluginR
   });
 }
 
+function validateLocalCliRuntime(
+  value: LocalCliPluginRuntimeV1,
+): LocalCliPluginRuntimeV1 {
+  requireExactKeys(
+    value,
+    ["inspect", "probe", "execute", "reconcile"],
+    "local CLI plugin runtime",
+  );
+  if (
+    typeof value.inspect !== "function"
+    || typeof value.probe !== "function"
+    || typeof value.execute !== "function"
+  ) {
+    throw new Error("local CLI plugin runtime must declare inspect, probe, and execute");
+  }
+  if (value.reconcile !== undefined && typeof value.reconcile !== "function") {
+    throw new Error("local CLI plugin runtime reconciliation hook is invalid");
+  }
+  return Object.freeze({
+    inspect: value.inspect,
+    probe: value.probe,
+    execute: value.execute,
+    ...(value.reconcile === undefined ? {} : { reconcile: value.reconcile }),
+  });
+}
+
 function memoizedRuntime<T>(
   loader: () => Promise<T>,
   validate: (value: T) => T,
@@ -2825,6 +2941,14 @@ export function lazyWebSessionRuntime(
   return Object.freeze({ loadRuntime });
 }
 
+export function lazyLocalCliRuntime(
+  loader: () => Promise<LocalCliPluginRuntimeV1>,
+): LocalCliPluginRuntimeHooksV1 {
+  const loadRuntime = memoizedRuntime(loader, validateLocalCliRuntime);
+  providerPluginLazyRuntimeLoaders.add(loadRuntime);
+  return Object.freeze({ loadRuntime });
+}
+
 function freezeBinding(
   binding: ProviderPluginBindingDefinitionV1,
   sourceKind: ProviderPluginV1["sourceKind"],
@@ -2836,6 +2960,7 @@ function freezeBinding(
       "surfaceId",
       "origin",
       ...(binding.transport === "provider-api" ? ["runtimeOrigins"] : []),
+      ...(binding.transport === "local-cli" ? ["tool"] : []),
       "manifestOrigins",
       "protectedHostnameFamilies",
       "authKinds",
@@ -3005,7 +3130,9 @@ function freezeBinding(
   requireBoundedNonEmptyArray(
     binding.authKinds,
     `provider plugin surface ${binding.surfaceId} authKinds`,
-    binding.transport === "web-session-api" ? 3 : 1,
+    binding.transport === "web-session-api" || binding.transport === "local-cli"
+      ? 5
+      : 1,
   );
   const acceptedAuthKinds = [...binding.authKinds];
   for (const kind of acceptedAuthKinds) {
@@ -3035,6 +3162,9 @@ function freezeBinding(
   ) {
     throw new Error(`provider plugin surface ${binding.surfaceId} web-session-api auth must use browser-session credentials`);
   }
+  const localCliTool = binding.transport === "local-cli"
+    ? parseLocalCliToolIdentityV1(binding.tool)
+    : undefined;
   requireBoundedNonEmptyArray(
     binding.operations,
     `provider plugin surface ${binding.surfaceId} operations`,
@@ -3087,6 +3217,192 @@ function freezeBinding(
       loadRuntime,
       execute: async (context: ProviderActionContext) =>
         (await loadRuntime()).execute(context),
+    });
+    return result;
+  }
+  if (binding.transport === "local-cli") {
+    requireExactKeys(binding.runtime, ["loadRuntime"], "local CLI plugin runtime hooks");
+    const loadRuntime = binding.runtime.loadRuntime;
+    const reconciles = operations.some(
+      (operation) => operation.reconciliation !== undefined,
+    );
+    const reconcile: NonNullable<LocalCliPluginRuntimeV1["reconcile"]> = async (
+      operationName,
+      input,
+      auth,
+      context,
+      options,
+    ) => {
+      const selectedOperation = operations.find((operation) =>
+        operation.name === operationName
+        && operation.reconciliation !== undefined);
+      if (selectedOperation === undefined) {
+        throw new Error(
+          `provider plugin surface ${binding.surfaceId} has no reconciliation contract for ${operationName}`,
+        );
+      }
+      const reconciliationKind = selectedOperation.reconciliation?.kind;
+      const reconciliationContext =
+        reconciliationKind === "provider-accepted-target-presence"
+          || reconciliationKind === "provider-bound-target-desired-state"
+          ? (() => {
+              const parsed = parseProviderPluginReconciliationContextV1(context);
+              if (parsed.kind !== reconciliationKind) {
+                throw new Error(
+                  `provider plugin surface ${binding.surfaceId} reconciliation target context kind changed`,
+                );
+              }
+              return parsed;
+            })()
+          : (() => {
+              if (context !== undefined) {
+                throw new Error(
+                  `provider plugin surface ${binding.surfaceId} boolean reconciliation does not accept target context`,
+                );
+              }
+              return undefined;
+            })();
+      const hook = (await loadRuntime()).reconcile;
+      if (hook === undefined) {
+        throw new Error(
+          `provider plugin surface ${binding.surfaceId} declared reconciliation without a runtime hook`,
+        );
+      }
+      const value = await hook(
+        operationName,
+        input,
+        auth,
+        reconciliationContext,
+        options,
+      );
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new Error("provider plugin reconciliation returned an invalid readback");
+      }
+      requireExactKeys(
+        value,
+        ["actualState", "reason"],
+        "provider plugin reconciliation readback",
+      );
+      if (
+        typeof value.actualState !== "boolean"
+        || typeof value.reason !== "string"
+        || value.reason.length < 1
+        || value.reason.length > 200
+      ) {
+        throw new Error("provider plugin reconciliation returned an invalid readback");
+      }
+      return Object.freeze({
+        actualState: value.actualState,
+        reason: value.reason,
+      });
+    };
+    const result: LocalCliPluginBindingV1 = Object.freeze({
+      ...common,
+      transport: "local-cli",
+      tool: localCliTool!,
+      operations: Object.freeze(operations) as readonly LocalCliPluginOperationV1[],
+      loadRuntime,
+      subject: Object.freeze({
+        ...binding.subject,
+        probe: async (
+          auth: WrenchAuth,
+          options?: ProviderPluginSubjectProbeOptionsV1,
+        ) => {
+          const subject = await (await loadRuntime()).probe(auth, options);
+          if (
+            typeof subject !== "string"
+            || !binding.subject.matches(subject)
+          ) {
+            throw new Error(
+              `provider plugin surface ${binding.surfaceId} returned a subject outside ${binding.subject.format}`,
+            );
+          }
+          return subject;
+        },
+      }),
+      inspect: async (environment, options) => {
+        let artifact: LocalCliToolArtifactIdentityV1;
+        try {
+          artifact = localCliToolArtifactForCurrentRuntime(localCliTool!);
+        } catch {
+          return Object.freeze({
+            ready: false,
+            platform: process.platform,
+            arch: process.arch,
+            version: null,
+            executableSha256: null,
+            reason: `unsupported-runtime:${process.platform}/${process.arch}`,
+          });
+        }
+        const cleanupFilesystem = inspectLocalCliCleanupFilesystemReadiness();
+        if (!cleanupFilesystem.ready) {
+          return Object.freeze({
+            ready: false,
+            platform: process.platform,
+            arch: process.arch,
+            version: null,
+            executableSha256: null,
+            reason: cleanupFilesystem.reason,
+          });
+        }
+        const [ready, platform, arch, version, executableSha256, reason] =
+          snapshotExactEnumerableDataProperties(
+            await (await loadRuntime()).inspect(environment, options),
+            [
+              "ready",
+              "platform",
+              "arch",
+              "version",
+              "executableSha256",
+              "reason",
+            ],
+            "local CLI runtime inspection status",
+          );
+        if (
+          typeof ready !== "boolean"
+          || typeof platform !== "string"
+          || platform !== process.platform
+          || typeof arch !== "string"
+          || arch !== process.arch
+          || (version !== null && (
+            typeof version !== "string"
+            || version.length < 1
+            || version.length > 128
+            || /[\u0000-\u001f\u007f-\u009f]/u.test(version)
+            || hasUnpairedSurrogate(version)
+          ))
+          || (executableSha256 !== null && (
+            typeof executableSha256 !== "string"
+            || !/^[a-f0-9]{64}$/u.test(executableSha256)
+          ))
+          || (reason !== null && (
+            typeof reason !== "string"
+            || reason.length < 1
+            || reason.length > 500
+            || /[\u0000-\u001f\u007f-\u009f]/u.test(reason)
+            || hasUnpairedSurrogate(reason)
+          ))
+          || (ready && (
+            version !== localCliTool!.version
+            || executableSha256 !== artifact.executableSha256
+            || reason !== null
+          ))
+          || (!ready && reason === null)
+        ) {
+          throw new Error("local CLI runtime inspection returned an invalid status");
+        }
+        return Object.freeze({
+          ready,
+          platform,
+          arch,
+          version,
+          executableSha256,
+          reason,
+        });
+      },
+      execute: async (manifest, recipe, input, auth, options) =>
+        (await loadRuntime()).execute(manifest, recipe, input, auth, options),
+      ...(reconciles ? { reconcile } : {}),
     });
     return result;
   }
@@ -3582,6 +3898,11 @@ export function definePortableProviderPluginProjection(
       portableBindingValue as PortablePackageBindingV1;
     const bindingDefinition =
       bindingValue as ProviderPluginBindingDefinitionV1;
+    if (bindingDefinition.transport === "local-cli") {
+      throw new Error(
+        `portable provider plugin ${id} cannot project a source-only local-cli binding`,
+      );
+    }
     adapterIds.add(adapterId);
     assertKernelPortableProviderPluginBindingProjection(
       bindingDefinition,

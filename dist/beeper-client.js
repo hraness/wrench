@@ -18,53 +18,254 @@ import {
 } from "@hraness/message-like-me/message-bundle-v1";
 
 // src/providers/beeper-local.ts
+var BEEPER_CLI_DARWIN_ARM64_ARTIFACT_PIN = Object.freeze({
+  platform: "darwin",
+  arch: "arm64",
+  archiveSha256: "688ccde7e7d044d33980cd06474bf1ae7215ccf8ca79967262fa3bfb85a2589a",
+  executableSha256: "48aa895449129c793a212ea19f69a534adc34a8adc4037ca1d7da9e648716425",
+  downloadUrl: "https://github.com/beeper/cli/releases/download/v0.6.2/beeper-cli-0.6.2-macos-arm64.zip"
+});
 var BEEPER_CLI_PIN = Object.freeze({
+  id: "beeper-cli",
   implementation: "github.com/beeper/cli",
   version: "0.6.2",
   commit: "a416af06023449a87312dc11e54643fd9dc94b8c",
-  darwinArm64ArchiveSha256: "688ccde7e7d044d33980cd06474bf1ae7215ccf8ca79967262fa3bfb85a2589a",
-  darwinArm64BinarySha256: "48aa895449129c793a212ea19f69a534adc34a8adc4037ca1d7da9e648716425",
+  releaseManifestSha256: "5c52b533180151b97e26138ef687b6b819170687b34a478184e5648335356950",
+  releaseManifestUrl: "https://github.com/beeper/cli/releases/download/v0.6.2/binaries.json",
   releaseUrl: "https://github.com/beeper/cli/releases/tag/v0.6.2",
-  downloadUrl: "https://github.com/beeper/cli/releases/download/v0.6.2/beeper-cli-0.6.2-macos-arm64.zip"
+  sourceUrl: "https://github.com/beeper/cli/tree/a416af06023449a87312dc11e54643fd9dc94b8c",
+  darwinArm64ArchiveSha256: BEEPER_CLI_DARWIN_ARM64_ARTIFACT_PIN.archiveSha256,
+  darwinArm64BinarySha256: BEEPER_CLI_DARWIN_ARM64_ARTIFACT_PIN.executableSha256,
+  downloadUrl: BEEPER_CLI_DARWIN_ARM64_ARTIFACT_PIN.downloadUrl,
+  artifacts: Object.freeze([
+    BEEPER_CLI_DARWIN_ARM64_ARTIFACT_PIN,
+    Object.freeze({
+      platform: "darwin",
+      arch: "x64",
+      archiveSha256: "4113a1979cfbd7839f14743158e70c12efa941313afb77ab2b11a08309196186",
+      executableSha256: "83bb89edb6eeb9c61ebdb6ec940e0db30c90ecbca61d60a7408fe336e255f22e",
+      downloadUrl: "https://github.com/beeper/cli/releases/download/v0.6.2/beeper-cli-0.6.2-macos-x64.zip"
+    }),
+    Object.freeze({
+      platform: "linux",
+      arch: "arm64",
+      archiveSha256: "2bd37043a4ed863621edc59e28aaa652e8193e55abca0e9477f5aeae1c65d629",
+      executableSha256: "102b8725bd99b03905dcff9fff645f3742e1697ce8d43ab9d8656896aafd12a8",
+      downloadUrl: "https://github.com/beeper/cli/releases/download/v0.6.2/beeper-cli-0.6.2-linux-arm64.tar.gz"
+    }),
+    Object.freeze({
+      platform: "linux",
+      arch: "x64",
+      archiveSha256: "a881e1d2bc91e31218b251716644ec5f8d161d5ccb30e7eab66cf2ba6410511d",
+      executableSha256: "723cc3a6c556fa21b6ba11db8377d6a29776aca1660da48f0072883d6452ae3d",
+      downloadUrl: "https://github.com/beeper/cli/releases/download/v0.6.2/beeper-cli-0.6.2-linux-x64.tar.gz"
+    })
+  ])
 });
+var BEEPER_DESKTOP_API_PIN = Object.freeze({
+  package: "@beeper/desktop-api",
+  version: "5.0.0",
+  commit: "b9c1714410139c2139b597338cd002d785653e85"
+});
+var BEEPER_MAX_FILE_BYTES = 500 * 1024 * 1024;
+var BEEPER_DESKTOP_BUNDLE_IDS = Object.freeze([
+  "com.automattic.beeper.desktop",
+  "com.automattic.beeper.desktop.nightly"
+]);
 var BEEPER_LOCAL_OPERATION_NAMES = Object.freeze([
+  "accounts.list",
+  "accounts.read",
+  "bridges.list",
+  "bridges.read",
   "contacts.list",
   "contacts.search",
+  "contacts.read",
   "messaging.list",
   "messaging.search",
-  "messaging.read"
+  "conversations.read",
+  "messaging.read",
+  "messaging.content.search",
+  "messaging.message.read",
+  "messaging.context.read",
+  "messaging.send",
+  "reactions.set",
+  "messaging.edit",
+  "conversations.start",
+  "conversations.archive.set",
+  "conversations.pin.set",
+  "conversations.mute.set",
+  "conversations.read-state.set",
+  "conversations.priority.set",
+  "conversations.notify",
+  "conversations.title.set",
+  "conversations.description.set",
+  "conversations.avatar.set",
+  "conversations.draft.set",
+  "conversations.disappearing.set",
+  "conversations.reminder.set",
+  "conversations.focus",
+  "presence.set"
 ]);
+var readPolicy = (reason) => Object.freeze({
+  effect: "read",
+  risk: "R1",
+  state: "observed",
+  reason
+});
+var reversiblePolicy = (reason) => Object.freeze({
+  effect: "write",
+  risk: "R2",
+  state: "desired",
+  reason
+});
+var visiblePolicy = (reason) => Object.freeze({
+  effect: "write",
+  risk: "R3",
+  state: "desired",
+  reason
+});
 var BEEPER_LOCAL_OPERATIONS = Object.freeze({
-  "contacts.list": Object.freeze({
-    effect: "read",
-    risk: "R1",
-    state: "observed",
-    reason: "the pinned official Beeper CLI reads one bounded account-aware contact projection from local Desktop in read-only mode; it does not download media or expose raw requests"
-  }),
-  "contacts.search": Object.freeze({
-    effect: "read",
-    risk: "R1",
-    state: "observed",
-    reason: "the pinned official Beeper CLI performs one bounded account-aware fuzzy contact search against local Desktop in read-only mode and returns candidate identity metadata without media or private content"
-  }),
-  "messaging.list": Object.freeze({
-    effect: "read",
-    risk: "R1",
-    state: "observed",
-    reason: "the pinned official Beeper CLI reads one bounded local chat projection in read-only mode and preserves account, network, participant, and local-completeness evidence"
-  }),
-  "messaging.search": Object.freeze({
-    effect: "read",
-    risk: "R1",
-    state: "observed",
-    reason: "the pinned official Beeper CLI performs one bounded account-aware fuzzy chat search against local Desktop in read-only mode and returns candidate conversation and participant identity metadata without message content or private UI state"
-  }),
-  "messaging.read": Object.freeze({
-    effect: "read",
-    risk: "R1",
-    state: "observed",
-    reason: "the pinned official Beeper CLI reads one exact account-bound conversation page in read-only mode and preserves reply, edit, deletion, reaction, and attachment-shape evidence"
-  })
+  "accounts.list": readPolicy("list the exact account realm bound to local Beeper Desktop"),
+  "accounts.read": readPolicy("read one exact connected-account projection"),
+  "bridges.list": readPolicy("list a bounded bridge capability catalog"),
+  "bridges.read": readPolicy("read one exact bridge and its non-secret capabilities"),
+  "contacts.list": readPolicy("list one bounded account-aware contact projection"),
+  "contacts.search": readPolicy("search one bounded account-aware contact candidate window"),
+  "contacts.read": readPolicy("read one exact account-bound contact identity"),
+  "messaging.list": readPolicy("list one bounded account-aware conversation projection"),
+  "messaging.search": readPolicy("search one bounded conversation candidate window"),
+  "conversations.read": readPolicy("read one exact account-bound conversation"),
+  "messaging.read": readPolicy("read one bounded page from an exact conversation"),
+  "messaging.content.search": readPolicy("search one bounded message-content candidate window"),
+  "messaging.message.read": readPolicy("read one exact message from an exact conversation"),
+  "messaging.context.read": readPolicy("read bounded context around one exact message"),
+  "messaging.send": visiblePolicy("submit one confirmed text, file, sticker, or voice request to Beeper Desktop; network delivery is not asserted"),
+  "reactions.set": reversiblePolicy("set or clear one exact reaction desired state"),
+  "messaging.edit": visiblePolicy("edit one exact message authored by the current account"),
+  "conversations.start": visiblePolicy("start one conversation with an exact account-bound user"),
+  "conversations.archive.set": reversiblePolicy("set one conversation archive desired state"),
+  "conversations.pin.set": reversiblePolicy("set one conversation pin desired state"),
+  "conversations.mute.set": reversiblePolicy("set one conversation mute desired state"),
+  "conversations.read-state.set": visiblePolicy("set one conversation read marker, which may emit a network read receipt"),
+  "conversations.priority.set": reversiblePolicy("set one conversation inbox priority desired state"),
+  "conversations.notify": visiblePolicy("send one explicit iMessage Notify Anyway alert"),
+  "conversations.title.set": visiblePolicy("set one group-conversation title"),
+  "conversations.description.set": visiblePolicy("set or clear one group-conversation description"),
+  "conversations.avatar.set": visiblePolicy("set or clear one group-conversation avatar"),
+  "conversations.draft.set": reversiblePolicy("set or clear one private conversation draft"),
+  "conversations.disappearing.set": visiblePolicy("set a retention timer whose effects cannot be undone after messages expire"),
+  "conversations.reminder.set": reversiblePolicy("set or clear one private conversation reminder"),
+  "conversations.focus": reversiblePolicy("focus local Beeper Desktop on one exact conversation"),
+  "presence.set": visiblePolicy("send one bounded typing or paused indicator")
+});
+var supported = (operation) => Object.freeze({ state: "supported", operation });
+var internalPreflight = (purpose) => Object.freeze({
+  state: "internal-preflight",
+  purpose
+});
+var unavailable = (reason) => Object.freeze({ state: "unavailable", reason });
+var BEEPER_CLI_COMMAND_COVERAGE = Object.freeze({
+  setup: unavailable("installation-lifecycle"),
+  "install desktop": unavailable("installation-lifecycle"),
+  "install server": unavailable("installation-lifecycle"),
+  "targets list": unavailable("target-lifecycle"),
+  "bridges list": supported("bridges.list"),
+  "bridges show": supported("bridges.read"),
+  "targets add desktop": unavailable("target-lifecycle"),
+  "targets add server": unavailable("target-lifecycle"),
+  "targets add remote": unavailable("target-lifecycle"),
+  "targets use": unavailable("target-lifecycle"),
+  "targets show": unavailable("target-lifecycle"),
+  "targets status": internalPreflight("desktop-target-realm-proof"),
+  "targets start": unavailable("target-lifecycle"),
+  "targets stop": unavailable("target-lifecycle"),
+  "targets restart": unavailable("target-lifecycle"),
+  "targets logs": unavailable("target-lifecycle"),
+  "targets enable": unavailable("target-lifecycle"),
+  "targets disable": unavailable("target-lifecycle"),
+  "targets remove": unavailable("target-lifecycle"),
+  "targets tunnel": unavailable("target-lifecycle"),
+  "auth status": unavailable("authentication-and-verification"),
+  "auth logout": unavailable("authentication-and-verification"),
+  "auth email start": unavailable("authentication-and-verification"),
+  "auth email response": unavailable("authentication-and-verification"),
+  verify: unavailable("authentication-and-verification"),
+  "verify status": unavailable("authentication-and-verification"),
+  "verify approve": unavailable("authentication-and-verification"),
+  "verify recovery-key": unavailable("authentication-and-verification"),
+  "verify reset-recovery-key": unavailable("authentication-and-verification"),
+  "verify cancel": unavailable("authentication-and-verification"),
+  "verify list": unavailable("authentication-and-verification"),
+  "verify start": unavailable("authentication-and-verification"),
+  "verify show": unavailable("authentication-and-verification"),
+  "verify sas": unavailable("authentication-and-verification"),
+  "verify sas-confirm": unavailable("authentication-and-verification"),
+  "verify qr-scan": unavailable("authentication-and-verification"),
+  "verify qr-confirm": unavailable("authentication-and-verification"),
+  "accounts list": supported("accounts.list"),
+  "accounts add": unavailable("account-lifecycle-r4"),
+  "accounts show": supported("accounts.read"),
+  "accounts remove": unavailable("account-lifecycle-r4"),
+  "accounts use": unavailable("account-lifecycle-r4"),
+  "chats list": supported("messaging.list"),
+  "chats search": supported("messaging.search"),
+  "chats show": supported("conversations.read"),
+  "chats start": supported("conversations.start"),
+  "chats archive": supported("conversations.archive.set"),
+  "chats unarchive": supported("conversations.archive.set"),
+  "chats pin": supported("conversations.pin.set"),
+  "chats unpin": supported("conversations.pin.set"),
+  "chats mute": supported("conversations.mute.set"),
+  "chats unmute": supported("conversations.mute.set"),
+  "chats mark-read": supported("conversations.read-state.set"),
+  "chats mark-unread": supported("conversations.read-state.set"),
+  "chats priority": supported("conversations.priority.set"),
+  "chats notify-anyway": supported("conversations.notify"),
+  "chats rename": supported("conversations.title.set"),
+  "chats description": supported("conversations.description.set"),
+  "chats avatar": supported("conversations.avatar.set"),
+  "chats draft": supported("conversations.draft.set"),
+  "chats disappear": supported("conversations.disappearing.set"),
+  "chats remind": supported("conversations.reminder.set"),
+  "chats unremind": supported("conversations.reminder.set"),
+  "chats focus": supported("conversations.focus"),
+  "messages list": supported("messaging.read"),
+  "messages search": supported("messaging.content.search"),
+  "messages show": supported("messaging.message.read"),
+  "messages context": supported("messaging.context.read"),
+  "messages edit": supported("messaging.edit"),
+  "messages delete": unavailable("destructive-message-deletion-r4"),
+  "messages export": unavailable("caller-path-media-or-export"),
+  "send text": supported("messaging.send"),
+  "send file": supported("messaging.send"),
+  "send react": supported("reactions.set"),
+  "send sticker": supported("messaging.send"),
+  "send unreact": supported("reactions.set"),
+  "send voice": supported("messaging.send"),
+  presence: supported("presence.set"),
+  "contacts list": supported("contacts.list"),
+  "contacts search": supported("contacts.search"),
+  "contacts show": supported("contacts.read"),
+  "media download": unavailable("caller-path-media-or-export"),
+  export: unavailable("caller-path-media-or-export"),
+  watch: unavailable("unbounded-event-stream"),
+  rpc: unavailable("raw-api-or-rpc"),
+  man: unavailable("cli-maintenance-or-documentation"),
+  doctor: unavailable("target-lifecycle"),
+  status: unavailable("target-lifecycle"),
+  docs: unavailable("cli-maintenance-or-documentation"),
+  version: internalPreflight("pinned-tool-version-proof"),
+  completion: unavailable("cli-maintenance-or-documentation"),
+  plugins: unavailable("cli-extension-or-configuration"),
+  "plugins available": unavailable("cli-extension-or-configuration"),
+  update: unavailable("cli-extension-or-configuration"),
+  "config get": unavailable("cli-extension-or-configuration"),
+  "config set": unavailable("cli-extension-or-configuration"),
+  "config path": unavailable("cli-extension-or-configuration"),
+  "config reset": unavailable("cli-extension-or-configuration"),
+  "api get": unavailable("raw-api-or-rpc"),
+  "api post": unavailable("raw-api-or-rpc"),
+  "api request": unavailable("raw-api-or-rpc")
 });
 
 // src/version.ts

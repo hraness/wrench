@@ -94,7 +94,7 @@ describe("wrench CLI grammar", () => {
       "--limit-messages",
       "5000",
       "--max-participants",
-      "250",
+      "2000",
       "--json",
     ])).toEqual({
       ok: true,
@@ -104,7 +104,7 @@ describe("wrench CLI grammar", () => {
         output: "/tmp/message-like-me",
         limitChats: 100,
         limitMessages: 5000,
-        maxParticipants: 250,
+        maxParticipants: 2000,
         json: true,
       },
     });
@@ -119,6 +119,10 @@ describe("wrench CLI grammar", () => {
         "--output", "/tmp/export", "--limit-chats", "0",
       ],
       ["beeper", "messages"],
+      [
+        "beeper", "export-message-like-me", "--auth", "beeper-main",
+        "--output", "/tmp/export", "--max-participants", "2001",
+      ],
     ]) {
       expect(parseWrenchArguments(raw).ok).toBeFalse();
     }
@@ -135,7 +139,7 @@ describe("wrench CLI grammar", () => {
       "--limit-messages",
       "10000",
       "--max-participants",
-      "250",
+      "2000",
       "--json",
     ])).toEqual({
       ok: true,
@@ -144,7 +148,7 @@ describe("wrench CLI grammar", () => {
         authId: "beeper-main",
         limitChats: 500,
         limitMessages: 10000,
-        maxParticipants: 250,
+        maxParticipants: 2000,
         json: true,
       },
     });
@@ -160,6 +164,10 @@ describe("wrench CLI grammar", () => {
       message:
         "beeper export-contact-interactions writes its body-free artifact to stdout and does not accept --output",
     });
+    expect(parseWrenchArguments([
+      "beeper", "export-contact-interactions", "--auth", "beeper-main",
+      "--max-participants", "2001",
+    ]).ok).toBeFalse();
   });
 
   test("parses adapter and capability management", () => {

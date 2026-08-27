@@ -70,14 +70,19 @@
         </section>
 
         <section aria-labelledby="beeper">
-          <h2 id="beeper">Beeper projects connected local accounts without a browser or model service</h2>
-          <p>The bundled source plugin accepts only the pinned official Beeper CLI 0.6.2, one already-authorized Desktop target, and read-only JSON operations. Wrench hashes the stable self-account coordinate before storing the auth subject. It exposes no send, raw request, media download, pairing, presence, or background-sync surface.</p>
+          <h2 id="beeper">Beeper reads and actions use one exact local CLI contract</h2>
+          <p>The bundled source plugin accepts only the pinned official Beeper CLI 0.6.2 executable for the current macOS or Linux architecture and one already-authorized Desktop target. Its typed operations cover accounts, bridges, contacts, conversations, messages, sends, edits, reactions, conversation state, metadata, reminders, drafts, local focus, and presence. Wrench hashes the stable self-account coordinate before storing the auth subject.</p>
           <div class="command-panel"><pre><code>wrench auth add beeper-main --linked-device beeper \
   --device-store "${HOME}/.beeper"
 wrench auth bind beeper-main --site beeper
 
+wrench beeper-local messaging.send --auth beeper-main --preview --json \
+  --input '{"account_id":"&lt;account-id&gt;","conversation_id":"&lt;chat-id&gt;","kind":"text","text":"Hello from Wrench"}'
+wrench confirm &lt;preview-digest&gt; --json
+
 wrench beeper export-message-like-me --auth beeper-main \
   --output /absolute/path/to/new-message-like-me-bundle --json</code></pre></div>
+          <p>The adapter is not a generic command runner. It isolates oclif user-plugin state, strips ambient credentials and target defaults, uses exact IDs, and stages files only from digest-bound plan assets. Its checked coverage ledger accounts for all 101 canonical v0.6.2 commands. Raw API/RPC, account and target administration, software and plugin lifecycle, arbitrary paths and webhooks, media download, and destructive message deletion remain unavailable or R4.</p>
           <p>The export enumerates connected accounts, then invokes the official <code>export --no-attachments</code> command once per account in deterministic order. Wrench validates each retained raw shard and the account realm, removes redundant plaintext renderings inside private staging, builds the six mode-0600 NDJSON artifacts and manifest, then atomically renames the complete seven-file bundle into its mode-0700 destination. Completeness describes only the locally materialized sequential snapshot. A 500,000-record, 512 MiB, or 250,000-participant-occurrence ceiling produces a coherent truncated bundle, and any chat JSON file over the 64 MiB per-chat bound is omitted with an explicit warning.</p>
         </section>
 

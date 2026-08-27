@@ -1,6 +1,5 @@
 import type { WrenchAuth } from "./auth";
 import type {
-  BrowserCleanupResourceIdentity,
   BrowserFileResolver,
 } from "./browser";
 import type {
@@ -17,6 +16,17 @@ import {
   type OperationDeadlineClock,
 } from "./operation-deadline";
 import type { WebSessionPluginOperationV1 } from "./provider-plugin";
+import {
+  startProviderPluginCleanupTrackedOperation,
+  type ProviderPluginCleanupBarrierRegistrar,
+  type ProviderPluginCleanupResourcePublisher,
+} from "./provider-plugin-cleanup-execution";
+
+export {
+  startProviderPluginCleanupTrackedOperation,
+  type ProviderPluginCleanupBarrierRegistrar,
+  type ProviderPluginCleanupResourcePublisher,
+} from "./provider-plugin-cleanup-execution";
 
 const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
 export const WEB_SESSION_CLEANUP_JOIN_TIMEOUT_MS = 30_000;
@@ -24,7 +34,7 @@ export const WEB_SESSION_CLEANUP_JOIN_TIMEOUT_MS = 30_000;
 export class WebSessionCleanupUnverifiedError extends Error {
   constructor(cause?: unknown) {
     super(
-      "authenticated web cleanup could not be verified within its bounded join; retry is unsafe until wrench doctor proves exact browser-closed cleanup evidence, or a reboot proves the admitted resource cannot still be running",
+      "provider resource cleanup could not be verified within its bounded join; retry is unsafe until wrench doctor proves exact quiescence, or a reboot proves the admitted resource cannot still be running",
       cause === undefined ? undefined : { cause },
     );
     this.name = "WebSessionCleanupUnverifiedError";
@@ -72,18 +82,13 @@ export type WebSessionOperationDeadline = Pick<
   "signal" | "remainingTimeMs" | "run" | "throwIfUnavailable"
 >;
 
-export type WebSessionCleanupResourcePublisher = (
-  resource: BrowserCleanupResourceIdentity,
-) => void;
+/** Compatibility names retained for existing browser-backed runtimes. */
+export type WebSessionCleanupResourcePublisher =
+  ProviderPluginCleanupResourcePublisher;
+export type WebSessionCleanupBarrierRegistrar =
+  ProviderPluginCleanupBarrierRegistrar;
 
-export type WebSessionCleanupBarrierRegistrar = (
-  barrier: Promise<void>,
-) => WebSessionCleanupResourcePublisher | void;
-
-/**
- * Register cleanup before starting a resource-owning asynchronous operation.
- * If registration has closed, `start` is never called.
- */
+/** Compatibility wrapper for existing browser-backed runtimes. */
 export function startWebSessionCleanupTrackedOperation<T>(
   register: WebSessionCleanupBarrierRegistrar | undefined,
   start: (
@@ -92,29 +97,22 @@ export function startWebSessionCleanupTrackedOperation<T>(
   cleanupBoundary: (operation: Promise<T>) => Promise<void>,
 ): Promise<T> {
   if (register === undefined) return start(undefined);
-  let begin: ((
-    publishCleanupResource: WebSessionCleanupResourcePublisher | undefined,
-  ) => void) | undefined;
-  const operation = new Promise<T>((resolve, reject) => {
-    begin = (publishCleanupResource) => {
+  return startProviderPluginCleanupTrackedOperation(
+    register,
+    async (publishCleanupResource, cleanup) => {
+      const operation = start(publishCleanupResource);
       try {
-        void start(publishCleanupResource).then(resolve, reject);
+        await cleanupBoundary(operation);
+        cleanup.verified();
       } catch (error) {
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("authenticated web cleanup-tracked operation failed"),
-        );
+        cleanup.unsafe(error);
       }
-    };
-  });
-  const registered = register(cleanupBoundary(operation));
-  begin?.(
-    typeof registered === "function"
-      ? registered
-      : undefined,
+      // Preserve the provider result only after cleanup proof has settled. This
+      // ordering prevents the generic controller's rejection fallback from
+      // racing an ordinary provider failure ahead of its verified cleanup.
+      return await operation;
+    },
   );
-  return operation;
 }
 
 export type WebSessionExecutionOptions = {
@@ -264,7 +262,7 @@ async function awaitWebSessionCleanupBarriers(
  * work that does not cooperate with cancellation.
  */
 export async function runWebSessionOperationWithDeadline<T>(
-  recipe: WebSessionRecipe,
+  recipe: Pick<WebSessionRecipe, "timeoutMs">,
   options: WebSessionExecutionOptions,
   execute: (boundedOptions: WebSessionExecutionOptions) => Promise<T>,
 ): Promise<T> {

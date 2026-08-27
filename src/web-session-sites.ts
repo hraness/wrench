@@ -6,7 +6,9 @@ export type BundledWebSessionSiteId = WebSessionSiteId;
 
 function sessionBindings(registry: ProviderPluginRegistry) {
   return registry.list().flatMap((plugin) =>
-    plugin.bindings.filter((binding) => binding.transport !== "provider-api"))
+    plugin.bindings.filter((binding) =>
+      binding.transport === "web-session-api"
+      || binding.transport === "linked-device"))
     .sort((left, right) => left.surfaceId.localeCompare(right.surfaceId));
 }
 

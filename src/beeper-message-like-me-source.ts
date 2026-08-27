@@ -43,15 +43,19 @@ import type {
 } from "./beeper-message-like-me-export";
 import {
   BEEPER_CLI_PIN,
+  beeperCliArtifactForRuntime,
   planBeeperAccountsListCommand,
   planBeeperMessageLikeMeExportCommand,
+  planBeeperTargetStatusCommand,
 } from "./providers/beeper-local";
 import {
-  beeperSubjectFromAccounts,
+  beeperSubjectFromAccountsAndTarget,
+  parseBeeperTargetRealmProof,
   parseBeeperCliEnvelope,
   parseBeeperExportAccounts,
   parseBeeperExportConversation,
   parseBeeperExportMessages,
+  materializePinnedBeeperCliBinary,
   resolvePinnedBeeperCliBinary,
   validateBeeperCliStore,
   type BeeperAccountProjection,
@@ -60,6 +64,7 @@ import {
   type BeeperConversationProjection,
   type BeeperMessageProjection,
   type BeeperReactionProjection,
+  type BeeperTargetRealmProof,
   type BeeperUserProjection,
 } from "./providers/beeper-local-runtime";
 
@@ -312,6 +317,7 @@ type SelfAliasPrepass = Readonly<{
 type BeeperCliStoreSnapshot = Readonly<{
   config: JsonRecord;
   desktopTarget: JsonRecord;
+  targetBaseUrl: string;
 }>;
 
 type OperationPrivateBeeperStore = Readonly<{
@@ -1415,6 +1421,41 @@ async function enumerateAccounts(
   }
 }
 
+async function proveDesktopTargetRealm(
+  binary: string,
+  environment: Readonly<Record<string, string>>,
+  targetBaseUrl: string,
+  deadlineMs: number,
+  run: (invocation: BeeperExportCliInvocation) => Promise<BeeperCliInvocationResult>,
+  directoryLease: BeeperMessageLikeMeDirectoryLease | undefined,
+  signal: AbortSignal | undefined,
+): Promise<BeeperTargetRealmProof> {
+  const timeoutMs = remainingTimeoutMs(deadlineMs);
+  const command = planBeeperTargetStatusCommand(timeoutMs);
+  const result = await run({
+    binary,
+    arguments: command.argv,
+    environment,
+    timeoutMs,
+    maxOutputBytes: 64 * 1024,
+    maxStderrBytes: MAX_STDERR_BYTES,
+    ...(directoryLease === undefined ? {} : { directoryLease }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+  throwIfAborted(signal);
+  if (result.exitCode !== 0 || result.stderr.trim().length !== 0) {
+    return fail("official Desktop target realm proof failed");
+  }
+  try {
+    return parseBeeperTargetRealmProof(
+      parseCliJson(result.stdout, "official Desktop target realm proof"),
+      targetBaseUrl,
+    );
+  } catch {
+    return fail("official Desktop target realm proof returned an unsupported projection");
+  }
+}
+
 function accountOutputRealm(
   account: BeeperAccountProjection,
 ): Readonly<Record<string, unknown>> {
@@ -1607,6 +1648,7 @@ async function readCliStoreSnapshot(
     "Beeper Desktop target.baseURL",
   );
   if (targetBaseUrl === undefined) return fail("Beeper Desktop target omitted baseURL");
+  const targetBasePort = Number(new URL(targetBaseUrl).port);
   if (
     (desktopTarget.managed !== undefined && desktopTarget.managed !== false)
     || desktopTarget.dataDir !== undefined
@@ -1619,7 +1661,9 @@ async function readCliStoreSnapshot(
       "Beeper Desktop target.port",
       23_392,
     );
-    if (port < 23_373) return fail("Beeper Desktop target.port is outside the reviewed range");
+    if (port < 23_373 || port !== targetBasePort) {
+      return fail("Beeper Desktop target.port did not match its exact base URL");
+    }
   }
   if (desktopTarget.runtime !== undefined) {
     const runtime = record(desktopTarget.runtime, "Beeper Desktop target.runtime");
@@ -1632,8 +1676,8 @@ async function readCliStoreSnapshot(
       "Beeper Desktop target.runtime.port",
       23_392,
     );
-    if (port < 23_373) {
-      return fail("Beeper Desktop target.runtime.port is outside the reviewed range");
+    if (port < 23_373 || port !== targetBasePort) {
+      return fail("Beeper Desktop target.runtime.port did not match its exact base URL");
     }
   }
   if (desktopTarget.name !== undefined) {
@@ -1662,6 +1706,7 @@ async function readCliStoreSnapshot(
       managed: false,
       type: "desktop",
     }),
+    targetBaseUrl,
   });
 }
 
@@ -1736,7 +1781,6 @@ async function validateAccountShard(
   canonicalWorking: string,
   selected: BeeperAccountProjection,
   baselineRealmDigest: string,
-  expectedSubject: string,
   signal: AbortSignal | undefined,
 ): Promise<ValidatedAccountShard> {
   throwIfAborted(signal);
@@ -1750,9 +1794,6 @@ async function validateAccountShard(
     signal,
   ));
   throwIfAborted(signal);
-  if (beeperSubjectFromAccounts(accounts) !== expectedSubject) {
-    return fail("official export account did not match the bound auth realm");
-  }
   assertOutputRealm(accounts, baselineRealmDigest);
   const manifest = parseManifest(await readOwnedJson(
     join(rawRoot, "manifest.json"),
@@ -2760,7 +2801,9 @@ function messageRecord(
       account.accountId,
       canonicalParticipantSourceId(account, message.senderId, aliasesByAccount),
     ),
-    direction: message.isSender ? "outgoing" : "incoming",
+    direction: message.isSender === null
+      ? "unknown"
+      : message.isSender ? "outgoing" : "incoming",
     sentAt: message.timestamp,
     sortKey: message.sortKey,
     body: deletionState === null ? message.text : null,
@@ -2951,7 +2994,7 @@ export function createBeeperMessageLikeMeSource(
     request.onProgress?.(Object.freeze({ phase: "preparing" }));
     const configDirectory = await validateBeeperCliStore(auth.path);
     const environment = request.environment ?? process.env;
-    const binary = request.dependencies?.binaryPath
+    const binarySource = request.dependencies?.binaryPath
       ?? await resolvePinnedBeeperCliBinary(environment);
     const maxBundleRecords = request.dependencies?.maxBundleRecords === undefined
       ? BEEPER_MESSAGE_LIKE_ME_MAX_RECORDS
@@ -2982,7 +3025,7 @@ export function createBeeperMessageLikeMeSource(
             "test maxParticipantOccurrences",
             MAX_PARTICIPANT_OCCURRENCES,
           );
-    if (!isAbsolute(binary)) return fail("Beeper CLI binary path must be absolute");
+    if (!isAbsolute(binarySource)) return fail("Beeper CLI binary path must be absolute");
     const customCreateWorking = request.dependencies?.createWorkingDirectory;
     const customRemoveWorking = request.dependencies?.removeWorkingDirectory;
     if ((customCreateWorking === undefined) !== (customRemoveWorking === undefined)) {
@@ -3083,6 +3126,13 @@ export function createBeeperMessageLikeMeSource(
     await assertPrivateOwnedDirectory(cacheDirectory, canonicalWorking);
     await assertPrivateOwnedDirectory(shardsDirectory, canonicalWorking);
     await assertPrivateOwnedDirectory(selectorsDirectory, canonicalWorking);
+    const binary = request.dependencies?.binaryPath !== undefined
+      ? binarySource
+      : await materializePinnedBeeperCliBinary(
+          binarySource,
+          canonicalWorking,
+          beeperCliArtifactForRuntime().executableSha256,
+        );
     {
       const run = request.dependencies?.runCli ?? runExportCli;
       const deadlineMs = Date.now() + limits.timeoutMs;
@@ -3092,6 +3142,15 @@ export function createBeeperMessageLikeMeSource(
         storeSnapshot,
       );
       const baseEnvironment = environmentForExport(inventoryStore.path, cacheDirectory);
+      const targetProof = await proveDesktopTargetRealm(
+        binary,
+        baseEnvironment,
+        storeSnapshot.targetBaseUrl,
+        deadlineMs,
+        run,
+        workingLease,
+        request.signal,
+      );
       const accounts = await enumerateAccounts(
         binary,
         baseEnvironment,
@@ -3105,7 +3164,15 @@ export function createBeeperMessageLikeMeSource(
           elapsedSeconds,
         })),
       );
-      if (beeperSubjectFromAccounts(accounts) !== auth.subject) {
+      if (
+        beeperSubjectFromAccountsAndTarget(
+          accounts,
+          storeSnapshot.targetBaseUrl,
+          targetProof.bundleId,
+          targetProof.version,
+        )
+        !== auth.subject
+      ) {
         return fail("official export account did not match the bound auth realm");
       }
       const baselineRealmDigest = outputRealmDigest(accounts);
@@ -3199,7 +3266,6 @@ export function createBeeperMessageLikeMeSource(
             canonicalWorking,
             account,
             baselineRealmDigest,
-            auth.subject,
             request.signal,
           ),
           request.onProgress === undefined
@@ -3240,6 +3306,21 @@ export function createBeeperMessageLikeMeSource(
         phase: "accounts-verifying",
         accounts: orderedAccounts.length,
       }));
+      const finalTargetProof = await proveDesktopTargetRealm(
+        binary,
+        baseEnvironment,
+        storeSnapshot.targetBaseUrl,
+        deadlineMs,
+        run,
+        workingLease,
+        request.signal,
+      );
+      if (
+        finalTargetProof.bundleId !== targetProof.bundleId
+        || finalTargetProof.version !== targetProof.version
+      ) {
+        return fail("official Desktop target realm changed during export");
+      }
       const finalAccounts = await enumerateAccounts(
         binary,
         baseEnvironment,
@@ -3253,7 +3334,15 @@ export function createBeeperMessageLikeMeSource(
           elapsedSeconds,
         })),
       );
-      if (beeperSubjectFromAccounts(finalAccounts) !== auth.subject) {
+      if (
+        beeperSubjectFromAccountsAndTarget(
+          finalAccounts,
+          storeSnapshot.targetBaseUrl,
+          finalTargetProof.bundleId,
+          finalTargetProof.version,
+        )
+        !== auth.subject
+      ) {
         return fail("official export account did not match the bound auth realm");
       }
       assertOutputRealm(finalAccounts, baselineRealmDigest);

@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -8,16 +8,20 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
 import type { WrenchAuth } from "../auth";
-import type { OperationInput, WebSessionRecipe } from "../model";
+import { canonicalJson } from "../canonical-json";
+import type { LocalCliRecipe, OperationInput } from "../model";
+import { OperationDeadline } from "../operation-deadline";
 import { boundedJsonOutput } from "../runtime";
 import {
   materializeBeeperMessagingList,
@@ -25,31 +29,34 @@ import {
 } from "./beeper-omni";
 import {
   executeBeeperLocalOperation,
+  beeperSubjectFromAccountsAndTarget,
+  beeperDesiredChatStateForTest,
+  materializeBeeperPlanBoundFileForTest,
   parseBeeperExportAccounts,
+  parseBeeperExportConversation,
   parseBeeperExportMessages,
   probeBeeperLocalSubject,
+  reconcileBeeperLocalOperation,
   validateBeeperCliStore,
   type BeeperCliInvocation,
   type BeeperCliInvocationResult,
 } from "./beeper-local-runtime";
 import {
   parseBeeperContactsSearchInput,
+  parseBeeperOperationInput,
   parseBeeperMessagingSearchInput,
   parseBeeperMessagingReadInput,
   planBeeperAccountsListCommand,
   planBeeperMessageLikeMeExportCommand,
   planBeeperReadCommand,
+  planBeeperVersionCommand,
 } from "./beeper-local";
 
 const ACCOUNT_ID = "account-beeper";
 const NETWORK_ACCOUNT_ID = "account-signal";
 const SELF_ID = "@self:beeper.local";
-const CHAT_ID = "chat-synthetic";
-const SUBJECT = `beeper:local:${createHash("sha256")
-  .update(ACCOUNT_ID, "utf8")
-  .update("\0", "utf8")
-  .update(SELF_ID, "utf8")
-  .digest("hex")}`;
+const CHAT_ID = "!chat-synthetic:beeper.local";
+const BUNDLE_ID = "com.automattic.beeper.desktop" as const;
 
 function envelope(data: unknown): BeeperCliInvocationResult {
   return Object.freeze({
@@ -65,7 +72,7 @@ function accounts(): readonly unknown[] {
     bridge: { id: "beeper", provider: "cloud", type: "matrix" },
     loginID: "redacted-login",
     network: "Beeper",
-    status: "CONNECTED",
+    status: "connected",
     user: {
       displayName: "Official Display Alias",
       displayText: "Fixture Self",
@@ -83,13 +90,50 @@ function accounts(): readonly unknown[] {
     bridge: { id: "signal", provider: "cloud", type: "signal" },
     loginID: "+15550000000",
     network: "Signal",
-    status: "CONNECTED",
+    status: "connected",
     user: {
       fullName: "Fixture Self",
       id: "signal:self",
       isSelf: true,
     },
   }]);
+}
+
+const SUBJECT = beeperSubjectFromAccountsAndTarget(
+  parseBeeperExportAccounts(accounts()),
+  "http://127.0.0.1:23384",
+  BUNDLE_ID,
+  "4.2.0-fixture",
+);
+
+function targetStatus(overrides: Readonly<Record<string, unknown>> = {}): unknown {
+  return Object.freeze({
+    target: Object.freeze({
+      id: "desktop",
+      type: "desktop",
+      baseURL: "http://127.0.0.1:23384",
+      auth: Object.freeze({ accessToken: "fixture-stored-access-token", tokenType: "Bearer" }),
+      managed: false,
+    }),
+    reachable: true,
+    version: "4.2.0-fixture",
+    bundleID: BUNDLE_ID,
+    actualType: "desktop",
+    ...overrides,
+  });
+}
+
+function bridges(): readonly unknown[] {
+  return Object.freeze(["signal", "whatsapp"].map((id) => Object.freeze({
+    id,
+    accounts: Object.freeze([]),
+    activeAccountCount: 0,
+    displayName: `${id} fixture`,
+    provider: "cloud",
+    status: "available",
+    supportsMultipleAccounts: true,
+    type: id,
+  })));
 }
 
 function contacts(): readonly unknown[] {
@@ -198,7 +242,7 @@ function privateStore(): string {
       id: "desktop",
       managed: false,
       name: "Desktop",
-      runtime: { install: "desktop", port: 23_373 },
+      runtime: { install: "desktop", port: 23_384 },
       type: "desktop",
     })}\n`,
     { mode: 0o600 },
@@ -206,7 +250,7 @@ function privateStore(): string {
   return path;
 }
 
-function auth(path: string): WrenchAuth {
+function auth(path: string): Extract<WrenchAuth, { readonly kind: "linked-device-store" }> {
   return {
     schemaVersion: 1,
     id: "beeper-fixture",
@@ -217,13 +261,13 @@ function auth(path: string): WrenchAuth {
   };
 }
 
-function recipe(action: string): WebSessionRecipe {
+function recipe(action: string): LocalCliRecipe {
   return {
-    site: "beeper",
+    surface: "beeper",
     action,
     contractVersion: 1,
     timeoutMs: 60_000,
-    maxOutputBytes: 32 * 1024 * 1024,
+    maxOutputBytes: 10 * 1024 * 1024,
   };
 }
 
@@ -233,6 +277,11 @@ function runner(
     readonly includeDirection?: boolean;
     readonly contactsData?: readonly unknown[];
     readonly chatsData?: readonly unknown[];
+    readonly chatReadData?: unknown;
+    readonly bridgesData?: readonly unknown[];
+    readonly contactReadData?: unknown;
+    readonly targetStatusData?: unknown;
+    readonly messageReadData?: unknown;
   } = {},
 ): (invocation: BeeperCliInvocation) => Promise<BeeperCliInvocationResult> {
   return async (invocation) => {
@@ -241,14 +290,28 @@ function runner(
     if (invocation.arguments[0] === "version") {
       return envelope({ name: "@beeper/cli", version: "0.6.2" });
     }
+    if (command === "targets status") {
+      return envelope(options.targetStatusData ?? targetStatus());
+    }
     if (command === "accounts list") return envelope(accounts());
-    if (command === "contacts list") {
+    if (command === "bridges list") return envelope(options.bridgesData ?? bridges());
+    if (command === "contacts list" || command === "contacts search") {
       return envelope(options.contactsData ?? contacts());
+    }
+    if (command === "contacts show") {
+      return envelope(options.contactReadData ?? {
+        accountID: NETWORK_ACCOUNT_ID,
+        contact: contacts()[0],
+      });
     }
     if (command === "chats list") return envelope(options.chatsData ?? chats());
     if (command === "chats search") return envelope(options.chatsData ?? chats());
+    if (command === "chats show") return envelope(options.chatReadData ?? chats()[0]);
     if (command === "messages list") {
       return envelope(messages(options.includeDirection ?? true));
+    }
+    if (command === "messages show") {
+      return envelope(options.messageReadData ?? messages()[0]);
     }
     throw new Error(`unexpected fixture command ${command}`);
   };
@@ -263,13 +326,16 @@ async function execute(
     readonly includeDirection?: boolean;
     readonly contactsData?: readonly unknown[];
     readonly chatsData?: readonly unknown[];
+    readonly chatReadData?: unknown;
+    readonly bridgesData?: readonly unknown[];
+    readonly contactReadData?: unknown;
+    readonly targetStatusData?: unknown;
+    readonly messageReadData?: unknown;
   } = {},
 ) {
   return executeBeeperLocalOperation(recipe(action), input, auth(path), {
     dependencies: {
       binaryPath: "/fixture/beeper-0.6.2",
-      createCacheDirectory: async () => join(path, "ephemeral-cache"),
-      removeCacheDirectory: async () => undefined,
       run: runner(calls, options),
     },
   });
@@ -288,7 +354,410 @@ describe("Beeper local read runtime", () => {
     expect(Object.keys(parsed[0] ?? {})).not.toContain("selectorAliases");
   });
 
+  test("proves the exact official Desktop target before authenticated account reads", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    try {
+      const result = await execute(path, "accounts.list", {}, calls);
+      expect(calls.map((call) => call.arguments.slice(0, 2).join(" "))).toEqual([
+        "version --read-only",
+        "targets status",
+        "accounts list",
+        "accounts list",
+      ]);
+      expect(calls[1]?.arguments).toEqual([
+        "targets",
+        "status",
+        "desktop",
+        "--read-only",
+        "--json",
+        "--full",
+        "--quiet",
+        "--target",
+        "desktop",
+        "--timeout",
+        "60s",
+      ]);
+      expect(JSON.stringify(result.output)).not.toContain("fixture-stored-access-token");
+
+      const rejectedCalls: BeeperCliInvocation[] = [];
+      await expect(execute(path, "accounts.list", {}, rejectedCalls, {
+        targetStatusData: targetStatus({ bundleID: "com.example.lookalike.desktop" }),
+      })).rejects.toThrow("failed at a protected local boundary");
+      expect(rejectedCalls.some((call) => call.arguments[0] === "accounts")).toBeFalse();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("reconciles a present exact outgoing pending send as provider-accepted", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    const pendingMessageId = "pending-message-fixture";
+    const finalMessage = {
+      ...(messages()[0] as Record<string, unknown>),
+      id: "provider-final-message-fixture",
+      isSender: true,
+      sendStatus: {
+        status: "PENDING",
+        timestamp: "2026-08-21T14:00:01.000Z",
+      },
+    };
+    try {
+      const result = await reconcileBeeperLocalOperation(
+        "messaging.send",
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          kind: "text",
+          text: "one synthetic outgoing message",
+        },
+        auth(path),
+        {
+          schemaVersion: 1,
+          kind: "provider-accepted-target-presence",
+          dispatch: { id: "send-1", index: 1, planned: 1 },
+          target: {
+            schemaVersion: 1,
+            identifier: canonicalJson({
+              accountId: NETWORK_ACCOUNT_ID,
+              conversationId: CHAT_ID,
+              pendingMessageId,
+            }),
+          },
+        },
+        {
+          dependencies: {
+            binaryPath: "/fixture/beeper-0.6.2",
+            run: runner(calls, { messageReadData: finalMessage }),
+          },
+        },
+      );
+      expect(result.actualState).toBeTrue();
+      expect(calls.some((call) => call.arguments.includes(pendingMessageId))).toBeTrue();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("returns an exact partial result when bounded presence is cancelled between dispatches", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    const controller = new AbortController();
+    const deadline = new OperationDeadline(60_000, { signal: controller.signal });
+    try {
+      const result = await executeBeeperLocalOperation(
+        recipe("presence.set"),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          state: "typing",
+          duration_seconds: 1,
+        },
+        auth(path),
+        {
+          operationDeadline: deadline,
+          afterDispatchVerified: async () => {
+            controller.abort();
+          },
+          dependencies: {
+            binaryPath: "/fixture/beeper-0.6.2",
+            run: async (invocation) => {
+              calls.push(invocation);
+              const command = invocation.arguments.slice(0, 2).join(" ");
+              if (invocation.arguments[0] === "version") {
+                return envelope({ name: "@beeper/cli", version: "0.6.2" });
+              }
+              if (command === "targets status") return envelope(targetStatus());
+              if (command === "accounts list") return envelope(accounts());
+              if (command === "chats show") return envelope(chats()[0]);
+              if (invocation.arguments[0] === "presence") {
+                await invocation.beforeSpawn?.();
+                return envelope({
+                  message: "Sent typing indicator",
+                  chatID: CHAT_ID,
+                  state: "typing",
+                });
+              }
+              throw new Error(`unexpected fixture command ${command}`);
+            },
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "partial",
+        dispatchStarted: true,
+        dispatch: { planned: 2, started: 1, verified: 1 },
+      });
+      expect(calls.filter((call) => call.arguments[0] === "presence")).toHaveLength(1);
+      expect(calls.some((call) => call.arguments.includes("paused"))).toBeFalse();
+    } finally {
+      deadline.dispose();
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects exact read-only chats before a messaging dispatch", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    try {
+      await expect(executeBeeperLocalOperation(
+        recipe("presence.set"),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          state: "typing",
+        },
+        auth(path),
+        {
+          dependencies: {
+            binaryPath: "/fixture/beeper-0.6.2",
+            run: runner(calls, {
+              chatReadData: { ...(chats()[0] as Record<string, unknown>), isReadOnly: true },
+            }),
+          },
+        },
+      )).rejects.toThrow("execution failed at a protected local boundary");
+      expect(calls.some((call) => call.arguments[0] === "presence")).toBeFalse();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an exact non-messageable start contact before dispatch", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    const contactId = "@ada:beeper.local";
+    try {
+      await expect(executeBeeperLocalOperation(
+        recipe("conversations.start"),
+        { account_id: NETWORK_ACCOUNT_ID, user_id: contactId },
+        auth(path),
+        {
+          dependencies: {
+            binaryPath: "/fixture/beeper-0.6.2",
+            run: runner(calls, {
+              contactReadData: {
+                accountID: NETWORK_ACCOUNT_ID,
+                contact: {
+                  accountID: NETWORK_ACCOUNT_ID,
+                  cannotMessage: true,
+                  fullName: "Ada Fixture",
+                  id: contactId,
+                },
+              },
+            }),
+          },
+        },
+      )).rejects.toThrow("execution failed at a protected local boundary");
+      expect(calls.some((call) =>
+        call.arguments[0] === "chats" && call.arguments[1] === "start"
+      )).toBeFalse();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("slices a complete bounded bridge catalog without pretending the projection is complete", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    try {
+      const result = await execute(path, "bridges.list", { limit: 1 }, calls);
+      const output = result.output as Readonly<{
+        bridges: readonly Readonly<{ id: string }>[];
+        completeness: Readonly<{
+          providerCatalogComplete: boolean;
+          projectedCatalogComplete: boolean;
+          requestedLimitReached: boolean;
+          truncated: boolean;
+        }>;
+      }>;
+      expect(output.bridges.map((bridge) => bridge.id)).toEqual(["signal"]);
+      expect(output.completeness).toEqual({
+        providerCatalogComplete: true,
+        projectedCatalogComplete: false,
+        requestedLimitReached: true,
+        truncated: true,
+      });
+      expect(calls.filter((call) => call.arguments.slice(0, 2).join(" ") === "bridges list"))
+        .toHaveLength(1);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects valid bridge and chat rows that contradict exact requested filters", async () => {
+    const path = privateStore();
+    try {
+      await expect(execute(path, "bridges.list", {
+        provider: "self-hosted",
+        limit: 10,
+      }, [], { bridgesData: bridges() })).rejects.toThrow(
+        "failed at a protected local boundary",
+      );
+      await expect(execute(path, "messaging.list", {
+        account_id: NETWORK_ACCOUNT_ID,
+        archived: true,
+        limit: 10,
+      }, [], { chatsData: chats() })).rejects.toThrow(
+        "failed at a protected local boundary",
+      );
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("binds contacts.read directly to the strict account and contact returned by contacts show", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    const contactId = "signal:outside-first-200";
+    try {
+      const result = await execute(path, "contacts.read", {
+        account_id: NETWORK_ACCOUNT_ID,
+        contact_id: contactId,
+      }, calls, {
+        contactReadData: {
+          accountID: NETWORK_ACCOUNT_ID,
+          contact: { id: contactId, fullName: "Outside Window" },
+        },
+      });
+      expect((result.output as { contact: { id: string } }).contact.id).toBe(contactId);
+      expect(calls.some((call) => call.arguments.slice(0, 2).join(" ") === "contacts list"))
+        .toBeFalse();
+      expect(calls.filter((call) => call.arguments.slice(0, 2).join(" ") === "contacts show"))
+        .toHaveLength(1);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("treats an omitted reminder dismissal flag as pinned default false", () => {
+    const parsedAccounts = parseBeeperExportAccounts(accounts());
+    const chat = parseBeeperExportConversation({
+      ...(chats()[0] as Record<string, unknown>),
+      reminder: { remindAt: "2026-09-01T12:00:00.000Z" },
+    }, parsedAccounts);
+    expect(beeperDesiredChatStateForTest("conversations.reminder.set", {
+      when: "2026-09-01T12:00:00.000Z",
+      dismissOnMessage: false,
+    }, chat)).toBeTrue();
+    expect(beeperDesiredChatStateForTest("conversations.reminder.set", {
+      when: "2026-09-01T12:00:00.000Z",
+      dismissOnMessage: true,
+    }, chat)).toBeFalse();
+  });
+
+  test("normalizes omitted pinned Chat state booleans as false desired-state evidence", () => {
+    const chat = parseBeeperExportConversation(
+      chats()[0],
+      parseBeeperExportAccounts(accounts()),
+    );
+    for (const action of [
+      "conversations.archive.set",
+      "conversations.pin.set",
+      "conversations.mute.set",
+    ] as const) {
+      expect(beeperDesiredChatStateForTest(action, { enabled: false }, chat)).toBeTrue();
+      expect(beeperDesiredChatStateForTest(action, { enabled: true }, chat)).toBeFalse();
+    }
+    expect(beeperDesiredChatStateForTest(
+      "conversations.priority.set",
+      { level: "inbox" },
+      chat,
+    )).toBeTrue();
+  });
+
+  test("rejects lossy opaque IDs and non-data bounded JSON arrays", () => {
+    expect(() => parseBeeperOperationInput("contacts.read", {
+      account_id: NETWORK_ACCOUNT_ID,
+      contact_id: "signal:\ud800",
+    })).toThrow("well-formed opaque text");
+    for (const [action, input] of [
+      ["contacts.search", { query: "query-\ud800" }],
+      ["messaging.search", { query: "query-\ud800" }],
+      ["messaging.content.search", { query: "query-\ud800" }],
+    ] as const) {
+      expect(() => parseBeeperOperationInput(action, input))
+        .toThrow("nonempty normalized non-flag text");
+    }
+    const base = accounts()[0] as Record<string, unknown>;
+    const accessor: unknown[] = [null];
+    Object.defineProperty(accessor, "0", { enumerable: true, get: () => "secret" });
+    const withSymbol: unknown[] = [null];
+    Object.defineProperty(withSymbol, Symbol("secret"), { value: true });
+    const sparse = new Array(1);
+    for (const capabilities of [accessor, withSymbol, sparse]) {
+      expect(() => parseBeeperExportAccounts([{ ...base, capabilities }]))
+        .toThrow();
+    }
+  });
+
+  test("copies only stable confirmed file bytes into one read-only private snapshot", async () => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "wrench-beeper-file-copy.")));
+    const bytes = Buffer.from("confirmed plan-bound bytes\n", "utf8");
+    const expected = Object.freeze({
+      bytes: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    const makeCase = (name: string) => {
+      const root = join(parent, name);
+      mkdirSync(root, { mode: 0o700 });
+      const source = join(parent, `${name}.txt`);
+      writeFileSync(source, bytes, { mode: 0o600 });
+      return { root, source };
+    };
+    try {
+      const stable = makeCase("stable");
+      const copied = await materializeBeeperPlanBoundFileForTest(
+        stable.source,
+        stable.root,
+        expected,
+      );
+      expect(readFileSync(copied)).toEqual(bytes);
+      expect(statSync(copied).mode & 0o777).toBe(0o400);
+      expect(copied.startsWith(`${stable.root}/`)).toBeTrue();
+
+      const replaced = makeCase("replaced");
+      await expect(materializeBeeperPlanBoundFileForTest(
+        replaced.source,
+        replaced.root,
+        expected,
+        async () => {
+          renameSync(replaced.source, `${replaced.source}.original`);
+          writeFileSync(replaced.source, bytes, { mode: 0o600 });
+        },
+      )).rejects.toThrow("changed while its private snapshot was created");
+
+      const mutated = makeCase("mutated");
+      await expect(materializeBeeperPlanBoundFileForTest(
+        mutated.source,
+        mutated.root,
+        expected,
+        async () => {
+          writeFileSync(mutated.source, "mutated after open\n", { mode: 0o600 });
+        },
+      )).rejects.toThrow();
+
+      const linkedRoot = join(parent, "linked");
+      mkdirSync(linkedRoot, { mode: 0o700 });
+      const linkedSource = join(parent, "linked.txt");
+      symlinkSync(stable.source, linkedSource);
+      await expect(materializeBeeperPlanBoundFileForTest(
+        linkedSource,
+        linkedRoot,
+        expected,
+      )).rejects.toThrow();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   test("plans only fixed read commands with command paths before Oclif global flags", () => {
+    expect(planBeeperVersionCommand()).toEqual({
+      action: "version",
+      argv: ["version", "--read-only", "--json", "--quiet"],
+      mutation: false,
+    });
     expect(planBeeperAccountsListCommand(1_500).argv).toEqual([
       "accounts",
       "list",
@@ -330,13 +799,10 @@ describe("Beeper local read runtime", () => {
     expect(planBeeperReadCommand("contacts.search", contactInput, 60_000).argv)
       .toEqual([
         "contacts",
-        "list",
-        "--query",
+        "search",
         "Åda Fixture",
         "--account",
         NETWORK_ACCOUNT_ID,
-        "--limit",
-        "7",
         "--read-only",
         "--json",
         "--full",
@@ -362,9 +828,9 @@ describe("Beeper local read runtime", () => {
       "20",
     ]);
     expect(() => parseBeeperContactsSearchInput({ query: "  " }))
-      .toThrow("nonempty normalized text");
+      .toThrow("nonempty normalized non-flag text");
     expect(() => parseBeeperContactsSearchInput({ query: "Ada\nFixture" }))
-      .toThrow("nonempty normalized text");
+      .toThrow("nonempty normalized non-flag text");
     expect(() => parseBeeperContactsSearchInput({ query: "é".repeat(129) }))
       .toThrow("at most 256 UTF-8 bytes");
     expect(() => parseBeeperMessagingSearchInput({
@@ -375,6 +841,15 @@ describe("Beeper local read runtime", () => {
       query: "Ada",
       raw_endpoint: "/private",
     })).toThrow("unsupported fields");
+  });
+
+  test("rejects an empty group description before planning a mutation", () => {
+    expect(() => parseBeeperOperationInput("conversations.description.set", {
+      account_id: NETWORK_ACCOUNT_ID,
+      conversation_id: CHAT_ID,
+      clear: false,
+      description: "",
+    })).toThrow("description must be nonempty bounded text");
   });
 
   test("plans the official export without an account or diagnostic surface", () => {
@@ -405,7 +880,7 @@ describe("Beeper local read runtime", () => {
       outputDirectory: "/private/export/account-2",
       limitChats: 100_000,
       limitMessages: 1_000_000,
-      maxParticipants: 500,
+      maxParticipants: 2_000,
     }, 3_600_001);
     expect(hardBounded).not.toContain("--account");
     expect(hardBounded).not.toContain("--events");
@@ -419,7 +894,7 @@ describe("Beeper local read runtime", () => {
       "/private/export/account-2",
       "--no-attachments",
       "--max-participants",
-      "500",
+      "2000",
       "--limit-chats",
       "100000",
       "--limit-messages",
@@ -431,6 +906,12 @@ describe("Beeper local read runtime", () => {
       "--timeout",
       "3601s",
     ]);
+    expect(() => planBeeperMessageLikeMeExportCommand({
+      outputDirectory: "/private/export/account-3",
+      limitChats: 1,
+      limitMessages: 1,
+      maxParticipants: 2_001,
+    }, 1_000)).toThrow("integer from 1 through 2000");
   });
 
   test("executes contacts, chats, and messages through strict synthetic JSON", async () => {
@@ -537,7 +1018,7 @@ describe("Beeper local read runtime", () => {
         }],
       });
 
-      expect(calls).toHaveLength(9);
+      expect(calls).toHaveLength(12);
       for (const invocation of calls) {
         expect(invocation.environment.BEEPER_READONLY).toBe("1");
         expect(invocation.environment.BEEPER_DESKTOP_BASE_URL).toBeUndefined();
@@ -649,9 +1130,11 @@ describe("Beeper local read runtime", () => {
       expect(calls.map((call) => call.arguments.slice(0, 2).join(" ")))
         .toEqual([
           "version --read-only",
+          "targets status",
           "accounts list",
-          "contacts list",
+          "contacts search",
           "version --read-only",
+          "targets status",
           "accounts list",
           "chats search",
         ]);
@@ -685,28 +1168,33 @@ describe("Beeper local read runtime", () => {
         { account_id: NETWORK_ACCOUNT_ID, limit: 1 },
         [],
         { contactsData: repeatedContacts },
-      )).rejects.toThrow("exceeded the requested result bound");
-      await expect(execute(
+      )).rejects.toThrow("failed at a protected local boundary");
+      const contactSearch = await execute(
         path,
         "contacts.search",
         { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 1 },
         [],
         { contactsData: repeatedContacts },
-      )).rejects.toThrow("search exceeded the requested result bound");
+      );
+      expect((contactSearch.output as { contacts: readonly unknown[] }).contacts)
+        .toHaveLength(1);
+      expect((contactSearch.output as {
+        completeness: { requestedLimitReached: boolean };
+      }).completeness.requestedLimitReached).toBeTrue();
       await expect(execute(
         path,
         "messaging.list",
         { account_id: NETWORK_ACCOUNT_ID, limit: 1 },
         [],
         { chatsData: repeatedChats },
-      )).rejects.toThrow("exceeded the requested result bound");
+      )).rejects.toThrow("failed at a protected local boundary");
       await expect(execute(
         path,
         "messaging.search",
         { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 1 },
         [],
         { chatsData: repeatedChats },
-      )).rejects.toThrow("search exceeded the requested result bound");
+      )).rejects.toThrow("failed at a protected local boundary");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
@@ -725,14 +1213,14 @@ describe("Beeper local read runtime", () => {
         { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
         [],
         { contactsData: [{ ...contact, id: "signal:\ud800" }] },
-      )).rejects.toThrow("must contain well-formed Unicode");
+      )).rejects.toThrow("failed at a protected local boundary");
       await expect(execute(
         path,
         "contacts.search",
         { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
         [],
         { contactsData: [{ ...contact, id: "signal:\nada" }] },
-      )).rejects.toThrow("must not contain control characters");
+      )).rejects.toThrow("failed at a protected local boundary");
       await expect(execute(
         path,
         "messaging.search",
@@ -744,7 +1232,7 @@ describe("Beeper local read runtime", () => {
             participants: { ...participants, total: 3, hasMore: false },
           }],
         },
-      )).rejects.toThrow("completeness evidence is inconsistent");
+      )).rejects.toThrow("failed at a protected local boundary");
       await expect(execute(
         path,
         "messaging.search",
@@ -759,7 +1247,7 @@ describe("Beeper local read runtime", () => {
             },
           }],
         },
-      )).rejects.toThrow("repeated a stable user ID");
+      )).rejects.toThrow("failed at a protected local boundary");
       await expect(execute(
         path,
         "messaging.search",
@@ -774,7 +1262,7 @@ describe("Beeper local read runtime", () => {
             },
           }],
         },
-      )).rejects.toThrow("ambiguous self ownership");
+      )).rejects.toThrow("failed at a protected local boundary");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
@@ -825,14 +1313,14 @@ describe("Beeper local read runtime", () => {
         { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
         [],
         { chatsData: [{ ...chat, capabilities: { unreviewed: true } }] },
-      )).rejects.toThrow("contains unreviewed property unreviewed");
+      )).rejects.toThrow("failed at a protected local boundary");
       await expect(execute(
         path,
         "messaging.search",
         { account_id: NETWORK_ACCOUNT_ID, query: "Fixture", limit: 2 },
         [],
         { chatsData: [{ ...chat, preview: { ...preview, unreviewed: true } }] },
-      )).rejects.toThrow("contains unreviewed property unreviewed");
+      )).rejects.toThrow("failed at a protected local boundary");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
@@ -862,7 +1350,7 @@ describe("Beeper local read runtime", () => {
       );
 
       for (const result of [contactsResult, listResult, readResult]) {
-        expect(boundedJsonOutput(result.output, 32 * 1024 * 1024))
+        expect(boundedJsonOutput(result.output, 10 * 1024 * 1024))
           .toEqual(result.output);
       }
       for (const result of [contactsResult, listResult]) {
@@ -884,16 +1372,24 @@ describe("Beeper local read runtime", () => {
     }
   });
 
-  test("rejects message drift when style-critical isSender is absent", async () => {
+  test("projects an omitted optional isSender field as unknown direction", async () => {
     const path = privateStore();
     try {
-      await expect(execute(
+      const result = await execute(
         path,
         "messaging.read",
         { account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, limit: 2 },
         [],
         { includeDirection: false },
-      )).rejects.toThrow("isSender is required");
+      );
+      const omni = materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        limit: 2,
+      }, result.output);
+      expect(omni.entities[0]?.kind).toBe("message");
+      expect(omni.entities[0]?.kind === "message" && omni.entities[0].direction)
+        .toBe("unknown");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
@@ -1033,14 +1529,15 @@ describe("Beeper local read runtime", () => {
       const subject = await probeBeeperLocalSubject(auth(path), {
         dependencies: {
           binaryPath: "/fixture/beeper-0.6.2",
-          createCacheDirectory: async () => join(path, "fresh-payload-cache"),
-          removeCacheDirectory: async () => undefined,
           run: async (invocation) => {
             calls.push(invocation);
             if (invocation.arguments[0] === "version") {
               expect(invocation.timeoutMs).toBeGreaterThan(5_000);
               await new Promise((resolve) => setTimeout(resolve, 10));
               return envelope({ name: "@beeper/cli", version: "0.6.2" });
+            }
+            if (invocation.arguments.slice(0, 2).join(" ") === "targets status") {
+              return envelope(targetStatus());
             }
             if (invocation.arguments.slice(0, 2).join(" ") === "accounts list") {
               return envelope(accounts());
@@ -1052,6 +1549,7 @@ describe("Beeper local read runtime", () => {
       expect(subject).toBe(SUBJECT);
       expect(calls.map((call) => call.arguments[0])).toEqual([
         "version",
+        "targets",
         "accounts",
       ]);
     } finally {
@@ -1119,6 +1617,104 @@ describe("Beeper local read runtime", () => {
     }
   });
 
+  test("requires a durable private-root publisher when a cleanup registrar is present", async () => {
+    const path = privateStore();
+    let created = false;
+    let barrier: Promise<void> | undefined;
+    try {
+      await expect(executeBeeperLocalOperation(recipe("accounts.list"), {}, auth(path), {
+        registerCleanupBarrier: (value) => {
+          barrier = value;
+        },
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createCacheDirectory: async () => {
+            created = true;
+            return join(path, "must-not-exist");
+          },
+          run: runner([]),
+        },
+      })).rejects.toThrow("cleanup could not be proven");
+      expect(created).toBeFalse();
+      await expect(barrier!).rejects.toThrow("cleanup could not be proven");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves a successful result while durable admission retains unsafe cleanup", async () => {
+    const path = privateStore();
+    const operationRoot = join(
+      realpathSync(tmpdir()),
+      `wrench-beeper-cli-cleanup-proof-${process.pid}-${Date.now().toString(36)}`,
+    );
+    let barrier: Promise<void> | undefined;
+    let published = 0;
+    try {
+      const result = await executeBeeperLocalOperation(recipe("accounts.list"), {}, auth(path), {
+        registerCleanupBarrier: (value) => {
+          barrier = value;
+          return () => {
+            published += 1;
+          };
+        },
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createCacheDirectory: async () => operationRoot,
+          removeCacheDirectory: async () => {
+            throw new Error("fixture cleanup failure with a private path");
+          },
+          run: runner([]),
+        },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(published).toBe(1);
+      await expect(barrier!).rejects.toThrow("cleanup could not be proven");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+      rmSync(operationRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("fulfills durable cleanup after an ordinary provider failure", async () => {
+    const path = privateStore();
+    const operationRoot = join(
+      realpathSync(tmpdir()),
+      `wrench-beeper-cli-cleanup-ordinary-${process.pid}-${Date.now().toString(36)}`,
+    );
+    let barrier: Promise<void> | undefined;
+    let published = 0;
+    try {
+      await expect(executeBeeperLocalOperation(recipe("accounts.list"), {}, auth(path), {
+        registerCleanupBarrier: (value) => {
+          barrier = value;
+          return () => {
+            published += 1;
+          };
+        },
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          createCacheDirectory: async () => operationRoot,
+          run: async (invocation) => {
+            if (invocation.arguments[0] === "version") {
+              return envelope({ name: "@beeper/cli", version: "0.6.2" });
+            }
+            if (invocation.arguments.slice(0, 2).join(" ") === "targets status") {
+              return envelope(targetStatus());
+            }
+            throw new Error("ordinary fixture provider failure");
+          },
+        },
+      })).rejects.toThrow("execution failed at a protected local boundary");
+      expect(published).toBe(1);
+      await expect(barrier!).resolves.toBeUndefined();
+      expect(existsSync(operationRoot)).toBeFalse();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+      rmSync(operationRoot, { recursive: true, force: true });
+    }
+  });
+
   test("does not disclose a rejected config-store path in diagnostics", async () => {
     const parent = realpathSync(mkdtempSync(join(tmpdir(), "wrench-beeper-private-path.")));
     const missing = join(parent, "sensitive-account-store-name");
@@ -1128,6 +1724,23 @@ describe("Beeper local read runtime", () => {
       );
       try {
         await validateBeeperCliStore(missing);
+      } catch (error) {
+        expect(String(error)).not.toContain(missing);
+        expect(String(error)).not.toContain("sensitive-account-store-name");
+      }
+      await expect(probeBeeperLocalSubject({ ...auth(missing), path: missing }, {
+        dependencies: {
+          binaryPath: "/fixture/beeper-0.6.2",
+          run: runner([]),
+        },
+      })).rejects.toThrow("subject probe failed at a protected local boundary");
+      try {
+        await probeBeeperLocalSubject({ ...auth(missing), path: missing }, {
+          dependencies: {
+            binaryPath: "/fixture/beeper-0.6.2",
+            run: runner([]),
+          },
+        });
       } catch (error) {
         expect(String(error)).not.toContain(missing);
         expect(String(error)).not.toContain("sensitive-account-store-name");

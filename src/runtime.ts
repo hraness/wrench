@@ -29,6 +29,7 @@ import {
   canonicalJson,
   DOM_ACTION_TRANSPORT_DISABLED_MESSAGE,
   expandBrowserRecipe,
+  isLocalCliOperation,
   isProviderOperation,
   isReviewedTemplateOperation,
   isWebSessionOperation,
@@ -45,6 +46,20 @@ import {
   type OperationRisk,
   type WrenchManifest,
 } from "./model";
+import {
+  getLocalCliContract,
+  localCliContractHash,
+  localCliContractIdentity,
+  parseLocalCliContractIdentityV1,
+  type LocalCliContractIdentityV1,
+} from "./local-cli-contracts";
+import type {
+  LocalCliDispatchEvent,
+  LocalCliExecutionOptions,
+  LocalCliOperationExecutor,
+} from "./local-cli-execution";
+import { runLocalCliOperationWithDeadline } from "./local-cli-execution";
+import { localCliToolArtifactForCurrentRuntime } from "./local-cli-tool-identity";
 import {
   getProviderContract,
   providerContractHash,
@@ -175,6 +190,7 @@ function assertPreparedInvocationBrowserPolicy(invocation: PreparedInvocation): 
     !isProviderOperation(operation)
     && !isWebSessionOperation(operation)
     && !isReviewedTemplateOperation(operation)
+    && !isLocalCliOperation(operation)
   ) {
     throw new Error(DOM_ACTION_TRANSPORT_DISABLED_MESSAGE);
   }
@@ -268,6 +284,11 @@ export type InvocationPlan = InvocationPlanCommon & (
       readonly transport: "portable-provider-plugin";
       readonly portablePluginContract: PortableOperationIdentityV1;
     }
+  | {
+      readonly schemaVersion: 7;
+      readonly transport: "local-cli";
+      readonly localCliContract: LocalCliContractIdentityV1;
+    }
 );
 
 export type StoredPlan = {
@@ -321,6 +342,11 @@ export type RunReceipt = RunReceiptCommon & (
       readonly transport: "portable-provider-plugin";
       readonly portablePluginContract: PortableOperationIdentityV1;
     }
+  | {
+      readonly schemaVersion: 7;
+      readonly transport: "local-cli";
+      readonly localCliContract: LocalCliContractIdentityV1;
+    }
 );
 
 export type PreparedInvocation = {
@@ -359,6 +385,14 @@ function resolveCodeOwnedPluginOperation(
       operation.webSession.contractVersion,
     );
   }
+  if (isLocalCliOperation(operation)) {
+    return registry.requireOperationDefinition(
+      "local-cli",
+      operation.localCli.surface,
+      operation.localCli.action,
+      operation.localCli.contractVersion,
+    );
+  }
   return null;
 }
 
@@ -369,7 +403,11 @@ function resolvedWebSessionAuthenticationPolicy(
   resolution: ProviderPluginOperationResolutionV1 | null,
 ): WebSessionAuthenticationPolicy {
   if (!isWebSessionOperation(operation)) return Object.freeze({ kind: "required" });
-  if (resolution === null || resolution.binding.transport === "provider-api") {
+  if (
+    resolution === null
+    || resolution.binding.transport === "provider-api"
+    || resolution.binding.transport === "local-cli"
+  ) {
     throw new Error("authenticated session operation resolved to the wrong plugin transport");
   }
   return webSessionAuthenticationPolicy({
@@ -467,7 +505,11 @@ function assertInvocationTransport(
     const conditionalIssues = resolution.operation.validateInput(input);
     if (conditionalIssues.length > 0) throw new Error(conditionalIssues.join("; "));
   } else if (isWebSessionOperation(operation)) {
-    if (resolution === null || resolution.binding.transport === "provider-api") {
+    if (
+      resolution === null
+      || resolution.binding.transport === "provider-api"
+      || resolution.binding.transport === "local-cli"
+    ) {
       throw new Error("authenticated session operation resolved to the wrong plugin transport");
     }
     if (authenticationPolicy.kind === "public") {
@@ -505,6 +547,35 @@ function assertInvocationTransport(
     }
     if (contract.state !== "observed") {
       throw new Error(`${operation.webSession.site} ${operation.webSession.action} is capture-required: ${contract.implementation}`);
+    }
+    const inputIssues = resolution.operation.validateInput(input);
+    if (inputIssues.length > 0) throw new Error(inputIssues.join("; "));
+  } else if (isLocalCliOperation(operation)) {
+    const auth = persistedAuthAuthority(authority);
+    if (resolution === null || resolution.binding.transport !== "local-cli") {
+      throw new Error("local CLI operation resolved to the wrong plugin transport");
+    }
+    requireProviderPluginAuth(resolution.binding, auth);
+    const contract = getLocalCliContract(operation.localCli, registry);
+    if (
+      contract.surface !== operation.localCli.surface
+      || resolution.operation.name !== operationId
+      || contract.operation !== resolution.operation.name
+      || contract.risk !== operation.risk
+      || contract.sideEffect !== operation.sideEffect
+      || contract.idempotency !== operation.idempotency
+      || contract.dedupeWindowMs !== operation.dedupeWindowMs
+      || canonicalJson(contract.input) !== canonicalJson(operation.input)
+      || canonicalJson(contract.tool) !== canonicalJson(resolution.binding.tool)
+    ) {
+      throw new Error(
+        `local CLI contract semantics changed for ${operation.localCli.surface}/${operationId}`,
+      );
+    }
+    if (contract.state !== "observed") {
+      throw new Error(
+        `${operation.localCli.surface} ${operation.localCli.action} is capture-required: ${contract.implementation}`,
+      );
     }
     const inputIssues = resolution.operation.validateInput(input);
     if (inputIssues.length > 0) throw new Error(inputIssues.join("; "));
@@ -1222,6 +1293,15 @@ export function createReadProjectionQueryForInvocation(
               registry,
             ),
           }
+        : isLocalCliOperation(operation)
+          ? {
+              transport: "local-cli" as const,
+              hash: localCliContractHash(
+                getLocalCliContract(operation.localCli, registry),
+                registry,
+              ),
+              tool: getLocalCliContract(operation.localCli, registry).tool,
+            }
         : isReviewedTemplateOperation(operation)
           ? {
               transport: "reviewed-template-api" as const,
@@ -1347,6 +1427,16 @@ export function createInvocationPlan(
             ),
           },
           }
+        : isLocalCliOperation(operation)
+          ? {
+            ...common,
+            schemaVersion: 7,
+            transport: "local-cli",
+            localCliContract: localCliContractIdentity(
+              operation.localCli,
+              registry,
+            ),
+          }
         : isReviewedTemplateOperation(operation)
           ? {
             ...common,
@@ -1389,6 +1479,12 @@ function planRecoveryContract(plan: InvocationPlan): RecoveryContractIdentity {
       hash: plan.webSessionContract.hash,
     };
   }
+  if (plan.transport === "local-cli") {
+    return {
+      transport: "local-cli",
+      identity: plan.localCliContract,
+    };
+  }
   if (plan.transport === "reviewed-template-api") {
     return {
       transport: "reviewed-template-api",
@@ -1405,6 +1501,8 @@ function planRunJournalContract(plan: InvocationPlan): RunJournal["contract"] {
   const contract = planRecoveryContract(plan);
   return contract.transport === "portable-provider-plugin"
     ? contract
+    : contract.transport === "local-cli"
+      ? contract
     : { transport: contract.transport, hash: contract.hash };
 }
 
@@ -1886,11 +1984,13 @@ function parseStoredPlan(value: unknown): StoredPlan {
   const webSessionPlan = raw.schemaVersion === 4;
   const reviewedTemplatePlan = raw.schemaVersion === 5;
   const portablePluginPlan = raw.schemaVersion === 6;
+  const localCliPlan = raw.schemaVersion === 7;
   const planKeys = ["schemaVersion", "id", "createdAt", "expiresAt", "adapter", "operation", "risk", "sideEffect", "input", "inputHash", "dispatches", "auth", "transport"];
   if (providerPlan) planKeys.push("providerContract");
   if (webSessionPlan) planKeys.push("webSessionContract");
   if (reviewedTemplatePlan) planKeys.push("reviewedTemplateContract");
   if (portablePluginPlan) planKeys.push("portablePluginContract");
+  if (localCliPlan) planKeys.push("localCliContract");
   if (Object.hasOwn(raw, "duplicateRisk")) planKeys.push("duplicateRisk");
   if (!hasExactKeys(raw, planKeys)) {
     throw new Error("stored plan is malformed");
@@ -1903,6 +2003,7 @@ function parseStoredPlan(value: unknown): StoredPlan {
       && raw.schemaVersion !== 4
       && raw.schemaVersion !== 5
       && raw.schemaVersion !== 6
+      && raw.schemaVersion !== 7
     )
     || typeof id !== "string"
     || !/^[0-9a-f-]{36}$/u.test(id)
@@ -1926,7 +2027,9 @@ function parseStoredPlan(value: unknown): StoredPlan {
           ? transport !== "web-session-api"
           : raw.schemaVersion === 5
             ? transport !== "reviewed-template-api"
-            : transport !== "portable-provider-plugin")
+            : raw.schemaVersion === 6
+              ? transport !== "portable-provider-plugin"
+              : transport !== "local-cli")
     || !isRecord(raw.adapter)
     || !isRecord(raw.auth)
     || !isRecord(raw.input)
@@ -1954,6 +2057,7 @@ function parseStoredPlan(value: unknown): StoredPlan {
   let webSessionContract: Extract<InvocationPlan, { readonly schemaVersion: 4 }>["webSessionContract"] | null = null;
   let reviewedTemplateContract: Extract<InvocationPlan, { readonly schemaVersion: 5 }>["reviewedTemplateContract"] | null = null;
   let portablePluginContract: PortableOperationIdentityV1 | null = null;
+  let localCliContract: LocalCliContractIdentityV1 | null = null;
   if (providerPlan) {
     const candidate = raw.providerContract;
     if (
@@ -2020,6 +2124,12 @@ function parseStoredPlan(value: unknown): StoredPlan {
       );
     }
   }
+  if (localCliPlan) {
+    localCliContract = parseLocalCliContractIdentityV1(raw.localCliContract);
+    if (localCliContract.action !== operation) {
+      throw new Error("stored local CLI contract does not match its plan route");
+    }
+  }
   const input = parsePlanInput(raw.input);
   if (raw.dispatches.length > 25) throw new Error("stored plan dispatch schedule is malformed");
   if ((risk === "R2" || risk === "R3") && raw.dispatches.length < 1) {
@@ -2070,7 +2180,14 @@ function parseStoredPlan(value: unknown): StoredPlan {
     throw new Error("stored duplicate-risk plan is outside the supported v1 scope");
   }
   const plan: InvocationPlan =
-    portablePluginPlan && portablePluginContract !== null
+    localCliPlan && localCliContract !== null
+      ? {
+          ...common,
+          schemaVersion: 7,
+          transport: "local-cli",
+          localCliContract,
+        }
+    : portablePluginPlan && portablePluginContract !== null
       ? {
           ...common,
           schemaVersion: 6,
@@ -2386,6 +2503,14 @@ function validateFreshPlan(
       || plan.webSessionContract.version !== operation.webSession.contractVersion
       || plan.webSessionContract.hash !== webSessionContractHash(contract, registry)
     ) throw new Error("authenticated web contract changed after preview; preview the action again");
+  } else if (isLocalCliOperation(operation)) {
+    if (plan.schemaVersion !== 7 || plan.transport !== "local-cli") {
+      throw new Error("operation transport changed after preview; preview the action again");
+    }
+    const currentIdentity = localCliContractIdentity(operation.localCli, registry);
+    if (canonicalJson(plan.localCliContract) !== canonicalJson(currentIdentity)) {
+      throw new Error("local CLI tool or contract changed after preview; preview the action again");
+    }
   } else if (isReviewedTemplateOperation(operation)) {
     if (plan.schemaVersion !== 5 || plan.transport !== "reviewed-template-api") {
       throw new Error("operation transport changed after preview; preview the action again");
@@ -2669,6 +2794,14 @@ function runJournalReceipt(journal: RunJournal): RunReceipt {
       schemaVersion: 6,
       transport: "portable-provider-plugin",
       portablePluginContract: journal.contract.identity,
+    };
+  }
+  if (journal.contract.transport === "local-cli") {
+    return {
+      ...common,
+      schemaVersion: 7,
+      transport: "local-cli",
+      localCliContract: journal.contract.identity,
     };
   }
   if (journal.contract.transport === "provider-api") {
@@ -3358,6 +3491,7 @@ function executionOutputLimit(
 ): number {
   if (isProviderOperation(operation)) return operation.provider.maxOutputBytes;
   if (isWebSessionOperation(operation)) return operation.webSession.maxOutputBytes;
+  if (isLocalCliOperation(operation)) return operation.localCli.maxOutputBytes;
   if (isReviewedTemplateOperation(operation)) {
     if (operation.reviewedTemplate.state !== "reviewed") {
       throw new Error("capture-required reviewed templates have no output bound");
@@ -3381,7 +3515,12 @@ function boundedThrownExecutorReason(error: unknown): string {
 
 function boundedExecutionResult(
   value: unknown,
-  kind: "browser" | "provider" | "web-session" | "reviewed-template",
+  kind:
+    | "browser"
+    | "provider"
+    | "web-session"
+    | "local-cli"
+    | "reviewed-template",
   maxOutputBytes: number,
 ): BoundedExecution {
   const record = foreignDataRecord(value);
@@ -3390,7 +3529,7 @@ function boundedExecutionResult(
   const allowedKeys = new Set([
     ...requiredKeys,
     "error",
-    ...(kind === "web-session" ? ["noOp"] : []),
+    ...(kind === "web-session" || kind === "local-cli" ? ["noOp"] : []),
     ...(kind === "browser" ? ["privateArtifactsPreserved", "recoveryHandle"] : []),
   ]);
   if (
@@ -3485,6 +3624,7 @@ type RunPreparedOptions = {
   readonly executeRecipe?: typeof executeBrowserRecipe;
   readonly executeProvider?: typeof executeProviderOperation;
   readonly executeWebSession?: WebSessionOperationExecutor;
+  readonly executeLocalCli?: LocalCliOperationExecutor;
   readonly executePublicWebSession?: PublicWebSessionOperationExecutor;
   readonly executeReviewedTemplate?: typeof executeReviewedTemplateOperation;
   readonly fileResolver?: BrowserFileResolver;
@@ -3529,6 +3669,7 @@ async function runPreparedCore(
   }
   const providerOperation = isProviderOperation(operation);
   const webSessionOperation = isWebSessionOperation(operation);
+  const localCliOperation = isLocalCliOperation(operation);
   const reviewedTemplateOperation = isReviewedTemplateOperation(operation);
   const pluginResolution = resolveCodeOwnedPluginOperation(operation, registry);
   const plannedDispatches = pluginResolution !== null
@@ -3567,6 +3708,9 @@ async function runPreparedCore(
         registry,
       )
     : null;
+  const currentLocalCliContractIdentity = localCliOperation
+    ? localCliContractIdentity(operation.localCli, registry)
+    : null;
   const currentReviewedTemplateContractHash = reviewedTemplateOperation
     ? reviewedTemplateHash(operation.reviewedTemplate)
     : null;
@@ -3597,6 +3741,15 @@ async function runPreparedCore(
         action: operation.webSession.action,
         version: operation.webSession.contractVersion,
         hash: currentWebSessionContractHash,
+      };
+    }
+    if (localCliOperation) {
+      if (currentLocalCliContractIdentity === null) {
+        throw new Error("local CLI contract identity is unavailable");
+      }
+      return {
+        transport: "local-cli",
+        identity: currentLocalCliContractIdentity,
       };
     }
     if (reviewedTemplateOperation) {
@@ -3657,6 +3810,17 @@ async function runPreparedCore(
         webSessionContractHash: currentWebSessionContractHash,
       };
     }
+    if (localCliOperation) {
+      if (currentLocalCliContractIdentity === null) {
+        throw new Error("local CLI contract identity is unavailable");
+      }
+      return {
+        ...value,
+        schemaVersion: 7,
+        transport: "local-cli",
+        localCliContract: currentLocalCliContractIdentity,
+      };
+    }
     if (reviewedTemplateOperation) {
       if (currentReviewedTemplateContractHash === null) throw new Error("reviewed template contract hash is unavailable");
       return {
@@ -3704,6 +3868,8 @@ async function runPreparedCore(
       ? operation.provider.timeoutMs
       : webSessionOperation
         ? operation.webSession.timeoutMs
+        : localCliOperation
+          ? operation.localCli.timeoutMs
         : reviewedTemplateOperation
           ? operation.reviewedTemplate.state === "reviewed"
             ? operation.reviewedTemplate.timeoutMs
@@ -3720,6 +3886,7 @@ async function runPreparedCore(
         inputHash,
         auth: durableWriteAuth(),
         contract: contract.transport === "portable-provider-plugin"
+          || contract.transport === "local-cli"
           ? contract
           : {
               transport: contract.transport,
@@ -3964,7 +4131,12 @@ async function runPreparedCore(
   }
   let duplicateSourceClaimed = false;
   const persistDispatchProgress = (
-    event: BrowserDispatchEvent | ProviderDispatchEvent | WebSessionDispatchEvent | ReviewedTemplateDispatchEvent,
+    event:
+      | BrowserDispatchEvent
+      | ProviderDispatchEvent
+      | WebSessionDispatchEvent
+      | LocalCliDispatchEvent
+      | ReviewedTemplateDispatchEvent,
     phase: "starting" | "verified",
   ): Promise<void> => {
     const expectedDispatch = plannedDispatches[event.index - 1];
@@ -4056,7 +4228,7 @@ async function runPreparedCore(
     const current = durableReceipt.dispatch;
     if (
       !isWrite
-      || !webSessionOperation
+      || (!webSessionOperation && !localCliOperation)
       || journal === null
       || expectedDispatch === undefined
       || event.id !== expectedDispatch.id
@@ -4071,9 +4243,12 @@ async function runPreparedCore(
       ));
     }
     const contract = recoveryContract();
-    if (contract.transport !== "web-session-api") {
+    if (
+      contract.transport !== "web-session-api"
+      && contract.transport !== "local-cli"
+    ) {
       return Promise.reject(new Error(
-        "provider-accepted mutation target requires a web-session contract",
+        "provider-accepted mutation target requires a session or local CLI contract",
       ));
     }
     try {
@@ -4106,6 +4281,8 @@ async function runPreparedCore(
     ? "provider"
     : webSessionOperation
       ? "web-session"
+      : localCliOperation
+        ? "local-cli"
       : reviewedTemplateOperation ? "reviewed-template" : "browser";
   const exactTargetReconciliationKind =
     pluginResolution?.operation.reconciliation?.kind;
@@ -4164,7 +4341,10 @@ async function runPreparedCore(
             async (executionOptions: WebSessionExecutionOptions) => {
               if (
                 pluginResolution === null
-                || pluginResolution.binding.transport === "provider-api"
+                || (
+                  pluginResolution.binding.transport !== "web-session-api"
+                  && pluginResolution.binding.transport !== "linked-device"
+                )
               ) {
                 throw new Error(
                   "authenticated session operation resolved to the wrong plugin transport",
@@ -4200,6 +4380,60 @@ async function runPreparedCore(
               );
             },
           )
+        : localCliOperation
+          ? await runLocalCliOperationWithDeadline(
+              operation.localCli,
+              {
+                ...(options.fileResolver === undefined
+                  ? {}
+                  : { fileResolver: options.fileResolver }),
+                environment: options.environment,
+                ...(options.signal === undefined
+                  ? {}
+                  : { signal: options.signal }),
+                ...(options.registerCleanupBarrier === undefined
+                  ? {}
+                  : { registerCleanupBarrier: options.registerCleanupBarrier }),
+                beforeDispatch: (event) =>
+                  persistDispatchProgress(event, "starting"),
+                ...(isWrite
+                  && exactTargetReconciliationKind
+                    === "provider-accepted-target-presence"
+                  ? {
+                    afterProviderAcceptedMutationTarget:
+                      persistProviderBoundMutationTarget,
+                  }
+                  : {}),
+                ...(isWrite
+                  && exactTargetReconciliationKind
+                    === "provider-bound-target-desired-state"
+                  ? {
+                    afterProviderBoundMutationTarget:
+                      persistProviderBoundMutationTarget,
+                  }
+                  : {}),
+                afterDispatchVerified: (event) =>
+                  persistDispatchProgress(event, "verified"),
+              },
+              async (executionOptions: LocalCliExecutionOptions) => {
+                if (
+                  pluginResolution === null
+                  || pluginResolution.binding.transport !== "local-cli"
+                ) {
+                  throw new Error(
+                    "local CLI operation resolved to the wrong plugin transport",
+                  );
+                }
+                return (options.executeLocalCli
+                  ?? pluginResolution.binding.execute)(
+                  invocation.manifest,
+                  operation.localCli,
+                  invocation.input,
+                  persistedAuthAuthority(invocation.auth),
+                  executionOptions,
+                );
+              },
+            )
         : reviewedTemplateOperation
           ? await (options.executeReviewedTemplate ?? executeReviewedTemplateOperation)(
               invocation.manifest,
@@ -4255,7 +4489,9 @@ async function runPreparedCore(
       error: preservedArtifactsError !== null
         ? "provider browser cleanup could not be verified; private artifacts were preserved and durable cleanup admission requires wrench doctor before retry"
         : error instanceof WebSessionCleanupUnverifiedError
-          ? "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves exact browser-closed evidence, or reboot recovery proves quiescence"
+          ? localCliOperation
+            ? "local CLI child/private-root cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves every pinned process group quiescent and removes the exact private root, or reboot recovery proves quiescence"
+            : "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves exact browser-closed evidence, or reboot recovery proves quiescence"
           : boundedThrownExecutorReason(error),
       ...(preservedArtifactsError === null
         ? {}
@@ -4312,10 +4548,19 @@ async function runPreparedCore(
         ? ""
         : `; recovery handle: ${recoveryHandle}`}`
     : null;
-  const apiOperation = providerOperation || webSessionOperation || reviewedTemplateOperation;
+  const apiOperation = providerOperation
+    || webSessionOperation
+    || localCliOperation
+    || reviewedTemplateOperation;
   const transportLabel = providerOperation
     ? "official API"
-    : webSessionOperation ? "authenticated web API" : reviewedTemplateOperation ? "reviewed authenticated API" : "browser";
+    : webSessionOperation
+      ? "authenticated web API"
+      : localCliOperation
+        ? "local CLI"
+        : reviewedTemplateOperation
+          ? "reviewed authenticated API"
+          : "browser";
   const providerReason = apiOperation && execution.error !== undefined
     ? redactSensitiveText(execution.error).slice(0, 2_000)
     : null;
@@ -4449,10 +4694,23 @@ async function runPrepared(
   );
   if (portableIdentity === null) {
     if (
-      isWebSessionOperation(checked.operation)
+      (
+        isWebSessionOperation(checked.operation)
+        || isLocalCliOperation(checked.operation)
+      )
       && pluginResolution !== null
       && !isPublicWebSessionInvocationAuthority(checked.invocation.auth)
     ) {
+      const executionIdentityHash = pluginResolution.binding.transport
+          === "local-cli"
+        ? sha256(canonicalJson({
+            transport: "local-cli",
+            tool: pluginResolution.binding.tool,
+            artifact: localCliToolArtifactForCurrentRuntime(
+              pluginResolution.binding.tool,
+            ),
+          }))
+        : registry.implementationHash(pluginResolution.binding).toString("hex");
       const cleanupIdentity: WebSessionCleanupAdmissionIdentity = {
         runId,
         pluginId: pluginResolution.plugin.id,
@@ -4465,6 +4723,10 @@ async function runPrepared(
         surfaceId: pluginResolution.binding.surfaceId,
         authId: checked.invocation.auth.id,
         authHash: authHash(checked.invocation.auth),
+        transport: isLocalCliOperation(checked.operation)
+          ? "local-cli"
+          : "web-session-api",
+        executionIdentityHash,
       };
       return withWebSessionCleanupAdmission(
         cleanupIdentity,
@@ -4530,6 +4792,7 @@ export async function executeReadInvocation(
     readonly executeRecipe?: typeof executeBrowserRecipe;
     readonly executeProvider?: typeof executeProviderOperation;
     readonly executeWebSession?: WebSessionOperationExecutor;
+    readonly executeLocalCli?: LocalCliOperationExecutor;
     readonly executePublicWebSession?: PublicWebSessionOperationExecutor;
     readonly executeReviewedTemplate?: typeof executeReviewedTemplateOperation;
     readonly signal?: AbortSignal;
@@ -4545,6 +4808,7 @@ export async function executeReadInvocation(
     ...(options.executeRecipe === undefined ? {} : { executeRecipe: options.executeRecipe }),
     ...(options.executeProvider === undefined ? {} : { executeProvider: options.executeProvider }),
     ...(options.executeWebSession === undefined ? {} : { executeWebSession: options.executeWebSession }),
+    ...(options.executeLocalCli === undefined ? {} : { executeLocalCli: options.executeLocalCli }),
     ...(options.executePublicWebSession === undefined
       ? {}
       : { executePublicWebSession: options.executePublicWebSession }),
@@ -4565,6 +4829,7 @@ export async function confirmInvocation(
     readonly executeRecipe?: typeof executeBrowserRecipe;
     readonly executeProvider?: typeof executeProviderOperation;
     readonly executeWebSession?: WebSessionOperationExecutor;
+    readonly executeLocalCli?: LocalCliOperationExecutor;
     readonly executeReviewedTemplate?: typeof executeReviewedTemplateOperation;
     readonly signal?: AbortSignal;
     readonly persistReceipt?: (receipt: RunReceipt, environment: Readonly<Record<string, string | undefined>>) => void;
@@ -4665,6 +4930,7 @@ export async function confirmInvocation(
       ...(options.executeRecipe === undefined ? {} : { executeRecipe: options.executeRecipe }),
       ...(options.executeProvider === undefined ? {} : { executeProvider: options.executeProvider }),
       ...(options.executeWebSession === undefined ? {} : { executeWebSession: options.executeWebSession }),
+      ...(options.executeLocalCli === undefined ? {} : { executeLocalCli: options.executeLocalCli }),
       ...(options.executeReviewedTemplate === undefined ? {} : { executeReviewedTemplate: options.executeReviewedTemplate }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.persistReceipt === undefined ? {} : { persistReceipt: options.persistReceipt }),
@@ -4700,6 +4966,7 @@ function parseRunReceiptValue(runId: string, value: unknown): RunReceipt {
   const webSessionReceipt = value.schemaVersion === 4;
   const reviewedTemplateReceipt = value.schemaVersion === 5;
   const portablePluginReceipt = value.schemaVersion === 6;
+  const localCliReceipt = value.schemaVersion === 7;
   const keys = legacy
     ? [
         "schemaVersion", "runId", "planDigest", "adapter", "operation", "risk", "inputHash", "auth", "transport", "status",
@@ -4725,6 +4992,11 @@ function parseRunReceiptValue(runId: string, value: unknown): RunReceipt {
               "schemaVersion", "runId", "planDigest", "adapter", "operation", "risk", "inputHash", "auth", "transport", "status",
               "dispatchStarted", "dispatch", "startedAt", "finishedAt", "finalOrigin", "error", "portablePluginContract",
             ]
+            : localCliReceipt
+              ? [
+                "schemaVersion", "runId", "planDigest", "adapter", "operation", "risk", "inputHash", "auth", "transport", "status",
+                "dispatchStarted", "dispatch", "startedAt", "finishedAt", "finalOrigin", "error", "localCliContract",
+              ]
             : [
               "schemaVersion", "runId", "planDigest", "adapter", "operation", "risk", "inputHash", "auth", "transport", "status",
               "dispatchStarted", "dispatch", "startedAt", "finishedAt", "finalOrigin", "error",
@@ -4737,14 +5009,19 @@ function parseRunReceiptValue(runId: string, value: unknown): RunReceipt {
       && value.schemaVersion !== 4
       && value.schemaVersion !== 5
       && value.schemaVersion !== 6
+      && value.schemaVersion !== 7
     )
     || !hasExactKeys(value, keys)
   ) throw new Error("run receipt is malformed");
   let portablePluginContract: PortableOperationIdentityV1 | null = null;
+  let localCliContract: LocalCliContractIdentityV1 | null = null;
   if (portablePluginReceipt) {
     portablePluginContract = parsePortableOperationIdentityV1(
       value.portablePluginContract,
     );
+  }
+  if (localCliReceipt) {
+    localCliContract = parseLocalCliContractIdentityV1(value.localCliContract);
   }
   const { planDigest, operation, risk, inputHash, transport, status, dispatchStarted, startedAt, finishedAt, finalOrigin, error } = value;
   const dispatch: RunReceipt["dispatch"] = legacy && typeof dispatchStarted === "boolean"
@@ -4769,7 +5046,9 @@ function parseRunReceiptValue(runId: string, value: unknown): RunReceipt {
           ? transport !== "reviewed-template-api"
           : portablePluginReceipt
             ? transport !== "portable-provider-plugin"
-            : transport !== "browser")
+            : localCliReceipt
+              ? transport !== "local-cli"
+              : transport !== "browser")
     || (providerReceipt && (typeof value.providerContractHash !== "string" || !/^[a-f0-9]{64}$/u.test(value.providerContractHash)))
     || (webSessionReceipt && (typeof value.webSessionContractHash !== "string" || !/^[a-f0-9]{64}$/u.test(value.webSessionContractHash)))
     || (reviewedTemplateReceipt
@@ -4855,6 +5134,17 @@ function parseRunReceiptValue(runId: string, value: unknown): RunReceipt {
       schemaVersion: 6,
       transport: "portable-provider-plugin",
       portablePluginContract,
+    };
+  }
+  if (localCliReceipt && localCliContract !== null) {
+    if (localCliContract.action !== operation) {
+      throw new Error("run receipt local CLI route is malformed");
+    }
+    return {
+      ...common,
+      schemaVersion: 7,
+      transport: "local-cli",
+      localCliContract,
     };
   }
   return providerReceipt

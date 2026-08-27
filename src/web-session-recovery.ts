@@ -3,6 +3,7 @@ import { loadAuth } from "./auth";
 import {
   canonicalJson,
   sha256,
+  type LocalCliRecipe,
   type OperationInput,
   type WebSessionRecipe,
 } from "./model";
@@ -11,7 +12,9 @@ import { requireProviderPluginAuth } from "./provider-plugin-auth";
 import {
   runProviderPluginPlanConformance,
   type ProviderPluginReconciliationContextV1,
+  type ProviderPluginReconciliationOptionsV1,
 } from "./provider-plugin";
+import { withLocalCliProviderCleanupAdmission } from "./local-cli-admission";
 import type {
   ProviderPluginOperationResolutionV1,
   ProviderPluginRegistry,
@@ -35,6 +38,10 @@ import {
   getWebSessionContract,
   isCompatibleWebSessionContractHash,
 } from "./web-session-contracts";
+import {
+  getLocalCliContract,
+  isCompatibleLocalCliContractHash,
+} from "./local-cli-contracts";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -73,6 +80,13 @@ export type WebSessionRecoveryDependencies = {
     auth: WrenchAuth,
     context?: ProviderPluginReconciliationContextV1,
   ) => Promise<unknown>;
+  readonly observeLocalCliActualState?: (
+    recipe: LocalCliRecipe,
+    input: OperationInput,
+    auth: WrenchAuth,
+    context?: ProviderPluginReconciliationContextV1,
+    options?: ProviderPluginReconciliationOptionsV1,
+  ) => Promise<unknown>;
   readonly releaseRecoveryArtifacts: (
     runId: string,
     planDigest: string,
@@ -100,7 +114,7 @@ function isUnknownRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type SelectedReconciliation = {
-  readonly receipt: Extract<RunReceipt, { readonly schemaVersion: 4 }>;
+  readonly receipt: ReconciliationReceipt;
   readonly resolution: ProviderPluginOperationResolutionV1;
   readonly input: OperationInput;
   readonly inputSource: "capsule" | "provided";
@@ -111,6 +125,11 @@ type SelectedReconciliation = {
     | "ancient-x";
   readonly reconciliationContext?: ProviderPluginReconciliationContextV1;
 };
+
+type ReconciliationReceipt = Extract<
+  RunReceipt,
+  { readonly schemaVersion: 4 | 7 }
+>;
 
 type PreProviderPluginXContract = {
   readonly action: "content.save" | "likes.set";
@@ -139,7 +158,7 @@ function isUnsettled(status: RunReceipt["status"]): boolean {
 
 function assertReconciliationReceipt(
   receipt: RunReceipt,
-): asserts receipt is Extract<RunReceipt, { readonly schemaVersion: 4 }> {
+): asserts receipt is ReconciliationReceipt {
   if (!isUnsettled(receipt.status)) {
     throw new Error("only an unsettled run can be reconciled");
   }
@@ -171,7 +190,10 @@ function assertReconciliationReceipt(
       "the unsettled run does not have the exact one-dispatch or plugin-declared dispatched write schedule",
     );
   }
-  if (receipt.schemaVersion !== 4 || receipt.transport !== "web-session-api") {
+  if (
+    (receipt.schemaVersion !== 4 || receipt.transport !== "web-session-api")
+    && (receipt.schemaVersion !== 7 || receipt.transport !== "local-cli")
+  ) {
     throw new Error(
       "this reconciliation command supports authenticated session plugin runs",
     );
@@ -223,8 +245,15 @@ function legacyXRecipe(): WebSessionRecipe {
 
 function assertCapsuleMatchesReceipt(
   capsule: RecoveryCapsule,
-  receipt: Extract<RunReceipt, { readonly schemaVersion: 4 }>,
+  receipt: ReconciliationReceipt,
 ): void {
+  const contractMatches = receipt.transport === "local-cli"
+    ? capsule.contract.transport === "local-cli"
+      && canonicalJson(capsule.contract.identity)
+        === canonicalJson(receipt.localCliContract)
+    : capsule.contract.transport === "web-session-api"
+      && capsule.contract.action === receipt.operation
+      && capsule.contract.hash === receipt.webSessionContractHash;
   if (
     capsule.runId !== receipt.runId
     || capsule.createdAt !== receipt.startedAt
@@ -234,9 +263,7 @@ function assertCapsuleMatchesReceipt(
     || capsule.risk !== receipt.risk
     || capsule.inputHash !== receipt.inputHash
     || canonicalJson(capsule.auth) !== canonicalJson(receipt.auth)
-    || capsule.contract.transport !== "web-session-api"
-    || capsule.contract.action !== receipt.operation
-    || capsule.contract.hash !== receipt.webSessionContractHash
+    || !contractMatches
   ) {
     throw new Error(
       "encrypted recovery capsule does not match the immutable run receipt",
@@ -260,19 +287,22 @@ function validateRecoveryInput(
 }
 
 function resolveOperation(
+  transport: "web-session-api" | "local-cli",
   site: string,
   action: string,
   version: number,
   registry: ProviderPluginRegistry,
 ): ProviderPluginOperationResolutionV1 {
-  const binding = registry.requireSessionRoute(site);
+  const binding = transport === "local-cli"
+    ? registry.requireRoute("local-cli", site)
+    : registry.requireSessionRoute(site);
   const resolution = registry.requireOperationDefinition(
     binding.transport,
     site,
     action,
     version,
   );
-  if (resolution.binding.transport === "provider-api") {
+  if (resolution.binding.transport !== transport) {
     throw new Error("reconciliation resolved to the wrong plugin transport");
   }
   if (
@@ -287,7 +317,7 @@ function resolveOperation(
 }
 
 function providerBoundTargetReconciliationContext(
-  receipt: Extract<RunReceipt, { readonly schemaVersion: 4 }>,
+  receipt: ReconciliationReceipt,
   capsule: RecoveryCapsule,
   resolution: ProviderPluginOperationResolutionV1,
   input: OperationInput,
@@ -350,7 +380,7 @@ function providerBoundTargetReconciliationContext(
 }
 
 function selectReconciliation(
-  receipt: Extract<RunReceipt, { readonly schemaVersion: 4 }>,
+  receipt: ReconciliationReceipt,
   providedInput: unknown,
   environment: Environment,
   registry: ProviderPluginRegistry,
@@ -363,13 +393,29 @@ function selectReconciliation(
   );
   if (capsule !== null) {
     assertCapsuleMatchesReceipt(capsule, receipt);
-    if (capsule.contract.transport !== "web-session-api") {
+    const recoveryRoute = capsule.contract.transport === "web-session-api"
+      ? {
+          transport: "web-session-api" as const,
+          surface: capsule.contract.site,
+          action: capsule.contract.action,
+          version: capsule.contract.version,
+        }
+      : capsule.contract.transport === "local-cli"
+        ? {
+            transport: "local-cli" as const,
+            surface: capsule.contract.identity.surface,
+            action: capsule.contract.identity.action,
+            version: capsule.contract.identity.version,
+          }
+        : null;
+    if (recoveryRoute === null) {
       throw new Error("recovery capsule transport changed unexpectedly");
     }
     const resolution = resolveOperation(
-      capsule.contract.site,
-      capsule.contract.action,
-      capsule.contract.version,
+      recoveryRoute.transport,
+      recoveryRoute.surface,
+      recoveryRoute.action,
+      recoveryRoute.version,
       registry,
     );
     const input = validateRecoveryInput(resolution, capsule.input);
@@ -395,7 +441,8 @@ function selectReconciliation(
       input,
       inputSource: "capsule",
       planDigest: receipt.planDigest as string,
-      contractIdentity: isPreProviderPluginXContract(receipt, capsule)
+      contractIdentity: receipt.schemaVersion === 4
+        && isPreProviderPluginXContract(receipt, capsule)
         ? "pre-provider-plugin-x"
         : "current",
       ...(reconciliationContext === undefined
@@ -404,7 +451,7 @@ function selectReconciliation(
     };
   }
 
-  if (!isLegacyXContentSave(receipt)) {
+  if (receipt.schemaVersion !== 4 || !isLegacyXContentSave(receipt)) {
     throw new Error(
       "this run should have an encrypted recovery capsule; refusing caller-supplied replacement input",
     );
@@ -420,6 +467,7 @@ function selectReconciliation(
   }
   const recipe = legacyXRecipe();
   const resolution = resolveOperation(
+    "web-session-api",
     recipe.site,
     recipe.action,
     recipe.contractVersion,
@@ -473,7 +521,14 @@ function assertSupportedContract(
   registry: ProviderPluginRegistry,
 ): void {
   const { binding, operation, contractVersion } = selected.resolution;
-  if (binding.transport === "provider-api") {
+  if (
+    binding.transport === "provider-api"
+    || (
+      selected.receipt.transport === "local-cli"
+        ? binding.transport !== "local-cli"
+        : binding.transport === "local-cli"
+    )
+  ) {
     throw new Error("reconciliation resolved to the wrong plugin transport");
   }
   if (operation.risk !== selected.receipt.risk) {
@@ -482,21 +537,40 @@ function assertSupportedContract(
     );
   }
   if (selected.contractIdentity !== "current") {
+    if (selected.receipt.schemaVersion !== 4) {
+      throw new Error("historical reconciliation identity is not a web-session receipt");
+    }
     assertExactHistoricalXSchedule(selected.receipt);
     return;
   }
-  const contract = getWebSessionContract({
-    site: binding.surfaceId,
-    action: operation.name,
-    contractVersion,
-    timeoutMs: 60_000,
-    maxOutputBytes: 2 * 1024 * 1024,
-  }, registry);
-  if (!isCompatibleWebSessionContractHash(
-    contract,
-    selected.receipt.webSessionContractHash,
-    registry,
-  )) {
+  const compatible = selected.receipt.transport === "local-cli"
+    ? isCompatibleLocalCliContractHash(
+        getLocalCliContract({
+          surface: binding.surfaceId,
+          action: operation.name,
+          contractVersion,
+          timeoutMs: 60_000,
+          maxOutputBytes: 2 * 1024 * 1024,
+        }, registry),
+        selected.receipt.localCliContract.hash,
+        registry,
+      )
+      && canonicalJson(selected.receipt.localCliContract.tool)
+        === canonicalJson(
+          binding.transport === "local-cli" ? binding.tool : null,
+        )
+    : isCompatibleWebSessionContractHash(
+        getWebSessionContract({
+          site: binding.surfaceId,
+          action: operation.name,
+          contractVersion,
+          timeoutMs: 60_000,
+          maxOutputBytes: 2 * 1024 * 1024,
+        }, registry),
+        selected.receipt.webSessionContractHash,
+        registry,
+      );
+  if (!compatible) {
     throw new Error(
       "the unsettled run is bound to an unsupported authenticated session contract hash; its receipt, encrypted recovery capsule, and plan assets were retained. Run `wrench doctor`, then use the exact predecessor build or complete a manual evidence review before reconciliation",
     );
@@ -509,6 +583,11 @@ async function observeActualState(
   dependency:
     | WebSessionRecoveryDependencies["observeActualState"]
     | undefined,
+  localDependency:
+    | WebSessionRecoveryDependencies["observeLocalCliActualState"]
+    | undefined,
+  registry: ProviderPluginRegistry,
+  environment: Environment,
 ): Promise<boolean> {
   const { binding, operation, contractVersion } = selected.resolution;
   if (binding.transport === "provider-api" || binding.reconcile === undefined) {
@@ -516,7 +595,43 @@ async function observeActualState(
       `provider plugin operation ${binding.surfaceId}/${operation.name}@${contractVersion} has no registered reconciler`,
     );
   }
-  const value = dependency === undefined
+  const value = binding.transport === "local-cli"
+    ? await withLocalCliProviderCleanupAdmission(
+        {
+          registry,
+          binding,
+          auth,
+          purpose: {
+            kind: "reconcile",
+            action: operation.name,
+            contractVersion,
+            recoveryRunId: selected.receipt.runId,
+          },
+          environment,
+        },
+        (registerCleanupBarrier) => localDependency === undefined
+          ? binding.reconcile!(
+              operation.name,
+              selected.input,
+              auth,
+              selected.reconciliationContext,
+              { environment, registerCleanupBarrier },
+            )
+          : localDependency(
+              {
+                surface: binding.surfaceId,
+                action: operation.name,
+                contractVersion,
+                timeoutMs: 60_000,
+                maxOutputBytes: 2 * 1024 * 1024,
+              },
+              selected.input,
+              auth,
+              selected.reconciliationContext,
+              { environment, registerCleanupBarrier },
+            ),
+      )
+    : dependency === undefined
     ? await binding.reconcile(
         operation.name,
         selected.input,
@@ -620,7 +735,9 @@ export async function reconcileWebSessionRun(
     operation: receipt.operation,
     inputHash: receipt.inputHash,
     authHash: receipt.auth.hash,
-    contractHash: receipt.webSessionContractHash,
+    contractHash: receipt.transport === "local-cli"
+      ? receipt.localCliContract.hash
+      : receipt.webSessionContractHash,
     inputSource: selected.inputSource,
   };
   let observation: ReconciliationObservation;
@@ -629,6 +746,9 @@ export async function reconcileWebSessionRun(
       selected,
       auth,
       options.dependencies?.observeActualState,
+      options.dependencies?.observeLocalCliActualState,
+      registry,
+      environment,
     );
     if (
       reconciliation.kind === "provider-accepted-target-presence"

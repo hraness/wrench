@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 4,
+  "id": "beeper-local",
+  "version": "1.1.0",
+  "displayName": "Beeper (Local Read-Only Projection)",
+  "surfaceId": "beeper",
+  "origins": [
+    "https://www.beeper.com"
+  ],
+  "browserDomains": [
+    "www.beeper.com"
+  ],
+  "operations": {
+    "contacts.list": {
+      "description": "List one bounded local Beeper contact projection, preserving account and network provenance without downloading media or emitting presence, read receipts, or provider writes.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Optional exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected contacts",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": []
+      },
+      "webSession": {
+        "site": "beeper",
+        "action": "contacts.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "contacts.search": {
+      "description": "Search one bounded fuzzy candidate window from the local Beeper contact projection, preserving only stable identity, account, and network metadata and never claiming completeness.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Person lookup text normalized with NFKC and surrounding whitespace removed",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Optional exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected fuzzy contact candidates",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "webSession": {
+        "site": "beeper",
+        "action": "contacts.search",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.list": {
+      "description": "List one bounded local Beeper conversation projection with account, network, participant, and completeness evidence and no remote mutation.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Optional exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected conversations",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": []
+      },
+      "webSession": {
+        "site": "beeper",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.search": {
+      "description": "Search one bounded fuzzy candidate window from local Beeper conversations, preserving only stable conversation, account, network, directness, and participant identity metadata without message content or private UI state.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Conversation or participant lookup text normalized with NFKC and surrounding whitespace removed",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Optional exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected fuzzy conversation candidates",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "webSession": {
+        "site": "beeper",
+        "action": "messaging.search",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.read": {
+      "description": "Read one bounded page of an exact Beeper conversation with reply, edit, deletion, reaction, and attachment-shape evidence while omitting media locations.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID bound to the conversation",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact canonical Beeper chat ID returned by messaging.list",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "before_cursor": {
+            "type": "string",
+            "description": "Exact opaque message ID cursor for older messages",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "after_cursor": {
+            "type": "string",
+            "description": "Exact opaque message ID cursor for newer messages",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected messages",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id"
+        ]
+      },
+      "webSession": {
+        "site": "beeper",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 10485760
+      }
+    }
+  }
+}

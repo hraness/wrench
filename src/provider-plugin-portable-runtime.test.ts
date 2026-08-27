@@ -1041,7 +1041,6 @@ describe("portable provider runtime catalog", () => {
       );
       if (
         manifest === undefined
-        || binding.transport === "provider-api"
         || resolution.portableIdentity === null
       ) {
         throw new Error("portable partial-file fixture is unavailable");
@@ -1143,7 +1142,6 @@ describe("portable provider runtime catalog", () => {
       );
       if (
         manifest === undefined
-        || binding.transport === "provider-api"
         || resolution.portableIdentity === null
       ) {
         throw new Error("portable current-file fixture is unavailable");
@@ -1779,7 +1777,10 @@ describe("portable provider runtime catalog", () => {
     const webManifest = catalog.registry.resolveOwnedManifest("portable-web");
     if (
       webManifest === undefined
-      || webResolution.binding.transport === "provider-api"
+      || (
+        webResolution.binding.transport !== "web-session-api"
+        && webResolution.binding.transport !== "linked-device"
+      )
     ) throw new Error("portable web projection is unavailable");
     const webExecution = await webResolution.binding.execute(
       webManifest,
@@ -1975,7 +1976,7 @@ describe("portable provider runtime capability containment", () => {
     );
     const manifest = catalog.registry.resolveOwnedManifest("portable-web");
     const binding = catalog.registry.requireSessionRoute("portable-web");
-    if (manifest === undefined || binding.transport === "provider-api") {
+    if (manifest === undefined) {
       throw new Error("portable web projection is unavailable");
     }
     const selectedRecipe = webRecipe(manifest, "media.send");
@@ -2068,7 +2069,6 @@ describe("portable provider runtime capability containment", () => {
       );
       if (
         manifest === undefined
-        || binding.transport === "provider-api"
         || resolution.portableIdentity === null
       ) {
         throw new Error("portable file deadline fixture is unavailable");
@@ -2394,7 +2394,7 @@ describe("portable provider runtime capability containment", () => {
     );
     const manifest = catalog.registry.resolveOwnedManifest("portable-web");
     const binding = catalog.registry.requireSessionRoute("portable-web");
-    if (manifest === undefined || binding.transport === "provider-api") {
+    if (manifest === undefined) {
       throw new Error("portable web projection is unavailable");
     }
     const execution = await binding.execute(
@@ -2444,7 +2444,6 @@ describe("portable provider runtime capability containment", () => {
       escapedCatalog.registry.requireSessionRoute("portable-web");
     if (
       escapedManifest === undefined
-      || escapedBinding.transport === "provider-api"
     ) throw new Error("portable web projection is unavailable");
     const escapedExecution = await escapedBinding.execute(
       escapedManifest,
@@ -2536,7 +2535,7 @@ describe("portable provider runtime capability containment", () => {
     );
     const manifest = catalog.registry.resolveOwnedManifest("portable-web");
     const binding = catalog.registry.requireSessionRoute("portable-web");
-    if (manifest === undefined || binding.transport === "provider-api") {
+    if (manifest === undefined) {
       throw new Error("portable web projection is unavailable");
     }
     const correct = await binding.execute(
@@ -2652,7 +2651,7 @@ describe("portable provider runtime capability containment", () => {
     );
     const manifest = catalog.registry.resolveOwnedManifest("portable-web");
     const binding = catalog.registry.requireSessionRoute("portable-web");
-    if (manifest === undefined || binding.transport === "provider-api") {
+    if (manifest === undefined) {
       throw new Error("portable web projection is unavailable");
     }
     const execution = await binding.execute(
@@ -2686,7 +2685,7 @@ describe("portable provider runtime capability containment", () => {
     );
     const manifest = catalog.registry.resolveOwnedManifest("portable-web");
     const binding = catalog.registry.requireSessionRoute("portable-web");
-    if (manifest === undefined || binding.transport === "provider-api") {
+    if (manifest === undefined) {
       throw new Error("portable web projection is unavailable");
     }
     const execute = () => binding.execute(
@@ -3113,7 +3112,7 @@ describe("portable provider runtime capability containment", () => {
     );
     const manifest = catalog.registry.resolveOwnedManifest("portable-web");
     const binding = catalog.registry.requireSessionRoute("portable-web");
-    if (manifest === undefined || binding.transport === "provider-api") {
+    if (manifest === undefined) {
       throw new Error("portable web projection is unavailable");
     }
     const run = (mode: "direct-verify" | "duplicate-mutation" | "normal") =>

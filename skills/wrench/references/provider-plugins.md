@@ -1,8 +1,8 @@
 # Provider plugins
 
-Use a provider plugin when a reviewed official API, first-party web API, or
-linked-device protocol needs provider-specific contracts and execution. Wrench has
-two distributions over one logical registry:
+Use a provider plugin when a reviewed official API, first-party web API,
+linked-device protocol, or exact provider CLI needs provider-specific contracts
+and execution. Wrench has two distributions over one logical registry:
 
 - a source plugin is reviewed repository code statically assembled into Wrench;
 - a portable plugin is a self-contained immutable package that Wrench verifies,
@@ -211,6 +211,8 @@ Portable v1 may describe a `linked-device` binding only as a network-inert
 and sync remain source-plugin-only until a portable lifecycle protocol can
 preserve the same admission, journal, acknowledgement, and recovery
 invariants. Wrench rejects that execution path without transport fallback.
+Portable v1 also rejects `local-cli`: verified native executable discovery,
+process authority, and subprocess cleanup remain source-plugin-only.
 
 Every installed `messaging.list` and `messaging.read` operation also declares
 its omni state. Use `unsupported` with a concrete bounded reason unless exact
@@ -307,12 +309,14 @@ The trusted source-plugin v1 contexts retain compatibility with existing
 runtimes: an official-provider executor can receive its selected auth locator,
 loaded token material, bounded HTTP client, and resolver-produced local file
 paths; web and linked-device runtimes receive their corresponding scoped
-context. This does not attenuate the process's authority or isolate secrets
-from plugin code. Keep additions transport-specific and narrowly typed; do not
-add arbitrary requests or expose unrelated kernel objects. The portable
+context; a local CLI runtime receives the same bounded dispatch lifecycle but
+owns exact executable and subprocess validation. This does not attenuate the
+process's authority or isolate secrets from plugin code. Keep additions
+transport-specific and narrowly typed; do not add arbitrary requests, argv, or
+unrelated kernel objects. The portable
 out-of-process host replaces these values with opaque, bounded host
 capabilities. Never fall back between official API, web-session API,
-linked-device protocol, and browser behavior.
+linked-device protocol, local CLI, and browser behavior.
 
 ## Define one binding
 
@@ -322,7 +326,8 @@ Every plugin definition is validated and deeply frozen. Its top level declares
 
 Each binding declares:
 
-- one `provider-api`, `web-session-api`, or `linked-device` transport;
+- one `provider-api`, `web-session-api`, `linked-device`, or `local-cli`
+  transport;
 - a strict kebab-case `surfaceId`;
 - the exact code-owned runtime `origin`;
 - exact `manifestOrigins` when the public product origin differs from the
@@ -333,6 +338,18 @@ Each binding declares:
 - one or more versioned semantic operations;
 - a lazy runtime loader. Import provider execution code only inside that
   loader.
+
+A `local-cli` binding additionally declares one strict tool identity. It names
+the upstream version under an explicit `semver` or `opaque` scheme and pins the
+final executable SHA-256 for every supported platform and architecture. Bind
+published source, release-commit, release-manifest, archive, and download
+provenance too; an archive or manifest URL and digest are an all-or-nothing
+pair. The operation's semantic contract and the tool's byte identity are
+separate version boundaries, but both enter durable implementation identity.
+When the executable speaks a separately versioned provider API, include the
+reviewed API schema or SDK revision in the operation implementation identity;
+an executable digest cannot prove that an independently updated server kept
+the same semantics.
 
 An operation declares its active `contractVersion`, any structurally compatible
 `historicalContractVersions`, exact risk, bounded input schema, side effect,
@@ -348,6 +365,43 @@ The second is a hostname-suffix reservation that also protects sibling API and
 asset hosts. For example, a runtime at `api.example.com` and public product at
 `www.example.com` normally reserve `example.com`. Avoid an overbroad public
 suffix such as `co.uk`.
+
+## Wrap one exact provider CLI
+
+Use `local-cli` only when an official native client is the reviewed transport.
+Keep its interface semantic: one operation owns one fixed command template,
+strict inputs, strict projected output, exact account and target probes,
+deadlines, byte limits, and failure categories. Maintain a deterministic
+coverage ledger that maps every reviewed upstream canonical command to one
+semantic operation or one explicit unavailable reason. Never expose a generic
+command name, argument array, environment override, endpoint, or output path.
+
+Resolve and hash the final executable before private work. Start it directly
+without a shell under a minimal environment and operation-private config,
+data, cache, and temporary roots. Strip ambient credentials, targets, account
+defaults, proxies, debug flags, and plugin search state. If the CLI supports
+user, linked, or just-in-time plugins, isolate or reject them so unbound code
+cannot override a reviewed command.
+
+Use exact provider IDs instead of titles, fuzzy lookup, interactive selection,
+or ambient defaults. Stage an attachment only from the kernel's digest-bound
+plan asset. Parse stdout and stderr from `unknown`, reject extra fields and
+changed envelopes, and never persist argv or foreign output. Direct spawning
+prevents shell interpretation but cannot hide private arguments from a
+same-account process inspector, so keep such child lifetimes short and
+document that local exposure.
+
+For R2/R3, enter the durable dispatch boundary immediately before the effect.
+Record an exact provider-accepted pending target when available. A lost,
+malformed, timed-out, or signaled post-dispatch response is indeterminate and
+must never be retried. Reconcile only with a separately reviewed exact read.
+One local-CLI dispatch item is one fixed child invocation; if that command
+performs an internal upload followed by a provider mutation, disclose the
+opaque sequence and possible intermediate effect. Wrench cannot fence those
+internal calls separately, so uncertainty begins when the child starts.
+Raw API/RPC, software and plugin lifecycle, account recovery, arbitrary file
+output, destructive administration, and other high-authority commands remain
+unavailable or R4 even if the upstream CLI exposes them.
 
 ## Scaffold one source plugin
 

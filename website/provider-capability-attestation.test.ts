@@ -103,6 +103,39 @@ describe("provider capability attestation", () => {
     }, "wrench-web-adapter.json", "example.json")).toThrow("webSession");
   });
 
+  test("binds local CLI selectors distinctly and rejects mixed transports", () => {
+    const local = {
+      description: "Observed local operation.",
+      risk: "R1",
+      localCli: { contractVersion: 1 },
+    } as const;
+    const manifest = parseCurrentAdapterManifest({
+      displayName: "Example Local CLI",
+      id: "example-local",
+      operations: { "accounts.list": local },
+      surfaceId: "example",
+      version: "1.0.0",
+    }, "wrench-web-adapter.json", "example-local.json");
+    expect(manifest.selectorTransport).toBe("local-cli");
+
+    expect(() => parseCurrentAdapterManifest({
+      displayName: "Mixed Example",
+      id: "mixed-example",
+      operations: {
+        "accounts.list": local,
+        "contacts.list": {
+          description: "Observed session operation.",
+          risk: "R1",
+          webSession: { contractVersion: 1 },
+        },
+      },
+      surfaceId: "example",
+      version: "1.0.0",
+    }, "wrench-web-adapter.json", "mixed-example.json")).toThrow(
+      "cannot mix provider, session, and local CLI selectors",
+    );
+  });
+
   test("escapes arbitrary attestation text and keeps completeness a closed union", async () => {
     const attestation = await loadProviderCapabilityAttestation(repositoryRoot);
     fc.assert(
@@ -111,7 +144,7 @@ describe("provider capability attestation", () => {
         fc.string(),
         (row, hostile) => {
           expect(["observed", "capture-required"]).toContain(row.completeness);
-          expect(row.operation).toMatch(/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/u);
+          expect(row.operation).toMatch(/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/u);
           const escaped = escapeAttestationHtml(`<${hostile}&"${row.adapterId}`);
           expect(escaped).not.toContain("<");
           expect(escaped).not.toContain(">");

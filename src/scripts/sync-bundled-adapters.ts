@@ -18,6 +18,7 @@ import { basename, join } from "node:path";
 
 import { main as defaultWrenchMain, type WrenchDependencies } from "../wrench";
 import {
+  isLocalCliOperation,
   isProviderOperation,
   isWebSessionOperation,
   manifestHash,
@@ -212,7 +213,10 @@ function manifestRouteKey(
   const usesSessionApi = operations.every(([, operation]) =>
     isWebSessionOperation(operation)
   );
-  if (!usesProviderApi && !usesSessionApi) {
+  const usesLocalCli = operations.every(([, operation]) =>
+    isLocalCliOperation(operation)
+  );
+  if (!usesProviderApi && !usesSessionApi && !usesLocalCli) {
     throw new Error(`bundled adapter ${manifest.id} mixes provider transports`);
   }
   const candidates = registry.list().flatMap((plugin) =>
@@ -220,18 +224,29 @@ function manifestRouteKey(
       if (binding.surfaceId !== manifest.surfaceId) return false;
       if (
         (usesProviderApi && binding.transport !== "provider-api")
-        || (usesSessionApi && binding.transport === "provider-api")
+        || (
+          usesSessionApi
+          && binding.transport !== "web-session-api"
+          && binding.transport !== "linked-device"
+        )
+        || (usesLocalCli && binding.transport !== "local-cli")
       ) {
         return false;
       }
       return operations.every(
         ([operationId, operation]) => {
-          if (!isProviderOperation(operation) && !isWebSessionOperation(operation)) {
+          if (
+            !isProviderOperation(operation)
+            && !isWebSessionOperation(operation)
+            && !isLocalCliOperation(operation)
+          ) {
             return false;
           }
           const contractVersion = isProviderOperation(operation)
             ? operation.provider.contractVersion
-            : operation.webSession.contractVersion;
+            : isWebSessionOperation(operation)
+              ? operation.webSession.contractVersion
+              : operation.localCli.contractVersion;
           return registry.resolveOperationDefinition(
             binding.transport,
             binding.surfaceId,
