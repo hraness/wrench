@@ -677,7 +677,9 @@ function parseMessagingPrivateOutputReceiptV1(value) {
     "wrench.messaging-route",
     "wrench.messaging-routes",
     "wrench.messaging-context",
-    "wrench.messaging-preview"
+    "wrench.messaging-preview",
+    "wrench.messaging-run",
+    "wrench.messaging-receipt-binding"
   ]);
   if (source.schemaVersion !== 1 || source.format !== "wrench.messaging-private-output-receipt" || !formats.has(source.artifactFormat))
     return fail("messaging private output receipt", "has an unsupported contract");

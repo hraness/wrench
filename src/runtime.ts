@@ -220,7 +220,53 @@ type InvocationPlanCommon = {
     readonly kind: WrenchAuth["kind"];
   };
   readonly duplicateRisk?: InvocationDuplicateRiskV1;
+  readonly messagingComposite?: MessagingCompositeInvocationPlanV1;
 };
+
+export type MessagingCompositeInvocationPartV1 = {
+  readonly partId: string;
+  readonly text: string;
+  readonly replyRef: string | null;
+  readonly replyToProviderId: string | null;
+  readonly input: OperationInput;
+  readonly inputHash: string;
+};
+
+export type MessagingCompositeInvocationPlanV1 = {
+  readonly schemaVersion: 1;
+  readonly format: "wrench.messaging-composite-invocation";
+  readonly routeRef: string;
+  readonly contextRef: string;
+  readonly clientIntentSha256: string;
+  readonly turnDigest: string;
+  readonly previewDigest: string;
+  readonly contextLimit: number;
+  readonly baseExactDataRevision: string;
+  readonly baseLatestMessageRevision: string;
+  readonly baseRouteStateRevision: string;
+  readonly recipient: {
+    readonly network: string;
+    readonly conversation: {
+      readonly kind: "single" | "group" | "unknown";
+      readonly title: string | null;
+      readonly participantCount: number;
+    };
+  };
+  readonly parts: readonly MessagingCompositeInvocationPartV1[];
+};
+
+export type CreateMessagingCompositeInvocationPartV1 = {
+  readonly partId: string;
+  readonly text: string;
+  readonly replyRef: string | null;
+  readonly replyToProviderId: string | null;
+  readonly invocation: PreparedInvocation;
+};
+
+export type CreateMessagingCompositeInvocationMetadataV1 = Omit<
+  MessagingCompositeInvocationPlanV1,
+  "schemaVersion" | "format" | "previewDigest" | "parts"
+>;
 
 export type InvocationDuplicateRiskV1 = {
   readonly schemaVersion: 1;
@@ -732,6 +778,19 @@ function planDirectory(environment: Readonly<Record<string, string | undefined>>
 function planPath(digest: string, environment: Readonly<Record<string, string | undefined>>): string {
   if (!/^[a-f0-9]{64}$/u.test(digest)) throw new Error("confirmation digest must be 64 lowercase hexadecimal characters");
   return join(planDirectory(environment), `${digest}.json`);
+}
+
+export function invocationPlanDigest(plan: InvocationPlan): string {
+  if (plan.messagingComposite === undefined) return sha256(canonicalJson(plan));
+  return sha256(canonicalJson({
+    ...plan,
+    messagingComposite: {
+      ...plan.messagingComposite,
+      // The preview artifact contains this digest, so its own hash is bound by
+      // authenticated plan storage and validation rather than a circular hash.
+      previewDigest: null,
+    },
+  }));
 }
 
 function portablePluginStoreRoot(
@@ -1448,7 +1507,106 @@ export function createInvocationPlan(
             },
             }
           : { ...common, schemaVersion: 2, transport: "browser" };
-  return { digest: sha256(canonicalJson(plan)), plan };
+  return { digest: invocationPlanDigest(plan), plan };
+}
+
+export function messagingCompositeInputHash(
+  composite: MessagingCompositeInvocationPlanV1,
+): string {
+  return sha256(canonicalJson({
+    schemaVersion: composite.schemaVersion,
+    format: composite.format,
+    routeRef: composite.routeRef,
+    contextRef: composite.contextRef,
+    clientIntentSha256: composite.clientIntentSha256,
+    turnDigest: composite.turnDigest,
+    contextLimit: composite.contextLimit,
+    baseExactDataRevision: composite.baseExactDataRevision,
+    baseLatestMessageRevision: composite.baseLatestMessageRevision,
+    baseRouteStateRevision: composite.baseRouteStateRevision,
+    parts: composite.parts.map((part) => ({
+      partId: part.partId,
+      replyToProviderId: part.replyToProviderId,
+      inputHash: part.inputHash,
+    })),
+  }));
+}
+
+export function createMessagingCompositeInvocationPlan(
+  parts: readonly CreateMessagingCompositeInvocationPartV1[],
+  metadata: CreateMessagingCompositeInvocationMetadataV1,
+  now = new Date(),
+  registry: ProviderPluginRegistry = providerPluginRegistry,
+): StoredPlan {
+  if (parts.length < 1 || parts.length > 8) {
+    throw new Error("messaging composite requires one to eight exact parts");
+  }
+  const planned = parts.map((part) => createInvocationPlan(part.invocation, now, registry));
+  const first = planned[0]!;
+  for (let index = 0; index < planned.length; index += 1) {
+    const candidate = planned[index]!;
+    if (
+      candidate.plan.risk !== "R3"
+      || candidate.plan.dispatches.length !== 1
+      || candidate.plan.adapter.hash !== first.plan.adapter.hash
+      || candidate.plan.operation !== first.plan.operation
+      || candidate.plan.auth.hash !== first.plan.auth.hash
+      || candidate.plan.transport !== first.plan.transport
+    ) throw new Error("messaging parts do not share one exact single-dispatch R3 action");
+    const withoutPart = (plan: InvocationPlan): unknown => {
+      const { id: _id, input: _input, inputHash: _inputHash, dispatches: _dispatches, ...identity } = plan;
+      return identity;
+    };
+    if (canonicalJson(withoutPart(candidate.plan)) !== canonicalJson(withoutPart(first.plan))) {
+      throw new Error("messaging action identity changed between ordered parts");
+    }
+  }
+  const composite = parseMessagingCompositeInvocationPlan({
+    schemaVersion: 1,
+    format: "wrench.messaging-composite-invocation",
+    ...metadata,
+    previewDigest: "0".repeat(64),
+    parts: parts.map((part, index) => ({
+      partId: part.partId,
+      text: part.text,
+      replyRef: part.replyRef,
+      replyToProviderId: part.replyToProviderId,
+      input: planned[index]!.plan.input,
+      inputHash: sha256(canonicalJson(planned[index]!.plan.input)),
+    })),
+  });
+  const plan: InvocationPlan = {
+    ...first.plan,
+    inputHash: messagingCompositeInputHash(composite),
+    dispatches: Object.freeze(parts.map((_part, index) => Object.freeze({
+      id: `messaging.part[${index + 1}]`,
+      description: `Submit ordered messaging turn part ${index + 1}`,
+    }))),
+    messagingComposite: composite,
+  };
+  return Object.freeze({ digest: invocationPlanDigest(plan), plan });
+}
+
+export function bindMessagingCompositePreviewDigest(
+  stored: StoredPlan,
+  previewDigest: string,
+): StoredPlan {
+  if (stored.plan.messagingComposite === undefined) {
+    throw new Error("confirmation plan is not a messaging composite");
+  }
+  const digest = messagingDigest(previewDigest, "messaging preview digest");
+  const plan: InvocationPlan = {
+    ...stored.plan,
+    messagingComposite: Object.freeze({
+      ...stored.plan.messagingComposite,
+      previewDigest: digest,
+    }),
+  };
+  const rebound = Object.freeze({ digest: stored.digest, plan });
+  if (invocationPlanDigest(plan) !== stored.digest) {
+    throw new Error("messaging preview binding changed its confirmation digest");
+  }
+  return rebound;
 }
 
 const DUPLICATE_RISK_SCOPE_DOMAIN = "wrench-duplicate-risk-scope-v1\0";
@@ -1785,7 +1943,7 @@ function createAndSaveInvocationPlanUnlocked(
       : { ...base.plan, duplicateRisk };
     const stored: StoredPlan = duplicateRisk === undefined
       ? base
-      : { digest: sha256(canonicalJson(plan)), plan };
+      : { digest: invocationPlanDigest(plan), plan };
     const claim = acquireConfirmationClaim(
       stored.digest,
       crypto.randomUUID(),
@@ -1853,7 +2011,7 @@ function saveInvocationPlanWithClaim(
   stored: StoredPlan,
   environment: Readonly<Record<string, string | undefined>>,
 ): string {
-  const computed = sha256(canonicalJson(stored.plan));
+  const computed = invocationPlanDigest(stored.plan);
   if (computed !== stored.digest) throw new Error("plan digest does not match its contents");
   const path = planPath(stored.digest, environment);
   purgeExpiredPlans(environment);
@@ -1975,6 +2133,139 @@ function parseInvocationDuplicateRisk(
   });
 }
 
+function messagingDigest(value: unknown, label: string): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
+    throw new Error(`${label} is malformed`);
+  }
+  return value;
+}
+
+function parseMessagingCompositeInvocationPlan(
+  value: unknown,
+): MessagingCompositeInvocationPlanV1 {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    "schemaVersion",
+    "format",
+    "routeRef",
+    "contextRef",
+    "clientIntentSha256",
+    "turnDigest",
+    "previewDigest",
+    "contextLimit",
+    "baseExactDataRevision",
+    "baseLatestMessageRevision",
+    "baseRouteStateRevision",
+    "recipient",
+    "parts",
+  ])) throw new Error("messaging composite invocation is malformed");
+  if (
+    value.schemaVersion !== 1
+    || value.format !== "wrench.messaging-composite-invocation"
+    || typeof value.routeRef !== "string"
+    || !/^wmroute_[A-Za-z0-9_-]{22}$/u.test(value.routeRef)
+    || typeof value.contextRef !== "string"
+    || !/^wmcontext_[A-Za-z0-9_-]{22}$/u.test(value.contextRef)
+    || typeof value.contextLimit !== "number"
+    || !Number.isSafeInteger(value.contextLimit)
+    || value.contextLimit < 1
+    || value.contextLimit > 200
+    || !isRecord(value.recipient)
+    || !hasExactKeys(value.recipient, ["network", "conversation"])
+    || typeof value.recipient.network !== "string"
+    || !/^[a-z][a-z0-9-]{0,63}$/u.test(value.recipient.network)
+    || !isRecord(value.recipient.conversation)
+    || !hasExactKeys(value.recipient.conversation, ["kind", "title", "participantCount"])
+    || value.recipient.conversation.kind !== "single"
+      && value.recipient.conversation.kind !== "group"
+      && value.recipient.conversation.kind !== "unknown"
+    || value.recipient.conversation.title !== null
+      && (typeof value.recipient.conversation.title !== "string"
+        || Buffer.byteLength(value.recipient.conversation.title, "utf8") > 4_096
+        || /[\0\r\n]/u.test(value.recipient.conversation.title))
+    || typeof value.recipient.conversation.participantCount !== "number"
+    || !Number.isSafeInteger(value.recipient.conversation.participantCount)
+    || value.recipient.conversation.participantCount < 0
+    || value.recipient.conversation.participantCount > 10_000
+    || !Array.isArray(value.parts)
+    || value.parts.length < 1
+    || value.parts.length > 8
+  ) throw new Error("messaging composite invocation is malformed");
+  const seen = new Set<string>();
+  const parts = value.parts.map((candidate, index): MessagingCompositeInvocationPartV1 => {
+    if (!isRecord(candidate) || !hasExactKeys(candidate, [
+      "partId", "text", "replyRef", "replyToProviderId", "input", "inputHash",
+    ])) throw new Error("messaging composite invocation part is malformed");
+    if (
+      typeof candidate.partId !== "string"
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(candidate.partId)
+      || seen.has(candidate.partId)
+      || typeof candidate.text !== "string"
+      || candidate.text.length < 1
+      || Buffer.byteLength(candidate.text, "utf8") > 65_536
+      || candidate.replyRef !== null
+        && (typeof candidate.replyRef !== "string" || !/^wmreply_[A-Za-z0-9_-]{22}$/u.test(candidate.replyRef))
+      || candidate.replyToProviderId !== null
+        && (typeof candidate.replyToProviderId !== "string"
+          || candidate.replyToProviderId.length < 1
+          || Buffer.byteLength(candidate.replyToProviderId, "utf8") > 4_096
+          || /[\0\r\n]/u.test(candidate.replyToProviderId))
+      || !isRecord(candidate.input)
+    ) throw new Error(`messaging composite invocation part ${index + 1} is malformed`);
+    seen.add(candidate.partId);
+    const input = parsePlanInput(candidate.input);
+    const inputHash = messagingDigest(candidate.inputHash, "messaging composite invocation part input hash");
+    if (sha256(canonicalJson(input)) !== inputHash) {
+      throw new Error("messaging composite invocation part input hash disagrees");
+    }
+    return Object.freeze({
+      partId: candidate.partId,
+      text: candidate.text,
+      replyRef: candidate.replyRef as string | null,
+      replyToProviderId: candidate.replyToProviderId as string | null,
+      input,
+      inputHash,
+    });
+  });
+  const parsed: MessagingCompositeInvocationPlanV1 = Object.freeze({
+    schemaVersion: 1,
+    format: "wrench.messaging-composite-invocation",
+    routeRef: value.routeRef,
+    contextRef: value.contextRef,
+    clientIntentSha256: messagingDigest(value.clientIntentSha256, "messaging composite client intent"),
+    turnDigest: messagingDigest(value.turnDigest, "messaging composite turn digest"),
+    previewDigest: messagingDigest(value.previewDigest, "messaging composite preview digest"),
+    contextLimit: value.contextLimit,
+    baseExactDataRevision: messagingDigest(value.baseExactDataRevision, "messaging composite base data revision"),
+    baseLatestMessageRevision: messagingDigest(value.baseLatestMessageRevision, "messaging composite base message revision"),
+    baseRouteStateRevision: messagingDigest(value.baseRouteStateRevision, "messaging composite base route-state revision"),
+    recipient: Object.freeze({
+      network: value.recipient.network,
+      conversation: Object.freeze({
+        kind: value.recipient.conversation.kind,
+        title: value.recipient.conversation.title as string | null,
+        participantCount: value.recipient.conversation.participantCount,
+      }),
+    }),
+    parts: Object.freeze(parts),
+  });
+  const exactTurnDigest = sha256(canonicalJson({
+    schemaVersion: 1,
+    format: "wrench.messaging-turn",
+    clientIntentSha256: parsed.clientIntentSha256,
+    routeRef: parsed.routeRef,
+    contextRef: parsed.contextRef,
+    parts: parsed.parts.map((part) => ({
+      partId: part.partId,
+      text: part.text,
+      replyRef: part.replyRef,
+    })),
+  }));
+  if (exactTurnDigest !== parsed.turnDigest) {
+    throw new Error("messaging composite turn digest disagrees with its exact parts");
+  }
+  return parsed;
+}
+
 function parseStoredPlan(value: unknown): StoredPlan {
   if (!isRecord(value) || !hasExactKeys(value, ["digest", "plan"]) || typeof value.digest !== "string" || !/^[a-f0-9]{64}$/u.test(value.digest) || !isRecord(value.plan)) {
     throw new Error("stored plan is malformed");
@@ -1992,6 +2283,7 @@ function parseStoredPlan(value: unknown): StoredPlan {
   if (portablePluginPlan) planKeys.push("portablePluginContract");
   if (localCliPlan) planKeys.push("localCliContract");
   if (Object.hasOwn(raw, "duplicateRisk")) planKeys.push("duplicateRisk");
+  if (Object.hasOwn(raw, "messagingComposite")) planKeys.push("messagingComposite");
   if (!hasExactKeys(raw, planKeys)) {
     throw new Error("stored plan is malformed");
   }
@@ -2167,6 +2459,9 @@ function parseStoredPlan(value: unknown): StoredPlan {
     ...(Object.hasOwn(raw, "duplicateRisk")
       ? { duplicateRisk: parseInvocationDuplicateRisk(raw.duplicateRisk) }
       : {}),
+    ...(Object.hasOwn(raw, "messagingComposite")
+      ? { messagingComposite: parseMessagingCompositeInvocationPlan(raw.messagingComposite) }
+      : {}),
   };
   if (
     common.duplicateRisk !== undefined
@@ -2178,6 +2473,19 @@ function parseStoredPlan(value: unknown): StoredPlan {
     )
   ) {
     throw new Error("stored duplicate-risk plan is outside the supported v1 scope");
+  }
+  if (common.messagingComposite !== undefined) {
+    const composite = common.messagingComposite;
+    if (
+      risk !== "R3"
+      || dispatches.length !== composite.parts.length
+      || dispatches.some((dispatch, index) =>
+        dispatch.id !== `messaging.part[${index + 1}]`
+        || dispatch.description !== `Submit ordered messaging turn part ${index + 1}`)
+      || canonicalJson(input) !== canonicalJson(composite.parts[0]!.input)
+      || inputHash !== messagingCompositeInputHash(composite)
+      || common.duplicateRisk !== undefined
+    ) throw new Error("stored messaging composite has contradictory invocation state");
   }
   const plan: InvocationPlan =
     localCliPlan && localCliContract !== null
@@ -2201,7 +2509,7 @@ function parseStoredPlan(value: unknown): StoredPlan {
           : reviewedTemplatePlan && reviewedTemplateContract !== null
             ? { ...common, schemaVersion: 5, transport: "reviewed-template-api", reviewedTemplateContract }
             : { ...common, schemaVersion: 2, transport: "browser" };
-  if (sha256(canonicalJson(plan)) !== value.digest) throw new Error("stored plan failed its digest check");
+  if (invocationPlanDigest(plan) !== value.digest) throw new Error("stored plan failed its digest check");
   return { digest: value.digest, plan };
 }
 
@@ -2443,17 +2751,50 @@ function validateFreshPlan(
   const platformInput = inputResult.ok
     ? validatePlatformOperationInput(manifest, plan.operation, inputResult.value)
     : inputResult;
-  if (!platformInput.ok || sha256(canonicalJson(platformInput.ok ? platformInput.value : null)) !== plan.inputHash) {
+  const plannedInputIsCurrent = plan.messagingComposite === undefined
+    ? sha256(canonicalJson(platformInput.ok ? platformInput.value : null)) === plan.inputHash
+    : platformInput.ok
+      && canonicalJson(platformInput.value) === canonicalJson(plan.messagingComposite.parts[0]!.input)
+      && messagingCompositeInputHash(plan.messagingComposite) === plan.inputHash;
+  if (!platformInput.ok || !plannedInputIsCurrent) {
     throw new Error("planned input failed validation; preview the action again");
   }
   const pluginResolution = resolveCodeOwnedPluginOperation(operation, registry);
-  const dispatches = pluginResolution !== null
-    ? runProviderPluginPlanConformance(
-        pluginResolution.operation,
-        platformInput.value,
-      )
+  const dispatches = plan.messagingComposite !== undefined
+    ? (() => {
+        if (pluginResolution === null) {
+          throw new Error("messaging composite action lost its provider plugin binding");
+        }
+        for (const part of plan.messagingComposite.parts) {
+          const raw = Object.fromEntries(Object.entries(part.input).map(([key, value]) => [
+            key,
+            isInputArray(value)
+              ? value.map((item) => isFileInputValue(item) ? item.reference : item)
+              : isFileInputValue(value) ? value.reference : value,
+          ]));
+          const checked = validateOperationInput(operation.input, raw, manifest.origins);
+          const normalized = checked.ok
+            ? validatePlatformOperationInput(manifest, plan.operation, checked.value)
+            : checked;
+          if (
+            !normalized.ok
+            || canonicalJson(normalized.value) !== canonicalJson(part.input)
+            || pluginResolution.operation.validateInput(normalized.value).length > 0
+            || runProviderPluginPlanConformance(pluginResolution.operation, normalized.value).length !== 1
+          ) throw new Error("messaging composite part changed validity; preview the action again");
+        }
+        return plan.messagingComposite.parts.map((_part, index) => ({
+          id: `messaging.part[${index + 1}]`,
+          description: `Submit ordered messaging turn part ${index + 1}`,
+        }));
+      })()
+    : pluginResolution !== null
+      ? runProviderPluginPlanConformance(
+          pluginResolution.operation,
+          platformInput.value,
+        )
       : isReviewedTemplateOperation(operation)
-        ? planReviewedTemplateDispatches(plan.operation, operation.risk, operation.reviewedTemplate)
+      ? planReviewedTemplateDispatches(plan.operation, operation.risk, operation.reviewedTemplate)
         : operation.browser === undefined
           ? (() => {
             throw new Error(DOM_ACTION_TRANSPORT_DISABLED_MESSAGE);
@@ -4836,6 +5177,11 @@ export async function confirmInvocation(
   },
 ): Promise<InvocationResult> {
   const environment = options.environment ?? process.env;
+  if (loadInvocationPlan(digest, environment).plan.messagingComposite !== undefined) {
+    throw new Error(
+      "messaging composite execution is unavailable until a reviewed provider executor is installed",
+    );
+  }
   const registry = options.registry ?? providerPluginRegistry;
   const now = options.now ?? new Date();
   const claimRepair = repairInterruptedConfirmationClaims(environment);

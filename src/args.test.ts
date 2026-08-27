@@ -1148,6 +1148,54 @@ describe("wrench CLI grammar", () => {
         json: true,
       },
     });
+    expect(parseWrenchArguments([
+      "confirm",
+      "a".repeat(64),
+      "--private-output",
+      "/tmp/wrench-private/messaging-run.json",
+      "--receipt-binding-output",
+      "/tmp/wrench-private/messaging-receipt.json",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "confirm",
+        digest: "a".repeat(64),
+        headed: false,
+        privateOutput: "/tmp/wrench-private/messaging-run.json",
+        receiptBindingOutput: "/tmp/wrench-private/messaging-receipt.json",
+        json: true,
+      },
+    });
+    const runId = "00000000-0000-4000-8000-000000000000";
+    expect(parseWrenchArguments([
+      "runs",
+      "show",
+      runId,
+      "--private-output",
+      "/tmp/wrench-private/messaging-run.json",
+      "--receipt-binding-output",
+      "/tmp/wrench-private/messaging-receipt.json",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "runs-show",
+        runId,
+        privateOutput: "/tmp/wrench-private/messaging-run.json",
+        receiptBindingOutput: "/tmp/wrench-private/messaging-receipt.json",
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "confirm",
+      "a".repeat(64),
+      "--private-output",
+      "relative.json",
+    ])).toEqual({
+      ok: false,
+      message: "confirm --private-output must be a normalized absolute path",
+    });
     expect(parseWrenchArguments(["confirm", "a".repeat(64), "--idempotency-key", "new-key"]).ok).toBeFalse();
     expect(parseWrenchArguments(["linkedin", "messaging.send", "--input", "{}"])).toEqual({
       ok: true,

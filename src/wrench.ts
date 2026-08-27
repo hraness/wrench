@@ -173,6 +173,7 @@ import {
   listInvocationPlans,
   listRunReceipts,
   prepareInvocation,
+  loadInvocationPlan,
   purgeExpiredPlans,
   readRunReceipt,
   repairInterruptedConfirmationClaims,
@@ -192,11 +193,14 @@ import {
 } from "./omni-runtime";
 import {
   discoverMessagingRoutesInternal,
+  loadMessagingPreviewForConfirmationInternal,
   previewMessagingTurnInternal,
   readMessagingContextInternal,
   resolveMessagingRouteInternal,
+  showMessagingRunInternal,
   writeMessagingPrivateOutput,
 } from "./messaging-runtime";
+import { readMessagingRunIfPresent } from "./messaging-action-store";
 import {
   checkSourceProviderPluginDirectory,
   scaffoldWebProvider,
@@ -3071,6 +3075,23 @@ async function runCommand(
     return arguments_.preview ? 0 : 4;
   }
   if (arguments_.command === "confirm") {
+    const selectedPlan = loadInvocationPlan(arguments_.digest, environment);
+    if (selectedPlan.plan.messagingComposite !== undefined) {
+      if (
+        arguments_.privateOutput === undefined
+        || arguments_.receiptBindingOutput === undefined
+      ) throw new Error(
+        "messaging confirmation requires --private-output and --receipt-binding-output",
+      );
+      loadMessagingPreviewForConfirmationInternal(arguments_.digest, { environment });
+      throw new Error(
+        "messaging composite execution is unavailable until a reviewed provider executor is installed; the confirmation plan remains usable",
+      );
+    }
+    if (
+      arguments_.privateOutput !== undefined
+      || arguments_.receiptBindingOutput !== undefined
+    ) throw new Error("messaging output options require a messaging composite plan");
     const result = await confirmInvocation(arguments_.digest, {
       headed: arguments_.headed,
       environment,
@@ -3168,6 +3189,29 @@ async function runCommand(
     const removed = cancelInvocationPlan(arguments_.digest, environment);
     output.stdout(removed ? `Cancelled preview ${safe(arguments_.digest)}.\n` : `Preview ${safe(arguments_.digest)} was not present.\n`);
     return 0;
+  }
+  if (arguments_.command === "runs-show") {
+    const messaging = readMessagingRunIfPresent(arguments_.runId, environment);
+    if (messaging !== null) {
+      if (
+        arguments_.privateOutput === undefined
+        || arguments_.receiptBindingOutput === undefined
+      ) throw new Error(
+        "messaging runs show requires --private-output and --receipt-binding-output",
+      );
+      const result = showMessagingRunInternal(arguments_.runId, { environment });
+      writeMessagingPrivateOutput(arguments_.privateOutput, result.run);
+      writeMessagingPrivateOutput(
+        arguments_.receiptBindingOutput,
+        result.receiptBinding,
+      );
+      output.stdout(exactTerminalJson(result.receipt));
+      return result.receipt.state === "indeterminate" ? 5 : result.receipt.state === "submitted" ? 0 : 3;
+    }
+    if (
+      arguments_.privateOutput !== undefined
+      || arguments_.receiptBindingOutput !== undefined
+    ) throw new Error("messaging output options require a messaging run");
   }
   repairInterruptedConfirmationClaims(environment);
   repairInterruptedRunJournals(environment);

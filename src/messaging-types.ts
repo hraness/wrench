@@ -258,6 +258,70 @@ export type MessagingReceiptBindingV1 = {
   readonly recordedAt: string;
 };
 
+export type MessagingPartJournalStateV1 =
+  | "unattempted"
+  | "claimed"
+  | "dispatching"
+  | "accepted"
+  | "failed-before-dispatch"
+  | "failed-permanent"
+  | "indeterminate";
+
+export type MessagingRunV1 = {
+  readonly schemaVersion: 1;
+  readonly format: "wrench.messaging-run";
+  readonly runId: string;
+  readonly planDigest: string;
+  readonly routeRef: string;
+  readonly contextRef: string;
+  readonly clientIntentSha256: string;
+  readonly turnDigest: string;
+  readonly previewDigest: string;
+  readonly state: "pending" | "submitted" | "failed" | "partial" | "indeterminate";
+  readonly partCount: number;
+  readonly provenPartCount: number;
+  readonly possibleSubmittedPartIndex: number | null;
+  readonly terminalReason:
+    | null
+    | "context-drift"
+    | "prefix-freshness-unproven"
+    | "provider-failed-before-dispatch"
+    | "provider-result-indeterminate"
+    | "journal-recovery-required";
+  readonly parts: readonly {
+    readonly partId: string;
+    readonly text: string;
+    readonly replyRef: string | null;
+    readonly replyToProviderId: string | null;
+    readonly direction: "outgoing";
+    readonly bodySha256: string;
+    readonly state: MessagingPartJournalStateV1;
+    readonly providerMessageId: string | null;
+    readonly providerRevision: string | null;
+    readonly delivery: "unknown" | "delivered" | "failed";
+    readonly read: "unknown" | "read";
+  }[];
+  readonly startedAt: string;
+  readonly recordedAt: string;
+};
+
+export type MessagingRunReceiptV1 = {
+  readonly schemaVersion: 1;
+  readonly format: "wrench.messaging-run-receipt";
+  readonly planDigest: string;
+  readonly runId: string;
+  readonly state: "submitted" | "failed" | "partial" | "indeterminate";
+  readonly partCount: number;
+  readonly provenPartCount: number;
+  readonly clientIntentSha256: string;
+  readonly routeRefSha256: string;
+  readonly contextRefSha256: string;
+  readonly turnDigest: string;
+  readonly previewDigest: string;
+  readonly receiptBindingSha256: string;
+  readonly recordedAt: string;
+};
+
 export type MessagingClientEnvironment = Readonly<
   Record<string, string | undefined>
 >;
@@ -274,7 +338,9 @@ export type MessagingPrivateOutputReceiptV1 = {
     | "wrench.messaging-route"
     | "wrench.messaging-routes"
     | "wrench.messaging-context"
-    | "wrench.messaging-preview";
+    | "wrench.messaging-preview"
+    | "wrench.messaging-run"
+    | "wrench.messaging-receipt-binding";
   readonly artifactSha256: string;
   readonly itemCount: number;
   readonly generatedAt: string;
@@ -1151,6 +1217,8 @@ export function parseMessagingPrivateOutputReceiptV1(
     "wrench.messaging-routes",
     "wrench.messaging-context",
     "wrench.messaging-preview",
+    "wrench.messaging-run",
+    "wrench.messaging-receipt-binding",
   ]);
   if (
     source.schemaVersion !== 1

@@ -15,8 +15,11 @@ import {
   type MessagingContextMessageV1,
   type MessagingContextV1,
   type MessagingPreviewV1,
+  type MessagingReceiptBindingV1,
   type MessagingRouteV1,
   type MessagingRoutesV1,
+  type MessagingRunReceiptV1,
+  type MessagingRunV1,
 } from "./messaging-types";
 import {
   loadMessagingContextRecord,
@@ -47,11 +50,17 @@ import type {
 } from "./provider-plugin-registry";
 import { providerPluginRegistry } from "./provider-plugins";
 import {
-  createAndSaveInvocationPlan,
+  bindMessagingCompositePreviewDigest,
+  createMessagingCompositeInvocationPlan,
   executeReadInvocation,
+  invocationPlanDigest,
+  loadInvocationPlan,
   prepareInvocation,
+  saveInvocationPlan,
   type PreparedInvocation,
+  type StoredPlan,
 } from "./runtime";
+import { messagingReceiptBinding, messagingRunReceipt, readMessagingRun } from "./messaging-action-store";
 import { writePrivateJson } from "./storage";
 
 const ROUTE_TTL_MS = 15 * 60_000;
@@ -405,7 +414,9 @@ export function writeMessagingPrivateOutput(
     | MessagingRouteV1
     | MessagingRoutesV1
     | MessagingContextV1
-    | MessagingPreviewV1,
+    | MessagingPreviewV1
+    | MessagingRunV1
+    | MessagingReceiptBindingV1,
 ): MessagingPrivateOutputReceiptV1 {
   const outputPath = privateOutputPath(path);
   writePrivateJson(outputPath, artifact, { privateParent: true });
@@ -416,6 +427,10 @@ export function writeMessagingPrivateOutput(
       ? artifact.expiresAt
       : artifact.format === "wrench.messaging-route"
         ? artifact.expiresAt
+      : artifact.format === "wrench.messaging-run"
+        ? null
+      : artifact.format === "wrench.messaging-receipt-binding"
+        ? null
       : artifact.routes.reduce<string | null>((latest, route) =>
           latest === null || route.expiresAt < latest ? route.expiresAt : latest, null);
   return Object.freeze({
@@ -427,16 +442,22 @@ export function writeMessagingPrivateOutput(
       ? artifact.routes.length
       : artifact.format === "wrench.messaging-context"
         ? artifact.messages.length
-        : artifact.format === "wrench.messaging-route"
+      : artifact.format === "wrench.messaging-route"
           ? 1
-        : artifact.partCount,
+        : artifact.format === "wrench.messaging-preview"
+          || artifact.format === "wrench.messaging-run"
+          ? artifact.partCount
+          : 1,
     generatedAt: artifact.format === "wrench.messaging-routes"
       ? artifact.generatedAt
       : artifact.format === "wrench.messaging-context"
         ? artifact.binding.validatedAt
-        : artifact.format === "wrench.messaging-route"
+      : artifact.format === "wrench.messaging-route"
           ? new Date().toISOString()
-        : new Date().toISOString(),
+        : artifact.format === "wrench.messaging-run"
+          || artifact.format === "wrench.messaging-receipt-binding"
+          ? artifact.recordedAt
+          : new Date().toISOString(),
     expiresAt,
   });
 }
@@ -803,6 +824,60 @@ async function currentContextPage(
   });
 }
 
+async function currentMessagingRouteStateRevision(
+  record: MessagingRouteRecordV1,
+  resolution: MessagingResolution,
+  environment: Environment,
+  registry: ProviderPluginRegistry,
+  signal?: AbortSignal,
+): Promise<string> {
+  const action = resolution.messaging.action;
+  if (action.state !== "supported") {
+    throw new Error("messaging route does not support an actionable live preflight");
+  }
+  const target = resolution.messaging.parseTarget(record.target);
+  const invocation = prepareInvocation(
+    record.adapter.id,
+    action.livePreflight.operation,
+    action.livePreflight.input(target),
+    record.auth.id,
+    environment,
+    registry,
+  );
+  const liveResolution = operationResolution(invocation, registry);
+  if (
+    liveResolution.binding !== resolution.binding
+    || liveResolution.plugin.id !== resolution.plugin.id
+  ) throw new Error("messaging live preflight changed provider binding");
+  const live = await executeReadInvocation(invocation, {
+    headed: false,
+    environment,
+    registry,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (live.receipt.status !== "succeeded") {
+    throw new Error("messaging live route preflight did not succeed");
+  }
+  const snapshot = action.livePreflight.snapshot(live.output);
+  if (
+    typeof snapshot.conversationProviderId !== "string"
+    || snapshot.conversationProviderId !== record.conversationProviderId
+    || typeof snapshot.participantFingerprint !== "string"
+    || !/^[a-f0-9]{64}$/u.test(snapshot.participantFingerprint)
+    || snapshot.providerRevision !== null
+      && typeof snapshot.providerRevision !== "string"
+  ) throw new Error("messaging live route preflight returned malformed identity state");
+  if (
+    snapshot.participantFingerprint !== record.conversation.participantFingerprint
+    || snapshot.providerRevision !== record.conversation.providerRevision
+  ) throw new Error("messaging route participants or provider state changed; resolve a new route");
+  return sha256(canonicalJson({
+    conversationProviderId: snapshot.conversationProviderId,
+    participantFingerprint: snapshot.participantFingerprint,
+    providerRevision: snapshot.providerRevision,
+  }));
+}
+
 export async function readMessagingContextInternal(
   value: unknown,
   options: MessagingRuntimeOptions = {},
@@ -892,11 +967,6 @@ export async function previewMessagingTurnInternal(
   options: MessagingRuntimeOptions = {},
 ): Promise<MessagingPreviewV1> {
   const turn = parseMessagingTurnV1(value);
-  if (turn.parts.length !== 1) {
-    throw new Error(
-      "ordered multi-part turns require an existing-kernel composite journal with proven-prefix, uncertain-part, and unattempted-suffix state; no preview was created",
-    );
-  }
   const environment = options.environment ?? process.env;
   const registry = options.registry ?? providerPluginRegistry;
   const observation = now(options);
@@ -909,6 +979,7 @@ export async function previewMessagingTurnInternal(
   if (resolution.messaging.action.state !== "supported") {
     throw new Error("messaging route does not support checked turn actions");
   }
+  const action = resolution.messaging.action;
   const context = loadMessagingContextRecord(
     turn.contextRef,
     environment,
@@ -934,70 +1005,168 @@ export async function previewMessagingTurnInternal(
     current.exactDataRevision !== context.exactDataRevision
     || current.latestMessageRevision !== context.latestMessageRevision
   ) throw new Error("messaging context changed; read a new context before preview");
-  const part = turn.parts[0]!;
-  const replyToProviderId = part.replyRef === null
-    ? null
-    : context.replyTargets[part.replyRef];
-  if (part.replyRef !== null && replyToProviderId === undefined) {
-    throw new Error("messaging reply reference is not part of the bound context");
-  }
-  if (
-    replyToProviderId !== null
-    && resolution.messaging.action.reply !== "supported"
-  ) throw new Error("messaging route does not support exact replies");
-  const input: OperationInput = resolution.messaging.action.compileTurnPart(
-    resolution.messaging.parseTarget(record.target),
-    Object.freeze({
-      partId: part.partId,
-      text: part.text,
-      replyToProviderId: replyToProviderId ?? null,
-    }),
-  );
-  const invocation = prepareInvocation(
-    record.adapter.id,
-    resolution.messaging.action.operation,
-    input,
-    record.auth.id,
+  const baseRouteStateRevision = await currentMessagingRouteStateRevision(
+    record,
+    resolution,
     environment,
     registry,
+    options.signal,
   );
-  const actionResolution = messagingResolution(invocation, registry, "action");
-  if (
-    actionResolution.binding !== resolution.binding
-    || actionResolution.plugin.id !== resolution.plugin.id
-    || actionResolution.messaging.contractId !== resolution.messaging.contractId
-  ) throw new Error("messaging action changed provider route");
-  const stored = createAndSaveInvocationPlan(
-    invocation,
-    environment,
+  const target = resolution.messaging.parseTarget(record.target);
+  const plannedParts = turn.parts.map((part) => {
+    const replyToProviderId = part.replyRef === null
+      ? null
+      : context.replyTargets[part.replyRef];
+    if (part.replyRef !== null && replyToProviderId === undefined) {
+      throw new Error("messaging reply reference is not part of the bound context");
+    }
+    if (replyToProviderId !== null && action.reply !== "supported") {
+      throw new Error("messaging route does not support exact replies");
+    }
+    const input: OperationInput = action.compileTurnPart(
+      target,
+      Object.freeze({
+        partId: part.partId,
+        text: part.text,
+        replyToProviderId: replyToProviderId ?? null,
+      }),
+    );
+    const invocation = prepareInvocation(
+      record.adapter.id,
+      action.operation,
+      input,
+      record.auth.id,
+      environment,
+      registry,
+    );
+    const actionResolution = messagingResolution(invocation, registry, "action");
+    if (
+      actionResolution.binding !== resolution.binding
+      || actionResolution.plugin.id !== resolution.plugin.id
+      || actionResolution.messaging.contractId !== resolution.messaging.contractId
+    ) throw new Error("messaging action changed provider route");
+    return Object.freeze({
+      partId: part.partId,
+      text: part.text,
+      replyRef: part.replyRef,
+      replyToProviderId: replyToProviderId ?? null,
+      invocation,
+    });
+  });
+  const initial = createMessagingCompositeInvocationPlan(
+    plannedParts,
+    Object.freeze({
+      routeRef: record.routeRef,
+      contextRef: context.contextRef,
+      clientIntentSha256: turn.clientIntentSha256,
+      turnDigest: messagingTurnDigest(turn),
+      contextLimit: context.limit,
+      baseExactDataRevision: context.exactDataRevision,
+      baseLatestMessageRevision: context.latestMessageRevision,
+      baseRouteStateRevision,
+      recipient: Object.freeze({
+        network: resolution.messaging.network,
+        conversation: Object.freeze({
+          kind: record.conversation.kind,
+          title: record.conversation.title,
+          participantCount: record.conversation.participantCount,
+        }),
+      }),
+    }),
     observation,
     registry,
   );
+  const initialComposite = initial.plan.messagingComposite;
+  if (initialComposite === undefined) throw new Error("messaging composite plan disappeared");
+  const preview: MessagingPreviewV1 = Object.freeze({
+    schemaVersion: 1,
+    format: "wrench.messaging-preview",
+    status: "confirmation-required",
+    planDigest: initial.digest,
+    expiresAt: initial.plan.expiresAt,
+    routeRef: record.routeRef,
+    contextRef: context.contextRef,
+    clientIntentSha256: turn.clientIntentSha256,
+    turnDigest: messagingTurnDigest(turn),
+    recipient: initialComposite.recipient,
+    partCount: turn.parts.length,
+    bubbles: Object.freeze(turn.parts.map((part) => Object.freeze({
+      partId: part.partId,
+      text: part.text,
+      replyRef: part.replyRef,
+    }))),
+    risk: "R3",
+    sideEffect: initial.plan.sideEffect,
+  });
+  const stored = bindMessagingCompositePreviewDigest(
+    initial,
+    sha256(canonicalJson(preview)),
+  );
+  if (invocationPlanDigest(stored.plan) !== preview.planDigest) {
+    throw new Error("messaging preview changed its confirmation digest");
+  }
+  saveInvocationPlan(stored, environment);
+  return preview;
+}
+
+export function previewFromStoredMessagingPlan(stored: StoredPlan): MessagingPreviewV1 {
+  const composite = stored.plan.messagingComposite;
+  if (composite === undefined) throw new Error("confirmation plan is not a messaging composite");
   return Object.freeze({
     schemaVersion: 1,
     format: "wrench.messaging-preview",
     status: "confirmation-required",
     planDigest: stored.digest,
     expiresAt: stored.plan.expiresAt,
-    routeRef: record.routeRef,
-    contextRef: context.contextRef,
-    clientIntentSha256: turn.clientIntentSha256,
-    turnDigest: messagingTurnDigest(turn),
-    recipient: Object.freeze({
-      network: resolution.messaging.network,
-      conversation: Object.freeze({
-        kind: record.conversation.kind,
-        title: record.conversation.title,
-        participantCount: record.conversation.participantCount,
-      }),
-    }),
-    partCount: 1,
-    bubbles: Object.freeze([Object.freeze({
+    routeRef: composite.routeRef,
+    contextRef: composite.contextRef,
+    clientIntentSha256: composite.clientIntentSha256,
+    turnDigest: composite.turnDigest,
+    recipient: composite.recipient,
+    partCount: composite.parts.length,
+    bubbles: Object.freeze(composite.parts.map((part) => Object.freeze({
       partId: part.partId,
       text: part.text,
       replyRef: part.replyRef,
-    })]),
+    }))),
     risk: "R3",
     sideEffect: stored.plan.sideEffect,
+  });
+}
+
+export function verifyStoredMessagingPreview(stored: StoredPlan): MessagingPreviewV1 {
+  const composite = stored.plan.messagingComposite;
+  if (composite === undefined) throw new Error("confirmation plan is not a messaging composite");
+  const preview = previewFromStoredMessagingPlan(stored);
+  if (sha256(canonicalJson(preview)) !== composite.previewDigest) {
+    throw new Error("messaging preview digest does not match the exact reconstructed artifact");
+  }
+  return preview;
+}
+
+export function loadMessagingPreviewForConfirmationInternal(
+  digest: string,
+  options: Pick<MessagingRuntimeOptions, "environment"> = {},
+): MessagingPreviewV1 {
+  const stored = loadInvocationPlan(digest, options.environment ?? process.env);
+  return verifyStoredMessagingPreview(stored);
+}
+
+export function showMessagingRunInternal(
+  runId: string,
+  options: Pick<MessagingRuntimeOptions, "environment"> = {},
+): {
+  readonly run: MessagingRunV1;
+  readonly receipt: MessagingRunReceiptV1;
+  readonly receiptBinding: MessagingReceiptBindingV1;
+} {
+  const run = readMessagingRun(runId, options.environment ?? process.env).run;
+  if (run.state === "pending") {
+    throw new Error("messaging run is pending or requires checked recovery");
+  }
+  return Object.freeze({
+    run,
+    receipt: messagingRunReceipt(run),
+    receiptBinding: messagingReceiptBinding(run),
   });
 }

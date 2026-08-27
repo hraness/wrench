@@ -127,11 +127,11 @@ export const wrenchUsage = `Usage:
                 [--cache-only | --identity-only | --from-exact-cache]
                 [--headed] [--json]
   wrench <adapter> <operation> [invoke-options]  Shorthand for 'wrench invoke'
-  wrench confirm <plan-digest> [--headed] [--json]
+  wrench confirm <plan-digest> [--headed] [--private-output <absolute-path> --receipt-binding-output <absolute-path>] [--json]
   wrench plans list [--json]
   wrench plans cancel <plan-digest> --yes
   wrench runs list [--json]
-  wrench runs show <run-id> [--json]
+  wrench runs show <run-id> [--private-output <absolute-path> --receipt-binding-output <absolute-path>] [--json]
   wrench runs reconcile <run-id> [--input <json|@file|->] [--json]  Reconcile from transport-specific external evidence
 
 Local browser admission:

@@ -42,6 +42,7 @@ import type { ProviderActionContext } from "./provider-context";
 import type {
   ProviderConversationV1,
   ProviderMaterializedPageV1,
+  ProviderMessageV1,
 } from "./omni-model";
 import type { LocalCliOperationExecutor } from "./local-cli-execution";
 import type { MessagingRouteCoordinateV1 } from "./messaging-types";
@@ -195,6 +196,32 @@ export type ProviderPluginMessagingAcceptedResultV1 = {
   /** Provider accepted/submitted work; delivery and read remain unproven. */
   readonly state: "submitted";
   readonly providerMessageId: string;
+  readonly providerRevision: string | null;
+};
+
+export type ProviderPluginMessagingExpectedOwnPrefixV1 = {
+  readonly base: {
+    readonly exactDataRevision: string;
+    readonly latestMessageRevision: string;
+  };
+  readonly current: {
+    readonly exactDataRevision: string;
+    readonly latestMessageRevision: string;
+    readonly messages: readonly ProviderMessageV1[];
+  };
+  readonly accepted: readonly {
+    readonly providerMessageId: string;
+    readonly providerRevision: string | null;
+    readonly direction: "outgoing";
+    readonly bodySha256: string;
+    readonly replyToProviderId: string | null;
+  }[];
+};
+
+export type ProviderPluginMessagingLiveRouteStateV1 = {
+  readonly conversationProviderId: string;
+  readonly participantFingerprint: string;
+  readonly providerRevision: string | null;
 };
 
 export type ProviderPluginMessagingReconciliationRequestV1 = {
@@ -212,6 +239,11 @@ export type ProviderPluginMessagingActionDefinitionV1 =
       readonly state: "supported";
       readonly operation: string;
       readonly reply: "supported" | "unsupported";
+      readonly livePreflight: {
+        readonly operation: string;
+        readonly input: (target: ProviderPluginMessagingTargetV1) => OperationInput;
+        readonly snapshot: (output: unknown) => ProviderPluginMessagingLiveRouteStateV1;
+      };
       readonly compileTurnPart: (
         target: ProviderPluginMessagingTargetV1,
         part: ProviderPluginMessagingTurnPartV1,
@@ -219,6 +251,10 @@ export type ProviderPluginMessagingActionDefinitionV1 =
       readonly mapAcceptedResult: (
         output: unknown,
       ) => ProviderPluginMessagingAcceptedResultV1;
+      /** Prove that live state contains exactly the accepted own-message prefix and no drift. */
+      readonly proveExpectedOwnPrefix: (
+        value: ProviderPluginMessagingExpectedOwnPrefixV1,
+      ) => "proven" | "drift";
       /**
        * Build one explicit checked provider read. The generic facade never
        * invokes this implicitly and never changes existing runs reconciliation.
@@ -3201,8 +3237,10 @@ function freezeProviderPluginMessaging(
       "state",
       "operation",
       "reply",
+      "livePreflight",
       "compileTurnPart",
       "mapAcceptedResult",
+      "proveExpectedOwnPrefix",
       "reconciliation",
     ],
     `provider plugin surface ${surfaceId} messaging action`,
@@ -3214,14 +3252,34 @@ function freezeProviderPluginMessaging(
     || actionOperation.state !== "observed"
     || actionOperation.risk !== "R3"
     || action.reply !== "supported" && action.reply !== "unsupported"
+    || typeof action.livePreflight !== "object"
+    || action.livePreflight === null
     || typeof action.compileTurnPart !== "function"
     || typeof action.mapAcceptedResult !== "function"
+    || typeof action.proveExpectedOwnPrefix !== "function"
     || typeof action.reconciliation !== "function"
   ) {
     throw new Error(
       `provider plugin surface ${surfaceId} messaging action must bind one observed R3 operation`,
     );
   }
+  requireExactKeys(
+    action.livePreflight,
+    ["operation", "input", "snapshot"],
+    `provider plugin surface ${surfaceId} messaging action live preflight`,
+  );
+  const livePreflightOperation = operations.find((candidate) =>
+    candidate.name === action.livePreflight.operation
+    && candidate.contractVersion === 1);
+  if (
+    livePreflightOperation === undefined
+    || livePreflightOperation.state !== "observed"
+    || livePreflightOperation.risk !== "R1"
+    || typeof action.livePreflight.input !== "function"
+    || typeof action.livePreflight.snapshot !== "function"
+  ) throw new Error(
+    `provider plugin surface ${surfaceId} messaging action requires one observed R1 live preflight`,
+  );
   return Object.freeze({
     schemaVersion: 1,
     contractId: value.contractId,
@@ -3242,8 +3300,14 @@ function freezeProviderPluginMessaging(
       state: "supported",
       operation: action.operation,
       reply: action.reply,
+      livePreflight: Object.freeze({
+        operation: action.livePreflight.operation,
+        input: action.livePreflight.input,
+        snapshot: action.livePreflight.snapshot,
+      }),
       compileTurnPart: action.compileTurnPart,
       mapAcceptedResult: action.mapAcceptedResult,
+      proveExpectedOwnPrefix: action.proveExpectedOwnPrefix,
       reconciliation: action.reconciliation,
     }),
   });

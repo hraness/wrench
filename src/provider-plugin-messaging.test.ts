@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { sha256 } from "./canonical-json";
 import type { InputSchema, OperationInput } from "./model";
 import type { MessagingRouteCoordinateV1 } from "./messaging-types";
 import type { ProviderMaterializedPageV1 } from "./omni-model";
@@ -137,6 +138,22 @@ const messaging = Object.freeze({
     state: "supported",
     operation: "messaging.send",
     reply: "supported",
+    livePreflight: Object.freeze({
+      operation: "messaging.read",
+      input: (value: Readonly<Record<string, string>>) => {
+        const parsed = target(value);
+        return Object.freeze({
+          account_id: parsed.accountId!,
+          conversation_id: parsed.conversationId!,
+          limit: 1,
+        });
+      },
+      snapshot: (_output: unknown) => Object.freeze({
+        conversationProviderId: "room",
+        participantFingerprint: "a".repeat(64),
+        providerRevision: "route-rev-1",
+      }),
+    }),
     compileTurnPart: (value, part) => {
       const parsed = target(value);
       return Object.freeze({
@@ -153,8 +170,23 @@ const messaging = Object.freeze({
         || !("pendingId" in output)
         || typeof output.pendingId !== "string"
       ) throw new Error("synthetic acceptance changed");
-      return Object.freeze({ state: "submitted" as const, providerMessageId: output.pendingId });
+      return Object.freeze({
+        state: "submitted" as const,
+        providerMessageId: output.pendingId,
+        providerRevision: "message-rev-1",
+      });
     },
+    proveExpectedOwnPrefix: ({ current, accepted }) => accepted.every((expected) =>
+      current.messages.some((message) =>
+        message.providerId === expected.providerMessageId
+        && message.providerRevision === expected.providerRevision
+        && message.direction === "outgoing"
+        && message.replyToProviderId === expected.replyToProviderId
+        && message.body !== null
+        && sha256(message.body) === expected.bodySha256
+        && message.bodyTruncated !== true))
+      ? "proven" as const
+      : "drift" as const,
     reconciliation: (value, accepted) => {
       const parsed = target(value);
       return Object.freeze({
@@ -228,7 +260,57 @@ describe("provider messaging SPI conformance", () => {
     });
     if (conformed!.action.state !== "supported") throw new Error("expected supported action");
     const submitted = conformed!.action.mapAcceptedResult({ pendingId: "pending-1" });
-    expect(submitted).toEqual({ state: "submitted", providerMessageId: "pending-1" });
+    expect(submitted).toEqual({
+      state: "submitted",
+      providerMessageId: "pending-1",
+      providerRevision: "message-rev-1",
+    });
+    const message = Object.freeze({
+      kind: "message" as const,
+      providerId: "pending-1",
+      providerRevision: "message-rev-1",
+      orderedAt: "2026-08-27T12:00:00.000Z",
+      conversationProviderId: "room",
+      sender: null,
+      recipients: Object.freeze([]),
+      direction: "outgoing" as const,
+      subject: null,
+      body: "exact body",
+      bodyTruncated: false,
+      unread: null,
+      replyToProviderId: "reply-1",
+      state: "active" as const,
+      attachments: Object.freeze([]),
+    });
+    const proof = {
+      base: { exactDataRevision: "a".repeat(64), latestMessageRevision: "b".repeat(64) },
+      current: {
+        exactDataRevision: "c".repeat(64),
+        latestMessageRevision: "d".repeat(64),
+        messages: [message],
+      },
+      accepted: [{
+        providerMessageId: "pending-1",
+        providerRevision: "message-rev-1",
+        direction: "outgoing" as const,
+        bodySha256: sha256("exact body"),
+        replyToProviderId: "reply-1",
+      }],
+    } as const;
+    expect(conformed!.action.proveExpectedOwnPrefix(proof)).toBe("proven");
+    for (const accepted of [
+      { ...proof.accepted[0], providerMessageId: "other" },
+      { ...proof.accepted[0], providerRevision: "other" },
+      { ...proof.accepted[0], bodySha256: sha256("other") },
+      { ...proof.accepted[0], replyToProviderId: "other" },
+    ]) {
+      expect(conformed!.action.proveExpectedOwnPrefix({ ...proof, accepted: [accepted] }))
+        .toBe("drift");
+    }
+    expect(conformed!.action.proveExpectedOwnPrefix({
+      ...proof,
+      current: { ...proof.current, messages: [{ ...message, direction: "incoming" }] },
+    })).toBe("drift");
     expect(conformed!.action.reconciliation(exactTarget, submitted).operation)
       .toBe("messaging.read");
   });

@@ -253,9 +253,17 @@ export type WrenchArguments =
       readonly command: "confirm";
       readonly digest: string;
       readonly headed: boolean;
+      readonly privateOutput?: string;
+      readonly receiptBindingOutput?: string;
       readonly json: boolean;
     }
-  | { readonly command: "runs-show"; readonly runId: string; readonly json: boolean }
+  | {
+      readonly command: "runs-show";
+      readonly runId: string;
+      readonly privateOutput?: string;
+      readonly receiptBindingOutput?: string;
+      readonly json: boolean;
+    }
   | { readonly command: "runs-list"; readonly json: boolean }
   | { readonly command: "runs-reconcile"; readonly runId: string; readonly inputSource?: string; readonly json: boolean }
   | { readonly command: "plans-list"; readonly json: boolean }
@@ -1802,14 +1810,33 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
   if (first === "confirm") {
     const digest = raw[1];
     if (digest === undefined) return { ok: false, message: "confirm requires a plan digest" };
-    const parsed = optionValues(raw.slice(2), [], ["--headed", "--json"]);
+    const parsed = optionValues(
+      raw.slice(2),
+      ["--private-output", "--receipt-binding-output"],
+      ["--headed", "--json"],
+    );
     if (isFailure(parsed)) return parsed;
+    const privateOutput = parsed.values["--private-output"];
+    const receiptBindingOutput = parsed.values["--receipt-binding-output"];
+    for (const [label, path] of [
+      ["--private-output", privateOutput],
+      ["--receipt-binding-output", receiptBindingOutput],
+    ] as const) {
+      if (path !== undefined && (
+        !isAbsolute(path)
+        || resolve(path) !== path
+        || Buffer.byteLength(path, "utf8") > 4_096
+        || /[\0\r\n]/u.test(path)
+      )) return { ok: false, message: `confirm ${label} must be a normalized absolute path` };
+    }
     return {
       ok: true,
       value: {
         command: "confirm",
         digest,
         headed: parsed.booleans.has("--headed"),
+        ...(privateOutput === undefined ? {} : { privateOutput }),
+        ...(receiptBindingOutput === undefined ? {} : { receiptBindingOutput }),
         json: parsed.booleans.has("--json"),
       },
     };
@@ -1824,8 +1851,35 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       if (runId === undefined) return { ok: false, message: "runs show requires a run ID" };
       const issue = validRunId(runId);
       if (issue !== null) return { ok: false, message: issue };
-      const json = simpleJsonOptions(raw.slice(3), "runs show");
-      return typeof json === "boolean" ? { ok: true, value: { command: "runs-show", runId, json } } : json;
+      const parsed = optionValues(
+        raw.slice(3),
+        ["--private-output", "--receipt-binding-output"],
+        ["--json"],
+      );
+      if (isFailure(parsed)) return parsed;
+      const privateOutput = parsed.values["--private-output"];
+      const receiptBindingOutput = parsed.values["--receipt-binding-output"];
+      for (const [label, path] of [
+        ["--private-output", privateOutput],
+        ["--receipt-binding-output", receiptBindingOutput],
+      ] as const) {
+        if (path !== undefined && (
+          !isAbsolute(path)
+          || resolve(path) !== path
+          || Buffer.byteLength(path, "utf8") > 4_096
+          || /[\0\r\n]/u.test(path)
+        )) return { ok: false, message: `runs show ${label} must be a normalized absolute path` };
+      }
+      return {
+        ok: true,
+        value: {
+          command: "runs-show",
+          runId,
+          ...(privateOutput === undefined ? {} : { privateOutput }),
+          ...(receiptBindingOutput === undefined ? {} : { receiptBindingOutput }),
+          json: parsed.booleans.has("--json"),
+        },
+      };
     }
     if (raw[1] === "reconcile") {
       const runId = raw[2];

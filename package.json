@@ -245,6 +245,7 @@
     "src/media/yt-dlp.ts",
     "src/messaging-types.ts",
     "src/messaging.ts",
+    "src/messaging-action-store.ts",
     "src/messaging-runtime.ts",
     "src/messaging-store.ts",
     "src/linked-device-lifecycle-admission.ts",
