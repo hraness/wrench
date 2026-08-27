@@ -401,6 +401,7 @@ describe("provider messaging coordinate codecs", () => {
       beforeExternalBegin: () => Promise.resolve(),
       operationDeadline,
       signal: operationDeadline.signal,
+      recordPrivateIndeterminateOutcome: () => Promise.resolve(),
       environment: Object.freeze({}),
     });
     try {

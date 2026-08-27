@@ -267,6 +267,13 @@ export type MessagingPartJournalStateV1 =
   | "failed-permanent"
   | "indeterminate";
 
+/** Provider-defined diagnostic retained only inside the encrypted run. */
+export type MessagingPrivateProviderOutcomeV1 = {
+  readonly schemaVersion: 1;
+  readonly messagingContractId: string;
+  readonly code: string;
+};
+
 export type MessagingRunV1 = {
   readonly schemaVersion: 1;
   readonly format: "wrench.messaging-run";
@@ -283,6 +290,7 @@ export type MessagingRunV1 = {
   /** Durable high-water mark for accepted own messages proven in live context. */
   readonly observedAcceptedPrefixCount: number;
   readonly possibleSubmittedPartIndex: number | null;
+  readonly privateProviderOutcome: MessagingPrivateProviderOutcomeV1 | null;
   readonly terminalReason:
     | null
     | "context-drift"

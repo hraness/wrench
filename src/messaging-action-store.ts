@@ -6,6 +6,7 @@ import {
   MESSAGING_RECEIPT_BINDING_CONTRACT_ID,
   parseMessagingReceiptBindingV1,
   type MessagingPartJournalStateV1,
+  type MessagingPrivateProviderOutcomeV1,
   type MessagingReceiptBindingV1,
   type MessagingRunReceiptV1,
   type MessagingRunV1,
@@ -63,7 +64,14 @@ export type MessagingRunEventV1 =
   | {
       readonly type: "indeterminate";
       readonly index: number;
-      readonly reason: "provider-result-indeterminate" | "journal-recovery-required";
+      readonly reason: "provider-result-indeterminate";
+      readonly privateProviderOutcome: MessagingPrivateProviderOutcomeV1 | null;
+      readonly at: string;
+    }
+  | {
+      readonly type: "indeterminate";
+      readonly index: number;
+      readonly reason: "journal-recovery-required";
       readonly at: string;
     };
 
@@ -128,6 +136,31 @@ function boundedText(value: unknown, label: string, maximum: number): string {
   return value;
 }
 
+function parsePrivateProviderOutcome(
+  value: unknown,
+): MessagingPrivateProviderOutcomeV1 {
+  const source = record(value, "messaging private provider outcome");
+  exactKeys(source, [
+    "schemaVersion", "messagingContractId", "code",
+  ], "messaging private provider outcome");
+  const messagingContractId = boundedText(
+    source.messagingContractId,
+    "messaging private provider outcome contract ID",
+    256,
+  );
+  const code = boundedText(
+    source.code,
+    "messaging private provider outcome code",
+    64,
+  );
+  if (
+    source.schemaVersion !== 1
+    || !/^[a-z][a-z0-9.-]{0,255}$/u.test(messagingContractId)
+    || !/^[a-z][a-z0-9_-]{0,63}$/u.test(code)
+  ) throw new Error("messaging private provider outcome is malformed");
+  return Object.freeze({ schemaVersion: 1, messagingContractId, code });
+}
+
 function denseArray(value: unknown, label: string, maximum: number): readonly unknown[] {
   if (
     !Array.isArray(value)
@@ -168,6 +201,15 @@ function assertRun(run: MessagingRunV1): void {
       offset > 0 && part.state !== "unattempted")
   ) throw new Error("messaging run violates its ordered-prefix invariant");
   const active = run.parts[run.provenPartCount];
+  if (
+    run.privateProviderOutcome !== null
+    && (
+      run.state !== "indeterminate"
+      || run.terminalReason !== "provider-result-indeterminate"
+      || run.possibleSubmittedPartIndex !== run.provenPartCount
+      || active?.state !== "indeterminate"
+    )
+  ) throw new Error("messaging run private provider outcome is contradictory");
   if (run.state === "pending") {
     if (
       run.provenPartCount === run.partCount
@@ -225,11 +267,17 @@ function assertRun(run: MessagingRunV1): void {
 
 function parseRun(value: unknown): MessagingRunV1 {
   const source = record(value, "messaging run");
+  const hasPrivateProviderOutcome = Object.hasOwn(
+    source,
+    "privateProviderOutcome",
+  );
   exactKeys(source, [
     "schemaVersion", "format", "runId", "planDigest", "routeRef", "contextRef",
     "clientIntentSha256", "turnDigest", "previewDigest", "state", "partCount",
     "provenPartCount", "observedAcceptedPrefixCount", "possibleSubmittedPartIndex",
-    "terminalReason", "parts", "startedAt", "recordedAt",
+    "terminalReason", "parts",
+    ...(hasPrivateProviderOutcome ? ["privateProviderOutcome"] : []),
+    "startedAt", "recordedAt",
   ], "messaging run");
   if (
     source.schemaVersion !== 1
@@ -346,6 +394,11 @@ function parseRun(value: unknown): MessagingRunV1 {
     provenPartCount: source.provenPartCount,
     observedAcceptedPrefixCount: source.observedAcceptedPrefixCount,
     possibleSubmittedPartIndex: source.possibleSubmittedPartIndex as number | null,
+    privateProviderOutcome: hasPrivateProviderOutcome
+      ? source.privateProviderOutcome === null
+        ? null
+        : parsePrivateProviderOutcome(source.privateProviderOutcome)
+      : null,
     terminalReason: source.terminalReason as MessagingRunV1["terminalReason"],
     parts: Object.freeze(parts),
     startedAt,
@@ -412,6 +465,7 @@ export function initializeMessagingRun(
     provenPartCount: 0,
     observedAcceptedPrefixCount: 0,
     possibleSubmittedPartIndex: null,
+    privateProviderOutcome: null,
     terminalReason: null,
     parts: plan.parts.map((part) => ({
       partId: part.partId,
@@ -502,6 +556,7 @@ export function transitionMessagingRun(
   let provenPartCount = run.provenPartCount;
   let observedAcceptedPrefixCount = run.observedAcceptedPrefixCount;
   let possibleSubmittedPartIndex = run.possibleSubmittedPartIndex;
+  let privateProviderOutcome = run.privateProviderOutcome;
   let terminalReason = run.terminalReason;
   if (event.type === "claimed") {
     if (current.state !== "unattempted") throw new Error("messaging part was already claimed");
@@ -533,10 +588,18 @@ export function transitionMessagingRun(
     if (current.state !== "dispatching" && current.state !== "claimed") {
       throw new Error("indeterminate part was not active");
     }
+    if (
+      event.reason === "provider-result-indeterminate"
+      && event.privateProviderOutcome !== null
+      && current.state !== "dispatching"
+    ) throw new Error("private provider outcome did not cross dispatch");
     nextState = "indeterminate";
     state = "indeterminate";
     possibleSubmittedPartIndex = event.index;
     terminalReason = event.reason;
+    privateProviderOutcome = event.reason === "provider-result-indeterminate"
+      ? event.privateProviderOutcome
+      : null;
   }
   const parts = run.parts.map((part, index) => index === event.index
     ? Object.freeze({ ...part, state: nextState, providerMessageId, providerRevision })
@@ -550,6 +613,7 @@ export function transitionMessagingRun(
     provenPartCount,
     observedAcceptedPrefixCount,
     possibleSubmittedPartIndex,
+    privateProviderOutcome,
     terminalReason,
     parts,
     recordedAt: timestamp(event.at),

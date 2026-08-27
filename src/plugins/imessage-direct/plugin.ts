@@ -175,6 +175,8 @@ export const imessageDirectPlugin = defineProviderPlugin({
               operationDeadline: attempt.operationDeadline,
               registerCleanupBarrier: attempt.registerCleanupBarrier,
               beforeDispatch: async () => attempt.beforeExternalBegin(),
+              afterIndeterminateOutcome: (outcome) =>
+                attempt.recordPrivateIndeterminateOutcome(outcome),
             },
           );
           if (result.status !== "succeeded" || result.output === null) {

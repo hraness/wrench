@@ -15,6 +15,7 @@ import {
   type MessagingContextMessageV1,
   type MessagingContextV1,
   type MessagingPreviewV1,
+  type MessagingPrivateProviderOutcomeV1,
   type MessagingReceiptBindingV1,
   type MessagingRouteV1,
   type MessagingRoutesV1,
@@ -1283,13 +1284,26 @@ function stopMessagingIndeterminate(
   snapshot: MessagingRunSnapshotV1,
   reason: "provider-result-indeterminate" | "journal-recovery-required",
   options: MessagingRuntimeOptions,
+  privateProviderOutcome: MessagingPrivateProviderOutcomeV1 | null = null,
 ): MessagingRunSnapshotV1 {
-  return updateMessagingRun(snapshot, {
-    type: "indeterminate",
-    index: snapshot.run.provenPartCount,
-    reason,
-    at: messagingTransitionTime(snapshot, options),
-  }, options.environment ?? process.env);
+  return updateMessagingRun(
+    snapshot,
+    reason === "provider-result-indeterminate"
+      ? {
+          type: "indeterminate",
+          index: snapshot.run.provenPartCount,
+          reason,
+          privateProviderOutcome,
+          at: messagingTransitionTime(snapshot, options),
+        }
+      : {
+          type: "indeterminate",
+          index: snapshot.run.provenPartCount,
+          reason,
+          at: messagingTransitionTime(snapshot, options),
+        },
+    options.environment ?? process.env,
+  );
 }
 
 function stopMessagingAfterError(
@@ -1460,6 +1474,23 @@ export async function executeMessagingCompositeInternal(
       if (operation === undefined) {
         throw new Error("messaging action lost its exact operation recipe");
       }
+      const recordPrivateIndeterminateOutcome = async (
+        code: string,
+      ): Promise<void> => {
+        if (!crossedExternalBoundary) {
+          throw new Error("messaging provider outcome preceded its durable dispatch boundary");
+        }
+        snapshot = stopMessagingIndeterminate(
+          snapshot,
+          "provider-result-indeterminate",
+          options,
+          Object.freeze({
+            schemaVersion: 1,
+            messagingContractId: actionResolution.messaging.contractId,
+            code,
+          }),
+        );
+      };
       const beforeExternalBegin = async (): Promise<void> => {
         if (crossedExternalBoundary) {
           throw new Error("messaging provider attempted more than one dispatch boundary");
@@ -1484,6 +1515,7 @@ export async function executeMessagingCompositeInternal(
           boundAuth,
           Object.freeze({
             beforeExternalBegin,
+            recordPrivateIndeterminateOutcome,
             operationDeadline,
             signal: operationDeadline.signal,
             ...(registerCleanupBarrier === undefined
@@ -1549,6 +1581,7 @@ export async function executeMessagingCompositeInternal(
               "messaging provider action",
             ).finally(() => operationDeadline.dispose());
           })();
+      if (snapshot.run.state !== "pending") return snapshot;
       if (!crossedExternalBoundary) {
         throw new Error("messaging provider returned without crossing its durable dispatch boundary");
       }

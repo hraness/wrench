@@ -105,6 +105,11 @@ export type ImsgTransportOutcome =
   | "still_in_flight"
   | "unknown_post_dispatch";
 
+export type ImsgIndeterminateTransportOutcome = Exclude<
+  ImsgTransportOutcome,
+  "accepted"
+>;
+
 export type ImsgRpcInvocation = Readonly<{
   binary: string;
   arguments: readonly ["rpc"];
@@ -1223,6 +1228,37 @@ function uncertainOutput(
   });
 }
 
+export function parseImsgPrivateIndeterminateOutcome(
+  value: unknown,
+): ImsgIndeterminateTransportOutcome {
+  const source = record(value, "direct iMessage indeterminate output");
+  exactKeys(source, [
+    "provider",
+    "operation",
+    "accountSelection",
+    "service",
+    "transport",
+    "smsFallback",
+    "transportOutcome",
+    "retryAuthorized",
+  ], [], "direct iMessage indeterminate output");
+  const outcome = source.transportOutcome;
+  if (
+    source.provider !== "imessage"
+    || source.operation !== "messaging.send"
+    || source.accountSelection !== IMSG_ACCOUNT_SELECTION
+    || source.service !== IMSG_SERVICE
+    || source.transport !== IMSG_TRANSPORT
+    || source.smsFallback !== IMSG_SMS_FALLBACK
+    || source.retryAuthorized !== false
+    || outcome !== "not_started"
+      && outcome !== "may_have_completed"
+      && outcome !== "still_in_flight"
+      && outcome !== "unknown_post_dispatch"
+  ) throw new Error("direct iMessage indeterminate output is malformed");
+  return outcome;
+}
+
 export async function executeImsgDirectOperation(
   recipe: LocalCliRecipe,
   inputValue: OperationInput,
@@ -1334,12 +1370,32 @@ export async function executeImsgDirectMessagingPart(
   authValue: WrenchAuth,
   options: LocalCliExecutionOptions & Readonly<{
     dependencies?: ImsgDirectRuntimeDependencies;
+    afterIndeterminateOutcome?: (
+      outcome: ImsgIndeterminateTransportOutcome,
+    ) => Promise<void>;
   }> = {},
 ): Promise<LocalCliExecution> {
   if (recipe.action !== "messaging.send") {
     throw new Error("direct iMessage messaging-part execution requires messaging.send");
   }
-  return await executeImsgDirectOperation(recipe, inputValue, authValue, options);
+  const { afterIndeterminateOutcome, ...executionOptions } = options;
+  const result = await executeImsgDirectOperation(
+    recipe,
+    inputValue,
+    authValue,
+    executionOptions,
+  );
+  if (result.status === "indeterminate") {
+    if (
+      result.dispatchStarted !== true
+      || result.dispatch.started !== 1
+      || result.dispatch.verified !== 0
+      || result.output === null
+    ) throw new Error("direct iMessage indeterminate dispatch evidence is malformed");
+    const outcome = parseImsgPrivateIndeterminateOutcome(result.output);
+    await afterIndeterminateOutcome?.(outcome);
+  }
+  return result;
 }
 
 function parseAcceptedTarget(

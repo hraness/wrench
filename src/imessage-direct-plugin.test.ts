@@ -35,7 +35,9 @@ import {
 import {
   executeImsgDirectOperation,
   executeImsgDirectMessagingPart,
+  parseImsgPrivateIndeterminateOutcome,
   runImsgRpc,
+  type ImsgIndeterminateTransportOutcome,
   type ImsgRpcInvocation,
   type ImsgRpcInvocationResult,
   type ImsgTransportOutcome,
@@ -290,6 +292,9 @@ describe("reviewed direct iMessage provider", () => {
           afterDispatchVerified: async () => {
             events.push("verified");
           },
+          afterIndeterminateOutcome: async (outcome) => {
+            events.push(`private-outcome:${outcome}`);
+          },
         },
       );
       expect(result.status).toBe("succeeded");
@@ -470,8 +475,9 @@ describe("reviewed direct iMessage provider", () => {
     test(`preserves ${outcome} after spawn and never authorizes retry`, async () => {
       const storePath = temporaryRoot("wrench-imessage-store-");
       const calls: ImsgRpcInvocation[] = [];
+      const privateOutcomes: ImsgIndeterminateTransportOutcome[] = [];
       try {
-        const result = await executeImsgDirectOperation(
+        const result = await executeImsgDirectMessagingPart(
           recipe("messaging.send"),
           {
             chat_guid: CHAT_GUID,
@@ -487,6 +493,9 @@ describe("reviewed direct iMessage provider", () => {
               run: runner(calls, storePath, outcome),
             },
             beforeDispatch: async () => undefined,
+            afterIndeterminateOutcome: async (recorded) => {
+              privateOutcomes.push(recorded);
+            },
           },
         );
         expect(result.status).toBe("indeterminate");
@@ -496,6 +505,7 @@ describe("reviewed direct iMessage provider", () => {
           retryAuthorized: false,
         });
         expect(calls).toHaveLength(2);
+        expect(privateOutcomes).toEqual([outcome]);
       } finally {
         cleanupTemporaryRoots();
       }
@@ -505,8 +515,9 @@ describe("reviewed direct iMessage provider", () => {
   test("treats a lost post-spawn response as indeterminate without retry", async () => {
     const storePath = temporaryRoot("wrench-imessage-store-");
     let calls = 0;
+    const privateOutcomes: ImsgIndeterminateTransportOutcome[] = [];
     try {
-      const result = await executeImsgDirectOperation(
+      const result = await executeImsgDirectMessagingPart(
         recipe("messaging.send"),
         {
           chat_guid: CHAT_GUID,
@@ -533,6 +544,9 @@ describe("reviewed direct iMessage provider", () => {
             },
           },
           beforeDispatch: async () => undefined,
+          afterIndeterminateOutcome: async (outcome) => {
+            privateOutcomes.push(outcome);
+          },
         },
       );
       expect(result.status).toBe("indeterminate");
@@ -541,9 +555,32 @@ describe("reviewed direct iMessage provider", () => {
         retryAuthorized: false,
       });
       expect(calls).toBe(2);
+      expect(privateOutcomes).toEqual(["unknown_post_dispatch"]);
     } finally {
       cleanupTemporaryRoots();
     }
+  });
+
+  test("strictly parses only private indeterminate iMessage outcome envelopes", () => {
+    const valid = {
+      provider: "imessage",
+      operation: "messaging.send",
+      accountSelection: "device-default",
+      service: "iMessage",
+      transport: "applescript",
+      smsFallback: false,
+      transportOutcome: "may_have_completed",
+      retryAuthorized: false,
+    } as const;
+    expect(parseImsgPrivateIndeterminateOutcome(valid)).toBe("may_have_completed");
+    expect(() => parseImsgPrivateIndeterminateOutcome({
+      ...valid,
+      transportOutcome: "accepted",
+    })).toThrow("malformed");
+    expect(() => parseImsgPrivateIndeterminateOutcome({
+      ...valid,
+      privateBody: PRIVATE_TEXT,
+    })).toThrow("unsupported fields");
   });
 
   test("reaps a timed-out detached RPC process group", async () => {

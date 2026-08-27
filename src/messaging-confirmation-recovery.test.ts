@@ -9,7 +9,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { canonicalJson, sha256 } from "./canonical-json";
-import { initializeMessagingRun, readMessagingRun } from "./messaging-action-store";
+import {
+  initializeMessagingRun,
+  readMessagingRun,
+  updateMessagingRun,
+} from "./messaging-action-store";
 import { messagingTurnDigest, parseMessagingTurnV1 } from "./messaging-types";
 import {
   invocationPlanDigest,
@@ -228,4 +232,61 @@ describe("messaging confirmation crash recovery ordering", () => {
       });
     });
   }
+
+  test("preserves private provider outcome while projecting a generic repaired receipt", () => {
+    const testState = state();
+    const stored = storedPlan();
+    const planPath = saveInvocationPlan(stored, testState.environment);
+    const canonicalStateRoot = dirname(dirname(planPath));
+    const runId = "123e4567-e89b-42d3-a456-426614174013";
+    let snapshot = initializeMessagingRun(
+      runId,
+      stored.digest,
+      stored.plan.messagingComposite!,
+      testState.environment,
+      "2026-08-27T12:00:00.000Z",
+    );
+    snapshot = updateMessagingRun(snapshot, {
+      type: "claimed",
+      index: 0,
+      observedAcceptedPrefixCount: 0,
+      at: "2026-08-27T12:00:01.000Z",
+    }, testState.environment);
+    snapshot = updateMessagingRun(snapshot, {
+      type: "dispatching",
+      index: 0,
+      at: "2026-08-27T12:00:02.000Z",
+    }, testState.environment);
+    snapshot = updateMessagingRun(snapshot, {
+      type: "indeterminate",
+      index: 0,
+      reason: "provider-result-indeterminate",
+      privateProviderOutcome: {
+        schemaVersion: 1,
+        messagingContractId: "wrench.provider-messaging.imessage-direct.v1",
+        code: "unknown_post_dispatch",
+      },
+      at: "2026-08-27T12:00:03.000Z",
+    }, testState.environment);
+    const receiptPath = join(canonicalStateRoot, "runs", `${runId}.json`);
+    ensurePrivateStateDirectory(dirname(receiptPath), testState.environment);
+    writePrivateJson(receiptPath, pendingReceipt(stored, runId));
+    const claimPath = join(dirname(planPath), `${stored.digest}.claim.json`);
+    writePrivateJson(claimPath, deadClaim(stored.digest, runId));
+
+    expect(repairInterruptedConfirmationClaims(testState.environment)).toEqual({
+      inspected: 1,
+      released: 1,
+      invalid: 0,
+      active: 0,
+    });
+    expect(readMessagingRun(runId, testState.environment).run.privateProviderOutcome)
+      .toEqual(snapshot.run.privateProviderOutcome);
+    const ordinaryReceipt = canonicalJson(readRunReceipt(runId, testState.environment));
+    expect(ordinaryReceipt).not.toContain("unknown_post_dispatch");
+    expect(ordinaryReceipt).not.toContain("imessage-direct");
+    expect(ordinaryReceipt).toContain("provider-result-indeterminate");
+    expect(existsSync(planPath)).toBeFalse();
+    expect(existsSync(claimPath)).toBeFalse();
+  });
 });

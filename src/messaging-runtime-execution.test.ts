@@ -59,6 +59,9 @@ type Behavior =
   | "fail-before-fence"
   | "fail-after-fence"
   | "malformed-after-fence"
+  | "private-outcome-before-fence"
+  | "private-outcome-after-fence"
+  | "invalid-private-outcome-after-fence"
   | "omit-fence"
   | "double-fence";
 
@@ -70,6 +73,7 @@ type HarnessOptions = {
   ) => ProviderPluginMessagingExpectedOwnPrefixProofV1;
   readonly afterContextRead?: () => void;
   readonly contextLimit?: number;
+  readonly privateOutcomeCode?: string;
 };
 
 function message(
@@ -350,6 +354,9 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     const behavior = options.behavior?.(index) ?? "success";
     const pendingId = `accepted-${index + 1}`;
     if (behavior === "fail-before-fence") throw new Error("synthetic pre-dispatch failure");
+    if (behavior === "private-outcome-before-fence") {
+      await attempt.recordPrivateIndeterminateOutcome("still_in_flight");
+    }
     if (behavior === "omit-fence") return { pendingId };
     await attempt.beforeExternalBegin();
     dispatches += 1;
@@ -363,6 +370,14 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     );
     messages.push(acceptedMessage);
     options.afterMutation?.(messages, index);
+    if (behavior === "private-outcome-after-fence") {
+      await attempt.recordPrivateIndeterminateOutcome(
+        options.privateOutcomeCode ?? "still_in_flight",
+      );
+    }
+    if (behavior === "invalid-private-outcome-after-fence") {
+      await attempt.recordPrivateIndeterminateOutcome("private body must not fit");
+    }
     if (behavior === "double-fence") await attempt.beforeExternalBegin();
     if (behavior === "fail-after-fence") throw new Error("synthetic post-dispatch failure");
     if (behavior === "malformed-after-fence") return { pendingId: null };
@@ -792,6 +807,100 @@ describe("generic messaging composite execution", () => {
       expect(setup.dispatches()).toBe(1);
     });
   }
+
+  for (const code of [
+    "not_started",
+    "may_have_completed",
+    "still_in_flight",
+    "unknown_post_dispatch",
+  ] as const) {
+    test(`keeps ${code} encrypted, out of ordinary receipts, and unretriable`, async () => {
+      const setup = await harness(1, {
+        behavior: () => "private-outcome-after-fence",
+        privateOutcomeCode: code,
+      });
+      const result = await confirmMessagingInvocation(setup.preview.planDigest, {
+        environment: setup.environment,
+        registry: setup.registry,
+        now: setup.observation,
+      });
+      expect(result.run).toMatchObject({
+        state: "indeterminate",
+        provenPartCount: 0,
+        possibleSubmittedPartIndex: 0,
+        terminalReason: "provider-result-indeterminate",
+        privateProviderOutcome: {
+          schemaVersion: 1,
+          messagingContractId: "wrench.provider-messaging.synthetic-fourth.v1",
+          code,
+        },
+      });
+      expect(setup.dispatches()).toBe(1);
+      expect(setup.attempts()).toBe(1);
+
+      const publicBytes = canonicalJson({
+        receipt: result.receipt,
+        receiptBinding: result.receiptBinding,
+        ordinaryReceipt: result.ordinaryReceipt,
+      });
+      expect(publicBytes).not.toContain(code);
+      expect(publicBytes).not.toContain("synthetic-fourth.v1");
+      const encrypted = readFileSync(
+        join(setup.root, "messaging", "runs", `${result.run.runId}.json`),
+        "utf8",
+      );
+      expect(encrypted).not.toContain(code);
+      expect(encrypted).not.toContain("synthetic-fourth.v1");
+
+      await expect(confirmMessagingInvocation(setup.preview.planDigest, {
+        environment: setup.environment,
+        registry: setup.registry,
+        now: setup.observation,
+      })).rejects.toThrow();
+      expect(setup.dispatches()).toBe(1);
+    });
+  }
+
+  test("rejects pre-fence or non-symbolic private outcomes without enabling retry", async () => {
+    const beforeFence = await harness(1, {
+      behavior: () => "private-outcome-before-fence",
+    });
+    const beforeFenceResult = await confirmMessagingInvocation(
+      beforeFence.preview.planDigest,
+      {
+        environment: beforeFence.environment,
+        registry: beforeFence.registry,
+        now: beforeFence.observation,
+      },
+    );
+    expect(beforeFenceResult.run).toMatchObject({
+      state: "failed",
+      terminalReason: "provider-failed-before-dispatch",
+      privateProviderOutcome: null,
+    });
+    expect(beforeFence.dispatches()).toBe(0);
+
+    const invalid = await harness(1, {
+      behavior: () => "invalid-private-outcome-after-fence",
+    });
+    const invalidResult = await confirmMessagingInvocation(invalid.preview.planDigest, {
+      environment: invalid.environment,
+      registry: invalid.registry,
+      now: invalid.observation,
+    });
+    expect(invalidResult.run).toMatchObject({
+      state: "indeterminate",
+      terminalReason: "provider-result-indeterminate",
+      privateProviderOutcome: null,
+    });
+    expect(invalid.dispatches()).toBe(1);
+    await expect(confirmMessagingInvocation(invalid.preview.planDigest, {
+      environment: invalid.environment,
+      registry: invalid.registry,
+      now: invalid.observation,
+    })).rejects.toThrow();
+    expect(invalid.dispatches()).toBe(1);
+  });
 
   test("requires exactly one durable provider fence", async () => {
     const omitted = await harness(1, { behavior: () => "omit-fence" });

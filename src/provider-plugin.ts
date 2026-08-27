@@ -261,6 +261,11 @@ export type ProviderPluginMessagingActionAttemptV1 = {
   /** One kernel-owned total budget for lazy loading and every provider step. */
   readonly operationDeadline: ProviderPluginMessagingActionDeadlineV1;
   readonly signal: AbortSignal;
+  /**
+   * Durably terminalize this fenced attempt with one provider-owned symbolic
+   * diagnostic. This never authorizes retry and accepts no message data or IDs.
+   */
+  readonly recordPrivateIndeterminateOutcome: (code: string) => Promise<void>;
   readonly environment: Readonly<Record<string, string | undefined>>;
   /** Kernel-owned durable cleanup publication for provider-private resources. */
   readonly registerCleanupBarrier?: ProviderPluginCleanupBarrierRegistrar;

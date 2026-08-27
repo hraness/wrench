@@ -3,8 +3,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { canonicalJson, sha256 } from "./canonical-json";
 import { assertProperty, fc } from "./test-support";
-import { sha256 } from "./canonical-json";
 import {
   initializeMessagingRun,
   messagingExpectedOwnPrefix,
@@ -222,6 +222,7 @@ describe("messaging composite run journal", () => {
       type: "indeterminate",
       index: 1,
       reason: "provider-result-indeterminate",
+      privateProviderOutcome: null,
       at: at(6),
     });
     expect([indeterminate.state, indeterminate.provenPartCount, indeterminate.possibleSubmittedPartIndex])
@@ -267,6 +268,73 @@ describe("messaging composite run journal", () => {
     expect(binding.state).toBe("submitted");
     expect(binding.routeRefSha256).not.toContain("wmroute");
     expect(messagingRunReceipt(submitted).receiptBindingSha256).toBe(binding.receiptSha256);
+  });
+
+  test("retains bounded private provider outcomes only in the encrypted run", () => {
+    const testState = state();
+    const initial = initializeMessagingRun(
+      runId,
+      "9".repeat(64),
+      plan(),
+      testState.environment,
+      startedAt,
+    );
+    const claimed = updateMessagingRun(initial, {
+      type: "claimed",
+      index: 0,
+      observedAcceptedPrefixCount: 0,
+      at: "2026-08-27T12:00:01.000Z",
+    }, testState.environment);
+    const dispatching = updateMessagingRun(claimed, {
+      type: "dispatching",
+      index: 0,
+      at: "2026-08-27T12:00:02.000Z",
+    }, testState.environment);
+    const privateProviderOutcome = Object.freeze({
+      schemaVersion: 1 as const,
+      messagingContractId: "wrench.provider-messaging.imessage-direct.v1",
+      code: "still_in_flight",
+    });
+    const terminal = updateMessagingRun(dispatching, {
+      type: "indeterminate",
+      index: 0,
+      reason: "provider-result-indeterminate",
+      privateProviderOutcome,
+      at: "2026-08-27T12:00:03.000Z",
+    }, testState.environment);
+    expect(terminal.run.privateProviderOutcome).toEqual(privateProviderOutcome);
+    expect(readMessagingRun(runId, testState.environment).run.privateProviderOutcome)
+      .toEqual(privateProviderOutcome);
+
+    const encrypted = readFileSync(
+      join(testState.root, "messaging", "runs", `${runId}.json`),
+      "utf8",
+    );
+    expect(encrypted).not.toContain("still_in_flight");
+    expect(encrypted).not.toContain("imessage-direct");
+    const ordinaryReceipts = canonicalJson({
+      receipt: messagingRunReceipt(terminal.run),
+      receiptBinding: messagingReceiptBinding(terminal.run),
+    });
+    expect(ordinaryReceipts).not.toContain("still_in_flight");
+    expect(ordinaryReceipts).not.toContain("imessage-direct");
+
+    const { privateProviderOutcome: _legacyMissing, ...legacy } = initial.run;
+    expect(parseMessagingRunV1(legacy).privateProviderOutcome).toBeNull();
+    expect(() => transitionMessagingRun(dispatching.run, {
+      type: "indeterminate",
+      index: 0,
+      reason: "provider-result-indeterminate",
+      privateProviderOutcome: {
+        ...privateProviderOutcome,
+        code: "private body must not fit",
+      },
+      at: "2026-08-27T12:00:03.000Z",
+    })).toThrow("private provider outcome");
+    expect(() => parseMessagingRunV1({
+      ...initial.run,
+      privateProviderOutcome,
+    })).toThrow("private provider outcome is contradictory");
   });
 
   test("strictly rejects extra fields, null accepted IDs, and impossible prefix vectors", () => {
