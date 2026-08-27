@@ -82,6 +82,16 @@ export const wrenchUsage = `Usage:
                 [--max-participants <n>] [--json]
                 # body-free receipt/output envelope on stdout; progress on stderr
 
+  wrench messaging routes --input <-|@absolute-private-file>
+                          --private-output <absolute-mode-0600-file> [--json]
+  wrench messaging resolve --input <-|@absolute-private-file>
+                           --private-output <absolute-mode-0600-file> [--json]
+  wrench messaging context --input <-|@absolute-private-file>
+                           --private-output <absolute-mode-0600-file> [--json]
+  wrench messaging preview --input <-|@absolute-private-file>
+                           --private-output <absolute-mode-0600-file> [--json]
+                # capability refs and bodies never appear in argv or stdout
+
   wrench adapter init <id> (--origin <https-origin> | --platform <surface-id>)
                              --output <directory> [--force]
   wrench adapter sync-bundled [--json]                 Install or safely upgrade reviewed bundled manifests

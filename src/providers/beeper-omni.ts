@@ -186,6 +186,39 @@ function readInput(input: OperationInput): Readonly<{
   });
 }
 
+function exactConversationInput(input: OperationInput): Readonly<{
+  accountId: string;
+  conversationId: string;
+}> {
+  const source = record(input, "conversations.read input");
+  exactKeys(
+    source,
+    ["account_id", "conversation_id"],
+    ["max_participants"],
+    "conversations.read input",
+  );
+  if (source.max_participants !== undefined) {
+    integer(
+      source.max_participants,
+      "conversations.read input.max_participants",
+      1,
+      500,
+    );
+  }
+  return Object.freeze({
+    accountId: string(
+      source.account_id,
+      "conversations.read input.account_id",
+      512,
+    ),
+    conversationId: string(
+      source.conversation_id,
+      "conversations.read input.conversation_id",
+      2_048,
+    ),
+  });
+}
+
 function participant(value: unknown, path: string, accountId: string): OmniParticipantV1 {
   const source = record(value, path);
   exactKeys(source, [
@@ -505,6 +538,45 @@ export function materializeBeeperMessagingList(
     entities: Object.freeze(entities),
     tombstones: Object.freeze([]),
   });
+}
+
+/** Strict projection for the provider-native exact-chat lookup used by route issuance. */
+export function materializeBeeperExactConversation(
+  input: OperationInput,
+  output: unknown,
+): ProviderConversationV1 {
+  const parsed = exactConversationInput(input);
+  const source = record(output, "conversations.read output");
+  exactKeys(source, [
+    "provider",
+    "operation",
+    "accountSubject",
+    "conversation",
+  ], [], "conversations.read output");
+  if (source.provider !== "beeper" || source.operation !== "conversations.read") {
+    drift(
+      "conversations.read output",
+      "must identify the exact Beeper conversation operation",
+    );
+  }
+  subject(source.accountSubject, "conversations.read output.accountSubject");
+  const rawConversation = record(
+    source.conversation,
+    "conversations.read output.conversation",
+  );
+  if (
+    rawConversation.accountId !== parsed.accountId
+    || rawConversation.id !== parsed.conversationId
+  ) {
+    drift(
+      "conversations.read output.conversation",
+      "must bind the exact requested account and conversation",
+    );
+  }
+  return conversation(
+    source.conversation,
+    "conversations.read output.conversation",
+  );
 }
 
 export function materializeBeeperMessagingRead(

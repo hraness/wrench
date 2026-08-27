@@ -9,7 +9,8 @@
     "./src/client.ts",
     "./src/beeper-client.ts",
     "./src/index.ts",
-    "./src/omni-client.ts"
+    "./src/omni-client.ts",
+    "./src/messaging.ts"
   ],
   "packageManager": "bun@1.3.14",
   "repository": {
@@ -53,6 +54,10 @@
     "./omni": {
       "types": "./src/omni-client-types.ts",
       "import": "./dist/omni-client.js"
+    },
+    "./messaging": {
+      "types": "./src/messaging-types.ts",
+      "import": "./dist/messaging.js"
     }
   },
   "bin": {
@@ -238,6 +243,10 @@
     "src/media/whisper-cpp.ts",
     "src/media/whisper-language.ts",
     "src/media/yt-dlp.ts",
+    "src/messaging-types.ts",
+    "src/messaging.ts",
+    "src/messaging-runtime.ts",
+    "src/messaging-store.ts",
     "src/linked-device-lifecycle-admission.ts",
     "src/linked-device-lifecycle-journal.ts",
     "src/linked-device-lifecycle-runtime.ts",
@@ -318,6 +327,7 @@
     "src/read-projections.ts",
     "src/providers/beeper-local-runtime.ts",
     "src/providers/beeper-local.ts",
+    "src/providers/beeper-messaging.ts",
     "src/providers/beeper-omni.ts",
     "src/providers/bluesky-web-runtime.ts",
     "src/providers/bluesky-web.ts",
@@ -364,6 +374,7 @@
     "src/providers/whatsapp-interaction-projection-protocol.ts",
     "src/providers/whatsapp-web-runtime.ts",
     "src/providers/whatsapp-web.ts",
+    "src/providers/whatsapp-messaging.ts",
     "src/providers/whatsapp-omni.ts",
     "src/providers/x-transaction-id.ts",
     "src/providers/x-image-provenance.ts",
@@ -414,7 +425,7 @@
     "website:test": "bun test ./website ./edge",
     "website:typecheck": "tsc --noEmit --project website/tsconfig.json && tsc --noEmit --project edge/tsconfig.json",
     "website:check": "bun run website:typecheck && bun run website:test && bun run website:build",
-    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts ./src/beeper-client.ts ./src/omni-client.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
+    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/client.ts ./src/beeper-client.ts ./src/omni-client.ts ./src/messaging.ts --outdir ./dist --root ./src --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test --no-orphans --timeout 180000 --max-concurrency \"${GOMAXPROCS:-4}\" ./src --path-ignore-patterns='**/src/omni-runtime.test.ts' && bun test --no-orphans --timeout 180000 --max-concurrency 1 ./src/omni-runtime.test.ts",
     "accept:media:adaptive": "bun run scripts/media/adaptive-vod-acceptance.ts",

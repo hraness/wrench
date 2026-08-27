@@ -3,6 +3,54 @@ import { describe, expect, test } from "bun:test";
 import { parseWrenchArguments } from "./args";
 
 describe("wrench CLI grammar", () => {
+  test("keeps messaging capability data out of argv and requires private output", () => {
+    expect(parseWrenchArguments([
+      "messaging",
+      "resolve",
+      "--input",
+      "-",
+      "--private-output",
+      "/tmp/wrench-private/route.json",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "messaging-resolve",
+        inputSource: "-",
+        privateOutput: "/tmp/wrench-private/route.json",
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "messaging",
+      "context",
+      "--input",
+      "@/tmp/wrench-private/context-request.json",
+      "--private-output",
+      "/tmp/wrench-private/context.json",
+    ]).ok).toBeTrue();
+    for (const input of [
+      '{"routeRef":"wmroute_private"}',
+      "@relative.json",
+      "wmroute_private",
+    ]) {
+      expect(parseWrenchArguments([
+        "messaging",
+        "context",
+        "--input",
+        input,
+        "--private-output",
+        "/tmp/wrench-private/context.json",
+      ]).ok).toBeFalse();
+    }
+    expect(parseWrenchArguments([
+      "messaging",
+      "routes",
+      "--input",
+      "-",
+    ]).ok).toBeFalse();
+  });
+
   test.each([
     { raw: [] },
     { raw: ["help"] },

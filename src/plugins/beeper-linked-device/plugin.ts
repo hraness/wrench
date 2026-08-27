@@ -20,6 +20,7 @@ import {
   materializeBeeperMessagingList,
   materializeBeeperMessagingRead,
 } from "../../providers/beeper-omni";
+import { beeperMessagingDefinition } from "../../providers/beeper-messaging";
 import beeperManifest from "../../assets/adapters/beeper/wrench-web-adapter.json";
 
 type ManifestOperationProjection = Readonly<{
@@ -187,6 +188,7 @@ export const beeperLinkedDevicePlugin = defineProviderPlugin({
       format: "beeper:local:<sha256-account-and-desktop-target-coordinate>",
       matches: (value) => /^beeper:local:[a-f0-9]{64}$/u.test(value),
     },
+    messaging: beeperMessagingDefinition,
     runtime: lazyLocalCliRuntime(async () => {
       const runtime = await import("../../providers/beeper-local-runtime");
       return {

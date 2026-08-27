@@ -39,7 +39,12 @@ import type {
   ScalarInputField,
 } from "./model";
 import type { ProviderActionContext } from "./provider-context";
+import type {
+  ProviderConversationV1,
+  ProviderMaterializedPageV1,
+} from "./omni-model";
 import type { LocalCliOperationExecutor } from "./local-cli-execution";
+import type { MessagingRouteCoordinateV1 } from "./messaging-types";
 import {
   localCliToolArtifactForCurrentRuntime,
   parseLocalCliToolIdentityV1,
@@ -163,6 +168,107 @@ export type ProviderPluginOmniDefinitionV1 =
       readonly state: "unsupported";
       readonly reason: string;
     };
+
+export type ProviderPluginMessagingTargetV1 = Readonly<
+  Record<string, string>
+>;
+
+export type ProviderPluginMessagingRouteCandidateV1 = {
+  /** Exact provider coordinates retained only in Wrench private state. */
+  readonly target: ProviderPluginMessagingTargetV1;
+  /** Exact provider conversation identity used to bind normalized reads. */
+  readonly conversationProviderId: string;
+  readonly conversationKind: "single" | "group" | "unknown";
+  readonly title: string | null;
+  readonly participants: ProviderConversationV1["participants"];
+  readonly providerRevision: string | null;
+};
+
+export type ProviderPluginMessagingTurnPartV1 = {
+  readonly partId: string;
+  readonly text: string;
+  /** Exact provider message identity recovered from one current context ref. */
+  readonly replyToProviderId: string | null;
+};
+
+export type ProviderPluginMessagingAcceptedResultV1 = {
+  /** Provider accepted/submitted work; delivery and read remain unproven. */
+  readonly state: "submitted";
+  readonly providerMessageId: string;
+};
+
+export type ProviderPluginMessagingReconciliationRequestV1 = {
+  readonly operation: string;
+  readonly input: OperationInput;
+};
+
+export type ProviderPluginMessagingActionDefinitionV1 =
+  | {
+      readonly state: "unavailable";
+      readonly reason: string;
+      readonly reply: "unsupported";
+    }
+  | {
+      readonly state: "supported";
+      readonly operation: string;
+      readonly reply: "supported" | "unsupported";
+      readonly compileTurnPart: (
+        target: ProviderPluginMessagingTargetV1,
+        part: ProviderPluginMessagingTurnPartV1,
+      ) => OperationInput;
+      readonly mapAcceptedResult: (
+        output: unknown,
+      ) => ProviderPluginMessagingAcceptedResultV1;
+      /**
+       * Build one explicit checked provider read. The generic facade never
+       * invokes this implicitly and never changes existing runs reconciliation.
+       */
+      readonly reconciliation: (
+        target: ProviderPluginMessagingTargetV1,
+        accepted: ProviderPluginMessagingAcceptedResultV1,
+      ) => ProviderPluginMessagingReconciliationRequestV1;
+    };
+
+/**
+ * Provider-owned exact messaging codec. The kernel owns lifecycle, storage,
+ * confirmation, and execution; this SPI owns provider coordinate semantics.
+ */
+export type ProviderPluginMessagingDefinitionV1 = {
+  readonly schemaVersion: 1;
+  readonly contractId: string;
+  readonly network: string;
+  /** Whether an exact provider read proves current remote state. */
+  readonly contextLiveness:
+    | "fresh-as-of-live-preflight"
+    | "freshness-unproven";
+  readonly listOperation: "messaging.list";
+  readonly contextOperation: "messaging.read";
+  /** Closed coordinate variant this exact provider codec accepts. */
+  readonly coordinateKind: MessagingRouteCoordinateV1["kind"];
+  readonly enumerateRoutes: (
+    input: OperationInput,
+    page: ProviderMaterializedPageV1,
+  ) => readonly ProviderPluginMessagingRouteCandidateV1[];
+  /** Exact coordinate resolution, independent from bounded list pagination. */
+  readonly resolveRoute: {
+    readonly operation: string;
+    readonly input: (
+      listInput: OperationInput,
+      coordinate: MessagingRouteCoordinateV1,
+    ) => OperationInput;
+    readonly candidates: (
+      listInput: OperationInput,
+      coordinate: MessagingRouteCoordinateV1,
+      output: unknown,
+    ) => readonly ProviderPluginMessagingRouteCandidateV1[];
+  };
+  readonly parseTarget: (value: unknown) => ProviderPluginMessagingTargetV1;
+  readonly contextInput: (
+    target: ProviderPluginMessagingTargetV1,
+    limit: number,
+  ) => OperationInput;
+  readonly action: ProviderPluginMessagingActionDefinitionV1;
+};
 
 export type ProviderApiPluginOperationDefinitionV1 =
   ProviderPluginOperationDefinitionBaseV1 & {
@@ -747,6 +853,7 @@ type ProviderPluginBindingDefinitionBaseV1 = {
   readonly protectedHostnameFamilies?: readonly string[];
   readonly authKinds: readonly ProviderPluginAuthKind[];
   readonly subject: ProviderPluginSubjectDefinitionV1;
+  readonly messaging?: ProviderPluginMessagingDefinitionV1;
 };
 
 export type ProviderApiPluginBindingDefinitionV1 =
@@ -821,11 +928,12 @@ export type PortableProviderPluginProjectionDefinitionV1 = {
 
 type ProviderPluginBindingBaseV1 = Omit<
   ProviderPluginBindingDefinitionBaseV1,
-  "manifestOrigins" | "protectedHostnameFamilies" | "subject"
+  "manifestOrigins" | "protectedHostnameFamilies" | "subject" | "messaging"
 > & {
   readonly manifestOrigins: readonly `https://${string}`[];
   readonly protectedHostnameFamilies: readonly string[];
   readonly subject: ProviderPluginSubjectV1;
+  readonly messaging?: ProviderPluginMessagingDefinitionV1;
 };
 
 export type ProviderApiPluginBindingV1 = ProviderPluginBindingBaseV1 & {
@@ -2954,6 +3062,193 @@ export function lazyLocalCliRuntime(
   return Object.freeze({ loadRuntime });
 }
 
+function freezeProviderPluginMessaging(
+  value: ProviderPluginMessagingDefinitionV1 | undefined,
+  operations: readonly ProviderPluginOperationV1[],
+  surfaceId: string,
+): ProviderPluginMessagingDefinitionV1 | undefined {
+  if (value === undefined) return undefined;
+  requireExactKeys(value, [
+    "schemaVersion",
+    "contractId",
+    "network",
+    "contextLiveness",
+    "listOperation",
+    "contextOperation",
+    "coordinateKind",
+    "enumerateRoutes",
+    "resolveRoute",
+    "parseTarget",
+    "contextInput",
+    "action",
+  ], `provider plugin surface ${surfaceId} messaging SPI`);
+  if (
+    value.schemaVersion !== 1
+    || typeof value.contractId !== "string"
+    || !/^[a-z][a-z0-9.-]{0,127}\.v1$/u.test(value.contractId)
+    || typeof value.network !== "string"
+    || !/^[a-z][a-z0-9-]{0,63}$/u.test(value.network)
+    || value.contextLiveness !== "fresh-as-of-live-preflight"
+      && value.contextLiveness !== "freshness-unproven"
+    || value.listOperation !== "messaging.list"
+    || value.contextOperation !== "messaging.read"
+    || value.coordinateKind !== "beeperConversation"
+      && value.coordinateKind !== "imessageChat"
+      && value.coordinateKind !== "whatsappJid"
+    || typeof value.enumerateRoutes !== "function"
+    || typeof value.resolveRoute !== "object"
+    || value.resolveRoute === null
+    || typeof value.parseTarget !== "function"
+    || typeof value.contextInput !== "function"
+  ) {
+    throw new Error(
+      `provider plugin surface ${surfaceId} has an invalid messaging SPI`,
+    );
+  }
+  requireExactKeys(
+    value.resolveRoute,
+    ["operation", "input", "candidates"],
+    `provider plugin surface ${surfaceId} messaging exact route resolution`,
+  );
+  if (
+    typeof value.resolveRoute.operation !== "string"
+    || !isProviderPluginOperationName(value.resolveRoute.operation)
+    || typeof value.resolveRoute.input !== "function"
+    || typeof value.resolveRoute.candidates !== "function"
+  ) throw new Error(
+    `provider plugin surface ${surfaceId} has an invalid exact messaging route resolver`,
+  );
+  const exactResolutionOperation = operations.find((candidate) =>
+    candidate.name === value.resolveRoute.operation
+    && candidate.contractVersion === 1);
+  if (
+    exactResolutionOperation === undefined
+    || exactResolutionOperation.state !== "observed"
+    || exactResolutionOperation.risk !== "R1"
+  ) {
+    throw new Error(
+      `provider plugin surface ${surfaceId} messaging SPI requires one observed R1 exact route resolver`,
+    );
+  }
+  for (const operationName of [value.listOperation, value.contextOperation]) {
+    const operation = operations.find((candidate) =>
+      candidate.name === operationName && candidate.contractVersion === 1);
+    if (
+      operation === undefined
+      || operation.state !== "observed"
+      || operation.risk !== "R1"
+      || operation.omni?.state !== "supported"
+    ) {
+      throw new Error(
+        `provider plugin surface ${surfaceId} messaging SPI requires observed normalized ${operationName}@1`,
+      );
+    }
+  }
+  if (typeof value.action !== "object" || value.action === null) {
+    throw new Error(
+      `provider plugin surface ${surfaceId} messaging SPI has an invalid action declaration`,
+    );
+  }
+  if (value.action.state === "unavailable") {
+    requireExactKeys(
+      value.action,
+      ["state", "reason", "reply"],
+      `provider plugin surface ${surfaceId} messaging action`,
+    );
+    if (
+      value.action.reply !== "unsupported"
+      || typeof value.action.reason !== "string"
+      || value.action.reason.length < 1
+      || value.action.reason.length > 1_000
+      || hasControlCharacters(value.action.reason)
+    ) {
+      throw new Error(
+        `provider plugin surface ${surfaceId} messaging action unavailability is invalid`,
+      );
+    }
+    return Object.freeze({
+      schemaVersion: 1,
+      contractId: value.contractId,
+      network: value.network,
+      contextLiveness: value.contextLiveness,
+      listOperation: value.listOperation,
+      contextOperation: value.contextOperation,
+      coordinateKind: value.coordinateKind,
+      enumerateRoutes: value.enumerateRoutes,
+      resolveRoute: Object.freeze({
+        operation: value.resolveRoute.operation,
+        input: value.resolveRoute.input,
+        candidates: value.resolveRoute.candidates,
+      }),
+      parseTarget: value.parseTarget,
+      contextInput: value.contextInput,
+      action: Object.freeze({
+        state: "unavailable",
+        reason: value.action.reason,
+        reply: "unsupported",
+      }),
+    });
+  }
+  if (value.action.state !== "supported") {
+    throw new Error(
+      `provider plugin surface ${surfaceId} messaging action has an invalid state`,
+    );
+  }
+  const action = value.action;
+  requireExactKeys(
+    action,
+    [
+      "state",
+      "operation",
+      "reply",
+      "compileTurnPart",
+      "mapAcceptedResult",
+      "reconciliation",
+    ],
+    `provider plugin surface ${surfaceId} messaging action`,
+  );
+  const actionOperation = operations.find((candidate) =>
+    candidate.name === action.operation && candidate.contractVersion === 1);
+  if (
+    actionOperation === undefined
+    || actionOperation.state !== "observed"
+    || actionOperation.risk !== "R3"
+    || action.reply !== "supported" && action.reply !== "unsupported"
+    || typeof action.compileTurnPart !== "function"
+    || typeof action.mapAcceptedResult !== "function"
+    || typeof action.reconciliation !== "function"
+  ) {
+    throw new Error(
+      `provider plugin surface ${surfaceId} messaging action must bind one observed R3 operation`,
+    );
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    contractId: value.contractId,
+    network: value.network,
+    contextLiveness: value.contextLiveness,
+    listOperation: value.listOperation,
+    contextOperation: value.contextOperation,
+    coordinateKind: value.coordinateKind,
+    enumerateRoutes: value.enumerateRoutes,
+    resolveRoute: Object.freeze({
+      operation: value.resolveRoute.operation,
+      input: value.resolveRoute.input,
+      candidates: value.resolveRoute.candidates,
+    }),
+    parseTarget: value.parseTarget,
+    contextInput: value.contextInput,
+    action: Object.freeze({
+      state: "supported",
+      operation: action.operation,
+      reply: action.reply,
+      compileTurnPart: action.compileTurnPart,
+      mapAcceptedResult: action.mapAcceptedResult,
+      reconciliation: action.reconciliation,
+    }),
+  });
+}
+
 function freezeBinding(
   binding: ProviderPluginBindingDefinitionV1,
   sourceKind: ProviderPluginV1["sourceKind"],
@@ -2971,6 +3266,7 @@ function freezeBinding(
       "authKinds",
       "operations",
       "subject",
+      "messaging",
       ...(binding.transport === "linked-device"
         ? ["linkedDeviceLifecycle"]
         : []),
@@ -3184,6 +3480,11 @@ function freezeBinding(
   if (new Set(operationKeys).size !== operationKeys.length) {
     throw new Error(`provider plugin surface ${binding.surfaceId} repeats an exact operation contract`);
   }
+  const messaging = freezeProviderPluginMessaging(
+    binding.messaging,
+    operations,
+    binding.surfaceId,
+  );
   if (
     typeof binding.subject !== "object"
     || binding.subject === null
@@ -3209,6 +3510,7 @@ function freezeBinding(
       protectedHostnameFamilies.sort(),
     ),
     authKinds: Object.freeze(acceptedAuthKinds),
+    ...(messaging === undefined ? {} : { messaging }),
   };
   if (binding.transport === "provider-api") {
     requireExactKeys(binding.runtime, ["loadRuntime"], "provider plugin runtime hooks");

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { BoundedByteBuffer } from "@hraness/kb/clip/bounded-byte-buffer";
@@ -190,6 +190,13 @@ import {
   rebuildOmniViewFromExactCache,
   revalidateOmniViewInternal,
 } from "./omni-runtime";
+import {
+  discoverMessagingRoutesInternal,
+  previewMessagingTurnInternal,
+  readMessagingContextInternal,
+  resolveMessagingRouteInternal,
+  writeMessagingPrivateOutput,
+} from "./messaging-runtime";
 import {
   checkSourceProviderPluginDirectory,
   scaffoldWebProvider,
@@ -816,6 +823,43 @@ async function readInput(source: string): Promise<unknown> {
     const path = resolve(source.slice(1));
     text = readRegularFile(path, maximum, "input file");
   } else if (Buffer.byteLength(source, "utf8") > maximum) throw new Error(`inline input exceeds ${maximum} bytes`);
+  return JSON.parse(text) as unknown;
+}
+
+async function readMessagingInput(source: string): Promise<unknown> {
+  const maximum = 1024 * 1024;
+  if (source === "-") {
+    return JSON.parse(await readStdinBounded(maximum)) as unknown;
+  }
+  if (!source.startsWith("@")) {
+    throw new Error("messaging input must arrive through stdin or one checked private file");
+  }
+  const path = source.slice(1);
+  const currentUid = process.getuid?.();
+  if (currentUid === undefined) {
+    throw new Error("messaging private-file ownership cannot be established");
+  }
+  const before = lstatSync(path, { bigint: true });
+  if (
+    !before.isFile()
+    || before.uid !== BigInt(currentUid)
+    || (before.mode & 0o077n) !== 0n
+  ) {
+    throw new Error("messaging input must be an owned regular file with no group or other access");
+  }
+  const text = readRegularFile(path, maximum, "messaging input file");
+  const after = lstatSync(path, { bigint: true });
+  if (
+    !after.isFile()
+    || after.uid !== before.uid
+    || after.dev !== before.dev
+    || after.ino !== before.ino
+    || after.size !== before.size
+    || after.mtimeNs !== before.mtimeNs
+    || after.ctimeNs !== before.ctimeNs
+    || after.mode !== before.mode
+    || (after.mode & 0o077n) !== 0n
+  ) throw new Error("messaging input file changed while it was being read");
   return JSON.parse(text) as unknown;
 }
 
@@ -1948,6 +1992,32 @@ async function runCommand(
     } finally {
       admission.release();
     }
+  }
+  if (
+    arguments_.command === "messaging-routes"
+    || arguments_.command === "messaging-resolve"
+    || arguments_.command === "messaging-context"
+    || arguments_.command === "messaging-preview"
+  ) {
+    const request = await readMessagingInput(arguments_.inputSource);
+    const options = {
+      environment,
+      registry: dependencies.providerPluginRegistry,
+      ...(signal === undefined ? {} : { signal }),
+    } as const;
+    const artifact = arguments_.command === "messaging-routes"
+      ? await discoverMessagingRoutesInternal(request, options)
+      : arguments_.command === "messaging-resolve"
+        ? await resolveMessagingRouteInternal(request, options)
+        : arguments_.command === "messaging-context"
+          ? await readMessagingContextInternal(request, options)
+          : await previewMessagingTurnInternal(request, options);
+    const receipt = writeMessagingPrivateOutput(
+      arguments_.privateOutput,
+      artifact,
+    );
+    output.stdout(exactTerminalJson(receipt));
+    return 0;
   }
   if (arguments_.command === "doctor") {
     return doctor(arguments_, environment, output, dependencies);
@@ -3199,6 +3269,10 @@ function commandUsesPortableProviderCatalog(
     || command === "auth-pair"
     || command === "auth-sync"
     || command === "omni-read"
+    || command === "messaging-routes"
+    || command === "messaging-resolve"
+    || command === "messaging-context"
+    || command === "messaging-preview"
     || command === "invoke"
     || command === "confirm"
     || command === "runs-reconcile";

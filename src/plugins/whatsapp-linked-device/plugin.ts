@@ -12,6 +12,7 @@ import {
   materializeWhatsAppMessagingList,
   materializeWhatsAppMessagingRead,
 } from "../../providers/whatsapp-omni";
+import { whatsappMessagingDefinition } from "../../providers/whatsapp-messaging";
 
 const whatsappContracts = webSessionContractDefinitions.whatsapp;
 if (whatsappContracts === undefined) {
@@ -36,6 +37,7 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
     ["providers/whatsapp-web.ts", "../../providers/whatsapp-web.ts"],
     ["providers/whatsapp-web-runtime.ts", "../../providers/whatsapp-web-runtime.ts"],
     ["providers/whatsapp-omni.ts", "../../providers/whatsapp-omni.ts"],
+    ["providers/whatsapp-messaging.ts", "../../providers/whatsapp-messaging.ts"],
   ]),
   bindings: [{
     transport: "linked-device",
@@ -68,6 +70,7 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
       format: "whatsapp:pn:<phone> or whatsapp:lid:<linked-id>",
       matches: (value) => /^whatsapp:(?:pn:[0-9]{5,20}|lid:[0-9]{5,32})$/u.test(value),
     },
+    messaging: whatsappMessagingDefinition,
     linkedDeviceLifecycle: {
       inspect: true,
       pair: true,

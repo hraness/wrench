@@ -8,6 +8,7 @@ const importSpecifiers = [
   "@hraness/wrench/client",
   "@hraness/wrench/beeper",
   "@hraness/wrench/omni",
+  "@hraness/wrench/messaging",
 ];
 const binNames = ["wrench"];
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";

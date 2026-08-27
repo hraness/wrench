@@ -15,6 +15,21 @@ import {
   type ProviderPluginSurfaceId,
 } from "./provider-plugin-identifiers";
 
+type MessagingCommand =
+  | "messaging-routes"
+  | "messaging-resolve"
+  | "messaging-context"
+  | "messaging-preview";
+
+type MessagingArguments = {
+  readonly [Command in MessagingCommand]: {
+    readonly command: Command;
+    readonly inputSource: string;
+    readonly privateOutput: string;
+    readonly json: boolean;
+  };
+}[MessagingCommand];
+
 export type WrenchArguments =
   | { readonly command: "help" }
   | { readonly command: "clip"; readonly arguments: readonly string[] }
@@ -38,6 +53,7 @@ export type WrenchArguments =
       readonly json: boolean;
     }
   | { readonly command: "doctor"; readonly json: boolean }
+  | MessagingArguments
   | { readonly command: "capabilities"; readonly adapterId?: string; readonly json: boolean }
   | { readonly command: "plugin-list"; readonly json: boolean }
   | { readonly command: "plugin-show"; readonly id: string; readonly json: boolean }
@@ -417,6 +433,68 @@ function optionalPositiveInteger(
   return parsed;
 }
 
+function parseMessagingArguments(raw: readonly string[]): ParseWrenchResult {
+  const operation = raw[0];
+  if (
+    operation !== "routes"
+    && operation !== "resolve"
+    && operation !== "context"
+    && operation !== "preview"
+  ) {
+    return {
+      ok: false,
+      message: "messaging requires routes, resolve, context, or preview",
+    };
+  }
+  const parsed = optionValues(
+    raw.slice(1),
+    ["--input", "--private-output"],
+    ["--json"],
+  );
+  if (isFailure(parsed)) return parsed;
+  const inputSource = parsed.values["--input"];
+  const privateOutput = parsed.values["--private-output"];
+  if (
+    inputSource === undefined
+    || (
+      inputSource !== "-"
+      && (
+        !inputSource.startsWith("@")
+        || !isAbsolute(inputSource.slice(1))
+        || resolve(inputSource.slice(1)) !== inputSource.slice(1)
+      )
+    )
+  ) {
+    return {
+      ok: false,
+      message:
+        "messaging requires --input <-|@normalized-absolute-owner-only-file>; inline or argv capability data is forbidden",
+    };
+  }
+  if (
+    privateOutput === undefined
+    || !isAbsolute(privateOutput)
+    || resolve(privateOutput) !== privateOutput
+    || Buffer.byteLength(privateOutput, "utf8") > 4_096
+    || /[\0\r\n]/u.test(privateOutput)
+  ) {
+    return {
+      ok: false,
+      message:
+        "messaging requires --private-output <normalized-absolute-mode-0600-file>",
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      command: `messaging-${operation}`,
+      inputSource,
+      privateOutput,
+      json: parsed.booleans.has("--json"),
+    },
+  };
+}
+
 function parsePluginScaffoldArguments(
   raw: readonly string[],
   label: "plugin scaffold" | "adapter scaffold",
@@ -771,6 +849,7 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       },
     };
   }
+  if (first === "messaging") return parseMessagingArguments(raw.slice(1));
   if (first === "run") return parseWrenchArguments(["invoke", ...raw.slice(1)]);
   if (first === "doctor") {
     const json = simpleJsonOptions(raw.slice(1), "doctor");
