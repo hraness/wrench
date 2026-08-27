@@ -556,11 +556,13 @@ reconcile the same run without repeating the mutation:
 wrench runs show <run-id> \
   --private-output /absolute/private/receipt.json \
   --receipt-binding-output /absolute/private/receipt-binding.json --json
-wrench messaging reconcile --input @/absolute/private/reconcile-request.json \
-  --private-output /absolute/private/reconciliation.json --json
+wrench messaging reconcile <run-id> --json
 ```
 
-See the packaged [Wrench Agent Skill](skills/wrench/references/messaging.md) for
+An indeterminate messaging run does not contain an exact accepted provider
+message identity. Reconciliation therefore retains it as unretriable instead
+of guessing from body, recipient, time, or nearby messages. See the packaged
+[Wrench Agent Skill](skills/wrench/references/messaging.md) for
 the complete route, freshness, authorization, private-artifact, terminal-state,
 and reconciliation rules.
 

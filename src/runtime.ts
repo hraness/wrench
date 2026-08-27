@@ -162,6 +162,18 @@ import {
   processOwnerStatus,
 } from "./process-identity";
 import {
+  messagingReceiptBinding,
+  messagingRunReceipt,
+  readMessagingRun,
+  readMessagingRunIfPresent,
+  updateMessagingRun,
+} from "./messaging-action-store";
+import type {
+  MessagingReceiptBindingV1,
+  MessagingRunReceiptV1,
+  MessagingRunV1,
+} from "./messaging-types";
+import {
   MAX_WRENCH_JSON_BYTES,
   loadInstalledManifest,
   loadInstalledManifestSnapshot,
@@ -244,6 +256,12 @@ export type MessagingCompositeInvocationPlanV1 = {
   readonly baseExactDataRevision: string;
   readonly baseLatestMessageRevision: string;
   readonly baseRouteStateRevision: string;
+  readonly baseMessages: readonly {
+    readonly providerMessageId: string;
+    readonly providerRevision: string | null;
+    readonly orderedAt: string | null;
+    readonly messageSha256: string;
+  }[];
   readonly recipient: {
     readonly network: string;
     readonly conversation: {
@@ -1524,6 +1542,7 @@ export function messagingCompositeInputHash(
     baseExactDataRevision: composite.baseExactDataRevision,
     baseLatestMessageRevision: composite.baseLatestMessageRevision,
     baseRouteStateRevision: composite.baseRouteStateRevision,
+    baseMessages: composite.baseMessages,
     parts: composite.parts.map((part) => ({
       partId: part.partId,
       replyToProviderId: part.replyToProviderId,
@@ -2155,6 +2174,7 @@ function parseMessagingCompositeInvocationPlan(
     "baseExactDataRevision",
     "baseLatestMessageRevision",
     "baseRouteStateRevision",
+    "baseMessages",
     "recipient",
     "parts",
   ])) throw new Error("messaging composite invocation is malformed");
@@ -2169,6 +2189,11 @@ function parseMessagingCompositeInvocationPlan(
     || !Number.isSafeInteger(value.contextLimit)
     || value.contextLimit < 1
     || value.contextLimit > 200
+    || !Array.isArray(value.baseMessages)
+    || Object.getPrototypeOf(value.baseMessages) !== Array.prototype
+    || Object.keys(value.baseMessages).length !== value.baseMessages.length
+    || value.baseMessages.length > value.contextLimit
+    || value.baseMessages.length > 200
     || !isRecord(value.recipient)
     || !hasExactKeys(value.recipient, ["network", "conversation"])
     || typeof value.recipient.network !== "string"
@@ -2187,9 +2212,53 @@ function parseMessagingCompositeInvocationPlan(
     || value.recipient.conversation.participantCount < 0
     || value.recipient.conversation.participantCount > 10_000
     || !Array.isArray(value.parts)
+    || Object.getPrototypeOf(value.parts) !== Array.prototype
+    || Object.keys(value.parts).length !== value.parts.length
     || value.parts.length < 1
     || value.parts.length > 8
   ) throw new Error("messaging composite invocation is malformed");
+  const seenBaseMessageIds = new Set<string>();
+  let previousBaseMessageSortKey: string | null = null;
+  const baseMessages = value.baseMessages.map((candidate, index) => {
+    if (!isRecord(candidate) || !hasExactKeys(candidate, [
+      "providerMessageId", "providerRevision", "orderedAt", "messageSha256",
+    ])) throw new Error("messaging composite base message is malformed");
+    if (
+      typeof candidate.providerMessageId !== "string"
+      || candidate.providerMessageId.length < 1
+      || Buffer.byteLength(candidate.providerMessageId, "utf8") > 4_096
+      || /[\0\r\n]/u.test(candidate.providerMessageId)
+      || seenBaseMessageIds.has(candidate.providerMessageId)
+      || candidate.providerRevision !== null
+        && (typeof candidate.providerRevision !== "string"
+          || candidate.providerRevision.length < 1
+          || Buffer.byteLength(candidate.providerRevision, "utf8") > 4_096
+          || /[\0\r\n]/u.test(candidate.providerRevision))
+      || candidate.orderedAt !== null
+        && (typeof candidate.orderedAt !== "string"
+          || candidate.orderedAt.length < 1
+          || candidate.orderedAt.length > 64
+          || !Number.isFinite(Date.parse(candidate.orderedAt))
+          || new Date(candidate.orderedAt).toISOString() !== candidate.orderedAt)
+    ) throw new Error(`messaging composite base message ${index + 1} is malformed`);
+    const providerMessageId = candidate.providerMessageId;
+    const orderedAt = candidate.orderedAt as string | null;
+    const sortKey = `${orderedAt ?? ""}\0${providerMessageId}`;
+    if (previousBaseMessageSortKey !== null && sortKey <= previousBaseMessageSortKey) {
+      throw new Error("messaging composite base messages are not in canonical order");
+    }
+    previousBaseMessageSortKey = sortKey;
+    seenBaseMessageIds.add(providerMessageId);
+    return Object.freeze({
+      providerMessageId,
+      providerRevision: candidate.providerRevision as string | null,
+      orderedAt,
+      messageSha256: messagingDigest(
+        candidate.messageSha256,
+        "messaging composite base message hash",
+      ),
+    });
+  });
   const seen = new Set<string>();
   const parts = value.parts.map((candidate, index): MessagingCompositeInvocationPartV1 => {
     if (!isRecord(candidate) || !hasExactKeys(candidate, [
@@ -2238,6 +2307,7 @@ function parseMessagingCompositeInvocationPlan(
     baseExactDataRevision: messagingDigest(value.baseExactDataRevision, "messaging composite base data revision"),
     baseLatestMessageRevision: messagingDigest(value.baseLatestMessageRevision, "messaging composite base message revision"),
     baseRouteStateRevision: messagingDigest(value.baseRouteStateRevision, "messaging composite base route-state revision"),
+    baseMessages: Object.freeze(baseMessages),
     recipient: Object.freeze({
       network: value.recipient.network,
       conversation: Object.freeze({
@@ -3112,6 +3182,109 @@ function writeReceipt(
   writePrivateJson(receiptPath(receipt.runId, environment), receipt, { privateParent: true });
 }
 
+function messagingDispatchProgress(run: MessagingRunV1): RunReceipt["dispatch"] {
+  const active = run.parts[run.provenPartCount];
+  const possibleCurrentDispatch = active?.state === "dispatching"
+    || active?.state === "indeterminate";
+  return Object.freeze({
+    planned: run.partCount,
+    started: run.provenPartCount + (possibleCurrentDispatch ? 1 : 0),
+    verified: run.provenPartCount,
+  });
+}
+
+function messagingRunError(run: MessagingRunV1): string | null {
+  return run.terminalReason === null
+    ? run.state === "pending"
+      ? "messaging execution has no durable final outcome"
+      : null
+    : `messaging execution stopped: ${run.terminalReason}`;
+}
+
+function projectMessagingReceipt(
+  receipt: RunReceipt,
+  run: MessagingRunV1,
+): RunReceipt {
+  if (
+    receipt.runId !== run.runId
+    || receipt.planDigest !== run.planDigest
+    || receipt.dispatch.planned !== run.partCount
+  ) throw new Error("messaging ordinary receipt belongs to another run");
+  const dispatch = messagingDispatchProgress(run);
+  return Object.freeze({
+    ...receipt,
+    status: run.state,
+    dispatchStarted: dispatch.started > 0,
+    dispatch,
+    finishedAt: run.recordedAt,
+    error: messagingRunError(run),
+  });
+}
+
+function messagingReceiptForPlan(
+  stored: StoredPlan,
+  run: MessagingRunV1,
+): RunReceipt {
+  const plan = stored.plan;
+  const common: RunReceiptCommon = {
+    runId: run.runId,
+    planDigest: stored.digest,
+    adapter: plan.adapter,
+    operation: plan.operation,
+    risk: plan.risk,
+    inputHash: plan.inputHash,
+    auth: plan.auth,
+    status: "pending",
+    dispatchStarted: false,
+    dispatch: Object.freeze({ planned: run.partCount, started: 0, verified: 0 }),
+    startedAt: run.startedAt,
+    finishedAt: run.recordedAt,
+    finalOrigin: null,
+    error: "messaging execution has no durable final outcome",
+  };
+  const pending: RunReceipt = plan.transport === "provider-api"
+    ? Object.freeze({
+        ...common,
+        schemaVersion: 3 as const,
+        transport: "provider-api" as const,
+        providerContractHash: plan.providerContract.hash,
+      })
+    : plan.transport === "web-session-api"
+      ? Object.freeze({
+          ...common,
+          schemaVersion: 4 as const,
+          transport: "web-session-api" as const,
+          webSessionContractHash: plan.webSessionContract.hash,
+        })
+      : plan.transport === "reviewed-template-api"
+        ? Object.freeze({
+            ...common,
+            schemaVersion: 5 as const,
+            transport: "reviewed-template-api" as const,
+            reviewedTemplateContractHash: plan.reviewedTemplateContract.hash,
+          })
+        : plan.transport === "portable-provider-plugin"
+          ? Object.freeze({
+              ...common,
+              schemaVersion: 6 as const,
+              transport: "portable-provider-plugin" as const,
+              portablePluginContract: plan.portablePluginContract,
+            })
+          : plan.transport === "local-cli"
+            ? Object.freeze({
+                ...common,
+                schemaVersion: 7 as const,
+                transport: "local-cli" as const,
+                localCliContract: plan.localCliContract,
+              })
+            : Object.freeze({
+                ...common,
+                schemaVersion: 2 as const,
+                transport: "browser" as const,
+              });
+  return projectMessagingReceipt(pending, run);
+}
+
 function runJournalReceipt(journal: RunJournal): RunReceipt {
   const common: RunReceiptCommon = {
     runId: journal.runId,
@@ -3511,6 +3684,34 @@ export function repairInterruptedConfirmationClaims(
     }
     if (processOwnerStatus(claim.claim.owner) !== "different-or-dead") {
       active += 1;
+      continue;
+    }
+    try {
+      const messaging = readMessagingRunIfPresent(
+        claim.claim.runId,
+        environment,
+      );
+      if (messaging !== null) {
+        const run = messaging.run.state === "pending"
+          ? terminalizeMessagingRecovery(
+              claim.claim.runId,
+              environment,
+              new Date(),
+            )
+          : messaging.run;
+        let ordinary: RunReceipt;
+        try {
+          ordinary = readRunReceipt(claim.claim.runId, environment);
+        } catch {
+          const stored = loadInvocationPlan(claim.claim.digest, environment);
+          ordinary = messagingReceiptForPlan(stored, run);
+        }
+        writeReceipt(projectMessagingReceipt(ordinary, run), environment);
+        if (releaseConfirmationClaim(claim, environment)) released += 1;
+        continue;
+      }
+    } catch {
+      invalid += 1;
       continue;
     }
     let journal: RunJournalSnapshot | null;
@@ -5290,6 +5491,169 @@ export async function confirmInvocation(
       }
     }
     releaseConfirmationClaim(claim, environment);
+  }
+}
+
+export type MessagingConfirmationResult = {
+  readonly run: MessagingRunV1;
+  readonly receipt: MessagingRunReceiptV1;
+  readonly receiptBinding: MessagingReceiptBindingV1;
+  readonly ordinaryReceipt: RunReceipt;
+};
+
+function terminalizeMessagingRecovery(
+  runId: string,
+  environment: Readonly<Record<string, string | undefined>>,
+  observedAt: Date,
+): MessagingRunV1 {
+  const snapshot = readMessagingRun(runId, environment);
+  if (snapshot.run.state !== "pending") return snapshot.run;
+  const active = snapshot.run.parts[snapshot.run.provenPartCount];
+  if (active === undefined) {
+    throw new Error("pending messaging recovery has no active part");
+  }
+  const at = Math.max(
+    observedAt.getTime(),
+    Date.parse(snapshot.run.recordedAt),
+  );
+  const event = active.state === "dispatching"
+    ? {
+        type: "indeterminate" as const,
+        index: snapshot.run.provenPartCount,
+        reason: "journal-recovery-required" as const,
+        at: new Date(at).toISOString(),
+      }
+    : active.state === "unattempted" || active.state === "claimed"
+      ? {
+          type: "categorical-stop" as const,
+          index: snapshot.run.provenPartCount,
+          partState: snapshot.run.provenPartCount === 0
+            ? "failed-before-dispatch" as const
+            : "failed-permanent" as const,
+          reason: "journal-recovery-required" as const,
+          at: new Date(at).toISOString(),
+        }
+      : null;
+  if (event === null) {
+    throw new Error("pending messaging recovery state is contradictory");
+  }
+  return updateMessagingRun(snapshot, event, environment).run;
+}
+
+/** Confirm one composite messaging preview under one durable ownership claim. */
+export async function confirmMessagingInvocation(
+  digest: string,
+  options: {
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+    readonly registry?: ProviderPluginRegistry;
+    readonly loadManifest?: typeof loadInstalledManifest;
+    readonly now?: Date;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<MessagingConfirmationResult> {
+  const environment = options.environment ?? process.env;
+  const registry = options.registry ?? providerPluginRegistry;
+  const observation = options.now ?? new Date();
+  if (!Number.isFinite(observation.getTime())) {
+    throw new Error("messaging confirmation time is invalid");
+  }
+  const claimRepair = repairInterruptedConfirmationClaims(environment);
+  const journalRepair = repairInterruptedRunJournals(environment, observation);
+  if (claimRepair.invalid > 0 || journalRepair.issues.length > 0) {
+    throw new Error(
+      "local execution recovery has unresolved state; run wrench doctor before confirming",
+    );
+  }
+  const runId = crypto.randomUUID();
+  const claim = acquireConfirmationClaim(digest, runId, environment, observation);
+  let planConsumed = false;
+  let terminal = false;
+  let stored: StoredPlan | null = null;
+  let run: MessagingRunV1 | null = null;
+  try {
+    stored = loadInvocationPlan(digest, environment);
+    if (stored.plan.messagingComposite === undefined) {
+      throw new Error("confirmation plan is not a messaging composite");
+    }
+    if (stored.plan.duplicateRisk !== undefined) {
+      throw new Error("messaging composite confirmations cannot accept duplicate risk");
+    }
+    const loadManifest: typeof loadInstalledManifest = options.loadManifest
+      ?? ((adapterId, selectedEnvironment = process.env) =>
+        loadInstalledManifestWithRegistry(adapterId, selectedEnvironment, registry));
+    const invocation = validateFreshPlan(
+      stored,
+      environment,
+      observation,
+      registry,
+      loadManifest,
+    );
+    const messagingRuntime = await import("./messaging-runtime");
+    let snapshot = messagingRuntime.initializeMessagingCompositeRunInternal(
+      stored,
+      runId,
+      { environment, now: observation },
+    );
+    run = snapshot.run;
+    writeReceipt(messagingReceiptForPlan(stored, run), environment);
+    if (!removePrivateStateFile(planPath(digest, environment), environment)) {
+      run = terminalizeMessagingRecovery(runId, environment, observation);
+      const ordinaryReceipt = messagingReceiptForPlan(stored, run);
+      writeReceipt(ordinaryReceipt, environment);
+      terminal = true;
+      return Object.freeze({
+        run,
+        receipt: messagingRunReceipt(run),
+        receiptBinding: messagingReceiptBinding(run),
+        ordinaryReceipt,
+      });
+    }
+    planConsumed = true;
+    try {
+      snapshot = await messagingRuntime.executeMessagingCompositeInternal(
+        stored,
+        invocation,
+        snapshot,
+        {
+          environment,
+          registry,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        },
+      );
+      run = snapshot.run;
+    } catch {
+      run = terminalizeMessagingRecovery(runId, environment, observation);
+    }
+    if (run.state === "pending") {
+      throw new Error(
+        "messaging execution remained pending; run wrench doctor before another write",
+      );
+    }
+    const ordinaryReceipt = messagingReceiptForPlan(stored, run);
+    writeReceipt(ordinaryReceipt, environment);
+    terminal = true;
+    return Object.freeze({
+      run,
+      receipt: messagingRunReceipt(run),
+      receiptBinding: messagingReceiptBinding(run),
+      ordinaryReceipt,
+    });
+  } finally {
+    if (!terminal && run !== null && run.state === "pending" && !planConsumed) {
+      try {
+        run = terminalizeMessagingRecovery(runId, environment, observation);
+        if (stored !== null) {
+          writeReceipt(messagingReceiptForPlan(stored, run), environment);
+        }
+        terminal = true;
+      } catch {
+        // Keep the claim as a durable recovery witness when local journaling
+        // itself cannot prove that no effect crossed the provider boundary.
+      }
+    }
+    if (terminal || !planConsumed) {
+      releaseConfirmationClaim(claim, environment);
+    }
   }
 }
 

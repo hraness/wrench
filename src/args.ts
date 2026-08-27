@@ -266,6 +266,7 @@ export type WrenchArguments =
     }
   | { readonly command: "runs-list"; readonly json: boolean }
   | { readonly command: "runs-reconcile"; readonly runId: string; readonly inputSource?: string; readonly json: boolean }
+  | { readonly command: "messaging-reconcile"; readonly runId: string; readonly json: boolean }
   | { readonly command: "plans-list"; readonly json: boolean }
   | { readonly command: "plans-cancel"; readonly digest: string; readonly yes: boolean };
 
@@ -443,6 +444,18 @@ function optionalPositiveInteger(
 
 function parseMessagingArguments(raw: readonly string[]): ParseWrenchResult {
   const operation = raw[0];
+  if (operation === "reconcile") {
+    const runId = raw[1];
+    if (runId === undefined) {
+      return { ok: false, message: "messaging reconcile requires a run ID" };
+    }
+    const issue = validRunId(runId);
+    if (issue !== null) return { ok: false, message: issue };
+    const json = simpleJsonOptions(raw.slice(2), "messaging reconcile");
+    return typeof json === "boolean"
+      ? { ok: true, value: { command: "messaging-reconcile", runId, json } }
+      : json;
+  }
   if (
     operation !== "routes"
     && operation !== "resolve"
@@ -451,7 +464,7 @@ function parseMessagingArguments(raw: readonly string[]): ParseWrenchResult {
   ) {
     return {
       ok: false,
-      message: "messaging requires routes, resolve, context, or preview",
+      message: "messaging requires routes, resolve, context, preview, or reconcile",
     };
   }
   const parsed = optionValues(

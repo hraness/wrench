@@ -60,7 +60,15 @@ import {
   type PreparedInvocation,
   type StoredPlan,
 } from "./runtime";
-import { messagingReceiptBinding, messagingRunReceipt, readMessagingRun } from "./messaging-action-store";
+import {
+  initializeMessagingRun,
+  messagingExpectedOwnPrefix,
+  messagingReceiptBinding,
+  messagingRunReceipt,
+  readMessagingRun,
+  updateMessagingRun,
+  type MessagingRunSnapshotV1,
+} from "./messaging-action-store";
 import { writePrivateJson } from "./storage";
 
 const ROUTE_TTL_MS = 15 * 60_000;
@@ -319,6 +327,28 @@ function latestRevision(
   }));
 }
 
+function messagingBaseMessages(
+  messages: readonly ProviderMessageV1[],
+): readonly {
+  readonly providerMessageId: string;
+  readonly providerRevision: string | null;
+  readonly orderedAt: string | null;
+  readonly messageSha256: string;
+}[] {
+  return Object.freeze([...messages]
+    .sort((left, right) => {
+      const leftKey = `${left.orderedAt ?? ""}\0${left.providerId}`;
+      const rightKey = `${right.orderedAt ?? ""}\0${right.providerId}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    })
+    .map((message) => Object.freeze({
+      providerMessageId: message.providerId,
+      providerRevision: message.providerRevision,
+      orderedAt: message.orderedAt,
+      messageSha256: sha256(canonicalJson(message)),
+    })));
+}
+
 function pageMessages(
   page: ProviderMaterializedPageV1,
   conversationProviderId: string,
@@ -398,7 +428,7 @@ function publicMessages(
   }));
 }
 
-function privateOutputPath(path: string): string {
+export function validateMessagingPrivateOutputPath(path: string): string {
   if (
     !isAbsolute(path)
     || resolve(path) !== path
@@ -418,7 +448,7 @@ export function writeMessagingPrivateOutput(
     | MessagingRunV1
     | MessagingReceiptBindingV1,
 ): MessagingPrivateOutputReceiptV1 {
-  const outputPath = privateOutputPath(path);
+  const outputPath = validateMessagingPrivateOutputPath(path);
   writePrivateJson(outputPath, artifact, { privateParent: true });
   const artifactSha256 = sha256(canonicalJson(artifact));
   const expiresAt = artifact.format === "wrench.messaging-context"
@@ -865,7 +895,10 @@ async function currentMessagingRouteStateRevision(
     || typeof snapshot.participantFingerprint !== "string"
     || !/^[a-f0-9]{64}$/u.test(snapshot.participantFingerprint)
     || snapshot.providerRevision !== null
-      && typeof snapshot.providerRevision !== "string"
+      && (typeof snapshot.providerRevision !== "string"
+        || snapshot.providerRevision.length < 1
+        || Buffer.byteLength(snapshot.providerRevision, "utf8") > 4_096
+        || /[\0\r\n]/u.test(snapshot.providerRevision))
   ) throw new Error("messaging live route preflight returned malformed identity state");
   if (
     snapshot.participantFingerprint !== record.conversation.participantFingerprint
@@ -1064,6 +1097,7 @@ export async function previewMessagingTurnInternal(
       baseExactDataRevision: context.exactDataRevision,
       baseLatestMessageRevision: context.latestMessageRevision,
       baseRouteStateRevision,
+      baseMessages: messagingBaseMessages(current.messages),
       recipient: Object.freeze({
         network: resolution.messaging.network,
         conversation: Object.freeze({
@@ -1144,6 +1178,294 @@ export function verifyStoredMessagingPreview(stored: StoredPlan): MessagingPrevi
   return preview;
 }
 
+export function initializeMessagingCompositeRunInternal(
+  stored: StoredPlan,
+  runId: string,
+  options: Pick<MessagingRuntimeOptions, "environment" | "now"> = {},
+): MessagingRunSnapshotV1 {
+  const composite = stored.plan.messagingComposite;
+  if (composite === undefined) {
+    throw new Error("confirmation plan is not a messaging composite");
+  }
+  verifyStoredMessagingPreview(stored);
+  return initializeMessagingRun(
+    runId,
+    stored.digest,
+    composite,
+    options.environment ?? process.env,
+    now(options).toISOString(),
+  );
+}
+
+function messagingTransitionTime(
+  snapshot: MessagingRunSnapshotV1,
+  options: MessagingRuntimeOptions,
+): string {
+  const observed = now(options).toISOString();
+  return Date.parse(observed) < Date.parse(snapshot.run.recordedAt)
+    ? snapshot.run.recordedAt
+    : observed;
+}
+
+function stopMessagingBeforeDispatch(
+  snapshot: MessagingRunSnapshotV1,
+  reason:
+    | "context-drift"
+    | "prefix-freshness-unproven"
+    | "provider-failed-before-dispatch"
+    | "journal-recovery-required",
+  options: MessagingRuntimeOptions,
+): MessagingRunSnapshotV1 {
+  return updateMessagingRun(snapshot, {
+    type: "categorical-stop",
+    index: snapshot.run.provenPartCount,
+    partState: snapshot.run.provenPartCount === 0
+      ? "failed-before-dispatch"
+      : "failed-permanent",
+    reason,
+    at: messagingTransitionTime(snapshot, options),
+  }, options.environment ?? process.env);
+}
+
+function stopMessagingIndeterminate(
+  snapshot: MessagingRunSnapshotV1,
+  reason: "provider-result-indeterminate" | "journal-recovery-required",
+  options: MessagingRuntimeOptions,
+): MessagingRunSnapshotV1 {
+  return updateMessagingRun(snapshot, {
+    type: "indeterminate",
+    index: snapshot.run.provenPartCount,
+    reason,
+    at: messagingTransitionTime(snapshot, options),
+  }, options.environment ?? process.env);
+}
+
+function stopMessagingAfterError(
+  snapshot: MessagingRunSnapshotV1,
+  options: MessagingRuntimeOptions,
+): MessagingRunSnapshotV1 {
+  const active = snapshot.run.parts[snapshot.run.provenPartCount];
+  if (active?.state === "dispatching") {
+    return stopMessagingIndeterminate(
+      snapshot,
+      "provider-result-indeterminate",
+      options,
+    );
+  }
+  if (active?.state === "claimed" || active?.state === "unattempted") {
+    return stopMessagingBeforeDispatch(
+      snapshot,
+      "provider-failed-before-dispatch",
+      options,
+    );
+  }
+  if (snapshot.run.state !== "pending") return snapshot;
+  throw new Error("messaging run error state could not be classified");
+}
+
+/**
+ * Execute one already-owned and consumed composite confirmation. The caller
+ * owns the outer confirmation claim and ordinary receipt projection. This
+ * function owns the one encrypted per-bubble journal and never retries.
+ */
+export async function executeMessagingCompositeInternal(
+  stored: StoredPlan,
+  invocation: PreparedInvocation,
+  initialSnapshot: MessagingRunSnapshotV1,
+  options: MessagingRuntimeOptions = {},
+): Promise<MessagingRunSnapshotV1> {
+  const composite = stored.plan.messagingComposite;
+  if (composite === undefined) {
+    throw new Error("confirmation plan is not a messaging composite");
+  }
+  if (
+    initialSnapshot.run.planDigest !== stored.digest
+    || initialSnapshot.run.turnDigest !== composite.turnDigest
+    || initialSnapshot.run.state !== "pending"
+  ) throw new Error("messaging run does not own the exact composite plan");
+  const environment = options.environment ?? process.env;
+  const registry = options.registry ?? providerPluginRegistry;
+  const actionResolution = messagingResolution(invocation, registry, "action");
+  const action = actionResolution.messaging.action;
+  if (action.state !== "supported") {
+    throw new Error("messaging action support disappeared after confirmation");
+  }
+  if (actionResolution.binding.executeMessagingPart === undefined) {
+    throw new Error("messaging provider has no private action executor");
+  }
+  requireBoundAuth(actionResolution.binding, invocation.auth);
+  let snapshot = initialSnapshot;
+  try {
+    await requireRuntimeReady(
+      actionResolution.binding,
+      invocation.auth,
+      environment,
+      registry,
+    );
+  } catch {
+    return stopMessagingBeforeDispatch(
+      snapshot,
+      "prefix-freshness-unproven",
+      options,
+    );
+  }
+  for (let index = snapshot.run.provenPartCount; index < composite.parts.length; index += 1) {
+    if (snapshot.run.state !== "pending" || snapshot.run.provenPartCount !== index) {
+      return snapshot;
+    }
+    if (options.signal?.aborted === true) {
+      return stopMessagingBeforeDispatch(
+        snapshot,
+        "provider-failed-before-dispatch",
+        options,
+      );
+    }
+    let record: MessagingRouteRecordV1;
+    let routeResolution: MessagingResolution;
+    let current: Awaited<ReturnType<typeof currentContextPage>>;
+    let routeStateRevision: string;
+    try {
+      const route = await resolveCurrentRoute(
+        composite.routeRef,
+        now(options),
+        environment,
+        registry,
+      );
+      record = route.record;
+      routeResolution = route.resolution;
+      if (
+        routeResolution.binding !== actionResolution.binding
+        || routeResolution.plugin.id !== actionResolution.plugin.id
+        || routeResolution.messaging.contractId !== actionResolution.messaging.contractId
+      ) {
+        return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
+      }
+      routeStateRevision = await currentMessagingRouteStateRevision(
+        record,
+        routeResolution,
+        environment,
+        registry,
+        options.signal,
+      );
+      current = await currentContextPage(
+        record,
+        routeResolution,
+        composite.contextLimit,
+        environment,
+        registry,
+        options.signal,
+      );
+    } catch {
+      return stopMessagingBeforeDispatch(
+        snapshot,
+        "prefix-freshness-unproven",
+        options,
+      );
+    }
+    if (routeStateRevision !== composite.baseRouteStateRevision) {
+      return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
+    }
+    let proof: "proven" | "drift";
+    try {
+      proof = action.proveExpectedOwnPrefix(Object.freeze({
+        base: Object.freeze({
+          exactDataRevision: composite.baseExactDataRevision,
+          latestMessageRevision: composite.baseLatestMessageRevision,
+          contextLimit: composite.contextLimit,
+          messages: composite.baseMessages,
+        }),
+        current: Object.freeze({
+          exactDataRevision: current.exactDataRevision,
+          latestMessageRevision: current.latestMessageRevision,
+          messages: current.messages,
+        }),
+        accepted: messagingExpectedOwnPrefix(snapshot.run),
+      }));
+    } catch {
+      return stopMessagingBeforeDispatch(
+        snapshot,
+        "prefix-freshness-unproven",
+        options,
+      );
+    }
+    if (proof !== "proven") {
+      return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
+    }
+    snapshot = updateMessagingRun(snapshot, {
+      type: "claimed",
+      index,
+      at: messagingTransitionTime(snapshot, options),
+    }, environment);
+    let crossedExternalBoundary = false;
+    try {
+      const output = await actionResolution.binding.executeMessagingPart(
+        action.operation,
+        composite.parts[index]!.input,
+        invocation.auth,
+        Object.freeze({
+          beforeExternalBegin: async () => {
+            if (crossedExternalBoundary) {
+              throw new Error("messaging provider attempted more than one dispatch boundary");
+            }
+            snapshot = updateMessagingRun(snapshot, {
+              type: "dispatching",
+              index,
+              at: messagingTransitionTime(snapshot, options),
+            }, environment);
+            crossedExternalBoundary = true;
+          },
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+          environment,
+        }),
+      );
+      if (!crossedExternalBoundary) {
+        throw new Error("messaging provider returned without crossing its durable dispatch boundary");
+      }
+      const accepted = action.mapAcceptedResult(output);
+      if (
+        accepted.state !== "submitted"
+        || typeof accepted.providerMessageId !== "string"
+        || accepted.providerMessageId.length < 1
+        || Buffer.byteLength(accepted.providerMessageId, "utf8") > 4_096
+        || /[\0\r\n]/u.test(accepted.providerMessageId)
+        || accepted.providerRevision !== null
+          && (typeof accepted.providerRevision !== "string"
+            || accepted.providerRevision.length < 1
+            || Buffer.byteLength(accepted.providerRevision, "utf8") > 4_096
+            || /[\0\r\n]/u.test(accepted.providerRevision))
+      ) throw new Error("messaging provider returned malformed acceptance evidence");
+      snapshot = updateMessagingRun(snapshot, {
+        type: "accepted",
+        index,
+        providerMessageId: accepted.providerMessageId,
+        providerRevision: accepted.providerRevision,
+        at: messagingTransitionTime(snapshot, options),
+      }, environment);
+    } catch {
+      try {
+        return stopMessagingAfterError(snapshot, options);
+      } catch {
+        const latest = readMessagingRun(snapshot.run.runId, environment);
+        if (latest.run.state !== "pending") return latest;
+        const active = latest.run.parts[latest.run.provenPartCount];
+        if (active?.state === "dispatching") {
+          return stopMessagingIndeterminate(
+            latest,
+            "journal-recovery-required",
+            options,
+          );
+        }
+        return stopMessagingBeforeDispatch(
+          latest,
+          "journal-recovery-required",
+          options,
+        );
+      }
+    }
+  }
+  return snapshot;
+}
+
 export function loadMessagingPreviewForConfirmationInternal(
   digest: string,
   options: Pick<MessagingRuntimeOptions, "environment"> = {},
@@ -1168,5 +1490,41 @@ export function showMessagingRunInternal(
     run,
     receipt: messagingRunReceipt(run),
     receiptBinding: messagingReceiptBinding(run),
+  });
+}
+
+export function reconcileMessagingRunInternal(
+  runId: string,
+  options: Pick<MessagingRuntimeOptions, "environment"> = {},
+): {
+  readonly schemaVersion: 1;
+  readonly format: "wrench.messaging-reconciliation";
+  readonly runId: string;
+  readonly state: MessagingRunV1["state"];
+  readonly action: "not-required" | "retained-unretriable";
+  readonly receiptBindingSha256: string;
+  readonly reason: string;
+} {
+  const run = readMessagingRun(
+    runId,
+    options.environment ?? process.env,
+  ).run;
+  if (run.state === "pending") {
+    throw new Error(
+      "messaging run is pending; run wrench doctor before reconciliation",
+    );
+  }
+  const binding = messagingReceiptBinding(run);
+  const indeterminate = run.state === "indeterminate";
+  return Object.freeze({
+    schemaVersion: 1,
+    format: "wrench.messaging-reconciliation",
+    runId,
+    state: run.state,
+    action: indeterminate ? "retained-unretriable" : "not-required",
+    receiptBindingSha256: binding.receiptSha256,
+    reason: indeterminate
+      ? "the provider result has no exact accepted message identity; the run remains indeterminate and must not be retried"
+      : "the messaging run already has a categorical terminal state",
   });
 }

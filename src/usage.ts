@@ -90,6 +90,7 @@ export const wrenchUsage = `Usage:
                            --private-output <absolute-mode-0600-file> [--json]
   wrench messaging preview --input <-|@absolute-private-file>
                            --private-output <absolute-mode-0600-file> [--json]
+  wrench messaging reconcile <run-id> [--json]
                 # capability refs and bodies never appear in argv or stdout
 
   wrench adapter init <id> (--origin <https-origin> | --platform <surface-id>)

@@ -165,6 +165,7 @@ import {
 import { isPlanBoundFile, summarizePlanFile } from "./plan-assets";
 import {
   cancelInvocationPlan,
+  confirmMessagingInvocation,
   confirmInvocation,
   createAndSaveInvocationPlan,
   createReadProjectionQueryForInvocation,
@@ -196,8 +197,10 @@ import {
   loadMessagingPreviewForConfirmationInternal,
   previewMessagingTurnInternal,
   readMessagingContextInternal,
+  reconcileMessagingRunInternal,
   resolveMessagingRouteInternal,
   showMessagingRunInternal,
+  validateMessagingPrivateOutputPath,
   writeMessagingPrivateOutput,
 } from "./messaging-runtime";
 import { readMessagingRunIfPresent } from "./messaging-action-store";
@@ -1882,6 +1885,23 @@ async function runCommand(
     output.stdout(renderWrenchUsage());
     return 0;
   }
+  if (arguments_.command === "messaging-reconcile") {
+    const claimRecovery = repairInterruptedConfirmationClaims(environment);
+    if (claimRecovery.invalid > 0) {
+      throw new Error(
+        "local messaging recovery has unresolved state; run wrench doctor before reconciliation",
+      );
+    }
+    const result = reconcileMessagingRunInternal(arguments_.runId, {
+      environment,
+    });
+    print(output, result, arguments_.json);
+    return result.state === "indeterminate"
+      ? 5
+      : result.state === "submitted"
+        ? 0
+        : 3;
+  }
   if (arguments_.command === "clip") {
     return runCaptureCommand(
       [],
@@ -3084,9 +3104,33 @@ async function runCommand(
         "messaging confirmation requires --private-output and --receipt-binding-output",
       );
       loadMessagingPreviewForConfirmationInternal(arguments_.digest, { environment });
-      throw new Error(
-        "messaging composite execution is unavailable until a reviewed provider executor is installed; the confirmation plan remains usable",
+      const privateOutput = validateMessagingPrivateOutputPath(
+        arguments_.privateOutput,
       );
+      const receiptBindingOutput = validateMessagingPrivateOutputPath(
+        arguments_.receiptBindingOutput,
+      );
+      if (privateOutput === receiptBindingOutput) {
+        throw new Error(
+          "messaging confirmation requires distinct private output and receipt-binding paths",
+        );
+      }
+      const result = await confirmMessagingInvocation(arguments_.digest, {
+        environment,
+        registry: dependencies.providerPluginRegistry,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      writeMessagingPrivateOutput(privateOutput, result.run);
+      writeMessagingPrivateOutput(
+        receiptBindingOutput,
+        result.receiptBinding,
+      );
+      output.stdout(exactTerminalJson(result.receipt));
+      return result.receipt.state === "submitted"
+        ? 0
+        : result.receipt.state === "indeterminate"
+          ? 5
+          : 3;
     }
     if (
       arguments_.privateOutput !== undefined
@@ -3199,10 +3243,21 @@ async function runCommand(
       ) throw new Error(
         "messaging runs show requires --private-output and --receipt-binding-output",
       );
-      const result = showMessagingRunInternal(arguments_.runId, { environment });
-      writeMessagingPrivateOutput(arguments_.privateOutput, result.run);
-      writeMessagingPrivateOutput(
+      const privateOutput = validateMessagingPrivateOutputPath(
+        arguments_.privateOutput,
+      );
+      const receiptBindingOutput = validateMessagingPrivateOutputPath(
         arguments_.receiptBindingOutput,
+      );
+      if (privateOutput === receiptBindingOutput) {
+        throw new Error(
+          "messaging runs show requires distinct private output and receipt-binding paths",
+        );
+      }
+      const result = showMessagingRunInternal(arguments_.runId, { environment });
+      writeMessagingPrivateOutput(privateOutput, result.run);
+      writeMessagingPrivateOutput(
+        receiptBindingOutput,
         result.receiptBinding,
       );
       output.stdout(exactTerminalJson(result.receipt));

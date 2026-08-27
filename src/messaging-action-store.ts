@@ -51,7 +51,8 @@ export type MessagingRunEventV1 =
       readonly reason:
         | "context-drift"
         | "prefix-freshness-unproven"
-        | "provider-failed-before-dispatch";
+        | "provider-failed-before-dispatch"
+        | "journal-recovery-required";
       readonly at: string;
     }
   | {
@@ -179,6 +180,7 @@ function assertRun(run: MessagingRunV1): void {
       || run.terminalReason !== "context-drift"
         && run.terminalReason !== "prefix-freshness-unproven"
         && run.terminalReason !== "provider-failed-before-dispatch"
+        && run.terminalReason !== "journal-recovery-required"
       || active === undefined
       || active.state !== "failed-before-dispatch" && active.state !== "failed-permanent"
     ) throw new Error("failed messaging run has contradictory state");
@@ -192,6 +194,7 @@ function assertRun(run: MessagingRunV1): void {
       || run.terminalReason !== "context-drift"
         && run.terminalReason !== "prefix-freshness-unproven"
         && run.terminalReason !== "provider-failed-before-dispatch"
+        && run.terminalReason !== "journal-recovery-required"
       || active === undefined
       || active.state !== "failed-before-dispatch" && active.state !== "failed-permanent"
     ) throw new Error("partial messaging run has contradictory state");

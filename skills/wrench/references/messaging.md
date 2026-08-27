@@ -115,14 +115,15 @@ wrench runs show RUN_ID \
   --private-output ABS_PRIVATE_FILE \
   --receipt-binding-output ABS_PRIVATE_FILE \
   --json
-wrench messaging reconcile --input <-|@ABS_PRIVATE_FILE> \
-  --private-output ABS_PRIVATE_FILE --json
+wrench messaging reconcile RUN_ID --json
 ```
 
-Messaging reconciliation is an exact provider read bound to the original run.
-It records evidence and invokes the existing recovery kernel. It never repeats
-the mutation, switches providers, invents delivery, or clears uncertainty from
-an approximate match.
+An indeterminate run has no exact accepted provider message identity. The
+reconciliation command reports it as `retained-unretriable`; it does not infer
+success from matching prose, recipient, time, or nearby messages. A run with a
+categorical terminal state reports `not-required`. Reconciliation never
+repeats the mutation, switches providers, invents delivery, or clears
+uncertainty from an approximate match.
 
 ## Keep private data on private surfaces
 

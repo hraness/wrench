@@ -203,6 +203,14 @@ export type ProviderPluginMessagingExpectedOwnPrefixV1 = {
   readonly base: {
     readonly exactDataRevision: string;
     readonly latestMessageRevision: string;
+    readonly contextLimit: number;
+    /** Ordered, bounded hashes of the exact normalized context at preview. */
+    readonly messages: readonly {
+      readonly providerMessageId: string;
+      readonly providerRevision: string | null;
+      readonly orderedAt: string | null;
+      readonly messageSha256: string;
+    }[];
   };
   readonly current: {
     readonly exactDataRevision: string;
@@ -228,6 +236,24 @@ export type ProviderPluginMessagingReconciliationRequestV1 = {
   readonly operation: string;
   readonly input: OperationInput;
 };
+
+export type ProviderPluginMessagingActionAttemptV1 = {
+  /**
+   * The provider runtime must await this durable fence immediately before its
+   * first effect-capable call or child process. It may perform bounded reads
+   * before the fence, but no mutation and no retry may happen before or after it.
+   */
+  readonly beforeExternalBegin: () => Promise<void>;
+  readonly signal?: AbortSignal;
+  readonly environment: Readonly<Record<string, string | undefined>>;
+};
+
+export type ProviderPluginMessagingActionExecutorV1 = (
+  operation: string,
+  input: OperationInput,
+  auth: WrenchAuth,
+  attempt: ProviderPluginMessagingActionAttemptV1,
+) => Promise<unknown>;
 
 export type ProviderPluginMessagingActionDefinitionV1 =
   | {
@@ -733,6 +759,7 @@ export type ProviderPluginImplementationSourceV1 = {
 
 export type ProviderApiPluginRuntimeV1 = {
   readonly execute: (context: ProviderActionContext) => Promise<void>;
+  readonly executeMessagingPart?: ProviderPluginMessagingActionExecutorV1;
 };
 
 export type ProviderPluginReconciliationReadbackV1 = {
@@ -815,6 +842,7 @@ export type WebSessionPluginRuntimeV1 = {
     options?: ProviderPluginSubjectProbeOptionsV1,
   ) => Promise<string>;
   readonly execute: WebSessionOperationExecutor;
+  readonly executeMessagingPart?: ProviderPluginMessagingActionExecutorV1;
   readonly executePublic?: PublicWebSessionOperationExecutor;
   readonly reconcile?: (
     operation: string,
@@ -837,6 +865,7 @@ export type LocalCliPluginRuntimeV1 = {
     options?: ProviderPluginSubjectProbeOptionsV1,
   ) => Promise<string>;
   readonly execute: LocalCliOperationExecutor;
+  readonly executeMessagingPart?: ProviderPluginMessagingActionExecutorV1;
   readonly reconcile?: (
     operation: string,
     input: OperationInput,
@@ -978,6 +1007,7 @@ export type ProviderApiPluginBindingV1 = ProviderPluginBindingBaseV1 & {
   readonly operations: readonly ProviderApiPluginOperationV1[];
   readonly loadRuntime: ProviderApiPluginRuntimeHooksV1["loadRuntime"];
   readonly execute: ProviderApiPluginRuntimeV1["execute"];
+  readonly executeMessagingPart?: ProviderPluginMessagingActionExecutorV1;
 };
 
 export type WebSessionApiPluginBindingV1 = ProviderPluginBindingBaseV1 & {
@@ -985,6 +1015,7 @@ export type WebSessionApiPluginBindingV1 = ProviderPluginBindingBaseV1 & {
   readonly operations: readonly WebSessionPluginOperationV1[];
   readonly loadRuntime: WebSessionPluginRuntimeHooksV1["loadRuntime"];
   readonly execute: WebSessionPluginRuntimeV1["execute"];
+  readonly executeMessagingPart?: ProviderPluginMessagingActionExecutorV1;
   readonly executePublic?: NonNullable<WebSessionPluginRuntimeV1["executePublic"]>;
   readonly reconcile?: NonNullable<WebSessionPluginRuntimeV1["reconcile"]>;
 };
@@ -994,6 +1025,7 @@ export type LinkedDevicePluginBindingV1 = ProviderPluginBindingBaseV1 & {
   readonly operations: readonly WebSessionPluginOperationV1[];
   readonly loadRuntime: WebSessionPluginRuntimeHooksV1["loadRuntime"];
   readonly execute: WebSessionPluginRuntimeV1["execute"];
+  readonly executeMessagingPart?: ProviderPluginMessagingActionExecutorV1;
   readonly reconcile?: NonNullable<WebSessionPluginRuntimeV1["reconcile"]>;
   readonly linkedDeviceLifecycle?: ProviderPluginLinkedDeviceLifecycleRuntimeV1;
 };
@@ -1005,6 +1037,7 @@ export type LocalCliPluginBindingV1 = ProviderPluginBindingBaseV1 & {
   readonly loadRuntime: LocalCliPluginRuntimeHooksV1["loadRuntime"];
   readonly inspect: LocalCliPluginRuntimeV1["inspect"];
   readonly execute: LocalCliPluginRuntimeV1["execute"];
+  readonly executeMessagingPart?: ProviderPluginMessagingActionExecutorV1;
   readonly reconcile?: NonNullable<LocalCliPluginRuntimeV1["reconcile"]>;
 };
 
@@ -2923,15 +2956,24 @@ function freezeOperation(
 }
 
 function validateProviderRuntime(value: ProviderApiPluginRuntimeV1): ProviderApiPluginRuntimeV1 {
-  requireExactKeys(value, ["execute"], "provider plugin runtime");
+  requireExactKeys(value, ["execute", "executeMessagingPart"], "provider plugin runtime");
   if (typeof value.execute !== "function") throw new Error("provider plugin runtime must declare execute");
-  return Object.freeze({ execute: value.execute });
+  if (
+    value.executeMessagingPart !== undefined
+    && typeof value.executeMessagingPart !== "function"
+  ) throw new Error("provider plugin messaging action runtime hook is invalid");
+  return Object.freeze({
+    execute: value.execute,
+    ...(value.executeMessagingPart === undefined
+      ? {}
+      : { executeMessagingPart: value.executeMessagingPart }),
+  });
 }
 
 function validateWebRuntime(value: WebSessionPluginRuntimeV1): WebSessionPluginRuntimeV1 {
   requireExactKeys(
     value,
-    ["probe", "execute", "executePublic", "reconcile", "linkedDeviceLifecycle"],
+    ["probe", "execute", "executeMessagingPart", "executePublic", "reconcile", "linkedDeviceLifecycle"],
     "web-session plugin runtime",
   );
   if (typeof value.probe !== "function" || typeof value.execute !== "function") {
@@ -2943,6 +2985,10 @@ function validateWebRuntime(value: WebSessionPluginRuntimeV1): WebSessionPluginR
   ) {
     throw new Error("web-session plugin public runtime hook is invalid");
   }
+  if (
+    value.executeMessagingPart !== undefined
+    && typeof value.executeMessagingPart !== "function"
+  ) throw new Error("web-session plugin messaging action runtime hook is invalid");
   if (value.reconcile !== undefined && typeof value.reconcile !== "function") {
     throw new Error("web-session plugin runtime reconciliation hook is invalid");
   }
@@ -2971,6 +3017,9 @@ function validateWebRuntime(value: WebSessionPluginRuntimeV1): WebSessionPluginR
   return Object.freeze({
     probe: value.probe,
     execute: value.execute,
+    ...(value.executeMessagingPart === undefined
+      ? {}
+      : { executeMessagingPart: value.executeMessagingPart }),
     ...(value.executePublic === undefined
       ? {}
       : { executePublic: value.executePublic }),
@@ -2984,7 +3033,7 @@ function validateLocalCliRuntime(
 ): LocalCliPluginRuntimeV1 {
   requireExactKeys(
     value,
-    ["inspect", "probe", "execute", "reconcile"],
+    ["inspect", "probe", "execute", "executeMessagingPart", "reconcile"],
     "local CLI plugin runtime",
   );
   if (
@@ -2997,10 +3046,17 @@ function validateLocalCliRuntime(
   if (value.reconcile !== undefined && typeof value.reconcile !== "function") {
     throw new Error("local CLI plugin runtime reconciliation hook is invalid");
   }
+  if (
+    value.executeMessagingPart !== undefined
+    && typeof value.executeMessagingPart !== "function"
+  ) throw new Error("local CLI plugin messaging action runtime hook is invalid");
   return Object.freeze({
     inspect: value.inspect,
     probe: value.probe,
     execute: value.execute,
+    ...(value.executeMessagingPart === undefined
+      ? {}
+      : { executeMessagingPart: value.executeMessagingPart }),
     ...(value.reconcile === undefined ? {} : { reconcile: value.reconcile }),
   });
 }
@@ -3588,6 +3644,24 @@ function freezeBinding(
       loadRuntime,
       execute: async (context: ProviderActionContext) =>
         (await loadRuntime()).execute(context),
+      ...(messaging?.action.state === "supported"
+        ? {
+            executeMessagingPart: async (
+              operation: string,
+              input: OperationInput,
+              auth: WrenchAuth,
+              attempt: ProviderPluginMessagingActionAttemptV1,
+            ) => {
+              const hook = (await loadRuntime()).executeMessagingPart;
+              if (hook === undefined) {
+                throw new Error(
+                  `provider plugin surface ${binding.surfaceId} declared messaging actions without a runtime hook`,
+                );
+              }
+              return hook(operation, input, auth, attempt);
+            },
+          }
+        : {}),
     });
     return result;
   }
@@ -3773,6 +3847,24 @@ function freezeBinding(
       },
       execute: async (manifest, recipe, input, auth, options) =>
         (await loadRuntime()).execute(manifest, recipe, input, auth, options),
+      ...(messaging?.action.state === "supported"
+        ? {
+            executeMessagingPart: async (
+              operation: string,
+              input: OperationInput,
+              auth: WrenchAuth,
+              attempt: ProviderPluginMessagingActionAttemptV1,
+            ) => {
+              const hook = (await loadRuntime()).executeMessagingPart;
+              if (hook === undefined) {
+                throw new Error(
+                  `provider plugin surface ${binding.surfaceId} declared messaging actions without a runtime hook`,
+                );
+              }
+              return hook(operation, input, auth, attempt);
+            },
+          }
+        : {}),
       ...(reconciles ? { reconcile } : {}),
     });
     return result;
@@ -4013,6 +4105,24 @@ function freezeBinding(
       },
     }),
     execute,
+    ...(messaging?.action.state === "supported"
+      ? {
+          executeMessagingPart: async (
+            operation: string,
+            input: OperationInput,
+            auth: WrenchAuth,
+            attempt: ProviderPluginMessagingActionAttemptV1,
+          ) => {
+            const hook = (await loadRuntime()).executeMessagingPart;
+            if (hook === undefined) {
+              throw new Error(
+                `provider plugin surface ${binding.surfaceId} declared messaging actions without a runtime hook`,
+              );
+            }
+            return hook(operation, input, auth, attempt);
+          },
+        }
+      : {}),
     ...(hasPublicOperations ? { executePublic } : {}),
     ...(reconciles ? { reconcile } : {}),
     ...(linkedDeviceLifecycle === undefined ? {} : { linkedDeviceLifecycle }),
