@@ -436,4 +436,3 @@ function parseArguments(args: readonly string[]): NpmPackageIdentityInput {
 if (import.meta.main) {
   await verifyNpmPackageIdentity(parseArguments(process.argv.slice(2)));
 }
-

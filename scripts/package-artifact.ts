@@ -311,4 +311,3 @@ if (import.meta.main) {
   }
   await inspectPackageArtifact(args[0]);
 }
-
