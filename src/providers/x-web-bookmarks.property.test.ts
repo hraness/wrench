@@ -77,6 +77,9 @@ const nameArb = fc.string({ minLength: 1, maxLength: 40 }).filter((value) =>
 const textArb = fc.string({ minLength: 0, maxLength: 80 }).filter((value) =>
   !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
 );
+const asciiTextArb = fc
+  .array(fc.integer({ min: 0, max: 0x7f }), { maxLength: 40 })
+  .map((codes) => String.fromCharCode(...codes));
 const cursorArb = fc.uuid().map((value) => `bookmark-cursor-${value}`);
 
 test("bookmark export records keep post_id equal to the tweet rest_id and round-trip", () => {
@@ -151,7 +154,7 @@ test("bookmark pages preserve unique post_id order and never leak a truncated cu
 test("property: tweet body text admits TAB, LF, and CR and rejects every other C0 or DEL", () => {
   assertProperty(fc.property(
     postIdArb,
-    fc.string({ minLength: 0, maxLength: 40 }),
+    asciiTextArb,
     (postId, raw) => {
       const allowed = !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(raw);
       const response = bookmarksResponse([

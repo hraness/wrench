@@ -1455,7 +1455,7 @@ describe("X bookmark export projection", () => {
     expect(parseXWebBookmarkExportPage(truncated).items[0]!.post_id).toBe("11");
   });
 
-  test("admits TAB, LF, and CR in post text while rejecting NUL and keeping createdAt strict", () => {
+  test("admits only TAB, LF, and CR among C0 and DEL in post text while keeping createdAt strict", () => {
     const multiline = "line one\nline two\rwith tab\there";
     const page = projectXWebBookmarkExportPage(bookmarksResponse(
       timelineItemEntry("tweet-1", tweetResult("900", {
@@ -1473,14 +1473,30 @@ describe("X bookmark export projection", () => {
     expect(empty.posts[0]!.text).toBe("");
     expect(parseXWebBookmarkExportPage(empty)).toEqual(empty);
 
-    expect(() => projectXWebBookmarkExportPage(bookmarksResponse(
-      timelineItemEntry("tweet-nul", tweetResult("901", { text: "before\0after" })),
-    ), 10)).toThrow("X post text must be bounded public text");
-
-    expect(() => parseXWebBookmarkExportRecord({
-      ...page.items[0]!,
-      text: "before\0after",
-    })).toThrow("X bookmark export record.text must be bounded public text");
+    const allowedControls = new Set([0x09, 0x0a, 0x0d]);
+    const controlCodes = [
+      ...Array.from({ length: 0x20 }, (_, code) => code),
+      0x7f,
+    ];
+    for (const code of controlCodes) {
+      const text = `before${String.fromCharCode(code)}after`;
+      const response = bookmarksResponse(
+        timelineItemEntry(`tweet-control-${code}`, tweetResult("901", { text })),
+      );
+      if (allowedControls.has(code)) {
+        const controlPage = projectXWebBookmarkExportPage(response, 10);
+        expect(controlPage.posts[0]!.text).toBe(text);
+        expect(controlPage.items[0]!.text).toBe(text);
+        expect(parseXWebBookmarkExportPage(controlPage)).toEqual(controlPage);
+        continue;
+      }
+      expect(() => projectXWebBookmarkExportPage(response, 10))
+        .toThrow("X post text must be bounded public text");
+      expect(() => parseXWebBookmarkExportRecord({
+        ...page.items[0]!,
+        text,
+      })).toThrow("X bookmark export record.text must be bounded public text");
+    }
 
     expect(() => projectXWebBookmarkExportPage(bookmarksResponse(
       timelineItemEntry("tweet-created", tweetResult("904", {
