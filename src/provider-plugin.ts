@@ -46,6 +46,7 @@ import type {
 } from "./omni-model";
 import type { LocalCliOperationExecutor } from "./local-cli-execution";
 import type { MessagingRouteCoordinateV1 } from "./messaging-types";
+import type { OperationDeadline } from "./operation-deadline";
 import {
   localCliToolArtifactForCurrentRuntime,
   parseLocalCliToolIdentityV1,
@@ -237,6 +238,11 @@ export type ProviderPluginMessagingReconciliationRequestV1 = {
   readonly input: OperationInput;
 };
 
+export type ProviderPluginMessagingActionDeadlineV1 = Pick<
+  OperationDeadline,
+  "signal" | "remainingTimeMs" | "run" | "throwIfUnavailable"
+>;
+
 export type ProviderPluginMessagingActionAttemptV1 = {
   /**
    * The provider runtime must await this durable fence immediately before its
@@ -244,8 +250,12 @@ export type ProviderPluginMessagingActionAttemptV1 = {
    * before the fence, but no mutation and no retry may happen before or after it.
    */
   readonly beforeExternalBegin: () => Promise<void>;
-  readonly signal?: AbortSignal;
+  /** One kernel-owned total budget for lazy loading and every provider step. */
+  readonly operationDeadline: ProviderPluginMessagingActionDeadlineV1;
+  readonly signal: AbortSignal;
   readonly environment: Readonly<Record<string, string | undefined>>;
+  /** Kernel-owned durable cleanup publication for provider-private resources. */
+  readonly registerCleanupBarrier?: ProviderPluginCleanupBarrierRegistrar;
 };
 
 export type ProviderPluginMessagingActionExecutorV1 = (

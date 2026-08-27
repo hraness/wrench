@@ -169,7 +169,8 @@ export type BeeperDirectMessagingAttempt = Readonly<{
    * The caller must make this transition persistent before it resolves.
    */
   beforeExternalBegin: () => Promise<void>;
-  signal?: AbortSignal;
+  operationDeadline: WebSessionOperationDeadline;
+  signal: AbortSignal;
   environment?: Readonly<Record<string, string | undefined>>;
   dependencies?: BeeperDirectMessagingDependencies;
 }>;
@@ -2174,6 +2175,7 @@ export async function executeBeeperDirectMessagingPart(
   authValue: WrenchAuth,
   attempt: BeeperDirectMessagingAttempt,
 ): Promise<BeeperDirectMessagingAcceptance> {
+  attempt.operationDeadline.throwIfUnavailable("Beeper direct messaging");
   const input = parseBeeperOperationInput("messaging.send", inputValue);
   if (
     !("kind" in input)
@@ -2187,6 +2189,7 @@ export async function executeBeeperDirectMessagingPart(
     throw new Error("Beeper direct messaging requires one bound local account realm");
   }
   const snapshot = await validateBeeperCliStoreInternal(auth.path);
+  attempt.operationDeadline.throwIfUnavailable("Beeper direct messaging");
   const accessToken = snapshot.effectiveAuth.accessToken;
   if (typeof accessToken !== "string") {
     throw new Error("Beeper Desktop selected target lost its effective bearer token");
@@ -2240,11 +2243,13 @@ export async function executeBeeperDirectMessagingPart(
     input.conversationId,
     "Beeper Desktop direct conversation",
   );
+  attempt.operationDeadline.throwIfUnavailable("Beeper direct messaging");
   const body = JSON.stringify({
     text: input.text,
     ...(input.replyTo === null ? {} : { replyToMessageID: input.replyTo }),
   });
   await attempt.beforeExternalBegin();
+  attempt.operationDeadline.throwIfUnavailable("Beeper direct messaging");
   const acceptance = strictRecord(
     await beeperDirectJsonRequest(
       `${baseUrl}${chatPath}/messages`,

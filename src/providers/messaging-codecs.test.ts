@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { canonicalJson, sha256 } from "../canonical-json";
 import type { WrenchAuth } from "../auth";
 import type { ProviderMessageV1 } from "../omni-model";
+import { OperationDeadline } from "../operation-deadline";
 import { beeperLinkedDevicePlugin } from "../plugins/beeper-linked-device/plugin";
 import { beeperMessagingDefinition, parseBeeperMessagingTarget } from "./beeper-messaging";
 import {
@@ -387,14 +388,21 @@ describe("provider messaging coordinate codecs", () => {
       path: "/not-read-for-malformed-input",
       subject: `beeper:local:${"a".repeat(64)}`,
     });
+    const operationDeadline = new OperationDeadline(1_000);
     const attempt = Object.freeze({
       beforeExternalBegin: () => Promise.resolve(),
+      operationDeadline,
+      signal: operationDeadline.signal,
       environment: Object.freeze({}),
     });
-    expect(() => runtime.executeMessagingPart!("messaging.edit", {}, auth, attempt))
-      .toThrow("only messaging.send");
-    await expect(runtime.executeMessagingPart!("messaging.send", {}, auth, attempt))
-      .rejects.toThrow("account_id");
+    try {
+      expect(() => runtime.executeMessagingPart!("messaging.edit", {}, auth, attempt))
+        .toThrow("only messaging.send");
+      await expect(runtime.executeMessagingPart!("messaging.send", {}, auth, attempt))
+        .rejects.toThrow("account_id");
+    } finally {
+      operationDeadline.dispose();
+    }
   });
 
   test("proves the exact iMessage prefix and bounded eviction without replies", () => {

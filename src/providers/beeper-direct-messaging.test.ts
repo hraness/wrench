@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { WrenchAuth } from "../auth";
+import { OperationDeadline } from "../operation-deadline";
 import {
   beeperSubjectFromAccountsAndTarget,
   executeBeeperDirectMessagingPart,
@@ -18,6 +19,7 @@ import {
 } from "./beeper-local-runtime";
 
 const roots: string[] = [];
+const deadlines: OperationDeadline[] = [];
 const baseUrl = "http://127.0.0.1:23373/";
 const bundleId = "com.automattic.beeper.desktop" as const;
 const account = Object.freeze({
@@ -46,7 +48,22 @@ const conversation = Object.freeze({
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const deadline of deadlines.splice(0)) deadline.dispose();
 });
+
+function boundedAttempt(signal?: AbortSignal): Readonly<{
+  operationDeadline: OperationDeadline;
+  signal: AbortSignal;
+}> {
+  const operationDeadline = new OperationDeadline(60_000, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+  deadlines.push(operationDeadline);
+  return Object.freeze({
+    operationDeadline,
+    signal: operationDeadline.signal,
+  });
+}
 
 function fixtureAuth(): WrenchAuth {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-beeper-direct-")));
@@ -122,6 +139,7 @@ describe("Beeper direct messaging transport", () => {
       text: "private exact body",
       reply_to: "event-1",
     }, fixtureAuth(), {
+      ...boundedAttempt(),
       beforeExternalBegin: () => {
         events.push("boundary");
         return Promise.resolve();
@@ -182,6 +200,7 @@ describe("Beeper direct messaging transport", () => {
       kind: "text",
       text: "one attempt",
     }, fixtureAuth(), {
+      ...boundedAttempt(),
       beforeExternalBegin: () => {
         boundary += 1;
         return Promise.resolve();
@@ -211,6 +230,7 @@ describe("Beeper direct messaging transport", () => {
       kind: "text",
       text: "never sent",
     }, fixtureAuth(), {
+      ...boundedAttempt(),
       beforeExternalBegin: () => {
         boundary += 1;
         return Promise.resolve();
@@ -244,11 +264,11 @@ describe("Beeper direct messaging transport", () => {
       kind: "text",
       text: "never requested",
     }, fixtureAuth(), {
+      ...boundedAttempt(controller.signal),
       beforeExternalBegin: () => {
         boundary += 1;
         return Promise.resolve();
       },
-      signal: controller.signal,
       dependencies: {
         fetch: () => {
           requests += 1;
@@ -256,7 +276,7 @@ describe("Beeper direct messaging transport", () => {
         },
       },
     });
-    await expect(promise).rejects.toThrow("synthetic already cancelled");
+    await expect(promise).rejects.toThrow("Beeper direct messaging was cancelled");
     expect(requests).toBe(0);
     expect(boundary).toBe(0);
   });
@@ -271,6 +291,7 @@ describe("Beeper direct messaging transport", () => {
       kind: "text",
       text: "never sent after body stall",
     }, fixtureAuth(), {
+      ...boundedAttempt(),
       beforeExternalBegin: () => {
         boundary += 1;
         return Promise.resolve();

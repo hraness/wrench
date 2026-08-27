@@ -37,7 +37,9 @@ import {
   manifestHash,
   type OperationInput,
 } from "./model";
+import { runLocalCliOperationWithDeadline } from "./local-cli-execution";
 import { parseMaterializedPageV1, type ProviderMaterializedPageV1, type ProviderMessageV1 } from "./omni-model";
+import { OperationDeadline } from "./operation-deadline";
 import { withLocalCliProviderCleanupAdmission } from "./local-cli-admission";
 import type {
   ProviderPluginBindingV1,
@@ -1302,7 +1304,8 @@ export async function executeMessagingCompositeInternal(
   if (actionResolution.binding.executeMessagingPart === undefined) {
     throw new Error("messaging provider has no private action executor");
   }
-  requireBoundAuth(actionResolution.binding, invocation.auth);
+  const boundAuth = invocation.auth;
+  requireBoundAuth(actionResolution.binding, boundAuth);
   let snapshot = initialSnapshot;
   try {
     await requireRuntimeReady(
@@ -1407,26 +1410,99 @@ export async function executeMessagingCompositeInternal(
     }, environment);
     let crossedExternalBoundary = false;
     try {
-      const output = await actionResolution.binding.executeMessagingPart(
-        action.operation,
-        composite.parts[index]!.input,
-        invocation.auth,
-        Object.freeze({
-          beforeExternalBegin: async () => {
-            if (crossedExternalBoundary) {
-              throw new Error("messaging provider attempted more than one dispatch boundary");
+      const operation = invocation.manifest.operations[invocation.operationId];
+      if (operation === undefined) {
+        throw new Error("messaging action lost its exact operation recipe");
+      }
+      const beforeExternalBegin = async (): Promise<void> => {
+        if (crossedExternalBoundary) {
+          throw new Error("messaging provider attempted more than one dispatch boundary");
+        }
+        snapshot = updateMessagingRun(snapshot, {
+          type: "dispatching",
+          index,
+          at: messagingTransitionTime(snapshot, options),
+        }, environment);
+        crossedExternalBoundary = true;
+      };
+      const executePart = (
+        operationDeadline: Parameters<
+          NonNullable<typeof actionResolution.binding.executeMessagingPart>
+        >[3]["operationDeadline"],
+        registerCleanupBarrier?: Parameters<
+          NonNullable<typeof actionResolution.binding.executeMessagingPart>
+        >[3]["registerCleanupBarrier"],
+      ) => actionResolution.binding.executeMessagingPart!(
+          action.operation,
+          composite.parts[index]!.input,
+          boundAuth,
+          Object.freeze({
+            beforeExternalBegin,
+            operationDeadline,
+            signal: operationDeadline.signal,
+            ...(registerCleanupBarrier === undefined
+              ? {}
+              : { registerCleanupBarrier }),
+            environment,
+          }),
+        );
+      const output = actionResolution.binding.transport === "local-cli"
+        ? await (() => {
+            if (!isLocalCliOperation(operation)) {
+              throw new Error("local CLI messaging action lost its exact operation recipe");
             }
-            snapshot = updateMessagingRun(snapshot, {
-              type: "dispatching",
-              index,
-              at: messagingTransitionTime(snapshot, options),
-            }, environment);
-            crossedExternalBoundary = true;
-          },
-          ...(options.signal === undefined ? {} : { signal: options.signal }),
-          environment,
-        }),
-      );
+            return withLocalCliProviderCleanupAdmission(
+              {
+                registry,
+                binding: actionResolution.binding,
+                auth: boundAuth,
+                purpose: {
+                  kind: "messaging",
+                  action: operation.localCli.action,
+                  contractVersion: operation.localCli.contractVersion,
+                  messagingRunId: snapshot.run.runId,
+                  partIndex: index,
+                },
+                environment,
+                ...(options.now === undefined ? {} : { now: options.now }),
+              },
+              (registerCleanupBarrier) => runLocalCliOperationWithDeadline(
+                operation.localCli,
+                {
+                  environment,
+                  ...(options.signal === undefined ? {} : { signal: options.signal }),
+                  registerCleanupBarrier,
+                },
+                (boundedOptions) => {
+                  const operationDeadline = boundedOptions.operationDeadline;
+                  if (operationDeadline === undefined) {
+                    throw new Error("local CLI messaging deadline is unavailable");
+                  }
+                  return executePart(
+                    operationDeadline,
+                    boundedOptions.registerCleanupBarrier,
+                  );
+                },
+              ),
+            );
+          })()
+        : await (() => {
+            const timeoutMs = isProviderOperation(operation)
+              ? operation.provider.timeoutMs
+              : isWebSessionOperation(operation)
+                ? operation.webSession.timeoutMs
+                : null;
+            if (timeoutMs === null) {
+              throw new Error("messaging action has no bounded provider recipe");
+            }
+            const operationDeadline = new OperationDeadline(timeoutMs, {
+              ...(options.signal === undefined ? {} : { signal: options.signal }),
+            });
+            return operationDeadline.run(
+              () => executePart(operationDeadline),
+              "messaging provider action",
+            ).finally(() => operationDeadline.dispose());
+          })();
       if (!crossedExternalBoundary) {
         throw new Error("messaging provider returned without crossing its durable dispatch boundary");
       }

@@ -160,13 +160,20 @@ export const imessageDirectPlugin = defineProviderPlugin({
           if (operation !== "messaging.send") {
             throw new Error("direct iMessage messaging runtime accepts only messaging.send");
           }
+          if (attempt.registerCleanupBarrier === undefined) {
+            throw new Error(
+              "direct iMessage messaging requires durable local CLI cleanup admission",
+            );
+          }
           const result = await runtime.executeImsgDirectMessagingPart(
             manifestOperations["messaging.send"].localCli,
             input,
             auth,
             {
               environment: attempt.environment,
-              ...(attempt.signal === undefined ? {} : { signal: attempt.signal }),
+              signal: attempt.signal,
+              operationDeadline: attempt.operationDeadline,
+              registerCleanupBarrier: attempt.registerCleanupBarrier,
               beforeDispatch: async () => attempt.beforeExternalBegin(),
             },
           );

@@ -202,7 +202,8 @@ export const beeperLinkedDevicePlugin = defineProviderPlugin({
           }
           return runtime.executeBeeperDirectMessagingPart(input, auth, {
             beforeExternalBegin: attempt.beforeExternalBegin,
-            ...(attempt.signal === undefined ? {} : { signal: attempt.signal }),
+            operationDeadline: attempt.operationDeadline,
+            signal: attempt.signal,
             environment: attempt.environment,
           });
         },
