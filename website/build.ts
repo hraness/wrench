@@ -490,6 +490,14 @@ function renderTemplate(
   return rendered;
 }
 
+export function renderPreview(template: string, cssAsset: string): string {
+  const rendered = replaceRequired(template, "{{CSS_ASSET}}", escapeHtml(cssAsset));
+  if (/\{\{[A-Z0-9_]+\}\}/u.test(rendered)) {
+    throw new Error("The rendered preview contains an unresolved template value.");
+  }
+  return rendered;
+}
+
 export function renderIndex(template: string, options: RenderOptions): string {
   return renderTemplate(template, options, PUBLIC_PAGES[0]);
 }
@@ -519,6 +527,7 @@ export async function buildWebsite(
   const [
     manifest,
     publicTemplates,
+    previewTemplate,
     notFoundTemplate,
     notFoundMarkdown,
     llmsTemplate,
@@ -530,6 +539,7 @@ export async function buildWebsite(
   ] = await Promise.all([
     Bun.file(join(repositoryRoot, "package.json")).json(),
     Promise.all(PUBLIC_PAGES.map((page) => readFile(join(sourceRoot, page.sourceFile), "utf8"))),
+    readFile(join(sourceRoot, "preview.html"), "utf8"),
     readFile(join(sourceRoot, "404.html"), "utf8"),
     readFile(join(sourceRoot, "404.md"), "utf8"),
     readFile(join(sourceRoot, "llms.txt"), "utf8"),
@@ -594,6 +604,7 @@ export async function buildWebsite(
 
   await rm(outputRoot, { force: true, recursive: true });
   await mkdir(join(outputRoot, "assets"), { recursive: true });
+  await mkdir(join(outputRoot, "preview"), { recursive: true });
   await Promise.all(PUBLIC_PAGES.map((page) => mkdir(dirname(join(outputRoot, page.outputFile)), {
     recursive: true,
   })));
@@ -607,6 +618,7 @@ export async function buildWebsite(
       join(outputRoot, markdownSiblingPath(page.canonicalPath).slice(1)),
       htmlMainToMarkdown(html, `${SITE_ORIGIN}${page.canonicalPath}`),
     )),
+    writeFile(join(outputRoot, "preview/index.html"), renderPreview(previewTemplate, cssAsset)),
     writeFile(join(outputRoot, "404.html"), renderTemplate(notFoundTemplate, renderOptions)),
     writeFile(join(outputRoot, "404.md"), renderTemplate(notFoundMarkdown, renderOptions)),
     writeFile(join(outputRoot, "llms.txt"), renderTemplate(llmsTemplate, renderOptions)),
