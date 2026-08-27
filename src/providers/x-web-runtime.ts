@@ -2573,6 +2573,74 @@ async function readArticleDraft(
   return responseBoundArticle(response, "article_result_by_rest_id", id);
 }
 
+type XPrivateArticleDraftReadOutput = Readonly<{
+  provider: "x";
+  operation: "articles.read";
+  article: Readonly<{
+    id: string;
+    ownerId: string;
+    kind: "private-draft";
+    lifecycle: "Draft";
+    published: false;
+    title: string;
+    content: XWebRichArticleContentState;
+  }>;
+}>;
+
+function projectPrivateArticleDraftRead(
+  article: JsonRecord,
+  expectedId: string,
+  expectedViewerId: string,
+): XPrivateArticleDraftReadOutput {
+  requirePrivateDraftArticle(article, expectedId, expectedViewerId);
+  const title = articleTitle(article, "X private Article draft readback");
+  if (title.length < 1 || title.length > 100 || /[\0\r\n]/u.test(title)) {
+    throw new Error("X private Article draft title must be one bounded plain-text line");
+  }
+  return Object.freeze({
+    provider: "x",
+    operation: "articles.read",
+    article: Object.freeze({
+      id: expectedId,
+      ownerId: expectedViewerId,
+      kind: "private-draft",
+      lifecycle: "Draft",
+      published: false,
+      title,
+      content: normalizeArticleContentReadback(article.content_state),
+    }),
+  });
+}
+
+async function executePrivateArticleDraftRead(
+  bootstrap: XBootstrap,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+): Promise<WebSessionExecution> {
+  if (
+    recipe.site !== "x"
+    || recipe.action !== "articles.read"
+    || recipe.contractVersion !== 2
+  ) {
+    throw new Error("X private Article draft reads support only articles.read@2");
+  }
+  const id = postId(input.article_id, "input.article_id");
+  const currentViewer = await requireBoundViewer(bootstrap, auth);
+  const output = projectPrivateArticleDraftRead(
+    await readArticleDraft(bootstrap, id),
+    id,
+    currentViewer.id,
+  );
+  return {
+    status: "succeeded",
+    output,
+    finalUrl: `${X_ORIGIN}/compose/articles/edit/${id}`,
+    dispatchStarted: false,
+    dispatch: { planned: 0, started: 0, verified: 0 },
+  };
+}
+
 function verifyFinalRichArticle(
   article: JsonRecord,
   expected: {
@@ -3157,6 +3225,12 @@ export async function executeXWebOperation(
   } = {},
 ): Promise<WebSessionExecution> {
   if (
+    recipe.action === "articles.read"
+    && (recipe.site !== "x" || recipe.contractVersion !== 2)
+  ) {
+    throw new Error("X private Article draft reads support only articles.read@2");
+  }
+  if (
     recipe.action === "posts.publish"
     || recipe.action === "threads.publish"
     || recipe.action === "replies.create"
@@ -3203,6 +3277,9 @@ export async function executeXWebOperation(
       dispatchStarted: false,
       dispatch: { planned: 0, started: 0, verified: 0 },
     };
+  }
+  if (recipe.action === "articles.read") {
+    return executePrivateArticleDraftRead(bootstrap, recipe, input, auth);
   }
   if (
     recipe.action === "posts.publish"

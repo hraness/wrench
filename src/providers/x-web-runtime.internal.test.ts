@@ -1366,6 +1366,204 @@ describe("X authenticated internal-API runtime", () => {
     expect(switchedCalls.some((call) => call.url.pathname.endsWith("/TweetDetail"))).toBeFalse();
   });
 
+  test("reads one exact current-viewer-owned private Article draft without mutation dispatch", async () => {
+    const calls: CapturedRequest[] = [];
+    let beforeDispatches = 0;
+    let acceptedTargets = 0;
+    let verifiedDispatches = 0;
+    const articleId = "700000000000000001";
+    const title = "Private native Article";
+    const content = buildXWebRichArticleContentState(
+      parseArticleDraftDocument(canonicalJson({
+        schemaVersion: 1,
+        blocks: [{ type: "paragraph", text: "Still private." }],
+      }), {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+      }),
+    );
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(articleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", VIEWER_QUERY_ID, "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response(
+          descriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+          { headers: { "content-type": "application/javascript" } },
+        );
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+        expect(request.method).toBe("GET");
+        expect(request.url.searchParams.get("variables")).toBe(
+          JSON.stringify({ articleEntityId: articleId }),
+        );
+        return jsonResponse({
+          data: {
+            article_result_by_rest_id: {
+              rest_id: articleId,
+              title,
+              metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+              lifecycle_state: { lifecycle: "Draft" },
+              content_state: content,
+              playback_url: "https://attacker.example/not-part-of-output",
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected private Article read request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.read", 2),
+      { article_id: articleId },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        beforeDispatch: () => {
+          beforeDispatches += 1;
+          return Promise.resolve();
+        },
+        afterProviderAcceptedMutationTarget: () => {
+          acceptedTargets += 1;
+          return Promise.resolve();
+        },
+        afterDispatchVerified: () => {
+          verifiedDispatches += 1;
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.read",
+        article: {
+          id: articleId,
+          ownerId: VIEWER_ID,
+          kind: "private-draft",
+          lifecycle: "Draft",
+          published: false,
+          title,
+          content,
+        },
+      },
+      finalUrl: `https://x.com/compose/articles/edit/${articleId}`,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(beforeDispatches).toBe(0);
+    expect(acceptedTargets).toBe(0);
+    expect(verifiedDispatches).toBe(0);
+    expect(JSON.stringify(result.output)).not.toContain("attacker.example");
+    expect(calls.every((call) => call.method === "GET")).toBeTrue();
+  });
+
+  test("rejects private Article draft reads that drift target, owner, lifecycle, or title bounds", async () => {
+    const articleId = "700000000000000001";
+    const content = buildXWebRichArticleContentState(
+      parseArticleDraftDocument(canonicalJson({
+        schemaVersion: 1,
+        blocks: [{ type: "paragraph", text: "Still private." }],
+      }), {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+      }),
+    );
+    const scenarios = [
+      {
+        name: "target",
+        article: {
+          rest_id: "700000000000000002",
+          title: "Private native Article",
+          metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+          lifecycle_state: { lifecycle: "Draft" },
+          content_state: content,
+        },
+        error: "changed the confirmed Article draft",
+      },
+      {
+        name: "owner",
+        article: {
+          rest_id: articleId,
+          title: "Private native Article",
+          metadata: { author_results: { result: { rest_id: "999" } } },
+          lifecycle_state: { lifecycle: "Draft" },
+          content_state: content,
+        },
+        error: "does not belong to the bound viewer",
+      },
+      {
+        name: "lifecycle",
+        article: {
+          rest_id: articleId,
+          title: "Private native Article",
+          metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+          lifecycle_state: { lifecycle: "Published" },
+          content_state: content,
+        },
+        error: "must remain an unpublished private draft",
+      },
+      {
+        name: "title",
+        article: {
+          rest_id: articleId,
+          title: "not\none line",
+          metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+          lifecycle_state: { lifecycle: "Draft" },
+          content_state: content,
+        },
+        error: "one bounded plain-text line",
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const calls: CapturedRequest[] = [];
+      const runtimeDependencies = dependencies(calls, (request) => {
+        if (request.url.href === "https://x.com/home") {
+          return new Response(articleHtml(), { headers: { "content-type": "text/html" } });
+        }
+        if (request.url.href === MAIN_URL) {
+          return new Response(mainBundle(
+            descriptor("Viewer", VIEWER_QUERY_ID, "query"),
+          ), { headers: { "content-type": "application/javascript" } });
+        }
+        if (request.url.href === ARTICLE_BUNDLE_URL) {
+          return new Response(
+            descriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+            { headers: { "content-type": "application/javascript" } },
+          );
+        }
+        if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+        if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+          return jsonResponse({
+            data: { article_result_by_rest_id: scenario.article },
+          });
+        }
+        throw new Error(`unexpected ${scenario.name} drift request ${request.url.href}`);
+      });
+      expect(executeXWebOperation(
+        xRecipe("articles.read", 2),
+        { article_id: articleId },
+        xAuth,
+        { dependencies: runtimeDependencies },
+      )).rejects.toThrow(scenario.error);
+    }
+
+    expect(executeXWebOperation(
+      xRecipe("articles.read"),
+      { article_id: articleId },
+      xAuth,
+    )).rejects.toThrow("support only articles.read@2");
+  });
+
   test("creates one response-bound private Article draft and never calls the publish mutation", async () => {
     const calls: CapturedRequest[] = [];
     const before: WebSessionDispatchEvent[] = [];
@@ -1748,7 +1946,7 @@ describe("X authenticated internal-API runtime", () => {
         if (command === "INIT") {
           expect(request.url.searchParams.get("media_category")).toBe("tweet_image");
           expect(request.url.searchParams.get("media_type")).toBe("image/png");
-          expect(request.url.searchParams.get("total_bytes")).toBe("869311");
+          expect(request.url.searchParams.get("total_bytes")).toBe("243290");
           return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 202);
         }
         if (command === "APPEND") {

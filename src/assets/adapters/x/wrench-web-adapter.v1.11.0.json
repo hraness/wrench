@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.12.0",
+  "version": "1.11.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -249,7 +249,7 @@
       }
     },
     "articles.read": {
-      "description": "Observed contract: read one exact current-viewer-owned private X Article draft through the current ArticleEntityResultByRestId query. The closed output binds the exact article ID, viewer-owner ID, Draft lifecycle, unpublished state, one-line title, and bounded rich content; published Articles remain outside this contract.",
+      "description": "Capture-required contract reservation: read one native X article only after its entitlement-specific first-party detail query and bounded projection are captured and reviewed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -258,9 +258,9 @@
         "properties": {
           "article_id": {
             "type": "string",
-            "description": "Exact 1-19 digit private X Article draft ID owned by the current viewer",
+            "description": "Exact native X article identifier",
             "minLength": 1,
-            "maxLength": 19
+            "maxLength": 128
           }
         },
         "required": [
@@ -270,7 +270,7 @@
       "webSession": {
         "site": "x",
         "action": "articles.read",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 4194304
       }
