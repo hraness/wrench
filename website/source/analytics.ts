@@ -19,6 +19,10 @@ const CANONICAL_ROUTES = new Map<string, Readonly<{ canonicalPath: string; pageK
     canonicalPath: "/provider-capabilities/",
     pageKind: "provider_capabilities",
   }],
+  ["/providers/beeper", {
+    canonicalPath: "/providers/beeper/",
+    pageKind: "provider_beeper",
+  }],
   ["/security", { canonicalPath: "/security/", pageKind: "security" }],
   ["/vms-cannot-contain-agents", {
     canonicalPath: "/vms-cannot-contain-agents/",

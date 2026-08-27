@@ -49,41 +49,35 @@
       <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Provider capabilities</li></ol></nav>
       <article class="guide-article">
         <header class="guide-hero">
-          <p class="eyebrow">Provider capability attestation · Wrench {{WRENCH_VERSION}}</p>
-          <h1>Wrench {{WRENCH_VERSION}} provider capability attestation.</h1>
-          <p class="answer-lede">Wrench {{WRENCH_VERSION}} provider capability attestation is checked against the bundled public adapter manifests for {{WRENCH_RELEASE}}. The table lists every current provider operation in those manifests and the reviewed completeness of that contract. A missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control.</p>
-          <p class="review-note">This page describes {{WRENCH_RELEASE}} and was generated at site build time from the release’s built-in provider plugins joined to the bundled public adapter manifests. Run <code>wrench capabilities --json</code> for the exact state installed on your machine.</p>
+          <p class="eyebrow">Provider directory · Wrench {{WRENCH_VERSION}}</p>
+          <h1>See what is observed before your agent runs it.</h1>
+          <p class="answer-lede">Wrench {{WRENCH_VERSION}} joins its built-in provider plugins to the bundled public adapter manifests for {{WRENCH_RELEASE}}. The result names every current adapter operation, transport, contract version, risk, completeness state, and limit. A missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control.</p>
+          <p class="review-note">Run <code>wrench capabilities --json</code> for the exact state installed on your machine. This release page is generated from reviewed source at build time.</p>
         </header>
 
-        <section aria-labelledby="attestation">
-          <h2 id="attestation">Bundled adapter operations and completeness</h2>
-          <p>This release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled public adapters. {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>. {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} remain <code>capture-required</code>. Telegram is absent from those manifests. Wrench does not install a Telegram Bot API substitute or claim Telegram contact access.</p>
-          <div class="table-scroll provider-table" role="region" aria-labelledby="attestation" tabindex="0">
-            {{PROVIDER_CAPABILITY_ATTESTATION_TABLE}}
+        <section aria-labelledby="directory">
+          <h2 id="directory">{{PROVIDER_SURFACE_COUNT}} provider surfaces, with readiness beside each name</h2>
+          <p>This release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled adapters. {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>. {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} remain <code>capture-required</code>. The cards group adapters by exact provider surface; LinkedIn and X each retain separate official and authenticated-web adapters inside one card.</p>
+          <div class="provider-directory provider-directory-guide">
+            {{PROVIDER_OVERVIEW_CARDS}}
           </div>
+          <p class="provider-status-note">Provider names identify compatible surfaces and do not imply endorsement. Telegram is absent from those manifests. Wrench does not install a Telegram Bot API substitute or claim Telegram contact access.</p>
         </section>
 
         <section aria-labelledby="completeness">
-          <h2 id="completeness">Completeness stays beside the claim</h2>
-          <p><code>observed</code> means the current contract can plan and execute after local doctor and auth checks pass. <code>capture-required</code> is an inert reservation. It cannot plan or execute until authorized evidence establishes a newly reviewed contract.</p>
-          <p>The limit column repeats the public adapter description for that current contract version. Historical plugin versions that are no longer current do not appear as extra rows. Local plugins, portable bundles, and retired manifests can differ from this release snapshot.</p>
+          <h2 id="completeness">Observed and reserved are different states</h2>
+          <p><code>observed</code> means the current contract can plan and execute after local doctor and authentication checks pass. It does not waive the operation's account, dependency, input, risk, or completeness checks.</p>
+          <p><code>capture-required</code> is an inert reservation. It cannot plan or execute until authorized evidence establishes a newly reviewed contract. Historical plugin versions, local plugins, portable bundles, and retired manifests can differ from this release snapshot.</p>
         </section>
 
         <section aria-labelledby="beeper">
-          <h2 id="beeper">Beeper reads and actions use one exact local CLI contract</h2>
-          <p>The bundled source plugin accepts only the pinned official Beeper CLI 0.6.2 executable for the current macOS or Linux architecture and one already-authorized Desktop target. Its typed operations cover accounts, bridges, contacts, conversations, messages, sends, edits, reactions, conversation state, metadata, reminders, drafts, local focus, and presence. Wrench hashes the stable self-account coordinate before storing the auth subject.</p>
-          <div class="command-panel"><pre><code>wrench auth add beeper-main --linked-device beeper \
-  --device-store "${HOME}/.beeper"
-wrench auth bind beeper-main --site beeper
-
-wrench beeper-local messaging.send --auth beeper-main --preview --json \
-  --input '{"account_id":"&lt;account-id&gt;","conversation_id":"&lt;chat-id&gt;","kind":"text","text":"Hello from Wrench"}'
-wrench confirm &lt;preview-digest&gt; --json
-
-wrench beeper export-message-like-me --auth beeper-main \
-  --output /absolute/path/to/new-message-like-me-bundle --json</code></pre></div>
-          <p>The adapter is not a generic command runner. It isolates oclif user-plugin state, strips ambient credentials and target defaults, uses exact IDs, and stages files only from digest-bound plan assets. Its checked coverage ledger accounts for all 101 canonical v0.6.2 commands. Raw API/RPC, account and target administration, software and plugin lifecycle, arbitrary paths and webhooks, media download, and destructive message deletion remain unavailable or R4.</p>
-          <p>The export enumerates connected accounts, then invokes the official <code>export --no-attachments</code> command once per account in deterministic order. Wrench validates each retained raw shard and the account realm, removes redundant plaintext renderings inside private staging, builds the six mode-0600 NDJSON artifacts and manifest, then atomically renames the complete seven-file bundle into its mode-0700 destination. Completeness describes only the locally materialized sequential snapshot. A 500,000-record, 512 MiB, or 250,000-participant-occurrence ceiling produces a coherent truncated bundle, and any chat JSON file over the 64 MiB per-chat bound is omitted with an explicit warning.</p>
+          <h2 id="beeper">Beeper contributes {{BEEPER_OBSERVED_OPERATION_COUNT}} observed local-CLI operations</h2>
+          <p>Wrench accepts only the pinned official Beeper CLI {{BEEPER_CLI_VERSION}} executable for the current macOS or Linux architecture and one already-authorized Desktop target. Its named contracts cover accounts, bridges, contacts, conversations, messages, sends, edits, reactions, conversation state, metadata, reminders, drafts, local focus, and presence.</p>
+          <p>The caller cannot choose an arbitrary Beeper command or flag. Every mutation keeps Wrench's preview, confirmation, durable dispatch, and at-most-once evidence. Exact reconciliation is available where a separately reviewed readback exists; other indeterminate mutations remain fenced and unretried. Submission does not assert network delivery.</p>
+          <div class="action-row guide-actions">
+            <a class="button button-primary" href="/providers/beeper/">Read the Beeper guide</a>
+            <a class="button button-secondary" href="#provider-beeper">Inspect all {{BEEPER_OBSERVED_OPERATION_COUNT}} operations</a>
+          </div>
         </section>
 
         <section aria-labelledby="gmail">
@@ -122,6 +116,14 @@ wrench whatsapp-web contacts.list --auth whatsapp-main \
           <h2 id="persistent">Verified reads can remain available locally</h2>
           <p>Successful R1 calls with a verified account subject can publish encrypted snapshots of the exact validated query and bounded output. Repeating the same operation with <code>--cache-only</code> can return the last verified state without opening a browser or provider connection.</p>
           <p>A failed refresh does not erase the last good snapshot. Provider paging, completeness, and unsupported states remain explicit. WhatsApp revalidation reads its local linked-device projection; synchronizing that projection remains the separate explicit <code>wrench auth sync &lt;id&gt; --once</code> operation.</p>
+        </section>
+
+        <section aria-labelledby="attestation">
+          <h2 id="attestation">Operation-level attestation</h2>
+          <p>Each group below preserves the adapter version, operation name, completeness, risk, semantic contract version, transport, and reviewed limit. The groups are collapsed for scanning in a browser and remain fully present in the static HTML and <a href="/provider-capabilities.md">Markdown edition</a>.</p>
+          <div class="provider-attestation-groups">
+            {{PROVIDER_ATTESTATION_GROUPS}}
+          </div>
         </section>
 
         <aside class="guide-callout" aria-labelledby="provider-next">

@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+    <title>{{BEEPER_PAGE_TITLE}}</title>
+    <meta name="description" content="{{BEEPER_PAGE_DESCRIPTION}}">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/providers/beeper/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="{{BEEPER_PAGE_TITLE}}">
+    <meta property="og:description" content="{{BEEPER_PAGE_DESCRIPTION}}">
+    <meta property="og:url" content="https://wrench.rip/providers/beeper/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{BEEPER_PAGE_TITLE}}">
+    <meta name="twitter:description" content="{{BEEPER_PAGE_DESCRIPTION}}">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Get started</a>
+        <a href="/capture-and-archives/">Capture</a>
+        <a aria-current="location" href="/provider-capabilities/">Providers</a>
+        <a href="/security/">Security</a>
+        <a href="/plugins/">Plugins</a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li><a href="/provider-capabilities/">Providers</a></li><li aria-current="page">Beeper</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero provider-guide-hero">
+          <p class="eyebrow">Beeper adapter · {{WRENCH_RELEASE}}</p>
+          <h1>Beeper through {{BEEPER_OBSERVED_OPERATION_COUNT}} observed operations.</h1>
+          <p class="answer-lede">Wrench exposes {{BEEPER_OBSERVED_OPERATION_COUNT}} semantic operations over the official Beeper CLI {{BEEPER_CLI_VERSION}} and an already-authorized Beeper Desktop target. Each request binds one executable, account realm, Desktop target, operation contract, input, output, and risk level.</p>
+          <p class="review-note">This page describes adapter <code>beeper-local</code> {{BEEPER_ADAPTER_VERSION}} in {{WRENCH_RELEASE}}. Run <code>wrench capabilities beeper-local --json</code> for the exact state installed on your machine.</p>
+        </header>
+
+        <section aria-labelledby="actions">
+          <h2 id="actions">Read, manage, and send through named contracts</h2>
+          <div class="provider-action-grid">
+            <article>
+              <h3>Read</h3>
+              <p>List and read accounts and bridges; list, search, and read contacts and conversations; read message pages, exact messages, and surrounding context; and search bounded message-content windows.</p>
+            </article>
+            <article>
+              <h3>Manage state</h3>
+              <p>Set reactions, archive or pin conversations, change mute or priority state, set or clear private drafts and reminders, and focus one exact Desktop conversation.</p>
+            </article>
+            <article>
+              <h3>Send and change</h3>
+              <p>Send text, files, stickers, or voice; edit an authored message; start a conversation; change read state or group metadata; set disappearing-message retention; send Notify Anyway; and emit bounded presence.</p>
+            </article>
+          </div>
+          <p><a href="/provider-capabilities/#provider-beeper">Inspect the operation-level contracts, risks, and limits</a>.</p>
+        </section>
+
+        <section aria-labelledby="setup">
+          <h2 id="setup">Bind one official CLI and one Desktop target</h2>
+          <p>Install the official CLI, authorize it to the local Desktop app, install Wrench's reviewed adapter manifests, then bind an auth identity to the exact Beeper account and Desktop realm.</p>
+          <div class="command-panel"><pre><code>brew install beeper/tap/cli
+beeper setup
+wrench adapter sync-bundled --json
+wrench auth add beeper-main --linked-device beeper \
+  --device-store "${HOME}/.beeper"
+wrench auth bind beeper-main --site beeper</code></pre></div>
+          <p>If a package manager installs different bytes, extract the matching release asset for your platform and place the executable at <code>&lt;WRENCH_STATE_HOME&gt;/tools/beeper/{{BEEPER_CLI_VERSION}}/beeper</code>. When <code>WRENCH_STATE_HOME</code> is unset, the default state root is <code>~/.local/share/wrench</code>. The artifact table below links the direct official asset for every supported macOS and Linux architecture. Wrench rejects an unpinned executable before private work. A Beeper Desktop update changes the bound runtime realm and requires explicit review and rebind.</p>
+        </section>
+
+        <section aria-labelledby="boundary">
+          <h2 id="boundary">What Wrench adds to the official Beeper CLI</h2>
+          <p><a href="https://github.com/beeper/cli">Beeper publishes the upstream CLI</a>. Wrench exposes reviewed outcomes from that CLI instead of exposing a command name and arbitrary arguments. The caller cannot select a command, flag, endpoint, target, environment variable, output path, or user-installed CLI plugin.</p>
+          <p>Wrench starts the executable directly without a shell, removes ambient credentials and target defaults, isolates oclif user-plugin state, and stages files only from digest-bound plan assets. Private text accepted by the upstream CLI as an argument can remain visible to same-account local process inspection while the child runs.</p>
+          <p>Each supported platform is bound to exact archive and executable SHA-256 values. A reported version, package-manager formula, release tag, or compatible-looking update is not execution authority.</p>
+        </section>
+
+        <section aria-labelledby="versions">
+          <h2 id="versions">Keep each version boundary separate</h2>
+          <div class="table-scroll version-table" role="region" aria-labelledby="versions" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">Boundary</th><th scope="col">Current identity</th><th scope="col">What it controls</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Wrench release</th><td><code>{{WRENCH_RELEASE}}</code></td><td>The installable CLI, SDK, plugin catalog, and public attestation</td></tr>
+                <tr><th scope="row">Adapter</th><td><code>beeper-local</code> {{BEEPER_ADAPTER_VERSION}}</td><td>The public operation catalog and selected source-plugin contracts</td></tr>
+                <tr><th scope="row">Semantic contracts</th><td>{{BEEPER_SEMANTIC_CONTRACT_VERSION_LABEL}} across the current {{BEEPER_OBSERVED_OPERATION_COUNT}} operations</td><td>Each operation's input, output, risk, side effect, and completeness</td></tr>
+                <tr><th scope="row">Official CLI</th><td>Beeper CLI {{BEEPER_CLI_VERSION}} at <code>{{BEEPER_CLI_COMMIT}}</code></td><td>The exact upstream client, further bound by one executable digest per platform</td></tr>
+                <tr><th scope="row">Reviewed SDK semantics</th><td><code>@beeper/desktop-api</code> {{BEEPER_DESKTOP_API_VERSION}} at <code>{{BEEPER_DESKTOP_API_COMMIT}}</code></td><td>The response semantics reviewed behind the CLI, not a claim about the running Desktop version</td></tr>
+                <tr><th scope="row">Runtime Desktop realm</th><td>Bound bundle ID, advertised version, loopback target, and hashed self account</td><td>The exact local Desktop instance authorized to execute</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>These identities answer different questions and do not form a compatibility range. A new CLI artifact or Desktop build requires separate review.</p>
+        </section>
+
+        <section aria-labelledby="artifacts">
+          <h2 id="artifacts">Pinned executable artifacts</h2>
+          <p>The reviewed CLI release commit is <code>{{BEEPER_CLI_COMMIT}}</code>. Its release-manifest SHA-256 is <code>{{BEEPER_CLI_RELEASE_MANIFEST_SHA256}}</code>. Review the <a href="{{BEEPER_CLI_RELEASE_URL}}">official {{BEEPER_CLI_VERSION}} release</a> and the <a href="https://github.com/beeper/cli/blob/{{BEEPER_CLI_COMMIT}}/packages/cli/README.md">CLI manual</a>.</p>
+          <div class="table-scroll artifact-table" role="region" aria-labelledby="artifacts" tabindex="0">
+            {{BEEPER_ARTIFACT_TABLE}}
+          </div>
+        </section>
+
+        <section aria-labelledby="send">
+          <h2 id="send">Preview one message send</h2>
+          <div class="command-panel"><pre><code>wrench beeper-local messaging.send --auth beeper-main --preview --json \
+  --input '{"account_id":"&lt;account-id&gt;","conversation_id":"&lt;chat-id&gt;","kind":"text","text":"Hello from Wrench"}'
+wrench confirm &lt;preview-digest&gt; --json</code></pre></div>
+          <p><code>messaging.send</code> previews the exact request, requires confirmation, durably records dispatch, and invokes Beeper without <code>--wait</code>. An accepted pending target is evidence of submission, not network delivery.</p>
+          <p>After the child may have reached Desktop, a timeout, signal, malformed response, or lost response remains indeterminate. Wrench does not retry it. A separately obtained exact read must reconcile the outcome.</p>
+        </section>
+
+        <section aria-labelledby="exports">
+          <h2 id="exports">Export local history for another bounded tool</h2>
+          <p>Separate Wrench workflows can produce a private Message Like Me bundle or a body-free contact-interaction summary from Beeper's locally materialized history. These workflows are not part of the {{BEEPER_OBSERVED_OPERATION_COUNT}} adapter operations.</p>
+          <div class="command-panel"><pre><code>wrench beeper export-message-like-me --auth beeper-main \
+  --output /absolute/path/to/new-message-like-me-bundle --json
+
+umask 077
+wrench beeper export-contact-interactions --auth beeper-main --json \
+  &gt; /absolute/private/path/beeper-contact-interactions.json</code></pre></div>
+          <p>Both exports retain incomplete-coverage evidence. The contact view excludes message bodies, attachments, reactions, media, group messages, names, titles, handles, credentials, and local paths. Provider coordinates can identify a person, so body-free does not mean anonymous.</p>
+        </section>
+
+        <section aria-labelledby="limits">
+          <h2 id="limits">Limits remain visible</h2>
+          <p>Beeper CLI {{BEEPER_CLI_VERSION}} exposes no continuation for several list and search commands and may cap results below the requested limit. Wrench returns bounded candidate windows instead of claiming complete history.</p>
+          <p>The checked coverage ledger accounts for all {{BEEPER_CLI_COMMAND_COUNT}} canonical CLI commands. Account setup and removal, authentication and verification, target and server administration, software and plugin lifecycle, raw API or RPC, watches and webhooks, arbitrary exports, media download, and message deletion remain unavailable or R4.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="beeper-next">
+          <h2 id="beeper-next">Inspect the local state before binding an account</h2>
+          <p>Install <a href="/getting-started/">Wrench {{WRENCH_RELEASE}}</a>, run <code>wrench doctor --json</code>, inspect <a href="/provider-capabilities/#provider-beeper">all Beeper contracts</a>, then read the <a href="/security/">security and local-custody guide</a>.</p>
+        </aside>
+      </article>
+    </main>
+    <aside aria-label="Wrench project information" class="site-disclosure">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </aside>
+    {{HRANESS_SITE_FOOTER}}
+  </body>
+</html>
