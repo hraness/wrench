@@ -711,6 +711,28 @@ reaction provenance, and includes attachment metadata without media IDs,
 paths, URLs, or downloads. This is a local materialized view, not a claim that
 every connected network has finished backfilling its remote history.
 
+### Direct iMessage through a reviewed private transport
+
+The built-in `imessage` local-CLI plugin reads bounded current context from
+`chat.db` and can submit one confirmed text bubble to an exact live chat GUID.
+It wraps `openclaw/imsg` 0.14.1 plus a vendored reviewed patch stack. The
+outer child argv is fixed to `imsg rpc`; the body enters only through JSON-RPC
+stdin. The nested `osascript` argv contains only fixed interpreter switches and
+an opaque random locator. Every private AppleScript parameter is a checked
+mode-0600 file below one random mode-0700 directory.
+
+The route is fixed to service `iMessage`, transport `applescript`, and disabled
+SMS fallback. Messages chooses the device-default account. Observed account
+routing metadata is diagnostic and does not make an Apple ID selectable or
+prove which account will send. AppleScript does not return a message GUID, so
+Wrench reports submission only after imsg independently observes an exact
+matching outgoing `chat.db` row. Otherwise the result remains non-retryable
+uncertainty.
+
+Build provenance, the exact macOS arm64 executable digest, checked installer,
+permission setup, and outcome limits are in
+[`docs/imessage-direct-provider.md`](docs/imessage-direct-provider.md).
+
 ### Gmail
 
 Gmail uses the official Gmail and People APIs. Download one Google OAuth

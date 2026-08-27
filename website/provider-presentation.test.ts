@@ -21,7 +21,7 @@ describe("provider presentation", () => {
     const attestation = await loadProviderCapabilityAttestation(repositoryRoot);
     const directory = createProviderDirectory(attestation);
 
-    expect(directory.providerCount).toBe(19);
+    expect(directory.providerCount).toBe(20);
     expect(directory.entries.map((entry) => entry.surfaceId)).toEqual(
       PROVIDER_PRESENTATIONS.map((entry) => entry.surfaceId),
     );
@@ -60,6 +60,13 @@ describe("provider presentation", () => {
     });
     expect(directory.entries.find((entry) => entry.surfaceId === "facebook-page"))
       .toMatchObject({ captureRequiredCount: 20, observedCount: 0, operationCount: 20 });
+    expect(directory.entries.find((entry) => entry.surfaceId === "imessage")).toMatchObject({
+      adapterCount: 1,
+      captureRequiredCount: 0,
+      observedCount: 5,
+      operationCount: 5,
+      transports: ["local-cli"],
+    });
   });
 
   test("binds Beeper marketing facts to reviewed code and adapter identity", async () => {
@@ -111,13 +118,13 @@ describe("provider presentation", () => {
     const cards = renderProviderOverviewCards(directory);
     const groups = renderProviderAttestationGroups(directory, attestation);
 
-    expect(cards.match(/<article class="provider-card/gu)).toHaveLength(19);
+    expect(cards.match(/<article class="provider-card/gu)).toHaveLength(20);
     expect(cards.indexOf(">Beeper</a>")).toBeLessThan(cards.indexOf(">Bluesky</a>"));
     expect(cards).toContain("32 of 32 observed");
     expect(cards).toContain("0 of 20 observed · 20 capture-required");
     expect(cards).toContain('aria-hidden="true"');
     expect(cards).not.toContain("{{");
-    expect(groups.match(/class="provider-attestation-group"/gu)).toHaveLength(19);
+    expect(groups.match(/class="provider-attestation-group"/gu)).toHaveLength(20);
     expect(groups.match(/class="provider-adapter"/gu)).toHaveLength(attestation.adapterCount);
     expect(groups).toContain('id="provider-linkedin"');
     expect(groups).toContain("LinkedIn (Official API)");
