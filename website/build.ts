@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  cp,
   copyFile,
   mkdir,
   readFile,
@@ -160,6 +161,10 @@ const repositoryRoot = resolve(websiteRoot, "..");
 const sourceRoot = join(websiteRoot, "source");
 const publicRoot = join(websiteRoot, "public");
 const outputRoot = join(websiteRoot, "dist");
+const designKitFontsStylesPath = fileURLToPath(
+  import.meta.resolve("@hraness/design-kit/fonts.css"),
+);
+const designKitFontsDirectory = join(dirname(designKitFontsStylesPath), "fonts");
 
 const supportedPostHogHosts = new Set([
   "https://eu.i.posthog.com",
@@ -523,6 +528,7 @@ export async function buildWebsite(
     notFoundMarkdown,
     llmsTemplate,
     css,
+    designKitFontsCss,
     hranessSiteFooterCss,
     analyticsBuild,
     skillInstallBuild,
@@ -534,6 +540,7 @@ export async function buildWebsite(
     readFile(join(sourceRoot, "404.md"), "utf8"),
     readFile(join(sourceRoot, "llms.txt"), "utf8"),
     readFile(join(sourceRoot, "styles.css"), "utf8"),
+    readFile(designKitFontsStylesPath, "utf8"),
     readFile(
       fileURLToPath(import.meta.resolve("@hraness/site-footer/styles.css")),
       "utf8",
@@ -571,7 +578,7 @@ export async function buildWebsite(
     );
   }
   const postHog = postHogEnvironment(environment);
-  const compiledCss = `${css.trimEnd()}\n\n${hranessSiteFooterCss.trim()}\n`;
+  const compiledCss = `${designKitFontsCss.trim()}\n\n${css.trimEnd()}\n\n${hranessSiteFooterCss.trim()}\n`;
   const cssAsset = `/assets/styles-${contentHash(compiledCss)}.css`;
   const analyticsAsset = `/assets/analytics-${contentHash(analytics)}.js`;
   const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
@@ -602,6 +609,10 @@ export async function buildWebsite(
     html: renderTemplate(publicTemplates[index]!, renderOptions, page),
   }));
   await Promise.all([
+    cp(designKitFontsDirectory, join(outputRoot, "assets/fonts"), {
+      dereference: true,
+      recursive: true,
+    }),
     ...renderedPages.map(({ page, html }) => writeFile(join(outputRoot, page.outputFile), html)),
     ...renderedPages.map(({ page, html }) => writeFile(
       join(outputRoot, markdownSiblingPath(page.canonicalPath).slice(1)),

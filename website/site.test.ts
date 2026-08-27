@@ -107,6 +107,17 @@ describe("wrench.rip static site", () => {
     expect(cssAsset).toMatch(/^\/assets\/styles-[a-f0-9]{12}\.css$/u);
     const builtCss = await readFile(join(websiteRoot, "dist", cssAsset!.slice(1)), "utf8");
 
+    expect(sourceCss).toContain('--font-sans: "Nebula Sans", ui-sans-serif, system-ui');
+    expect(builtCss).toContain('font-family: "Nebula Sans";');
+    expect(builtCss).toContain('./fonts/nebula-sans/NebulaSans-Book.woff2');
+    expect((await readFile(
+      join(websiteRoot, "dist/assets/fonts/nebula-sans/NebulaSans-Book.woff2"),
+    )).byteLength).toBeGreaterThan(60_000);
+    expect(await readFile(
+      join(websiteRoot, "dist/assets/fonts/nebula-sans/PROVENANCE.md"),
+      "utf8",
+    )).toContain("https://www.nebulasans.com/download/NebulaSans-1.010.zip");
+
     expect(html).toContain(`<title>${SITE_TITLE}</title>`);
     expect(html).toContain(`<meta name="description" content="${SITE_DESCRIPTION}">`);
     expect(html).toContain('<link rel="canonical" href="https://wrench.rip/">');
