@@ -3501,6 +3501,18 @@ function executionOutputLimit(
   return operation.browser.maxOutputBytes;
 }
 
+const GENERIC_EXECUTOR_TERMINATION =
+  "provider executor terminated without returning a bounded result";
+
+function boundedThrownExecutorReason(error: unknown): string {
+  const raw = error instanceof Error
+    ? error.message
+    : typeof error === "string" ? error : "";
+  const redacted = redactSensitiveText(raw).replaceAll("\0", "").trim();
+  if (redacted.length === 0) return GENERIC_EXECUTOR_TERMINATION;
+  return redacted.slice(0, 2_000);
+}
+
 function boundedExecutionResult(
   value: unknown,
   kind:
@@ -4446,7 +4458,19 @@ async function runPreparedCore(
             afterDispatchVerified: (event) => persistDispatchProgress(event, "verified"),
           },
         );
-    execution = boundedExecutionResult(rawExecution, executionKind, maxOutputBytes);
+    try {
+      execution = boundedExecutionResult(rawExecution, executionKind, maxOutputBytes);
+    } catch {
+      const { started } = durableReceipt.dispatch;
+      execution = {
+        status: started > 0 ? "indeterminate" : "failed",
+        output: null,
+        finalUrl: null,
+        dispatchStarted: started > 0,
+        dispatch: durableReceipt.dispatch,
+        error: GENERIC_EXECUTOR_TERMINATION,
+      };
+    }
   } catch (error) {
     const { started } = durableReceipt.dispatch;
     const preservedArtifactsError =
@@ -4468,7 +4492,7 @@ async function runPreparedCore(
           ? localCliOperation
             ? "local CLI child/private-root cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves every pinned process group quiescent and removes the exact private root, or reboot recovery proves quiescence"
             : "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves exact browser-closed evidence, or reboot recovery proves quiescence"
-          : "provider executor terminated without returning a bounded result",
+          : boundedThrownExecutorReason(error),
       ...(preservedArtifactsError === null
         ? {}
         : {

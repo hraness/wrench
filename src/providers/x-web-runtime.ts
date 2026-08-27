@@ -354,10 +354,31 @@ function sourceChunkLogicalName(sourceChunk: string): string {
   return match[1];
 }
 
+const ALLOWED_INSERTED_CHUNK_SEGMENT = /^(?:loader|bundle)\.[A-Za-z][A-Za-z0-9]{0,80}$/u;
+
 function matchesReviewedChunkFamily(currentName: string, reviewedName: string): boolean {
-  return currentName === reviewedName
+  if (
+    currentName === reviewedName
     || currentName.startsWith(`${reviewedName}~`)
-    || reviewedName.startsWith(`${currentName}~`);
+    || reviewedName.startsWith(`${currentName}~`)
+  ) return true;
+  // X sometimes inserts extra `loader.*` / `bundle.*` members inside a reviewed
+  // shared family (Bookmarks is observed as
+  // `shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~…`). Keep the
+  // reviewed segments in order, reject arbitrary prefixes, and still require a
+  // unique webpack-map hit.
+  const reviewed = reviewedName.split("~");
+  const current = currentName.split("~");
+  if (reviewed.length === 0 || current.length < reviewed.length) return false;
+  let next = 0;
+  for (const segment of current) {
+    if (next < reviewed.length && segment === reviewed[next]) {
+      next += 1;
+      continue;
+    }
+    if (!ALLOWED_INSERTED_CHUNK_SEGMENT.test(segment)) return false;
+  }
+  return next === reviewed.length;
 }
 
 function setUniqueChunkMapValue(
@@ -395,7 +416,11 @@ export function resolveCurrentXWebChunkUrl(html: string, sourceChunk: string): U
   const matchingChunks = exactChunks.length === 1
     ? exactChunks
     : [...names].filter(([, name]) => matchesReviewedChunkFamily(name, logicalName));
-  if (matchingChunks.length !== 1) throw new Error("X current build did not bind one unique reviewed logical chunk");
+  if (matchingChunks.length !== 1) {
+    throw new Error(
+      "X current build did not bind one unique reviewed logical chunk; reviewed evidence is stale",
+    );
+  }
   const hashes = new Map<string, string>();
   const hashStart = middle + separator.length;
   for (const match of html.slice(hashStart, suffix).matchAll(/(?:^|,)([0-9A-Za-z]+):"([a-f0-9]{7})"/gu)) {
