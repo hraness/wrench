@@ -423,7 +423,9 @@ export function resolveCurrentXWebChunkUrl(html: string, sourceChunk: string): U
   }
   const hashes = new Map<string, string>();
   const hashStart = middle + separator.length;
-  for (const match of html.slice(hashStart, suffix).matchAll(/(?:^|,)([0-9A-Za-z]+):"([a-f0-9]{7})"/gu)) {
+  // Historical maps used 7 hex chars. Current (2026-08) maps use 16. Accept
+  // only those reviewed widths so a truncated lookup cannot invent an asset URL.
+  for (const match of html.slice(hashStart, suffix).matchAll(/(?:^|,)([0-9A-Za-z]+):"([a-f0-9]{7}|[a-f0-9]{16})"/gu)) {
     if (match[1] !== undefined && match[2] !== undefined) {
       setUniqueChunkMapValue(hashes, match[1], match[2], "hash");
     }
