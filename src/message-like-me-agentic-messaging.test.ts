@@ -12,6 +12,7 @@ import {
   createBeeperMessageLikeMeContextBindingV1,
   createWrenchMessagingReceiptBindingV1,
   messageLikeMeSourceConversationCoordinateBindingV1,
+  wrenchMessagingContextBindingSha256V1,
 } from "./message-like-me-agentic-messaging";
 
 const HASH_A = "a".repeat(64);
@@ -205,7 +206,7 @@ describe("Message Like Me agentic messaging contracts", () => {
     expect(sha256(canonicalJson(WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR)))
       .toBe(WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH);
     expect(WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH)
-      .toBe("9cf5f7744b6d1889e9fb85cbb654cf6e5fac7777509bd134683a26b6f5dae236");
+      .toBe("6b5694f183a6a39b40001a04c62cf767bb5d612cb7c9be5710befa3c7f223ffd");
 
     const context = contextBinding();
     const clientIntent = {
@@ -213,6 +214,7 @@ describe("Message Like Me agentic messaging contracts", () => {
       format: WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_FORMAT,
       contractId: WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_CONTRACT_ID,
       clientIntentSha256: HASH_A,
+      contextBindingSha256: wrenchMessagingContextBindingSha256V1(context),
       sourceConversationCoordinateSha256: context.sourceConversationCoordinate.sha256,
       routeRefSha256: sha256(context.routeRef),
       contextRefSha256: sha256(context.contextRef),
@@ -235,6 +237,7 @@ describe("Message Like Me agentic messaging contracts", () => {
       receiptSha256: undefined,
     })));
     for (const changed of [
+      { contextBindingSha256: HASH_C },
       { sourceConversationCoordinateSha256: HASH_B },
       { routeRefSha256: HASH_C },
       { contextRefSha256: HASH_A },
@@ -249,5 +252,30 @@ describe("Message Like Me agentic messaging contracts", () => {
         recordedAt: "2026-08-27T12:01:00.000Z",
       })).toThrow("does not bind the exact context instance");
     }
+    for (const changedContext of [
+      { ...context, exactDataRevision: HASH_C },
+      { ...context, latestMessageRevision: HASH_C },
+      { ...context, validatedAt: "2026-08-27T12:00:01.000Z" },
+      { ...context, expiresAt: "2026-08-27T12:09:59.000Z" },
+    ]) {
+      expect(() => createWrenchMessagingReceiptBindingV1({
+        context: changedContext,
+        clientIntent,
+        previewDigest: HASH_C,
+        runId: "run_synthetic_001",
+        state: "submitted",
+        provenPartCount: 2,
+        recordedAt: "2026-08-27T12:01:00.000Z",
+      })).toThrow("does not bind the exact context instance");
+    }
+    expect(() => createWrenchMessagingReceiptBindingV1({
+      context: { ...context, contractHash: HASH_C },
+      clientIntent,
+      previewDigest: HASH_C,
+      runId: "run_synthetic_001",
+      state: "submitted",
+      provenPartCount: 2,
+      recordedAt: "2026-08-27T12:01:00.000Z",
+    })).toThrow("unsupported contract identity");
   });
 });
