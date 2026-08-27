@@ -80,6 +80,8 @@ export type {
 export {
   MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_CONTRACT_ID,
   MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_SCHEMA_VERSION,
+  WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_FORMAT,
   WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR,
   WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
   WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
@@ -92,11 +94,14 @@ export {
   createWrenchMessagingReceiptBindingV1,
   messageLikeMeSourceConversationCoordinateBindingV1,
   parseMessageLikeMeSourceConversationCoordinateV1,
+  parseWrenchMessagingClientIntentBindingV1,
+  parseWrenchMessagingContextBindingV1,
 } from "./message-like-me-agentic-messaging";
 
 export type {
   MessageLikeMeSourceConversationCoordinateBindingV1,
   MessageLikeMeSourceConversationCoordinateV1,
+  WrenchMessagingClientIntentBindingV1,
   WrenchMessagingContextBindingV1,
   WrenchMessagingReceiptBindingV1,
   WrenchMessagingReceiptStateV1,
