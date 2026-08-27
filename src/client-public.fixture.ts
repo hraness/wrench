@@ -170,6 +170,7 @@ function liveEnvelope(selectedReceipt: Readonly<Record<string, unknown>>): strin
 
 const invokeArguments: Array<readonly string[]> = [];
 let liveInvocation = 0;
+let syncLiveEnabled = false;
 
 await mock.module("node:child_process", () => ({
   ...childProcess,
@@ -190,6 +191,16 @@ await mock.module("node:child_process", () => ({
     }
     if (arguments_.includes("--projection-identity-only")) {
       return { status: 0, stdout: projectionIdentityEnvelope(), stderr: "" };
+    }
+    if (syncLiveEnabled) {
+      return {
+        status: 0,
+        stdout: liveEnvelope(receipt(
+          { id: authority.id, hash: authorityHash, kind: authority.kind },
+          "00000000-0000-4000-8000-000000000199",
+        )),
+        stderr: "",
+      };
     }
     return { status: 3, stdout: cacheMissEnvelope(), stderr: "" };
   }) as unknown as typeof childProcess.spawnSync,
@@ -212,7 +223,11 @@ await mock.module("node:child_process", () => ({
   }) as unknown as typeof childProcess.spawn,
 }));
 
-const { revalidateCapability } = await import("./client");
+const {
+  invokeCapability,
+  invokeCapabilitySync,
+  revalidateCapability,
+} = await import("./client");
 
 const request = { adapterId, operationId, input } as const;
 const result = await revalidateCapability(request);
@@ -240,6 +255,19 @@ for (const expectedMessage of [
       `public client accepted malformed authority: ${JSON.stringify({ message, expectedMessage })}`,
     );
   }
+}
+
+syncLiveEnabled = true;
+const synchronous = invokeCapabilitySync(request);
+syncLiveEnabled = false;
+if (
+  synchronous.receipt.runId !== "00000000-0000-4000-8000-000000000199"
+  || synchronous.output === null
+) throw new Error("synchronous invocation did not return its validated live envelope");
+
+const asynchronous = await invokeCapability(request);
+if (asynchronous.receipt.auth.id !== authority.id || asynchronous.output === null) {
+  throw new Error("asynchronous invocation did not return its validated live envelope");
 }
 
 if (

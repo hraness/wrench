@@ -12,7 +12,30 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
+import { types as nodeTypes } from "node:util";
 import { dlopen, ptr } from "bun:ffi";
+
+import {
+  LOCAL_MESSAGE_BUNDLE_V1_ARTIFACTS,
+  LOCAL_MESSAGE_BUNDLE_V1_FORMAT,
+  LOCAL_MESSAGE_BUNDLE_V1_LIMITS,
+  LOCAL_MESSAGE_BUNDLE_V1_PROVIDER_ID,
+  LOCAL_MESSAGE_BUNDLE_V1_SCHEMA_VERSION,
+  LOCAL_MESSAGE_BUNDLE_V1_SOURCE_ID,
+  LOCAL_MESSAGE_BUNDLE_V1_SOURCE_TRANSFORM_VERSION,
+  parseLocalMessageBundleV1Manifest,
+  parseLocalMessageBundleV1Record,
+  type LocalMessageBundleV1AccountRecord,
+  type LocalMessageBundleV1AttachmentRecord,
+  type LocalMessageBundleV1ConversationRecord,
+  type LocalMessageBundleV1MessageRecord,
+  type LocalMessageBundleV1ParticipantRecord,
+  type LocalMessageBundleV1Provenance,
+  type LocalMessageBundleV1ReactionRecord,
+  type LocalMessageBundleV1Record,
+  type LocalMessageBundleV1RecordKind,
+  type LocalMessageBundleV1TombstoneRecord,
+} from "@hraness/message-like-me/message-bundle-v1";
 
 import { canonicalJson, sha256 } from "./canonical-json";
 import {
@@ -22,19 +45,22 @@ import {
 } from "./beeper-message-like-me-recovery";
 import { removePrivateDirectoryTree } from "./storage";
 
-export const BEEPER_MESSAGE_LIKE_ME_SCHEMA_VERSION = 1 as const;
-export const BEEPER_MESSAGE_LIKE_ME_MAX_RECORDS = 500_000 as const;
-export const BEEPER_MESSAGE_LIKE_ME_MAX_TOTAL_BYTES = 512 * 1024 * 1024;
+export const BEEPER_MESSAGE_LIKE_ME_SCHEMA_VERSION =
+  LOCAL_MESSAGE_BUNDLE_V1_SCHEMA_VERSION;
+export const BEEPER_MESSAGE_LIKE_ME_MAX_RECORDS =
+  LOCAL_MESSAGE_BUNDLE_V1_LIMITS.records;
+export const BEEPER_MESSAGE_LIKE_ME_MAX_TOTAL_BYTES =
+  LOCAL_MESSAGE_BUNDLE_V1_LIMITS.totalBytes;
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-const MAX_IDENTIFIER_BYTES = 1_024;
-const MAX_SHORT_TEXT_BYTES = 8 * 1_024;
-const MAX_BODY_BYTES = 1024 * 1024;
-const MAX_WARNING_CODES = 128;
-const MAX_PARTICIPANTS = 10_000;
-const MAX_ATTACHMENTS = 256;
-const MAX_CONNECTED_ACCOUNTS = 128;
+const MAX_IDENTIFIER_BYTES = LOCAL_MESSAGE_BUNDLE_V1_LIMITS.identifierBytes;
+const MAX_SHORT_TEXT_BYTES = LOCAL_MESSAGE_BUNDLE_V1_LIMITS.shortTextBytes;
+const MAX_BODY_BYTES = LOCAL_MESSAGE_BUNDLE_V1_LIMITS.bodyBytes;
+const MAX_WARNING_CODES = LOCAL_MESSAGE_BUNDLE_V1_LIMITS.warnings;
+const MAX_PARTICIPANTS = LOCAL_MESSAGE_BUNDLE_V1_LIMITS.participantsPerConversation;
+const MAX_ATTACHMENTS = LOCAL_MESSAGE_BUNDLE_V1_LIMITS.attachmentsPerMessage;
+const MAX_CONNECTED_ACCOUNTS = LOCAL_MESSAGE_BUNDLE_V1_LIMITS.accounts;
 const BUNDLE_HEARTBEAT_INTERVAL_MS = 30_000;
 const DARWIN_RENAME_EXCL = 0x0000_0004;
 const LINUX_RENAME_NOREPLACE = 0x0000_0001;
@@ -49,7 +75,7 @@ let cachedNativeExclusiveRename: NativeExclusiveRename | undefined;
 
 const HARD_LIMITS = Object.freeze({
   maxRecords: BEEPER_MESSAGE_LIKE_ME_MAX_RECORDS,
-  maxRecordBytes: 2 * 1024 * 1024,
+  maxRecordBytes: LOCAL_MESSAGE_BUNDLE_V1_LIMITS.recordBytes,
   maxTotalBytes: BEEPER_MESSAGE_LIKE_ME_MAX_TOTAL_BYTES,
 });
 
@@ -106,117 +132,15 @@ export type BeeperMessageLikeMeExportRequest = {
   readonly clock?: () => Date;
 };
 
-export type BeeperMessageLikeMeProvenance = {
-  /** Stable entity identity in the provider's connected-account realm. */
-  readonly providerId: string;
-  readonly providerRevision: string | null;
-  readonly observedAt: string;
-  /** Stable provider account identity used to distinguish account incarnations. */
-  readonly connectedAccountProviderId: string;
-};
-
-type BeeperMessageLikeMeRecordCommon<Kind extends string> = {
-  readonly schemaVersion: 1;
-  readonly kind: Kind;
-  /** Bundle-local identity used for joins inside this export. */
-  readonly id: string;
-  readonly accountId: string;
-  readonly network: string;
-  readonly provenance: BeeperMessageLikeMeProvenance;
-};
-
-export type BeeperMessageLikeMeAccount = BeeperMessageLikeMeRecordCommon<"account"> & {
-  /** Equal to id for the account record. */
-  readonly accountId: string;
-  readonly displayName: string | null;
-  readonly handle: string | null;
-  readonly selfParticipantId: string;
-};
-
-export type BeeperMessageLikeMeParticipant = BeeperMessageLikeMeRecordCommon<"participant"> & {
-  readonly displayName: string | null;
-  readonly handle: string | null;
-  readonly isSelf: boolean;
-};
-
-export type BeeperMessageLikeMeConversation = BeeperMessageLikeMeRecordCommon<"conversation"> & {
-  readonly type: "direct" | "group" | "channel" | "unknown";
-  readonly title: string | null;
-  /** Known roster. It includes self whenever self is present in the provider roster. */
-  readonly participantIds: readonly string[];
-  /** Only true is a positive assertion that the known roster is complete. */
-  readonly participantsComplete: boolean | null;
-  readonly startedAt: string | null;
-  readonly lastMessageAt: string | null;
-};
-
-export type BeeperMessageLikeMeAttachment = {
-  readonly kind: "audio" | "document" | "image" | "link" | "sticker" | "video" | "unknown";
-  readonly mimeType: string | null;
-  /** Base name only. Provider URLs and local paths are outside this format. */
-  readonly name: string | null;
-  readonly sizeBytes: number | null;
-};
-
-export type BeeperMessageLikeMeMessage = BeeperMessageLikeMeRecordCommon<"message"> & {
-  readonly conversationId: string;
-  readonly senderParticipantId: string | null;
-  readonly direction: "incoming" | "outgoing" | "unknown";
-  readonly sentAt: string;
-  /** Provider-normalized key whose lexical order preserves provider message order. */
-  readonly sortKey: string;
-  readonly body: string | null;
-  /** True bodies are unavailable as prose evidence. */
-  readonly bodyTruncated: boolean | null;
-  readonly replyTo: {
-    readonly messageId: string | null;
-    readonly providerId: string;
-  } | null;
-  readonly edit: {
-    readonly kind: "in-place";
-    readonly editedAt: string;
-    readonly providerRevision: string;
-  } | {
-    readonly kind: "replacement";
-    readonly replacesMessageId: string | null;
-    readonly replacesProviderId: string;
-    readonly editedAt: string;
-    readonly providerRevision: string;
-  } | null;
-  readonly deletion: {
-    readonly state: "revoked" | "deleted-for-me" | "revoked-and-deleted-for-me";
-    readonly observedAt: string;
-    readonly providerRevision: string | null;
-  } | null;
-  readonly attachments: readonly BeeperMessageLikeMeAttachment[];
-};
-
-export type BeeperMessageLikeMeReaction = BeeperMessageLikeMeRecordCommon<"reaction"> & {
-  readonly messageId: string | null;
-  readonly messageProviderId: string;
-  readonly participantId: string | null;
-  readonly body: string;
-  /** Null when the provider does not supply a reaction time. Never synthesize it. */
-  readonly reactedAt: string | null;
-  readonly state: "active" | "removed";
-};
-
-export type BeeperMessageLikeMeTombstone = BeeperMessageLikeMeRecordCommon<"tombstone"> & {
-  readonly entityKind: "conversation" | "message" | "reaction";
-  readonly entityId: string | null;
-  readonly entityProviderId: string;
-  readonly deletedAt: string;
-  readonly scope: "remote" | "local" | "unknown";
-  readonly providerRevision: string | null;
-};
-
-export type BeeperMessageLikeMeRecord =
-  | BeeperMessageLikeMeAccount
-  | BeeperMessageLikeMeParticipant
-  | BeeperMessageLikeMeConversation
-  | BeeperMessageLikeMeMessage
-  | BeeperMessageLikeMeReaction
-  | BeeperMessageLikeMeTombstone;
+export type BeeperMessageLikeMeProvenance = LocalMessageBundleV1Provenance;
+export type BeeperMessageLikeMeAccount = LocalMessageBundleV1AccountRecord;
+export type BeeperMessageLikeMeParticipant = LocalMessageBundleV1ParticipantRecord;
+export type BeeperMessageLikeMeConversation = LocalMessageBundleV1ConversationRecord;
+export type BeeperMessageLikeMeAttachment = LocalMessageBundleV1AttachmentRecord;
+export type BeeperMessageLikeMeMessage = LocalMessageBundleV1MessageRecord;
+export type BeeperMessageLikeMeReaction = LocalMessageBundleV1ReactionRecord;
+export type BeeperMessageLikeMeTombstone = LocalMessageBundleV1TombstoneRecord;
+export type BeeperMessageLikeMeRecord = LocalMessageBundleV1Record;
 
 export type BeeperMessageLikeMeArtifact = {
   readonly path: string;
@@ -235,13 +159,13 @@ export type BeeperMessageLikeMeArtifact = {
 
 export type BeeperMessageLikeMeManifest = {
   readonly schemaVersion: 1;
-  readonly format: "message-like-me.local-message-bundle";
+  readonly format: typeof LOCAL_MESSAGE_BUNDLE_V1_FORMAT;
   readonly source: {
-    readonly id: "beeper-local";
+    readonly id: typeof LOCAL_MESSAGE_BUNDLE_V1_SOURCE_ID;
     readonly version: string;
   };
   readonly provider: {
-    readonly id: "beeper";
+    readonly id: typeof LOCAL_MESSAGE_BUNDLE_V1_PROVIDER_ID;
     readonly version: string;
   };
   readonly timestamps: {
@@ -278,11 +202,17 @@ export type BeeperMessageLikeMeExportResult = {
 };
 
 type JsonRecord = Record<string, unknown>;
-type RecordKind = BeeperMessageLikeMeArtifact["recordKind"];
+type RecordKind = LocalMessageBundleV1RecordKind;
 
 type ParsedDescriptor = {
-  readonly source: { readonly id: "beeper-local"; readonly version: string };
-  readonly provider: { readonly id: "beeper"; readonly version: string };
+  readonly source: {
+    readonly id: typeof LOCAL_MESSAGE_BUNDLE_V1_SOURCE_ID;
+    readonly version: string;
+  };
+  readonly provider: {
+    readonly id: typeof LOCAL_MESSAGE_BUNDLE_V1_PROVIDER_ID;
+    readonly version: string;
+  };
 };
 
 type ParsedCompletion = Pick<BeeperMessageLikeMeManifest, "completeness" | "warnings">;
@@ -397,14 +327,9 @@ type PublishedBundle = {
   readonly directoryLease?: BeeperMessageLikeMeDirectoryLease;
 };
 
-const ARTIFACTS = Object.freeze([
-  Object.freeze({ kind: "account" as const, fileName: "accounts.ndjson" }),
-  Object.freeze({ kind: "participant" as const, fileName: "participants.ndjson" }),
-  Object.freeze({ kind: "conversation" as const, fileName: "conversations.ndjson" }),
-  Object.freeze({ kind: "message" as const, fileName: "messages.ndjson" }),
-  Object.freeze({ kind: "reaction" as const, fileName: "reactions.ndjson" }),
-  Object.freeze({ kind: "tombstone" as const, fileName: "tombstones.ndjson" }),
-]);
+const ARTIFACTS = Object.freeze(LOCAL_MESSAGE_BUNDLE_V1_ARTIFACTS.map(
+  ({ kind, path }) => Object.freeze({ kind, fileName: path }),
+));
 
 function fail(message: string): never {
   throw new Error(`Beeper Message Like Me export: ${message}`);
@@ -419,6 +344,7 @@ function foreignRecord(value: unknown, label: string): JsonRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return fail(`${label} must be a plain object`);
   }
+  if (nodeTypes.isProxy(value)) return fail(`${label} must be a plain object`);
   const prototype = Object.getPrototypeOf(value) as unknown;
   if (prototype !== Object.prototype && prototype !== null) {
     return fail(`${label} must be a plain object`);
@@ -849,18 +775,59 @@ function parseTombstone(source: JsonRecord, label: string): ParsedRecord {
   };
 }
 
-function parseRecord(value: unknown, index: number): ParsedRecord {
-  const label = `record[${String(index)}]`;
-  const source = foreignRecord(value, label);
-  switch (source.kind) {
+function parseRecordWithKind(
+  source: JsonRecord,
+  kind: RecordKind,
+  label: string,
+): ParsedRecord {
+  switch (kind) {
     case "account": return parseAccount(source, label);
     case "participant": return parseParticipant(source, label);
     case "conversation": return parseConversation(source, label);
     case "message": return parseMessage(source, label);
     case "reaction": return parseReaction(source, label);
     case "tombstone": return parseTombstone(source, label);
-    default: return fail(`${label}.kind is unsupported`);
   }
+}
+
+function parseRecord(value: unknown, index: number): ParsedRecord {
+  const label = `record[${String(index)}]`;
+  const candidate = foreignRecord(value, label);
+  const kind = oneOf(candidate.kind, [
+    "account",
+    "participant",
+    "conversation",
+    "message",
+    "reaction",
+    "tombstone",
+  ] as const, `${label}.kind`);
+  let contractRecord: unknown;
+  try {
+    contractRecord = parseLocalMessageBundleV1Record(value, kind, label);
+  } catch {
+    // Preserve the legacy Wrench diagnostic when the legacy parser can name
+    // the same invalid field. A value that legacy Wrench accepted but the
+    // shared v1 authority rejects still fails at the generic contract gate.
+    parseRecordWithKind(candidate, kind, label);
+    return fail(`${label} violates the Message Like Me bundle v1 contract`);
+  }
+  return parseRecordWithKind(foreignRecord(contractRecord, label), kind, label);
+}
+
+/**
+ * Strict internal/publication-boundary parser shared by body-bearing bundle
+ * publication and content-free derivatives. Returning the normalized record
+ * prevents a derivative from trusting the producer's in-memory TypeScript
+ * type alone.
+ */
+export function parseBeeperMessageLikeMeRecord(
+  value: unknown,
+  index: number,
+): BeeperMessageLikeMeRecord {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= HARD_LIMITS.maxRecords) {
+    fail("record index is outside the bundle bound");
+  }
+  return parseRecord(value, index).value;
 }
 
 function bundleGraphFact(record: BeeperMessageLikeMeRecord): BundleGraphFact {
@@ -1196,14 +1163,30 @@ function parseDescriptor(value: unknown): ParsedDescriptor {
   exactKeys(descriptor, ["source", "provider"], "source descriptor");
   const source = foreignRecord(descriptor.source, "source descriptor.source");
   exactKeys(source, ["id", "version"], "source descriptor.source");
-  if (source.id !== "beeper-local") fail("source descriptor.source.id must equal beeper-local");
+  if (source.id !== LOCAL_MESSAGE_BUNDLE_V1_SOURCE_ID) {
+    fail(`source descriptor.source.id must equal ${LOCAL_MESSAGE_BUNDLE_V1_SOURCE_ID}`);
+  }
   const provider = foreignRecord(descriptor.provider, "source descriptor.provider");
   exactKeys(provider, ["id", "version"], "source descriptor.provider");
-  if (provider.id !== "beeper") fail("source descriptor.provider.id must equal beeper");
+  if (provider.id !== LOCAL_MESSAGE_BUNDLE_V1_PROVIDER_ID) {
+    fail(`source descriptor.provider.id must equal ${LOCAL_MESSAGE_BUNDLE_V1_PROVIDER_ID}`);
+  }
   return Object.freeze({
-    source: Object.freeze({ id: "beeper-local", version: version(source.version, "source descriptor.source.version") }),
-    provider: Object.freeze({ id: "beeper", version: version(provider.version, "source descriptor.provider.version") }),
+    source: Object.freeze({
+      id: LOCAL_MESSAGE_BUNDLE_V1_SOURCE_ID,
+      version: version(source.version, "source descriptor.source.version"),
+    }),
+    provider: Object.freeze({
+      id: LOCAL_MESSAGE_BUNDLE_V1_PROVIDER_ID,
+      version: version(provider.version, "source descriptor.provider.version"),
+    }),
   });
+}
+
+export function parseBeeperMessageLikeMeDescriptor(
+  value: unknown,
+): ParsedDescriptor {
+  return parseDescriptor(value);
 }
 
 function parseCompletion(value: unknown): ParsedCompletion {
@@ -1240,6 +1223,12 @@ function parseCompletion(value: unknown): ParsedCompletion {
     }),
     warnings: Object.freeze(warnings),
   });
+}
+
+export function parseBeeperMessageLikeMeCompletion(
+  value: unknown,
+): ParsedCompletion {
+  return parseCompletion(value);
 }
 
 function parseLimits(value: unknown): BeeperMessageLikeMeExportLimits {
@@ -2038,7 +2027,7 @@ async function publishBeeperMessageLikeMeBundle(
     )) as Readonly<Record<RecordKind, number>>;
     const manifestProjection = Object.freeze({
       schemaVersion: BEEPER_MESSAGE_LIKE_ME_SCHEMA_VERSION,
-      format: "message-like-me.local-message-bundle",
+      format: LOCAL_MESSAGE_BUNDLE_V1_FORMAT,
       source: descriptor.source,
       provider: descriptor.provider,
       timestamps: Object.freeze({
@@ -2064,6 +2053,13 @@ async function publishBeeperMessageLikeMeBundle(
         bundleSha256: sha256(canonicalJson(manifestProjection)),
       }),
     });
+    if (manifest.source.version === LOCAL_MESSAGE_BUNDLE_V1_SOURCE_TRANSFORM_VERSION) {
+      try {
+        parseLocalMessageBundleV1Manifest(manifest);
+      } catch {
+        fail("constructed manifest violates the Message Like Me bundle v1 contract");
+      }
+    }
     const stagedManifest = await writeManifest(staging, manifest);
     await validateCompleteBundle(
       staging,

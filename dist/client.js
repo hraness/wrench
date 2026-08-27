@@ -260,7 +260,7 @@ function isBrandedAbortSignal(value) {
     return false;
   }
 }
-function snapshotClientOptions(optionsValue, revalidation) {
+function snapshotClientOptions(optionsValue, mode) {
   if (!isRecord(optionsValue) || nodeTypes.isProxy(optionsValue) || Object.getPrototypeOf(optionsValue) !== Object.prototype && Object.getPrototypeOf(optionsValue) !== null)
     throw new Error("Wrench client options must use a plain, non-proxy object");
   const descriptors = Object.getOwnPropertyDescriptors(optionsValue);
@@ -268,12 +268,7 @@ function snapshotClientOptions(optionsValue, revalidation) {
   if (keys.some((key) => typeof key !== "string")) {
     throw new Error("Wrench client options have unsupported symbol fields");
   }
-  const allowed = new Set([
-    "environment",
-    "freshForMs",
-    "now",
-    ...revalidation ? ["headed", "signal"] : []
-  ]);
+  const allowed = new Set(mode === "read" ? ["environment", "freshForMs", "now"] : mode === "revalidation" ? ["environment", "freshForMs", "now", "headed", "signal"] : mode === "invoke-async" ? ["environment", "headed", "signal"] : ["environment", "headed"]);
   for (const key of keys) {
     const descriptor = descriptors[key];
     if (descriptor === undefined || !allowed.has(key)) {
@@ -773,6 +768,28 @@ function runLiveCommand(command, options) {
     child.stdin.end(command.input);
   });
 }
+function runLiveCommandSync(command, options) {
+  requireBunRuntime();
+  const result = spawnSync(process.execPath, command.arguments, {
+    cwd: options.cwd,
+    env: options.environment,
+    input: command.input,
+    encoding: "utf8",
+    maxBuffer: MAX_OUTPUT_BYTES
+  });
+  if (result.error !== undefined)
+    throw result.error;
+  const code = result.status ?? 3;
+  const stdout = String(result.stdout ?? "");
+  const stderr = String(result.stderr ?? "");
+  if (stdout.trim().length === 0) {
+    throw new Error(boundedMessage(stderr) || `Wrench live invocation exited ${String(code)}`);
+  }
+  if (code !== 0 && code !== 3 && code !== 5) {
+    throw new Error(boundedMessage(stderr) || `Wrench live invocation exited ${String(code)}`);
+  }
+  return parseOutput(stdout, "Wrench live response");
+}
 function parseFreshness(value, options, ageMs) {
   const freshnessValue = record(value, "Wrench cache freshness");
   assertExactKeys(freshnessValue, ["state", "freshForMs"], [], "Wrench cache freshness");
@@ -1106,8 +1123,29 @@ function parseLiveResult(value, request, expectedInputHash) {
     cache
   });
 }
+function assertLiveInvocationFences(request, options, executionIdentityBefore, identityBefore, parsed, activity) {
+  const identityAfter = observeProjectionIdentity(request, options);
+  if (!projectionIdentitiesMatch(identityBefore, identityAfter)) {
+    throw new Error(`Wrench projection identity changed while ${activity} was running; the live result was discarded`);
+  }
+  if (!executionIdentitiesMatch(executionIdentityBefore, receiptExecutionIdentity(parsed.live.receipt))) {
+    throw new Error(`Wrench execution identity changed while ${activity} was running; the live result was discarded`);
+  }
+  if (parsed.live.receipt.auth.hash !== identityBefore.authHash) {
+    throw new Error(`Wrench projection identity changed while ${activity} was running; the live result was discarded`);
+  }
+  if (identityBefore.status === "unbound") {
+    if (parsed.cache.status !== "skipped") {
+      throw new Error(`Wrench projection identity changed while ${activity} was running; the live result was discarded`);
+    }
+    return;
+  }
+  if (parsed.cache.status === "skipped" || parsed.cache.status === "stored" && parsed.cache.publication.key !== identityBefore.key) {
+    throw new Error(`Wrench projection identity changed while ${activity} was running; the live result was discarded`);
+  }
+}
 function readCachedCapability(request, options = {}) {
-  const preparedOptions = snapshotClientOptions(options, false);
+  const preparedOptions = snapshotClientOptions(options, "read");
   const now = validateReadOptions(preparedOptions);
   const prepared = prepareRequest(request);
   return readCachedPreparedCapability(prepared, preparedOptions, now);
@@ -1145,29 +1183,14 @@ async function runRevalidation(request, options, executionIdentityBefore, identi
     projectionIdentityOnly: false,
     headed: options.headed ?? false
   }), options), request, identityBefore.inputHash);
-  const identityAfter = observeProjectionIdentity(request, options);
-  if (!projectionIdentitiesMatch(identityBefore, identityAfter)) {
-    throw new Error("Wrench projection identity changed while revalidation was running; the live result was discarded");
-  }
-  if (!executionIdentitiesMatch(executionIdentityBefore, receiptExecutionIdentity(parsed.live.receipt))) {
-    throw new Error("Wrench execution identity changed while revalidation was running; the live result was discarded");
-  }
-  if (parsed.live.receipt.auth.hash !== identityBefore.authHash) {
-    throw new Error("Wrench projection identity changed while revalidation was running; the live result was discarded");
-  }
+  assertLiveInvocationFences(request, options, executionIdentityBefore, identityBefore, parsed, "revalidation");
   if (identityBefore.status === "unbound") {
-    if (parsed.cache.status !== "skipped") {
-      throw new Error("Wrench projection identity changed while revalidation was running; the live result was discarded");
-    }
     return Object.freeze({
       cachedBefore: null,
       cachedAfter: null,
       current: selectCurrentCapability(null, null, parsed),
       ...parsed
     });
-  }
-  if (parsed.cache.status === "skipped" || parsed.cache.status === "stored" && parsed.cache.publication.key !== identityBefore.key) {
-    throw new Error("Wrench projection identity changed while revalidation was running; the live result was discarded");
   }
   let cachedAfter = null;
   try {
@@ -1199,14 +1222,42 @@ function scheduleRevalidation(request, options, observationTime, cachedBeforeSou
     return runRevalidation(request, options, executionIdentityBefore, identityBefore, cachedBefore, observationTime);
   });
 }
+function invokeCapability(request, options = {}) {
+  const preparedOptions = snapshotClientOptions(options, "invoke-async");
+  const prepared = prepareRequest(request);
+  return Promise.resolve().then(async () => {
+    const executionIdentityBefore = observeExecutionIdentity(prepared, preparedOptions);
+    const identityBefore = observeProjectionIdentity(prepared, preparedOptions);
+    const parsed = parseLiveResult(await runLiveCommand(preparedCommand(prepared, {
+      cacheOnly: false,
+      projectionIdentityOnly: false,
+      headed: preparedOptions.headed ?? false
+    }), preparedOptions), prepared, identityBefore.inputHash);
+    assertLiveInvocationFences(prepared, preparedOptions, executionIdentityBefore, identityBefore, parsed, "invocation");
+    return parsed.live;
+  });
+}
+function invokeCapabilitySync(request, options = {}) {
+  const preparedOptions = snapshotClientOptions(options, "invoke-sync");
+  const prepared = prepareRequest(request);
+  const executionIdentityBefore = observeExecutionIdentity(prepared, preparedOptions);
+  const identityBefore = observeProjectionIdentity(prepared, preparedOptions);
+  const parsed = parseLiveResult(runLiveCommandSync(preparedCommand(prepared, {
+    cacheOnly: false,
+    projectionIdentityOnly: false,
+    headed: preparedOptions.headed ?? false
+  }), preparedOptions), prepared, identityBefore.inputHash);
+  assertLiveInvocationFences(prepared, preparedOptions, executionIdentityBefore, identityBefore, parsed, "invocation");
+  return parsed.live;
+}
 function revalidateCapability(request, options = {}) {
-  const preparedOptions = snapshotClientOptions(options, true);
+  const preparedOptions = snapshotClientOptions(options, "revalidation");
   const now = validateReadOptions(preparedOptions);
   const prepared = prepareRequest(request);
   return scheduleRevalidation(prepared, preparedOptions, now, { status: "lookup" });
 }
 function staleWhileRevalidateCapability(request, options = {}) {
-  const preparedOptions = snapshotClientOptions(options, true);
+  const preparedOptions = snapshotClientOptions(options, "revalidation");
   const now = validateReadOptions(preparedOptions);
   const prepared = prepareRequest(request);
   let cached = null;
@@ -1221,5 +1272,7 @@ function staleWhileRevalidateCapability(request, options = {}) {
 export {
   staleWhileRevalidateCapability,
   revalidateCapability,
-  readCachedCapability
+  readCachedCapability,
+  invokeCapabilitySync,
+  invokeCapability
 };

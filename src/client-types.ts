@@ -28,6 +28,17 @@ export type RevalidateCapabilityOptions = ReadCapabilityOptions & {
   readonly signal?: AbortSignal;
 };
 
+export type InvokeCapabilityOptions = Readonly<{
+  readonly environment?: WrenchClientEnvironment;
+  readonly headed?: boolean;
+  readonly signal?: AbortSignal;
+}>;
+
+export type InvokeCapabilitySyncOptions = Readonly<{
+  readonly environment?: WrenchClientEnvironment;
+  readonly headed?: boolean;
+}>;
+
 export type ReadProjectionCacheResult =
   | {
       readonly status: "miss";
@@ -188,6 +199,21 @@ export declare function revalidateCapability(
   request: CapabilityReadRequest,
   options?: RevalidateCapabilityOptions,
 ): Promise<RevalidatedCapability>;
+
+/** Invoke one live R1 capability and return its validated receipt and output. */
+export declare function invokeCapability(
+  request: CapabilityReadRequest,
+  options?: InvokeCapabilityOptions,
+): Promise<WrenchClientInvocationResult>;
+
+/**
+ * Synchronous form for local CLI applications that cannot make their command
+ * surface asynchronous. It retains the same pre/post identity fences.
+ */
+export declare function invokeCapabilitySync(
+  request: CapabilityReadRequest,
+  options?: InvokeCapabilitySyncOptions,
+): WrenchClientInvocationResult;
 
 export declare function staleWhileRevalidateCapability(
   request: CapabilityReadRequest,

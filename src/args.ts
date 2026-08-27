@@ -29,6 +29,14 @@ export type WrenchArguments =
       readonly maxParticipants?: number;
       readonly json: boolean;
     }
+  | {
+      readonly command: "beeper-export-contact-interactions";
+      readonly authId: string;
+      readonly limitChats?: number;
+      readonly limitMessages?: number;
+      readonly maxParticipants?: number;
+      readonly json: boolean;
+    }
   | { readonly command: "doctor"; readonly json: boolean }
   | { readonly command: "capabilities"; readonly adapterId?: string; readonly json: boolean }
   | { readonly command: "plugin-list"; readonly json: boolean }
@@ -671,10 +679,15 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     return { ok: true, value: { command: "media", arguments: raw } };
   }
   if (first === "beeper") {
-    if (raw[1] !== "export-message-like-me") {
+    const subcommand = raw[1];
+    if (
+      subcommand !== "export-message-like-me"
+      && subcommand !== "export-contact-interactions"
+    ) {
       return {
         ok: false,
-        message: "beeper requires export-message-like-me",
+        message:
+          "beeper requires export-message-like-me or export-contact-interactions",
       };
     }
     const parsed = optionValues(
@@ -694,19 +707,25 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     if (authId === undefined || validId(authId, "auth ID") !== null) {
       return {
         ok: false,
-        message: "beeper export-message-like-me requires --auth <lowercase-kebab-id>",
+        message: `beeper ${subcommand} requires --auth <lowercase-kebab-id>`,
       };
     }
-    if (
+    if (subcommand === "export-message-like-me" && (
       output === undefined
       || !isAbsolute(output)
       || resolve(output) !== output
       || Buffer.byteLength(output, "utf8") > 4_096
       || /[\0\r\n]/u.test(output)
-    ) {
+    )) {
       return {
         ok: false,
         message: "beeper export-message-like-me requires --output <normalized-absolute-directory>",
+      };
+    }
+    if (subcommand === "export-contact-interactions" && output !== undefined) {
+      return {
+        ok: false,
+        message: "beeper export-contact-interactions writes its body-free artifact to stdout and does not accept --output",
       };
     }
     const limitChats = optionalPositiveInteger(
@@ -727,16 +746,28 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
       2_000,
     );
     if (typeof maxParticipants === "object") return maxParticipants;
+    const common = {
+      authId,
+      ...(limitChats === undefined ? {} : { limitChats }),
+      ...(limitMessages === undefined ? {} : { limitMessages }),
+      ...(maxParticipants === undefined ? {} : { maxParticipants }),
+      json: parsed.booleans.has("--json"),
+    } as const;
+    if (subcommand === "export-contact-interactions") {
+      return {
+        ok: true,
+        value: {
+          command: "beeper-export-contact-interactions",
+          ...common,
+        },
+      };
+    }
     return {
       ok: true,
       value: {
         command: "beeper-export-message-like-me",
-        authId,
-        output,
-        ...(limitChats === undefined ? {} : { limitChats }),
-        ...(limitMessages === undefined ? {} : { limitMessages }),
-        ...(maxParticipants === undefined ? {} : { maxParticipants }),
-        json: parsed.booleans.has("--json"),
+        ...common,
+        output: output!,
       },
     };
   }

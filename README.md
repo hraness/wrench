@@ -80,10 +80,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.13.6` tag:
+Install the current immutable CLI release from the `v0.14.0` tag:
 
 ```sh
-bun add --global github:hraness/wrench#v0.13.6
+bun add --global github:hraness/wrench#v0.14.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -107,7 +107,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.13.6
+bun add github:hraness/wrench#v0.14.0
 ```
 
 ```ts
@@ -126,10 +126,31 @@ void plugin
 ```
 
 The package root exposes programmatic plugin types and bounded validators.
-`@hraness/wrench/client` exposes persistent-read client helpers, while
-`@hraness/wrench/omni` exposes normalized cross-provider reads. Importing any
-SDK entrypoint does not start the CLI. Importing the package root also does not
-inspect local state or load provider runtimes.
+`@hraness/wrench/client` exposes persistent-read and strict live-invocation
+helpers, `@hraness/wrench/beeper` exposes the body-free Beeper contact
+interaction export, and `@hraness/wrench/omni` exposes normalized
+cross-provider reads. Importing any SDK entrypoint does not start the CLI.
+Importing the package root also does not inspect local state or load provider
+runtimes.
+
+Consumers that need one strictly parsed live receipt and output without the
+cache orchestration can use the generic client directly:
+
+```ts
+import { invokeCapabilitySync } from "@hraness/wrench/client"
+
+const { receipt, output } = invokeCapabilitySync({
+  adapterId: "beeper-local",
+  operationId: "contacts.list",
+  authId: "beeper-main",
+  input: { limit: 100 },
+})
+```
+
+The asynchronous `invokeCapability` form accepts an abort signal. Both forms
+run Wrench's execution and projection identity fences before and after the
+read, then return the validated CLI receipt instead of asking a consumer to
+parse the raw process envelope.
 
 ## Capture and inspect
 
@@ -418,6 +439,44 @@ account materialized by Beeper Desktop:
 wrench beeper export-message-like-me --auth beeper-main \
   --output /absolute/path/to/new-message-like-me-bundle --json
 ```
+
+For contact or rolodex enrichment, derive a smaller body-free relationship
+view from the same admitted sequential history. Keep the artifact private:
+
+```sh
+umask 077
+wrench beeper export-contact-interactions --auth beeper-main --json \
+  > /absolute/private/path/beeper-contact-interactions.json
+```
+
+Progress remains visible on stderr. Stdout is a strict `{ receipt, output }`
+envelope. `output` contains stable raw account and account-scoped contact
+coordinates, sent and received counts, direct-conversation counts, first and
+last interaction times, and explicit lower-bound completeness. It retains only
+complete direct rosters and current direction-known message versions. Bodies,
+attachments, reactions, media, group messages, credentials, names, titles,
+handles, and local paths are excluded from both the output and receipt as
+separately surfaced fields. Provider coordinates can themselves contain
+identifying values such as an email address, phone number, or username. This
+artifact is body-free, not anonymized, so do not put it in Git or a shared path.
+
+Synchronous local applications can invoke the same installed command without
+duplicating its process or receipt parser:
+
+```ts
+import { exportBeeperContactInteractionsSync } from "@hraness/wrench/beeper"
+
+const { receipt, output } = exportBeeperContactInteractionsSync({
+  authId: "beeper-main",
+  limitChats: 10_000,
+})
+```
+
+The receipt binds the auth identity hash, requested bounds, linked-device
+transport, immutable Wrench release coordinate, verified official Beeper CLI
+version, commit and binary digest, source and provider versions, transform,
+completeness, counts, and exact summary digest. It is returned only after
+operation-owned private shards have been cleaned up.
 
 The command uses the pinned official CLI directly. It enumerates the connected
 account realm, then runs the official `export --no-attachments` command once per

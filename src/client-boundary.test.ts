@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
-import { readCachedCapability, revalidateCapability } from "./client";
+import {
+  invokeCapability,
+  invokeCapabilitySync,
+  readCachedCapability,
+  revalidateCapability,
+} from "./client";
 import type { RevalidatedCapabilityCurrent } from "./client";
 
 describe("public client process boundary", () => {
@@ -167,6 +172,29 @@ describe("public client process boundary", () => {
       request,
       inheritedOptions as never,
     )).toThrow("Wrench client options must use a plain, non-proxy object");
+  });
+
+  test("keeps live invocation option allowlists exact", () => {
+    const request = {
+      adapterId: "beeper-local",
+      operationId: "contacts.list",
+    } as const;
+    expect(() => invokeCapability(
+      request,
+      { freshForMs: 1 } as never,
+    )).toThrow("Wrench client options contain an unsupported field");
+    expect(() => invokeCapability(
+      request,
+      { now: new Date() } as never,
+    )).toThrow("Wrench client options contain an unsupported field");
+    expect(() => invokeCapabilitySync(
+      request,
+      { signal: new AbortController().signal } as never,
+    )).toThrow("Wrench client options contain an unsupported field");
+    expect(() => invokeCapabilitySync(
+      request,
+      { extra: true } as never,
+    )).toThrow("Wrench client options contain an unsupported field");
   });
 
   test("rejects nested proxies and unbranded platform options before traps run", () => {

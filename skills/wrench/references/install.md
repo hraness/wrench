@@ -21,7 +21,7 @@ When the user asked to install or use Wrench, install the current immutable
 release and its reviewed bundled adapter manifests:
 
 ```sh
-bun add --global github:hraness/wrench#v0.13.6
+bun add --global github:hraness/wrench#v0.14.0
 wrench adapter sync-bundled --json
 wrench --help
 wrench doctor --json
@@ -31,7 +31,7 @@ Do not clone the repository merely to run the CLI. Importing the SDK is a
 separate project dependency and does not install a global command:
 
 ```sh
-bun add github:hraness/wrench#v0.13.6
+bun add github:hraness/wrench#v0.14.0
 ```
 
 ## Add only required optional tools
