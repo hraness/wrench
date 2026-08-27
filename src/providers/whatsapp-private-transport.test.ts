@@ -204,7 +204,11 @@ describe("WhatsApp private transport provider boundary", () => {
     const accepted = qualifiedWhatsAppPrivateMessagingAction.mapAcceptedResult(
       result.output,
     );
-    expect(accepted).toEqual({ state: "submitted", providerMessageId: HASH_B });
+    expect(accepted).toEqual({
+      state: "submitted",
+      providerMessageId: HASH_B,
+      providerRevision: null,
+    });
   });
 
   test("never retries when a late worker remains in flight", async () => {

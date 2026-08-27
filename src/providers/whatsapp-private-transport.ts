@@ -499,10 +499,10 @@ function parseSubmittedOutput(value: unknown): WhatsAppPrivateSubmittedOutput {
 }
 
 /**
- * Provider-owned generic messaging action codec for the qualified transport.
- * The registered WhatsApp descriptor keeps this candidate inactive until a
- * controlled live fixture and an exact reconciliation read close the recorded
- * qualification gaps.
+ * Provider-owned transport codec candidate. This deliberately does not satisfy
+ * the complete generic action SPI: live route/context freshness and exact
+ * accepted-message prefix proof remain unqualified, so the registered WhatsApp
+ * descriptor cannot expose this write path.
  */
 export const qualifiedWhatsAppPrivateMessagingAction = Object.freeze({
   state: "supported",
@@ -514,6 +514,7 @@ export const qualifiedWhatsAppPrivateMessagingAction = Object.freeze({
     return Object.freeze({
       state: "submitted" as const,
       providerMessageId: parsed.providerMessageIdSha256,
+      providerRevision: null,
     });
   },
   reconciliation: (
@@ -530,4 +531,12 @@ export const qualifiedWhatsAppPrivateMessagingAction = Object.freeze({
       limit: 200,
     }),
   }),
-} satisfies Extract<ProviderPluginMessagingActionDefinitionV1, { state: "supported" }>);
+} satisfies Pick<
+  Extract<ProviderPluginMessagingActionDefinitionV1, { state: "supported" }>,
+  | "state"
+  | "operation"
+  | "reply"
+  | "compileTurnPart"
+  | "mapAcceptedResult"
+  | "reconciliation"
+>);

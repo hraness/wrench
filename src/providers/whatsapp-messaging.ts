@@ -6,7 +6,6 @@ import type {
 } from "../provider-plugin";
 import { parseWhatsAppJid, whatsappTargetJid } from "./whatsapp-web";
 import { materializeWhatsAppMessagingRead } from "./whatsapp-omni";
-import { qualifiedWhatsAppPrivateMessagingAction } from "./whatsapp-private-transport";
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
@@ -128,14 +127,4 @@ export const whatsappMessagingDefinition = Object.freeze({
     reason:
       "capture-required: the checked private no-retry transport still needs a controlled live fixture, fresh context proof, and exact accepted-message reconciliation",
   }),
-} satisfies ProviderPluginMessagingDefinitionV1);
-
-/**
- * Complete provider-owned route/context/action SPI candidate. It is not the
- * registered descriptor because context freshness and live observation remain
- * required before generic messaging may expose the write.
- */
-export const qualifiedWhatsAppPrivateMessagingDefinition = Object.freeze({
-  ...whatsappMessagingDefinition,
-  action: qualifiedWhatsAppPrivateMessagingAction,
 } satisfies ProviderPluginMessagingDefinitionV1);

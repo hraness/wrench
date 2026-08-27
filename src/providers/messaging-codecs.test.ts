@@ -12,9 +12,9 @@ import {
   rawBeeperMessageId,
 } from "./beeper-omni";
 import {
-  qualifiedWhatsAppPrivateMessagingDefinition,
   whatsappMessagingDefinition,
 } from "./whatsapp-messaging";
+import { qualifiedWhatsAppPrivateMessagingAction } from "./whatsapp-private-transport";
 
 const accountId = "account-signal";
 const rawConversationId = "!chat:beeper.local";
@@ -398,20 +398,17 @@ describe("provider messaging coordinate codecs", () => {
       reason:
         "capture-required: the checked private no-retry transport still needs a controlled live fixture, fresh context proof, and exact accepted-message reconciliation",
     });
-    expect(qualifiedWhatsAppPrivateMessagingDefinition.action.state).toBe(
+    expect(qualifiedWhatsAppPrivateMessagingAction.state).toBe(
       "supported",
     );
-    if (qualifiedWhatsAppPrivateMessagingDefinition.action.state !== "supported") {
-      throw new Error("qualified WhatsApp private action changed state");
-    }
-    expect(qualifiedWhatsAppPrivateMessagingDefinition.action.compileTurnPart(
+    expect(qualifiedWhatsAppPrivateMessagingAction.compileTurnPart(
       { conversationJid: "15551234567@s.whatsapp.net" },
       { partId: "part-1", text: "hello", replyToProviderId: null },
     )).toEqual({
       conversation_jid: "15551234567@s.whatsapp.net",
       body: "hello",
     });
-    expect(() => qualifiedWhatsAppPrivateMessagingDefinition.action.compileTurnPart(
+    expect(() => qualifiedWhatsAppPrivateMessagingAction.compileTurnPart(
       { conversationJid: "15551234567@s.whatsapp.net" },
       { partId: "part-1", text: "hello", replyToProviderId: "MSG-1" },
     )).toThrow("has not qualified replies");
