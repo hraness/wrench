@@ -63,6 +63,7 @@ function storedPlan(): StoredPlan {
     baseExactDataRevision: "b".repeat(64),
     baseLatestMessageRevision: "c".repeat(64),
     baseRouteStateRevision: "d".repeat(64),
+    baseMessages: [],
     recipient: {
       network: "synthetic",
       conversation: { kind: "single" as const, title: "Exact Private Recipient", participantCount: 1 },
@@ -145,12 +146,11 @@ describe("messaging composite preview binding", () => {
     })).toThrow("does not match");
   });
 
-  test("rechecks authenticated preview bytes and leaves hard-failed confirmation usable", async () => {
+  test("rechecks authenticated preview bytes and rejects identical private output paths", async () => {
     const validEnvironment = state();
     const stored = storedPlan();
     saveInvocationPlan(stored, validEnvironment);
-    const privateOutput = join(validEnvironment.WRENCH_STATE_HOME!, "private", "run.json");
-    const receiptOutput = join(validEnvironment.WRENCH_STATE_HOME!, "private", "receipt.json");
+    const privateOutput = join(validEnvironment.WRENCH_STATE_HOME!, "private", "same.json");
     const stderr: string[] = [];
     expect(await main([
       "confirm",
@@ -158,13 +158,12 @@ describe("messaging composite preview binding", () => {
       "--private-output",
       privateOutput,
       "--receipt-binding-output",
-      receiptOutput,
+      privateOutput,
       "--json",
     ], validEnvironment, { stdout: () => {}, stderr: (value) => stderr.push(value) })).toBe(3);
-    expect(stderr.join("")).toContain("reviewed provider executor");
+    expect(stderr.join("")).toContain("distinct private output and receipt-binding paths");
     expect(loadInvocationPlan(stored.digest, validEnvironment)).toEqual(stored);
     expect(existsSync(privateOutput)).toBeFalse();
-    expect(existsSync(receiptOutput)).toBeFalse();
 
     const wrongEnvironment = state();
     const wrong = {

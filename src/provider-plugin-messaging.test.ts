@@ -283,7 +283,12 @@ describe("provider messaging SPI conformance", () => {
       attachments: Object.freeze([]),
     });
     const proof = {
-      base: { exactDataRevision: "a".repeat(64), latestMessageRevision: "b".repeat(64) },
+      base: {
+        exactDataRevision: "a".repeat(64),
+        latestMessageRevision: "b".repeat(64),
+        contextLimit: 20,
+        messages: [],
+      },
       current: {
         exactDataRevision: "c".repeat(64),
         latestMessageRevision: "d".repeat(64),

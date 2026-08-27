@@ -42,6 +42,7 @@ function plan(): MessagingCompositeInvocationPlanV1 {
     baseExactDataRevision: "d".repeat(64),
     baseLatestMessageRevision: "e".repeat(64),
     baseRouteStateRevision: "f".repeat(64),
+    baseMessages: Object.freeze([]),
     recipient: Object.freeze({
       network: "synthetic",
       conversation: Object.freeze({ kind: "single", title: "Private Recipient", participantCount: 1 }),

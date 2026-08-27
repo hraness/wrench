@@ -282,6 +282,7 @@ describe("provider messaging coordinate codecs", () => {
       base: {
         exactDataRevision: "a".repeat(64),
         latestMessageRevision: "b".repeat(64),
+        contextLimit: 2,
         messages: [baseMessage(old1), baseMessage(old2)],
       },
       current: {
@@ -307,6 +308,25 @@ describe("provider messaging coordinate codecs", () => {
     expect(action.proveExpectedOwnPrefix({
       ...proof,
       current: { ...proof.current, messages: [old1, old2, own1, own2] },
+    })).toBe("drift");
+    expect(action.proveExpectedOwnPrefix({
+      ...proof,
+      base: { ...proof.base, contextLimit: 4 },
+      current: { ...proof.current, messages: [old1, old2, own1, own2] },
+    })).toBe("proven");
+    const exactBase = {
+      exactDataRevision: proof.base.exactDataRevision,
+      latestMessageRevision: proof.base.latestMessageRevision,
+      messages: [old1, old2],
+    } as const;
+    expect(action.proveExpectedOwnPrefix({
+      ...proof,
+      current: exactBase,
+      accepted: [],
+    })).toBe("proven");
+    expect(action.proveExpectedOwnPrefix({
+      ...proof,
+      current: exactBase,
     })).toBe("proven");
     for (const messages of [
       [old2, own1, own2],

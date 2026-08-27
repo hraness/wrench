@@ -1169,6 +1169,24 @@ describe("wrench CLI grammar", () => {
     });
     const runId = "00000000-0000-4000-8000-000000000000";
     expect(parseWrenchArguments([
+      "messaging",
+      "reconcile",
+      runId,
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "messaging-reconcile",
+        runId,
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments(["messaging", "reconcile", runId, "--private-output"]))
+      .toEqual({
+        ok: false,
+        message: "messaging reconcile accepts only --json",
+      });
+    expect(parseWrenchArguments([
       "runs",
       "show",
       runId,
