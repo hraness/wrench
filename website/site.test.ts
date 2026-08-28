@@ -133,7 +133,7 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('<meta property="og:image:height" content="630">');
     expect(html).toContain('<meta name="robots" content="max-image-preview:large">');
     expect(html).not.toContain('<meta name="keywords"');
-    expect(html).toContain(`github:hraness/wrench#${packageIdentity.release}`);
+    expect(html).toContain(`@hraness/wrench@${packageIdentity.version}`);
     expect(html).toContain(`Install Wrench ${packageIdentity.release}`);
     expect(html).toContain(`>${SKILL_INSTALL_COMMAND}</code>`);
     expect(html).toContain(`<code>${SKILL_INSTALL_COMMAND_BUNX}</code>`);

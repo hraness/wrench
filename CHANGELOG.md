@@ -21,6 +21,16 @@
   The registered WhatsApp action remains unavailable until controlled live
   freshness, acceptance, and reconciliation qualification is complete.
 
+## 0.15.1 - 2026-08-27
+
+- Publish Wrench through the public npm registry with an exact Bun runtime
+  floor, a bounded package inventory, and stage-only trusted publishing for
+  later releases.
+- Declare Wrench's authenticated browser and provider capabilities as dual-use
+  content and ship the required disclosure in every package.
+- Admit TAB, LF, and CR in projected X post bodies. Request headers, cursors,
+  timestamps, every other C0 control, and DEL remain fail-closed.
+
 ## 0.15.0 - 2026-08-27
 
 - Add a source-only `local-cli` provider transport with schema-v6 adapter
@@ -43,9 +53,6 @@
 - Publish a focused Beeper guide that binds its 32 observed operations to the
   official CLI, adapter, semantic contracts, Desktop realm, executable hashes,
   preview and dispatch rules, export boundaries, and explicit exclusions.
-- Admit TAB, LF, and CR in projected X post bodies. Request headers, cursors,
-  timestamps, every other C0 control, and DEL remain fail-closed.
-
 ## 0.14.0 - 2026-08-26
 
 - Add a versioned, body-free Beeper direct-contact interaction summary over

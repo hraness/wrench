@@ -391,7 +391,7 @@ function renderTemplate(
   page?: PublicPage,
 ): string {
   const { packageIdentity: identity } = options;
-  const installCommand = `bun add --global github:hraness/wrench#${identity.release}`;
+  const installCommand = `bun add --global @hraness/wrench@${identity.version}`;
   let rendered = template;
   rendered = replaceHtmlRequired(rendered, "{{ANALYTICS_ASSET}}", escapeHtml(options.analyticsAsset));
   rendered = replaceHtmlRequired(rendered, "{{CSS_ASSET}}", escapeHtml(options.cssAsset));

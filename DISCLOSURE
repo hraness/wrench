@@ -1,0 +1,22 @@
+Wrench dual-use disclosure
+
+Wrench is a bring-your-own-agent command-line interface and TypeScript SDK for
+authorized web capture, verified media archiving, encrypted cross-provider
+reads, and typed provider operations.
+
+Some Wrench capabilities can read a local browser profile or its cookies,
+issue authenticated requests, automate a reviewed browser surface, and submit
+provider writes after an exact preview and explicit confirmation. These
+capabilities can expose private account data or change an external account if
+they are used without the account holder's authorization.
+
+Use Wrench only with accounts, data, and systems that you are authorized to
+access. Review the selected provider, account realm, operation, inputs, and
+preview before confirming a write. Preserve its durable receipts and treat an
+indeterminate dispatch as unresolved rather than retrying it.
+
+Wrench does not grant authorization, bypass login, payment, access controls, or
+DRM, and does not turn source plugins into a hostile-code sandbox. Its intended
+use is to give a user-selected agent a bounded, inspectable capability while
+the user retains local custody of credentials and approval of consequential
+actions.

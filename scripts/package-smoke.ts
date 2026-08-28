@@ -1,6 +1,7 @@
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const packageName = "@hraness/wrench";
 const importSpecifiers = [
@@ -11,6 +12,10 @@ const importSpecifiers = [
   "@hraness/wrench/messaging",
 ];
 const binNames = ["wrench"];
+const MAX_PACKED_BYTES = 2_000_000;
+const MAX_PACKED_FILES = 425;
+const MAX_UNPACKED_BYTES = 11_000_000;
+const NPM_REGISTRY = "https://registry.npmjs.org";
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";
 const sweetCookieVerificationIntegrity = "sha512-HddZketABRWbHiLYqMbGlYuqEaWdtqAjES28eKHr2cPDdPvrXiF4JQxD4pl9WzSOre6p/B3zA4Z3uIsCHo/+uQ==";
 const verificationPackages = [`@steipete/sweet-cookie@${sweetCookieVerificationUrl}`,"@types/bun@^1.3.14","fast-check@^4.8.0"];
@@ -81,10 +86,177 @@ async function assertSweetCookieLock(lockPath: string, label: string): Promise<v
   }
 }
 
-async function run(command: string[], cwd: string): Promise<void> {
-  const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
+async function run(
+  command: string[],
+  cwd: string,
+  env?: Readonly<Record<string, string>>,
+): Promise<void> {
+  const process = Bun.spawn(command, env === undefined
+    ? { cwd, stdout: "inherit", stderr: "inherit" }
+    : {
+        cwd,
+        env: { ...globalThis.process.env, ...env },
+        stdout: "inherit",
+        stderr: "inherit",
+      });
   const exitCode = await process.exited;
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
+}
+
+type ExactNpmArtifact = Readonly<{
+  archive: string;
+  packJson: string;
+}>;
+
+type PackageMeasure = Readonly<{
+  fileCount: number;
+  packedBytes: number;
+  unpackedBytes: number;
+}>;
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  label: string,
+): string {
+  const field = value[key];
+  if (typeof field !== "string" || field.length === 0) {
+    throw new Error(`${label}.${key} must be a non-empty string.`);
+  }
+  return field;
+}
+
+function requireNonNegativeInteger(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  label: string,
+): number {
+  const field = value[key];
+  if (!Number.isSafeInteger(field) || (field as number) < 0) {
+    throw new Error(`${label}.${key} must be a non-negative safe integer.`);
+  }
+  return field as number;
+}
+
+function parseExactNpmArtifact(args: readonly string[], repository: string): ExactNpmArtifact | null {
+  if (args.length === 0) return null;
+  if (args.length !== 4) {
+    throw new Error(
+      "Usage: bun run scripts/package-smoke.ts [--archive <package.tgz> --pack-json <npm-pack.json>]",
+    );
+  }
+
+  let archive: string | null = null;
+  let packJson: string | null = null;
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (value === undefined || value.length === 0) {
+      throw new Error(`Missing value for ${flag ?? "package-smoke argument"}.`);
+    }
+    if (flag === "--archive" && archive === null) archive = value;
+    else if (flag === "--pack-json" && packJson === null) packJson = value;
+    else throw new Error(`Unknown or duplicate package-smoke argument: ${flag ?? "missing"}.`);
+  }
+  if (archive === null || packJson === null) {
+    throw new Error("Exact npm artifact verification requires --archive and --pack-json together.");
+  }
+  return Object.freeze({
+    archive: isAbsolute(archive) ? archive : resolve(repository, archive),
+    packJson: isAbsolute(packJson) ? packJson : resolve(repository, packJson),
+  });
+}
+
+function verifyPackageBounds(measure: PackageMeasure): void {
+  if (measure.packedBytes > MAX_PACKED_BYTES) {
+    throw new Error(
+      `Packed Wrench archive is ${String(measure.packedBytes)} bytes; limit is ${String(MAX_PACKED_BYTES)}.`,
+    );
+  }
+  if (measure.fileCount > MAX_PACKED_FILES) {
+    throw new Error(
+      `Packed Wrench has ${String(measure.fileCount)} files; limit is ${String(MAX_PACKED_FILES)}.`,
+    );
+  }
+  if (measure.unpackedBytes > MAX_UNPACKED_BYTES) {
+    throw new Error(
+      `Packed Wrench is ${String(measure.unpackedBytes)} unpacked bytes; limit is ${String(MAX_UNPACKED_BYTES)}.`,
+    );
+  }
+}
+
+async function verifyExactNpmPackResult(
+  artifact: ExactNpmArtifact,
+  expectedVersion: string,
+): Promise<PackageMeasure> {
+  const parsed: unknown = JSON.parse(await readFile(artifact.packJson, "utf8"));
+  if (!Array.isArray(parsed) || parsed.length !== 1) {
+    throw new Error("npm-pack.json must contain exactly one package result.");
+  }
+  const result = requireRecord(parsed[0], "npm pack result");
+  const name = requireString(result, "name", "npm pack result");
+  const version = requireString(result, "version", "npm pack result");
+  const filename = requireString(result, "filename", "npm pack result");
+  const integrity = requireString(result, "integrity", "npm pack result");
+  const shasum = requireString(result, "shasum", "npm pack result");
+  if (name !== packageName || version !== expectedVersion) {
+    throw new Error(
+      `npm pack reported ${name}@${version}, expected ${packageName}@${expectedVersion}.`,
+    );
+  }
+  const expectedFilename = `hraness-wrench-${expectedVersion}.tgz`;
+  if (
+    filename !== basename(filename)
+    || filename !== basename(artifact.archive)
+    || filename !== expectedFilename
+  ) {
+    throw new Error(`npm pack returned unsafe or unexpected filename ${filename}.`);
+  }
+
+  const measure = Object.freeze({
+    fileCount: requireNonNegativeInteger(result, "entryCount", "npm pack result"),
+    packedBytes: requireNonNegativeInteger(result, "size", "npm pack result"),
+    unpackedBytes: requireNonNegativeInteger(result, "unpackedSize", "npm pack result"),
+  });
+  const files = result.files;
+  if (!Array.isArray(files) || files.length !== measure.fileCount) {
+    throw new Error("npm pack file inventory does not match entryCount.");
+  }
+  const seen = new Set<string>();
+  let reportedUnpackedBytes = 0;
+  for (const [index, value] of files.entries()) {
+    const file = requireRecord(value, `npm pack result.files[${String(index)}]`);
+    const path = requireString(file, "path", `npm pack result.files[${String(index)}]`);
+    const size = requireNonNegativeInteger(file, "size", `npm pack result.files[${String(index)}]`);
+    if (seen.has(path)) throw new Error(`npm pack reported duplicate package path ${path}.`);
+    seen.add(path);
+    reportedUnpackedBytes += size;
+    if (!Number.isSafeInteger(reportedUnpackedBytes)) {
+      throw new Error("npm pack file inventory exceeds the safe integer range.");
+    }
+  }
+  if (reportedUnpackedBytes !== measure.unpackedBytes) {
+    throw new Error("npm pack file inventory does not match unpackedSize.");
+  }
+
+  const bytes = await readFile(artifact.archive);
+  if (bytes.byteLength !== measure.packedBytes) {
+    throw new Error("Exact npm tarball byte length does not match npm-pack.json.");
+  }
+  const actualIntegrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+  const actualShasum = createHash("sha1").update(bytes).digest("hex");
+  if (integrity !== actualIntegrity || shasum !== actualShasum) {
+    throw new Error("Exact npm tarball digest does not match npm-pack.json.");
+  }
+  verifyPackageBounds(measure);
+  return measure;
 }
 
 async function runExpectingFailure(
@@ -104,7 +276,9 @@ async function runExpectingFailure(
     || stdout.length !== 0
     || !stderr.includes(expectedDiagnostic)
   ) {
-    throw new Error(`Installed CLI failure contract drifted for: ${command.join(" ")}`);
+    throw new Error(
+      `Installed CLI failure contract drifted for: ${command.join(" ")}; exit=${String(exitCode)}; stdout=${JSON.stringify(stdout)}; stderr=${JSON.stringify(stderr)}`,
+    );
   }
 }
 
@@ -117,6 +291,28 @@ async function collectMarkdownFiles(root: string): Promise<readonly string[]> {
     else if (entry.isFile() && entry.name.endsWith(".md")) files.push(path);
   }
   return files;
+}
+
+async function measurePackageFiles(root: string): Promise<Readonly<{
+  fileCount: number;
+  unpackedBytes: number;
+}>> {
+  let fileCount = 0;
+  let unpackedBytes = 0;
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      const nested = await measurePackageFiles(path);
+      fileCount += nested.fileCount;
+      unpackedBytes += nested.unpackedBytes;
+    } else if (entry.isFile()) {
+      fileCount += 1;
+      unpackedBytes += (await stat(path)).size;
+    } else {
+      throw new Error(`Packed Wrench contains an unsupported entry: ${path}`);
+    }
+  }
+  return { fileCount, unpackedBytes };
 }
 
 async function collectArchivedAdapterFiles(
@@ -187,13 +383,21 @@ async function verifyLocalMarkdownLinks(skillRoot: string): Promise<void> {
   }
 }
 
-async function verifyPackagedSkill(repository: string, consumer: string): Promise<void> {
+async function verifyPackagedSkill(
+  repository: string,
+  consumer: string,
+  expectedVersion: string,
+): Promise<void> {
   const packageRoot = join(consumer, "node_modules", "@hraness", "wrench");
   const skillRoot = join(packageRoot, "skills", "wrench");
   const skill = await readFile(join(skillRoot, "SKILL.md"), "utf8");
   const metadata = await readFile(join(skillRoot, "agents", "openai.yaml"), "utf8");
   const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")) as {
+    readonly name?: unknown;
     readonly version?: unknown;
+    readonly contentPolicy?: unknown;
+    readonly engines?: unknown;
+    readonly publishConfig?: unknown;
   };
 
   if (!skill.startsWith("---\nname: wrench\ndescription:")) {
@@ -239,36 +443,125 @@ async function verifyPackagedSkill(repository: string, consumer: string): Promis
   for (const reference of references) await access(join(skillRoot, reference));
   await verifyLocalMarkdownLinks(skillRoot);
 
-  if (typeof manifest.version !== "string") {
-    throw new Error("Packed Wrench package version is missing.");
+  if (manifest.name !== packageName || manifest.version !== expectedVersion) {
+    throw new Error(
+      `Packed Wrench identity is ${String(manifest.name)}@${String(manifest.version)}, expected ${packageName}@${expectedVersion}.`,
+    );
+  }
+  if (
+    typeof manifest.contentPolicy !== "object"
+    || manifest.contentPolicy === null
+    || !("class" in manifest.contentPolicy)
+    || manifest.contentPolicy.class !== "dual-use"
+  ) {
+    throw new Error("Packed Wrench must retain npm dual-use metadata.");
+  }
+  if (
+    typeof manifest.engines !== "object"
+    || manifest.engines === null
+    || !("bun" in manifest.engines)
+    || manifest.engines.bun !== ">=1.3.14"
+  ) {
+    throw new Error("Packed Wrench must declare its Bun runtime floor.");
+  }
+  if (
+    typeof manifest.publishConfig !== "object"
+    || manifest.publishConfig === null
+    || !("access" in manifest.publishConfig)
+    || manifest.publishConfig.access !== "public"
+    || !("registry" in manifest.publishConfig)
+    || manifest.publishConfig.registry !== NPM_REGISTRY
+  ) {
+    throw new Error("Packed Wrench must pin public publication to the canonical npm registry.");
+  }
+  const npmDisclosure = await readFile(join(packageRoot, "DISCLOSURE"), "utf8");
+  for (const required of ["dual-use", "browser profile", "explicit confirmation", "authorized"] as const) {
+    if (!npmDisclosure.includes(required)) {
+      throw new Error(`Packed Wrench dual-use disclosure is missing ${JSON.stringify(required)}.`);
+    }
   }
   const install = await readFile(join(skillRoot, "references", "install.md"), "utf8");
-  if (!install.includes(`github:hraness/wrench#v${manifest.version}`)) {
+  if (!install.includes(`@hraness/wrench@${expectedVersion}`)) {
     throw new Error("Packed Wrench skill install pin does not match the package version.");
+  }
+  const readme = await readFile(join(packageRoot, "README.md"), "utf8");
+  if (
+    readme.includes("not currently published on npm")
+    || readme.includes("registries are not supported install paths")
+    || !readme.includes(`@hraness/wrench@${expectedVersion}`)
+  ) {
+    throw new Error("Packed Wrench README does not describe the current npm install path.");
   }
 
   await verifyPackedArchivedAdapterInventory(repository, packageRoot);
 }
 
 const repository = process.cwd();
+const sourceManifest = requireRecord(
+  JSON.parse(await readFile(join(repository, "package.json"), "utf8")) as unknown,
+  "package.json",
+);
+const packageVersion = requireString(sourceManifest, "version", "package.json");
+if (!/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(packageVersion)) {
+  throw new Error(`package.json version is not stable semantic version: ${packageVersion}.`);
+}
+const exactNpmArtifact = parseExactNpmArtifact(process.argv.slice(2), repository);
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
   await assertSweetCookieLock(join(repository, "bun.lock"), "repository lock");
-  const archive = join(work, "package.tgz");
+  const archive = exactNpmArtifact?.archive ?? join(work, "package.tgz");
   const consumer = join(work, "consumer");
   await mkdir(consumer);
-  await run([
-    process.execPath,
-    "pm",
-    "pack",
-    "--filename",
-    archive,
-    "--ignore-scripts",
-    "--quiet",
-  ], repository);
+  let exactNpmMeasure: PackageMeasure | null = null;
+  if (exactNpmArtifact === null) {
+    await run([
+      process.execPath,
+      "pm",
+      "pack",
+      "--filename",
+      archive,
+      "--ignore-scripts",
+      "--quiet",
+    ], repository);
+  } else {
+    exactNpmMeasure = await verifyExactNpmPackResult(exactNpmArtifact, packageVersion);
+  }
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
-  await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
-  await verifyPackagedSkill(repository, consumer);
+  if (exactNpmArtifact === null) {
+    await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
+  } else {
+    await run([
+      "npm",
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      `--registry=${NPM_REGISTRY}`,
+      archive,
+    ], consumer, {
+      NPM_CONFIG_CACHE: join(work, "npm-cache"),
+      NPM_CONFIG_UPDATE_NOTIFIER: "false",
+    });
+  }
+  await verifyPackagedSkill(repository, consumer, packageVersion);
+  const packageRoot = join(consumer, "node_modules", "@hraness", "wrench");
+  const packageMeasure = await measurePackageFiles(packageRoot);
+  const measuredArchive = Object.freeze({
+    fileCount: packageMeasure.fileCount,
+    packedBytes: (await stat(archive)).size,
+    unpackedBytes: packageMeasure.unpackedBytes,
+  });
+  verifyPackageBounds(measuredArchive);
+  if (
+    exactNpmMeasure !== null
+    && (
+      measuredArchive.fileCount !== exactNpmMeasure.fileCount
+      || measuredArchive.packedBytes !== exactNpmMeasure.packedBytes
+      || measuredArchive.unpackedBytes !== exactNpmMeasure.unpackedBytes
+    )
+  ) {
+    throw new Error("Clean npm install does not match the exact npm pack metrics.");
+  }
   await run(["node", "--input-type=module", "-e", inertRootImportProgram], consumer);
   for (const binName of binNames) {
     await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);

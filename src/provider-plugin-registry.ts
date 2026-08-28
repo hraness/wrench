@@ -37,10 +37,12 @@ import {
   bindProviderPluginRuntimeLoadIdentity,
   classifyProviderPluginPhysicalPath,
   defineProviderPlugin,
+  isProviderPluginInstalledBinaryDirectory,
   isValidatedProviderPlugin,
   portableProviderPluginAdapter,
   portableProviderPluginArtifactSha256,
   portableProviderPluginOperationIdentity,
+  providerPluginCanonicalInstalledBinaryLinkTarget,
   providerPluginDurableInstalledPackageMode,
   providerPluginEvaluationInstalledPackageSha256,
   providerPluginEvaluationSourceSha256,
@@ -307,6 +309,11 @@ type InstalledPackageDirectorySnapshot = {
   readonly mode: number;
 };
 
+type InstalledPackageLinkSnapshot = {
+  readonly path: string;
+  readonly targetPath: string;
+};
+
 type InstalledPackageDependencyKind =
   | "dependency"
   | "optional-dependency"
@@ -326,6 +333,7 @@ type InstalledPackageSnapshot = {
   readonly version: string;
   readonly treeSha256: string;
   readonly files: readonly InstalledPackageFileSnapshot[];
+  readonly links: readonly InstalledPackageLinkSnapshot[];
   readonly directories: readonly InstalledPackageDirectorySnapshot[];
   readonly dependencies: readonly InstalledPackageDependency[];
   readonly totalBytes: number;
@@ -572,9 +580,10 @@ const reviewedMetaDynamicInstalledModuleIdentities = Object.freeze([
 ]);
 const reviewedKbDynamicInstalledPackage = Object.freeze({
   name: "@hraness/kb",
-  version: "0.15.2",
+  version: "0.17.1",
+  keyFile: "dist/index-qry4vhxk.js",
   sha256:
-    "90dabe25235d6f9c64d963a7817580cf36bd96c1fe71d8adae748ab7ff0d138b",
+    "da69a90f9cf1edbfe82443c5f73226fe9960103522e37a106ff4ec04e3325e97",
 });
 const reviewedKbDynamicResolutionPolicy =
   "createRequire(parentUrl).resolve(`$" +
@@ -642,9 +651,12 @@ function discoverReviewedKbDynamicInstalledModuleIdentity(
     throw new Error(`installed ${snapshot.id} dynamic-resolution module disappeared`);
   }
   const sha256 = createHash("sha256").update(candidate.bytes).digest("hex");
-  if (sha256 !== reviewedKbDynamicInstalledPackage.sha256) {
+  if (
+    candidate.path !== reviewedKbDynamicInstalledPackage.keyFile
+    || sha256 !== reviewedKbDynamicInstalledPackage.sha256
+  ) {
     throw new Error(
-      `installed ${snapshot.id} dynamic-resolution module ${candidate.path} has sha256 ${sha256}, expected ${reviewedKbDynamicInstalledPackage.sha256}`,
+      `installed ${snapshot.id} dynamic-resolution module ${candidate.path} has sha256 ${sha256}, expected ${reviewedKbDynamicInstalledPackage.keyFile} with sha256 ${reviewedKbDynamicInstalledPackage.sha256}`,
     );
   }
   return `${snapshot.id}\u0000${candidate.path}\u0000${sha256}`;
@@ -1156,15 +1168,23 @@ function parseInstalledPackageManifest(
   };
 }
 
-type InstalledPackageTreeEntry = {
-  readonly path: string;
-  readonly kind: "directory" | "file";
-  readonly stats: BigIntStats;
-};
+type InstalledPackageTreeEntry =
+  | {
+    readonly path: string;
+    readonly kind: "directory" | "file";
+    readonly stats: BigIntStats;
+  }
+  | {
+    readonly path: string;
+    readonly kind: "link";
+    readonly stats: BigIntStats;
+    readonly targetPath: string;
+  };
 
 type InstalledPackageTreeWalk = {
   readonly entries: readonly InstalledPackageTreeEntry[];
   readonly fileCount: number;
+  readonly linkCount: number;
   readonly directoryCount: number;
   readonly totalBytes: number;
 };
@@ -1172,6 +1192,7 @@ type InstalledPackageTreeWalk = {
 function walkInstalledPackageTree(root: string): InstalledPackageTreeWalk {
   const entries: InstalledPackageTreeEntry[] = [];
   let fileCount = 0;
+  let linkCount = 0;
   let directoryCount = 0;
   let totalBytes = 0;
   const visit = (
@@ -1269,9 +1290,33 @@ function walkInstalledPackageTree(root: string): InstalledPackageTreeWalk {
           );
         }
         if (stats.isSymbolicLink()) {
-          throw new Error(
-            `installed package tree contains symlink ${relativePath}`,
+          if (!isProviderPluginInstalledBinaryDirectory(relativeDirectory)) {
+            throw new Error(
+              `installed package tree contains symlink ${relativePath}`,
+            );
+          }
+          linkCount += 1;
+          if (fileCount + linkCount > MAX_INSTALLED_PACKAGE_FILES) {
+            throw new Error("installed package tree exceeds its file bound");
+          }
+          const targetPath = providerPluginCanonicalInstalledBinaryLinkTarget(
+            root,
+            path,
+            stats,
+            MAX_INSTALLED_PACKAGE_PATH_BYTES,
+            `installed package npm binary link ${relativePath}`,
           );
+          totalBytes += Buffer.byteLength(targetPath, "utf8");
+          if (totalBytes > MAX_INSTALLED_PACKAGE_TOTAL_BYTES) {
+            throw new Error("installed package tree exceeds its total byte bound");
+          }
+          entries.push(Object.freeze({
+            path: relativePath,
+            kind: "link",
+            stats,
+            targetPath,
+          }));
+          continue;
         }
         if (stats.isDirectory()) {
           // A dependency's nested node_modules directory describes the
@@ -1291,7 +1336,7 @@ function walkInstalledPackageTree(root: string): InstalledPackageTreeWalk {
           );
         }
         fileCount += 1;
-        if (fileCount > MAX_INSTALLED_PACKAGE_FILES) {
+        if (fileCount + linkCount > MAX_INSTALLED_PACKAGE_FILES) {
           throw new Error("installed package tree exceeds its file bound");
         }
         if (
@@ -1342,6 +1387,7 @@ function walkInstalledPackageTree(root: string): InstalledPackageTreeWalk {
   return Object.freeze({
     entries: Object.freeze(entries),
     fileCount,
+    linkCount,
     directoryCount,
     totalBytes,
   });
@@ -1354,6 +1400,7 @@ function sameInstalledPackageTree(
   if (
     before.entries.length !== after.entries.length
     || before.fileCount !== after.fileCount
+    || before.linkCount !== after.linkCount
     || before.directoryCount !== after.directoryCount
     || before.totalBytes !== after.totalBytes
   ) return false;
@@ -1362,6 +1409,10 @@ function sameInstalledPackageTree(
     return current !== undefined
       && entry.path === current.path
       && entry.kind === current.kind
+      && (
+        entry.kind !== "link"
+        || (current.kind === "link" && entry.targetPath === current.targetPath)
+      )
       && sameFileSnapshot(entry.stats, current.stats);
   });
 }
@@ -1376,7 +1427,7 @@ function assertInstalledPackageRegistryCacheBounds(
   let directories = 0;
   let bytes = 0;
   for (const snapshot of snapshots.values()) {
-    files += snapshot.files.length;
+    files += snapshot.files.length + snapshot.links.length;
     directories += snapshot.directories.length;
     bytes += snapshot.totalBytes;
   }
@@ -1403,12 +1454,20 @@ function snapshotInstalledPackage(
   const root = installedPackageRoot(entryPath);
   const before = walkInstalledPackageTree(root);
   const files: InstalledPackageFileSnapshot[] = [];
+  const links: InstalledPackageLinkSnapshot[] = [];
   const directories: InstalledPackageDirectorySnapshot[] = [];
   for (const entry of before.entries) {
     if (entry.kind === "directory") {
       directories.push(Object.freeze({
         path: entry.path,
         mode: Number(entry.stats.mode & 0o777n),
+      }));
+      continue;
+    }
+    if (entry.kind === "link") {
+      links.push(Object.freeze({
+        path: entry.path,
+        targetPath: entry.targetPath,
       }));
       continue;
     }
@@ -1438,6 +1497,14 @@ function snapshotInstalledPackage(
       mode: Number(entry.stats.mode & 0o777n),
     }));
   }
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+  for (const link of links) {
+    if (!filesByPath.has(link.targetPath)) {
+      throw new Error(
+        `installed package npm binary link ${link.path} target is not part of the captured package tree`,
+      );
+    }
+  }
   const after = walkInstalledPackageTree(root);
   if (!sameInstalledPackageTree(before, after)) {
     throw new Error("installed package tree changed while it was snapshotted");
@@ -1452,7 +1519,7 @@ function snapshotInstalledPackage(
   }
   const parsed = parseInstalledPackageManifest(manifest.bytes, root);
   const treeHash = createHash("sha256");
-  treeHash.update("provider-plugin-installed-package-tree@1\0");
+  treeHash.update("provider-plugin-installed-package-tree@2\0");
   updateLengthFramedHash(
     treeHash,
     "identity",
@@ -1481,6 +1548,33 @@ function snapshotInstalledPackage(
     );
     updateLengthFramedHash(treeHash, `file/${file.path}`, file.bytes);
   }
+  for (const link of links) {
+    const target = filesByPath.get(link.targetPath);
+    if (target === undefined) {
+      throw new Error(
+        `installed package npm binary link ${link.path} target is unavailable`,
+      );
+    }
+    const durableMode = providerPluginDurableInstalledPackageMode(
+      "file",
+      target.mode,
+    );
+    updateLengthFramedHash(
+      treeHash,
+      `link/${link.path}`,
+      Buffer.from(link.targetPath, "utf8"),
+    );
+    updateLengthFramedHash(
+      treeHash,
+      `link-target-mode/${link.path}`,
+      Buffer.from(`mode:${durableMode.toString(8)}`, "utf8"),
+    );
+    updateLengthFramedHash(
+      treeHash,
+      `link-target/${link.path}`,
+      target.bytes,
+    );
+  }
   return Object.freeze({
     root,
     id: `${parsed.name}@${parsed.version}`,
@@ -1489,6 +1583,7 @@ function snapshotInstalledPackage(
     version: parsed.version,
     treeSha256: treeHash.digest("hex"),
     files: Object.freeze(files),
+    links: Object.freeze(links),
     directories: Object.freeze(directories),
     dependencies: parsed.dependencies,
     totalBytes: before.totalBytes,
@@ -2073,7 +2168,7 @@ function providerPluginPackageDependencyIdentity(
         .digest("base64url");
       occurrence = Object.freeze({ nodeId, snapshot });
       installedOccurrences.set(snapshot.root, occurrence);
-      installedFiles += snapshot.files.length;
+      installedFiles += snapshot.files.length + snapshot.links.length;
       installedDirectories += snapshot.directories.length;
       installedBytes += snapshot.totalBytes;
       if (

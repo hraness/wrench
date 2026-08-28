@@ -8,6 +8,7 @@ import {
   openSync,
   opendirSync,
   readFileSync,
+  readlinkSync,
   readSync,
   realpathSync,
   type BigIntStats,
@@ -1341,15 +1342,23 @@ const providerPluginEvaluationRuntimeBuiltins = new Set(
     name.startsWith("node:") ? [name, name.slice("node:".length)] : [name]),
 );
 
-type ProviderPluginEvaluationPackageTreeEntry = {
-  readonly path: string;
-  readonly kind: "directory" | "file";
-  readonly stats: BigIntStats;
-};
+type ProviderPluginEvaluationPackageTreeEntry =
+  | {
+    readonly path: string;
+    readonly kind: "directory" | "file";
+    readonly stats: BigIntStats;
+  }
+  | {
+    readonly path: string;
+    readonly kind: "link";
+    readonly stats: BigIntStats;
+    readonly targetPath: string;
+  };
 
 type ProviderPluginEvaluationPackageTreeWalk = {
   readonly entries: readonly ProviderPluginEvaluationPackageTreeEntry[];
   readonly fileCount: number;
+  readonly linkCount: number;
   readonly directoryCount: number;
   readonly totalBytes: number;
 };
@@ -1373,6 +1382,103 @@ function sameEvaluationSourceSnapshot(
     && left.mode === right.mode
     && left.mtimeNs === right.mtimeNs
     && left.ctimeNs === right.ctimeNs;
+}
+
+export function isProviderPluginInstalledBinaryDirectory(
+  relativeDirectory: string,
+): boolean {
+  return relativeDirectory === "node_modules/.bin"
+    || relativeDirectory.endsWith("/node_modules/.bin");
+}
+
+/**
+ * Bind an installer-generated npm binary link to one canonical regular file
+ * inside the same captured package tree. Wrapper files remain ordinary files.
+ */
+export function providerPluginCanonicalInstalledBinaryLinkTarget(
+  root: string,
+  linkPath: string,
+  initialStats: BigIntStats,
+  maximumPathBytes: number,
+  label: string,
+): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (
+    !initialStats.isSymbolicLink()
+    || (uid !== undefined && initialStats.uid !== BigInt(uid))
+  ) {
+    throw new Error(`${label} is not an owned symbolic link`);
+  }
+  let firstTargetBytes: Buffer;
+  let secondTargetBytes: Buffer;
+  let middleStats: BigIntStats;
+  let finalStats: BigIntStats;
+  try {
+    firstTargetBytes = readlinkSync(linkPath, { encoding: "buffer" });
+    middleStats = lstatSync(linkPath, { bigint: true });
+    secondTargetBytes = readlinkSync(linkPath, { encoding: "buffer" });
+    finalStats = lstatSync(linkPath, { bigint: true });
+  } catch {
+    throw new Error(`${label} changed while it was read`);
+  }
+  if (
+    firstTargetBytes.byteLength < 1
+    || firstTargetBytes.byteLength > maximumPathBytes
+    || !firstTargetBytes.equals(secondTargetBytes)
+    || !middleStats.isSymbolicLink()
+    || !finalStats.isSymbolicLink()
+    || !sameEvaluationSourceSnapshot(initialStats, middleStats)
+    || !sameEvaluationSourceSnapshot(middleStats, finalStats)
+  ) {
+    throw new Error(`${label} changed while it was read`);
+  }
+  let targetText: string;
+  try {
+    targetText = new TextDecoder("utf-8", { fatal: true }).decode(
+      firstTargetBytes,
+    );
+  } catch {
+    throw new Error(`${label} has invalid target text`);
+  }
+  if (
+    targetText.includes("\u0000")
+    || targetText.includes("\\")
+    || isAbsolute(targetText)
+  ) {
+    throw new Error(`${label} has an unsafe target`);
+  }
+  const lexicalTarget = resolve(dirname(linkPath), targetText);
+  const targetPath = relative(root, lexicalTarget).split(sep).join("/");
+  const canonicalTargetText = relative(dirname(linkPath), lexicalTarget)
+    .split(sep).join("/");
+  if (
+    targetText !== canonicalTargetText
+    || targetPath === ""
+    || targetPath === "."
+    || targetPath.includes("\\")
+    || targetPath.includes("\u0000")
+    || Buffer.byteLength(targetPath, "utf8") > maximumPathBytes
+    || !isWithinProviderPluginPhysicalRoot(root, lexicalTarget)
+  ) {
+    throw new Error(`${label} has a noncanonical or escaping target`);
+  }
+  let physicalTarget: string;
+  let targetStats: BigIntStats;
+  try {
+    physicalTarget = realpathSync(linkPath);
+    targetStats = lstatSync(lexicalTarget, { bigint: true });
+  } catch {
+    throw new Error(`${label} target is missing`);
+  }
+  if (
+    physicalTarget !== lexicalTarget
+    || !targetStats.isFile()
+    || targetStats.isSymbolicLink()
+    || (uid !== undefined && targetStats.uid !== BigInt(uid))
+  ) {
+    throw new Error(`${label} target is not one canonical owned regular file`);
+  }
+  return targetPath;
 }
 
 function readOwnedBoundedProviderPluginEvaluationFile(
@@ -1462,6 +1568,7 @@ function walkProviderPluginEvaluationPackageTree(
 ): ProviderPluginEvaluationPackageTreeWalk {
   const entries: ProviderPluginEvaluationPackageTreeEntry[] = [];
   let fileCount = 0;
+  let linkCount = 0;
   let directoryCount = 0;
   let totalBytes = 0;
   const visit = (
@@ -1570,9 +1677,40 @@ function walkProviderPluginEvaluationPackageTree(
           );
         }
         if (stats.isSymbolicLink()) {
-          throw new Error(
-            `provider plugin evaluation package tree contains symlink ${relativePath}`,
+          if (!isProviderPluginInstalledBinaryDirectory(relativeDirectory)) {
+            throw new Error(
+              `provider plugin evaluation package tree contains symlink ${relativePath}`,
+            );
+          }
+          linkCount += 1;
+          if (
+            fileCount + linkCount
+              > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_FILES
+          ) {
+            throw new Error(
+              "provider plugin evaluation package tree exceeds its file bound",
+            );
+          }
+          const targetPath = providerPluginCanonicalInstalledBinaryLinkTarget(
+            root,
+            path,
+            stats,
+            MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_PATH_BYTES,
+            `provider plugin evaluation npm binary link ${relativePath}`,
           );
+          totalBytes += Buffer.byteLength(targetPath, "utf8");
+          if (totalBytes > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_BYTES) {
+            throw new Error(
+              "provider plugin evaluation package tree exceeds its total byte bound",
+            );
+          }
+          entries.push(Object.freeze({
+            path: relativePath,
+            kind: "link",
+            stats,
+            targetPath,
+          }));
+          continue;
         }
         if (stats.isDirectory()) {
           // A dependency's nested node_modules directory describes the
@@ -1592,7 +1730,10 @@ function walkProviderPluginEvaluationPackageTree(
           );
         }
         fileCount += 1;
-        if (fileCount > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_FILES) {
+        if (
+          fileCount + linkCount
+            > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_FILES
+        ) {
           throw new Error(
             "provider plugin evaluation package tree exceeds its file bound",
           );
@@ -1648,6 +1789,7 @@ function walkProviderPluginEvaluationPackageTree(
   return Object.freeze({
     entries: Object.freeze(entries),
     fileCount,
+    linkCount,
     directoryCount,
     totalBytes,
   });
@@ -1658,6 +1800,7 @@ function sameProviderPluginEvaluationPackageTree(
   right: ProviderPluginEvaluationPackageTreeWalk,
 ): boolean {
   return left.fileCount === right.fileCount
+    && left.linkCount === right.linkCount
     && left.directoryCount === right.directoryCount
     && left.totalBytes === right.totalBytes
     && left.entries.length === right.entries.length
@@ -1666,6 +1809,10 @@ function sameProviderPluginEvaluationPackageTree(
       return current !== undefined
         && entry.path === current.path
         && entry.kind === current.kind
+        && (
+          entry.kind !== "link"
+          || (current.kind === "link" && entry.targetPath === current.targetPath)
+        )
         && sameEvaluationSourceSnapshot(entry.stats, current.stats);
     });
 }
@@ -1712,12 +1859,20 @@ function snapshotProviderPluginEvaluationPackage(
     readonly bytes: Buffer;
     readonly mode: number;
   }[] = [];
+  const links: { readonly path: string; readonly targetPath: string }[] = [];
   const directories: { readonly path: string; readonly mode: number }[] = [];
   for (const entry of firstWalk.entries) {
     if (entry.kind === "directory") {
       directories.push(Object.freeze({
         path: entry.path,
         mode: Number(entry.stats.mode & 0o777n),
+      }));
+      continue;
+    }
+    if (entry.kind === "link") {
+      links.push(Object.freeze({
+        path: entry.path,
+        targetPath: entry.targetPath,
       }));
       continue;
     }
@@ -1750,6 +1905,14 @@ function snapshotProviderPluginEvaluationPackage(
       bytes,
       mode: Number(entry.stats.mode & 0o777n),
     }));
+  }
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+  for (const link of links) {
+    if (!filesByPath.has(link.targetPath)) {
+      throw new Error(
+        `provider plugin evaluation npm binary link ${link.path} target is not part of the captured package tree`,
+      );
+    }
   }
   const secondWalk = walkProviderPluginEvaluationPackageTree(root);
   if (!sameProviderPluginEvaluationPackageTree(firstWalk, secondWalk)) {
@@ -1787,7 +1950,7 @@ function snapshotProviderPluginEvaluationPackage(
     );
   }
   const treeHash = createHash("sha256");
-  treeHash.update("provider-plugin-installed-package-tree@1\0");
+  treeHash.update("provider-plugin-installed-package-tree@2\0");
   updateProviderPluginEvaluationTreeHash(
     treeHash,
     "identity",
@@ -1818,6 +1981,33 @@ function snapshotProviderPluginEvaluationPackage(
       treeHash,
       `file/${file.path}`,
       file.bytes,
+    );
+  }
+  for (const link of links) {
+    const target = filesByPath.get(link.targetPath);
+    if (target === undefined) {
+      throw new Error(
+        `provider plugin evaluation npm binary link ${link.path} target is unavailable`,
+      );
+    }
+    const durableMode = providerPluginDurableInstalledPackageMode(
+      "file",
+      target.mode,
+    );
+    updateProviderPluginEvaluationTreeHash(
+      treeHash,
+      `link/${link.path}`,
+      Buffer.from(link.targetPath, "utf8"),
+    );
+    updateProviderPluginEvaluationTreeHash(
+      treeHash,
+      `link-target-mode/${link.path}`,
+      Buffer.from(`mode:${durableMode.toString(8)}`, "utf8"),
+    );
+    updateProviderPluginEvaluationTreeHash(
+      treeHash,
+      `link-target/${link.path}`,
+      target.bytes,
     );
   }
   const snapshot = Object.freeze({
