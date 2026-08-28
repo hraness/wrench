@@ -94,7 +94,7 @@ describe("GitHub public profile runtime", () => {
       { fetch: ok },
       undefined,
     )).rejects.toThrow("accepts only input.username");
-    await expect(executeGitHubPublicProfileRead(
+    expect(await executeGitHubPublicProfileRead(
       recipe,
       { username: "0thernet" },
       {
@@ -104,8 +104,14 @@ describe("GitHub public profile runtime", () => {
         })),
       },
       undefined,
-    )).rejects.toThrow("returned unreviewed status 404");
-    await expect(executeGitHubPublicProfileRead(
+    )).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "target-unavailable",
+        retryDisposition: "do-not-retry",
+      },
+    });
+    expect(await executeGitHubPublicProfileRead(
       recipe,
       { username: "0thernet" },
       {
@@ -115,7 +121,93 @@ describe("GitHub public profile runtime", () => {
         })),
       },
       undefined,
-    )).rejects.toThrow("returned an unreviewed content type");
+    )).toMatchObject({
+      status: "failed",
+      readFailure: { category: "contract-drift" },
+    });
+  });
+
+  test("distinguishes bounded public rate-limit evidence from an ordinary 403", async () => {
+    for (const [remaining, retryAfter, expectedCategory, expectedDisposition] of [
+      ["0", null, "provider-throttled", "retry-once-after-60s"],
+      ["1", "60", "provider-throttled", "retry-once-after-60s"],
+      [null, "0", "provider-throttled", "retry-once-after-60s"],
+      ["1", null, "contract-drift", "do-not-retry"],
+      [null, null, "contract-drift", "do-not-retry"],
+      [null, "tomorrow", "contract-drift", "do-not-retry"],
+      [null, "1000000000", "contract-drift", "do-not-retry"],
+    ] as const) {
+      let calls = 0;
+      const result = await executeGitHubPublicProfileRead(
+        recipe,
+        { username: "0thernet" },
+        {
+          fetch: () => {
+            calls += 1;
+            return Promise.resolve(new Response("private-provider-sentinel", {
+              status: 403,
+              headers: {
+                "content-type": "application/json",
+                ...(remaining === null
+                  ? {}
+                  : { "x-ratelimit-remaining": remaining }),
+                ...(retryAfter === null
+                  ? {}
+                  : { "retry-after": retryAfter }),
+              },
+            }));
+          },
+        },
+        undefined,
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        output: null,
+        readFailure: {
+          category: expectedCategory,
+          retryDisposition: expectedDisposition,
+        },
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      });
+      expect(calls).toBe(1);
+      expect(JSON.stringify(result)).not.toContain("private-provider-sentinel");
+    }
+  });
+
+  test("projects a response-body transport failure without retrying or leaking it", async () => {
+    const privateSentinel = "private GitHub stream sentinel";
+    let calls = 0;
+    const result = await executeGitHubPublicProfileRead(
+      recipe,
+      { username: "0thernet" },
+      {
+        fetch: () => {
+          calls += 1;
+          return Promise.resolve(new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error(new TypeError(privateSentinel));
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ));
+        },
+      },
+      undefined,
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      readFailure: {
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(calls).toBe(1);
+    expect(JSON.stringify(result)).not.toContain(privateSentinel);
   });
 });
 
@@ -248,12 +340,12 @@ describe("GitHub public organization statistics runtime", () => {
         headers: { "content-type": "application/json" },
       }));
     };
-    await expect(executeGitHubPublicOrganizationRead(
+    expect(await executeGitHubPublicOrganizationRead(
       organizationRecipe,
       { organization: "hraness" },
       { fetch: missingNext },
       undefined,
-    )).rejects.toThrow("pagination did not complete the declared public repository set");
+    )).toMatchObject({ status: "failed", readFailure: { category: "contract-drift" } });
   });
 
   test("rejects widened inputs and incomplete or drifted repository sets", async () => {
@@ -269,11 +361,11 @@ describe("GitHub public organization statistics runtime", () => {
       { fetch: ok },
       undefined,
     )).rejects.toThrow("accepts only input.organization");
-    await expect(executeGitHubPublicOrganizationRead(
+    expect(await executeGitHubPublicOrganizationRead(
       organizationRecipe,
       { organization: "hraness" },
       { fetch: ok },
       undefined,
-    )).rejects.toThrow("pagination repeated one repository");
+    )).toMatchObject({ status: "failed", readFailure: { category: "contract-drift" } });
   });
 });

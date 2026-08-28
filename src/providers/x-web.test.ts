@@ -924,7 +924,7 @@ describe("X exact profile projection", () => {
       response({ __typename: "UserUnavailable" }),
       "hraness",
       "2026-08-21T15:00:00.000Z",
-    )).toThrow("did not contain one available User");
+    )).toThrow("X profile target is unavailable");
     expect(() => projectXWebProfileStats(
       response({
         legacy: {

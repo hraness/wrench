@@ -947,9 +947,19 @@ export type SubstackWebViewer = Readonly<{
   }>[];
 }>;
 
+export class SubstackAuthRepairRequiredError extends Error {
+  constructor() {
+    super("Substack selected session is not signed in");
+    this.name = "SubstackAuthRepairRequiredError";
+  }
+}
+
 export function parseSubstackLoggedInResponse(value: unknown): void {
   const source = record(value, "Substack login-state response");
-  if (source.loggedIn !== true) throw new Error("Substack browser session is not signed in");
+  if (source.loggedIn === false) throw new SubstackAuthRepairRequiredError();
+  if (source.loggedIn !== true) {
+    throw new Error("Substack login-state response did not expose a reviewed signed-in flag");
+  }
 }
 
 function parseJsonStringLiteral(html: string, start: number): {

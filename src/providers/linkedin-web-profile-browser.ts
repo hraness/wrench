@@ -438,6 +438,9 @@ export async function createLinkedInProfileBrowserTransport(
     session = await createSession(profileBrowserManifest, auth, sessionOptions);
   } catch (error) {
     if (error instanceof PreservedBrowserArtifactsError) throw error;
+    options.operationDeadline?.throwIfUnavailable(
+      "LinkedIn stats browser startup",
+    );
     throw new LinkedInProfileBrowserFailure(
       "startup",
       "LinkedIn stats browser could not start its contained session",
@@ -464,7 +467,11 @@ export async function createLinkedInProfileBrowserTransport(
         ),
       );
     } catch (error) {
+      if (error instanceof PreservedBrowserArtifactsError) throw error;
       if (error instanceof LinkedInProfileBrowserFailure) throw error;
+      options.operationDeadline?.throwIfUnavailable(
+        "LinkedIn stats browser operation",
+      );
       if (hasNoDefaultExecutionContext(error)) {
         throw new LinkedInProfileBrowserFailure(
           "execution-context",

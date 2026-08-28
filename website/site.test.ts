@@ -163,6 +163,7 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/compare/personal-agents-browser-use/"');
     expect(html).toContain('href="/agentic-web-spoofing/"');
     expect(html).toContain('href="/vms-cannot-contain-agents/"');
+    expect(html).toContain('href="/paypal-grapheneos-attestation/"');
     expect(html).toContain('href="/providers/beeper/"');
     expect(html).toContain("Give your coding agent bounded access to the web.");
     expect(html).toContain("Work with the services you already use.");
@@ -212,9 +213,12 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
     expect(llms).toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/paypal-grapheneos-attestation/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
     expect(llms).toContain("submission is not a delivery claim");
-    expect(llms).not.toMatch(/observed|capture-required|reservation|attestation/iu);
+    expect(llms.replaceAll(/https:\/\/wrench\.rip\/[a-z0-9-/]+/gu, "")).not.toMatch(
+      /observed|capture-required|reservation|attestation/iu,
+    );
     expect(llms).toContain("npx skills add hraness/wrench");
     expect(llms).toContain("Accept: text/markdown");
     expect(llms).not.toContain("{{");
@@ -652,10 +656,47 @@ describe("wrench.rip static site", () => {
     );
     expect(vmsCannotContainAgents?.html).toContain("Telegram is absent from those manifests");
     expect(vmsCannotContainAgents?.html).toContain("does not sell a hypervisor, a microVM, or a hostile-code sandbox");
-    expect(vmsCannotContainAgents?.html).toContain("None of the three reprints the others.");
+    expect(vmsCannotContainAgents?.html).toContain("The pages do not reprint one another.");
+    expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/paypal-grapheneos-attestation/");
     expect(vmsCannotContainAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(vmsCannotContainAgents?.html).not.toContain("stripedex.com");
     expect(vmsCannotContainAgents?.html).not.toContain("spongeresearch.com");
+
+    const paypalGrapheneOsAttestation = pages.find((page) =>
+      page.definition.canonicalPath === "/paypal-grapheneos-attestation/");
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      "<h1>Device policy is not a named web operation.</h1>",
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      "https://news.ycombinator.com/item?id=49462253",
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain("Tell HN: PayPal blocks GrapheneOS");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://rough.day");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://rough.day/info");
+    expect(paypalGrapheneOsAttestation?.html).toContain("Thursday 27 August 2026");
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      "PayPal app crashes on GrapheneOS, citing a root-detection security violation",
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      "com.paypal.oslo.app.rasp.RootDetectionSecurityException: Security policy violation: s=root",
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://hraness.com");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/provider-capabilities/");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/agentic-web-spoofing/");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/vms-cannot-contain-agents/");
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain("Telegram is absent from those manifests");
+    expect(paypalGrapheneOsAttestation?.html).toContain("does not invent a PayPal API");
+    expect(paypalGrapheneOsAttestation?.html).toContain("The pages do not reprint one another.");
+    expect(paypalGrapheneOsAttestation?.html).not.toContain("{{PROVIDER_CAPABILITY");
+    expect(paypalGrapheneOsAttestation?.html).not.toContain("stripedex.com");
+    expect(paypalGrapheneOsAttestation?.html).not.toContain("spongeresearch.com");
     const software = (graph as ReadonlyArray<Readonly<Record<string, unknown>>>).find((node) =>
       node["@id"] === `${SITE_ORIGIN}/#software`);
     expect(software).toMatchObject({

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "facebook-group-web",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "displayName": "Facebook Group (Authenticated Internal API)",
   "surfaceId": "facebook-group",
   "origins": [

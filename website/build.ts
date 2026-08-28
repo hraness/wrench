@@ -35,7 +35,7 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.16.1" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.16.2" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const DEMO_PUBLIC_FILES = [
   "wrench-first-capture.gif",
@@ -147,6 +147,14 @@ export const PUBLIC_PAGES = [
     outputFile: "vms-cannot-contain-agents/index.html",
     sourceFile: "vms-cannot-contain-agents.html",
     title: "VMs cannot contain agents, and why attested web operations still matter",
+  },
+  {
+    canonicalPath: "/paypal-grapheneos-attestation/",
+    description:
+      "The Thursday 27 August 2026 rough.day tech edition ranked PayPal crashing on GrapheneOS with a RootDetectionSecurityException. Device-policy attestation is not a named Wrench operation.",
+    outputFile: "paypal-grapheneos-attestation/index.html",
+    sourceFile: "paypal-grapheneos-attestation.html",
+    title: "PayPal attested a hardened phone as rooted, and why named web operations still matter",
   },
 ] as const;
 

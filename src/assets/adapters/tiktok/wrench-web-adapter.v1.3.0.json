@@ -1,0 +1,762 @@
+{
+  "schemaVersion": 4,
+  "id": "tiktok-web",
+  "version": "1.3.0",
+  "displayName": "TikTok (Authenticated Web API)",
+  "surfaceId": "tiktok",
+  "origins": [
+    "https://www.tiktok.com"
+  ],
+  "browserDomains": [
+    "www.tiktok.com"
+  ],
+  "operations": {
+    "profiles.read": {
+      "description": "Observed contract: read exact follower, following, and lifetime-like counts for the viewer-bound current TikTok profile through the fixed first-party user-detail endpoint.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Exact TikTok handle without @",
+            "minLength": 2,
+            "maxLength": 24
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "profiles.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "feeds.read": {
+      "description": "Observed contract: read one bounded signer-free TikTok For You response through the exact first-party recommendation endpoint after binding the current viewer.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Exact TikTok feed supported by the reviewed direct request",
+            "enum": [
+              "for-you"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum complete response page to project",
+            "minimum": 1,
+            "maximum": 30
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.read": {
+      "description": "Capture-required contract reservation: read one exact TikTok post after current item-detail proof generation and a bounded target-bound response are reviewed.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "media.read": {
+      "description": "Capture-required contract reservation: resolve one exact TikTok post's bounded media metadata without persisting expiring playback credentials.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "comments.read": {
+      "description": "Observed contract: read one bounded acknowledgement-free TikTok comment page through the exact signer-free first-party list endpoint and bind every comment to the requested post.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "cursor": {
+            "type": "number",
+            "description": "Decimal cursor returned by the preceding comment page",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum complete comment response page to project",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.list": {
+      "description": "Capture-required contract reservation: list one TikTok inbox folder without read receipts, presence, or acknowledgement side effects.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Exact TikTok inbox folder",
+            "enum": [
+              "inbox",
+              "requests"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding inbox page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum conversations to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "folder"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "messaging.read": {
+      "description": "Capture-required contract reservation: read one exact TikTok conversation without read receipts, presence, or acknowledgement side effects.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "description": "Exact opaque TikTok conversation ID returned by messaging.list",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque cursor returned by the preceding conversation page",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum messages to project",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "conversation_id"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "likes.set": {
+      "description": "Capture-required contract reservation: set one exact TikTok like state only after current csrf/proof material, target binding, and independent readback are proven.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated viewer's like on the exact confirmed TikTok post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "liked": {
+            "type": "boolean",
+            "description": "Exact desired like state"
+          }
+        },
+        "required": [
+          "post_id",
+          "liked"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "likes.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: set one exact TikTok saved state only after current csrf/proof material, target binding, and independent saved-list readback are proven.",
+      "risk": "R2",
+      "sideEffect": "Saves or removes the exact confirmed TikTok post in the authenticated viewer's collection.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired saved state"
+          }
+        },
+        "required": [
+          "post_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.delete": {
+      "description": "Capture-required contract reservation: move one exact authored TikTok post to the recycle bin only after current detail, exact recyclable permission, accepted mutation, actor/caption binding, and independently absent readback are proven.",
+      "risk": "R3",
+      "sideEffect": "Moves the exact confirmed authored TikTok post to the provider recycle bin; this contract does not perform a normal or permanent deletion.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal authored TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "expected_caption": {
+            "type": "string",
+            "description": "Exact current caption re-confirmed before deletion",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "post_id",
+          "expected_caption"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "content.delete",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "relationships.follow.set": {
+      "description": "Capture-required contract reservation: set one exact TikTok follow state only after the current AB-selected mutation and independent relationship readback are proven.",
+      "risk": "R2",
+      "sideEffect": "Follows or unfollows the exact confirmed TikTok account as the authenticated viewer.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "Exact decimal target TikTok user ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "sec_user_id": {
+            "type": "string",
+            "description": "Exact target TikTok secUid paired with user_id",
+            "minLength": 16,
+            "maxLength": 256
+          },
+          "following": {
+            "type": "boolean",
+            "description": "Exact desired follow state"
+          }
+        },
+        "required": [
+          "user_id",
+          "sec_user_id",
+          "following"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "relationships.follow.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.create": {
+      "description": "Capture-required contract reservation: publish one confirmed TikTok comment after an authorized live fixture proves current proof material and actor/root response binding.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible TikTok comment on the exact confirmed post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact comment text",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "comments.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: publish one confirmed TikTok reply after an authorized live fixture proves actor/root/parent response binding.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible TikTok reply to the exact confirmed comment.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok root post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "comment_id": {
+            "type": "string",
+            "description": "Exact decimal parent TikTok comment ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact reply text",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "post_id",
+          "comment_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: send one confirmed TikTok DM, optionally with one reviewed attachment, after target and delivery response binding are proven.",
+      "risk": "R3",
+      "sideEffect": "Sends one externally visible TikTok direct message to the exact confirmed user or conversation.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "target_kind": {
+            "type": "string",
+            "description": "Send to an existing conversation or one exact TikTok user",
+            "enum": [
+              "conversation",
+              "user"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Exact conversation or user identifier selected by target_kind",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact direct-message text",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional reviewed TikTok DM video",
+            "maxBytes": 536870912,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.publish": {
+      "description": "Capture-required contract reservation: publish one confirmed native TikTok text post after actor, audience, and returned post binding are proven.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible TikTok text post with the exact confirmed content and audience.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact native text-post content",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "audience": {
+            "type": "string",
+            "description": "Exact reviewed audience option",
+            "enum": [
+              "public",
+              "friends",
+              "private"
+            ]
+          }
+        },
+        "required": [
+          "body",
+          "audience"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "posts.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "media.publish": {
+      "description": "Capture-required contract reservation: upload and publish one strictly materialized MP4 through the first-party Studio upload, multipart transfer, commit, project publish, and status families only after signing, authenticated response, actor, and independent post-readback contracts are captured.",
+      "risk": "R3",
+      "sideEffect": "Uploads and publishes one externally visible TikTok media post with the exact confirmed bytes, caption, settings, and audience.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "media": {
+            "type": "file",
+            "description": "Exactly one stable plan-bound ISO BMFF MP4",
+            "maxBytes": 134217728,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          },
+          "caption": {
+            "type": "string",
+            "description": "Optional exact media caption",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "audience": {
+            "type": "string",
+            "description": "Exact reviewed audience option",
+            "enum": [
+              "public",
+              "friends",
+              "private"
+            ]
+          },
+          "allow_comments": {
+            "type": "boolean",
+            "description": "Exact desired comment permission"
+          },
+          "allow_duet": {
+            "type": "boolean",
+            "description": "Exact desired duet permission"
+          },
+          "allow_stitch": {
+            "type": "boolean",
+            "description": "Exact desired stitch permission"
+          },
+          "allow_content_reuse": {
+            "type": "boolean",
+            "description": "Exact desired content-reuse permission"
+          },
+          "allow_ai_remix": {
+            "type": "boolean",
+            "description": "Exact desired AI-remix permission"
+          },
+          "contains_synthetic_media": {
+            "type": "boolean",
+            "description": "Explicit creator declaration for AI-generated or significantly AI-edited content"
+          },
+          "commercial_content": {
+            "type": "string",
+            "description": "Explicit conservative commercial-content declaration supported by this narrow reservation",
+            "enum": [
+              "none"
+            ]
+          }
+        },
+        "required": [
+          "media",
+          "audience",
+          "allow_comments",
+          "allow_duet",
+          "allow_stitch",
+          "allow_content_reuse",
+          "allow_ai_remix",
+          "contains_synthetic_media",
+          "commercial_content"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "media.publish",
+        "contractVersion": 2,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.schedule": {
+      "description": "Capture-required contract reservation: schedule one confirmed TikTok media post after exact Studio upload, time-zone, audience, and schedule bindings are proven.",
+      "risk": "R3",
+      "sideEffect": "Uploads and schedules one TikTok media post for externally visible publication at the exact confirmed time.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "media": {
+            "type": "file",
+            "description": "Exact reviewed image or video bytes",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "video/mp4",
+              "video/quicktime"
+            ]
+          },
+          "caption": {
+            "type": "string",
+            "description": "Optional exact scheduled-post caption",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "scheduled_at": {
+            "type": "string",
+            "description": "Exact reviewed ISO 8601 publication timestamp with offset",
+            "minLength": 20,
+            "maxLength": 64
+          },
+          "audience": {
+            "type": "string",
+            "description": "Exact reviewed audience option",
+            "enum": [
+              "public",
+              "friends",
+              "private"
+            ]
+          }
+        },
+        "required": [
+          "media",
+          "scheduled_at",
+          "audience"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "content.schedule",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.share": {
+      "description": "Capture-required contract reservation: share one exact TikTok post to one confirmed internal recipient only after destination and delivery response binding are proven.",
+      "risk": "R3",
+      "sideEffect": "Sends one externally visible TikTok share to the exact confirmed user or conversation.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "target_kind": {
+            "type": "string",
+            "description": "Share to an existing conversation or one exact TikTok user",
+            "enum": [
+              "conversation",
+              "user"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Exact conversation or user identifier selected by target_kind",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "post_id",
+          "target_kind",
+          "target_id"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "content.share",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.repost": {
+      "description": "Capture-required contract reservation: set one exact TikTok repost state only after the current upvote mutation, actor/target response binding, and independent readback are proven.",
+      "risk": "R3",
+      "sideEffect": "Creates or removes the authenticated viewer's externally visible repost of the exact confirmed TikTok post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal TikTok post ID",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "reposted": {
+            "type": "boolean",
+            "description": "Exact desired repost state"
+          }
+        },
+        "required": [
+          "post_id",
+          "reposted"
+        ]
+      },
+      "webSession": {
+        "site": "tiktok",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}

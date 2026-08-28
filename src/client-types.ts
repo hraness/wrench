@@ -202,11 +202,50 @@ export type WrenchClientRunReceipt = WrenchClientRunReceiptCommon & (
     }
 );
 
-export type WrenchClientInvocationResult = {
-  readonly receipt: WrenchClientRunReceipt;
-  readonly output: unknown;
+export type WrenchClientReadFailure =
+  | {
+      readonly category: "target-unavailable";
+      readonly retryDisposition: "do-not-retry";
+    }
+  | {
+      readonly category: "auth-repair-required";
+      readonly retryDisposition: "repair-auth";
+    }
+  | {
+      readonly category:
+        | "account-mismatch"
+        | "contract-drift"
+        | "cleanup-required";
+      readonly retryDisposition: "do-not-retry";
+    }
+  | {
+      readonly category:
+        | "provider-throttled"
+        | "provider-temporary"
+        | "operation-timeout";
+      readonly retryDisposition: "retry-once-after-60s";
+    };
+
+type WrenchClientInvocationCommon = {
   readonly replayed: boolean;
 };
+
+export type WrenchClientInvocationResult = WrenchClientInvocationCommon & (
+  | {
+      /** Receipt-bound top-level discriminant for ordinary control flow. */
+      readonly status: "succeeded";
+      readonly receipt: WrenchClientRunReceipt & { readonly status: "succeeded" };
+      readonly output: unknown;
+      readonly readFailure?: never;
+    }
+  | {
+      /** Receipt-bound top-level discriminant for ordinary control flow. */
+      readonly status: "failed";
+      readonly receipt: WrenchClientRunReceipt & { readonly status: "failed" };
+      readonly output: null;
+      readonly readFailure: WrenchClientReadFailure;
+    }
+);
 
 export type RevalidatedCapabilityCurrent =
   | Extract<ReadProjectionCacheResult, { readonly status: "hit" }>
@@ -234,7 +273,10 @@ export declare function revalidateCapability(
   options?: RevalidateCapabilityOptions,
 ): Promise<RevalidatedCapability>;
 
-/** Invoke one live R1 capability and return its validated receipt and output. */
+/**
+ * Invoke one live R1 capability and return a discriminated result whose failed
+ * branch carries the closed read-failure category and retry disposition.
+ */
 export declare function invokeCapability(
   request: CapabilityReadRequest,
   options?: InvokeCapabilityOptions,
@@ -242,7 +284,8 @@ export declare function invokeCapability(
 
 /**
  * Synchronous form for local CLI applications that cannot make their command
- * surface asynchronous. It retains the same pre/post identity fences.
+ * surface asynchronous. It retains the same pre/post identity fences and
+ * discriminated failure policy.
  */
 export declare function invokeCapabilitySync(
   request: CapabilityReadRequest,

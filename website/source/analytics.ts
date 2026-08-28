@@ -28,6 +28,10 @@ const CANONICAL_ROUTES = new Map<string, Readonly<{ canonicalPath: string; pageK
     canonicalPath: "/vms-cannot-contain-agents/",
     pageKind: "vms_cannot_contain_agents",
   }],
+  ["/paypal-grapheneos-attestation", {
+    canonicalPath: "/paypal-grapheneos-attestation/",
+    pageKind: "paypal_grapheneos_attestation",
+  }],
 ]);
 
 const ALLOWED_EVENTS = new Set([

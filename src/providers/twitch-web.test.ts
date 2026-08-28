@@ -139,7 +139,7 @@ describe("Twitch profile response binding", () => {
     ])).toThrow("must be one exact GraphQL batch result");
     expect(() => parseTwitchCurrentViewerResponse([{
       data: { currentUser: null },
-    }])).toThrow("must be an object");
+    }])).toThrow("Twitch selected session is not signed in");
   });
 
   test("rejects missing, nonnumeric, negative, fractional, and unsafe counts", () => {

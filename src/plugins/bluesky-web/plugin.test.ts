@@ -19,7 +19,7 @@ const auth = {
 
 describe("Bluesky provider plugin", () => {
   test("versions the public profile-read source closure independently", () => {
-    expect(blueskyWebPlugin.version).toBe("1.3.0");
+    expect(blueskyWebPlugin.version).toBe("1.4.0");
   });
 
   test("advertises the observed exact handle-bound profile read", () => {

@@ -22,26 +22,20 @@ page's rounded display as a fallback.
 
 ## Hraness account manifest
 
-Collect these reads in this order. The auth IDs are local Wrench locators, not
-credentials. Wrench probes and binds each authenticated provider subject.
+The authoritative ordered collection contract is the strict
+[Hraness social-profile manifest](hraness-social-profile-stats.json). Load it
+as foreign JSON, reject unknown fields and duplicate account keys, then flatten
+each account's ordered `reads` array without changing order. Its auth IDs are
+local Wrench locators, not credentials.
 
-| Consumer key | Adapter / operation | Auth | Input | Required exact metrics |
-| --- | --- | --- | --- | --- |
-| `x-hraness` | `x-web profiles.read` | `x-chrome` | `{"handle":"hraness"}` | followers, following |
-| `x-hrawdog` | `x-web profiles.read` | `x-chrome` | `{"handle":"hrawdog"}` | followers, following |
-| `linkedin-personal` | `linkedin-web profiles.read` | `linkedin-chrome` | `{"profile_url":"https://www.linkedin.com/in/hraness","include_connections":true}` | followers, connections |
-| `linkedin-company-hraness` | `linkedin-web organizations.read` | `linkedin-chrome` | `{"organization_url":"https://www.linkedin.com/company/hraness"}` | followers |
-| `youtube-hraness` | `youtube-web profiles.read` | `youtube-chrome` | `{"profile":"@hraness"}` | subscribers, videos, views |
-| `twitch-hranessdotcom` | `twitch-web profiles.read` | `twitch-chrome` | `{"profile":"hranessdotcom"}` | followers |
-| `bluesky-hraness` | `bluesky-web profiles.read` | public | `{"handle":"hraness.bsky.social"}` | followers, following, posts |
-| `instagram-hraness` | `instagram-web profiles.read` | `instagram-chrome` | `{"profile":"hraness"}` | followers, following, posts |
-| `threads-hraness` | `threads-web profiles.read` | `threads-chrome` | `{"profile":"hraness"}` | followers, recentViews |
-| `substack-hraness` | `substack-web profiles.read` | `substack-chrome` | `{"profile":"hraness"}` | followers |
-| `substack-hraness` | `substack-web organizations.read` | `substack-chrome` | `{"organization":"hraness"}` | freeSubscribers, paidSubscribers |
-| `github-0thernet` | `github-web profiles.read` | public | `{"username":"0thernet"}` | followers, following, publicRepositories |
-| `github-hraness` | `github-web organizations.read` | public | `{"organization":"hraness"}` | stars, followers |
-| `tiktok-hraness` | `tiktok-web profiles.read` | `tiktok-chrome` | `{"profile":"hraness"}` | followers, following, likes |
-| `reddit-bgdotjpg` | `reddit-web profiles.read` | `reddit-chrome` | `{"profile":"bgdotjpg"}` | followers, karma, contributions |
+Before invoking a read, confirm that the current installed adapter still owns
+the named operation with `state: "observed"`, `risk: "R1"`, and
+`sideEffect: "none"`. Confirm its public or authenticated authority kind, exact
+input, output provider and canonical target URL, metric keys, expected gaps,
+and `requiredDelayBeforeMs`. A mismatch is a categorical contract gap for that
+read. Do not reinterpret the manifest or fall back to a different capability.
+The current X accounts are `x-hraness` and `x-lifedaysleft`.
+The second exact handle is `lifedaysleft`.
 
 Bluesky and GitHub profile and organization statistics come from public target-bound APIs.
 Invoke these rows without `--auth`. Wrench assigns each reviewed operation a
@@ -96,11 +90,28 @@ printf '%s' '{"organization":"hraness"}' \
   | wrench invoke github-web organizations.read --input - --json
 ```
 
+`status: "failed"` R1 envelopes include one secret-free `readFailure`
+projection with a closed `category` and its only valid
+`retryDisposition`. A caller may make at most one retry for the read, after
+60 seconds, and only when the disposition is
+`retry-once-after-60s`. A transport retry consumes that same budget. Never
+retry `repair-auth` or `do-not-retry`; report the bounded category and
+continue with the next independent row. Do not parse receipt errors or
+provider exception text to invent a retry policy. Do not clear durable cleanup
+admission or reboot a host without separate operator authorization.
+
 `github-web organizations.read` first binds the exact organization and its
 declared public repository count, then completes the fixed public repository
 pagination before summing `stargazers_count`. It returns `stars` only when the
 complete repository set is available and bound; it never substitutes a partial
 page, a rounded display total, or a prior observation.
+
+The manifest marks Threads `recentViews` with the exact unavailable reason
+`not-authorized` as an expected categorical gap until the account becomes
+eligible. Keep reporting only that reason as unavailable. Treat
+`provider-drift`, `not-exposed`, and every other unavailable reason as an
+unexpected failure. Accept the metric normally once the same target-bound read
+returns an exact available count.
 
 Do not put an auth ID, provider receipt, cache key, run ID, subject identifier,
 or raw provider response in the consumer snapshot. Do not print or persist

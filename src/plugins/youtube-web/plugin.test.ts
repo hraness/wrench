@@ -19,7 +19,7 @@ const auth = {
 
 describe("YouTube provider plugin", () => {
   test("versions the narrowed MP4 and authored-video delete reservations", () => {
-    expect(youtubeWebPlugin.version).toBe("1.2.0");
+    expect(youtubeWebPlugin.version).toBe("1.3.0");
     const videoPublish = binding.operations.find((operation) =>
       operation.name === "media.publish");
     expect(videoPublish?.contractVersion).toBe(2);

@@ -13,6 +13,7 @@ import type {
   WebSessionExecution,
   WebSessionOperationDeadline,
 } from "../web-session-execution";
+import { failedProviderRead, type ProviderReadFailureStage } from "./read-failure";
 import {
   TWITCH_GQL_ORIGIN,
   TWITCH_GQL_PATH,
@@ -24,6 +25,8 @@ import {
   twitchCurrentViewerRequest,
   twitchLogin,
   twitchProfileRequest,
+  TwitchProfileTargetUnavailableError,
+  TwitchViewerAuthRepairRequiredError,
   type TwitchPersistedQueryRequest,
   type TwitchViewer,
 } from "./twitch-web";
@@ -174,33 +177,50 @@ export async function executeTwitchWebOperation(
   // R1 performs no dispatch and never invokes mutation lifecycle callbacks.
   void options.beforeDispatch;
   void options.afterDispatchVerified;
-  const client = await createWebSessionClient(TWITCH_GQL_ORIGIN, auth, {
-    timeoutMs: recipe.timeoutMs,
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-    ...(options.operationDeadline === undefined
-      ? {}
-      : { operationDeadline: options.operationDeadline }),
-    ...(options.dependencies === undefined
-      ? {}
-      : { dependencies: options.dependencies }),
-  });
-  const viewer = await currentViewer(client);
-  requireBoundViewer(auth, viewer);
-  const response = await requestTwitchBatch(
-    client,
-    twitchProfileRequest(profile),
-    `https://www.twitch.tv/${profile}/about`,
-    recipe.maxOutputBytes,
-  );
-  const output = projectTwitchProfileStats(
-    parseTwitchProfileResponse(response, profile, viewer),
-    observedAt(options.dependencies),
-  );
-  return {
-    status: "succeeded",
-    output,
-    finalUrl: output.target.url,
-    dispatchStarted: false,
-    dispatch: { planned: 0, started: 0, verified: 0 },
-  };
+  const finalUrl = `https://www.twitch.tv/${profile}`;
+  let stage: ProviderReadFailureStage = "bootstrap";
+  try {
+    const client = await createWebSessionClient(TWITCH_GQL_ORIGIN, auth, {
+      timeoutMs: recipe.timeoutMs,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(options.dependencies === undefined
+        ? {}
+        : { dependencies: options.dependencies }),
+    });
+    stage = "identity";
+    const viewer = await currentViewer(client);
+    requireBoundViewer(auth, viewer);
+    stage = "target";
+    const response = await requestTwitchBatch(
+      client,
+      twitchProfileRequest(profile),
+      `${finalUrl}/about`,
+      recipe.maxOutputBytes,
+    );
+    const output = projectTwitchProfileStats(
+      parseTwitchProfileResponse(response, profile, viewer),
+      observedAt(options.dependencies),
+    );
+    return {
+      status: "succeeded",
+      output,
+      finalUrl: output.target.url,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    };
+  } catch (error) {
+    return failedProviderRead("Twitch profile", error, finalUrl, {
+      stage,
+      authenticated: true,
+      accountMismatch: (candidate) => candidate.message.includes("no longer matches")
+        || candidate.message.includes("did not bind the current viewer ID"),
+      authRepairRequired: (candidate) => candidate.message.includes("auth-token cookie")
+        || candidate.message.includes("auth locator bound")
+        || candidate instanceof TwitchViewerAuthRepairRequiredError,
+      targetUnavailable: (candidate) => candidate instanceof TwitchProfileTargetUnavailableError,
+    });
+  }
 }

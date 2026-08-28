@@ -411,14 +411,20 @@ describe("Reddit authenticated internal API runtime", () => {
 
   test("rejects a profile handle that does not match the bound viewer", async () => {
     const calls: CapturedRequest[] = [];
-    expect(executeRedditWebOperation(
+    expect(await executeRedditWebOperation(
       recipe("profiles.read"),
       { profile: "another_viewer" },
       redditAuth,
       {
         dependencies: dependencies(calls, () => jsonResponse(viewerResponse())),
       },
-    )).rejects.toThrow("requested profile did not match");
+    )).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
+    });
     expect(calls).toHaveLength(1);
   });
 
