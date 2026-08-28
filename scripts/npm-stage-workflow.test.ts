@@ -762,9 +762,18 @@ esac
     ]);
     const manifest = JSON.parse(manifestText) as { readonly version: string };
     const exactPackage = `@hraness/wrench@${manifest.version}`;
+    const oneTimeBootstrap =
+      "This section records the one-time bootstrap of `@hraness/wrench@0.15.1`.";
+    const doNotReuseBootstrap =
+      "Do not reuse these bootstrap commands for any\nlater version.";
+    const laterVersionRoute =
+      "Follow [Stage a later version](#stage-a-later-version) instead.";
 
     for (const required of [
       exactPackage,
+      oneTimeBootstrap,
+      doNotReuseBootstrap,
+      laterVersionRoute,
       "npm publish \"$wrench_npm_archive\"",
       "npm trust github @hraness/wrench",
       "--environment npm-stage",
@@ -785,6 +794,10 @@ esac
     ] as const) {
       expect(guide).toContain(required);
     }
+    expect(guide.match(/^## Stage a later version$/gmu)).toHaveLength(1);
+    expect(guide).not.toContain("## Publish later versions");
+    expect(guide.indexOf(oneTimeBootstrap)).toBeLessThan(guide.indexOf(doNotReuseBootstrap));
+    expect(guide.indexOf(doNotReuseBootstrap)).toBeLessThan(guide.indexOf(laterVersionRoute));
     const commands = npmCommands(guide);
     expect(commands.length).toBeGreaterThan(0);
     for (const command of commands) expect(command).toContain(`--registry=${npmRegistry}`);
