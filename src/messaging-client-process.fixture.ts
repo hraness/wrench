@@ -1,6 +1,6 @@
 import { mock } from "bun:test";
 import * as childProcess from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -60,7 +60,8 @@ async function waitForStatus(path: string): Promise<{ parent: number; descendant
 }
 
 for (const mode of ["abort", "timeout", "stdout-overflow", "stderr-overflow"] as const) {
-  const status = join(mkdtempSync(join(tmpdir(), "wrench-messaging-lifecycle-status-")), "status.json");
+  const statusRoot = mkdtempSync(join(tmpdir(), "wrench-messaging-lifecycle-status-"));
+  const status = join(statusRoot, "status.json");
   const controller = new AbortController();
   const operation = discoverMessagingRoutes(request, {
     environment: {
@@ -85,4 +86,5 @@ for (const mode of ["abort", "timeout", "stdout-overflow", "stderr-overflow"] as
     throw new Error(`${mode} left an owned process alive`);
   }
   if (existsSync(tree.temp)) throw new Error(`${mode} left a private artifact directory`);
+  rmSync(statusRoot, { recursive: true, force: true });
 }
