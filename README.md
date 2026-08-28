@@ -44,7 +44,7 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-Wrench v0.16.1 supports actions for Beeper, Bluesky, Facebook,
+Wrench v0.16.2 supports actions for 19 services: Beeper, Bluesky, Facebook,
 Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker News, Instagram,
 iMessage, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and
 YouTube.
@@ -111,7 +111,7 @@ install the CLI if it is missing. Start a new agent session after installation.
 Install the current release from npm:
 
 ```sh
-bun add --global @hraness/wrench@0.16.1
+bun add --global @hraness/wrench@0.16.2
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -135,7 +135,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add @hraness/wrench@0.16.1
+bun add @hraness/wrench@0.16.2
 ```
 
 ```ts
@@ -161,24 +161,33 @@ cross-provider reads. Importing any SDK entrypoint does not start the CLI.
 Importing the package root also does not inspect local state or load provider
 runtimes.
 
-Consumers that need one strictly parsed live receipt and output without the
-cache orchestration can use the generic client directly:
+Consumers that need one strictly parsed live result without cache orchestration
+can use the generic client directly:
 
 ```ts
 import { invokeCapabilitySync } from "@hraness/wrench/client"
 
-const { receipt, output } = invokeCapabilitySync({
+const result = invokeCapabilitySync({
   adapterId: "beeper-local",
   operationId: "contacts.list",
   authId: "beeper-main",
   input: { limit: 100 },
 })
+
+if (result.status === "failed") {
+  handleReadFailure(result.readFailure)
+} else {
+  render(result.output)
+}
 ```
 
 The asynchronous `invokeCapability` form accepts an abort signal. Both forms
 run Wrench's execution and projection identity fences before and after the
-read, then return the validated CLI receipt instead of asking a consumer to
-parse the raw process envelope.
+read, then return a discriminated result instead of asking a consumer to parse
+the raw process envelope. The receipt-bound top-level `status` narrows both
+branches in ordinary TypeScript control flow. Failed results carry one closed
+`readFailure` category and retry disposition. Consumers use that policy field
+for control flow and never inspect the receipt's bounded diagnostic text.
 
 ## Capture and inspect
 

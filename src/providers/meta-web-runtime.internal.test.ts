@@ -13,6 +13,7 @@ import type { StrictCookie } from "@hraness/kb/clip/cookies";
 import type { WrenchAuth } from "../auth";
 import { sealCursorToken } from "../cursor-token";
 import { canonicalJson, sha256, type WebSessionRecipe } from "../model";
+import { OperationDeadline } from "../operation-deadline";
 import {
   executeMetaWebOperation,
   instagramConfigureDispatchDecision,
@@ -1217,6 +1218,48 @@ describe("Meta authenticated internal-data runtime", () => {
     }
   });
 
+  test("projects only an exact Threads signed-out session as auth repair", async () => {
+    for (const [loggedOut, expectedCategory, expectedDisposition] of [
+      [true, "auth-repair-required", "repair-auth"],
+      ["true", "contract-drift", "do-not-retry"],
+    ] as const) {
+      const calls: Call[] = [];
+      const result = await executeMetaWebOperation(
+        recipe("threads", "profiles.read"),
+        { profile: "viewer" },
+        auth("threads"),
+        {
+          dependencies: dependencies("threads", calls, (call) => {
+            if (call.url.pathname === "/") {
+              return new Response(script({
+                require: [[
+                  "BarcelonaSessionInfo",
+                  [],
+                  { is_th_session: true, is_logged_out: loggedOut },
+                  1,
+                ]],
+              }), {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              });
+            }
+            throw new Error(`unexpected Threads signed-out request ${call.url.href}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        readFailure: {
+          category: expectedCategory,
+          retryDisposition: expectedDisposition,
+        },
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      });
+      expect(calls.map((call) => call.url.pathname)).toEqual(["/"]);
+    }
+  });
+
   test("reads exact self-profile metrics without entering the dispatch ledger", async () => {
     const observedAt = Date.UTC(2026, 7, 21, 15, 0, 0);
     const instagramCalls: Call[] = [];
@@ -1355,6 +1398,229 @@ describe("Meta authenticated internal-data runtime", () => {
       "/insights",
     ]);
     expect(threadsDispatches).toBe(0);
+
+    const supplementalFailureCalls: Call[] = [];
+    const threadsWithUnavailableInsights = await executeMetaWebOperation(
+      recipe("threads", "profiles.read"),
+      { profile: "viewer" },
+      auth("threads"),
+      {
+        dependencies: {
+          ...dependencies("threads", supplementalFailureCalls, (call) => {
+            if (call.url.pathname === "/") {
+              return new Response(threadsHtml, {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              });
+            }
+            if (call.url.pathname === "/@viewer") {
+              return new Response(profileHtml, {
+                status: 200,
+                headers: { "content-type": "text/html" },
+              });
+            }
+            if (call.url.pathname === "/insights") {
+              return new Response("temporarily unavailable", {
+                status: 503,
+                headers: { "content-type": "text/html" },
+              });
+            }
+            throw new Error(`unexpected Threads profile request ${call.url.href}`);
+          }),
+          now: () => observedAt,
+        },
+      },
+    );
+    expect(threadsWithUnavailableInsights).toMatchObject({
+      status: "succeeded",
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+      output: {
+        completeness: "partial",
+        metrics: {
+          followers: { status: "available", value: 99, precision: "exact" },
+          recentViews: { status: "unavailable", reason: "not-authorized" },
+        },
+      },
+    });
+    expect(supplementalFailureCalls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      "/@viewer",
+      "/insights",
+    ]);
+
+    for (const failure of ["cancelled", "timed-out"] as const) {
+      const deadlineCalls: Call[] = [];
+      let now = 0;
+      const controller = new AbortController();
+      const operationDeadline = new OperationDeadline(100, failure === "cancelled"
+        ? { signal: controller.signal }
+        : {
+            clock: {
+              now: () => now,
+              schedule: () => () => undefined,
+            },
+          });
+      try {
+        const result = await executeMetaWebOperation(
+          recipe("threads", "profiles.read"),
+          { profile: "viewer" },
+          auth("threads"),
+          {
+            operationDeadline,
+            dependencies: {
+              ...dependencies("threads", deadlineCalls, (call) => {
+                if (call.url.pathname === "/") {
+                  return new Response(threadsHtml, {
+                    status: 200,
+                    headers: { "content-type": "text/html" },
+                  });
+                }
+                if (call.url.pathname === "/@viewer") {
+                  return new Response(profileHtml, {
+                    status: 200,
+                    headers: { "content-type": "text/html" },
+                  });
+                }
+                if (call.url.pathname === "/insights") {
+                  if (failure === "cancelled") controller.abort();
+                  else now = 100;
+                  return new Response("private deadline response", {
+                    status: 503,
+                    headers: { "content-type": "text/html" },
+                  });
+                }
+                throw new Error(`unexpected Threads deadline request ${call.url.href}`);
+              }),
+              now: () => observedAt,
+            },
+          },
+        );
+        expect(result).toMatchObject({
+          status: "failed",
+          output: null,
+          dispatchStarted: false,
+          dispatch: { planned: 0, started: 0, verified: 0 },
+          readFailure: failure === "timed-out"
+            ? {
+                category: "operation-timeout",
+                retryDisposition: "retry-once-after-60s",
+              }
+            : {
+                category: "contract-drift",
+                retryDisposition: "do-not-retry",
+              },
+        });
+        expect(JSON.stringify(result)).not.toContain("private deadline response");
+        expect(deadlineCalls.map((call) => call.url.pathname)).toEqual([
+          "/",
+          "/@viewer",
+          "/insights",
+        ]);
+      } finally {
+        operationDeadline.dispose();
+      }
+    }
+  });
+
+  test("projects target-stage Meta viewer-binding changes as account mismatch", async () => {
+    const instagramCalls: Call[] = [];
+    const instagram = await executeMetaWebOperation(
+      recipe("instagram", "profiles.read"),
+      { profile: "viewer" },
+      auth("instagram"),
+      {
+        dependencies: dependencies("instagram", instagramCalls, (call) => {
+          if (call.url.pathname === "/") {
+            return new Response(instagramHtml, {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            });
+          }
+          if (call.url.pathname === "/api/v1/users/web_profile_info/") {
+            return new Response(JSON.stringify({
+              status: "ok",
+              data: {
+                user: {
+                  id: "99999",
+                  username: "viewer",
+                  edge_followed_by: { count: 101 },
+                  edge_follow: { count: 20 },
+                  edge_owner_to_timeline_media: { count: 7 },
+                },
+              },
+            }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          throw new Error(`unexpected Instagram profile request ${call.url.href}`);
+        }),
+      },
+    );
+    expect(instagram).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(instagramCalls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      "/api/v1/users/web_profile_info/",
+    ]);
+
+    const threadsCalls: Call[] = [];
+    const threads = await executeMetaWebOperation(
+      recipe("threads", "profiles.read"),
+      { profile: "viewer" },
+      auth("threads"),
+      {
+        dependencies: dependencies("threads", threadsCalls, (call) => {
+          if (call.url.pathname === "/") {
+            return new Response(threadsHtml, {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            });
+          }
+          if (call.url.pathname === "/@viewer") {
+            return new Response(threadsHtml + script({
+              profile: {
+                pk: "99999",
+                username: "viewer",
+                follower_count: 99,
+              },
+            }), {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            });
+          }
+          if (call.url.pathname === "/insights") {
+            return new Response("<main></main>", {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            });
+          }
+          throw new Error(`unexpected Threads profile request ${call.url.href}`);
+        }),
+      },
+    );
+    expect(threads).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(threadsCalls.map((call) => call.url.pathname)).toEqual([
+      "/",
+      "/@viewer",
+      "/insights",
+    ]);
   });
 
   test("uploads one plan-bound Threads PNG, rebinds fresh config, and verifies the exact permalink readback", async () => {

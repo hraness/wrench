@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "facebook-marketplace-web",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "displayName": "Facebook Marketplace (Authenticated Internal API)",
   "surfaceId": "facebook-marketplace",
   "origins": [

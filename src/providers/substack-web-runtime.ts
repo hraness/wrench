@@ -24,6 +24,7 @@ import type {
   WebSessionOperationDeadline,
   WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
+import { failedProviderRead } from "./read-failure";
 import { substackMp4Metadata } from "./substack-video-mp4";
 import {
   SUBSTACK_WEB_OPERATION_NAMES,
@@ -39,6 +40,7 @@ import {
   normalizeSubstackProfileStatsResponse,
   parseSubstackLoggedInResponse,
   parseSubstackPreloadsHtml,
+  SubstackAuthRepairRequiredError,
   type SubstackFeedName,
   type SubstackWebOperationName,
   type SubstackWebViewer,
@@ -2696,15 +2698,71 @@ export async function executeSubstackWebOperation(
     && recipe.action !== "content.delete"
   ) throw new Error(`Substack authenticated web operation ${recipe.action} has no executable reviewed contract`);
 
-  const client = await createWebSessionClient(SUBSTACK_ORIGIN, auth, {
-    timeoutMs: recipe.timeoutMs,
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-    ...(options.operationDeadline === undefined
-      ? {}
-      : { operationDeadline: options.operationDeadline }),
-    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
-  });
-  const viewer = await requireBoundViewer(client, auth, recipe.maxOutputBytes);
+  const statisticsRead = recipe.action === "profiles.read"
+    || recipe.action === "organizations.read";
+  const statisticsFinalUrl = recipe.action === "profiles.read"
+    ? `https://substack.com/@${substackProfileInput(input)}`
+    : recipe.action === "organizations.read"
+      ? `https://${substackOrganizationInput(input)}.substack.com/`
+      : null;
+  let client: WebSessionClient;
+  try {
+    client = await createWebSessionClient(SUBSTACK_ORIGIN, auth, {
+      timeoutMs: recipe.timeoutMs,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+    });
+  } catch (error) {
+    if (!statisticsRead) throw error;
+    return failedProviderRead("Substack statistics", error, statisticsFinalUrl, {
+      stage: "bootstrap",
+      authenticated: true,
+    });
+  }
+  let viewer: SubstackWebViewer;
+  try {
+    viewer = await requireBoundViewer(client, auth, recipe.maxOutputBytes);
+  } catch (error) {
+    if (!statisticsRead) throw error;
+    return failedProviderRead("Substack statistics", error, statisticsFinalUrl, {
+      stage: "identity",
+      authenticated: true,
+      accountMismatch: (candidate) => candidate.message.includes("no longer matches"),
+      authRepairRequired: (candidate) => candidate.message.includes("auth locator bound")
+        || candidate instanceof SubstackAuthRepairRequiredError,
+    });
+  }
+  if (statisticsRead) {
+    try {
+      const output = recipe.action === "profiles.read"
+        ? await readProfile(
+          client,
+          recipe,
+          viewer,
+          input,
+          options.dependencies?.now ?? Date.now,
+        )
+        : await readOrganization(recipe, input, auth, viewer, options);
+      return {
+        status: "succeeded",
+        output,
+        finalUrl: statisticsFinalUrl,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      };
+    } catch (error) {
+      return failedProviderRead("Substack statistics", error, statisticsFinalUrl, {
+        stage: "target",
+        authenticated: true,
+        accountMismatch: (candidate) => candidate.message.includes("does not match the signed-in viewer")
+          || candidate.message.includes("viewer-owned publication")
+          || candidate.message.includes("did not bind the current viewer ID"),
+      });
+    }
+  }
   if (recipe.action === "posts.publish") {
     return executeSubstackPost(client, recipe, viewer, input, {
       ...options,
@@ -2743,22 +2801,6 @@ export async function executeSubstackWebOperation(
     case "messaging.list":
       output = await listMessages(client, recipe, input);
       break;
-    case "profiles.read": {
-      output = await readProfile(
-        client,
-        recipe,
-        viewer,
-        input,
-        options.dependencies?.now ?? Date.now,
-      );
-      finalUrl = `https://substack.com/@${substackProfileInput(input)}`;
-      break;
-    }
-    case "organizations.read": {
-      output = await readOrganization(recipe, input, auth, viewer, options);
-      finalUrl = `https://${substackOrganizationInput(input)}.substack.com/`;
-      break;
-    }
   }
   return {
     status: "succeeded",

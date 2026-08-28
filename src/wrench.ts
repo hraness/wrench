@@ -143,6 +143,7 @@ import {
   recoverWebSessionCleanupAdmissions,
 } from "./web-session-cleanup-admission";
 import {
+  readFailureProjection,
   WEB_SESSION_CLEANUP_JOIN_TIMEOUT_MS,
 } from "./web-session-execution";
 import { reconcileWebSessionRun } from "./web-session-recovery";
@@ -1831,6 +1832,10 @@ function directPreviewView(invocation: ReturnType<typeof prepareInvocation>): Re
 }
 
 export function invocationView(result: Awaited<ReturnType<typeof executeReadInvocation>>): Record<string, unknown> {
+  const readFailure = result.receipt.risk === "R1"
+    && result.receipt.status === "failed"
+    ? result.readFailure ?? readFailureProjection("contract-drift")
+    : undefined;
   return {
     ok: result.receipt.status === "succeeded" || result.receipt.status === "submitted",
     status: result.receipt.status,
@@ -1838,6 +1843,7 @@ export function invocationView(result: Awaited<ReturnType<typeof executeReadInvo
     replayed: result.replayed,
     receipt: result.receipt,
     output: result.output,
+    ...(readFailure === undefined ? {} : { readFailure }),
   };
 }
 

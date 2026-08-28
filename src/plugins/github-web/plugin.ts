@@ -24,10 +24,11 @@ const operations = webSessionContractOperations(
 export const githubWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "github-web",
-  version: "1.1.0",
+  version: "1.2.0",
   displayName: "GitHub Public Statistics API",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["providers/github-web.ts", "../../providers/github-web.ts"],
     ["providers/github-web-runtime.ts", "../../providers/github-web-runtime.ts"],
   ]),

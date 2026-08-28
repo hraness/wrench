@@ -87,7 +87,7 @@ describe("Bluesky public invocation authority", () => {
         providerPluginRegistry,
       );
       expect(query.identity).toMatchObject({
-        adapter: { id: "bluesky-web", version: "1.6.0" },
+        adapter: { id: "bluesky-web", version: "1.7.0" },
         operation: "profiles.read",
         input: { handle: "hraness.bsky.social" },
         auth: {

@@ -175,8 +175,18 @@ export function twitchProfileRequest(
 }
 
 /** Parse exactly one authenticated current-viewer result. */
+export class TwitchViewerAuthRepairRequiredError extends Error {
+  constructor() {
+    super("Twitch selected session is not signed in");
+    this.name = "TwitchViewerAuthRepairRequiredError";
+  }
+}
+
 export function parseTwitchCurrentViewerResponse(value: unknown): TwitchViewer {
   const data = exactGraphQlResult(value, "Twitch current-viewer response");
+  if (data.currentUser === null) {
+    throw new TwitchViewerAuthRepairRequiredError();
+  }
   const currentUser = record(
     data.currentUser,
     "Twitch current-viewer response[0].data.currentUser",
@@ -187,6 +197,13 @@ export function parseTwitchCurrentViewerResponse(value: unknown): TwitchViewer {
       "Twitch current-viewer response[0].data.currentUser.id",
     ),
   });
+}
+
+export class TwitchProfileTargetUnavailableError extends Error {
+  constructor() {
+    super("Twitch profile target is unavailable");
+    this.name = "TwitchProfileTargetUnavailableError";
+  }
 }
 
 /**
@@ -200,6 +217,7 @@ export function parseTwitchProfileResponse(
 ): TwitchProfile {
   const login = twitchLogin(requestedLogin, "requested Twitch login");
   const data = exactGraphQlResult(value, "Twitch profile response");
+  if (data.user === null) throw new TwitchProfileTargetUnavailableError();
   const user = record(data.user, "Twitch profile response[0].data.user");
   const responseId = twitchUserId(user.id, "Twitch profile response[0].data.user.id");
   if (responseId !== viewer.id) {

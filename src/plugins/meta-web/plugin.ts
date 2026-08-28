@@ -201,10 +201,11 @@ const archivedInstagramOperations = Object.freeze([
 export const metaWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "meta-web",
-  version: "1.3.0",
+  version: "1.4.0",
   displayName: "Meta Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["kernel/cursor-token.ts", "../../cursor-token.ts"],
     ["kernel/storage.ts", "../../storage.ts"],
     ["kernel/state-helper.ts", "../../state-helper.ts"],

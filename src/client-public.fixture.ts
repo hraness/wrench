@@ -389,7 +389,8 @@ const {
 const request = { adapterId, operationId, input } as const;
 const result = await revalidateCapability(request);
 if (
-  result.live.receipt.auth.id !== authority.id
+  result.live.status !== "succeeded"
+  || result.live.receipt.auth.id !== authority.id
   || result.live.receipt.auth.hash !== authorityHash
   || result.live.receipt.auth.kind !== authority.kind
   || result.live.output === null
@@ -418,12 +419,17 @@ syncLiveEnabled = true;
 const synchronous = invokeCapabilitySync(request);
 syncLiveEnabled = false;
 if (
-  synchronous.receipt.runId !== "00000000-0000-4000-8000-000000000199"
+  synchronous.status !== "succeeded"
+  || synchronous.receipt.runId !== "00000000-0000-4000-8000-000000000199"
   || synchronous.output === null
 ) throw new Error("synchronous invocation did not return its validated live envelope");
 
 const asynchronous = await invokeCapability(request);
-if (asynchronous.receipt.auth.id !== authority.id || asynchronous.output === null) {
+if (
+  asynchronous.status !== "succeeded"
+  || asynchronous.receipt.auth.id !== authority.id
+  || asynchronous.output === null
+) {
   throw new Error("asynchronous invocation did not return its validated live envelope");
 }
 

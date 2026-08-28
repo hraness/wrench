@@ -17,7 +17,7 @@ if (hackerNewsContracts === undefined) {
 export const hackerNewsWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "hacker-news-web",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "Hacker News Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [

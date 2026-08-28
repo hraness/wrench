@@ -9,7 +9,7 @@ if (binding?.transport !== "web-session-api") {
 
 describe("TikTok provider plugin", () => {
   test("versions the narrow MP4 and exact authored-post deletion reservations", () => {
-    expect(tiktokWebPlugin.version).toBe("1.2.0");
+    expect(tiktokWebPlugin.version).toBe("1.3.0");
     const publish = binding.operations.find((operation) => operation.name === "media.publish");
     expect(publish).toMatchObject({
       contractVersion: 2,

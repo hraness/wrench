@@ -18,10 +18,11 @@ if (substackContracts === undefined) {
 export const substackWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "substack-web",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "Substack Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["providers/substack-web.ts", "../../providers/substack-web.ts"],
     ["providers/substack-web-runtime.ts", "../../providers/substack-web-runtime.ts"],
     ["providers/substack-video-mp4.ts", "../../providers/substack-video-mp4.ts"],

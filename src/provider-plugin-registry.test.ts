@@ -276,27 +276,6 @@ describe("provider plugin definition and registry", () => {
       }
     }
   });
-
-  test("registers Twitch as a current-only durable authenticated-web identity", () => {
-    const plugin = providerPluginRegistry.get("twitch-web");
-    const binding = plugin?.bindings.find(({ surfaceId }) =>
-      surfaceId === "twitch");
-    expect(plugin?.version).toBe("1.0.0");
-    expect(binding?.transport).toBe("web-session-api");
-    if (binding === undefined) {
-      throw new Error("Twitch provider binding is unavailable");
-    }
-    const reviewed =
-      "325065c463ecf8d7b5e6202780c0392c1f7556baeb4a0b33fec1d3af937e5eb9";
-    expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
-      .toBe(reviewed);
-    expect(providerPluginRegistry.legacyContractImplementationHashes(
-      binding,
-      "profiles.read",
-      1,
-    )).toEqual([]);
-  });
-
   test("registers Gmail as a current-only durable provider identity", () => {
     const plugin = providerPluginRegistry.get("gmail-official");
     const binding = plugin?.bindings[0];
@@ -309,13 +288,143 @@ describe("provider plugin definition and registry", () => {
       .toEqual([]);
   });
 
+  test("retains each shipped web reader under its new reviewed identity", () => {
+    for (const expected of [
+      {
+        id: "x-web",
+        surface: "x",
+        version: "1.3.0",
+        current: "e464e4e97ed3cbf430c2008251e45e0024508c64357325882718cba31e6bf9ea",
+        prior: "03d906c92bfb5c30eb2d66e161ec67f7a081efa75e2a210a62b117df70b2af00",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "linkedin-web",
+        surface: "linkedin",
+        version: "1.5.0",
+        current: "97d1f8169a39f207db27145ef79de0f52ea98ad416ee69d4c5d3689d76211e2a",
+        prior: "f327a0baca1831436dc98be657c72b52f4e70494ff0e90204ac8c21a17f6a0ea",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "twitch-web",
+        surface: "twitch",
+        version: "1.1.0",
+        current: "c764d5733bcbbc60d7a5a8ced6d7294bfdfa53a5371567a63804104d9199157b",
+        prior: "325065c463ecf8d7b5e6202780c0392c1f7556baeb4a0b33fec1d3af937e5eb9",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "youtube-web",
+        surface: "youtube",
+        version: "1.3.0",
+        current: "06480c8aa798ec228e44b7b20a7b35f471400c44439b85548c3d8c513caf8c9d",
+        prior: "4d38cceaf871d6885abf76790b3d47b1e77b8b35dbb94bf5411d86f60202acb4",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "github-web",
+        surface: "github",
+        version: "1.2.0",
+        current: "42cf485abbc03c95495bd48b946e92f2bece607d26af20efda340699210c170d",
+        prior: "2764fb3c746755b2453279b5a6672f1460a139717c45e83520dfa5d9f753025a",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "bluesky-web",
+        surface: "bluesky",
+        version: "1.4.0",
+        current: "478d1e92d3f266dde61c4808104da239a0cc60d5a3c7000d7d2733792641e861",
+        prior: "f16f456fd06952bdd28e4bbed6e6faaed9b2c18899487224453e7ef314f585e8",
+        operation: "profiles.read",
+        contractVersion: 2,
+      },
+      {
+        id: "meta-web",
+        surface: "instagram",
+        version: "1.4.0",
+        current: "349991a62eb1b3e08c3917948554ba4e53016cf66f30d0d4513c2c0321548763",
+        prior: "cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "substack-web",
+        surface: "substack",
+        version: "1.3.0",
+        current: "3dfe5b506cef46b6534c7abd195a98df0a825a321bd0690eddae674e4592c041",
+        prior: "d35dda6043e224f4a2d6305a4a6aac9f05bef37ecfbfd087973394cdbe0c6811",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "tiktok-web",
+        surface: "tiktok",
+        version: "1.3.0",
+        current: "c0e36121d70d23753ce35019128be01e25d880393217332661de76e724c4169c",
+        prior: "59b037c542e5a32290c10a6d16a22e85a1f5b8c7b65d562fda67b6e04364f069",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "reddit-web",
+        surface: "reddit",
+        version: "1.3.0",
+        current: "646a29b320373f50ccdf9ae8b8b60d5147428f0f899a226480c2c5b009294d8a",
+        prior: "16e4e48609c12d5ffdaf47e622764e06cc9b3381c6b8ceb2c9f773fa9d99bdd9",
+        operation: "profiles.read",
+        contractVersion: 1,
+      },
+      {
+        id: "hacker-news-web",
+        surface: "hacker-news",
+        version: "1.1.0",
+        current: "66b9744caeb514cd9c4a749db4baaca84346098b162cdf4bcba653b7e9d9408a",
+        prior: "da3cdd6465b92ce933004fb9e3f2bf3dd48811e766079647d2cdaec43e507e1d",
+        operation: "feeds.read",
+        contractVersion: 1,
+      },
+      {
+        id: "whatsapp-linked-device",
+        surface: "whatsapp",
+        version: "1.1.0",
+        current: "b098d86a3fedee6c2a0f5bbd10b683af7ad4c27e4a633930d61e4ee188206a00",
+        prior: "4c58bd39ab0971764bc1361a8093f5965146c81e9be6785eb2c6c324765518c3",
+        operation: "contacts.list",
+        contractVersion: 1,
+      },
+    ] as const) {
+      const plugin = providerPluginRegistry.get(expected.id);
+      const binding = plugin?.bindings.find(({ surfaceId }) =>
+        surfaceId === expected.surface);
+      expect(plugin?.version).toBe(expected.version);
+      if (binding === undefined) {
+        throw new Error(`provider binding ${expected.id} is unavailable`);
+      }
+      expect(
+        providerPluginRegistry.contractImplementationHash(binding)
+          .toString("hex"),
+      ).toBe(expected.current);
+      expect(providerPluginRegistry.legacyContractImplementationHashes(
+        binding,
+        expected.operation,
+        expected.contractVersion,
+      ).map((hash) => hash.toString("hex"))).toContain(expected.prior);
+    }
+  });
+
   test("retains a distinct prior current implementation without replacing e71 readers", () => {
     const plugin = providerPluginRegistry.get("meta-web");
     const binding = plugin?.bindings.find(({ surfaceId }) => surfaceId === "instagram");
-    expect(plugin?.version).toBe("1.3.0");
+    expect(plugin?.version).toBe("1.4.0");
     if (binding === undefined) throw new Error("Meta provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
-      .toBe("cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b");
+      .toBe("349991a62eb1b3e08c3917948554ba4e53016cf66f30d0d4513c2c0321548763");
     expect(providerPluginRegistry.legacyContractImplementationHashes(binding, "contacts.list", 1)
       .map((hash) => hash.toString("hex")))
       .toContain("8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101");

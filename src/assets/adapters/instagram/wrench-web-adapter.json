@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "instagram-web",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "displayName": "Instagram (Authenticated Web API)",
   "surfaceId": "instagram",
   "origins": [
