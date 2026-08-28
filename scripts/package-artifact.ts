@@ -5,12 +5,18 @@ import { gunzipSync } from "node:zlib";
 const blockSize = 512;
 const packagePrefix = "package/";
 const maximumTarBytes = 12_000_000;
+// npm 11.19.0 packed the reviewed 0.16.2 inventory to 2,003,216 bytes on
+// GitHub Linux and 1,999,719 bytes on macOS. Keep narrowly bounded headroom
+// for gzip transport variance without relaxing the file or unpacked budgets.
+export const MAX_PACKED_BYTES = 2_025_000;
+export const MAX_PACKED_FILES = 450;
+export const MAX_UNPACKED_BYTES = 11_000_000;
 
 const packageBudget = Object.freeze({
-  entryCount: { min: 350, max: 450 },
-  fileCount: { min: 350, max: 450 },
-  packedBytes: { min: 1_600_000, max: 2_000_000 },
-  unpackedBytes: { min: 9_000_000, max: 11_000_000 },
+  entryCount: { min: 350, max: MAX_PACKED_FILES },
+  fileCount: { min: 350, max: MAX_PACKED_FILES },
+  packedBytes: { min: 1_600_000, max: MAX_PACKED_BYTES },
+  unpackedBytes: { min: 9_000_000, max: MAX_UNPACKED_BYTES },
 });
 
 const requiredPaths = Object.freeze([

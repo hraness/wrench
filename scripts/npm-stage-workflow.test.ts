@@ -8,6 +8,9 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 import {
   inspectPackageArtifact,
+  MAX_PACKED_BYTES,
+  MAX_PACKED_FILES,
+  MAX_UNPACKED_BYTES,
   type PackageArtifactInventory,
 } from "./package-artifact.js";
 import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
@@ -656,6 +659,12 @@ esac
   test("validates and npm-installs the exact reported tarball", async () => {
     const smoke = await readFile(packageSmokeUrl, "utf8");
 
+    expect({ MAX_PACKED_BYTES, MAX_PACKED_FILES, MAX_UNPACKED_BYTES }).toEqual({
+      MAX_PACKED_BYTES: 2_025_000,
+      MAX_PACKED_FILES: 450,
+      MAX_UNPACKED_BYTES: 11_000_000,
+    });
+
     for (const required of [
       "--archive <package.tgz> --pack-json <npm-pack.json>",
       "entryCount",
@@ -770,13 +779,15 @@ esac
       "--environment npm-stage",
       "--allow-stage-publish",
       "npm access set mfa=publish @hraness/wrench",
-      "require reviewer `0thernet`",
-      "`prevent_self_review: false`",
+      "The `npm-stage` environment has no",
+      "required deployment reviewers",
+      "**Stage exact package** to start automatically",
+      "human inspection and two-factor approval",
       "starts **Stage npm package** automatically",
       "manifest edit with an unchanged version succeeds without running the verify or",
       "OIDC jobs.",
       "Manual recovery",
-      "runs the same verification and protected-environment path",
+      "runs the same verification and main-only environment path",
       "scripts/npm-package-identity.ts",
       "--source-archive \"$wrench_npm_archive\"",
       "--registry-archive \"$wrench_registry_archive\"",
@@ -795,10 +806,13 @@ esac
 
     expect(agents).toContain("Follow `docs/publishing.md`");
     expect(agents).toContain("automatically enter the exact staging pipeline");
-    expect(agents).toContain("protected `npm-stage` environment");
-    expect(agents).toContain("required reviewer `0thernet`");
-    expect(agents).toContain("`prevent_self_review: false`");
-    expect(agents).toContain("verify that exact public artifact before creating its tag");
+    expect(agents).toContain("main-only `npm-stage` environment");
+    expect(agents).toContain("no required GitHub deployment reviewers");
+    expect(agents).toContain("CI must stage automatically after verification");
+    expect(agents).toContain("two-factor approval of the npm stage remain mandatory");
+    expect(agents).toContain("Verify that exact public artifact before creating its tag");
+    expect(`${guide}\n${agents}`).not.toContain("required reviewer `0thernet`");
+    expect(`${guide}\n${agents}`).not.toContain("prevent_self_review");
     expect(readme).toContain(exactPackage);
     expect(readme).not.toContain("not currently published on npm");
     expect(readme).not.toContain("registries are not supported install paths");

@@ -107,11 +107,12 @@ comparison before it creates the immutable GitHub Release.
 
 ## Configure stage-only trusted publishing
 
-Create a protected GitHub environment named `npm-stage` after the first package
-is public. Restrict it to `main`, require reviewer `0thernet`, and set
-`prevent_self_review: false` so the sole maintainer can approve the deployment.
-Do not add a secret to the environment. npm's separate staged-package inspection
-and two-factor approval remain mandatory before the version becomes public.
+Create a GitHub environment named `npm-stage` after the first package is public.
+Restrict its deployment branches to `main`. The `npm-stage` environment has no
+required deployment reviewers, so passing **Verify exact package** allows
+**Stage exact package** to start automatically. Do not add a secret to the
+environment. npm's separate human inspection and two-factor approval remain
+mandatory before the version becomes public.
 
 If the current npm trust relationship does not name that environment, inspect
 and revoke it before creating the replacement:
@@ -165,13 +166,13 @@ Release is non-draft, immutable, and Latest.
 
 1. Merge a monotonically greater stable version to `main`. A push that changes
    `package.json` starts **Stage npm package** automatically.
-2. Wait for **Verify exact package**, then inspect the uploaded tarball and its
-   `npm-pack.json`.
-3. As `0thernet`, approve the protected `npm-stage` environment. Self-review is
-   allowed for this sole-maintainer gate. Only its minimal OIDC job can submit
-   the verified tarball to npm's staging area.
-4. Inspect the staged package, then approve it with npm's separate two-factor
-   authentication prompt.
+2. Wait for **Verify exact package**. It packs, smokes, and uploads one exact
+   tarball with its `npm-pack.json`.
+3. **Stage exact package** starts automatically through the main-only
+   `npm-stage` environment. Only this minimal OIDC job can submit the verified
+   tarball to npm's staging area.
+4. Inspect the uploaded artifact and the staged npm package, then approve the
+   npm stage with human two-factor authentication.
 5. Download and smoke the public registry package.
 6. Create the matching `v<version>` tag on the staged source commit.
 
@@ -182,7 +183,7 @@ non-current `main` commit fails closed.
 
 If the automatic run did not start or failed before npm accepted the stage,
 dispatch **Stage npm package** from the current `main` branch. Manual recovery
-runs the same verification and protected-environment path. Do not dispatch a
+runs the same verification and main-only environment path. Do not dispatch a
 replacement after npm has accepted a stage for that version; continue with
 inspection and two-factor approval.
 
@@ -217,7 +218,8 @@ The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
 Bun 1.3.14, disabled package-manager caching, and no stored npm token. It binds
 the verified artifact to the current `main` commit, refetches `main` before
 staging, and aborts if that commit is no longer the default-branch head. The
-`npm-stage` environment applies only to the terminal OIDC job.
+main-only `npm-stage` environment applies only to the terminal OIDC job and has
+no required deployment reviewers.
 
 See npm's documentation for [trusted
 publishing](https://docs.npmjs.com/trusted-publishers/), [staged
