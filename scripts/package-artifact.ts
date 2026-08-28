@@ -5,9 +5,9 @@ import { gunzipSync } from "node:zlib";
 const blockSize = 512;
 const packagePrefix = "package/";
 const maximumTarBytes = 12_000_000;
-// npm 11.19.0 packed the reviewed 0.16.2 inventory to 2,003,216 bytes on
-// GitHub Linux and 1,999,719 bytes on macOS. Keep narrowly bounded headroom
-// for gzip transport variance without relaxing the file or unpacked budgets.
+// Keep narrowly bounded headroom above the combined shipped inventory while
+// rejecting accidental package-surface growth. The staging workflow refreshes
+// exact platform metrics before any promotion.
 export const MAX_PACKED_BYTES = 2_025_000;
 export const MAX_PACKED_FILES = 450;
 export const MAX_UNPACKED_BYTES = 11_000_000;

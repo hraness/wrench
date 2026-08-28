@@ -35,8 +35,7 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const NPM_PACKAGE_URL = "https://www.npmjs.com/package/@hraness/wrench" as const;
 export const SKILLS_URL = "https://skills.sh/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
-export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
-export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
+export const SKILL_REPOSITORY = "hraness/wrench" as const;
 export const CONTENT_REVIEWED_RELEASE = "v0.16.2" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const DEMO_PUBLIC_FILES = [
@@ -190,6 +189,20 @@ export type PackageIdentity = Readonly<{
   version: string;
 }>;
 
+export function versionedNpmPackageUrl(identity: Pick<PackageIdentity, "version">): string {
+  return `${NPM_PACKAGE_URL}/v/${identity.version}`;
+}
+
+export function agentSkillInstallCommands(
+  identity: Pick<PackageIdentity, "release">,
+): Readonly<{ bunx: string; npx: string }> {
+  const source = `${SKILL_REPOSITORY}#${identity.release}`;
+  return Object.freeze({
+    bunx: `bunx skills add ${source}`,
+    npx: `npx skills add ${source}`,
+  });
+}
+
 type RenderOptions = Readonly<{
   analyticsAsset: string;
   attestation: ProviderCapabilityAttestation;
@@ -314,7 +327,7 @@ function sharedJsonLd(identity: PackageIdentity): ReadonlyArray<Readonly<Record<
       },
       operatingSystem: ["macOS", "Linux"],
       publisher: { "@id": `${SITE_ORIGIN}/#organization` },
-      sameAs: [REPOSITORY_URL, NPM_PACKAGE_URL, SKILLS_URL],
+      sameAs: [REPOSITORY_URL, versionedNpmPackageUrl(identity), SKILLS_URL],
       softwareRequirements: "Bun 1.3.14 on macOS or Linux",
       softwareVersion: identity.version,
       url: `${SITE_ORIGIN}/`,
@@ -402,6 +415,7 @@ function renderTemplate(
 ): string {
   const { packageIdentity: identity } = options;
   const installCommand = `bun add --global @hraness/wrench@${identity.version}`;
+  const skillInstallCommands = agentSkillInstallCommands(identity);
   let rendered = template;
   rendered = replaceHtmlRequired(rendered, "{{ANALYTICS_ASSET}}", escapeHtml(options.analyticsAsset));
   rendered = replaceHtmlRequired(rendered, "{{CSS_ASSET}}", escapeHtml(options.cssAsset));
@@ -475,13 +489,13 @@ function renderTemplate(
   const optionalValues = new Map([
     ["{{WRENCH_DESCRIPTION}}", identity.description],
     ["{{WRENCH_INSTALL_COMMAND}}", installCommand],
-    ["{{WRENCH_NPM_PACKAGE}}", NPM_PACKAGE_URL],
+    ["{{WRENCH_NPM_PACKAGE}}", versionedNpmPackageUrl(identity)],
     ["{{WRENCH_RELEASE}}", identity.release],
     ["{{WRENCH_REPOSITORY}}", REPOSITORY_URL],
     ["{{WRENCH_SKILLS}}", SKILLS_URL],
     ["{{WRENCH_SKILL_INSTALL_ASSET}}", options.skillInstallAsset],
-    ["{{WRENCH_SKILL_INSTALL_COMMAND}}", SKILL_INSTALL_COMMAND],
-    ["{{WRENCH_SKILL_INSTALL_COMMAND_BUNX}}", SKILL_INSTALL_COMMAND_BUNX],
+    ["{{WRENCH_SKILL_INSTALL_COMMAND}}", skillInstallCommands.npx],
+    ["{{WRENCH_SKILL_INSTALL_COMMAND_BUNX}}", skillInstallCommands.bunx],
     ["{{WRENCH_VERSION}}", identity.version],
     ["{{BEEPER_ADAPTER_VERSION}}", options.beeperFacts.adapterVersion],
     ["{{BEEPER_CLI_COMMAND_COUNT}}", String(options.beeperFacts.cliCommandCount)],

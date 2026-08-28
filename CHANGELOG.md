@@ -1,6 +1,17 @@
 # Changelog
 
+Versioned sections identify checked package source. A version is publicly
+released only after the matching canonical npm package and immutable GitHub
+Release exist; the release-bound production site identifies the latest
+coordinate that completed both checks.
+
 ## Unreleased
+
+- Fail closed before every Vercel build unless a true local invocation has no
+  Vercel signal or the checked-in release marker and exact platform state agree.
+- Resolve the production release tag through bounded GitHub commit JSON while
+  retaining fixed local `git rev-parse HEAD` evidence, removing the remote Git
+  descendant boundary from website admission.
 
 ## 0.16.2 - 2026-08-28
 
