@@ -493,7 +493,7 @@ function execution(
 ): BrowserExecution {
   return {
     status,
-    output: { observed: true },
+    output: status === "failed" ? null : { observed: true },
     finalUrl: "https://example.com/messaging/thread/123",
     dispatchStarted,
     dispatch: {
@@ -4366,7 +4366,6 @@ describe("receipts", () => {
         rmSync(testState.directory, { recursive: true, force: true });
       }
     },
-    10_000,
   );
 
   test("rejects browser-only recovery fields from an official-provider executor", async () => {
