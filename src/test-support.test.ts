@@ -21,8 +21,8 @@ describe("property replay coordinates", () => {
     })).toEqual({ seed: 2_147_483_647, path: "3:0:12:1" });
     expect(propertyReplayParameters({
       WRENCH_PROPERTY_SEED: "1",
-      WRENCH_PROPERTY_PATH: "0:1:9007199254740991",
-    })).toEqual({ seed: 1, path: "0:1:9007199254740991" });
+      WRENCH_PROPERTY_PATH: "0:1:10000",
+    })).toEqual({ seed: 1, path: "0:1:10000" });
   });
 
   test("fails closed on ambiguous, noncanonical, or unbounded input", () => {
@@ -46,7 +46,10 @@ describe("property replay coordinates", () => {
       "1/a",
       "01:0",
       "1:00",
+      "10001",
+      "9007199254740991",
       "9007199254740992",
+      Array.from({ length: 11 }, () => "10000").join(":"),
       `1:${"2".repeat(513)}`,
     ]) {
       expect(() => propertyReplayParameters({

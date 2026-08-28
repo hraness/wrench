@@ -9,6 +9,22 @@ type PropertyReplayEnvironment = Readonly<Record<string, unknown>>;
 const MIN_FAST_CHECK_SEED = -2_147_483_648;
 const MAX_FAST_CHECK_SEED = 2_147_483_647;
 const MAX_FAST_CHECK_PATH_BYTES = 512;
+const MAX_FAST_CHECK_PATH_SEGMENT = 10_000;
+const MAX_FAST_CHECK_PATH_WORK = 100_000;
+
+function isComputationallyBoundedFastCheckPath(path: string): boolean {
+  if (!/^(?:0|[1-9]\d*)(?::(?:0|[1-9]\d*))*$/u.test(path)) return false;
+  let work = 0;
+  for (const segment of path.split(":")) {
+    const skip = Number(segment);
+    if (!Number.isSafeInteger(skip) || skip > MAX_FAST_CHECK_PATH_SEGMENT) {
+      return false;
+    }
+    work += skip;
+    if (work > MAX_FAST_CHECK_PATH_WORK) return false;
+  }
+  return true;
+}
 
 /**
  * Parse an opt-in fast-check replay coordinate without accepting ambiguous or
@@ -46,10 +62,7 @@ export function propertyReplayParameters(
   if (
     typeof rawPath !== "string"
     || Buffer.byteLength(rawPath, "utf8") > MAX_FAST_CHECK_PATH_BYTES
-    || !/^(?:0|[1-9]\d*)(?::(?:0|[1-9]\d*))*$/u.test(rawPath)
-    || !rawPath.split(":").every((segment) =>
-      Number.isSafeInteger(Number(segment))
-    )
+    || !isComputationallyBoundedFastCheckPath(rawPath)
   ) {
     throw new Error("WRENCH_PROPERTY_PATH must be a bounded fast-check path");
   }
