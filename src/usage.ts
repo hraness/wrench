@@ -1,10 +1,12 @@
 /**
  * Static CLI help kept separate from the command implementation graph.
  *
- * The installed entrypoint imports only this module for a valid help request,
- * so help remains available even when an optional provider runtime is broken.
+ * The installed entrypoint imports only this module and the static release
+ * identity for a valid help request, so help remains available even when an
+ * optional provider runtime is broken.
  */
 export const wrenchUsage = `Usage:
+  wrench --version                                  Print the exact Wrench release version
   wrench init [directory] [--json]                    Initialize a Markdown vault
   wrench inspect <url> [capture-options]              Inspect capture without persistence
   wrench pdf <file-or-url> [pdf-options]               Capture a PDF into the vault

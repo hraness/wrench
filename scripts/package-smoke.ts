@@ -103,6 +103,29 @@ async function run(
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
 }
 
+async function runExpectingExactSuccess(
+  command: string[],
+  cwd: string,
+  expectedStdout: string,
+): Promise<void> {
+  const child = Bun.spawn(command, {
+    cwd,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  if (exitCode !== 0 || stdout !== expectedStdout || stderr.length !== 0) {
+    throw new Error(
+      `Installed CLI output contract drifted for: ${command.join(" ")}; exit=${String(exitCode)}; stdout=${JSON.stringify(stdout)}; stderr=${JSON.stringify(stderr)}`,
+    );
+  }
+}
+
 type ExactNpmArtifact = Readonly<{
   archive: string;
   packJson: string;
@@ -592,6 +615,11 @@ try {
   for (const binName of binNames) {
     await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);
   }
+  await runExpectingExactSuccess(
+    [join(consumer, "node_modules", ".bin", "wrench"), "--version"],
+    consumer,
+    `${packageVersion}\n`,
+  );
   await runExpectingFailure([
     join(consumer, "node_modules", ".bin", "wrench"),
     "imessage",

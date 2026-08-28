@@ -17,11 +17,13 @@ import { fileURLToPath } from "node:url";
 
 import {
   isImmediateWrenchHelpRequest,
+  isImmediateWrenchVersionRequest,
   isPublicWrenchCommand,
   routedWrenchCatalogCommand,
   runWrenchCliProcess,
 } from "./cli";
 import { wrenchUsage } from "./usage";
+import { WRENCH_VERSION } from "./version";
 
 const repositoryRoot = process.cwd();
 const sourcePackageRoot = join(import.meta.dir, "..");
@@ -80,6 +82,45 @@ describe("lazy wrench CLI entrypoint", () => {
         expect(stdout).toBe(wrenchUsage);
         expect(loaded).toBe(0);
       }
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  test("prints the exact package version without loading any command graph", async () => {
+    const previousExitCode = process.exitCode;
+    try {
+      let stdout = "";
+      let loaded = 0;
+      const forbiddenLoader = () => {
+        loaded += 1;
+        throw new Error("the command graph must stay lazy for --version");
+      };
+      await runWrenchCliProcess(
+        ["--version"],
+        { stdout: (value) => { stdout += value; } },
+        forbiddenLoader,
+        forbiddenLoader,
+        forbiddenLoader,
+      );
+      expect(stdout).toBe(`${WRENCH_VERSION}\n`);
+      expect(loaded).toBe(0);
+      expect(process.exitCode).toBe(0);
+      expect(isImmediateWrenchVersionRequest(["--version"])).toBeTrue();
+      for (const rawArguments of [
+        ["version"],
+        ["-V"],
+        ["--version", "extra"],
+      ]) expect(isImmediateWrenchVersionRequest(rawArguments)).toBeFalse();
+
+      const packageJson = JSON.parse(
+        readFileSync(join(sourcePackageRoot, "package.json"), "utf8"),
+      ) as { readonly version?: unknown };
+      expect(packageJson.version).toBe(WRENCH_VERSION);
+
+      const rejected = await runProcess(cliPath, ["--version", "extra"], process.env);
+      expect(rejected).toMatchObject({ exitCode: 2, stdout: "" });
+      expect(rejected.stderr).toContain("unknown command: --version");
     } finally {
       process.exitCode = previousExitCode;
     }
@@ -428,9 +469,10 @@ throw new Error("private fallback did not load a forbidden module");
     }
   });
 
-  test("has only static help as an eager dependency and bounds startup CPU work", async () => {
+  test("has only static help and release identity as eager dependencies and bounds startup CPU work", async () => {
     const source = readFileSync(cliPath, "utf8");
     expect(source).toContain('import { wrenchUsage } from "./usage"');
+    expect(source).toContain('import { WRENCH_VERSION } from "./version"');
     expect(source).toContain('import("./wrench")');
     expect(source).toContain('import("./catalog-cli")');
     expect(source).not.toContain('from "./wrench"');

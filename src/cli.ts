@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { wrenchUsage } from "./usage";
+import { WRENCH_VERSION } from "./version";
 import type {
   WrenchCatalogCommand,
   WrenchCatalogOutput,
@@ -79,6 +80,12 @@ export function isImmediateWrenchHelpRequest(
     );
 }
 
+export function isImmediateWrenchVersionRequest(
+  rawArguments: readonly string[],
+): boolean {
+  return rawArguments.length === 1 && rawArguments[0] === "--version";
+}
+
 function hasOnlyOptionalJson(
   values: readonly string[],
 ): boolean {
@@ -143,7 +150,8 @@ export function routedWrenchCatalogCommand(
 }
 
 /**
- * Render help and catalog inspection without evaluating the full command graph.
+ * Render help, release identity, and catalog inspection without evaluating the
+ * full command graph.
  *
  * Every other invocation delegates to the existing process boundary, which
  * retains its signal, exit-code, parsing, dependency, and error behavior.
@@ -157,6 +165,11 @@ export async function runWrenchCliProcess(
 ): Promise<void> {
   if (isImmediateWrenchHelpRequest(rawArguments)) {
     output.stdout(wrenchUsage);
+    process.exitCode = 0;
+    return;
+  }
+  if (isImmediateWrenchVersionRequest(rawArguments)) {
+    output.stdout(`${WRENCH_VERSION}\n`);
     process.exitCode = 0;
     return;
   }
