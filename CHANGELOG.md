@@ -4,17 +4,6 @@
 
 ## 0.16.1 - 2026-08-27
 
-- Complete the provider-neutral messaging implementation prepared in 0.16.0,
-  including the encrypted journal, exact preview and authorization lifecycle,
-  qualified Beeper execution, and reviewed direct iMessage transport.
-- Ship the reviewed iMessage transport installer through the public CLI with
-  digest verification, no-overwrite semantics, path-private diagnostics, and
-  fail-closed handling for unsafe source and state paths.
-- Add an exact lightweight `wrench --version` command and bind package smoke
-  tests to the installed binary's immutable release identity.
-
-## 0.16.0 - 2026-08-27
-
 - Add a provider-neutral agentic messaging facade that keeps exact routes,
   current context, prose, replies, and receipts in encrypted state and
   explicit owner-only artifacts. One private preview authorizes one ordered
@@ -31,6 +20,14 @@
 - Vendor and verify a patched Wacli/Whatsmeow stdin-only private transport.
   The registered WhatsApp action remains unavailable until controlled live
   freshness, acceptance, and reconciliation qualification is complete.
+- Ship the reviewed iMessage transport installer through the public CLI with
+  digest verification, no-overwrite semantics, path-private diagnostics, and
+  fail-closed handling for unsafe source and state paths.
+- Add an exact lightweight `wrench --version` command and bind package smoke
+  tests to the installed binary's immutable release identity.
+
+## 0.16.0 - 2026-08-27
+
 - Redesign wrench.rip as a restrained editorial site with a supported-actions-only
   provider directory, task-first capability labels, and no zero-action service
   cards in the public catalog.
