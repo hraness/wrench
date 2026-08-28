@@ -2,13 +2,15 @@
 
 ## Unreleased
 
+## 0.16.2 - 2026-08-28
+
 - Start stage-only npm verification automatically when a greater stable package
   version reaches `main`. Unchanged manifest versions stop before OIDC, and the
   terminal staging job enters the main-only `npm-stage` environment without a
   GitHub deployment review. npm still requires separate human inspection and
   two-factor approval before the staged version becomes public.
-
-## 0.16.2 - 2026-08-28
+- Add the Agent Skill to npm discovery metadata and link npm, GitHub, and
+  skills.sh from the README and public software identity.
 
 - Add a strict machine-readable Hraness social-profile collection manifest,
   correct the second X account to Life Days Left, and bind the current Twitch

@@ -6,6 +6,10 @@ can use it, so the bootstrap cannot use the staging workflow.
 
 ## Bootstrap the npm package
 
+This section records the one-time bootstrap of `@hraness/wrench@0.15.1`.
+That package is already public. Do not reuse these bootstrap commands for any
+later version. Follow [Stage a later version](#stage-a-later-version) instead.
+
 Start from the current `main` commit after the required checks pass. Use Node
 24, npm 11.19.0, and Bun 1.3.14. Do not create the release tag yet.
 
@@ -162,7 +166,7 @@ The tag is a release request. Wait for the read-only verification job to
 rebuild and compare the exact public npm tarball, then verify that the GitHub
 Release is non-draft, immutable, and Latest.
 
-## Publish later versions
+## Stage a later version
 
 1. Merge a monotonically greater stable version to `main`. A push that changes
    `package.json` starts **Stage npm package** automatically.
