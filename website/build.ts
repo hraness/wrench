@@ -35,7 +35,7 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.15.0" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.15.1" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const DEMO_PUBLIC_FILES = [
   "wrench-first-capture.gif",
@@ -391,7 +391,7 @@ function renderTemplate(
   page?: PublicPage,
 ): string {
   const { packageIdentity: identity } = options;
-  const installCommand = `bun add --global github:hraness/wrench#${identity.release}`;
+  const installCommand = `bun add --global @hraness/wrench@${identity.version}`;
   let rendered = template;
   rendered = replaceHtmlRequired(rendered, "{{ANALYTICS_ASSET}}", escapeHtml(options.analyticsAsset));
   rendered = replaceHtmlRequired(rendered, "{{CSS_ASSET}}", escapeHtml(options.cssAsset));

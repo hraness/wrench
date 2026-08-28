@@ -1,0 +1,306 @@
+name: Stage npm package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-stage
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify exact package
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      artifact_name: ${{ steps.pack.outputs.artifact_name }}
+      package_version: ${{ steps.pack.outputs.version }}
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      tarball_name: ${{ steps.pack.outputs.tarball_name }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - name: Verify default-branch head
+        id: identity
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "::error::npm staging must run from $DEFAULT_BRANCH"
+            exit 1
+          fi
+          git fetch --no-tags origin \
+            "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          default_head="$(git rev-parse "origin/$DEFAULT_BRANCH")"
+          checked_out_head="$(git rev-parse HEAD)"
+          if [[ "$GITHUB_SHA" != "$default_head" || "$checked_out_head" != "$default_head" ]]; then
+            echo "::error::npm staging must run from current $DEFAULT_BRANCH HEAD $default_head"
+            exit 1
+          fi
+          printf 'source_sha=%s\n' "$default_head" >> "$GITHUB_OUTPUT"
+      - name: Pin npm
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.0 \
+            --ignore-scripts \
+            --registry=https://registry.npmjs.org
+          node --version
+          test "$(npm --version)" = "11.19.0"
+      - name: Verify unpublished package identity
+        run: |
+          set -euo pipefail
+          package_name="$(node -p 'require("./package.json").name')"
+          package_version="$(node -p 'require("./package.json").version')"
+          if [[ "$package_name" != "@hraness/wrench" ]]; then
+            echo "::error::Unexpected package name $package_name"
+            exit 1
+          fi
+          if [[ ! "$package_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Package version $package_version is not stable semantic version"
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/v$package_version" >/dev/null; then
+            echo "::error::Create v$package_version only after exact npm delivery is verified"
+            exit 1
+          fi
+          if ! npm view "$package_name" name --json \
+            --registry=https://registry.npmjs.org >/dev/null; then
+            echo "::error::$package_name must be bootstrapped interactively before staged publishing can run"
+            exit 1
+          fi
+          version_error="$RUNNER_TEMP/npm-version-error.txt"
+          if npm view "$package_name@$package_version" version --json \
+            --registry=https://registry.npmjs.org >/dev/null 2>"$version_error"; then
+            echo "::error::$package_name@$package_version is already public"
+            exit 1
+          fi
+          if ! grep -q 'E404' "$version_error"; then
+            cat "$version_error"
+            echo "::error::Could not prove that $package_name@$package_version is unpublished"
+            exit 1
+          fi
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run check
+      - name: Verify generated tree
+        run: |
+          set -euo pipefail
+          generated_status="$(git status --porcelain --untracked-files=all -- dist bun.lock)"
+          if [[ -n "$generated_status" ]]; then
+            printf '%s\n' "$generated_status"
+            exit 1
+          fi
+      - name: Pack and smoke one exact npm artifact
+        id: pack
+        run: |
+          set -euo pipefail
+          artifact_directory="$RUNNER_TEMP/wrench-npm-package"
+          pack_json="$artifact_directory/npm-pack.json"
+          sha256_file="$artifact_directory/npm-package.sha256"
+          mkdir -p "$artifact_directory"
+          npm pack \
+            --ignore-scripts \
+            --json \
+            --pack-destination "$artifact_directory" \
+            --registry=https://registry.npmjs.org > "$pack_json"
+          tarball_name="$(node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (!Array.isArray(value) || value.length !== 1 || typeof value[0].filename !== "string") process.exit(1); process.stdout.write(value[0].filename)' "$pack_json")"
+          version="$(node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (!Array.isArray(value) || value.length !== 1 || typeof value[0].version !== "string") process.exit(1); process.stdout.write(value[0].version)' "$pack_json")"
+          tarball="$artifact_directory/$tarball_name"
+          bun run ./scripts/package-smoke.ts \
+            --archive "$tarball" \
+            --pack-json "$pack_json"
+          sha256sum "$tarball" | awk '{ print $1 }' > "$sha256_file"
+          artifact_name="npm-package-$version-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'artifact_name=%s\ntarball_name=%s\nversion=%s\n' \
+            "$artifact_name" "$tarball_name" "$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}
+          path: ${{ runner.temp }}/wrench-npm-package
+          if-no-files-found: error
+          retention-days: 30
+
+  stage:
+    name: Stage exact package
+    needs: verify
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - name: Pin npm
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.0 \
+            --ignore-scripts \
+            --registry=https://registry.npmjs.org
+          test "$(npm --version)" = "11.19.0"
+      - name: Bind verified artifact identity
+        id: package_identity
+        env:
+          EXPECTED_ARTIFACT_NAME: ${{ needs.verify.outputs.artifact_name }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_TARBALL_NAME: ${{ needs.verify.outputs.tarball_name }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Verified package version is not stable semantic version"
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ || "$EXPECTED_SOURCE_SHA" != "$GITHUB_SHA" ]]; then
+            echo "::error::Verified source SHA does not match this workflow revision"
+            exit 1
+          fi
+          if [[ ! "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ || ! "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::GitHub run identity is invalid"
+            exit 1
+          fi
+          tarball_name="hraness-wrench-$EXPECTED_VERSION.tgz"
+          if [[ "$EXPECTED_TARBALL_NAME" != "$tarball_name" ]]; then
+            echo "::error::Verified tarball name does not match the package version"
+            exit 1
+          fi
+          artifact_name="npm-package-$EXPECTED_VERSION-$EXPECTED_SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [[ "$EXPECTED_ARTIFACT_NAME" != "$artifact_name" ]]; then
+            echo "::error::Verified artifact name does not match this workflow run"
+            exit 1
+          fi
+          printf 'artifact_name=%s\ntarball_name=%s\nversion=%s\nsource_sha=%s\n' \
+            "$artifact_name" "$tarball_name" "$EXPECTED_VERSION" "$EXPECTED_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: ${{ steps.package_identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/wrench-npm-package
+      - name: Bind downloaded artifact
+        id: artifact
+        env:
+          EXPECTED_TARBALL_NAME: ${{ steps.package_identity.outputs.tarball_name }}
+          EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          artifact_directory="$RUNNER_TEMP/wrench-npm-package"
+          pack_json="$artifact_directory/npm-pack.json"
+          sha256_file="$artifact_directory/npm-package.sha256"
+          tarball="$artifact_directory/$EXPECTED_TARBALL_NAME"
+          mapfile -d '' artifact_entries < <(find "$artifact_directory" -mindepth 1 -maxdepth 1 -print0 | sort -z)
+          if [[ ${#artifact_entries[@]} -ne 3 ]]; then
+            echo "::error::Downloaded npm artifact must contain exactly the tarball, npm-pack.json, and npm-package.sha256"
+            exit 1
+          fi
+          for required_file in "$pack_json" "$sha256_file" "$tarball"; do
+            if [[ ! -f "$required_file" || -L "$required_file" ]]; then
+              echo "::error::Downloaded npm artifact contains an unsafe or unexpected entry"
+              exit 1
+            fi
+          done
+          PACK_JSON="$pack_json" TARBALL="$tarball" \
+            EXPECTED_TARBALL_NAME="$EXPECTED_TARBALL_NAME" \
+            EXPECTED_VERSION="$EXPECTED_VERSION" node <<'NODE'
+          const fs = require("node:fs");
+          const crypto = require("node:crypto");
+          const value = JSON.parse(fs.readFileSync(process.env.PACK_JSON, "utf8"));
+          if (!Array.isArray(value) || value.length !== 1) throw new Error("npm-pack.json must contain exactly one package");
+          const record = value[0];
+          if (record?.name !== "@hraness/wrench") throw new Error("npm-pack.json has the wrong package name");
+          if (record?.version !== process.env.EXPECTED_VERSION) throw new Error("npm-pack.json has the wrong package version");
+          if (record?.filename !== process.env.EXPECTED_TARBALL_NAME) throw new Error("npm-pack.json has the wrong tarball name");
+          if (!/^hraness-wrench-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.tgz$/u.test(record.filename)) throw new Error("npm-pack.json has an unsafe tarball name");
+          for (const field of ["entryCount", "size", "unpackedSize"]) {
+            if (!Number.isSafeInteger(record[field]) || record[field] < 0) throw new Error(`npm-pack.json has invalid ${field}`);
+          }
+          if (!Array.isArray(record.files) || record.files.length !== record.entryCount) throw new Error("npm-pack.json has an invalid file inventory");
+          const bytes = fs.readFileSync(process.env.TARBALL);
+          if (bytes.byteLength !== record.size) throw new Error("Downloaded tarball size differs from npm-pack.json");
+          const integrity = `sha512-${crypto.createHash("sha512").update(bytes).digest("base64")}`;
+          const shasum = crypto.createHash("sha1").update(bytes).digest("hex");
+          if (record.integrity !== integrity || record.shasum !== shasum) throw new Error("Downloaded tarball digest differs from npm-pack.json");
+          NODE
+          expected_sha256="$(tr -d '\n' < "$sha256_file")"
+          if [[ ! "$expected_sha256" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "::error::Downloaded npm-package.sha256 is invalid"
+            exit 1
+          fi
+          actual_sha256="$(sha256sum "$tarball" | awk '{ print $1 }')"
+          if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+            echo "::error::Downloaded tarball does not match the verified SHA-256"
+            exit 1
+          fi
+          printf 'sha256=%s\ntarball=%s\n' "$actual_sha256" "$tarball" >> "$GITHUB_OUTPUT"
+      - name: Revalidate current main and stage exact package
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_SOURCE_SHA: ${{ steps.package_identity.outputs.source_sha }}
+          EXPECTED_TARBALL_SHA256: ${{ steps.artifact.outputs.sha256 }}
+          EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}
+          TARBALL: ${{ steps.artifact.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          current_main="$RUNNER_TEMP/wrench-current-main"
+          git init --quiet "$current_main"
+          git -C "$current_main" fetch --quiet --no-tags --depth=1 \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            "refs/heads/$DEFAULT_BRANCH"
+          default_head="$(git -C "$current_main" rev-parse FETCH_HEAD)"
+          if [[ "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || "$GITHUB_SHA" != "$default_head" ]]; then
+            echo "::error::$DEFAULT_BRANCH advanced to $default_head after package verification"
+            exit 1
+          fi
+          tag_error="$RUNNER_TEMP/wrench-current-tag-error.txt"
+          set +e
+          tag_lookup="$(git ls-remote --exit-code --refs --tags \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            "refs/tags/v$EXPECTED_VERSION" 2>"$tag_error")"
+          tag_status=$?
+          set -e
+          case "$tag_status" in
+            0)
+              if [[ -z "$tag_lookup" ]]; then
+                echo "::error::Remote tag lookup succeeded without returning the exact tag"
+              else
+                echo "::error::Tag v$EXPECTED_VERSION was created after package verification"
+              fi
+              exit 1
+              ;;
+            2)
+              if [[ -n "$tag_lookup" ]]; then
+                echo "::error::Remote tag lookup returned an ambiguous absence result"
+                exit 1
+              fi
+              ;;
+            *)
+              cat "$tag_error"
+              echo "::error::Could not prove that remote tag v$EXPECTED_VERSION is absent"
+              exit 1
+              ;;
+          esac
+          current_tarball_sha256="$(sha256sum "$TARBALL" | awk '{ print $1 }')"
+          if [[ "$current_tarball_sha256" != "$EXPECTED_TARBALL_SHA256" ]]; then
+            echo "::error::Downloaded tarball changed after current-$DEFAULT_BRANCH verification"
+            exit 1
+          fi
+          npm stage publish "$TARBALL" \
+            --access public \
+            --ignore-scripts \
+            --provenance \
+            --registry=https://registry.npmjs.org

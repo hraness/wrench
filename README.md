@@ -44,7 +44,7 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-Wrench v0.15.0 ships attested adapter surfaces for Beeper, Bluesky, Facebook,
+Wrench v0.15.1 ships attested adapter surfaces for Beeper, Bluesky, Facebook,
 Facebook Groups, Facebook Marketplace, Facebook Pages, GitHub, Gmail, Hacker
 News, Instagram, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp,
 X, and YouTube. Eighteen of those surfaces have at least one `observed`
@@ -92,10 +92,9 @@ owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
-The CLI and SDK use the immutable GitHub release tag shown below. Wrench is not
-currently published on npm, Homebrew, or another package repository, so those
-registries are not supported install paths. The Agent Skill remains available
-through skills.sh.
+The CLI and SDK use the exact public npm version shown below. The matching
+GitHub tag and immutable Release identify the same checked source. The Agent
+Skill remains available through skills.sh.
 
 Install the single Wrench Agent Skill with either runner:
 
@@ -109,10 +108,10 @@ The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current immutable CLI release from the `v0.15.0` tag:
+Install the current release from npm:
 
 ```sh
-bun add --global github:hraness/wrench#v0.15.0
+bun add --global @hraness/wrench@0.15.1
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -136,7 +135,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add github:hraness/wrench#v0.15.0
+bun add @hraness/wrench@0.15.1
 ```
 
 ```ts
