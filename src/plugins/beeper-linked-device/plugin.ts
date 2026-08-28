@@ -20,6 +20,7 @@ import {
   materializeBeeperMessagingList,
   materializeBeeperMessagingRead,
 } from "../../providers/beeper-omni";
+import { beeperMessagingDefinition } from "../../providers/beeper-messaging";
 import beeperManifest from "../../assets/adapters/beeper/wrench-web-adapter.json";
 
 type ManifestOperationProjection = Readonly<{
@@ -187,6 +188,7 @@ export const beeperLinkedDevicePlugin = defineProviderPlugin({
       format: "beeper:local:<sha256-account-and-desktop-target-coordinate>",
       matches: (value) => /^beeper:local:[a-f0-9]{64}$/u.test(value),
     },
+    messaging: beeperMessagingDefinition,
     runtime: lazyLocalCliRuntime(async () => {
       const runtime = await import("../../providers/beeper-local-runtime");
       return {
@@ -194,6 +196,17 @@ export const beeperLinkedDevicePlugin = defineProviderPlugin({
         probe: runtime.probeBeeperLocalSubject,
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeBeeperLocalOperation(recipe, input, auth, options),
+        executeMessagingPart: (operation, input, auth, attempt) => {
+          if (operation !== "messaging.send") {
+            throw new Error("Beeper direct messaging runtime accepts only messaging.send");
+          }
+          return runtime.executeBeeperDirectMessagingPart(input, auth, {
+            beforeExternalBegin: attempt.beforeExternalBegin,
+            operationDeadline: attempt.operationDeadline,
+            signal: attempt.signal,
+            environment: attempt.environment,
+          });
+        },
         reconcile: runtime.reconcileBeeperLocalOperation,
       };
     }),

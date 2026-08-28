@@ -155,12 +155,18 @@ executable mutation must mark dispatch before the request can leave and verify
 one independently read local message bound to the account, target, response
 ID, and confirmed content.
 
-All mutations are currently `capture-required` and perform no protocol
-request. The pinned `wacli` CLI retries selected send failures once and places
-message text in process argv. Both conflict with wrench's no-automatic-retry
-and private-payload requirements. Promotion requires a reviewed no-retry
-module or private stdin/Unix-socket payload channel plus authorized low-stakes
-fixtures. Do not flip contract state around those requirements.
+All registered mutations remain `capture-required` and perform no protocol
+request. Wrench now vendors a reviewed Wacli/Whatsmeow source patch that adds a
+strict stdin-only, no-retry text transport behind an authenticated idle daemon
+barrier. The recipient and body stay out of argv and the environment, and any
+post-spawn uncertainty remains unretriable. This closes the private transport
+mechanism gap but does not qualify a public action.
+
+Promotion still requires an authorized controlled low-stakes fixture, fresh
+live context proof on the generic route, exact accepted-message reconciliation,
+and the remaining daemon, commit-revision, persistence-drain, crash, suspend,
+ownership, key-rotation, and replacement checks recorded in the vendored
+private-transport review. Do not register the action around those requirements.
 
 Star/unstar has a read projection but no reviewed mutation. Community/group
 membership, administration, deletion/revoke, profile changes, calls, polls,

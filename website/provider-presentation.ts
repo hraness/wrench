@@ -40,6 +40,7 @@ export const PROVIDER_PRESENTATIONS = Object.freeze([
   { accent: "coral", icon: "mail", name: "Gmail", surfaceId: "gmail" },
   { accent: "gold", icon: "news", name: "Hacker News", surfaceId: "hacker-news" },
   { accent: "violet", icon: "photo", name: "Instagram", surfaceId: "instagram" },
+  { accent: "blue", icon: "chat", name: "iMessage", surfaceId: "imessage" },
   { accent: "blue", icon: "network", name: "LinkedIn", surfaceId: "linkedin" },
   { accent: "coral", icon: "community", name: "Reddit", surfaceId: "reddit" },
   { accent: "coral", icon: "publish", name: "Substack", surfaceId: "substack" },

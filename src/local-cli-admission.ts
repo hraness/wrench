@@ -17,6 +17,13 @@ export type LocalCliCleanupAdmissionPurposeV1 =
   | { readonly kind: "inspect" }
   | { readonly kind: "subject-probe" }
   | {
+      readonly kind: "messaging";
+      readonly action: string;
+      readonly contractVersion: number;
+      readonly messagingRunId: string;
+      readonly partIndex: number;
+    }
+  | {
       readonly kind: "reconcile";
       readonly action: string;
       readonly contractVersion: number;
@@ -42,12 +49,20 @@ function cleanupAdmissionIdentity(
   purpose: LocalCliCleanupAdmissionPurposeV1,
 ): WebSessionCleanupAdmissionIdentity {
   const plugin = ownerForBinding(registry, binding);
-  if (purpose.kind === "reconcile") {
+  if (purpose.kind === "reconcile" || purpose.kind === "messaging") {
     const operation = binding.operations.find((candidate) =>
       candidate.name === purpose.action
       && candidate.contractVersions.includes(purpose.contractVersion));
-    if (operation?.reconciliation === undefined) {
-      throw new Error("local CLI cleanup admission reconciliation route is not installed");
+    if (
+      operation === undefined
+      || purpose.kind === "reconcile" && operation.reconciliation === undefined
+      || purpose.kind === "messaging" && operation.risk !== "R3"
+    ) {
+      throw new Error(
+        purpose.kind === "reconcile"
+          ? "local CLI cleanup admission reconciliation route is not installed"
+          : "local CLI cleanup admission messaging route is not an installed R3 operation",
+      );
     }
   }
   const implementationHash = registry.implementationHash(binding).toString("hex");

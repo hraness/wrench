@@ -8,9 +8,9 @@ const maximumTarBytes = 12_000_000;
 
 const packageBudget = Object.freeze({
   entryCount: { min: 350, max: 450 },
-  fileCount: { min: 350, max: 400 },
+  fileCount: { min: 350, max: 425 },
   packedBytes: { min: 1_600_000, max: 2_000_000 },
-  unpackedBytes: { min: 9_000_000, max: 10_000_000 },
+  unpackedBytes: { min: 9_000_000, max: 11_000_000 },
 });
 
 const requiredPaths = Object.freeze([
@@ -19,17 +19,20 @@ const requiredPaths = Object.freeze([
   "LICENSE",
   "README.md",
   "bunfig.toml",
+  "docs/imessage-direct-provider.md",
   "package.json",
   "tsconfig.json",
   "dist/beeper-client.js",
   "dist/client.js",
   "dist/index.js",
+  "dist/messaging.js",
   "dist/omni-client.js",
   "skills/wrench/SKILL.md",
   "skills/wrench/agents/openai.yaml",
   "skills/wrench/references/install.md",
   "src/cli.ts",
   "src/index.ts",
+  "src/providers/imessage-direct-install.ts",
   "src/provider-plugin-registry.ts",
   "src/wrench.ts",
 ]);
@@ -136,6 +139,7 @@ function verifyAllowedPath(path: string, type: "directory" | "file"): void {
       || path === "LICENSE"
       || path === "README.md"
       || path === "bunfig.toml"
+      || path === "docs/imessage-direct-provider.md"
       || path === "package.json"
       || path === "tsconfig.json"
       || path.startsWith("dist/")
@@ -143,6 +147,7 @@ function verifyAllowedPath(path: string, type: "directory" | "file"): void {
       || path.startsWith("src/")
     : path === "dist"
       || path.startsWith("dist/")
+      || path === "docs"
       || path === "skills"
       || path === "skills/wrench"
       || path.startsWith("skills/wrench/")

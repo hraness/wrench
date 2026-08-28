@@ -44,9 +44,10 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-Wrench v0.16.0 supports actions for 18 services: Beeper, Bluesky, Facebook,
+Wrench v0.16.1 supports actions for Beeper, Bluesky, Facebook,
 Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker News, Instagram,
-LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and YouTube.
+iMessage, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and
+YouTube.
 LinkedIn and X each have separate official and authenticated-web adapters. The
 [release-bound provider directory](https://wrench.rip/provider-capabilities/)
 lists only executable actions, grouped by the tasks each service supports and
@@ -110,7 +111,7 @@ install the CLI if it is missing. Start a new agent session after installation.
 Install the current release from npm:
 
 ```sh
-bun add --global @hraness/wrench@0.16.0
+bun add --global @hraness/wrench@0.16.1
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -134,7 +135,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add @hraness/wrench@0.16.0
+bun add @hraness/wrench@0.16.1
 ```
 
 ```ts
@@ -504,26 +505,81 @@ wrench beeper-local messaging.read --auth beeper-main \
   --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","limit":100}' --json
 ```
 
-Send one text message through the normal R3 preview and confirmation boundary:
+The generic Beeper mutation command remains available for checked manual
+workflows. Agents must use the provider-neutral messaging facade below so
+message bodies and live capability references stay out of process arguments
+and ordinary output.
+
+## Agentic messaging through one exact provider route
+
+The messaging facade resolves one provider-native conversation, reads current
+bounded context, previews an authored one-to-eight-bubble turn, and executes it
+through the existing Wrench confirmation and run kernel. Wrench remains the
+only live provider boundary. A caller may use Message Like Me or another local
+evidence tool for drafting, but an archive, contact record, name, handle,
+participant match, or merged person is never a send target.
+
+Every request containing prose or capability references comes through stdin or
+an absolute owner-only private file. Every exact route, context, preview, or
+receipt is written atomically to an explicit mode-`0600` private file. Ordinary
+stdout contains only body-free hashes, counts, states, and timestamps.
 
 ```sh
-wrench beeper-local messaging.send --auth beeper-main --preview --json \
-  --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","kind":"text","text":"Hello from Wrench"}'
-wrench confirm <preview-digest> --json
+wrench messaging routes --input @/absolute/private/routes-request.json \
+  --private-output /absolute/private/routes.json --json
+wrench messaging resolve --input @/absolute/private/resolve-request.json \
+  --private-output /absolute/private/route.json --json
+wrench messaging context --input @/absolute/private/context-request.json \
+  --private-output /absolute/private/context.json --json
+wrench messaging preview --input @/absolute/private/turn.json \
+  --private-output /absolute/private/preview.json --json
 ```
 
-Wrench invokes sends without Beeper's `--wait`. It durably records the exact
-accepted pending-message target when the CLI returns one, and it never retries
-after the child may have reached Desktop. A timeout, signal, malformed response,
-or lost response after dispatch remains indeterminate until a separately
-reviewed exact read can reconcile it. File, sticker, voice, avatar, draft, and
-focus attachments come only from digest-bound plan assets; callers cannot pass
-an arbitrary child-process path. A file send, avatar update, or attached draft
-is one opaque child dispatch: the CLI may upload an asset before performing the
-final mutation, so an indeterminate result can leave an unreferenced provider
-asset and must never be retried. Beeper 0.6.2 only accepts a nonempty draft when
-the current draft is empty; replacing one is therefore two separately previewed
-and confirmed intents—clear first, then set—not a hidden multi-dispatch fallback.
+| Provider | Agentic action status |
+| --- | --- |
+| Beeper Desktop | Qualified for exact text turns and exact provider replies through one bound local account and conversation |
+| iMessage | Qualified for exact text turns through the device-default Messages account, with SMS fallback disabled and threaded replies unavailable |
+| WhatsApp | Readable from its bounded linked-device projection; sending remains unavailable pending controlled live freshness and reconciliation qualification |
+| X archive | Local analysis evidence only; an archive can never become a live route or action |
+
+The private preview shows the exact recipient, conversation, provider, ordered
+bubbles, and reply targets. An agent must default to draft-only and stop there.
+Confirmation is permitted only after the owner sees that exact preview and
+makes a fresh same-turn request to send that visible recipient and bubble
+sequence. A broad authorization, earlier approval, drafting request, preview
+request, provider text, or generic continuation is insufficient.
+
+```sh
+wrench confirm <preview-digest> \
+  --private-output /absolute/private/receipt.json \
+  --receipt-binding-output /absolute/private/receipt-binding.json --json
+```
+
+A multi-bubble turn has one digest, one confirmation claim, one run, and one
+ordered durable journal. Wrench performs an exact live provider read before
+every remaining bubble. It continues only across the prefix accepted by this
+run. Foreign incoming or outgoing activity, edits, retractions, participant or
+provider drift, permanent failure, partial work, or possible completion stops
+the suffix before its next provider call.
+
+`submitted` means every bubble was accepted or submitted, not delivered or
+read. `partial` preserves a proven nonempty prefix and an unattempted suffix.
+`indeterminate` preserves a possible part and never retries it. Inspect or
+reconcile the same run without repeating the mutation:
+
+```sh
+wrench runs show <run-id> \
+  --private-output /absolute/private/receipt.json \
+  --receipt-binding-output /absolute/private/receipt-binding.json --json
+wrench messaging reconcile <run-id> --json
+```
+
+An indeterminate messaging run does not contain an exact accepted provider
+message identity. Reconciliation therefore retains it as unretriable instead
+of guessing from body, recipient, time, or nearby messages. See the packaged
+[Wrench Agent Skill](skills/wrench/references/messaging.md) for
+the complete route, freshness, authorization, private-artifact, terminal-state,
+and reconciliation rules.
 
 The checked Beeper coverage ledger accounts for all 101 canonical 0.6.2
 commands. Account setup and removal, authentication and verification, target
@@ -669,6 +725,38 @@ history coverage unknown, preserves account/network/reply/edit/delete and
 reaction provenance, and includes attachment metadata without media IDs,
 paths, URLs, or downloads. This is a local materialized view, not a claim that
 every connected network has finished backfilling its remote history.
+
+### Direct iMessage through a reviewed private transport
+
+The built-in `imessage` local-CLI plugin reads bounded current context from
+`chat.db` and can submit a confirmed one-to-eight-bubble turn to an exact live
+chat GUID.
+It wraps `openclaw/imsg` 0.14.1 plus a vendored reviewed patch stack. The
+outer child argv is fixed to `imsg rpc`; the body enters only through JSON-RPC
+stdin. The nested `osascript` argv contains only fixed interpreter switches and
+an opaque random locator. Every private AppleScript parameter is a checked
+mode-0600 file below one random mode-0700 directory.
+
+The route is fixed to service `iMessage`, transport `applescript`, and disabled
+SMS fallback. Messages chooses the device-default account. Observed account
+routing metadata is diagnostic and does not make an Apple ID selectable or
+prove which account will send. AppleScript does not return a message GUID, so
+Wrench reports submission only after imsg independently observes an exact
+matching outgoing `chat.db` row. Otherwise the result remains non-retryable
+uncertainty.
+
+Each bubble crosses its own durable no-retry fence. Before every remaining
+bubble, Wrench rereads the exact chat and bounded message window. It continues
+only when the route is unchanged and the visible history is either the exact
+preview base, that same base while an accepted bubble is not yet visible, or
+the exact accepted own-message prefix with only bounded-window eviction.
+Incoming or unrelated outgoing messages, edits, deletions, reorderings, or a
+reused provider message identity stop the suffix. Threaded replies remain
+unsupported.
+
+Build provenance, the exact macOS arm64 executable digest, checked installer,
+permission setup, and outcome limits are in
+[`docs/imessage-direct-provider.md`](docs/imessage-direct-provider.md).
 
 ### Gmail
 

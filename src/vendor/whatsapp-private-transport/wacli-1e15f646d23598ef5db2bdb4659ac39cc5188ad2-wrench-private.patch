@@ -1,0 +1,2624 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 0000000000000000000000000000000000000000..ca8a44e285fa4ed0fe161b5376486582a7eecfe7
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1 @@
++patches/*.patch -whitespace
+diff --git a/cmd/wacli/root.go b/cmd/wacli/root.go
+index 978de094ccd3bfcf70cfc2d9342706d2fc9a55c0..7a1c235173f480e2b79b73eda4145d88272372c4 100644
+--- a/cmd/wacli/root.go
++++ b/cmd/wacli/root.go
+@@ -93,6 +93,7 @@ func execute(args []string) error {
+ 	rootCmd.AddCommand(newProfileCmd(&flags))
+ 	rootCmd.AddCommand(newDocsCmd(&flags))
+ 	rootCmd.AddCommand(newStoreCmd(&flags))
++	rootCmd.AddCommand(newWrenchPrivateCmd(&flags))
+ 
+ 	rootCmd.SetArgs(args)
+ 	if err := rootCmd.Execute(); err != nil {
+diff --git a/cmd/wacli/sync.go b/cmd/wacli/sync.go
+index 1eacff0e051f736b5197b9fcb77e87c0130f84a9..a1befd86cbd78ae3d018b2369531862a73042be6 100644
+--- a/cmd/wacli/sync.go
++++ b/cmd/wacli/sync.go
+@@ -25,6 +25,7 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
+ 	var webhookURL string
+ 	var webhookSecret string
+ 	var webhookAllowPrivate bool
++	var wrenchPrivateTransport bool
+ 	var storage syncStorageLimitFlags
+ 
+ 	cmd := &cobra.Command{
+@@ -75,7 +76,11 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
+ 			}
+ 
+ 			var stopSendDelegate func()
++			var stopWrenchPrivate func()
+ 			defer func() {
++				if stopWrenchPrivate != nil {
++					stopWrenchPrivate()
++				}
+ 				if stopSendDelegate != nil {
+ 					stopSendDelegate()
+ 				}
+@@ -88,6 +93,15 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
+ 						return err
+ 					}
+ 					stopSendDelegate = stop
++					if wrenchPrivateTransport {
++						wrenchStop, wrenchErr := startWrenchPrivateServer(ctx, a)
++						if wrenchErr != nil {
++							stopSendDelegate()
++							stopSendDelegate = nil
++							return wrenchErr
++						}
++						stopWrenchPrivate = wrenchStop
++					}
+ 					return nil
+ 				}
+ 			}
+@@ -139,6 +153,7 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
+ 	cmd.Flags().StringVar(&webhookURL, "webhook", "", "URL to POST live message JSON")
+ 	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "", "HMAC-SHA256 secret for X-Wacli-Signature header")
+ 	cmd.Flags().BoolVar(&webhookAllowPrivate, "webhook-allow-private", false, "allow webhook URLs that resolve to localhost or private networks")
++	cmd.Flags().BoolVar(&wrenchPrivateTransport, "wrench-private-transport", false, "enable the pinned owner-only Wrench mutation socket (patched build only)")
+ 	cmd.Flags().Int64Var(&storage.maxMessages, "max-messages", 0, "maximum total messages to keep in the local DB before sync stops (0 = unlimited, or WACLI_SYNC_MAX_MESSAGES)")
+ 	cmd.Flags().StringVar(&storage.maxDBSize, "max-db-size", "", "maximum wacli.db disk usage before sync stops, e.g. 500MB or 2GB (default: WACLI_SYNC_MAX_DB_SIZE or unlimited)")
+ 	return cmd
+diff --git a/cmd/wacli/wrench_private_cmd.go b/cmd/wacli/wrench_private_cmd.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..4a539ef499b2e01898320763eaeb3329020a19a5
+--- /dev/null
++++ b/cmd/wacli/wrench_private_cmd.go
+@@ -0,0 +1,258 @@
++package main
++
++import (
++	"context"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"net"
++	"os"
++	"strings"
++	"time"
++
++	"github.com/openclaw/wacli/internal/app"
++	"github.com/openclaw/wacli/internal/out"
++	"github.com/spf13/cobra"
++)
++
++type wrenchPrivateServer struct {
++	storeDir string
++	key      []byte
++	binding  wrenchDaemonBinding
++	replay   *wrenchPrivateReplayCache
++	engine   *wrenchPrivateMutationEngine
++	now      func() time.Time
++}
++
++func newWrenchPrivateServer(a *app.App) (*wrenchPrivateServer, error) {
++	backend, err := newWrenchPrivateAppBackend(a)
++	if err != nil {
++		return nil, err
++	}
++	epoch, connected := backend.ConnectionEpoch()
++	if !connected {
++		return nil, fmt.Errorf("wrench private transport has no live connection epoch")
++	}
++	toolHash, err := wrenchPrivateExecutableHash()
++	if err != nil {
++		return nil, err
++	}
++	key, err := wrenchPrivateLoadOrCreateKey(a.StoreDir())
++	if err != nil {
++		return nil, err
++	}
++	startedAt := time.Now().UTC()
++	binding := wrenchDaemonBinding{
++		ProtocolHash:    wrenchPrivateProtocolHash(),
++		ToolHash:        toolHash,
++		StoreSubject:    wrenchPrivateSubject(a.StoreDir()),
++		AuthSubject:     wrenchPrivateSubject(a.WA().LinkedJID()),
++		DaemonPID:       os.Getpid(),
++		DaemonStartedAt: startedAt.Format(time.RFC3339Nano),
++		ConnectionEpoch: epoch,
++	}
++	if strings.TrimSpace(a.WA().LinkedJID()) == "" {
++		return nil, fmt.Errorf("wrench private transport requires an authenticated account subject")
++	}
++	return &wrenchPrivateServer{
++		storeDir: a.StoreDir(),
++		key:      key,
++		binding:  binding,
++		replay:   newWrenchPrivateReplayCache(wrenchPrivateReplayLimit),
++		engine:   newWrenchPrivateMutationEngine(backend, epoch),
++		now:      func() time.Time { return time.Now().UTC() },
++	}, nil
++}
++
++func startWrenchPrivateServer(ctx context.Context, a *app.App) (func(), error) {
++	server, err := newWrenchPrivateServer(a)
++	if err != nil {
++		return nil, err
++	}
++	path := wrenchPrivateSocketPath(a.StoreDir())
++	if err := removeStaleSendDelegateSocket(path); err != nil {
++		return nil, err
++	}
++	listener, err := net.Listen("unix", path)
++	if err != nil {
++		return nil, err
++	}
++	if err := os.Chmod(path, 0o600); err != nil {
++		_ = listener.Close()
++		_ = os.Remove(path)
++		return nil, err
++	}
++	status := wrenchPrivateStatusFile{
++		SchemaVersion: wrenchPrivateProtocolVersion,
++		Format:        "wacli.wrench-private-status",
++		Binding:       server.binding,
++		RecordedAt:    server.now().Format(time.RFC3339Nano),
++	}
++	if err := wrenchPrivateWriteStatus(a.StoreDir(), status); err != nil {
++		_ = listener.Close()
++		_ = os.Remove(path)
++		return nil, err
++	}
++
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		for {
++			conn, err := listener.Accept()
++			if err != nil {
++				return
++			}
++			go server.handleConnection(ctx, conn)
++		}
++	}()
++	stop := func() {
++		_ = listener.Close()
++		<-done
++		_ = os.Remove(path)
++		_ = os.Remove(wrenchPrivateStatusPath(a.StoreDir()))
++	}
++	return stop, nil
++}
++
++func (s *wrenchPrivateServer) handleConnection(ctx context.Context, conn net.Conn) {
++	defer conn.Close()
++	_ = conn.SetDeadline(s.now().Add(wrenchPrivateMaxTimeout + 5*time.Second))
++	raw, err := wrenchPrivateReadBounded(conn, wrenchPrivateMaxPayload)
++	if err != nil {
++		return
++	}
++	var req wrenchPrivateWireRequest
++	if err := wrenchPrivateDecodeStrict(raw, &req); err != nil {
++		return
++	}
++	resp := s.handleRequest(ctx, req)
++	resp.Binding = s.binding
++	resp.Nonce = req.Nonce
++	resp.RecordedAt = s.now().Format(time.RFC3339Nano)
++	resp.MAC = wrenchPrivateSignResponse(s.key, resp)
++	_ = json.NewEncoder(conn).Encode(resp)
++}
++
++func (s *wrenchPrivateServer) handleRequest(ctx context.Context, req wrenchPrivateWireRequest) wrenchPrivateWireResponse {
++	if req.SchemaVersion != wrenchPrivateProtocolVersion {
++		return wrenchPrivateResult("failed", "protocol_version_mismatch", wrenchPrivateOutcome{})
++	}
++	if !wrenchPrivateEqualBinding(req.Binding, s.binding) {
++		return wrenchPrivateResult("failed", "daemon_binding_mismatch", wrenchPrivateOutcome{})
++	}
++	if len(req.Nonce) != 48 {
++		return wrenchPrivateResult("failed", "invalid_nonce", wrenchPrivateOutcome{})
++	}
++	if _, err := hex.DecodeString(req.Nonce); err != nil {
++		return wrenchPrivateResult("failed", "invalid_nonce", wrenchPrivateOutcome{})
++	}
++	issuedAt, err := time.Parse(time.RFC3339Nano, req.IssuedAt)
++	if err != nil || s.now().Sub(issuedAt) > wrenchPrivateMaxClockSkew || issuedAt.Sub(s.now()) > wrenchPrivateMaxClockSkew {
++		return wrenchPrivateResult("failed", "request_clock_window", wrenchPrivateOutcome{})
++	}
++	if !wrenchPrivateVerifyMAC(req.MAC, wrenchPrivateSignRequest(s.key, req)) {
++		return wrenchPrivateResult("failed", "request_authentication_failed", wrenchPrivateOutcome{})
++	}
++	if !s.replay.accept(req.Nonce, s.now()) {
++		return wrenchPrivateResult("failed", "replay_or_nonce_capacity", wrenchPrivateOutcome{})
++	}
++	currentEpoch, connected := s.engine.backend.ConnectionEpoch()
++	if !connected || currentEpoch != s.binding.ConnectionEpoch {
++		return wrenchPrivateResult("failed", "connection_epoch_drift", wrenchPrivateOutcome{})
++	}
++	switch req.Kind {
++	case "send":
++		return s.engine.send(ctx, req)
++	case "status_barrier":
++		if req.Send != nil {
++			return wrenchPrivateResult("failed", "invalid_request", wrenchPrivateOutcome{})
++		}
++		return s.engine.status(ctx)
++	default:
++		return wrenchPrivateResult("failed", "unsupported_request_kind", wrenchPrivateOutcome{})
++	}
++}
++
++func newWrenchPrivateCmd(flags *rootFlags) *cobra.Command {
++	cmd := &cobra.Command{
++		Use:   "wrench-private",
++		Short: "Use the pinned private Wrench mutation transport",
++	}
++	cmd.AddCommand(newWrenchPrivateSendCmd(flags))
++	cmd.AddCommand(newWrenchPrivateStatusCmd(flags))
++	return cmd
++}
++
++func newWrenchPrivateSendCmd(flags *rootFlags) *cobra.Command {
++	input := "-"
++	cmd := &cobra.Command{
++		Use:   "send",
++		Short: "Submit one private no-retry text payload from stdin or a 0600 file",
++		Args:  cobra.NoArgs,
++		RunE: func(cmd *cobra.Command, args []string) error {
++			if err := flags.requireWritable(); err != nil {
++				return err
++			}
++			var raw []byte
++			var err error
++			if input == "-" {
++				raw, err = wrenchPrivateReadBounded(cmd.InOrStdin(), wrenchPrivateMaxPayload)
++			} else {
++				raw, err = wrenchPrivateReadFile(input, wrenchPrivateMaxPayload)
++			}
++			if err != nil {
++				return err
++			}
++			var payload wrenchPrivateSendPayload
++			if err := wrenchPrivateDecodeStrict(raw, &payload); err != nil {
++				return err
++			}
++			timeout, err := validateWrenchPrivateSend(&payload)
++			if err != nil {
++				return err
++			}
++			storeDir, err := resolveStoreDir(flags)
++			if err != nil {
++				return err
++			}
++			resp, err := wrenchPrivateCall(storeDir, "send", &payload, timeout)
++			if err != nil {
++				return err
++			}
++			if err := out.WriteJSON(cmd.OutOrStdout(), resp); err != nil {
++				return err
++			}
++			if !resp.OK {
++				return fmt.Errorf("wrench private send: %s (%s)", resp.State, resp.Reason)
++			}
++			return nil
++		},
++	}
++	cmd.Flags().StringVar(&input, "input", "-", "private JSON payload source: - for stdin or an owner-only 0600 file")
++	return cmd
++}
++
++func newWrenchPrivateStatusCmd(flags *rootFlags) *cobra.Command {
++	return &cobra.Command{
++		Use:   "status",
++		Short: "Authenticate, prove connection drain, and reconcile the mutation lane",
++		Args:  cobra.NoArgs,
++		RunE: func(cmd *cobra.Command, args []string) error {
++			storeDir, err := resolveStoreDir(flags)
++			if err != nil {
++				return err
++			}
++			resp, err := wrenchPrivateCall(storeDir, "status_barrier", nil, wrenchPrivateBarrierTimeout)
++			if err != nil {
++				return err
++			}
++			if err := out.WriteJSON(cmd.OutOrStdout(), resp); err != nil {
++				return err
++			}
++			if !resp.OK {
++				return fmt.Errorf("wrench private status: %s (%s)", resp.State, resp.Reason)
++			}
++			return nil
++		},
++	}
++}
+diff --git a/cmd/wacli/wrench_private_engine.go b/cmd/wacli/wrench_private_engine.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..62c24da61fe52fd91314912f3c5ac201d7acc308
+--- /dev/null
++++ b/cmd/wacli/wrench_private_engine.go
+@@ -0,0 +1,412 @@
++package main
++
++import (
++	"context"
++	"database/sql"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/openclaw/wacli/internal/app"
++	"github.com/openclaw/wacli/internal/store"
++	"github.com/openclaw/wacli/internal/wa"
++	waProto "go.mau.fi/whatsmeow/binary/proto"
++	"go.mau.fi/whatsmeow/types"
++)
++
++const (
++	wrenchPrivateMinTimeout     = 100 * time.Millisecond
++	wrenchPrivateMaxTimeout     = 45 * time.Second
++	wrenchPrivateBarrierTimeout = 10 * time.Second
++)
++
++type wrenchPrivateCommittedProof struct {
++	Revision        string
++	BarrierSequence uint64
++}
++
++type wrenchPrivateBackend interface {
++	ConnectionEpoch() (uint64, bool)
++	GenerateMessageID() (string, error)
++	SendNoRetry(context.Context, string, string, string, time.Duration) error
++	PersistOutbound(context.Context, string, string, string, time.Time) error
++	Barrier(context.Context) (wa.WrenchBarrierProof, error)
++	ReadCommitted(string, string, string) (string, error)
++}
++
++type wrenchPrivateOutcome struct {
++	state              string
++	reason             string
++	routeSHA256        string
++	requestSHA256      string
++	messageID          string
++	messageIDSHA256    string
++	bodySHA256         string
++	to                 string
++	epoch              uint64
++	committedRevision  string
++	barrierSequence    uint64
++	timedOutToCaller   bool
++	transactionFailed  bool
++	possibleSubmission bool
++}
++
++type wrenchPrivateWorker struct {
++	done    chan struct{}
++	outcome wrenchPrivateOutcome
++}
++
++type wrenchPrivateMutationEngine struct {
++	mu             sync.Mutex
++	backend        wrenchPrivateBackend
++	epoch          uint64
++	barrierTimeout time.Duration
++	active         *wrenchPrivateWorker
++	poison         *wrenchPrivateOutcome
++}
++
++func newWrenchPrivateMutationEngine(backend wrenchPrivateBackend, epoch uint64) *wrenchPrivateMutationEngine {
++	return &wrenchPrivateMutationEngine{backend: backend, epoch: epoch, barrierTimeout: wrenchPrivateBarrierTimeout}
++}
++
++func validateWrenchPrivateSend(payload *wrenchPrivateSendPayload) (time.Duration, error) {
++	if payload == nil {
++		return 0, fmt.Errorf("send payload is required")
++	}
++	jid, err := types.ParseJID(strings.TrimSpace(payload.To))
++	if err != nil || jid.IsEmpty() || jid.Device != 0 {
++		return 0, fmt.Errorf("to must be one exact non-device JID")
++	}
++	if jid.String() != payload.To {
++		return 0, fmt.Errorf("to must use the canonical exact JID representation")
++	}
++	switch jid.Server {
++	case types.DefaultUserServer, types.HiddenUserServer, types.GroupServer:
++	default:
++		return 0, fmt.Errorf("unsupported exact JID server")
++	}
++	if payload.Message == "" || len([]byte(payload.Message)) > wrenchPrivateMaxMessage {
++		return 0, fmt.Errorf("message must be between 1 and %d bytes", wrenchPrivateMaxMessage)
++	}
++	if strings.TrimSpace(payload.Message) != payload.Message {
++		return 0, fmt.Errorf("leading or trailing whitespace is not qualified by this prototype")
++	}
++	if payload.ReplyTo != "" || payload.ReplyToSender != "" {
++		return 0, fmt.Errorf("replies are not qualified by this prototype")
++	}
++	if !payload.NoPreview {
++		return 0, fmt.Errorf("no_preview must be true")
++	}
++	if !payload.NoRetry {
++		return 0, fmt.Errorf("no_retry must be true")
++	}
++	timeout := time.Duration(payload.TimeoutMS) * time.Millisecond
++	if timeout < wrenchPrivateMinTimeout || timeout > wrenchPrivateMaxTimeout {
++		return 0, fmt.Errorf("timeout_ms must be between %d and %d", wrenchPrivateMinTimeout.Milliseconds(), wrenchPrivateMaxTimeout.Milliseconds())
++	}
++	return timeout, nil
++}
++
++func (e *wrenchPrivateMutationEngine) send(parent context.Context, request wrenchPrivateWireRequest) wrenchPrivateWireResponse {
++	timeout, err := validateWrenchPrivateSend(request.Send)
++	if err != nil {
++		return wrenchPrivateResult("failed", "invalid_request", wrenchPrivateOutcome{})
++	}
++	e.mu.Lock()
++	currentEpoch, connected := e.backend.ConnectionEpoch()
++	if !connected || currentEpoch != e.epoch {
++		e.mu.Unlock()
++		return wrenchPrivateResult("failed", "connection_epoch_drift", wrenchPrivateOutcome{})
++	}
++	if e.active != nil {
++		outcome := e.active.outcome
++		e.mu.Unlock()
++		return wrenchPrivateResult("still_in_flight", "mutation_worker_active", outcome)
++	}
++	if e.poison != nil {
++		outcome := *e.poison
++		e.mu.Unlock()
++		return wrenchPrivateResult("indeterminate", "route_lane_poisoned", outcome)
++	}
++	messageID, err := e.backend.GenerateMessageID()
++	if err != nil || strings.TrimSpace(messageID) == "" {
++		e.mu.Unlock()
++		return wrenchPrivateResult("failed", "message_id_unavailable", wrenchPrivateOutcome{})
++	}
++	outcome := wrenchPrivateOutcome{
++		state:           "started",
++		routeSHA256:     wrenchPrivateSubject(request.Send.To),
++		requestSHA256:   wrenchPrivateRequestHash(request),
++		messageID:       messageID,
++		messageIDSHA256: wrenchPrivateSubject(messageID),
++		bodySHA256:      wrenchPrivateHash([]byte(request.Send.Message)),
++		to:              strings.TrimSpace(request.Send.To),
++		epoch:           e.epoch,
++	}
++	worker := &wrenchPrivateWorker{done: make(chan struct{}), outcome: outcome}
++	initialOutcome := outcome
++	e.active = worker
++	e.mu.Unlock()
++
++	workerCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
++	go func(initial wrenchPrivateOutcome) {
++		defer cancel()
++		result := e.runWorker(workerCtx, initial, request.Send.Message, timeout)
++		e.mu.Lock()
++		result.timedOutToCaller = worker.outcome.timedOutToCaller
++		worker.outcome = result
++		if e.active == worker {
++			e.active = nil
++		}
++		if result.timedOutToCaller || result.state != "submitted" {
++			copy := result
++			e.poison = &copy
++		}
++		close(worker.done)
++		e.mu.Unlock()
++	}(initialOutcome)
++
++	timer := time.NewTimer(timeout)
++	defer timer.Stop()
++	select {
++	case <-worker.done:
++		e.mu.Lock()
++		result := worker.outcome
++		e.mu.Unlock()
++		return wrenchPrivateResult(result.state, result.reason, result)
++	case <-timer.C:
++		e.mu.Lock()
++		worker.outcome.timedOutToCaller = true
++		result := worker.outcome
++		e.mu.Unlock()
++		return wrenchPrivateResult("still_in_flight", "mutation_worker_active", result)
++	}
++}
++
++func (e *wrenchPrivateMutationEngine) runWorker(ctx context.Context, outcome wrenchPrivateOutcome, body string, timeout time.Duration) wrenchPrivateOutcome {
++	outcome.possibleSubmission = true
++	if err := e.backend.SendNoRetry(ctx, outcome.to, body, outcome.messageID, timeout); err != nil {
++		outcome.state = "indeterminate"
++		outcome.reason = "send_result_uncertain"
++		return outcome
++	}
++	if err := e.backend.PersistOutbound(context.WithoutCancel(ctx), outcome.to, outcome.messageID, body, time.Now().UTC()); err != nil {
++		outcome.state = "indeterminate"
++		outcome.reason = "transaction_failure"
++		outcome.transactionFailed = true
++		return outcome
++	}
++	barrierCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.barrierTimeout)
++	proof, err := e.backend.Barrier(barrierCtx)
++	cancel()
++	if err != nil {
++		outcome.state = "indeterminate"
++		outcome.reason = wrenchPrivateBarrierReason(err)
++		return outcome
++	}
++	if proof.ConnectionEpoch != outcome.epoch {
++		outcome.state = "indeterminate"
++		outcome.reason = "connection_epoch_drift"
++		return outcome
++	}
++	revision, err := e.backend.ReadCommitted(outcome.to, outcome.messageID, outcome.bodySHA256)
++	if err != nil {
++		outcome.state = "indeterminate"
++		outcome.reason = "committed_read_failure"
++		return outcome
++	}
++	if finalEpoch, connected := e.backend.ConnectionEpoch(); !connected || finalEpoch != outcome.epoch {
++		outcome.state = "indeterminate"
++		outcome.reason = "connection_epoch_drift"
++		return outcome
++	}
++	outcome.state = "submitted"
++	outcome.reason = ""
++	outcome.committedRevision = revision
++	outcome.barrierSequence = proof.ResponseSequence
++	return outcome
++}
++
++func (e *wrenchPrivateMutationEngine) status(parent context.Context) wrenchPrivateWireResponse {
++	e.mu.Lock()
++	currentEpoch, connected := e.backend.ConnectionEpoch()
++	if !connected || currentEpoch != e.epoch {
++		e.mu.Unlock()
++		return wrenchPrivateResult("failed", "connection_epoch_drift", wrenchPrivateOutcome{})
++	}
++	if e.active != nil {
++		outcome := e.active.outcome
++		e.mu.Unlock()
++		return wrenchPrivateResult("still_in_flight", "mutation_worker_active", outcome)
++	}
++	var prior *wrenchPrivateOutcome
++	if e.poison != nil {
++		copy := *e.poison
++		prior = &copy
++	}
++	e.mu.Unlock()
++
++	barrierCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), e.barrierTimeout)
++	proof, err := e.backend.Barrier(barrierCtx)
++	cancel()
++	if err != nil {
++		outcome := wrenchPrivateOutcome{}
++		if prior != nil {
++			outcome = *prior
++		}
++		return wrenchPrivateResult("indeterminate", wrenchPrivateBarrierReason(err), outcome)
++	}
++	if proof.ConnectionEpoch != e.epoch {
++		return wrenchPrivateResult("failed", "connection_epoch_drift", wrenchPrivateOutcome{})
++	}
++	if finalEpoch, connected := e.backend.ConnectionEpoch(); !connected || finalEpoch != e.epoch {
++		return wrenchPrivateResult("failed", "connection_epoch_drift", wrenchPrivateOutcome{})
++	}
++	if prior == nil {
++		return wrenchPrivateResult("idle", "", wrenchPrivateOutcome{barrierSequence: proof.ResponseSequence})
++	}
++	if prior.transactionFailed {
++		return wrenchPrivateResult("indeterminate", "transaction_failure", *prior)
++	}
++	revision, readErr := e.backend.ReadCommitted(prior.to, prior.messageID, prior.bodySHA256)
++	if readErr != nil {
++		if errors.Is(readErr, sql.ErrNoRows) {
++			return wrenchPrivateResult("indeterminate", "submitted_state_not_observed", *prior)
++		}
++		return wrenchPrivateResult("indeterminate", "committed_read_failure", *prior)
++	}
++	if finalEpoch, connected := e.backend.ConnectionEpoch(); !connected || finalEpoch != e.epoch {
++		return wrenchPrivateResult("failed", "connection_epoch_drift", *prior)
++	}
++	prior.state = "submitted"
++	prior.reason = ""
++	prior.committedRevision = revision
++	prior.barrierSequence = proof.ResponseSequence
++	e.mu.Lock()
++	if e.poison != nil && e.poison.requestSHA256 == prior.requestSHA256 {
++		e.poison = nil
++	}
++	e.mu.Unlock()
++	return wrenchPrivateResult("submitted", "", *prior)
++}
++
++func wrenchPrivateBarrierReason(err error) string {
++	var barrierErr *wa.WrenchBarrierError
++	if errors.As(err, &barrierErr) && barrierErr.Category != "" {
++		return barrierErr.Category
++	}
++	if errors.Is(err, context.DeadlineExceeded) {
++		return "keepalive_timeout"
++	}
++	return "barrier_failure"
++}
++
++func wrenchPrivateResult(state, reason string, outcome wrenchPrivateOutcome) wrenchPrivateWireResponse {
++	return wrenchPrivateWireResponse{
++		SchemaVersion:     wrenchPrivateProtocolVersion,
++		OK:                state == "submitted" || state == "idle",
++		State:             state,
++		Reason:            reason,
++		RouteSHA256:       outcome.routeSHA256,
++		RequestSHA256:     outcome.requestSHA256,
++		MessageIDSHA256:   outcome.messageIDSHA256,
++		CommittedRevision: outcome.committedRevision,
++		BarrierSequence:   outcome.barrierSequence,
++		RecordedAt:        time.Now().UTC().Format(time.RFC3339Nano),
++	}
++}
++
++type wrenchPrivateAppBackend struct {
++	app       *app.App
++	transport wa.WrenchPrivateTransport
++}
++
++func newWrenchPrivateAppBackend(a *app.App) (*wrenchPrivateAppBackend, error) {
++	transport, ok := a.WA().(wa.WrenchPrivateTransport)
++	if !ok {
++		return nil, wa.ErrWrenchPrivateTransportUnavailable
++	}
++	if _, connected := transport.WrenchConnectionEpoch(); !connected {
++		return nil, wa.ErrWrenchPrivateTransportUnavailable
++	}
++	return &wrenchPrivateAppBackend{app: a, transport: transport}, nil
++}
++
++func (b *wrenchPrivateAppBackend) ConnectionEpoch() (uint64, bool) {
++	return b.transport.WrenchConnectionEpoch()
++}
++
++func (b *wrenchPrivateAppBackend) GenerateMessageID() (string, error) {
++	id, err := b.transport.WrenchGenerateMessageID()
++	return string(id), err
++}
++
++func (b *wrenchPrivateAppBackend) SendNoRetry(ctx context.Context, to, body, messageID string, timeout time.Duration) error {
++	jid, err := types.ParseJID(to)
++	if err != nil {
++		return err
++	}
++	msg := &waProto.Message{Conversation: &body}
++	return b.transport.WrenchSendProtoNoRetry(ctx, jid, msg, types.MessageID(messageID), timeout)
++}
++
++func (b *wrenchPrivateAppBackend) PersistOutbound(ctx context.Context, to, messageID, body string, now time.Time) error {
++	jid, err := types.ParseJID(to)
++	if err != nil {
++		return err
++	}
++	chatName := b.app.WA().ResolveChatName(ctx, jid, "")
++	if err := b.app.DB().UpsertChat(jid.String(), chatKindFromJID(jid), chatName, now); err != nil {
++		return err
++	}
++	return b.app.DB().UpsertMessage(store.UpsertMessageParams{
++		ChatJID:    jid.String(),
++		ChatName:   chatName,
++		MsgID:      messageID,
++		SenderName: "me",
++		Timestamp:  now,
++		FromMe:     true,
++		Text:       body,
++	})
++}
++
++func (b *wrenchPrivateAppBackend) Barrier(ctx context.Context) (wa.WrenchBarrierProof, error) {
++	return b.transport.WrenchReceiveBarrier(ctx)
++}
++
++func (b *wrenchPrivateAppBackend) ReadCommitted(to, messageID, bodySHA256 string) (string, error) {
++	message, err := b.app.DB().GetMessage(to, messageID)
++	if err != nil {
++		return "", err
++	}
++	if !message.FromMe || wrenchPrivateHash([]byte(message.Text)) != bodySHA256 {
++		return "", fmt.Errorf("committed message does not match exact outbound payload")
++	}
++	canonical := struct {
++		ChatJID         string `json:"chat_jid"`
++		MessageID       string `json:"message_id"`
++		Timestamp       string `json:"timestamp"`
++		FromMe          bool   `json:"from_me"`
++		BodySHA256      string `json:"body_sha256"`
++		QuotedMessageID string `json:"quoted_message_id"`
++		Revoked         bool   `json:"revoked"`
++		DeletedForMe    bool   `json:"deleted_for_me"`
++	}{
++		ChatJID:         message.ChatJID,
++		MessageID:       message.MsgID,
++		Timestamp:       message.Timestamp.UTC().Format(time.RFC3339Nano),
++		FromMe:          message.FromMe,
++		BodySHA256:      bodySHA256,
++		QuotedMessageID: message.QuotedMsgID,
++		Revoked:         message.Revoked,
++		DeletedForMe:    message.DeletedForMe,
++	}
++	raw, err := json.Marshal(canonical)
++	if err != nil {
++		return "", err
++	}
++	return wrenchPrivateHash(raw), nil
++}
+diff --git a/cmd/wacli/wrench_private_engine_test.go b/cmd/wacli/wrench_private_engine_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..82f97490e2590bdc8177cf94f79222e4fcfae416
+--- /dev/null
++++ b/cmd/wacli/wrench_private_engine_test.go
+@@ -0,0 +1,296 @@
++package main
++
++import (
++	"context"
++	"database/sql"
++	"errors"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/openclaw/wacli/internal/wa"
++)
++
++type fakeWrenchPrivateBackend struct {
++	mu sync.Mutex
++
++	epoch     uint64
++	connected bool
++	nextID    string
++
++	sendCalls int
++	sendErr   error
++	sendBlock <-chan struct{}
++	sendStart chan struct{}
++
++	persistErr  error
++	persisted   chan struct{}
++	rows        map[string]string
++	driftOnRead bool
++
++	barrierCalls int
++	barrierErr   error
++	barrierBlock bool
++	sequence     uint64
++}
++
++func newFakeWrenchPrivateBackend() *fakeWrenchPrivateBackend {
++	return &fakeWrenchPrivateBackend{
++		epoch:     7,
++		connected: true,
++		nextID:    "message-1",
++		rows:      make(map[string]string),
++		sequence:  42,
++	}
++}
++
++func (f *fakeWrenchPrivateBackend) ConnectionEpoch() (uint64, bool) {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	return f.epoch, f.connected
++}
++
++func (f *fakeWrenchPrivateBackend) GenerateMessageID() (string, error) {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	return f.nextID, nil
++}
++
++func (f *fakeWrenchPrivateBackend) SendNoRetry(ctx context.Context, _, _, _ string, _ time.Duration) error {
++	f.mu.Lock()
++	f.sendCalls++
++	block := f.sendBlock
++	started := f.sendStart
++	err := f.sendErr
++	f.mu.Unlock()
++	if started != nil {
++		select {
++		case started <- struct{}{}:
++		default:
++		}
++	}
++	if block != nil {
++		<-block // Deliberately ignore ctx to model a late provider completion.
++	}
++	return err
++}
++
++func (f *fakeWrenchPrivateBackend) PersistOutbound(_ context.Context, to, id, body string, _ time.Time) error {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	if f.persistErr != nil {
++		return f.persistErr
++	}
++	f.rows[to+"\x00"+id] = wrenchPrivateHash([]byte(body))
++	if f.persisted != nil {
++		close(f.persisted)
++		f.persisted = nil
++	}
++	return nil
++}
++
++func (f *fakeWrenchPrivateBackend) Barrier(ctx context.Context) (wa.WrenchBarrierProof, error) {
++	f.mu.Lock()
++	f.barrierCalls++
++	block := f.barrierBlock
++	err := f.barrierErr
++	epoch := f.epoch
++	sequence := f.sequence
++	f.mu.Unlock()
++	if block {
++		<-ctx.Done()
++		return wa.WrenchBarrierProof{}, ctx.Err()
++	}
++	if err != nil {
++		return wa.WrenchBarrierProof{}, err
++	}
++	return wa.WrenchBarrierProof{ConnectionEpoch: epoch, ResponseSequence: sequence}, nil
++}
++
++func (f *fakeWrenchPrivateBackend) ReadCommitted(to, id, bodyHash string) (string, error) {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	got, ok := f.rows[to+"\x00"+id]
++	if !ok {
++		return "", sql.ErrNoRows
++	}
++	if got != bodyHash {
++		return "", errors.New("body hash mismatch")
++	}
++	if f.driftOnRead {
++		f.epoch++
++	}
++	return wrenchPrivateHash([]byte(to + "\x00" + id + "\x00" + got)), nil
++}
++
++func privateSendRequest(timeout time.Duration) wrenchPrivateWireRequest {
++	return wrenchPrivateWireRequest{
++		SchemaVersion: wrenchPrivateProtocolVersion,
++		Kind:          "send",
++		Nonce:         "00112233445566778899aabbccddeeff0011223344556677",
++		IssuedAt:      time.Now().UTC().Format(time.RFC3339Nano),
++		Send: &wrenchPrivateSendPayload{
++			To:        "15551234567@s.whatsapp.net",
++			Message:   "private payload sentinel",
++			NoPreview: true,
++			NoRetry:   true,
++			TimeoutMS: timeout.Milliseconds(),
++		},
++	}
++}
++
++func TestWrenchPrivateEngineSubmittedRequiresBarrierAndCommittedRead(t *testing.T) {
++	backend := newFakeWrenchPrivateBackend()
++	engine := newWrenchPrivateMutationEngine(backend, backend.epoch)
++	resp := engine.send(context.Background(), privateSendRequest(time.Second))
++	if !resp.OK || resp.State != "submitted" || resp.CommittedRevision == "" || resp.BarrierSequence != 42 {
++		t.Fatalf("response = %+v", resp)
++	}
++	backend.mu.Lock()
++	defer backend.mu.Unlock()
++	if backend.sendCalls != 1 {
++		t.Fatalf("send calls = %d, want 1", backend.sendCalls)
++	}
++	if backend.barrierCalls != 1 {
++		t.Fatalf("barrier calls = %d, want 1", backend.barrierCalls)
++	}
++}
++
++func TestWrenchPrivateEngineTimeoutOwnsLateWorkerAndPoisonsLane(t *testing.T) {
++	backend := newFakeWrenchPrivateBackend()
++	block := make(chan struct{})
++	backend.sendBlock = block
++	backend.sendStart = make(chan struct{}, 1)
++	persisted := make(chan struct{})
++	backend.persisted = persisted
++	engine := newWrenchPrivateMutationEngine(backend, backend.epoch)
++
++	request := privateSendRequest(wrenchPrivateMinTimeout)
++	resp := engine.send(context.Background(), request)
++	if resp.State != "still_in_flight" || resp.Reason != "mutation_worker_active" {
++		t.Fatalf("timeout response = %+v", resp)
++	}
++	blocked := engine.send(context.Background(), request)
++	if blocked.State != "still_in_flight" || blocked.Reason != "mutation_worker_active" {
++		t.Fatalf("second send was not blocked: %+v", blocked)
++	}
++
++	close(block)
++	select {
++	case <-persisted:
++	case <-time.After(time.Second):
++		t.Fatal("late worker did not persist")
++	}
++	deadline := time.Now().Add(time.Second)
++	for {
++		status := engine.status(context.Background())
++		if status.State == "submitted" {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("late completion did not reconcile: %+v", status)
++		}
++		time.Sleep(time.Millisecond)
++	}
++	backend.mu.Lock()
++	if backend.sendCalls != 1 {
++		t.Fatalf("late completion was retried: calls=%d", backend.sendCalls)
++	}
++	backend.mu.Unlock()
++}
++
++func TestWrenchPrivateEngineNeverRetriesUncertainSend(t *testing.T) {
++	backend := newFakeWrenchPrivateBackend()
++	backend.sendErr = errors.New("response lost after frame write")
++	engine := newWrenchPrivateMutationEngine(backend, backend.epoch)
++	resp := engine.send(context.Background(), privateSendRequest(time.Second))
++	if resp.State != "indeterminate" || resp.Reason != "send_result_uncertain" {
++		t.Fatalf("response = %+v", resp)
++	}
++	blocked := engine.send(context.Background(), privateSendRequest(time.Second))
++	if blocked.Reason != "route_lane_poisoned" {
++		t.Fatalf("lane = %+v", blocked)
++	}
++	backend.mu.Lock()
++	defer backend.mu.Unlock()
++	if backend.sendCalls != 1 {
++		t.Fatalf("send calls = %d, want 1", backend.sendCalls)
++	}
++}
++
++func TestWrenchPrivateEngineFailsOnTransactionAndBarrierStates(t *testing.T) {
++	t.Run("transaction", func(t *testing.T) {
++		backend := newFakeWrenchPrivateBackend()
++		backend.persistErr = errors.New("commit failed")
++		engine := newWrenchPrivateMutationEngine(backend, backend.epoch)
++		resp := engine.send(context.Background(), privateSendRequest(time.Second))
++		if resp.State != "indeterminate" || resp.Reason != "transaction_failure" {
++			t.Fatalf("response = %+v", resp)
++		}
++		status := engine.status(context.Background())
++		if status.Reason != "transaction_failure" {
++			t.Fatalf("status = %+v", status)
++		}
++	})
++
++	for _, category := range []string{"queue_overflow", "escaped_or_late_handler", "transaction_or_handler_failure", "connection_epoch_drift"} {
++		t.Run(category, func(t *testing.T) {
++			backend := newFakeWrenchPrivateBackend()
++			backend.barrierErr = &wa.WrenchBarrierError{Category: category}
++			engine := newWrenchPrivateMutationEngine(backend, backend.epoch)
++			resp := engine.send(context.Background(), privateSendRequest(time.Second))
++			if resp.State != "indeterminate" || resp.Reason != category {
++				t.Fatalf("response = %+v", resp)
++			}
++		})
++	}
++}
++
++func TestWrenchPrivateEngineFailsOnBlackholeAndEpochDrift(t *testing.T) {
++	backend := newFakeWrenchPrivateBackend()
++	backend.barrierBlock = true
++	engine := newWrenchPrivateMutationEngine(backend, backend.epoch)
++	engine.barrierTimeout = 20 * time.Millisecond
++	resp := engine.send(context.Background(), privateSendRequest(time.Second))
++	if resp.State != "indeterminate" || resp.Reason != "keepalive_timeout" {
++		t.Fatalf("blackhole response = %+v", resp)
++	}
++
++	backend2 := newFakeWrenchPrivateBackend()
++	engine2 := newWrenchPrivateMutationEngine(backend2, backend2.epoch)
++	backend2.epoch++
++	drift := engine2.send(context.Background(), privateSendRequest(time.Second))
++	if drift.State != "failed" || drift.Reason != "connection_epoch_drift" {
++		t.Fatalf("epoch response = %+v", drift)
++	}
++
++	backend3 := newFakeWrenchPrivateBackend()
++	backend3.driftOnRead = true
++	engine3 := newWrenchPrivateMutationEngine(backend3, backend3.epoch)
++	finalDrift := engine3.send(context.Background(), privateSendRequest(time.Second))
++	if finalDrift.State != "indeterminate" || finalDrift.Reason != "connection_epoch_drift" {
++		t.Fatalf("final-read epoch response = %+v", finalDrift)
++	}
++}
++
++func TestValidateWrenchPrivateSendRequiresExactPrivateContract(t *testing.T) {
++	valid := privateSendRequest(time.Second).Send
++	if _, err := validateWrenchPrivateSend(valid); err != nil {
++		t.Fatalf("valid: %v", err)
++	}
++	tests := []func(*wrenchPrivateSendPayload){
++		func(p *wrenchPrivateSendPayload) { p.To = "Alice" },
++		func(p *wrenchPrivateSendPayload) { p.Message = " private" },
++		func(p *wrenchPrivateSendPayload) { p.NoPreview = false },
++		func(p *wrenchPrivateSendPayload) { p.NoRetry = false },
++		func(p *wrenchPrivateSendPayload) { p.ReplyTo = "not-qualified" },
++		func(p *wrenchPrivateSendPayload) { p.TimeoutMS = 1 },
++	}
++	for i, mutate := range tests {
++		copy := *valid
++		mutate(&copy)
++		if _, err := validateWrenchPrivateSend(&copy); err == nil {
++			t.Fatalf("case %d unexpectedly valid", i)
++		}
++	}
++}
+diff --git a/cmd/wacli/wrench_private_protocol.go b/cmd/wacli/wrench_private_protocol.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..410e08516568b431a0e665883916d94293c0aadd
+--- /dev/null
++++ b/cmd/wacli/wrench_private_protocol.go
+@@ -0,0 +1,352 @@
++package main
++
++import (
++	"bytes"
++	"crypto/hmac"
++	"crypto/rand"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/openclaw/wacli/internal/fsutil"
++)
++
++const (
++	wrenchPrivateProtocolVersion = 1
++	wrenchPrivateSocketName      = ".wrench-send.sock"
++	wrenchPrivateKeyName         = ".wrench-send.key"
++	wrenchPrivateStatusName      = ".wrench-send-status.json"
++	wrenchPrivateMaxPayload      = 32 * 1024
++	wrenchPrivateMaxMessage      = 16 * 1024
++	wrenchPrivateMaxClockSkew    = 30 * time.Second
++	wrenchPrivateReplayLimit     = 1024
++)
++
++const wrenchPrivateProtocolDescriptor = `{"format":"wacli.wrench-private-send","schemaVersion":1,"binding":["protocolHash","toolHash","storeSubject","authSubject","daemonPid","daemonStartedAt","connectionEpoch"],"requests":["send","status_barrier"],"transport":"owner-only-unix-socket+hmac-sha256","payload":"stdin-or-0600-file"}`
++
++type wrenchDaemonBinding struct {
++	ProtocolHash    string `json:"protocol_hash"`
++	ToolHash        string `json:"tool_hash"`
++	StoreSubject    string `json:"store_subject"`
++	AuthSubject     string `json:"auth_subject"`
++	DaemonPID       int    `json:"daemon_pid"`
++	DaemonStartedAt string `json:"daemon_started_at"`
++	ConnectionEpoch uint64 `json:"connection_epoch"`
++}
++
++type wrenchPrivateStatusFile struct {
++	SchemaVersion int                 `json:"schema_version"`
++	Format        string              `json:"format"`
++	Binding       wrenchDaemonBinding `json:"binding"`
++	RecordedAt    string              `json:"recorded_at"`
++}
++
++type wrenchPrivateSendPayload struct {
++	To            string `json:"to"`
++	Message       string `json:"message"`
++	ReplyTo       string `json:"reply_to,omitempty"`
++	ReplyToSender string `json:"reply_to_sender,omitempty"`
++	NoPreview     bool   `json:"no_preview"`
++	NoRetry       bool   `json:"no_retry"`
++	TimeoutMS     int64  `json:"timeout_ms"`
++}
++
++type wrenchPrivateWireRequest struct {
++	SchemaVersion int                       `json:"schema_version"`
++	Kind          string                    `json:"kind"`
++	Binding       wrenchDaemonBinding       `json:"binding"`
++	Nonce         string                    `json:"nonce"`
++	IssuedAt      string                    `json:"issued_at"`
++	Send          *wrenchPrivateSendPayload `json:"send,omitempty"`
++	MAC           string                    `json:"mac"`
++}
++
++type wrenchPrivateWireResponse struct {
++	SchemaVersion     int                 `json:"schema_version"`
++	OK                bool                `json:"ok"`
++	State             string              `json:"state"`
++	Reason            string              `json:"reason,omitempty"`
++	Binding           wrenchDaemonBinding `json:"binding"`
++	Nonce             string              `json:"nonce"`
++	RouteSHA256       string              `json:"route_sha256,omitempty"`
++	RequestSHA256     string              `json:"request_sha256,omitempty"`
++	MessageIDSHA256   string              `json:"message_id_sha256,omitempty"`
++	CommittedRevision string              `json:"committed_revision,omitempty"`
++	BarrierSequence   uint64              `json:"barrier_sequence,omitempty"`
++	RecordedAt        string              `json:"recorded_at"`
++	MAC               string              `json:"mac"`
++}
++
++func wrenchPrivateProtocolHash() string {
++	return wrenchPrivateHash([]byte(wrenchPrivateProtocolDescriptor))
++}
++
++func wrenchPrivateHash(data []byte) string {
++	sum := sha256.Sum256(data)
++	return hex.EncodeToString(sum[:])
++}
++
++func wrenchPrivateSubject(value string) string {
++	return wrenchPrivateHash([]byte(strings.TrimSpace(value)))
++}
++
++func wrenchPrivateRequestHash(req wrenchPrivateWireRequest) string {
++	copy := req
++	copy.MAC = ""
++	raw, _ := json.Marshal(copy)
++	return wrenchPrivateHash(raw)
++}
++
++func wrenchPrivateSignRequest(key []byte, req wrenchPrivateWireRequest) string {
++	req.MAC = ""
++	raw, _ := json.Marshal(req)
++	mac := hmac.New(sha256.New, key)
++	_, _ = mac.Write(raw)
++	return hex.EncodeToString(mac.Sum(nil))
++}
++
++func wrenchPrivateSignResponse(key []byte, resp wrenchPrivateWireResponse) string {
++	resp.MAC = ""
++	raw, _ := json.Marshal(resp)
++	mac := hmac.New(sha256.New, key)
++	_, _ = mac.Write(raw)
++	return hex.EncodeToString(mac.Sum(nil))
++}
++
++func wrenchPrivateVerifyMAC(got, want string) bool {
++	gotBytes, err := hex.DecodeString(got)
++	if err != nil {
++		return false
++	}
++	wantBytes, err := hex.DecodeString(want)
++	if err != nil {
++		return false
++	}
++	return hmac.Equal(gotBytes, wantBytes)
++}
++
++func wrenchPrivateNonce() (string, error) {
++	raw := make([]byte, 24)
++	if _, err := rand.Read(raw); err != nil {
++		return "", err
++	}
++	return hex.EncodeToString(raw), nil
++}
++
++func wrenchPrivateSocketPath(storeDir string) string {
++	return filepath.Join(storeDir, wrenchPrivateSocketName)
++}
++
++func wrenchPrivateKeyPath(storeDir string) string {
++	return filepath.Join(storeDir, wrenchPrivateKeyName)
++}
++
++func wrenchPrivateStatusPath(storeDir string) string {
++	return filepath.Join(storeDir, wrenchPrivateStatusName)
++}
++
++func wrenchPrivateReadFile(path string, limit int64) ([]byte, error) {
++	info, err := os.Lstat(path)
++	if err != nil {
++		return nil, err
++	}
++	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
++		return nil, fmt.Errorf("private input must be a regular non-symlink file")
++	}
++	if info.Mode().Perm() != 0o600 {
++		return nil, fmt.Errorf("private input mode must be 0600")
++	}
++	if info.Size() > limit {
++		return nil, fmt.Errorf("private input exceeds %d bytes", limit)
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	defer f.Close()
++	return wrenchPrivateReadBounded(f, limit)
++}
++
++func wrenchPrivateReadBounded(reader io.Reader, limit int64) ([]byte, error) {
++	raw, err := io.ReadAll(io.LimitReader(reader, limit+1))
++	if err != nil {
++		return nil, err
++	}
++	if int64(len(raw)) > limit {
++		return nil, fmt.Errorf("private input exceeds %d bytes", limit)
++	}
++	return raw, nil
++}
++
++func wrenchPrivateDecodeStrict(raw []byte, target any) error {
++	decoder := json.NewDecoder(bytes.NewReader(raw))
++	decoder.DisallowUnknownFields()
++	if err := decoder.Decode(target); err != nil {
++		return fmt.Errorf("invalid private JSON payload")
++	}
++	if decoder.Decode(&struct{}{}) != io.EOF {
++		return fmt.Errorf("private JSON payload must contain one value")
++	}
++	return nil
++}
++
++func wrenchPrivateLoadOrCreateKey(storeDir string) ([]byte, error) {
++	path := wrenchPrivateKeyPath(storeDir)
++	raw, err := wrenchPrivateReadFile(path, 64)
++	if err == nil {
++		if len(raw) != 32 {
++			return nil, fmt.Errorf("wrench private key has invalid length")
++		}
++		return raw, nil
++	}
++	if !errors.Is(err, os.ErrNotExist) {
++		return nil, err
++	}
++	raw = make([]byte, 32)
++	if _, err := rand.Read(raw); err != nil {
++		return nil, err
++	}
++	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
++	if err != nil {
++		return nil, err
++	}
++	if _, err := f.Write(raw); err != nil {
++		_ = f.Close()
++		return nil, err
++	}
++	if err := f.Close(); err != nil {
++		return nil, err
++	}
++	return raw, nil
++}
++
++func wrenchPrivateWriteStatus(storeDir string, status wrenchPrivateStatusFile) error {
++	raw, err := json.Marshal(status)
++	if err != nil {
++		return err
++	}
++	return fsutil.WritePrivateFileAtomic(wrenchPrivateStatusPath(storeDir), append(raw, '\n'))
++}
++
++func wrenchPrivateExecutableHash() (string, error) {
++	path, err := os.Executable()
++	if err != nil {
++		return "", err
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		return "", err
++	}
++	defer f.Close()
++	hash := sha256.New()
++	if _, err := io.Copy(hash, f); err != nil {
++		return "", err
++	}
++	return hex.EncodeToString(hash.Sum(nil)), nil
++}
++
++type wrenchPrivateReplayCache struct {
++	mu    sync.Mutex
++	seen  map[string]time.Time
++	limit int
++}
++
++func newWrenchPrivateReplayCache(limit int) *wrenchPrivateReplayCache {
++	return &wrenchPrivateReplayCache{seen: make(map[string]time.Time), limit: limit}
++}
++
++func (c *wrenchPrivateReplayCache) accept(nonce string, now time.Time) bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	for key, seenAt := range c.seen {
++		if now.Sub(seenAt) > 2*wrenchPrivateMaxClockSkew {
++			delete(c.seen, key)
++		}
++	}
++	if _, exists := c.seen[nonce]; exists || len(c.seen) >= c.limit {
++		return false
++	}
++	c.seen[nonce] = now
++	return true
++}
++
++func wrenchPrivateEqualBinding(a, b wrenchDaemonBinding) bool {
++	return a == b
++}
++
++func wrenchPrivateCall(storeDir string, kind string, send *wrenchPrivateSendPayload, timeout time.Duration) (wrenchPrivateWireResponse, error) {
++	statusRaw, err := wrenchPrivateReadFile(wrenchPrivateStatusPath(storeDir), wrenchPrivateMaxPayload)
++	if err != nil {
++		return wrenchPrivateWireResponse{}, fmt.Errorf("read private transport status: %w", err)
++	}
++	var status wrenchPrivateStatusFile
++	if err := wrenchPrivateDecodeStrict(statusRaw, &status); err != nil {
++		return wrenchPrivateWireResponse{}, err
++	}
++	if status.SchemaVersion != wrenchPrivateProtocolVersion || status.Format != "wacli.wrench-private-status" {
++		return wrenchPrivateWireResponse{}, fmt.Errorf("unsupported private transport status")
++	}
++	toolHash, err := wrenchPrivateExecutableHash()
++	if err != nil {
++		return wrenchPrivateWireResponse{}, err
++	}
++	if status.Binding.ToolHash != toolHash || status.Binding.ProtocolHash != wrenchPrivateProtocolHash() {
++		return wrenchPrivateWireResponse{}, fmt.Errorf("private transport tool or protocol hash mismatch")
++	}
++	key, err := wrenchPrivateReadFile(wrenchPrivateKeyPath(storeDir), 64)
++	if err != nil || len(key) != 32 {
++		return wrenchPrivateWireResponse{}, fmt.Errorf("read private transport key")
++	}
++	nonce, err := wrenchPrivateNonce()
++	if err != nil {
++		return wrenchPrivateWireResponse{}, err
++	}
++	req := wrenchPrivateWireRequest{
++		SchemaVersion: wrenchPrivateProtocolVersion,
++		Kind:          kind,
++		Binding:       status.Binding,
++		Nonce:         nonce,
++		IssuedAt:      time.Now().UTC().Format(time.RFC3339Nano),
++		Send:          send,
++	}
++	req.MAC = wrenchPrivateSignRequest(key, req)
++
++	ctxDeadline := time.Now().Add(timeout + 2*time.Second)
++	var dialer net.Dialer
++	conn, err := dialer.Dial("unix", wrenchPrivateSocketPath(storeDir))
++	if err != nil {
++		return wrenchPrivateWireResponse{}, err
++	}
++	defer conn.Close()
++	_ = conn.SetDeadline(ctxDeadline)
++	if err := json.NewEncoder(conn).Encode(req); err != nil {
++		return wrenchPrivateWireResponse{}, err
++	}
++	if unixConn, ok := conn.(*net.UnixConn); ok {
++		if err := unixConn.CloseWrite(); err != nil {
++			return wrenchPrivateWireResponse{}, err
++		}
++	}
++	var resp wrenchPrivateWireResponse
++	decoder := json.NewDecoder(io.LimitReader(conn, wrenchPrivateMaxPayload+1))
++	decoder.DisallowUnknownFields()
++	if err := decoder.Decode(&resp); err != nil {
++		return wrenchPrivateWireResponse{}, err
++	}
++	if resp.Nonce != nonce || !wrenchPrivateEqualBinding(resp.Binding, status.Binding) {
++		return wrenchPrivateWireResponse{}, fmt.Errorf("private transport response binding mismatch")
++	}
++	if !wrenchPrivateVerifyMAC(resp.MAC, wrenchPrivateSignResponse(key, resp)) {
++		return wrenchPrivateWireResponse{}, fmt.Errorf("private transport response authentication failed")
++	}
++	return resp, nil
++}
+diff --git a/cmd/wacli/wrench_private_protocol_test.go b/cmd/wacli/wrench_private_protocol_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..797876f3e69bef2caefcca59345f5ae7dea9b511
+--- /dev/null
++++ b/cmd/wacli/wrench_private_protocol_test.go
+@@ -0,0 +1,93 @@
++package main
++
++import (
++	"bytes"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/openclaw/wacli/internal/fsutil"
++)
++
++func TestWrenchPrivateProtocolAuthenticatesExactBindingAndPayload(t *testing.T) {
++	key := bytes.Repeat([]byte{0x42}, 32)
++	req := privateSendRequest(time.Second)
++	req.Binding = wrenchDaemonBinding{
++		ProtocolHash:    wrenchPrivateProtocolHash(),
++		ToolHash:        strings.Repeat("a", 64),
++		StoreSubject:    strings.Repeat("b", 64),
++		AuthSubject:     strings.Repeat("c", 64),
++		DaemonPID:       123,
++		DaemonStartedAt: "2026-08-27T12:00:00Z",
++		ConnectionEpoch: 7,
++	}
++	req.MAC = wrenchPrivateSignRequest(key, req)
++	if !wrenchPrivateVerifyMAC(req.MAC, wrenchPrivateSignRequest(key, req)) {
++		t.Fatal("valid MAC rejected")
++	}
++	tampered := req
++	tampered.Send = &wrenchPrivateSendPayload{}
++	*tampered.Send = *req.Send
++	tampered.Send.Message = "tampered"
++	if wrenchPrivateVerifyMAC(tampered.MAC, wrenchPrivateSignRequest(key, tampered)) {
++		t.Fatal("tampered body authenticated")
++	}
++	tampered = req
++	tampered.Binding.ConnectionEpoch++
++	if wrenchPrivateVerifyMAC(tampered.MAC, wrenchPrivateSignRequest(key, tampered)) {
++		t.Fatal("tampered epoch authenticated")
++	}
++}
++
++func TestWrenchPrivateReplayCacheFailsClosedAtCapacity(t *testing.T) {
++	cache := newWrenchPrivateReplayCache(1)
++	now := time.Now()
++	if !cache.accept("one", now) {
++		t.Fatal("first nonce rejected")
++	}
++	if cache.accept("one", now) {
++		t.Fatal("replayed nonce accepted")
++	}
++	if cache.accept("two", now) {
++		t.Fatal("nonce accepted past capacity")
++	}
++}
++
++func TestWrenchPrivateInputRequiresOwnerOnlyRegularFile(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "payload.json")
++	if err := fsutil.WritePrivateFile(path, []byte(`{"message":"secret"}`)); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := wrenchPrivateReadFile(path, wrenchPrivateMaxPayload); err != nil {
++		t.Fatalf("0600 file: %v", err)
++	}
++	if err := os.Chmod(path, 0o644); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := wrenchPrivateReadFile(path, wrenchPrivateMaxPayload); err == nil {
++		t.Fatal("0644 file accepted")
++	}
++	link := filepath.Join(dir, "payload-link.json")
++	if err := os.Symlink(path, link); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := wrenchPrivateReadFile(link, wrenchPrivateMaxPayload); err == nil {
++		t.Fatal("symlink accepted")
++	}
++}
++
++func TestWrenchPrivateCommandHasNoMessageArgumentOrEnvironmentSurface(t *testing.T) {
++	cmd := newWrenchPrivateSendCmd(&rootFlags{})
++	for _, name := range []string{"message", "to", "reply-to", "body"} {
++		if cmd.Flags().Lookup(name) != nil {
++			t.Fatalf("private field exposed as --%s", name)
++		}
++	}
++	cmd.SetArgs([]string{"private body must not be argv"})
++	if err := cmd.Execute(); err == nil {
++		t.Fatal("positional body argument accepted")
++	}
++}
+diff --git a/docs/wrench-private-transport-prototype.md b/docs/wrench-private-transport-prototype.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc8ddacbe05b8ec0f70504a7c8c6cebf4ac77e1d
+--- /dev/null
++++ b/docs/wrench-private-transport-prototype.md
+@@ -0,0 +1,68 @@
++# Wrench private transport prototype
++
++This tree is a feasibility prototype. It is not qualified for production sending.
++
++## Provenance
++
++- Wacli baseline: `openclaw/wacli` v0.13.0 commit `1e15f646d23598ef5db2bdb4659ac39cc5188ad2`.
++- Whatsmeow baseline: commit `85d99080dee8ebd10ca7021751fe432d880d3b76`, resolved by Wacli as `v0.0.0-20260716095330-85d99080dee8`.
++- Checked Whatsmeow patch: `patches/whatsmeow-85d99080dee8-wrench-private.patch`.
++- Patch SHA-256: `cbf6f0b72963b365ca4c81f86993cf8a77a7eec6ffcd973d13aa68fe7331fcdc`.
++- Validation toolchain: Go 1.25.12 darwin/arm64 archive with SHA-256 `fa2c88bbcf64bd3b2aef355f026cfec6d3a4a01c132f999c8f8c964eb767164f`.
++
++The standard build does not expose a working private mutation backend. A usable prototype build requires both the checked dependency patch and the `wrench_private_transport` build tag. `scripts/test-wrench-private-transport.sh` creates a disposable patched dependency copy, uses a temporary Go module replacement, tests both layers, and builds the tagged binary.
++
++## Private request boundary
++
++`wacli wrench-private send` accepts one strict JSON value through stdin or `--input` pointing to a regular, non-symlink file with mode exactly `0600`. The command has no recipient or message-body flags and accepts no positional arguments. The body is never placed in argv or an environment variable. The response contains hashes and proof state, not the recipient, message ID, or body.
++
++The follow-mode daemon creates an owner-only Unix socket, a 32-byte owner-only HMAC key, and an atomically written owner-only status file in the selected Wacli store. Every request and response is HMAC-SHA256 authenticated. A request binds all of these values:
++
++- protocol descriptor hash
++- executable hash
++- store subject hash
++- authenticated WhatsApp subject hash
++- daemon PID and start time
++- post-handshake connection epoch
++- request nonce and issuance time
++
++The daemon rejects stale timestamps, replayed nonces, a full replay cache, changed bindings, and connection-epoch drift. `wrench-private status` uses the same authenticated channel and performs a provider barrier before reporting idle or reconciling an uncertain send.
++
++The accepted send contract is deliberately narrow: one canonical non-device DM, LID, or group JID; one 1 to 16 KiB text body without leading or trailing whitespace; `no_preview: true`; `no_retry: true`; and a timeout from 100 ms through 45 seconds. Replies, mentions, media, link previews, disappearing-message metadata, and status/channel sends are rejected.
++
++## Mutation ownership
++
++Only one mutation worker may exist for the daemon connection epoch. A client timeout returns `still_in_flight`; it does not cancel ownership or permit another send. The worker retains the route lane until it quiesces. Any possibly submitted result that lacks the complete proof poisons the lane. There is no automatic resend.
++
++An exact recovery requires all of the following on the original store and connection epoch:
++
++1. The worker has quiesced.
++2. A bounded Whatsmeow keepalive IQ with namespace `w:p`, type `get`, destination `types.ServerJID`, and retry disabled receives a valid response on that connection.
++3. Every registered non-response handler whose receive sequence is at or before that response has returned.
++4. Synchronous Wacli event handling has reported no observed store or persistence failure.
++5. The exact generated outbound message ID is present in the same Wacli store and its body hash matches.
++
++The final proof returns the keepalive response sequence and a deterministic hash of the committed row fields. A reconnect changes the epoch and fails closed. Queue overflow, escaped or late handlers, event-handler failure, store transaction failure, a blackholed or half-open connection, timeout, and epoch drift also fail closed.
++
++## Deterministic evidence
++
++Run the complete prototype check without connecting an account:
++
++```bash
++GO_BIN=/path/to/go1.25.12/bin/go \
++  bash scripts/test-wrench-private-transport.sh
++```
++
++The test suite uses fake providers and no live WhatsApp session. It covers successful proof, exact keepalive construction, handler drain ordering, queue overflow, handler escape, handler or transaction failure, reconnect, late handler completion, caller timeout with a still-running provider worker, permanent no-retry behavior, lane poisoning, exact committed-read recovery, a blackholed barrier, and epoch drift. No live message was sent while building or validating this prototype.
++
++## Production qualification gaps
++
++- The patch reaches into Whatsmeow connection and handler internals. It needs upstream review or a maintained fork, compatibility checks for every dependency update, and integration tests against a controlled WhatsApp test account before production use.
++- The deterministic tests do not exercise a real Noise socket, a real provider acknowledgement, server-side duplicate behavior, or the full reconnect lifecycle. They prove the local state machine, not delivery semantics offered by WhatsApp.
++- Wacli store failures are surfaced through synchronous event-handler status and known `store_failed` or `persist_failed` warning codes. Existing best-effort writes that discard errors are not fully instrumented. Production qualification requires transaction-level success reporting for every database mutation reachable from a sequenced handler.
++- The returned committed revision is a deterministic hash of the row read after synchronous store calls return. Wacli does not currently expose a database commit sequence or snapshot revision. A production proof should use a store-owned monotonic commit revision in the same read transaction.
++- Whatsmeow's existing long-handler escape threshold is five minutes. The Wrench barrier has its own shorter deadline and fails closed first, but production should use an explicit bounded handler contract instead of inheriting that threshold.
++- Work started by an event handler after the synchronous handler returns is outside the receive barrier. Production qualification must either prohibit such persistence or register and drain it explicitly.
++- Socket permissions and HMAC authentication were tested locally. Peer-credential checks, key rotation, crash recovery, filesystem ownership changes, multiple local users, suspend/resume, and daemon replacement still need adversarial tests.
++- An uncertain send with no matching committed row remains poisoned for the life of the connection epoch. The prototype does not query a provider-side idempotency ledger because WhatsApp exposes no qualified one here.
++- The payload contract omits common message forms. Each additional form needs an exact canonicalization and committed-read proof before it can be enabled.
+diff --git a/internal/app/app.go b/internal/app/app.go
+index c378d6409f10aef83100d38a1d3586839c3e0b18..05079e69656ccdbe06deac13dca2db045d6001df 100644
+--- a/internal/app/app.go
++++ b/internal/app/app.go
+@@ -112,14 +112,15 @@ type Options struct {
+ }
+ 
+ type App struct {
+-	opts            Options
+-	waMu            sync.Mutex
+-	wa              WAClient
+-	sessionResolver *readOnlySessionResolver
+-	db              *store.DB
+-	statusMu        sync.Mutex
+-	status          *syncStatus
+-	heartbeatLast   atomic.Int64
++	opts                 Options
++	waMu                 sync.Mutex
++	wa                   WAClient
++	sessionResolver      *readOnlySessionResolver
++	db                   *store.DB
++	statusMu             sync.Mutex
++	status               *syncStatus
++	heartbeatLast        atomic.Int64
++	storeFailureRevision atomic.Uint64
+ }
+ 
+ func New(opts Options) (*App, error) {
+diff --git a/internal/app/events.go b/internal/app/events.go
+index a39780c5b4c166942dadd30f94e236d29369f13b..b509f731c6eaaeedae74b7ad28e6413b5d8593ef 100644
+--- a/internal/app/events.go
++++ b/internal/app/events.go
+@@ -3,6 +3,7 @@ package app
+ import (
+ 	"fmt"
+ 	"os"
++	"strings"
+ )
+ 
+ func (a *App) eventsEnabled() bool {
+@@ -40,6 +41,9 @@ func (a *App) emitOrPrint(event string, data map[string]any, format string, args
+ }
+ 
+ func (a *App) emitWarning(code, message string, data map[string]any) {
++	if strings.Contains(code, "store_failed") || strings.Contains(code, "persist_failed") {
++		a.storeFailureRevision.Add(1)
++	}
+ 	if a.eventsEnabled() {
+ 		if data == nil {
+ 			data = map[string]any{}
+diff --git a/internal/app/sync_events.go b/internal/app/sync_events.go
+index 9b1a850ae6fd3c5266964bf0dd3f24ba89549f50..07c3a6c8d828080aa74438ca7ea0c00bd0ea6d84 100644
+--- a/internal/app/sync_events.go
++++ b/internal/app/sync_events.go
+@@ -49,7 +49,7 @@ type syncPresence struct {
+ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, messagesStored, lastEvent *atomic.Int64, disconnected chan<- struct{}, staleReconnect chan<- staleReconnectRequest, enqueueMedia func(string, string), enqueueWebhook func(wa.ParsedMessage), limits *syncStorageLimits, ps *syncPresence, mediaQ *mediaQueue) uint32 {
+ 	var panicCount atomic.Int64
+ 	var appStateRecoveries sync.Map
+-	return a.wa.AddEventHandler(func(evt interface{}) {
++	handler := func(evt interface{}) {
+ 		if mediaQ != nil {
+ 			if !mediaQ.beginProducer() {
+ 				return
+@@ -64,6 +64,7 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
+ 		// process. Include event type, stack trace, and a running counter.
+ 		defer func() {
+ 			if r := recover(); r != nil {
++				a.storeFailureRevision.Add(1)
+ 				n := panicCount.Add(1)
+ 				if a.eventsEnabled() {
+ 					a.emitEvent("event_handler_panic", map[string]any{
+@@ -142,7 +143,17 @@ func (a *App) addSyncEventHandler(ctx context.Context, opts SyncOptions, message
+ 		case *events.AppStateSyncError:
+ 			a.handleAppStateSyncError(ctx, v, &appStateRecoveries)
+ 		}
+-	})
++	}
++	if client, ok := a.wa.(interface {
++		AddEventHandlerWithSuccessStatus(func(interface{}) bool) uint32
++	}); ok {
++		return client.AddEventHandlerWithSuccessStatus(func(evt interface{}) bool {
++			before := a.storeFailureRevision.Load()
++			handler(evt)
++			return a.storeFailureRevision.Load() == before
++		})
++	}
++	return a.wa.AddEventHandler(handler)
+ }
+ 
+ func (a *App) handleKeepAliveTimeout(opts SyncOptions, evt *events.KeepAliveTimeout, staleReconnect chan<- staleReconnectRequest) {
+diff --git a/internal/wa/client.go b/internal/wa/client.go
+index 0401de5b477daf41cb972145f5418bb5719be484..6ba1401c03e57c7af0c811e2998942e3bb5e94d1 100644
+--- a/internal/wa/client.go
++++ b/internal/wa/client.go
+@@ -267,6 +267,16 @@ func (c *Client) AddEventHandler(handler func(interface{})) uint32 {
+ 	return cli.AddEventHandler(handler)
+ }
+ 
++func (c *Client) AddEventHandlerWithSuccessStatus(handler func(interface{}) bool) uint32 {
++	c.mu.Lock()
++	cli := c.client
++	c.mu.Unlock()
++	if cli == nil {
++		return 0
++	}
++	return cli.AddEventHandlerWithSuccessStatus(handler)
++}
++
+ func (c *Client) RemoveEventHandler(id uint32) {
+ 	c.mu.Lock()
+ 	cli := c.client
+diff --git a/internal/wa/wrench_transport.go b/internal/wa/wrench_transport.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..789c69465327a7f2009bc5dbffec85d9fa6f14a6
+--- /dev/null
++++ b/internal/wa/wrench_transport.go
+@@ -0,0 +1,32 @@
++package wa
++
++import (
++	"context"
++	"errors"
++	"time"
++
++	waProto "go.mau.fi/whatsmeow/binary/proto"
++	"go.mau.fi/whatsmeow/types"
++)
++
++var ErrWrenchPrivateTransportUnavailable = errors.New("wrench private transport requires the pinned whatsmeow patch and wrench_private_transport build tag")
++
++type WrenchBarrierProof struct {
++	ConnectionEpoch  uint64
++	ResponseSequence uint64
++}
++
++type WrenchBarrierError struct {
++	Category string
++}
++
++func (e *WrenchBarrierError) Error() string {
++	return "wrench receive barrier failed: " + e.Category
++}
++
++type WrenchPrivateTransport interface {
++	WrenchConnectionEpoch() (uint64, bool)
++	WrenchGenerateMessageID() (types.MessageID, error)
++	WrenchSendProtoNoRetry(context.Context, types.JID, *waProto.Message, types.MessageID, time.Duration) error
++	WrenchReceiveBarrier(context.Context) (WrenchBarrierProof, error)
++}
+diff --git a/internal/wa/wrench_transport_patched.go b/internal/wa/wrench_transport_patched.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c2410cf47b19494351a98e17d3be6c55ccf0a39
+--- /dev/null
++++ b/internal/wa/wrench_transport_patched.go
+@@ -0,0 +1,79 @@
++//go:build wrench_private_transport
++
++package wa
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"time"
++
++	"go.mau.fi/whatsmeow"
++	waProto "go.mau.fi/whatsmeow/binary/proto"
++	"go.mau.fi/whatsmeow/types"
++)
++
++func (c *Client) WrenchConnectionEpoch() (uint64, bool) {
++	c.mu.Lock()
++	cli := c.client
++	c.mu.Unlock()
++	if cli == nil {
++		return 0, false
++	}
++	return cli.WrenchConnectionEpoch()
++}
++
++func (c *Client) WrenchGenerateMessageID() (types.MessageID, error) {
++	c.mu.Lock()
++	cli := c.client
++	c.mu.Unlock()
++	if cli == nil || !cli.IsConnected() {
++		return "", fmt.Errorf("not connected")
++	}
++	return cli.GenerateMessageID(), nil
++}
++
++func (c *Client) WrenchSendProtoNoRetry(ctx context.Context, to types.JID, msg *waProto.Message, id types.MessageID, timeout time.Duration) error {
++	c.mu.Lock()
++	cli := c.client
++	c.mu.Unlock()
++	if cli == nil || !cli.IsConnected() {
++		return fmt.Errorf("not connected")
++	}
++	_, err := cli.SendMessage(ctx, to, msg, whatsmeow.SendRequestExtra{
++		ID:      id,
++		Timeout: timeout,
++		NoRetry: true,
++	})
++	return err
++}
++
++func (c *Client) WrenchReceiveBarrier(ctx context.Context) (WrenchBarrierProof, error) {
++	c.mu.Lock()
++	cli := c.client
++	c.mu.Unlock()
++	if cli == nil || !cli.IsConnected() {
++		return WrenchBarrierProof{}, fmt.Errorf("not connected")
++	}
++	proof, err := cli.WrenchReceiveBarrier(ctx)
++	if err != nil {
++		category := "barrier_failure"
++		switch {
++		case errors.Is(err, whatsmeow.ErrWrenchBarrierQueueOverflow):
++			category = "queue_overflow"
++		case errors.Is(err, whatsmeow.ErrWrenchBarrierHandlerEscaped):
++			category = "escaped_or_late_handler"
++		case errors.Is(err, whatsmeow.ErrWrenchBarrierHandlerFailed):
++			category = "transaction_or_handler_failure"
++		case errors.Is(err, whatsmeow.ErrWrenchBarrierEpochDrift), errors.Is(err, whatsmeow.ErrWrenchBarrierNotConnected):
++			category = "connection_epoch_drift"
++		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, whatsmeow.ErrIQTimedOut):
++			category = "keepalive_timeout"
++		}
++		return WrenchBarrierProof{}, &WrenchBarrierError{Category: category}
++	}
++	return WrenchBarrierProof{
++		ConnectionEpoch:  proof.ConnectionEpoch,
++		ResponseSequence: proof.ResponseSequence,
++	}, nil
++}
+diff --git a/internal/wa/wrench_transport_stub.go b/internal/wa/wrench_transport_stub.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..56fbcc76b70182b26e83859c6b79e244143cb036
+--- /dev/null
++++ b/internal/wa/wrench_transport_stub.go
+@@ -0,0 +1,27 @@
++//go:build !wrench_private_transport
++
++package wa
++
++import (
++	"context"
++	"time"
++
++	waProto "go.mau.fi/whatsmeow/binary/proto"
++	"go.mau.fi/whatsmeow/types"
++)
++
++func (c *Client) WrenchConnectionEpoch() (uint64, bool) {
++	return 0, false
++}
++
++func (c *Client) WrenchGenerateMessageID() (types.MessageID, error) {
++	return "", ErrWrenchPrivateTransportUnavailable
++}
++
++func (c *Client) WrenchSendProtoNoRetry(context.Context, types.JID, *waProto.Message, types.MessageID, time.Duration) error {
++	return ErrWrenchPrivateTransportUnavailable
++}
++
++func (c *Client) WrenchReceiveBarrier(context.Context) (WrenchBarrierProof, error) {
++	return WrenchBarrierProof{}, ErrWrenchPrivateTransportUnavailable
++}
+diff --git a/package.json b/package.json
+index 1cb927f4f17dc913459d2407376ceed46c09a950..a18cb7dce3f5d611b2a77889425878397b82b100 100644
+--- a/package.json
++++ b/package.json
+@@ -12,6 +12,7 @@
+     "test:windows-lock": "bash -euc 'tmp=\"${TMPDIR:-/tmp}/wacli-lock-windows.test.exe\"; trap \"rm -f \\\"$tmp\\\"\" EXIT; GOOS=windows GOARCH=amd64 go test -c ./internal/lock -o \"$tmp\"'",
+     "test:cgo-required": "bash -c 'set +e; out=$(CGO_ENABLED=0 go build ./cmd/wacli 2>&1); status=$?; set -e; echo \"$out\" | grep -q wacli_requires_cgo_enabled_1_for_go_sqlite3; test $status -ne 0'",
+     "test:docs": "node --test scripts/*.test.mjs",
++    "test:wrench-private": "bash scripts/test-wrench-private-transport.sh",
+     "test:release": "node --test scripts/release-workflow.test.mjs",
+     "test:e2e": "bash scripts/e2e-store-sqlc.sh",
+     "lint": "go vet ./...",
+diff --git a/patches/whatsmeow-85d99080dee8-wrench-private.patch b/patches/whatsmeow-85d99080dee8-wrench-private.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..8284e788d51659d259fbac69d792dbad7643fd6f
+--- /dev/null
++++ b/patches/whatsmeow-85d99080dee8-wrench-private.patch
+@@ -0,0 +1,694 @@
++diff --git a/client.go b/client.go
++index 58179ca..bef1052 100644
++--- a/client.go
+++++ b/client.go
++@@ -115,10 +115,11 @@ type Client struct {
++ 	responseWaiters     map[string]chan<- *waBinary.Node
++ 	responseWaitersLock sync.Mutex
++ 
++-	nodeHandlers      map[string]nodeHandler
++-	handlerQueue      chan *waBinary.Node
++-	eventHandlers     []wrappedEventHandler
++-	eventHandlersLock sync.RWMutex
+++	nodeHandlers         map[string]nodeHandler
+++	handlerQueue         chan wrenchSequencedNode
+++	eventHandlers        []wrappedEventHandler
+++	eventHandlersLock    sync.RWMutex
+++	wrenchReceiveBarrier *wrenchReceiveBarrierState
++ 
++ 	messageRetries     map[string]int
++ 	messageRetriesLock sync.Mutex
++@@ -250,21 +251,22 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
++ 		Transport: (http.DefaultTransport.(*http.Transport)).Clone(),
++ 	}
++ 	cli := &Client{
++-		mediaHTTP:          ptr.Clone(baseHTTPClient),
++-		websocketHTTP:      ptr.Clone(baseHTTPClient),
++-		preLoginHTTP:       ptr.Clone(baseHTTPClient),
++-		Store:              deviceStore,
++-		Log:                log,
++-		recvLog:            log.Sub("Recv"),
++-		sendLog:            log.Sub("Send"),
++-		uniqueID:           fmt.Sprintf("%d.%d-", uniqueIDPrefix[0], uniqueIDPrefix[1]),
++-		responseWaiters:    make(map[string]chan<- *waBinary.Node),
++-		eventHandlers:      make([]wrappedEventHandler, 0, 1),
++-		messageRetries:     make(map[string]int),
++-		handlerQueue:       make(chan *waBinary.Node, handlerQueueSize),
++-		appStateProc:       appstate.NewProcessor(deviceStore, log.Sub("AppState")),
++-		socketWait:         make(chan struct{}),
++-		expectedDisconnect: exsync.NewEvent(),
+++		mediaHTTP:            ptr.Clone(baseHTTPClient),
+++		websocketHTTP:        ptr.Clone(baseHTTPClient),
+++		preLoginHTTP:         ptr.Clone(baseHTTPClient),
+++		Store:                deviceStore,
+++		Log:                  log,
+++		recvLog:              log.Sub("Recv"),
+++		sendLog:              log.Sub("Send"),
+++		uniqueID:             fmt.Sprintf("%d.%d-", uniqueIDPrefix[0], uniqueIDPrefix[1]),
+++		responseWaiters:      make(map[string]chan<- *waBinary.Node),
+++		eventHandlers:        make([]wrappedEventHandler, 0, 1),
+++		messageRetries:       make(map[string]int),
+++		handlerQueue:         make(chan wrenchSequencedNode, handlerQueueSize),
+++		wrenchReceiveBarrier: newWrenchReceiveBarrierState(),
+++		appStateProc:         appstate.NewProcessor(deviceStore, log.Sub("AppState")),
+++		socketWait:           make(chan struct{}),
+++		expectedDisconnect:   exsync.NewEvent(),
++ 
++ 		incomingRetryRequestCounter: make(map[incomingRetryKey]int),
++ 
++@@ -563,6 +565,7 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
++ 		fs.Close(0)
++ 		return fmt.Errorf("noise handshake failed: %w", err)
++ 	}
+++	cli.wrenchReceiveBarrier.beginConnection()
++ 	go cli.keepAliveLoop(ctx, fs.Context())
++ 	go cli.handlerQueueLoop(ctx, fs.Context())
++ 	return nil
++@@ -578,6 +581,7 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
++ 	cli.socketLock.Lock()
++ 	defer cli.socketLock.Unlock()
++ 	if cli.socket == ns {
+++		cli.wrenchReceiveBarrier.endConnection()
++ 		cli.socket = nil
++ 		cli.clearResponseWaiters(xmlStreamEndNode)
++ 		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
++@@ -833,22 +837,33 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
++ 		return
++ 	}
++ 	cli.recvLog.Debugf("%s", node)
+++	epoch, sequence := cli.wrenchReceiveBarrier.observeFrame()
++ 	if node.Tag == "xmlstreamend" {
++ 		if !cli.isExpectedDisconnect() {
++ 			cli.Log.Warnf("Received stream end frame")
++ 		}
++ 		// TODO should we do something else?
++-	} else if cli.receiveResponse(ctx, node) {
+++	} else if func() bool {
+++		if !cli.receiveResponse(ctx, node) {
+++			return false
+++		}
+++		id, _ := node.Attrs["id"].(string)
+++		cli.wrenchReceiveBarrier.noteResponse(id, epoch, sequence)
+++		return true
+++	}() {
++ 		// handled
++ 	} else if _, ok := cli.nodeHandlers[node.Tag]; ok {
+++		queued := wrenchSequencedNode{node: node, epoch: epoch, sequence: sequence}
+++		cli.wrenchReceiveBarrier.registerHandler(epoch, sequence)
++ 		select {
++-		case cli.handlerQueue <- node:
+++		case cli.handlerQueue <- queued:
++ 		case <-ctx.Done():
++ 		default:
++ 			cli.Log.Warnf("Handler queue is full, message ordering is no longer guaranteed")
+++			cli.wrenchReceiveBarrier.markQueueOverflow(epoch, sequence)
++ 			go func() {
++ 				select {
++-				case cli.handlerQueue <- node:
+++				case cli.handlerQueue <- queued:
++ 				case <-ctx.Done():
++ 				}
++ 			}()
++@@ -865,12 +880,17 @@ func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context) {
++ Loop:
++ 	for {
++ 		select {
++-		case node := <-cli.handlerQueue:
+++		case queued := <-cli.handlerQueue:
+++			node := queued.node
+++			if !cli.wrenchReceiveBarrier.startHandler(queued.epoch, queued.sequence) {
+++				continue Loop
+++			}
++ 			doneChan := make(chan struct{})
++ 			start := time.Now()
++ 			go func() {
++ 				cli.nodeHandlers[node.Tag](evtCtx, node)
++ 				duration := time.Since(start)
+++				cli.wrenchReceiveBarrier.finishHandler(queued.epoch, queued.sequence)
++ 				close(doneChan)
++ 				if duration > 5*time.Second {
++ 					cli.Log.Warnf("Node handling took %s for %s", duration, node)
++@@ -887,6 +907,7 @@ Loop:
++ 				}
++ 			}
++ 			cli.Log.Warnf("Continuing handling of %s in background as it's taking too long", node)
+++			cli.wrenchReceiveBarrier.markHandlerEscaped(queued.epoch, queued.sequence)
++ 			ticker.Stop()
++ 		case <-connCtx.Done():
++ 			cli.Log.Debugf("Closing handler queue loop")
++@@ -926,11 +947,14 @@ func (cli *Client) dispatchEvent(evt any) (handlerFailed bool) {
++ 		cli.eventHandlersLock.RUnlock()
++ 		err := recover()
++ 		if err != nil {
+++			cli.wrenchReceiveBarrier.markActiveHandlerFailed()
+++			handlerFailed = true
++ 			cli.Log.Errorf("Event handler panicked while handling a %T: %v\n%s", evt, err, debug.Stack())
++ 		}
++ 	}()
++ 	for _, handler := range cli.eventHandlers {
++ 		if !handler.fn(evt) {
+++			cli.wrenchReceiveBarrier.markActiveHandlerFailed()
++ 			return true
++ 		}
++ 	}
++diff --git a/retry.go b/retry.go
++index 92d1e6d..03df7c4 100644
++--- a/retry.go
+++++ b/retry.go
++@@ -34,6 +34,10 @@ import (
++ // Number of sent messages to cache in memory for handling retry receipts.
++ const recentMessagesSize = 256
++ 
+++func shouldCacheMessageForRetry(req SendRequestExtra) bool {
+++	return !req.Peer && !req.NoRetry
+++}
+++
++ type recentMessageKey struct {
++ 	To types.JID
++ 	ID types.MessageID
++diff --git a/send.go b/send.go
++index 0deefb5..274fb37 100644
++--- a/send.go
+++++ b/send.go
++@@ -152,6 +152,11 @@ type SendRequestExtra struct {
++ 	Timeout time.Duration
++ 	// When sending media to newsletters, the Handle field returned by the file upload.
++ 	MediaHandle string
+++	// NoRetry prevents resending the serialized frame after a disconnect
+++	// response and prevents retaining the plaintext for retry receipts.
+++	// Mutation callers that cannot safely duplicate an externally visible
+++	// effect must set this and reconcile independently.
+++	NoRetry bool
++ 
++ 	Meta *types.MsgMetaInfo
++ 	// use this only if you know what you are doing
++@@ -380,7 +385,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
++ 	defer cli.messageSendLock.Unlock()
++ 
++ 	// Peer message retries aren't implemented yet
++-	if !req.Peer {
+++	if shouldCacheMessageForRetry(req) {
++ 		err = cli.addRecentMessage(ctx, to, req.ID, message, nil)
++ 		if err != nil {
++ 			return
++@@ -438,6 +443,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
++ 	}
++ 	resp.DebugTimings.Resp = time.Since(start)
++ 	if isDisconnectNode(respNode) {
+++		if req.NoRetry {
+++			err = &DisconnectedError{Action: "message send", Node: respNode}
+++			return
+++		}
++ 		start = time.Now()
++ 		respNode, err = cli.retryFrame(ctx, "message send", req.ID, data, respNode, 0)
++ 		resp.DebugTimings.Retry = time.Since(start)
++diff --git a/sendfb.go b/sendfb.go
++index db01ac9..1b855f9 100644
++--- a/sendfb.go
+++++ b/sendfb.go
++@@ -137,7 +137,7 @@ func (cli *Client) SendFBMessage(
++ 	resp.DebugTimings.Queue = time.Since(start)
++ 	defer cli.messageSendLock.Unlock()
++ 
++-	if !req.Peer {
+++	if shouldCacheMessageForRetry(req) {
++ 		err = cli.addRecentMessage(ctx, to, req.ID, nil, messageAppProto)
++ 		if err != nil {
++ 			return
++@@ -184,6 +184,10 @@ func (cli *Client) SendFBMessage(
++ 	}
++ 	resp.DebugTimings.Resp = time.Since(start)
++ 	if isDisconnectNode(respNode) {
+++		if req.NoRetry {
+++			err = &DisconnectedError{Action: "message send", Node: respNode}
+++			return
+++		}
++ 		start = time.Now()
++ 		respNode, err = cli.retryFrame(ctx, "message send", req.ID, data, respNode, 0)
++ 		resp.DebugTimings.Retry = time.Since(start)
++diff --git a/wrench_barrier.go b/wrench_barrier.go
++new file mode 100644
++index 0000000..b347b3c
++--- /dev/null
+++++ b/wrench_barrier.go
++@@ -0,0 +1,330 @@
+++package whatsmeow
+++
+++import (
+++	"context"
+++	"errors"
+++	"fmt"
+++	"sync"
+++	"time"
+++
+++	waBinary "go.mau.fi/whatsmeow/binary"
+++	"go.mau.fi/whatsmeow/types"
+++)
+++
+++var (
+++	ErrWrenchBarrierNotConnected   = errors.New("wrench receive barrier is not connected")
+++	ErrWrenchBarrierEpochDrift     = errors.New("wrench receive barrier connection epoch changed")
+++	ErrWrenchBarrierQueueOverflow  = errors.New("wrench receive barrier observed handler queue overflow")
+++	ErrWrenchBarrierHandlerEscaped = errors.New("wrench receive barrier observed an escaped or late handler")
+++	ErrWrenchBarrierHandlerFailed  = errors.New("wrench receive barrier observed a failed event handler")
+++)
+++
+++// WrenchReceiveBarrierProof proves that an exact keepalive IQ response was
+++// received on one connection and that every earlier queued node handler
+++// returned. Event handlers invoked synchronously by those node handlers have
+++// therefore returned too.
+++type WrenchReceiveBarrierProof struct {
+++	ConnectionEpoch  uint64
+++	ResponseSequence uint64
+++}
+++
+++type wrenchSequencedNode struct {
+++	node     *waBinary.Node
+++	epoch    uint64
+++	sequence uint64
+++}
+++
+++type wrenchResponseSequence struct {
+++	epoch    uint64
+++	sequence uint64
+++}
+++
+++type wrenchReceiveBarrierState struct {
+++	mu sync.Mutex
+++
+++	changed chan struct{}
+++
+++	epoch     uint64
+++	connected bool
+++	sequence  uint64
+++	pending   map[uint64]struct{}
+++
+++	queueOverflowSequence uint64
+++	escapedSequence       uint64
+++	failedSequence        uint64
+++
+++	barrierResponses map[string]chan wrenchResponseSequence
+++
+++	activeEpoch    uint64
+++	activeSequence uint64
+++}
+++
+++func newWrenchReceiveBarrierState() *wrenchReceiveBarrierState {
+++	return &wrenchReceiveBarrierState{
+++		changed:          make(chan struct{}),
+++		pending:          make(map[uint64]struct{}),
+++		barrierResponses: make(map[string]chan wrenchResponseSequence),
+++	}
+++}
+++
+++func (s *wrenchReceiveBarrierState) signalLocked() {
+++	close(s.changed)
+++	s.changed = make(chan struct{})
+++}
+++
+++func (s *wrenchReceiveBarrierState) beginConnection() uint64 {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	s.epoch++
+++	s.connected = true
+++	s.sequence = 0
+++	s.pending = make(map[uint64]struct{})
+++	s.queueOverflowSequence = 0
+++	s.escapedSequence = 0
+++	s.failedSequence = 0
+++	s.activeEpoch = 0
+++	s.activeSequence = 0
+++	for id, waiter := range s.barrierResponses {
+++		close(waiter)
+++		delete(s.barrierResponses, id)
+++	}
+++	s.signalLocked()
+++	return s.epoch
+++}
+++
+++func (s *wrenchReceiveBarrierState) endConnection() {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	if !s.connected {
+++		return
+++	}
+++	s.connected = false
+++	for id, waiter := range s.barrierResponses {
+++		close(waiter)
+++		delete(s.barrierResponses, id)
+++	}
+++	s.signalLocked()
+++}
+++
+++func (s *wrenchReceiveBarrierState) connectionEpoch() (uint64, bool) {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	return s.epoch, s.connected
+++}
+++
+++func (s *wrenchReceiveBarrierState) observeFrame() (uint64, uint64) {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	s.sequence++
+++	return s.epoch, s.sequence
+++}
+++
+++func (s *wrenchReceiveBarrierState) registerHandler(epoch, sequence uint64) {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	if s.connected && s.epoch == epoch {
+++		s.pending[sequence] = struct{}{}
+++		s.signalLocked()
+++	}
+++}
+++
+++func (s *wrenchReceiveBarrierState) startHandler(epoch, sequence uint64) bool {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	if !s.connected || s.epoch != epoch {
+++		if s.escapedSequence == 0 || sequence < s.escapedSequence {
+++			s.escapedSequence = sequence
+++		}
+++		s.signalLocked()
+++		return false
+++	}
+++	s.activeEpoch = epoch
+++	s.activeSequence = sequence
+++	return true
+++}
+++
+++func (s *wrenchReceiveBarrierState) finishHandler(epoch, sequence uint64) {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	if s.epoch != epoch {
+++		if s.escapedSequence == 0 || sequence < s.escapedSequence {
+++			s.escapedSequence = sequence
+++		}
+++	} else {
+++		delete(s.pending, sequence)
+++	}
+++	if s.activeEpoch == epoch && s.activeSequence == sequence {
+++		s.activeEpoch = 0
+++		s.activeSequence = 0
+++	}
+++	s.signalLocked()
+++}
+++
+++func (s *wrenchReceiveBarrierState) markQueueOverflow(epoch, sequence uint64) {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	if s.epoch == epoch && (s.queueOverflowSequence == 0 || sequence < s.queueOverflowSequence) {
+++		s.queueOverflowSequence = sequence
+++	}
+++	s.signalLocked()
+++}
+++
+++func (s *wrenchReceiveBarrierState) markHandlerEscaped(epoch, sequence uint64) {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	if s.epoch == epoch && (s.escapedSequence == 0 || sequence < s.escapedSequence) {
+++		s.escapedSequence = sequence
+++	}
+++	s.signalLocked()
+++}
+++
+++func (s *wrenchReceiveBarrierState) markActiveHandlerFailed() {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	sequence := s.activeSequence
+++	if sequence == 0 {
+++		sequence = s.sequence
+++	}
+++	if s.failedSequence == 0 || sequence < s.failedSequence {
+++		s.failedSequence = sequence
+++	}
+++	s.signalLocked()
+++}
+++
+++func (s *wrenchReceiveBarrierState) registerBarrierResponse(id string) <-chan wrenchResponseSequence {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	ch := make(chan wrenchResponseSequence, 1)
+++	s.barrierResponses[id] = ch
+++	return ch
+++}
+++
+++func (s *wrenchReceiveBarrierState) cancelBarrierResponse(id string) {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	if waiter, ok := s.barrierResponses[id]; ok {
+++		delete(s.barrierResponses, id)
+++		close(waiter)
+++	}
+++}
+++
+++func (s *wrenchReceiveBarrierState) noteResponse(id string, epoch, sequence uint64) {
+++	s.mu.Lock()
+++	defer s.mu.Unlock()
+++	waiter, ok := s.barrierResponses[id]
+++	if !ok {
+++		return
+++	}
+++	delete(s.barrierResponses, id)
+++	waiter <- wrenchResponseSequence{epoch: epoch, sequence: sequence}
+++	close(waiter)
+++}
+++
+++func (s *wrenchReceiveBarrierState) wait(ctx context.Context, epoch, through uint64) error {
+++	for {
+++		s.mu.Lock()
+++		if !s.connected {
+++			s.mu.Unlock()
+++			return ErrWrenchBarrierNotConnected
+++		}
+++		if s.epoch != epoch {
+++			s.mu.Unlock()
+++			return ErrWrenchBarrierEpochDrift
+++		}
+++		if s.queueOverflowSequence != 0 && s.queueOverflowSequence <= through {
+++			s.mu.Unlock()
+++			return ErrWrenchBarrierQueueOverflow
+++		}
+++		if s.escapedSequence != 0 && s.escapedSequence <= through {
+++			s.mu.Unlock()
+++			return ErrWrenchBarrierHandlerEscaped
+++		}
+++		if s.failedSequence != 0 && s.failedSequence <= through {
+++			s.mu.Unlock()
+++			return ErrWrenchBarrierHandlerFailed
+++		}
+++		pending := false
+++		for sequence := range s.pending {
+++			if sequence <= through {
+++				pending = true
+++				break
+++			}
+++		}
+++		if !pending {
+++			s.mu.Unlock()
+++			return nil
+++		}
+++		changed := s.changed
+++		s.mu.Unlock()
+++		select {
+++		case <-changed:
+++		case <-ctx.Done():
+++			return ctx.Err()
+++		}
+++	}
+++}
+++
+++func wrenchKeepaliveQuery(id string, timeout time.Duration) infoQuery {
+++	return infoQuery{
+++		Namespace: "w:p",
+++		Type:      iqGet,
+++		To:        types.ServerJID,
+++		ID:        id,
+++		Timeout:   timeout,
+++		NoRetry:   true,
+++	}
+++}
+++
+++// WrenchConnectionEpoch returns the connection generation used by the Wrench
+++// receive barrier. The boolean is false unless a live post-handshake socket is
+++// owned by this Client.
+++func (cli *Client) WrenchConnectionEpoch() (uint64, bool) {
+++	if cli == nil || cli.wrenchReceiveBarrier == nil {
+++		return 0, false
+++	}
+++	return cli.wrenchReceiveBarrier.connectionEpoch()
+++}
+++
+++// WrenchReceiveBarrier sends the same bounded keepalive IQ as whatsmeow's own
+++// liveness loop and then drains all earlier non-response handlers. The caller
+++// must supply a deadline so blackholed and half-open connections fail closed.
+++func (cli *Client) WrenchReceiveBarrier(ctx context.Context) (WrenchReceiveBarrierProof, error) {
+++	if cli == nil || cli.wrenchReceiveBarrier == nil {
+++		return WrenchReceiveBarrierProof{}, ErrClientIsNil
+++	}
+++	deadline, ok := ctx.Deadline()
+++	if !ok {
+++		return WrenchReceiveBarrierProof{}, fmt.Errorf("wrench receive barrier requires a context deadline")
+++	}
+++	epoch, connected := cli.wrenchReceiveBarrier.connectionEpoch()
+++	if !connected {
+++		return WrenchReceiveBarrierProof{}, ErrWrenchBarrierNotConnected
+++	}
+++
+++	id := cli.generateRequestID()
+++	responseSequence := cli.wrenchReceiveBarrier.registerBarrierResponse(id)
+++	defer cli.wrenchReceiveBarrier.cancelBarrierResponse(id)
+++	remaining := time.Until(deadline)
+++	if remaining <= 0 {
+++		return WrenchReceiveBarrierProof{}, context.DeadlineExceeded
+++	}
+++	_, err := cli.sendIQ(ctx, wrenchKeepaliveQuery(id, remaining))
+++	if err != nil {
+++		return WrenchReceiveBarrierProof{}, fmt.Errorf("wrench keepalive IQ: %w", err)
+++	}
+++	marker, ok := <-responseSequence
+++	if !ok {
+++		return WrenchReceiveBarrierProof{}, ErrWrenchBarrierEpochDrift
+++	}
+++	if marker.epoch != epoch {
+++		return WrenchReceiveBarrierProof{}, ErrWrenchBarrierEpochDrift
+++	}
+++	if err := cli.wrenchReceiveBarrier.wait(ctx, epoch, marker.sequence); err != nil {
+++		return WrenchReceiveBarrierProof{}, err
+++	}
+++	finalEpoch, connected := cli.wrenchReceiveBarrier.connectionEpoch()
+++	if !connected || finalEpoch != epoch {
+++		return WrenchReceiveBarrierProof{}, ErrWrenchBarrierEpochDrift
+++	}
+++	return WrenchReceiveBarrierProof{ConnectionEpoch: epoch, ResponseSequence: marker.sequence}, nil
+++}
++diff --git a/wrench_barrier_test.go b/wrench_barrier_test.go
++new file mode 100644
++index 0000000..28be55e
++--- /dev/null
+++++ b/wrench_barrier_test.go
++@@ -0,0 +1,124 @@
+++package whatsmeow
+++
+++import (
+++	"context"
+++	"errors"
+++	"testing"
+++	"time"
+++
+++	"go.mau.fi/whatsmeow/types"
+++)
+++
+++func TestWrenchReceiveBarrierUsesExactNoRetryKeepalive(t *testing.T) {
+++	timeout := 2 * time.Second
+++	query := wrenchKeepaliveQuery("barrier-id", timeout)
+++	if query.Namespace != "w:p" || query.Type != iqGet || query.To != types.ServerJID {
+++		t.Fatalf("keepalive query = %+v", query)
+++	}
+++	if query.ID != "barrier-id" || query.Timeout != timeout || !query.NoRetry {
+++		t.Fatalf("bounded no-retry query = %+v", query)
+++	}
+++}
+++
+++func TestWrenchNoRetryDisablesEveryApplicationLevelRetryPath(t *testing.T) {
+++	if shouldCacheMessageForRetry(SendRequestExtra{NoRetry: true}) {
+++		t.Fatal("no-retry message retained for retry receipts")
+++	}
+++	if shouldCacheMessageForRetry(SendRequestExtra{Peer: true}) {
+++		t.Fatal("peer message retained for unsupported retry path")
+++	}
+++	if !shouldCacheMessageForRetry(SendRequestExtra{}) {
+++		t.Fatal("ordinary message retry behavior changed")
+++	}
+++}
+++
+++func TestWrenchReceiveBarrierWaitsForEarlierHandlers(t *testing.T) {
+++	state := newWrenchReceiveBarrierState()
+++	epoch := state.beginConnection()
+++	_, first := state.observeFrame()
+++	state.registerHandler(epoch, first)
+++	_, response := state.observeFrame()
+++
+++	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+++	defer cancel()
+++	done := make(chan error, 1)
+++	go func() { done <- state.wait(ctx, epoch, response) }()
+++
+++	select {
+++	case err := <-done:
+++		t.Fatalf("barrier returned before handler completion: %v", err)
+++	case <-time.After(20 * time.Millisecond):
+++	}
+++	state.finishHandler(epoch, first)
+++	if err := <-done; err != nil {
+++		t.Fatalf("barrier wait: %v", err)
+++	}
+++}
+++
+++func TestWrenchReceiveBarrierFailsClosed(t *testing.T) {
+++	tests := []struct {
+++		name string
+++		mark func(*wrenchReceiveBarrierState, uint64, uint64)
+++		want error
+++	}{
+++		{"queue overflow", (*wrenchReceiveBarrierState).markQueueOverflow, ErrWrenchBarrierQueueOverflow},
+++		{"escaped handler", (*wrenchReceiveBarrierState).markHandlerEscaped, ErrWrenchBarrierHandlerEscaped},
+++	}
+++	for _, tc := range tests {
+++		t.Run(tc.name, func(t *testing.T) {
+++			state := newWrenchReceiveBarrierState()
+++			epoch := state.beginConnection()
+++			_, sequence := state.observeFrame()
+++			tc.mark(state, epoch, sequence)
+++			err := state.wait(context.Background(), epoch, sequence)
+++			if !errors.Is(err, tc.want) {
+++				t.Fatalf("error = %v, want %v", err, tc.want)
+++			}
+++		})
+++	}
+++}
+++
+++func TestWrenchReceiveBarrierFailsOnHandlerAndTransactionFailure(t *testing.T) {
+++	state := newWrenchReceiveBarrierState()
+++	epoch := state.beginConnection()
+++	_, sequence := state.observeFrame()
+++	state.registerHandler(epoch, sequence)
+++	if !state.startHandler(epoch, sequence) {
+++		t.Fatal("handler did not start")
+++	}
+++	state.markActiveHandlerFailed()
+++	state.finishHandler(epoch, sequence)
+++	if err := state.wait(context.Background(), epoch, sequence); !errors.Is(err, ErrWrenchBarrierHandlerFailed) {
+++		t.Fatalf("error = %v, want handler failure", err)
+++	}
+++}
+++
+++func TestWrenchReceiveBarrierRejectsReconnectAndLateCompletion(t *testing.T) {
+++	state := newWrenchReceiveBarrierState()
+++	oldEpoch := state.beginConnection()
+++	_, sequence := state.observeFrame()
+++	state.registerHandler(oldEpoch, sequence)
+++	if !state.startHandler(oldEpoch, sequence) {
+++		t.Fatal("handler did not start")
+++	}
+++	state.endConnection()
+++	newEpoch := state.beginConnection()
+++	if newEpoch == oldEpoch {
+++		t.Fatal("connection epoch did not advance")
+++	}
+++	state.finishHandler(oldEpoch, sequence)
+++	if err := state.wait(context.Background(), oldEpoch, sequence); !errors.Is(err, ErrWrenchBarrierEpochDrift) {
+++		t.Fatalf("old epoch error = %v, want epoch drift", err)
+++	}
+++	if err := state.wait(context.Background(), newEpoch, sequence); !errors.Is(err, ErrWrenchBarrierHandlerEscaped) {
+++		t.Fatalf("new epoch late-handler error = %v, want escaped handler", err)
+++	}
+++}
+++
+++func TestWrenchReceiveBarrierRequiresBoundedContext(t *testing.T) {
+++	client := &Client{wrenchReceiveBarrier: newWrenchReceiveBarrierState()}
+++	client.wrenchReceiveBarrier.beginConnection()
+++	if _, err := client.WrenchReceiveBarrier(context.Background()); err == nil {
+++		t.Fatal("expected missing-deadline error")
+++	}
+++}
+diff --git a/scripts/test-wrench-private-transport.sh b/scripts/test-wrench-private-transport.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..cd52a37f8af3720b3aaec961312b24983b6176e6
+--- /dev/null
++++ b/scripts/test-wrench-private-transport.sh
+@@ -0,0 +1,57 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++go_bin="${GO_BIN:-go}"
++expected_go="go1.25.12"
++expected_module="v0.0.0-20260716095330-85d99080dee8"
++patch_path="$repo_root/patches/whatsmeow-85d99080dee8-wrench-private.patch"
++
++if [[ "$($go_bin env GOVERSION)" != "$expected_go" ]]; then
++  echo "expected $expected_go, got $($go_bin env GOVERSION)" >&2
++  exit 1
++fi
++
++actual_module="$(cd "$repo_root" && GOTOOLCHAIN=local "$go_bin" list -m -f '{{.Version}}' go.mau.fi/whatsmeow)"
++if [[ "$actual_module" != "$expected_module" ]]; then
++  echo "expected whatsmeow $expected_module, got $actual_module" >&2
++  exit 1
++fi
++
++GOTOOLCHAIN=local "$go_bin" mod download "go.mau.fi/whatsmeow@$expected_module"
++module_dir="$($go_bin env GOMODCACHE)/go.mau.fi/whatsmeow@$expected_module"
++if [[ ! -d "$module_dir" ]]; then
++  echo "pinned whatsmeow module directory is missing" >&2
++  exit 1
++fi
++
++prototype_tmp="$(mktemp -d "${TMPDIR:-/tmp}/wacli-wrench-private.XXXXXX")"
++trap 'rm -rf "$prototype_tmp"' EXIT
++cp -R "$module_dir" "$prototype_tmp/whatsmeow"
++chmod -R u+w "$prototype_tmp/whatsmeow"
++
++(
++  cd "$prototype_tmp/whatsmeow"
++  git apply --check "$patch_path"
++  git apply "$patch_path"
++)
++
++cp "$repo_root/go.mod" "$prototype_tmp/wacli.mod"
++cp "$repo_root/go.sum" "$prototype_tmp/wacli.sum"
++GOTOOLCHAIN=local "$go_bin" mod edit -modfile="$prototype_tmp/wacli.mod" \
++  -replace="go.mau.fi/whatsmeow=$prototype_tmp/whatsmeow"
++
++(
++  cd "$prototype_tmp/whatsmeow"
++  GOTOOLCHAIN=local "$go_bin" test . -run 'TestWrenchReceiveBarrier' -count=1
++)
++(
++  cd "$repo_root"
++  GOTOOLCHAIN=local "$go_bin" test -modfile="$prototype_tmp/wacli.mod" \
++    -tags wrench_private_transport ./cmd/wacli ./internal/app ./internal/wa -count=1
++  GOTOOLCHAIN=local CGO_ENABLED=1 CGO_CFLAGS="${CGO_CFLAGS:+$CGO_CFLAGS }-Wno-error=missing-braces" \
++    "$go_bin" build -modfile="$prototype_tmp/wacli.mod" -tags 'sqlite_fts5 wrench_private_transport' \
++    -o "$prototype_tmp/wacli" ./cmd/wacli
++)
++
++echo "wrench private transport prototype verified"

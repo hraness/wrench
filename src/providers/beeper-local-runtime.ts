@@ -153,6 +153,38 @@ export type BeeperLocalRuntimeDependencies = Readonly<{
   removeCacheDirectory?: (path: string) => Promise<void>;
 }>;
 
+export type BeeperDirectMessagingDependencies = Readonly<{
+  /** Test-only request seam. Production uses the process-native fetch. */
+  fetch?: (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  /** Test-only deadline override; production always uses the reviewed bound. */
+  requestTimeoutMs?: number;
+}>;
+
+export type BeeperDirectMessagingAttempt = Readonly<{
+  /**
+   * Durably crosses the mutation boundary immediately before the only POST.
+   * The caller must make this transition persistent before it resolves.
+   */
+  beforeExternalBegin: () => Promise<void>;
+  operationDeadline: WebSessionOperationDeadline;
+  signal: AbortSignal;
+  environment?: Readonly<Record<string, string | undefined>>;
+  dependencies?: BeeperDirectMessagingDependencies;
+}>;
+
+export type BeeperDirectMessagingAcceptance = Readonly<{
+  provider: "beeper";
+  operation: "messaging.send";
+  accountSubject: string;
+  accountId: string;
+  conversationId: string;
+  pendingMessageId: string;
+  providerRevision: null;
+}>;
+
 export type BeeperUserProjection = Readonly<{
   id: string;
   fullName: string | null;
@@ -1974,13 +2006,27 @@ async function readBoundedStream(
   stream: ReadableStream<Uint8Array>,
   maximum: number,
   label: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let byteLength = 0;
+  let rejectAbort: ((reason: Error) => void) | null = null;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = (): void => {
+    const reason = signal?.reason;
+    rejectAbort?.(reason instanceof Error ? reason : new Error(`${label} was cancelled`));
+    void reader.cancel(reason).catch(() => undefined);
+  };
+  if (signal?.aborted === true) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   try {
     for (;;) {
-      const item = await reader.read();
+      const item = signal === undefined
+        ? await reader.read()
+        : await Promise.race([reader.read(), aborted]);
       if (item.done) break;
       if (item.value.byteLength > maximum - byteLength) {
         throw new Error(`${label} exceeded its byte bound`);
@@ -1989,6 +2035,7 @@ async function readBoundedStream(
       byteLength += item.value.byteLength;
     }
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
   const output = new Uint8Array(byteLength);
@@ -1998,6 +2045,255 @@ async function readBoundedStream(
     offset += chunk.byteLength;
   }
   return new TextDecoder("utf-8", { fatal: true }).decode(output);
+}
+
+const BEEPER_DIRECT_REQUEST_TIMEOUT_MS = 30_000;
+const BEEPER_DIRECT_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+function parseBeeperDirectInfo(
+  value: unknown,
+  expectedBaseUrl: string,
+): BeeperTargetRealmProof {
+  const source = strictRecord(value, "Beeper Desktop direct info");
+  exactKeys(
+    source,
+    ["app", "endpoints", "platform", "server"],
+    [],
+    "Beeper Desktop direct info",
+  );
+  const app = strictRecord(source.app, "Beeper Desktop direct info.app");
+  exactKeys(app, ["bundle_id", "name", "version"], [], "Beeper Desktop direct info.app");
+  const server = strictRecord(source.server, "Beeper Desktop direct info.server");
+  exactKeys(
+    server,
+    ["base_url", "hostname", "mcp_enabled", "port", "remote_access", "status"],
+    [],
+    "Beeper Desktop direct info.server",
+  );
+  const bundleId = boundedString(
+    app.bundle_id,
+    "Beeper Desktop direct info.app.bundle_id",
+    256,
+  );
+  if (!BEEPER_DESKTOP_BUNDLE_IDS.includes(
+    bundleId as typeof BEEPER_DESKTOP_BUNDLE_IDS[number],
+  )) throw new Error("Beeper Desktop direct info returned an unsupported bundle ID");
+  const baseUrl = localDesktopBaseUrl(
+    server.base_url,
+    "Beeper Desktop direct info.server.base_url",
+  );
+  const expectedPort = Number(new URL(expectedBaseUrl).port);
+  if (
+    baseUrl !== expectedBaseUrl
+    || server.hostname !== "127.0.0.1"
+    || integer(server.port, "Beeper Desktop direct info.server.port", 23_373, 23_392)
+      !== expectedPort
+    || server.remote_access !== false
+    || typeof server.mcp_enabled !== "boolean"
+    || boundedString(server.status, "Beeper Desktop direct info.server.status", 128)
+      !== "ready"
+  ) throw new Error("Beeper Desktop direct info did not bind the selected local realm");
+  // These documents are not used to choose an endpoint. Parsing them prevents
+  // an unexpected response shape from silently becoming accepted evidence.
+  strictRecord(source.endpoints, "Beeper Desktop direct info.endpoints");
+  strictRecord(source.platform, "Beeper Desktop direct info.platform");
+  return Object.freeze({
+    baseUrl,
+    bundleId: bundleId as typeof BEEPER_DESKTOP_BUNDLE_IDS[number],
+    version: boundedString(app.version, "Beeper Desktop direct info.app.version", 256),
+  });
+}
+
+async function beeperDirectJsonRequest(
+  url: string,
+  init: RequestInit,
+  label: string,
+  dependencies: BeeperDirectMessagingDependencies | undefined,
+  signal: AbortSignal | undefined,
+): Promise<unknown> {
+  const request = dependencies?.fetch ?? fetch;
+  const controller = new AbortController();
+  const onAbort = (): void => controller.abort(signal?.reason);
+  if (signal?.aborted === true) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  if (controller.signal.aborted) {
+    throw controller.signal.reason instanceof Error
+      ? controller.signal.reason
+      : new Error(`${label} was cancelled`);
+  }
+  const timeoutMs = dependencies?.requestTimeoutMs
+    ?? BEEPER_DIRECT_REQUEST_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+    throw new Error("Beeper direct request timeout override is invalid");
+  }
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${label} timed out`)),
+    timeoutMs,
+  );
+  let text: string;
+  try {
+    const response = await request(url, {
+      ...init,
+      redirect: "error",
+      signal: controller.signal,
+    });
+    if (
+      response.redirected
+      || response.url !== "" && response.url !== url
+      || response.status !== 200
+      || response.body === null
+    ) throw new Error(`${label} did not return one exact successful response`);
+    text = await readBoundedStream(
+      response.body,
+      BEEPER_DIRECT_RESPONSE_BYTES,
+      `${label} response`,
+      controller.signal,
+    );
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", onAbort);
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`${label} returned malformed JSON`);
+  }
+  return value;
+}
+
+/**
+ * Submit exactly one text part to the pinned Beeper Desktop loopback API.
+ *
+ * This path intentionally does not call the Beeper CLI or SDK: the CLI places
+ * text in child argv and the SDK retries by default. All realm and target reads
+ * finish before `beforeExternalBegin`; after that durable fence there is one
+ * POST, no retry, and any missing exact acceptance must remain indeterminate.
+ */
+export async function executeBeeperDirectMessagingPart(
+  inputValue: OperationInput,
+  authValue: WrenchAuth,
+  attempt: BeeperDirectMessagingAttempt,
+): Promise<BeeperDirectMessagingAcceptance> {
+  attempt.operationDeadline.throwIfUnavailable("Beeper direct messaging");
+  const input = parseBeeperOperationInput("messaging.send", inputValue);
+  if (
+    !("kind" in input)
+    || input.kind !== "text"
+    || input.text === null
+    || input.mentions.length !== 0
+    || input.noPreview
+  ) throw new Error("Beeper direct messaging v1 accepts only exact text and reply parts");
+  const auth = requireBeeperAuth(authValue);
+  if (auth.subject === undefined) {
+    throw new Error("Beeper direct messaging requires one bound local account realm");
+  }
+  const snapshot = await validateBeeperCliStoreInternal(auth.path);
+  attempt.operationDeadline.throwIfUnavailable("Beeper direct messaging");
+  const accessToken = snapshot.effectiveAuth.accessToken;
+  if (typeof accessToken !== "string") {
+    throw new Error("Beeper Desktop selected target lost its effective bearer token");
+  }
+  const authorization = `Bearer ${accessToken}`;
+  const baseUrl = snapshot.targetBaseUrl.endsWith("/")
+    ? snapshot.targetBaseUrl.slice(0, -1)
+    : snapshot.targetBaseUrl;
+  const commonHeaders = Object.freeze({
+    Accept: "application/json",
+    Authorization: authorization,
+  });
+  const info = parseBeeperDirectInfo(
+    await beeperDirectJsonRequest(
+      `${baseUrl}/v1/info`,
+      { method: "GET", headers: { Accept: "application/json" } },
+      "Beeper Desktop direct info",
+      attempt.dependencies,
+      attempt.signal,
+    ),
+    snapshot.targetBaseUrl,
+  );
+  const accounts = parseAccounts(await beeperDirectJsonRequest(
+    `${baseUrl}/v1/accounts`,
+    { method: "GET", headers: commonHeaders },
+    "Beeper Desktop direct accounts",
+    attempt.dependencies,
+    attempt.signal,
+  ));
+  requireBoundAccount(accounts, input.accountId, "Beeper direct messaging");
+  const subject = beeperSubjectFromAccountsAndTarget(
+    accounts,
+    info.baseUrl,
+    info.bundleId,
+    info.version,
+  );
+  if (subject !== auth.subject) {
+    throw new Error("Beeper Desktop direct account did not match the bound auth realm");
+  }
+  const chatPath = `/v1/chats/${encodeURIComponent(input.conversationId)}`;
+  exactConversation(
+    await beeperDirectJsonRequest(
+      `${baseUrl}${chatPath}`,
+      { method: "GET", headers: commonHeaders },
+      "Beeper Desktop direct conversation",
+      attempt.dependencies,
+      attempt.signal,
+    ),
+    accounts,
+    input.accountId,
+    input.conversationId,
+    "Beeper Desktop direct conversation",
+  );
+  attempt.operationDeadline.throwIfUnavailable("Beeper direct messaging");
+  const body = JSON.stringify({
+    text: input.text,
+    ...(input.replyTo === null ? {} : { replyToMessageID: input.replyTo }),
+  });
+  await attempt.beforeExternalBegin();
+  attempt.operationDeadline.throwIfUnavailable("Beeper direct messaging");
+  const acceptance = strictRecord(
+    await beeperDirectJsonRequest(
+      `${baseUrl}${chatPath}/messages`,
+      {
+        method: "POST",
+        headers: {
+          ...commonHeaders,
+          "Content-Type": "application/json",
+        },
+        body,
+      },
+      "Beeper Desktop direct send",
+      attempt.dependencies,
+      attempt.signal,
+    ),
+    "Beeper Desktop direct acceptance",
+  );
+  exactKeys(
+    acceptance,
+    ["chatID", "pendingMessageID"],
+    [],
+    "Beeper Desktop direct acceptance",
+  );
+  const conversationId = boundedString(
+    acceptance.chatID,
+    "Beeper Desktop direct acceptance.chatID",
+    2_048,
+  );
+  if (conversationId !== input.conversationId) {
+    throw new Error("Beeper Desktop direct acceptance changed the exact conversation");
+  }
+  return Object.freeze({
+    provider: "beeper",
+    operation: "messaging.send",
+    accountSubject: subject,
+    accountId: input.accountId,
+    conversationId,
+    pendingMessageId: boundedString(
+      acceptance.pendingMessageID,
+      "Beeper Desktop direct acceptance.pendingMessageID",
+      2_048,
+    ),
+    providerRevision: null,
+  });
 }
 
 async function runBeeperCli(

@@ -13,6 +13,7 @@ import {
 import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
+const ciWorkflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
@@ -476,8 +477,9 @@ describe("npm publication contract", () => {
   });
 
   test("gates the immutable GitHub Release on canonical public npm content", async () => {
-    const [workflow, artifact, identity] = await Promise.all([
+    const [workflow, ciWorkflow, artifact, identity] = await Promise.all([
       readFile(releaseWorkflowUrl, "utf8"),
+      readFile(ciWorkflowUrl, "utf8"),
       readFile(packageArtifactUrl, "utf8"),
       readFile(packageIdentityUrl, "utf8"),
     ]);
@@ -512,6 +514,23 @@ describe("npm publication contract", () => {
       .toHaveLength(4);
     expect(workflow.indexOf("Verify exact public npm delivery"))
       .toBeLessThan(workflow.indexOf("\n  publish:"));
+    for (const checkedSurface of [
+      "dist/index.js",
+      "dist/client.js",
+      "dist/beeper-client.js",
+      "dist/omni-client.js",
+      "dist/messaging.js",
+    ] as const) {
+      expect(ciWorkflow).toContain(checkedSurface);
+      expect(workflow).toContain(checkedSurface);
+      expect(artifact).toContain(`"${checkedSurface}"`);
+    }
+    expect(artifact).toContain(
+      '"src/providers/imessage-direct-install.ts"',
+    );
+    expect(await readFile(packageSmokeUrl, "utf8")).toContain(
+      "private-missing-reviewed-imsg-canary",
+    );
 
     for (const required of [
       "contentSha256",

@@ -1,0 +1,225 @@
+From c5994f00d17969fd7772fd2772e7b3591089513a Mon Sep 17 00:00:00 2001
+From: 0thernet <ben@substrate.run>
+Date: Thu, 27 Aug 2026 17:30:43 -0400
+Subject: [PATCH] feat(rpc): add exact chat lookup
+
+---
+ Sources/IMsgCore/MessageStore+Chats.swift | 65 ++++++++++++++++++++++-
+ Sources/imsg/RPCMethodDescriptors.swift   |  3 +-
+ Sources/imsg/RPCServer+Handlers.swift     | 35 ++++++++++++
+ Sources/imsg/RPCServer.swift              |  2 +
+ Tests/imsgTests/RPCServerTests.swift      | 33 ++++++++++++
+ 5 files changed, 136 insertions(+), 2 deletions(-)
+
+diff --git a/Sources/IMsgCore/MessageStore+Chats.swift b/Sources/IMsgCore/MessageStore+Chats.swift
+index d80a0c6..bb75222 100644
+--- a/Sources/IMsgCore/MessageStore+Chats.swift
++++ b/Sources/IMsgCore/MessageStore+Chats.swift
+@@ -58,6 +58,46 @@ private struct ListChatsQuery {
+   }
+ }
+ 
++private struct ChatByIDQuery {
++  let sql: String
++  let bindings: [Binding?]
++
++  init(chatID: ChatID, schema: MessageStoreSchema) {
++    let routing = ChatRoutingSelection(schema: schema)
++    if schema.hasChatMessageJoinMessageDateColumn {
++      self.sql = """
++        SELECT c.ROWID AS chat_rowid, IFNULL(c.display_name, c.chat_identifier) AS name,
++               c.chat_identifier AS chat_identifier, c.service_name AS service_name,
++               MAX(cmj.message_date) AS last_date,
++               \(routing.accountIDColumn) AS account_id,
++               \(routing.accountLoginColumn) AS account_login,
++               \(routing.lastAddressedHandleColumn) AS last_addressed_handle
++        FROM chat c
++        JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
++        WHERE c.ROWID = ?
++        GROUP BY c.ROWID
++        LIMIT 1
++        """
++    } else {
++      self.sql = """
++        SELECT c.ROWID AS chat_rowid, IFNULL(c.display_name, c.chat_identifier) AS name,
++               c.chat_identifier AS chat_identifier, c.service_name AS service_name,
++               MAX(m.date) AS last_date,
++               \(routing.accountIDColumn) AS account_id,
++               \(routing.accountLoginColumn) AS account_login,
++               \(routing.lastAddressedHandleColumn) AS last_addressed_handle
++        FROM chat c
++        JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
++        JOIN message m ON m.ROWID = cmj.message_id
++        WHERE c.ROWID = ?
++        GROUP BY c.ROWID
++        LIMIT 1
++        """
++    }
++    self.bindings = [chatID.rawValue]
++  }
++}
++
+ private struct UnreadChatSelection {
+   let joinClause: String
+ 
+@@ -197,9 +237,32 @@ extension MessageStore {
+     }
+   }
+ 
++  /// Return one exact chat row with the same projection as `listChats`.
++  ///
++  /// Chats without a joined message are intentionally absent because they are
++  /// not enumerable by `listChats` and have no meaningful ordering timestamp.
++  public func chat(chatID: Int64) throws -> Chat? {
++    guard chatID > 0 else { return nil }
++    return try withConnection { db in
++      let query = ChatByIDQuery(chatID: ChatID(rawValue: chatID), schema: schema)
++      let rows = try chatRows(sql: query.sql, bindings: query.bindings, db: db)
++      guard let row = rows.first else { return nil }
++      let counts = try unreadCounts(for: [row.id], db: db)
++      return chat(from: row, unreadCount: counts[row.id])
++    }
++  }
++
+   private func chatRows(for query: ListChatsQuery, db: Connection) throws -> [ChatRow] {
++    try chatRows(sql: query.sql, bindings: query.bindings, db: db)
++  }
++
++  private func chatRows(
++    sql: String,
++    bindings: [Binding?],
++    db: Connection
++  ) throws -> [ChatRow] {
+     var result: [ChatRow] = []
+-    let rows = try db.prepareRowIterator(query.sql, bindings: query.bindings)
++    let rows = try db.prepareRowIterator(sql, bindings: bindings)
+     while let row = try rows.failableNext() {
+       result.append(
+         ChatRow(
+diff --git a/Sources/imsg/RPCMethodDescriptors.swift b/Sources/imsg/RPCMethodDescriptors.swift
+index f3c0458..3e92ee2 100644
+--- a/Sources/imsg/RPCMethodDescriptors.swift
++++ b/Sources/imsg/RPCMethodDescriptors.swift
+@@ -43,7 +43,7 @@ struct RPCBridgeRequirement: Sendable, Equatable {
+ }
+ 
+ enum RPCDispatchRoute: Sendable, Equatable {
+-  case initialize, status, chatsList, messagesStats, messagesHistory, messagesSearch
++  case initialize, status, chatsList, chatsGet, messagesStats, messagesHistory, messagesSearch
+   case messagesAfter, watchSubscribe, bridgeEventsSubscribe, watchUnsubscribe
+   case send, sendRich, sendAttachment
+   case sendMultipart, sendSticker, messagesScheduled, pollSend, pollVote, pollUnvote
+@@ -109,6 +109,7 @@ let rpcMethodDescriptors: [RPCMethodDescriptor] = [
+   RPCMethodDescriptor("status", route: .status, lane: .read),
+   RPCMethodDescriptor("watch.unsubscribe", route: .watchUnsubscribe, lane: .control),
+   RPCMethodDescriptor("chats.list", route: .chatsList, lane: .read, database: [.ready]),
++  RPCMethodDescriptor("chats.get", route: .chatsGet, lane: .read, database: [.ready]),
+   RPCMethodDescriptor(
+     "messages.stats", route: .messagesStats, lane: .read, database: [.ready]),
+   RPCMethodDescriptor(
+diff --git a/Sources/imsg/RPCServer+Handlers.swift b/Sources/imsg/RPCServer+Handlers.swift
+index 5427d62..4e49dc3 100644
+--- a/Sources/imsg/RPCServer+Handlers.swift
++++ b/Sources/imsg/RPCServer+Handlers.swift
+@@ -16,6 +16,41 @@ private enum RPCSendTransport: String {
+ }
+ 
+ extension RPCServer {
++  func handleChatsGet(id: Any?, params: [String: Any]) async throws {
++    let params = try RPCParameters(
++      params,
++      method: "chats.get",
++      supportedKeys: ["chat_id"]
++    )
++    guard let chatID = try params.int64("chat_id"), chatID > 0 else {
++      throw RPCError.invalidParams("chat_id must be a positive integer")
++    }
++    let store = try await databaseResources.require().store
++    guard
++      let chat = try store.chat(chatID: chatID),
++      let info = try store.chatInfo(chatID: chatID)
++    else {
++      throw RPCError.invalidParams("unknown chat_id \(chatID)")
++    }
++    let participants = try store.participants(chatID: chatID)
++    let contactName = contactNameForChat(
++      chat: chat,
++      chatInfo: info,
++      participants: participants,
++      contacts: contactResolver
++    )
++    respond(
++      id: id,
++      result: [
++        "chat": try ChatPayload(
++          chat: chat,
++          chatInfo: info,
++          participants: participants,
++          contactName: contactName
++        ).asDictionary()
++      ])
++  }
++
+   func handleChatsList(id: Any?, params: [String: Any]) async throws {
+     let params = try RPCParameters(
+       params,
+diff --git a/Sources/imsg/RPCServer.swift b/Sources/imsg/RPCServer.swift
+index bc740d3..0f2faa8 100644
+--- a/Sources/imsg/RPCServer.swift
++++ b/Sources/imsg/RPCServer.swift
+@@ -277,6 +277,8 @@ final class RPCServer: @unchecked Sendable {
+         try await handleStatus(id: id, params: params)
+       case .chatsList:
+         try await handleChatsList(id: id, params: params)
++      case .chatsGet:
++        try await handleChatsGet(id: id, params: params)
+       case .messagesStats:
+         try await handleMessagesStats(id: id, params: params)
+       case .messagesHistory:
+diff --git a/Tests/imsgTests/RPCServerTests.swift b/Tests/imsgTests/RPCServerTests.swift
+index 27a4f3c..de1ba0b 100644
+--- a/Tests/imsgTests/RPCServerTests.swift
++++ b/Tests/imsgTests/RPCServerTests.swift
+@@ -42,6 +42,39 @@ func rpcChatsListReturnsChatPayload() async throws {
+   #expect((chat["participants"] as? [String])?.count == 2)
+ }
+ 
++@Test
++func rpcChatsGetReturnsOneExactChatPayload() async throws {
++  let store = try CommandTestDatabase.makeStoreForRPC()
++  let output = TestRPCOutput()
++  let resolver = MockContactResolver(names: ["iMessage;+;chat123": "Family"])
++  let server = RPCServer(store: store, verbose: false, output: output, contactResolver: resolver)
++
++  let line = #"{"jsonrpc":"2.0","id":"exact","method":"chats.get","params":{"chat_id":1}}"#
++  await server.handleLineForTesting(line)
++
++  #expect(output.responses.count == 1)
++  let result = output.responses[0]["result"] as? [String: Any]
++  let chat = result?["chat"] as? [String: Any]
++  #expect(int64Value(chat?["id"]) == 1)
++  #expect(chat?["guid"] as? String == "iMessage;+;chat123")
++  #expect(chat?["service"] as? String == "iMessage")
++  #expect(chat?["contact_name"] as? String == "Family")
++}
++
++@Test
++func rpcChatsGetRejectsAnUnknownChatRow() async throws {
++  let store = try CommandTestDatabase.makeStoreForRPC()
++  let output = TestRPCOutput()
++  let server = RPCServer(store: store, verbose: false, output: output)
++
++  let line = #"{"jsonrpc":"2.0","id":"missing","method":"chats.get","params":{"chat_id":999}}"#
++  await server.handleLineForTesting(line)
++
++  #expect(output.responses.count == 1)
++  let error = output.responses[0]["error"] as? [String: Any]
++  #expect(int64Value(error?["code"]) == -32602)
++}
++
+ @Test
+ func rpcMessagesHistoryIncludesChatFields() async throws {
+   let store = try CommandTestDatabase.makeStoreForRPC()
+-- 
+2.50.1 (Apple Git-155)
+

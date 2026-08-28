@@ -1,0 +1,236 @@
+{
+  "schemaVersion": 6,
+  "id": "imessage-direct",
+  "version": "1.0.0",
+  "displayName": "iMessage (Reviewed Direct Transport)",
+  "surfaceId": "imessage",
+  "origins": [
+    "https://www.apple.com"
+  ],
+  "browserDomains": [
+    "www.apple.com"
+  ],
+  "operations": {
+    "messaging.list": {
+      "description": "List one bounded current local iMessage conversation window.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Maximum recent iMessage chats scanned from chat.db",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": []
+      },
+      "localCli": {
+        "surface": "imessage",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.read": {
+      "description": "Resolve one exact live iMessage chat GUID, service, and observed chat.db row.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "chat_guid": {
+            "type": "string",
+            "description": "Exact iMessage chat GUID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "service": {
+            "type": "string",
+            "description": "Exact iMessage service; SMS is unsupported",
+            "minLength": 8,
+            "maxLength": 8,
+            "enum": [
+              "iMessage"
+            ]
+          },
+          "observed_chat_row_id": {
+            "type": "number",
+            "description": "Positive chat.db row ID observed with the exact GUID and service",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "chat_guid",
+          "service",
+          "observed_chat_row_id"
+        ]
+      },
+      "localCli": {
+        "surface": "imessage",
+        "action": "conversations.read",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.read": {
+      "description": "Read bounded current context from one exact live iMessage chat.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "chat_guid": {
+            "type": "string",
+            "description": "Exact iMessage chat GUID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "service": {
+            "type": "string",
+            "description": "Exact iMessage service; SMS is unsupported",
+            "minLength": 8,
+            "maxLength": 8,
+            "enum": [
+              "iMessage"
+            ]
+          },
+          "observed_chat_row_id": {
+            "type": "number",
+            "description": "Positive chat.db row ID observed with the exact GUID and service",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum current messages",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "chat_guid",
+          "service",
+          "observed_chat_row_id"
+        ]
+      },
+      "localCli": {
+        "surface": "imessage",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.send": {
+      "description": "Submit one confirmed text bubble through explicit AppleScript iMessage transport with SMS fallback disabled; delivery is not asserted.",
+      "risk": "R3",
+      "sideEffect": "externally visible iMessage submission",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "chat_guid": {
+            "type": "string",
+            "description": "Exact iMessage chat GUID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "service": {
+            "type": "string",
+            "description": "Exact iMessage service; SMS is unsupported",
+            "minLength": 8,
+            "maxLength": 8,
+            "enum": [
+              "iMessage"
+            ]
+          },
+          "observed_chat_row_id": {
+            "type": "number",
+            "description": "Positive chat.db row ID observed with the exact GUID and service",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "text": {
+            "type": "string",
+            "description": "One private confirmed text bubble passed only through RPC stdin",
+            "minLength": 1,
+            "maxLength": 65536
+          }
+        },
+        "required": [
+          "chat_guid",
+          "service",
+          "observed_chat_row_id",
+          "text"
+        ]
+      },
+      "localCli": {
+        "surface": "imessage",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 1048576
+      }
+    },
+    "messaging.delivery.read": {
+      "description": "Read the local Messages status row for one exact independently observed outgoing GUID.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "chat_guid": {
+            "type": "string",
+            "description": "Exact iMessage chat GUID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "service": {
+            "type": "string",
+            "description": "Exact iMessage service; SMS is unsupported",
+            "minLength": 8,
+            "maxLength": 8,
+            "enum": [
+              "iMessage"
+            ]
+          },
+          "observed_chat_row_id": {
+            "type": "number",
+            "description": "Positive chat.db row ID observed with the exact GUID and service",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "message_guid": {
+            "type": "string",
+            "description": "Exact outgoing message GUID independently observed in chat.db",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "chat_guid",
+          "service",
+          "observed_chat_row_id",
+          "message_guid"
+        ]
+      },
+      "localCli": {
+        "surface": "imessage",
+        "action": "messaging.delivery.read",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 1048576
+      }
+    }
+  }
+}

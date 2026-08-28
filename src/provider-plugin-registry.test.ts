@@ -260,6 +260,23 @@ function writeInstalledDependency(
 }
 
 describe("provider plugin definition and registry", () => {
+  test("registers iMessage as a current-only durable local-CLI identity", () => {
+    const plugin = providerPluginRegistry.get("imessage-direct");
+    const binding = providerPluginRegistry.requireRoute("local-cli", "imessage");
+    expect(plugin?.version).toBe("1.0.0");
+    expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
+      .toBe("00ef9201e77ffe5258f13b81a5e934af0ccf6317e095644ccfcec258c6928e8d");
+    for (const operation of binding.operations) {
+      for (const contractVersion of operation.contractVersions) {
+        expect(providerPluginRegistry.legacyContractImplementationHashes(
+          binding,
+          operation.name,
+          contractVersion,
+        )).toEqual([]);
+      }
+    }
+  });
+
   test("registers Twitch as a current-only durable authenticated-web identity", () => {
     const plugin = providerPluginRegistry.get("twitch-web");
     const binding = plugin?.bindings.find(({ surfaceId }) =>
@@ -1950,6 +1967,8 @@ describe("provider plugin definition and registry", () => {
         "wrench-registry-occurrence-owner-alpha",
         {
           dependencies: { "wrench-registry-shared-occurrence": "1.0.0" },
+          source:
+            'import "wrench-registry-shared-occurrence";\nexport const owner = "alpha";\n',
         },
       );
       const zetaOwner = writeInstalledDependency(
@@ -1957,13 +1976,16 @@ describe("provider plugin definition and registry", () => {
         "wrench-registry-occurrence-owner-zeta",
         {
           dependencies: { "wrench-registry-shared-occurrence": "1.0.0" },
+          source:
+            'import "wrench-registry-shared-occurrence";\nexport const owner = "zeta";\n',
         },
       );
       const alpha = writeInstalledDependency(
         alphaOwner.root,
         "wrench-registry-shared-occurrence",
         {
-          source: "export const occurrence = 'alpha';\n",
+          source:
+            'import "wrench-registry-occurrence-peer";\nexport const occurrence = "alpha";\n',
           peerDependencies: { "wrench-registry-occurrence-peer": "*" },
         },
       );
@@ -1971,7 +1993,8 @@ describe("provider plugin definition and registry", () => {
         zetaOwner.root,
         "wrench-registry-shared-occurrence",
         {
-          source: "export const occurrence = 'zeta';\n",
+          source:
+            'import "wrench-registry-occurrence-peer";\nexport const occurrence = "zeta";\n',
           peerDependencies: { "wrench-registry-occurrence-peer": "*" },
         },
       );
@@ -2008,7 +2031,10 @@ describe("provider plugin definition and registry", () => {
         repeated.requireSessionRoute("installed-occurrence-site"),
       ).toString("hex")).toBe(firstHash);
 
-      writeFileSync(alpha.entry, "export const occurrence = 'ALPHA';\n");
+      writeFileSync(
+        alpha.entry,
+        'import "wrench-registry-occurrence-peer";\nexport const occurrence = "ALPHA";\n',
+      );
       const changed = createProviderPluginRegistry([definition()]);
       expect(changed.implementationHash(
         changed.requireSessionRoute("installed-occurrence-site"),
@@ -2059,6 +2085,151 @@ describe("provider plugin definition and registry", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    "reads one canonical npm binary target once across duplicate aliases",
+    () => {
+      const directory = mkdtempSync(
+        join(import.meta.dir, "plugins", "installed-bin-alias-dedup-test-"),
+      );
+      const pluginPath = join(directory, "plugin.ts");
+      try {
+        const dependency = writeInstalledDependency(
+          directory,
+          "wrench-registry-bin-alias-dedup",
+        );
+        const nestedBin = join(dependency.root, "node_modules", ".bin");
+        const tool = join(dependency.root, "node_modules", "tool");
+        const target = join(tool, "cli.js");
+        mkdirSync(nestedBin, { recursive: true });
+        mkdirSync(tool, { recursive: true });
+        writeFileSync(target, "shared target body\n".repeat(256));
+        for (let index = 0; index < 64; index += 1) {
+          symlinkSync(
+            "../tool/cli.js",
+            join(nestedBin, `tool-${String(index).padStart(2, "0")}`),
+          );
+        }
+        writeFileSync(
+          pluginPath,
+          'import "wrench-registry-bin-alias-dedup";\nexport const plugin = true;\n',
+        );
+        const reads = new Map<string, number>();
+
+        const registry = createProviderPluginRegistry([
+          pluginDefinition(
+            "installed-bin-alias-dedup",
+            undefined,
+            pathToFileURL(pluginPath),
+          ),
+        ], {
+          readDependencySource: (path) => {
+            reads.set(path, (reads.get(path) ?? 0) + 1);
+            return readFileSync(path);
+          },
+        });
+
+        expect(registry.implementationHash(
+          registry.requireSessionRoute("installed-bin-alias-dedup-site"),
+        ).toString("hex")).toMatch(/^[a-f0-9]{64}$/u);
+        expect(reads.get(target)).toBe(1);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "rejects an unsafe direct node_modules parent for npm binary links",
+    () => {
+      const directory = mkdtempSync(
+        join(import.meta.dir, "plugins", "unsafe-bin-parent-test-"),
+      );
+      const pluginPath = join(directory, "plugin.ts");
+      try {
+        const dependency = writeInstalledDependency(
+          directory,
+          "wrench-registry-unsafe-bin-parent",
+        );
+        const nodeModules = join(dependency.root, "node_modules");
+        const nestedBin = join(nodeModules, ".bin");
+        mkdirSync(nestedBin, { recursive: true });
+        symlinkSync("../../index.js", join(nestedBin, "tool"));
+        chmodSync(nodeModules, 0o775);
+        writeFileSync(
+          pluginPath,
+          'import "wrench-registry-unsafe-bin-parent";\nexport const plugin = true;\n',
+        );
+
+        expect(() => createProviderPluginRegistry([
+          pluginDefinition(
+            "unsafe-bin-parent",
+            undefined,
+            pathToFileURL(pluginPath),
+          ),
+        ])).toThrow(
+          /(?:installed|evaluation) package directory node_modules.*unsafe/u,
+        );
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "rejects an unsafe npm binary target ancestor while excluding unrelated nested content",
+    () => {
+      const directory = mkdtempSync(
+        join(import.meta.dir, "plugins", "unsafe-bin-target-parent-test-"),
+      );
+      const pluginPath = join(directory, "plugin.ts");
+      try {
+        const dependency = writeInstalledDependency(
+          directory,
+          "wrench-registry-unsafe-bin-target-parent",
+        );
+        const nestedBin = join(dependency.root, "node_modules", ".bin");
+        const tool = join(dependency.root, "node_modules", "tool");
+        const unrelated = join(
+          dependency.root,
+          "node_modules",
+          "unrelated",
+        );
+        mkdirSync(nestedBin, { recursive: true });
+        mkdirSync(tool, { recursive: true });
+        mkdirSync(unrelated, { recursive: true });
+        writeFileSync(join(tool, "cli.js"), "target bytes\n");
+        writeFileSync(join(unrelated, "index.js"), "unrelated one\n");
+        symlinkSync("../tool/cli.js", join(nestedBin, "tool"));
+        writeFileSync(
+          pluginPath,
+          'import "wrench-registry-unsafe-bin-target-parent";\nexport const plugin = true;\n',
+        );
+        const definition = () => pluginDefinition(
+          "unsafe-bin-target-parent",
+          undefined,
+          pathToFileURL(pluginPath),
+        );
+        const identity = (): string => {
+          const registry = createProviderPluginRegistry([definition()]);
+          return registry.implementationHash(
+            registry.requireSessionRoute("unsafe-bin-target-parent-site"),
+          ).toString("hex");
+        };
+
+        const baseline = identity();
+        writeFileSync(join(unrelated, "index.js"), "unrelated two\n");
+        expect(identity()).toBe(baseline);
+
+        chmodSync(tool, 0o775);
+        expect(identity).toThrow(
+          /(?:installed|evaluation) package directory node_modules\/tool.*unsafe/u,
+        );
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("binds transitive package bytes and exact entry resolution", () => {
     const directory = mkdtempSync(
@@ -3076,6 +3247,103 @@ describe("provider plugin definition and registry", () => {
         .toThrow(
           "installed dependency changed after its definition was evaluated",
         );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "binds canonical bin links while excluding unrelated nested install topology",
+    () => {
+      const directory = mkdtempSync(
+        join(import.meta.dir, "plugins", "evaluation-install-topology-test-"),
+      );
+      const pluginPath = join(directory, "plugin.ts");
+      try {
+        const dependency = writeInstalledDependency(
+          directory,
+          "wrench-evaluation-install-topology",
+        );
+        const binDirectory = join(dependency.root, "node_modules", ".bin");
+        mkdirSync(binDirectory, { recursive: true });
+        symlinkSync("../../index.js", join(binDirectory, "topology-tool"));
+        writeFileSync(
+          pluginPath,
+          'import "wrench-evaluation-install-topology";\nexport const plugin = true;\n',
+        );
+
+        const evaluated = defineProviderPlugin(pluginDefinition(
+          "evaluation-install-topology",
+          undefined,
+          pathToFileURL(pluginPath),
+        ));
+        const before = createProviderPluginRegistry([evaluated]);
+        const beforeHash = before.implementationHash(
+          before.requireSessionRoute("evaluation-install-topology-site"),
+        ).toString("hex");
+
+        const unrelated = join(
+          dependency.root,
+          "node_modules",
+          "unrelated-install-only-package",
+        );
+        mkdirSync(unrelated, { recursive: true });
+        writeFileSync(
+          join(unrelated, "package.json"),
+          '{"name":"unrelated-install-only-package","version":"1.0.0"}\n',
+        );
+        writeFileSync(join(unrelated, "index.js"), "unrelated bytes\n");
+
+        const after = createProviderPluginRegistry([evaluated]);
+        expect(after.implementationHash(
+          after.requireSessionRoute("evaluation-install-topology-site"),
+        ).toString("hex")).toBe(beforeHash);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("hashes statically imported nested dependency packages independently", () => {
+    const directory = mkdtempSync(
+      join(import.meta.dir, "plugins", "evaluation-nested-package-test-"),
+    );
+    const pluginPath = join(directory, "plugin.ts");
+    try {
+      const dependency = writeInstalledDependency(
+        directory,
+        "wrench-evaluation-nested-parent",
+        {
+          dependencies: { "wrench-evaluation-nested-child": "1.0.0" },
+          source:
+            'import "wrench-evaluation-nested-child";\nexport const parent = true;\n',
+        },
+      );
+      const child = writeInstalledDependency(
+        dependency.root,
+        "wrench-evaluation-nested-child",
+      );
+      writeFileSync(
+        pluginPath,
+        'import "wrench-evaluation-nested-parent";\nexport const plugin = true;\n',
+      );
+      const registry = () => createProviderPluginRegistry([
+        defineProviderPlugin(pluginDefinition(
+          "evaluation-nested-package",
+          undefined,
+          pathToFileURL(pluginPath),
+        )),
+      ]);
+
+      const before = registry();
+      const beforeHash = before.implementationHash(
+        before.requireSessionRoute("evaluation-nested-package-site"),
+      ).toString("hex");
+      writeFileSync(child.entry, "export const value = 2;\n");
+      const after = registry();
+      expect(after.implementationHash(
+        after.requireSessionRoute("evaluation-nested-package-site"),
+      ).toString("hex")).not.toBe(beforeHash);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

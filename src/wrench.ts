@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { BoundedByteBuffer } from "@hraness/kb/clip/bounded-byte-buffer";
@@ -165,6 +165,7 @@ import {
 import { isPlanBoundFile, summarizePlanFile } from "./plan-assets";
 import {
   cancelInvocationPlan,
+  confirmMessagingInvocation,
   confirmInvocation,
   createAndSaveInvocationPlan,
   createReadProjectionQueryForInvocation,
@@ -173,6 +174,7 @@ import {
   listInvocationPlans,
   listRunReceipts,
   prepareInvocation,
+  loadInvocationPlan,
   purgeExpiredPlans,
   readRunReceipt,
   repairInterruptedConfirmationClaims,
@@ -190,6 +192,18 @@ import {
   rebuildOmniViewFromExactCache,
   revalidateOmniViewInternal,
 } from "./omni-runtime";
+import {
+  discoverMessagingRoutesInternal,
+  loadMessagingPreviewForConfirmationInternal,
+  previewMessagingTurnInternal,
+  readMessagingContextInternal,
+  reconcileMessagingRunInternal,
+  resolveMessagingRouteInternal,
+  showMessagingRunInternal,
+  validateMessagingPrivateOutputPath,
+  writeMessagingPrivateOutput,
+} from "./messaging-runtime";
+import { readMessagingRunIfPresent } from "./messaging-action-store";
 import {
   checkSourceProviderPluginDirectory,
   scaffoldWebProvider,
@@ -217,6 +231,8 @@ type MediaRuntime = typeof MediaRuntimeModule;
 type BeeperMessageLikeMeCliRuntime = typeof BeeperMessageLikeMeCliRuntimeModule;
 type BeeperContactInteractionCliRuntime =
   typeof BeeperContactInteractionCliRuntimeModule;
+type ImsgDirectInstallRuntime =
+  typeof import("./providers/imessage-direct-install");
 
 /**
  * Wrench's stable boundary around the independently versioned KB doctor.
@@ -241,6 +257,8 @@ const loadBeeperMessageLikeMeCliRuntime = (): Promise<BeeperMessageLikeMeCliRunt
   import("./beeper-message-like-me-cli");
 const loadBeeperContactInteractionCliRuntime = (): Promise<BeeperContactInteractionCliRuntime> =>
   import("./beeper-contact-interactions-cli");
+const loadImsgDirectInstallRuntime = (): Promise<ImsgDirectInstallRuntime> =>
+  import("./providers/imessage-direct-install");
 
 const runDefaultGmailCapture: GmailCaptureRunner = async (...arguments_) => {
   const { runGmailCapture } = await import("./gmail-capture");
@@ -276,6 +294,8 @@ export type WrenchDependencies = {
     () => Promise<BeeperMessageLikeMeCliRuntime>;
   readonly loadBeeperContactInteractionCliRuntime:
     () => Promise<BeeperContactInteractionCliRuntime>;
+  readonly loadImsgDirectInstallRuntime:
+    () => Promise<ImsgDirectInstallRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
   readonly probePluginSubject: (
     binding: ProviderPluginBindingV1,
@@ -332,6 +352,7 @@ const defaultDependencies: WrenchDependencies = {
   loadMediaRuntime,
   loadBeeperMessageLikeMeCliRuntime,
   loadBeeperContactInteractionCliRuntime,
+  loadImsgDirectInstallRuntime,
   providerPluginRegistry,
   probePluginSubject: async (
     binding,
@@ -418,6 +439,9 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
     loadBeeperContactInteractionCliRuntime:
       overrides.loadBeeperContactInteractionCliRuntime
       ?? defaultDependencies.loadBeeperContactInteractionCliRuntime,
+    loadImsgDirectInstallRuntime:
+      overrides.loadImsgDirectInstallRuntime
+      ?? defaultDependencies.loadImsgDirectInstallRuntime,
     providerPluginRegistry: overrides.providerPluginRegistry
       ?? defaultDependencies.providerPluginRegistry,
     probePluginSubject: overrides.probePluginSubject
@@ -816,6 +840,43 @@ async function readInput(source: string): Promise<unknown> {
     const path = resolve(source.slice(1));
     text = readRegularFile(path, maximum, "input file");
   } else if (Buffer.byteLength(source, "utf8") > maximum) throw new Error(`inline input exceeds ${maximum} bytes`);
+  return JSON.parse(text) as unknown;
+}
+
+async function readMessagingInput(source: string): Promise<unknown> {
+  const maximum = 1024 * 1024;
+  if (source === "-") {
+    return JSON.parse(await readStdinBounded(maximum)) as unknown;
+  }
+  if (!source.startsWith("@")) {
+    throw new Error("messaging input must arrive through stdin or one checked private file");
+  }
+  const path = source.slice(1);
+  const currentUid = process.getuid?.();
+  if (currentUid === undefined) {
+    throw new Error("messaging private-file ownership cannot be established");
+  }
+  const before = lstatSync(path, { bigint: true });
+  if (
+    !before.isFile()
+    || before.uid !== BigInt(currentUid)
+    || (before.mode & 0o077n) !== 0n
+  ) {
+    throw new Error("messaging input must be an owned regular file with no group or other access");
+  }
+  const text = readRegularFile(path, maximum, "messaging input file");
+  const after = lstatSync(path, { bigint: true });
+  if (
+    !after.isFile()
+    || after.uid !== before.uid
+    || after.dev !== before.dev
+    || after.ino !== before.ino
+    || after.size !== before.size
+    || after.mtimeNs !== before.mtimeNs
+    || after.ctimeNs !== before.ctimeNs
+    || after.mode !== before.mode
+    || (after.mode & 0o077n) !== 0n
+  ) throw new Error("messaging input file changed while it was being read");
   return JSON.parse(text) as unknown;
 }
 
@@ -1834,6 +1895,40 @@ async function runCommand(
     output.stdout(renderWrenchUsage());
     return 0;
   }
+  if (arguments_.command === "imessage-transport-install") {
+    const runtime = await dependencies.loadImsgDirectInstallRuntime();
+    const installed = await runtime.installReviewedImsgBinary(
+      arguments_.binary,
+      environment,
+    );
+    const result = Object.freeze({
+      ok: true,
+      installed: true,
+      alreadyPresent: installed.alreadyPresent,
+      tool: "imsg-private-transport",
+      version: installed.version,
+      executableSha256: installed.executableSha256,
+    });
+    print(output, result, arguments_.json);
+    return 0;
+  }
+  if (arguments_.command === "messaging-reconcile") {
+    const claimRecovery = repairInterruptedConfirmationClaims(environment);
+    if (claimRecovery.invalid > 0) {
+      throw new Error(
+        "local messaging recovery has unresolved state; run wrench doctor before reconciliation",
+      );
+    }
+    const result = reconcileMessagingRunInternal(arguments_.runId, {
+      environment,
+    });
+    print(output, result, arguments_.json);
+    return result.state === "indeterminate"
+      ? 5
+      : result.state === "submitted"
+        ? 0
+        : 3;
+  }
   if (arguments_.command === "clip") {
     return runCaptureCommand(
       [],
@@ -1948,6 +2043,37 @@ async function runCommand(
     } finally {
       admission.release();
     }
+  }
+  if (
+    arguments_.command === "messaging-routes"
+    || arguments_.command === "messaging-resolve"
+    || arguments_.command === "messaging-context"
+    || arguments_.command === "messaging-preview"
+  ) {
+    const privateOutput = validateMessagingPrivateOutputPath(
+      arguments_.privateOutput,
+      environment,
+    );
+    const request = await readMessagingInput(arguments_.inputSource);
+    const options = {
+      environment,
+      registry: dependencies.providerPluginRegistry,
+      ...(signal === undefined ? {} : { signal }),
+    } as const;
+    const artifact = arguments_.command === "messaging-routes"
+      ? await discoverMessagingRoutesInternal(request, options)
+      : arguments_.command === "messaging-resolve"
+        ? await resolveMessagingRouteInternal(request, options)
+        : arguments_.command === "messaging-context"
+          ? await readMessagingContextInternal(request, options)
+          : await previewMessagingTurnInternal(request, options);
+    const receipt = writeMessagingPrivateOutput(
+      privateOutput,
+      artifact,
+      environment,
+    );
+    output.stdout(exactTerminalJson(receipt));
+    return 0;
   }
   if (arguments_.command === "doctor") {
     return doctor(arguments_, environment, output, dependencies);
@@ -3001,6 +3127,50 @@ async function runCommand(
     return arguments_.preview ? 0 : 4;
   }
   if (arguments_.command === "confirm") {
+    const selectedPlan = loadInvocationPlan(arguments_.digest, environment);
+    if (selectedPlan.plan.messagingComposite !== undefined) {
+      if (
+        arguments_.privateOutput === undefined
+        || arguments_.receiptBindingOutput === undefined
+      ) throw new Error(
+        "messaging confirmation requires --private-output and --receipt-binding-output",
+      );
+      loadMessagingPreviewForConfirmationInternal(arguments_.digest, { environment });
+      const privateOutput = validateMessagingPrivateOutputPath(
+        arguments_.privateOutput,
+        environment,
+      );
+      const receiptBindingOutput = validateMessagingPrivateOutputPath(
+        arguments_.receiptBindingOutput,
+        environment,
+      );
+      if (privateOutput === receiptBindingOutput) {
+        throw new Error(
+          "messaging confirmation requires distinct private output and receipt-binding paths",
+        );
+      }
+      const result = await confirmMessagingInvocation(arguments_.digest, {
+        environment,
+        registry: dependencies.providerPluginRegistry,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      writeMessagingPrivateOutput(privateOutput, result.run, environment);
+      writeMessagingPrivateOutput(
+        receiptBindingOutput,
+        result.receiptBinding,
+        environment,
+      );
+      output.stdout(exactTerminalJson(result.receipt));
+      return result.receipt.state === "submitted"
+        ? 0
+        : result.receipt.state === "indeterminate"
+          ? 5
+          : 3;
+    }
+    if (
+      arguments_.privateOutput !== undefined
+      || arguments_.receiptBindingOutput !== undefined
+    ) throw new Error("messaging output options require a messaging composite plan");
     const result = await confirmInvocation(arguments_.digest, {
       headed: arguments_.headed,
       environment,
@@ -3098,6 +3268,43 @@ async function runCommand(
     const removed = cancelInvocationPlan(arguments_.digest, environment);
     output.stdout(removed ? `Cancelled preview ${safe(arguments_.digest)}.\n` : `Preview ${safe(arguments_.digest)} was not present.\n`);
     return 0;
+  }
+  if (arguments_.command === "runs-show") {
+    const messaging = readMessagingRunIfPresent(arguments_.runId, environment);
+    if (messaging !== null) {
+      if (
+        arguments_.privateOutput === undefined
+        || arguments_.receiptBindingOutput === undefined
+      ) throw new Error(
+        "messaging runs show requires --private-output and --receipt-binding-output",
+      );
+      const privateOutput = validateMessagingPrivateOutputPath(
+        arguments_.privateOutput,
+        environment,
+      );
+      const receiptBindingOutput = validateMessagingPrivateOutputPath(
+        arguments_.receiptBindingOutput,
+        environment,
+      );
+      if (privateOutput === receiptBindingOutput) {
+        throw new Error(
+          "messaging runs show requires distinct private output and receipt-binding paths",
+        );
+      }
+      const result = showMessagingRunInternal(arguments_.runId, { environment });
+      writeMessagingPrivateOutput(privateOutput, result.run, environment);
+      writeMessagingPrivateOutput(
+        receiptBindingOutput,
+        result.receiptBinding,
+        environment,
+      );
+      output.stdout(exactTerminalJson(result.receipt));
+      return result.receipt.state === "indeterminate" ? 5 : result.receipt.state === "submitted" ? 0 : 3;
+    }
+    if (
+      arguments_.privateOutput !== undefined
+      || arguments_.receiptBindingOutput !== undefined
+    ) throw new Error("messaging output options require a messaging run");
   }
   repairInterruptedConfirmationClaims(environment);
   repairInterruptedRunJournals(environment);
@@ -3199,6 +3406,10 @@ function commandUsesPortableProviderCatalog(
     || command === "auth-pair"
     || command === "auth-sync"
     || command === "omni-read"
+    || command === "messaging-routes"
+    || command === "messaging-resolve"
+    || command === "messaging-context"
+    || command === "messaging-preview"
     || command === "invoke"
     || command === "confirm"
     || command === "runs-reconcile";
