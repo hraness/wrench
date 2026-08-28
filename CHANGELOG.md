@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Start stage-only npm verification automatically when a greater stable package
+  version reaches `main`. Unchanged manifest versions stop before OIDC, and the
+  terminal staging job requires maintainer approval through the protected
+  `npm-stage` environment before npm's separate two-factor approval.
+
 ## 0.16.0 - 2026-08-27
 
 - Redesign wrench.rip as a restrained editorial site with a supported-actions-only
