@@ -1345,7 +1345,7 @@ const providerPluginEvaluationRuntimeBuiltins = new Set(
 type ProviderPluginEvaluationPackageTreeEntry =
   | {
     readonly path: string;
-    readonly kind: "directory" | "file";
+    readonly kind: "directory" | "guard-directory" | "file";
     readonly stats: BigIntStats;
   }
   | {
@@ -1391,6 +1391,67 @@ export function isProviderPluginInstalledBinaryDirectory(
     || relativeDirectory.endsWith("/node_modules/.bin");
 }
 
+export type ProviderPluginInstalledBinaryLinkTarget = Readonly<{
+  path: string;
+  stats: BigIntStats;
+}>;
+
+/**
+ * Bind a directory that is security-relevant to an installed binary target
+ * without making installer topology part of the package's durable identity.
+ */
+export function providerPluginInstalledGuardDirectorySnapshot(
+  path: string,
+  label: string,
+): BigIntStats {
+  let before: BigIntStats;
+  try {
+    before = lstatSync(path, { bigint: true });
+  } catch {
+    throw new Error(`${label} changed while it was bound`);
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (
+    before.isSymbolicLink()
+    || !before.isDirectory()
+    || (uid !== undefined && before.uid !== BigInt(uid))
+    || (before.mode & 0o022n) !== 0n
+  ) {
+    throw new Error(`${label} is unsafe`);
+  }
+  let descriptor: number;
+  try {
+    descriptor = openSync(
+      path,
+      constants.O_RDONLY
+        | ("O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0)
+        | ("O_DIRECTORY" in constants ? constants.O_DIRECTORY : 0),
+    );
+  } catch {
+    throw new Error(`${label} changed while it was bound`);
+  }
+  try {
+    const bound = fstatSync(descriptor, { bigint: true });
+    let current: BigIntStats;
+    try {
+      current = lstatSync(path, { bigint: true });
+    } catch {
+      throw new Error(`${label} changed while it was bound`);
+    }
+    if (
+      current.isSymbolicLink()
+      || !current.isDirectory()
+      || !sameEvaluationSourceSnapshot(before, bound)
+      || !sameEvaluationSourceSnapshot(bound, current)
+    ) {
+      throw new Error(`${label} changed while it was bound`);
+    }
+    return before;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 /**
  * Bind an installer-generated npm binary link to one canonical regular file
  * inside the same captured package tree. Wrapper files remain ordinary files.
@@ -1401,7 +1462,7 @@ export function providerPluginCanonicalInstalledBinaryLinkTarget(
   initialStats: BigIntStats,
   maximumPathBytes: number,
   label: string,
-): string {
+): ProviderPluginInstalledBinaryLinkTarget {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   if (
     !initialStats.isSymbolicLink()
@@ -1478,7 +1539,7 @@ export function providerPluginCanonicalInstalledBinaryLinkTarget(
   ) {
     throw new Error(`${label} target is not one canonical owned regular file`);
   }
-  return targetPath;
+  return Object.freeze({ path: targetPath, stats: targetStats });
 }
 
 function readOwnedBoundedProviderPluginEvaluationFile(
@@ -1567,10 +1628,110 @@ function walkProviderPluginEvaluationPackageTree(
   root: string,
 ): ProviderPluginEvaluationPackageTreeWalk {
   const entries: ProviderPluginEvaluationPackageTreeEntry[] = [];
+  const capturedFiles = new Map<string, BigIntStats>();
+  const capturedGuardDirectories = new Map<string, BigIntStats>();
   let fileCount = 0;
   let linkCount = 0;
   let directoryCount = 0;
   let totalBytes = 0;
+  const captureFile = (
+    relativePath: string,
+    stats: BigIntStats,
+  ): void => {
+    const existing = capturedFiles.get(relativePath);
+    if (existing !== undefined) {
+      if (!sameEvaluationSourceSnapshot(existing, stats)) {
+        throw new Error(
+          `provider plugin evaluation package file ${relativePath} changed while it was walked`,
+        );
+      }
+      return;
+    }
+    const uid =
+      typeof process.getuid === "function" ? process.getuid() : undefined;
+    if (
+      !stats.isFile()
+      || stats.isSymbolicLink()
+      || (uid !== undefined && stats.uid !== BigInt(uid))
+    ) {
+      throw new Error(
+        `provider plugin evaluation package tree contains unsupported entry ${relativePath}`,
+      );
+    }
+    fileCount += 1;
+    if (
+      fileCount + linkCount
+        > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_FILES
+    ) {
+      throw new Error(
+        "provider plugin evaluation package tree exceeds its file bound",
+      );
+    }
+    if (
+      stats.size < 0n
+      || stats.size
+        > BigInt(MAX_PROVIDER_PLUGIN_EVALUATION_SOURCE_BYTES)
+    ) {
+      throw new Error(
+        `provider plugin evaluation package file ${relativePath} exceeds its byte bound`,
+      );
+    }
+    totalBytes += Number(stats.size);
+    if (totalBytes > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_BYTES) {
+      throw new Error(
+        "provider plugin evaluation package tree exceeds its total byte bound",
+      );
+    }
+    capturedFiles.set(relativePath, stats);
+    entries.push(Object.freeze({
+      path: relativePath,
+      kind: "file",
+      stats,
+    }));
+  };
+  const captureGuardDirectory = (relativePath: string): void => {
+    const stats = providerPluginInstalledGuardDirectorySnapshot(
+      resolve(root, relativePath),
+      `provider plugin evaluation package directory ${relativePath}`,
+    );
+    const existing = capturedGuardDirectories.get(relativePath);
+    if (existing !== undefined) {
+      if (!sameEvaluationSourceSnapshot(existing, stats)) {
+        throw new Error(
+          `provider plugin evaluation installed binary directory ${relativePath} changed while it was walked`,
+        );
+      }
+      return;
+    }
+    directoryCount += 1;
+    if (
+      directoryCount
+        > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_DIRECTORIES
+    ) {
+      throw new Error(
+        "provider plugin evaluation package tree exceeds its directory bound",
+      );
+    }
+    capturedGuardDirectories.set(relativePath, stats);
+    entries.push(Object.freeze({
+      path: relativePath,
+      kind: "guard-directory",
+      stats,
+    }));
+  };
+  const captureTargetGuardDirectories = (targetPath: string): void => {
+    const parent = dirname(targetPath).split(sep).join("/");
+    if (parent === ".") return;
+    const segments = parent.split("/");
+    if (segments.length > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_DEPTH) {
+      throw new Error(
+        "provider plugin evaluation package tree exceeds its depth bound",
+      );
+    }
+    for (let index = 1; index <= segments.length; index += 1) {
+      captureGuardDirectory(segments.slice(0, index).join("/"));
+    }
+  };
   const visit = (
     directoryPath: string,
     relativeDirectory: string,
@@ -1691,14 +1852,14 @@ function walkProviderPluginEvaluationPackageTree(
               "provider plugin evaluation package tree exceeds its file bound",
             );
           }
-          const targetPath = providerPluginCanonicalInstalledBinaryLinkTarget(
+          const target = providerPluginCanonicalInstalledBinaryLinkTarget(
             root,
             path,
             stats,
             MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_PATH_BYTES,
             `provider plugin evaluation npm binary link ${relativePath}`,
           );
-          totalBytes += Buffer.byteLength(targetPath, "utf8");
+          totalBytes += Buffer.byteLength(target.path, "utf8");
           if (totalBytes > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_BYTES) {
             throw new Error(
               "provider plugin evaluation package tree exceeds its total byte bound",
@@ -1708,56 +1869,41 @@ function walkProviderPluginEvaluationPackageTree(
             path: relativePath,
             kind: "link",
             stats,
-            targetPath,
+            targetPath: target.path,
           }));
+          captureTargetGuardDirectories(target.path);
+          captureFile(target.path, target.stats);
           continue;
         }
         if (stats.isDirectory()) {
-          // A dependency's nested node_modules directory describes the
-          // installation topology, not that package's owned payload. Static
-          // imports reached through it are resolved and snapshotted as their
-          // own exact installed-package identities below.
-          if (name === "node_modules") continue;
+          if (isProviderPluginInstalledBinaryDirectory(relativeDirectory)) {
+            throw new Error(
+              `provider plugin evaluation package tree contains unsupported entry ${relativePath}`,
+            );
+          }
+          // Only installer-owned binary shims and their canonical regular-file
+          // targets contribute from nested node_modules. Statically imported
+          // packages are snapshotted independently below.
+          if (name === "node_modules") {
+            const binaryDirectory = resolve(path, ".bin");
+            const binaryStats = lstatSync(binaryDirectory, {
+              bigint: true,
+              throwIfNoEntry: false,
+            });
+            if (binaryStats !== undefined) {
+              captureGuardDirectory(relativePath);
+              visit(
+                binaryDirectory,
+                `${relativePath}/.bin`,
+                depth + 2,
+              );
+            }
+            continue;
+          }
           visit(path, relativePath, depth + 1);
           continue;
         }
-        if (
-          !stats.isFile()
-          || (uid !== undefined && stats.uid !== BigInt(uid))
-        ) {
-          throw new Error(
-            `provider plugin evaluation package tree contains unsupported entry ${relativePath}`,
-          );
-        }
-        fileCount += 1;
-        if (
-          fileCount + linkCount
-            > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_FILES
-        ) {
-          throw new Error(
-            "provider plugin evaluation package tree exceeds its file bound",
-          );
-        }
-        if (
-          stats.size < 0n
-          || stats.size
-            > BigInt(MAX_PROVIDER_PLUGIN_EVALUATION_SOURCE_BYTES)
-        ) {
-          throw new Error(
-            `provider plugin evaluation package file ${relativePath} exceeds its byte bound`,
-          );
-        }
-        totalBytes += Number(stats.size);
-        if (totalBytes > MAX_PROVIDER_PLUGIN_EVALUATION_PACKAGE_BYTES) {
-          throw new Error(
-            "provider plugin evaluation package tree exceeds its total byte bound",
-          );
-        }
-        entries.push(Object.freeze({
-          path: relativePath,
-          kind: "file",
-          stats,
-        }));
+        captureFile(relativePath, stats);
       }
       const after = fstatSync(descriptor, { bigint: true });
       let current: BigIntStats;
@@ -1862,6 +2008,7 @@ function snapshotProviderPluginEvaluationPackage(
   const links: { readonly path: string; readonly targetPath: string }[] = [];
   const directories: { readonly path: string; readonly mode: number }[] = [];
   for (const entry of firstWalk.entries) {
+    if (entry.kind === "guard-directory") continue;
     if (entry.kind === "directory") {
       directories.push(Object.freeze({
         path: entry.path,
@@ -1984,30 +2131,15 @@ function snapshotProviderPluginEvaluationPackage(
     );
   }
   for (const link of links) {
-    const target = filesByPath.get(link.targetPath);
-    if (target === undefined) {
+    if (!filesByPath.has(link.targetPath)) {
       throw new Error(
         `provider plugin evaluation npm binary link ${link.path} target is unavailable`,
       );
     }
-    const durableMode = providerPluginDurableInstalledPackageMode(
-      "file",
-      target.mode,
-    );
     updateProviderPluginEvaluationTreeHash(
       treeHash,
       `link/${link.path}`,
       Buffer.from(link.targetPath, "utf8"),
-    );
-    updateProviderPluginEvaluationTreeHash(
-      treeHash,
-      `link-target-mode/${link.path}`,
-      Buffer.from(`mode:${durableMode.toString(8)}`, "utf8"),
-    );
-    updateProviderPluginEvaluationTreeHash(
-      treeHash,
-      `link-target/${link.path}`,
-      target.bytes,
     );
   }
   const snapshot = Object.freeze({

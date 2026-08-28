@@ -44,6 +44,7 @@ import {
   portableProviderPluginOperationIdentity,
   providerPluginCanonicalInstalledBinaryLinkTarget,
   providerPluginDurableInstalledPackageMode,
+  providerPluginInstalledGuardDirectorySnapshot,
   providerPluginEvaluationInstalledPackageSha256,
   providerPluginEvaluationSourceSha256,
   providerPluginPackageRoot,
@@ -1171,7 +1172,7 @@ function parseInstalledPackageManifest(
 type InstalledPackageTreeEntry =
   | {
     readonly path: string;
-    readonly kind: "directory" | "file";
+    readonly kind: "directory" | "guard-directory" | "file";
     readonly stats: BigIntStats;
   }
   | {
@@ -1191,10 +1192,93 @@ type InstalledPackageTreeWalk = {
 
 function walkInstalledPackageTree(root: string): InstalledPackageTreeWalk {
   const entries: InstalledPackageTreeEntry[] = [];
+  const capturedFiles = new Map<string, BigIntStats>();
+  const capturedGuardDirectories = new Map<string, BigIntStats>();
   let fileCount = 0;
   let linkCount = 0;
   let directoryCount = 0;
   let totalBytes = 0;
+  const captureFile = (
+    relativePath: string,
+    stats: BigIntStats,
+  ): void => {
+    const existing = capturedFiles.get(relativePath);
+    if (existing !== undefined) {
+      if (!sameFileSnapshot(existing, stats)) {
+        throw new Error(
+          `installed package file ${relativePath} changed while it was walked`,
+        );
+      }
+      return;
+    }
+    if (
+      !stats.isFile()
+      || stats.isSymbolicLink()
+      || !ownedByCurrentUser(stats)
+    ) {
+      throw new Error(
+        `installed package tree contains unsupported entry ${relativePath}`,
+      );
+    }
+    fileCount += 1;
+    if (fileCount + linkCount > MAX_INSTALLED_PACKAGE_FILES) {
+      throw new Error("installed package tree exceeds its file bound");
+    }
+    if (
+      stats.size < 0n
+      || stats.size > BigInt(MAX_PROVIDER_DEPENDENCY_FILE_BYTES)
+    ) {
+      throw new Error(
+        `installed package file ${relativePath} exceeds its byte bound`,
+      );
+    }
+    totalBytes += Number(stats.size);
+    if (totalBytes > MAX_INSTALLED_PACKAGE_TOTAL_BYTES) {
+      throw new Error("installed package tree exceeds its total byte bound");
+    }
+    capturedFiles.set(relativePath, stats);
+    entries.push(Object.freeze({
+      path: relativePath,
+      kind: "file",
+      stats,
+    }));
+  };
+  const captureGuardDirectory = (relativePath: string): void => {
+    const stats = providerPluginInstalledGuardDirectorySnapshot(
+      resolve(root, relativePath),
+      `installed package directory ${relativePath}`,
+    );
+    const existing = capturedGuardDirectories.get(relativePath);
+    if (existing !== undefined) {
+      if (!sameFileSnapshot(existing, stats)) {
+        throw new Error(
+          `installed package binary directory ${relativePath} changed while it was walked`,
+        );
+      }
+      return;
+    }
+    directoryCount += 1;
+    if (directoryCount > MAX_INSTALLED_PACKAGE_DIRECTORIES) {
+      throw new Error("installed package tree exceeds its directory bound");
+    }
+    capturedGuardDirectories.set(relativePath, stats);
+    entries.push(Object.freeze({
+      path: relativePath,
+      kind: "guard-directory",
+      stats,
+    }));
+  };
+  const captureTargetGuardDirectories = (targetPath: string): void => {
+    const parent = dirname(targetPath).split(sep).join("/");
+    if (parent === ".") return;
+    const segments = parent.split("/");
+    if (segments.length > MAX_INSTALLED_PACKAGE_DEPTH) {
+      throw new Error("installed package tree exceeds its depth bound");
+    }
+    for (let index = 1; index <= segments.length; index += 1) {
+      captureGuardDirectory(segments.slice(0, index).join("/"));
+    }
+  };
   const visit = (
     directoryPath: string,
     relativeDirectory: string,
@@ -1299,14 +1383,14 @@ function walkInstalledPackageTree(root: string): InstalledPackageTreeWalk {
           if (fileCount + linkCount > MAX_INSTALLED_PACKAGE_FILES) {
             throw new Error("installed package tree exceeds its file bound");
           }
-          const targetPath = providerPluginCanonicalInstalledBinaryLinkTarget(
+          const target = providerPluginCanonicalInstalledBinaryLinkTarget(
             root,
             path,
             stats,
             MAX_INSTALLED_PACKAGE_PATH_BYTES,
             `installed package npm binary link ${relativePath}`,
           );
-          totalBytes += Buffer.byteLength(targetPath, "utf8");
+          totalBytes += Buffer.byteLength(target.path, "utf8");
           if (totalBytes > MAX_INSTALLED_PACKAGE_TOTAL_BYTES) {
             throw new Error("installed package tree exceeds its total byte bound");
           }
@@ -1314,48 +1398,41 @@ function walkInstalledPackageTree(root: string): InstalledPackageTreeWalk {
             path: relativePath,
             kind: "link",
             stats,
-            targetPath,
+            targetPath: target.path,
           }));
+          captureTargetGuardDirectories(target.path);
+          captureFile(target.path, target.stats);
           continue;
         }
         if (stats.isDirectory()) {
-          // A dependency's nested node_modules directory describes the
-          // installation topology, not that package's owned payload. Static
-          // imports reached through it are resolved and snapshotted as their
-          // own exact installed-package identities below.
-          if (name === "node_modules") continue;
+          if (isProviderPluginInstalledBinaryDirectory(relativeDirectory)) {
+            throw new Error(
+              `installed package tree contains unsupported entry ${relativePath}`,
+            );
+          }
+          // Only installer-owned binary shims and their canonical regular-file
+          // targets contribute from nested node_modules. Statically imported
+          // packages are snapshotted independently below.
+          if (name === "node_modules") {
+            const binaryDirectory = resolve(path, ".bin");
+            const binaryStats = lstatSync(binaryDirectory, {
+              bigint: true,
+              throwIfNoEntry: false,
+            });
+            if (binaryStats !== undefined) {
+              captureGuardDirectory(relativePath);
+              visit(
+                binaryDirectory,
+                `${relativePath}/.bin`,
+                depth + 2,
+              );
+            }
+            continue;
+          }
           visit(path, relativePath, depth + 1);
           continue;
         }
-        if (
-          !stats.isFile()
-          || !ownedByCurrentUser(stats)
-        ) {
-          throw new Error(
-            `installed package tree contains unsupported entry ${relativePath}`,
-          );
-        }
-        fileCount += 1;
-        if (fileCount + linkCount > MAX_INSTALLED_PACKAGE_FILES) {
-          throw new Error("installed package tree exceeds its file bound");
-        }
-        if (
-          stats.size < 0n
-          || stats.size > BigInt(MAX_PROVIDER_DEPENDENCY_FILE_BYTES)
-        ) {
-          throw new Error(
-            `installed package file ${relativePath} exceeds its byte bound`,
-          );
-        }
-        totalBytes += Number(stats.size);
-        if (totalBytes > MAX_INSTALLED_PACKAGE_TOTAL_BYTES) {
-          throw new Error("installed package tree exceeds its total byte bound");
-        }
-        entries.push(Object.freeze({
-          path: relativePath,
-          kind: "file",
-          stats,
-        }));
+        captureFile(relativePath, stats);
       }
       const after = fstatSync(descriptor, { bigint: true });
       let current: BigIntStats;
@@ -1428,7 +1505,7 @@ function assertInstalledPackageRegistryCacheBounds(
   let bytes = 0;
   for (const snapshot of snapshots.values()) {
     files += snapshot.files.length + snapshot.links.length;
-    directories += snapshot.directories.length;
+    directories += snapshot.verificationWalk.directoryCount;
     bytes += snapshot.totalBytes;
   }
   if (
@@ -1457,6 +1534,7 @@ function snapshotInstalledPackage(
   const links: InstalledPackageLinkSnapshot[] = [];
   const directories: InstalledPackageDirectorySnapshot[] = [];
   for (const entry of before.entries) {
+    if (entry.kind === "guard-directory") continue;
     if (entry.kind === "directory") {
       directories.push(Object.freeze({
         path: entry.path,
@@ -1549,30 +1627,15 @@ function snapshotInstalledPackage(
     updateLengthFramedHash(treeHash, `file/${file.path}`, file.bytes);
   }
   for (const link of links) {
-    const target = filesByPath.get(link.targetPath);
-    if (target === undefined) {
+    if (!filesByPath.has(link.targetPath)) {
       throw new Error(
         `installed package npm binary link ${link.path} target is unavailable`,
       );
     }
-    const durableMode = providerPluginDurableInstalledPackageMode(
-      "file",
-      target.mode,
-    );
     updateLengthFramedHash(
       treeHash,
       `link/${link.path}`,
       Buffer.from(link.targetPath, "utf8"),
-    );
-    updateLengthFramedHash(
-      treeHash,
-      `link-target-mode/${link.path}`,
-      Buffer.from(`mode:${durableMode.toString(8)}`, "utf8"),
-    );
-    updateLengthFramedHash(
-      treeHash,
-      `link-target/${link.path}`,
-      target.bytes,
     );
   }
   return Object.freeze({
@@ -2169,7 +2232,7 @@ function providerPluginPackageDependencyIdentity(
       occurrence = Object.freeze({ nodeId, snapshot });
       installedOccurrences.set(snapshot.root, occurrence);
       installedFiles += snapshot.files.length + snapshot.links.length;
-      installedDirectories += snapshot.directories.length;
+      installedDirectories += snapshot.verificationWalk.directoryCount;
       installedBytes += snapshot.totalBytes;
       if (
         installedFiles > MAX_INSTALLED_CLOSURE_FILES
