@@ -5077,7 +5077,8 @@ async function runPreparedCore(
             ? "local CLI child/private-root cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves every pinned process group quiescent and removes the exact private root, or reboot recovery proves quiescence"
             : "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves exact browser-closed evidence, or reboot recovery proves quiescence"
           : boundedThrownExecutorReason(error),
-      ...(error instanceof WebSessionCleanupUnverifiedError
+      ...(operation.risk === "R1"
+        && error instanceof WebSessionCleanupUnverifiedError
         ? { readFailure: readFailureProjection("cleanup-required") }
         : operation.risk === "R1"
           && started === 0

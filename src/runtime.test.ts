@@ -1195,6 +1195,78 @@ describe("encrypted confirmation plans", () => {
     }
   });
 
+  test("preserves an R2 authenticated-web cleanup failure and recovery handle", async () => {
+    const testState = state();
+    try {
+      const selectedManifest = xWebManifest();
+      const selectedAuth = createAuth("x-web-test", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "123",
+      });
+      installManifest(selectedManifest, {
+        force: false,
+        environment: testState.environment,
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const invocation = prepareInvocation(
+        "x-web",
+        "content.save",
+        { post_id: "2078889282404569267", saved: true },
+        selectedAuth.id,
+        testState.environment,
+      );
+      const stored = createAndSaveInvocationPlan(
+        invocation,
+        testState.environment,
+      );
+      const recoveryHandle =
+        "v1;session=aW8teC1yMg;config=Y29uZmln;socket=c29ja2V0;artifacts=YXJ0aWZhY3Rz";
+
+      const result = await confirmInvocation(stored.digest, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: (_manifest, _recipe, _input, _auth, options) => {
+          options.registerCleanupBarrier?.(Promise.reject(
+            new PreservedBrowserArtifactsError(
+              "browser teardown could not be verified",
+              recoveryHandle,
+              new Error("synthetic cleanup failure"),
+            ),
+          ));
+          return Promise.resolve({
+            status: "failed",
+            output: null,
+            finalUrl: null,
+            dispatchStarted: false,
+            dispatch: { planned: 1, started: 0, verified: 0 },
+            error: "the bounded operation timed out",
+          });
+        },
+      });
+
+      expect(result).toMatchObject({
+        privateArtifactsPreserved: true,
+        recoveryHandle,
+        receipt: {
+          status: "failed",
+          dispatchStarted: false,
+          dispatch: { planned: 1, started: 0, verified: 0 },
+        },
+      });
+      expect("readFailure" in result).toBeFalse();
+      expect(result.receipt.error).toContain(
+        "private browser artifacts were preserved; manual recovery is required",
+      );
+      expect(result.receipt.error).toContain(`recovery handle: ${recoveryHandle}`);
+      expect(result.receipt.error).not.toContain("invalid dispatch progress");
+      expect(readRunReceipt(result.receipt.runId, testState.environment))
+        .toEqual(result.receipt);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("records an independently verified desired-state no-op without fabricating a dispatch", async () => {
     const testState = state();
     try {
