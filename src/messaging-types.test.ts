@@ -18,12 +18,12 @@ const contextRef = "wmcontext_ABCDEFGHIJKLMNOPQRSTUV";
 describe("provider-neutral messaging contracts", () => {
   test("freezes the cross-repository context and receipt descriptors", () => {
     expect(canonicalJson(MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR)).toBe(
-      '{"contractId":"wrench.messaging-context-binding.v1","fields":["schemaVersion:1","format:wrench.messaging-context-binding","contractId:wrench.messaging-context-binding.v1","contractHash:sha256","routeRef:opaque","contextRef:opaque","exactDataRevision:sha256","latestMessageRevision:sha256","validatedAt:rfc3339","expiresAt:rfc3339"],"format":"wrench.messaging-contract-descriptor","schemaVersion":1}',
+      '{"contractId":"wrench.messaging-context-binding.v1","fields":["schemaVersion:1","format:wrench.messaging-context-binding","contractId:wrench.messaging-context-binding.v1","contractHash:sha256","sourceConversationCoordinate:{contractId,schemaVersion,sha256}","routeRef:opaque","contextRef:opaque","exactDataRevision:sha256","latestMessageRevision:sha256","validatedAt:rfc3339","expiresAt:rfc3339"],"format":"wrench.messaging-contract-descriptor","schemaVersion":1}',
     );
     expect(sha256(canonicalJson(MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR)))
       .toBe(MESSAGING_CONTEXT_BINDING_CONTRACT_HASH);
     expect(canonicalJson(MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR)).toBe(
-      '{"contractId":"wrench.messaging-receipt-binding.v1","fields":["schemaVersion:1","format:wrench.messaging-receipt-binding","contractId:wrench.messaging-receipt-binding.v1","contractHash:sha256","clientIntentSha256:sha256","routeRefSha256:sha256","contextRefSha256:sha256","turnDigest:sha256","previewDigest:sha256","runId:opaque","state:submitted|failed|partial|indeterminate","partCount:uint","provenPartCount:uint","receiptSha256:sha256","recordedAt:rfc3339"],"format":"wrench.messaging-contract-descriptor","schemaVersion":1}',
+      '{"contractId":"wrench.messaging-receipt-binding.v1","fields":["schemaVersion:1","format:wrench.messaging-receipt-binding","contractId:wrench.messaging-receipt-binding.v1","contractHash:sha256","clientIntentSha256:sha256","contextBindingSha256:sha256","sourceConversationCoordinateSha256:sha256","routeRefSha256:sha256","contextRefSha256:sha256","turnDigest:sha256","previewDigest:sha256","runId:opaque","state:submitted|failed|partial|indeterminate","partCount:uint","provenPartCount:uint","receiptSha256:sha256","recordedAt:rfc3339"],"format":"wrench.messaging-contract-descriptor","schemaVersion":1}',
     );
     expect(sha256(canonicalJson(MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR)))
       .toBe(MESSAGING_RECEIPT_BINDING_CONTRACT_HASH);
