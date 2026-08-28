@@ -44,7 +44,7 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-Wrench v0.16.0 supports actions for Beeper, Bluesky, Facebook,
+Wrench v0.16.1 supports actions for Beeper, Bluesky, Facebook,
 Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker News, Instagram,
 iMessage, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and
 YouTube.
@@ -111,7 +111,7 @@ install the CLI if it is missing. Start a new agent session after installation.
 Install the current release from npm:
 
 ```sh
-bun add --global @hraness/wrench@0.16.0
+bun add --global @hraness/wrench@0.16.1
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -135,7 +135,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add @hraness/wrench@0.16.0
+bun add @hraness/wrench@0.16.1
 ```
 
 ```ts

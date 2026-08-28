@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.16.1 - 2026-08-27
+
+- Complete the provider-neutral messaging implementation prepared in 0.16.0,
+  including the encrypted journal, exact preview and authorization lifecycle,
+  qualified Beeper execution, and reviewed direct iMessage transport.
+- Ship the reviewed iMessage transport installer through the public CLI with
+  digest verification, no-overwrite semantics, path-private diagnostics, and
+  fail-closed handling for unsafe source and state paths.
+- Add an exact lightweight `wrench --version` command and bind package smoke
+  tests to the installed binary's immutable release identity.
+
 ## 0.16.0 - 2026-08-27
 
 - Add a provider-neutral agentic messaging facade that keeps exact routes,
