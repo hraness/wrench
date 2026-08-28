@@ -10,6 +10,12 @@ import {
   inspectPackageArtifact,
   type PackageArtifactInventory,
 } from "./package-artifact.js";
+import {
+  MAX_PACKED_BYTES,
+  MAX_PACKED_FILES,
+  MAX_UNPACKED_BYTES,
+  packageArtifactBudget,
+} from "./package-budget.js";
 import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
@@ -18,6 +24,7 @@ const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.me
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packageArtifactUrl = new URL("./package-artifact.ts", import.meta.url);
+const packageBudgetUrl = new URL("./package-budget.ts", import.meta.url);
 const packageIdentityUrl = new URL("./npm-package-identity.ts", import.meta.url);
 const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
@@ -672,6 +679,27 @@ esac
     ] as const) {
       expect(smoke).toContain(required);
     }
+  });
+
+  test("shares exact reviewed package ceilings across artifact checks", async () => {
+    const [artifact, budget, smoke] = await Promise.all([
+      readFile(packageArtifactUrl, "utf8"),
+      readFile(packageBudgetUrl, "utf8"),
+      readFile(packageSmokeUrl, "utf8"),
+    ]);
+
+    expect(artifact).toContain('from "./package-budget.js"');
+    expect(smoke).toContain('from "./package-budget.js"');
+    expect(budget).toContain("reviewed gzip and tar variance");
+    expect(MAX_PACKED_BYTES).toBe(2_050_000);
+    expect(MAX_PACKED_FILES).toBe(450);
+    expect(MAX_UNPACKED_BYTES).toBe(11_000_000);
+    expect(packageArtifactBudget).toEqual({
+      entryCount: { min: 350, max: 450 },
+      fileCount: { min: 350, max: 450 },
+      packedBytes: { min: 1_600_000, max: 2_050_000 },
+      unpackedBytes: { min: 9_000_000, max: 11_000_000 },
+    });
   });
 
   test("gates the immutable GitHub Release on canonical public npm content", async () => {

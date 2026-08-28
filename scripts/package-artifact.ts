@@ -2,16 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 
+import { packageArtifactBudget } from "./package-budget.js";
+
 const blockSize = 512;
 const packagePrefix = "package/";
 const maximumTarBytes = 12_000_000;
-
-const packageBudget = Object.freeze({
-  entryCount: { min: 350, max: 450 },
-  fileCount: { min: 350, max: 450 },
-  packedBytes: { min: 1_600_000, max: 2_010_000 },
-  unpackedBytes: { min: 9_000_000, max: 11_000_000 },
-});
 
 const requiredPaths = Object.freeze([
   "CHANGELOG.md",
@@ -195,7 +190,7 @@ export async function inspectPackageArtifact(
   archive: string,
 ): Promise<PackageArtifactInventory> {
   const compressed = await readFile(archive);
-  verifyBound("packed byte count", compressed.byteLength, packageBudget.packedBytes);
+  verifyBound("packed byte count", compressed.byteLength, packageArtifactBudget.packedBytes);
 
   let tar: Buffer;
   try {
@@ -284,9 +279,9 @@ export async function inspectPackageArtifact(
   }
 
   const unpackedBytes = files.reduce((total, file) => total + file.size, 0);
-  verifyBound("entry count", entries.length, packageBudget.entryCount);
-  verifyBound("file count", files.length, packageBudget.fileCount);
-  verifyBound("unpacked byte count", unpackedBytes, packageBudget.unpackedBytes);
+  verifyBound("entry count", entries.length, packageArtifactBudget.entryCount);
+  verifyBound("file count", files.length, packageArtifactBudget.fileCount);
+  verifyBound("unpacked byte count", unpackedBytes, packageArtifactBudget.unpackedBytes);
 
   console.log(`Reviewed package inventory (${String(files.length)} files):`);
   for (const file of files) {
