@@ -44,7 +44,8 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-The unreleased source tree prepares supported actions for 18 services: Beeper,
+Wrench v0.15.1 is the current immutable release. The unreleased source tree
+prepares supported actions for 18 services: Beeper,
 Bluesky, Facebook, Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker
 News, Instagram, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp,
 X, and YouTube. LinkedIn and X each have separate official and

@@ -116,7 +116,7 @@ describe("provider presentation", () => {
 
     expect(cards.match(/<article class="provider-card/gu)).toHaveLength(directory.providerCount);
     expect(cards.indexOf(">Beeper</a>")).toBeLessThan(cards.indexOf(">Bluesky</a>"));
-    expect(cards).toContain("32 supported actions");
+    expect(cards).toContain("32 source-prepared actions");
     expect(cards).toContain("Accounts · Bridges · Contacts · Conversations · Messages · Presence · Reactions");
     expect(cards).not.toContain("{{");
     expect(cards).not.toMatch(/observed|capture-required|adapter/iu);

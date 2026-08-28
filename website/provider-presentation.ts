@@ -291,7 +291,7 @@ function transportLabel(transport: ProviderCapabilityAttestationRow["transport"]
 }
 
 function entryCountLabel(entry: ProviderDirectoryEntry): string {
-  return `${entry.supportedActionCount} supported ${entry.supportedActionCount === 1 ? "action" : "actions"}`;
+  return `${entry.supportedActionCount} source-prepared ${entry.supportedActionCount === 1 ? "action" : "actions"}`;
 }
 
 export function renderProviderOverviewCards(directory: ProviderDirectory): string {
@@ -302,7 +302,7 @@ export function renderProviderOverviewCards(directory: ProviderDirectory): strin
     `<p class="provider-capabilities">${entry.capabilities.map(escapeHtml).join(" · ")}</p>`,
     `<p class="provider-transport">${entry.transports.map(transportLabel).join(" + ")}</p>`,
     entry.surfaceId === "beeper"
-      ? '<p class="provider-feature-copy">Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.</p>'
+      ? '<p class="provider-feature-copy">The unreleased source prepares conversation and message reads plus previewed and confirmed sends, edits, reactions, drafts, reminders, and other actions.</p>'
       : "",
     "</article>",
   ].join("")).join("");

@@ -129,8 +129,10 @@
             <p class="eyebrow">Provider support</p>
             <h2 id="providers-title">Work with the services you already use.</h2>
             <p>
-              Each card names the actions available in this release and how Wrench
-              connects. If an action is not listed, Wrench does not offer it.
+              Each card names actions prepared in the unreleased source tree and how
+              Wrench connects. Run <code>wrench capabilities --json</code> for the exact
+              actions in your installed release. A source-prepared action absent from
+              that output is unavailable there.
             </p>
           </div>
           <div class="provider-directory">
@@ -140,7 +142,7 @@
             Provider names identify compatible services and do not imply endorsement.
           </p>
           <div class="action-row provider-actions">
-            <a class="button button-primary" href="/provider-capabilities/">Browse supported actions</a>
+            <a class="button button-primary" href="/provider-capabilities/">Browse source-prepared actions</a>
           </div>
         </section>
 

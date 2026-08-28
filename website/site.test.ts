@@ -507,20 +507,25 @@ describe("wrench.rip static site", () => {
       join(websiteRoot, "dist", markdownSiblingPath("/provider-capabilities/").slice(1)),
       "utf8",
     );
+    expect(html).toContain("actions prepared in the unreleased source tree");
+    expect(html).toContain("32 source-prepared actions");
+    expect(html).toContain("wrench capabilities --json");
     expect(providerCapabilities?.html).toContain(
-      "This directory lists the actions supported by the current Wrench release",
+      "This source preview lists the actions prepared on current <code>main</code>",
     );
+    expect(providerCapabilities?.html).toContain("32 source-prepared actions");
+    expect(providerCapabilities?.html).toContain("wrench capabilities --json");
     expect(html).toContain(providerCards);
     expect(providerCapabilities?.html).toContain(providerCards);
     expect(providerCapabilities?.html).toContain(providerGroups);
-    expect(providerCapabilities?.html).toContain("Supported actions by service");
+    expect(providerCapabilities?.html).toContain("Source-prepared actions by service");
     expect(providerCapabilities?.html).toContain("Official API");
     expect(providerCapabilities?.html).toContain(`<code>contacts.list</code>`);
     expect(providerCapabilities?.html).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
     expect(providerCapabilities?.html).not.toContain("Telegram");
     expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(providerMarkdown).toContain("### Beeper");
-    expect(providerMarkdown).toContain("32 supported actions");
+    expect(providerMarkdown).toContain("32 source-prepared actions");
     expect(providerMarkdown).toContain("**List accounts**");
     expect(providerMarkdown).toContain("`accounts.list`");
     expect(providerMarkdown).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
