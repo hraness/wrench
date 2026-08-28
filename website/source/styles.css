@@ -1299,7 +1299,7 @@ code:not(pre code) {
 }
 
 .version-table table {
-  min-width: 62rem;
+  min-width: 58rem;
 }
 
 .artifact-table table {

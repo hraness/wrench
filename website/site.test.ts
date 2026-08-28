@@ -136,6 +136,9 @@ describe("wrench.rip static site", () => {
     expect(cssPropertyValues(sourceCss, ".artifact-table table", "table-layout")).toEqual([
       "fixed",
     ]);
+    expect(cssPropertyValues(sourceCss, ".version-table table", "min-width")).toEqual([
+      "58rem",
+    ]);
     expect(cssPropertyValues(
       sourceCss,
       ".artifact-table td:nth-child(4)",
