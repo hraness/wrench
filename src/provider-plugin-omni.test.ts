@@ -7,6 +7,8 @@ const supported = new Set([
   "beeper-linked-device/beeper/messaging.read",
   "gmail-official/gmail/messaging.list",
   "gmail-official/gmail/messaging.read",
+  "imessage-direct/imessage/messaging.list",
+  "imessage-direct/imessage/messaging.read",
   "meta-web/instagram/messaging.list",
   "reddit-web/reddit/messaging.list",
   "reddit-web/reddit/messaging.read",
