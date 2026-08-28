@@ -108,8 +108,10 @@ comparison before it creates the immutable GitHub Release.
 ## Configure stage-only trusted publishing
 
 Create a protected GitHub environment named `npm-stage` after the first package
-is public. Restrict it to `main`, add a regular maintainer as a required reviewer,
-and prevent self-review. Do not add a secret to the environment.
+is public. Restrict it to `main`, require reviewer `0thernet`, and set
+`prevent_self_review: false` so the sole maintainer can approve the deployment.
+Do not add a secret to the environment. npm's separate staged-package inspection
+and two-factor approval remain mandatory before the version becomes public.
 
 If the current npm trust relationship does not name that environment, inspect
 and revoke it before creating the replacement:
@@ -165,8 +167,9 @@ Release is non-draft, immutable, and Latest.
    `package.json` starts **Stage npm package** automatically.
 2. Wait for **Verify exact package**, then inspect the uploaded tarball and its
    `npm-pack.json`.
-3. Approve the protected `npm-stage` environment. Only its minimal OIDC job can
-   submit the verified tarball to npm's staging area.
+3. As `0thernet`, approve the protected `npm-stage` environment. Self-review is
+   allowed for this sole-maintainer gate. Only its minimal OIDC job can submit
+   the verified tarball to npm's staging area.
 4. Inspect the staged package, then approve it with npm's separate two-factor
    authentication prompt.
 5. Download and smoke the public registry package.

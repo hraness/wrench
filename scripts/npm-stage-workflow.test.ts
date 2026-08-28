@@ -751,8 +751,8 @@ esac
       "--environment npm-stage",
       "--allow-stage-publish",
       "npm access set mfa=publish @hraness/wrench",
-      "required reviewer",
-      "prevent self-review",
+      "require reviewer `0thernet`",
+      "`prevent_self_review: false`",
       "starts **Stage npm package** automatically",
       "manifest edit with an unchanged version succeeds without running the verify or",
       "OIDC jobs.",
@@ -777,6 +777,8 @@ esac
     expect(agents).toContain("Follow `docs/publishing.md`");
     expect(agents).toContain("automatically enter the exact staging pipeline");
     expect(agents).toContain("protected `npm-stage` environment");
+    expect(agents).toContain("required reviewer `0thernet`");
+    expect(agents).toContain("`prevent_self_review: false`");
     expect(agents).toContain("verify that exact public artifact before creating its tag");
     expect(readme).toContain(exactPackage);
     expect(readme).not.toContain("not currently published on npm");
