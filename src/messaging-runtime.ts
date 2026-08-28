@@ -638,8 +638,18 @@ function reserveMessagingPrivateOutput(
     artifactFormat,
   });
   const reservedContentSha256 = sha256(`${canonicalJson(marker)}\n`);
-  if (!createPrivateJsonIfAbsent(outputPath, marker, { privateParent: true }).created) {
-    throw new Error(`messaging private output sink already exists: ${outputPath}`);
+  let created: boolean;
+  try {
+    created = createPrivateJsonIfAbsent(
+      outputPath,
+      marker,
+      { privateParent: true },
+    ).created;
+  } catch {
+    throw new Error("messaging private output sink failed physical reservation");
+  }
+  if (!created) {
+    throw new Error("messaging private output sink already exists");
   }
   return Object.freeze({
     path: outputPath,
@@ -681,7 +691,7 @@ export function reserveMessagingPrivateOutputPair(
     );
   } catch (error) {
     throw new Error(
-      `messaging receipt-binding sink failed physical reservation after the body-free run sink was reserved at ${exactRunPath}`,
+      "messaging receipt-binding sink failed physical reservation after the body-free run sink was reserved",
       { cause: error },
     );
   }
@@ -696,11 +706,16 @@ export function writeReservedMessagingPrivateOutput(
   if (artifact.format !== reservation.artifactFormat) {
     throw new Error("messaging private output reservation has another artifact format");
   }
-  const written = writePrivateJsonIfUnchanged(reservation.path, artifact, {
-    expectedCurrentContentSha256: reservation.reservedContentSha256,
-    maximumExpectedCurrentBytes: 4_096,
-    privateParent: true,
-  });
+  let written: boolean;
+  try {
+    written = writePrivateJsonIfUnchanged(reservation.path, artifact, {
+      expectedCurrentContentSha256: reservation.reservedContentSha256,
+      maximumExpectedCurrentBytes: 4_096,
+      privateParent: true,
+    });
+  } catch {
+    throw new Error("messaging private output final export failed");
+  }
   if (!written) {
     throw new Error(
       "messaging private output reservation changed before final export; recover by run ID",

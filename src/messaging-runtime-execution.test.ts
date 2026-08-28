@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,7 @@ import {
 import { createProviderPluginRegistry } from "./provider-plugin-registry";
 import { confirmMessagingInvocation } from "./runtime";
 import { installManifest } from "./storage";
+import { main } from "./wrench";
 
 const roots: string[] = [];
 let sharedRoot: string | null = null;
@@ -859,6 +861,59 @@ describe("generic messaging composite execution", () => {
       expect(encrypted).not.toContain("accepted-");
     });
   }
+
+  test("prints the exact recovery receipt before a private export CAS failure", async () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "wrench-messaging-cas-output-"));
+    chmodSync(outputRoot, 0o700);
+    roots.push(outputRoot);
+    const runOutput = join(outputRoot, "run.json");
+    const receiptBindingOutput = join(outputRoot, "receipt-binding.json");
+    const setup = await harness(1, {
+      afterMutation: () => {
+        writeFileSync(runOutput, "{}\n", { mode: 0o600 });
+      },
+    });
+    const writes: Array<{ readonly stream: "stdout" | "stderr"; readonly value: string }> = [];
+
+    const exitCode = await main([
+      "confirm",
+      setup.preview.planDigest,
+      "--private-output",
+      runOutput,
+      "--receipt-binding-output",
+      receiptBindingOutput,
+      "--json",
+    ], setup.environment, {
+      stdout: (value) => writes.push({ stream: "stdout", value }),
+      stderr: (value) => writes.push({ stream: "stderr", value }),
+    }, { providerPluginRegistry: setup.registry });
+
+    expect(exitCode).toBe(3);
+    expect(writes.map((write) => write.stream)).toEqual(["stdout", "stderr"]);
+    const stdout = writes.filter((write) => write.stream === "stdout");
+    expect(stdout).toHaveLength(1);
+    const receipt = JSON.parse(stdout[0]!.value) as {
+      readonly format: string;
+      readonly planDigest: string;
+      readonly runId: string;
+      readonly state: string;
+    };
+    expect(receipt).toEqual(showMessagingRunInternal(receipt.runId, {
+      environment: setup.environment,
+    }).receipt);
+    expect(receipt).toMatchObject({
+      format: "wrench.messaging-run-receipt",
+      planDigest: setup.preview.planDigest,
+      state: "submitted",
+    });
+    expect(stdout[0]!.value).not.toContain("private bubble");
+    const stderr = writes.filter((write) => write.stream === "stderr")
+      .map((write) => write.value)
+      .join("");
+    expect(stderr).toContain("reservation changed before final export");
+    expect(stderr).not.toContain(runOutput);
+    expect(stderr).not.toContain(receiptBindingOutput);
+  });
 
   test("allows initial provider lag before any accepted prefix has been observed", async () => {
     const setup = await harness(2, {

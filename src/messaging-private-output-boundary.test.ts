@@ -72,6 +72,28 @@ function plan(): MessagingCompositeInvocationPlanV1 {
   });
 }
 
+function thrownError(callback: () => void): Error {
+  try {
+    callback();
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw new Error("expected an Error rejection");
+  }
+  throw new Error("expected callback to throw");
+}
+
+function errorChainText(error: Error): string {
+  const messages: string[] = [];
+  const seen = new Set<Error>();
+  let current: unknown = error;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    messages.push(current.message);
+    current = current.cause;
+  }
+  return messages.join("\n");
+}
+
 describe("messaging private output state boundary", () => {
   test("physically reserves both body-free sinks before either final export", () => {
     const testState = state();
@@ -100,11 +122,13 @@ describe("messaging private output state boundary", () => {
       expect(marker).toContain("wrench.messaging-private-output-reservation");
       expect(marker).not.toContain("private first body");
     }
-    expect(() => reserveMessagingPrivateOutputPair(
+    const existingSinkError = thrownError(() => reserveMessagingPrivateOutputPair(
       runPath,
       join(outputRoot, "another-binding.json"),
       testState.environment,
-    )).toThrow("already exists");
+    ));
+    expect(existingSinkError.message).toContain("already exists");
+    expect(errorChainText(existingSinkError)).not.toContain(runPath);
 
     writeReservedMessagingPrivateOutput(
       reservations.run,
@@ -119,11 +143,25 @@ describe("messaging private output state boundary", () => {
       testState.environment,
     );
     writeFileSync(tamperedRunPath, "{}\n", { mode: 0o600 });
-    expect(() => writeReservedMessagingPrivateOutput(
+    const changedReservationError = thrownError(() => writeReservedMessagingPrivateOutput(
       tampered.run,
       snapshot.run,
       testState.environment,
-    )).toThrow("reservation changed");
+    ));
+    expect(changedReservationError.message).toContain("reservation changed");
+    expect(errorChainText(changedReservationError)).not.toContain(tamperedRunPath);
+
+    const strandedRunPath = join(outputRoot, "stranded-run.json");
+    const occupiedBindingPath = join(outputRoot, "occupied-binding.json");
+    writeFileSync(occupiedBindingPath, "occupied\n", { mode: 0o600 });
+    const pairReservationError = thrownError(() => reserveMessagingPrivateOutputPair(
+      strandedRunPath,
+      occupiedBindingPath,
+      testState.environment,
+    ));
+    expect(pairReservationError.message).toContain("failed physical reservation");
+    expect(errorChainText(pairReservationError)).not.toContain(strandedRunPath);
+    expect(errorChainText(pairReservationError)).not.toContain(occupiedBindingPath);
   });
 
   test("cannot overwrite encrypted journals or root encryption keys with plaintext artifacts", () => {

@@ -3174,6 +3174,9 @@ async function runCommand(
         registry: dependencies.providerPluginRegistry,
         ...(signal === undefined ? {} : { signal }),
       });
+      // Once dispatch settles, publish its body-free recovery handle before
+      // either reserved private export can fail.
+      output.stdout(exactTerminalJson(result.receipt));
       writeReservedMessagingPrivateOutput(
         reservations.run,
         result.run,
@@ -3184,7 +3187,6 @@ async function runCommand(
         result.receiptBinding,
         environment,
       );
-      output.stdout(exactTerminalJson(result.receipt));
       return result.receipt.state === "submitted"
         ? 0
         : result.receipt.state === "indeterminate"

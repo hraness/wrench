@@ -256,6 +256,8 @@ describe("messaging composite preview binding", () => {
       "--json",
     ], environment, { stdout: () => {}, stderr: (value) => stderr.push(value) })).toBe(3);
     expect(stderr.join("")).toContain("failed physical reservation");
+    expect(stderr.join("")).not.toContain(privateOutput);
+    expect(stderr.join("")).not.toContain(receiptOutput);
     expect(loadInvocationPlan(stored.digest, environment)).toEqual(stored);
     expect(readFileSync(receiptOutput, "utf8")).toBe("preexisting\n");
     expect(readFileSync(privateOutput, "utf8"))
