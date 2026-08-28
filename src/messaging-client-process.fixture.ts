@@ -63,25 +63,27 @@ for (const mode of ["abort", "timeout", "stdout-overflow", "stderr-overflow"] as
   const statusRoot = mkdtempSync(join(tmpdir(), "wrench-messaging-lifecycle-status-"));
   const status = join(statusRoot, "status.json");
   const controller = new AbortController();
-  const operation = discoverMessagingRoutes(request, {
+  const operationOutcome = discoverMessagingRoutes(request, {
     environment: {
       WRENCH_MESSAGING_LIFECYCLE_MODE: mode,
       WRENCH_MESSAGING_LIFECYCLE_STATUS: status,
     },
     signal: controller.signal,
-  });
+  }).then(
+    (value) => ({ fulfilled: true as const, value }),
+    (error: unknown) => ({ fulfilled: false as const, error }),
+  );
   const tree = await waitForStatus(status);
   if (mode === "abort") controller.abort(new Error("fixture abort"));
-  let error = "";
-  try {
-    await operation;
-  } catch (value) {
-    error = value instanceof Error ? value.message : String(value);
-  }
+  const outcome = await operationOutcome;
   for (let attempt = 0; attempt < 200 && alive(tree.descendant); attempt += 1) {
     await Bun.sleep(5);
   }
-  if (error.length === 0) throw new Error(`${mode} unexpectedly succeeded`);
+  if (outcome.fulfilled) throw new Error(`${mode} unexpectedly succeeded`);
+  const error = outcome.error instanceof Error
+    ? outcome.error.message
+    : String(outcome.error);
+  if (error.length === 0) throw new Error(`${mode} rejected without an error message`);
   if (alive(tree.parent) || alive(tree.descendant)) {
     throw new Error(`${mode} left an owned process alive`);
   }
