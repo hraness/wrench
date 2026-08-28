@@ -92,7 +92,7 @@ describe("WhatsApp linked-device protocol registry", () => {
     });
     expect(whatsappManifest.schemaVersion).toBe(4);
     expect(whatsappManifest.id).toBe("whatsapp-web");
-    expect(whatsappManifest.version).toBe("1.3.0");
+    expect(whatsappManifest.version).toBe("1.4.0");
     expect(whatsappManifest.displayName).toContain("Linked-Device Protocol");
     expect(whatsappManifest.operations["contacts.list"].description).toContain(
       "account-bound contact table",

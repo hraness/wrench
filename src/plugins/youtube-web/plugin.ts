@@ -51,10 +51,11 @@ const operations = webSessionContractOperations(
 export const youtubeWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "youtube-web",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "YouTube Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["providers/iso-bmff.ts", "../../providers/iso-bmff.ts"],
     ["providers/youtube-web.ts", "../../providers/youtube-web.ts"],
     ["providers/youtube-web-runtime.ts", "../../providers/youtube-web-runtime.ts"],

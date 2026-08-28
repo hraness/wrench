@@ -9,7 +9,7 @@ if (binding?.transport !== "web-session-api") {
 
 describe("X web provider plugin", () => {
   test("versions the profile-read source closure independently", () => {
-    expect(xWebPlugin.version).toBe("1.2.0");
+    expect(xWebPlugin.version).toBe("1.3.0");
   });
 
   test("keeps the generic Article reservation inert beside the exact private-draft read", () => {

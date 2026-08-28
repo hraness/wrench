@@ -201,16 +201,16 @@ npm stage approve <stage-id> \
   --registry=https://registry.npmjs.org
 ```
 
-For the current release, download and smoke `@hraness/wrench@0.16.1` after
+For the current release, download and smoke `@hraness/wrench@0.16.2` after
 approving its stage. Keep the public coordinate and tag literal through the
-final registry checks, then create `v0.16.1` on the exact staged source commit:
+final registry checks, then create `v0.16.2` on the exact staged source commit:
 
 ```sh
-npm view @hraness/wrench@0.16.1 name version dist \
+npm view @hraness/wrench@0.16.2 name version dist \
   --json \
   --registry=https://registry.npmjs.org
-git tag v0.16.1
-git push origin refs/tags/v0.16.1
+git tag v0.16.2
+git push origin refs/tags/v0.16.2
 ```
 
 The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,

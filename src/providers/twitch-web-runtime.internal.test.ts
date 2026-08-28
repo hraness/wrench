@@ -224,7 +224,7 @@ describe("Twitch authenticated profile runtime", () => {
   test("fails closed before the target read on missing or mismatched binding", async () => {
     const missingCalls: CapturedRequest[] = [];
     const { subject: _subject, ...unboundAuth } = boundAuth;
-    await expect(executeTwitchWebOperation(
+    expect(await executeTwitchWebOperation(
       recipe,
       { profile: "wrench_test" },
       unboundAuth,
@@ -234,11 +234,17 @@ describe("Twitch authenticated profile runtime", () => {
           () => jsonResponse(viewerResponse()),
         ),
       },
-    )).rejects.toThrow("bound to the exact viewer subject");
+    )).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "auth-repair-required",
+        retryDisposition: "repair-auth",
+      },
+    });
     expect(missingCalls).toHaveLength(1);
 
     const mismatchCalls: CapturedRequest[] = [];
-    await expect(executeTwitchWebOperation(
+    expect(await executeTwitchWebOperation(
       recipe,
       { profile: "wrench_test" },
       boundAuth,
@@ -248,8 +254,37 @@ describe("Twitch authenticated profile runtime", () => {
           () => jsonResponse(viewerResponse("987654321")),
         ),
       },
-    )).rejects.toThrow("no longer matches the confirmed auth subject");
+    )).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
+    });
     expect(mismatchCalls).toHaveLength(1);
+
+    const signedOutCalls: CapturedRequest[] = [];
+    const signedOut = await executeTwitchWebOperation(
+      recipe,
+      { profile: "wrench_test" },
+      boundAuth,
+      {
+        dependencies: dependencies(
+          signedOutCalls,
+          () => jsonResponse([{ data: { currentUser: null } }]),
+        ),
+      },
+    );
+    expect(signedOut).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "auth-repair-required",
+        retryDisposition: "repair-auth",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(signedOutCalls).toHaveLength(1);
   });
 
   test("rejects response status, content type, byte, token, and target drift", async () => {
@@ -257,20 +292,21 @@ describe("Twitch authenticated profile runtime", () => {
       string,
       readonly StrictCookie[],
       (index: number) => Response,
+      string,
     ][] = [
-      ["unreviewed status", cookies, () => jsonResponse({}, 403)],
+      ["unreviewed status", cookies, () => jsonResponse({}, 403), "auth-repair-required"],
       ["unreviewed status/content type", cookies, () => new Response("ok", {
         status: 200,
         headers: { "content-type": "text/html" },
-      })],
+      }), "contract-drift"],
       ["exceeded its reviewed byte limit", cookies, () => new Response("{}", {
         status: 200,
         headers: {
           "content-type": "application/json",
           "content-length": String(256 * 1024 + 1),
         },
-      })],
-      ["exactly one auth-token", [], () => jsonResponse(viewerResponse())],
+      }), "contract-drift"],
+      ["exactly one auth-token", [], () => jsonResponse(viewerResponse()), "auth-repair-required"],
       [
         "cookie source returned malformed or out-of-scope records",
         [
@@ -278,15 +314,16 @@ describe("Twitch authenticated profile runtime", () => {
           strictCookie("auth-token", `${AUTH_TOKEN}_duplicate`),
         ],
         () => jsonResponse(viewerResponse()),
+        "contract-drift",
       ],
       ["did not bind the current viewer ID", cookies, (index) =>
         jsonResponse(index === 0
           ? viewerResponse()
-          : profileResponse("987654321"))],
+          : profileResponse("987654321")), "account-mismatch"],
     ];
-    for (const [message, sourceCookies, response] of scenarios) {
+    for (const [message, sourceCookies, response, category] of scenarios) {
       const calls: CapturedRequest[] = [];
-      await expect(executeTwitchWebOperation(
+      const result = await executeTwitchWebOperation(
         recipe,
         { profile: "wrench_test" },
         boundAuth,
@@ -297,8 +334,45 @@ describe("Twitch authenticated profile runtime", () => {
             sourceCookies,
           ),
         },
-      )).rejects.toThrow(message);
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        readFailure: { category },
+      });
+      expect(JSON.stringify(result)).not.toContain(message);
     }
+  });
+
+  test("projects a response-body transport failure without retrying or leaking it", async () => {
+    const privateSentinel = "private Twitch stream sentinel";
+    const calls: CapturedRequest[] = [];
+    const result = await executeTwitchWebOperation(
+      recipe,
+      { profile: "wrench_test" },
+      boundAuth,
+      {
+        dependencies: dependencies(calls, () => new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(new TypeError(privateSentinel));
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      readFailure: {
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain(privateSentinel);
   });
 
   test("accepts no input aliases or extra transport fields", async () => {

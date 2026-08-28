@@ -17,6 +17,7 @@ import type {
   WebSessionExecution,
   WebSessionOperationDeadline,
 } from "../web-session-execution";
+import { failedProviderRead } from "./read-failure";
 import {
   TIKTOK_WEB_OPERATION_NAMES,
   TIKTOK_WEB_OPERATIONS,
@@ -711,28 +712,56 @@ export async function executeTikTokWebOperation(
   // R1 operations never enter a dispatch ledger or invoke mutation callbacks.
   void options.beforeDispatch;
   void options.afterDispatchVerified;
-  const client = await createWebSessionClient(TIKTOK_ORIGIN, auth, {
+  let client: WebSessionClient;
+  try {
+    client = await createWebSessionClient(TIKTOK_ORIGIN, auth, {
     timeoutMs: recipe.timeoutMs,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.operationDeadline === undefined
       ? {}
       : { operationDeadline: options.operationDeadline }),
     ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
-  });
-  const output = recipe.action === "profiles.read"
-    ? await readProfile(client, input, auth, options.dependencies)
-    : (await (async () => {
-      await requireBoundViewer(client, auth);
-      return recipe.action === "feeds.read"
-        ? readForYou(client, input, recipe.maxOutputBytes)
-        : readComments(client, input, recipe.maxOutputBytes);
-    })());
+    });
+  } catch (error) {
+    if (recipe.action !== "profiles.read") throw error;
+    return failedProviderRead(
+      "TikTok profile",
+      error,
+      `${TIKTOK_ORIGIN}/@${encodeURIComponent(profileInput(input))}`,
+      { stage: "bootstrap", authenticated: true },
+    );
+  }
+  if (recipe.action === "profiles.read") {
+    const finalUrl = `${TIKTOK_ORIGIN}/@${encodeURIComponent(profileInput(input))}`;
+    try {
+      const output = await readProfile(client, input, auth, options.dependencies);
+      return {
+        status: "succeeded",
+        output,
+        finalUrl,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      };
+    } catch (error) {
+      return failedProviderRead("TikTok profile", error, finalUrl, {
+        stage: "identity",
+        authenticated: true,
+        accountMismatch: (candidate) => candidate.message.includes("no longer matches")
+          || candidate.message.includes("did not match the bound current account"),
+        authRepairRequired: (candidate) => candidate.message.includes("auth locator bound"),
+      });
+    }
+  }
+  const output = await (async () => {
+    await requireBoundViewer(client, auth);
+    return recipe.action === "feeds.read"
+      ? readForYou(client, input, recipe.maxOutputBytes)
+      : readComments(client, input, recipe.maxOutputBytes);
+  })();
   return {
     status: "succeeded",
     output,
-    finalUrl: recipe.action === "profiles.read"
-      ? `${TIKTOK_ORIGIN}/@${encodeURIComponent(profileInput(input))}`
-      : recipe.action === "feeds.read"
+    finalUrl: recipe.action === "feeds.read"
       ? `${TIKTOK_ORIGIN}/foryou`
       : TIKTOK_ORIGIN,
     dispatchStarted: false,

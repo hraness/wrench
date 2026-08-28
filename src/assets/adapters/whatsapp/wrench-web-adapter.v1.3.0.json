@@ -1,0 +1,400 @@
+{
+  "schemaVersion": 4,
+  "id": "whatsapp-web",
+  "version": "1.3.0",
+  "displayName": "WhatsApp (Linked-Device Protocol)",
+  "surfaceId": "whatsapp",
+  "origins": [
+    "https://web.whatsapp.com"
+  ],
+  "browserDomains": [
+    "web.whatsapp.com"
+  ],
+  "operations": {
+    "contacts.list": {
+      "description": "List one bounded page from the private account-bound contact table, or incrementally scan content-free relationship evidence from the pinned local message store by exact rowid, without opening a WhatsApp connection.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "collection": {
+            "type": "string",
+            "description": "Exact local projection: contacts (default) or interactions",
+            "enum": [
+              "contacts",
+              "interactions"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Exact contact JID cursor, or decimal message rowid cursor for interactions",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "cursor_anchor": {
+            "type": "string",
+            "description": "SHA-256 anchor returned with a nonzero interaction checkpoint",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected contacts",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": []
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "contacts.list",
+        "contractVersion": 2,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.list": {
+      "description": "List a bounded page from the private account-bound linked-device projection without opening a WhatsApp connection or emitting protocol acknowledgements.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Exact local conversation filter",
+            "enum": [
+              "all",
+              "active",
+              "archived",
+              "unread"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected conversations",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": []
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.read": {
+      "description": "Read one bounded exact conversation from the private account-bound linked-device projection without opening a WhatsApp connection or emitting protocol acknowledgements.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "conversation_jid": {
+            "type": "string",
+            "description": "Exact canonical user, LID, or group JID returned by messaging.list",
+            "minLength": 9,
+            "maxLength": 96
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected messages",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "conversation_jid"
+        ]
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "media.read": {
+      "description": "Return metadata for one exact account-bound locally projected attachment while omitting direct paths, local paths, hashes, and media keys.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "conversation_jid": {
+            "type": "string",
+            "description": "Exact canonical user, LID, or group JID",
+            "minLength": 9,
+            "maxLength": 96
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact bounded WhatsApp message ID",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "conversation_jid",
+          "message_id"
+        ]
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "reactions.set": {
+      "description": "Capture-required contract reservation: set or clear one exact reaction through the linked-device protocol only after a no-retry private payload transport and live desired-state fixture are proven.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated WhatsApp account's reaction on one exact message.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "conversation_jid": {
+            "type": "string",
+            "description": "Exact canonical user, LID, or group JID",
+            "minLength": 9,
+            "maxLength": 96
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact target message ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "sender_jid": {
+            "type": "string",
+            "description": "Exact original sender JID; required for group messages",
+            "minLength": 9,
+            "maxLength": 96
+          },
+          "reaction": {
+            "type": "string",
+            "description": "Exact reaction emoji, or an empty string to clear",
+            "minLength": 0,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "conversation_jid",
+          "message_id",
+          "reaction"
+        ]
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "reactions.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: set or clear the starred state for one exact WhatsApp message after a reviewed linked-device mutation exists.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated account's private starred state on one exact message.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "conversation_jid": {
+            "type": "string",
+            "description": "Exact canonical user, LID, or group JID",
+            "minLength": 9,
+            "maxLength": 96
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact target message ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired starred state"
+          }
+        },
+        "required": [
+          "conversation_jid",
+          "message_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: send one exact text or attachment message through the linked-device protocol only after a no-retry private payload transport and low-stakes live fixture are proven.",
+      "risk": "R3",
+      "sideEffect": "Sends one externally visible WhatsApp message to the exact confirmed conversation.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "conversation_jid": {
+            "type": "string",
+            "description": "Exact canonical user, LID, or group destination JID",
+            "minLength": 9,
+            "maxLength": 96
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact message body or attachment caption",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "attachment": {
+            "type": "file",
+            "description": "Optional single plan-bound image, video, audio, or document",
+            "maxBytes": 1073741824,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+              "image/gif",
+              "video/mp4",
+              "audio/mpeg",
+              "audio/mp4",
+              "audio/ogg",
+              "application/pdf",
+              "application/zip",
+              "application/octet-stream"
+            ]
+          },
+          "filename": {
+            "type": "string",
+            "description": "Optional exact attachment display name",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "mime_type": {
+            "type": "string",
+            "description": "Optional exact attachment media type",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "reply_to_message_id": {
+            "type": "string",
+            "description": "Optional exact message ID to quote",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "conversation_jid",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "content.edit": {
+      "description": "Capture-required contract reservation: edit one exact recent self-authored text message through the linked-device protocol only after a no-retry private payload transport and low-stakes live fixture are proven.",
+      "risk": "R3",
+      "sideEffect": "Edits one externally visible recent WhatsApp message authored by the authenticated account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "conversation_jid": {
+            "type": "string",
+            "description": "Exact canonical user, LID, or group JID",
+            "minLength": 9,
+            "maxLength": 96
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact self-authored target message ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact replacement text",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "conversation_jid",
+          "message_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "content.edit",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.share": {
+      "description": "Capture-required contract reservation: forward one exact stored WhatsApp message to one exact destination through the linked-device protocol after text and media fixtures pass.",
+      "risk": "R3",
+      "sideEffect": "Forwards one externally visible WhatsApp message to the exact confirmed destination.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "source_conversation_jid": {
+            "type": "string",
+            "description": "Exact canonical source conversation JID",
+            "minLength": 9,
+            "maxLength": 96
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact source message ID",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "destination_jid": {
+            "type": "string",
+            "description": "Exact canonical user, LID, or group destination JID",
+            "minLength": 9,
+            "maxLength": 96
+          }
+        },
+        "required": [
+          "source_conversation_jid",
+          "message_id",
+          "destination_jid"
+        ]
+      },
+      "webSession": {
+        "site": "whatsapp",
+        "action": "content.share",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    }
+  }
+}

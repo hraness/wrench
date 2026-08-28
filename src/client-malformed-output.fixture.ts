@@ -151,10 +151,18 @@ function liveEnvelope(
     runId: receipt.runId,
     replayed: false,
     receipt,
-    output: {},
+    output: receipt.status === "failed" ? null : {},
     cache: receipt.status === "succeeded"
       ? { status: "error", message: "fixture cache unavailable" }
       : { status: "retained", reason: "live-read-failed" },
+    ...(receipt.status === "failed"
+      ? {
+          readFailure: {
+            category: "contract-drift",
+            retryDisposition: "do-not-retry",
+          },
+        }
+      : {}),
     ...overrides,
   });
 }
@@ -298,6 +306,16 @@ const exactBoundaryReceipt = {
   status: "failed",
   error: "é".repeat(6_144),
 };
+const protoReadFailure: Record<string, unknown> = {
+  category: "contract-drift",
+  retryDisposition: "do-not-retry",
+};
+Object.defineProperty(protoReadFailure, "__proto__", {
+  configurable: true,
+  enumerable: true,
+  value: { private: "prototype-smuggling-sentinel" },
+  writable: true,
+});
 const invalidReceipts: Record<string, unknown>[] = [
   { ...exactBoundaryReceipt, error: `${exactBoundaryReceipt.error}x` },
   { ...validReceipts[1], dispatchStarted: true },
@@ -376,6 +394,32 @@ const invalidLiveResponses = [
   }),
   liveEnvelope(validReceipts[1]!, { unexpected: true }),
   liveEnvelope(validReceipts[1]!, { output: undefined }),
+  liveEnvelope(validReceipts[1]!, {
+    readFailure: {
+      category: "provider-temporary",
+      retryDisposition: "retry-once-after-60s",
+    },
+  }),
+  liveEnvelope(exactBoundaryReceipt, { readFailure: undefined }),
+  liveEnvelope(exactBoundaryReceipt, {
+    readFailure: {
+      category: "provider-throttled",
+      retryDisposition: "do-not-retry",
+    },
+  }),
+  liveEnvelope(exactBoundaryReceipt, {
+    readFailure: {
+      category: "contract-drift",
+      retryDisposition: "do-not-retry",
+      detail: "private provider detail",
+    },
+  }),
+  liveEnvelope(exactBoundaryReceipt, {
+    output: { private: "failed-output-sentinel" },
+  }),
+  liveEnvelope(exactBoundaryReceipt, {
+    readFailure: protoReadFailure,
+  }),
 ] as const;
 const driftReceipt = {
   ...validReceipts[1],
@@ -514,6 +558,7 @@ const {
 async function invocationOutcome(): Promise<{
   readonly status: "resolved" | "rejected" | "timed-out";
   readonly message: string;
+  readonly invocationStatus: "succeeded" | "failed" | null;
 }> {
   let deadline: ReturnType<typeof setTimeout> | undefined;
   const outcome = await Promise.race([
@@ -522,16 +567,29 @@ async function invocationOutcome(): Promise<{
       operationId: "messaging.list",
       authId: "x-main",
     }).then(
-      () => ({ status: "resolved" as const, message: "" }),
+      (result) => ({
+        status: "resolved" as const,
+        message: "",
+        invocationStatus: result.live.status,
+      }),
       (error: unknown) => ({
         status: "rejected" as const,
         message: error instanceof Error ? error.message : String(error),
+        invocationStatus: null,
       }),
     ),
-    new Promise<{ readonly status: "timed-out"; readonly message: string }>(
+    new Promise<{
+      readonly status: "timed-out";
+      readonly message: string;
+      readonly invocationStatus: null;
+    }>(
       (resolve) => {
         deadline = setTimeout(
-          () => resolve({ status: "timed-out", message: "" }),
+          () => resolve({
+            status: "timed-out",
+            message: "",
+            invocationStatus: null,
+          }),
           1_000,
         );
       },
@@ -562,7 +620,13 @@ if (
 
 for (let index = 0; index < validReceipts.length + 1; index += 1) {
   const validOutcome = await invocationOutcome();
-  if (validOutcome.status !== "resolved") {
+  const expectedInvocationStatus = index === validReceipts.length
+    ? "failed"
+    : "succeeded";
+  if (
+    validOutcome.status !== "resolved"
+    || validOutcome.invocationStatus !== expectedInvocationStatus
+  ) {
     throw new Error(
       `unexpected valid-receipt outcome ${String(index)}: ${JSON.stringify(validOutcome)}`,
     );
@@ -1116,7 +1180,6 @@ cacheResponseOverrides.push(
   { status: 0, stdout: cachedEnvelope(accountAKey, "last-good") },
 );
 liveResponses.push(liveEnvelope(accountAFailedReceipt, {
-  output: { account: "failed-live" },
   cache: { status: "retained", reason: "live-read-failed" },
 }));
 const failedRefresh = await revalidateCapability(publicRequest);

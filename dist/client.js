@@ -135,7 +135,12 @@ function record(value, label) {
     if (!descriptor.enumerable || !("value" in descriptor)) {
       throw new Error(`${label} must be a plain data object`);
     }
-    result[key] = descriptor.value;
+    Object.defineProperty(result, key, {
+      configurable: true,
+      enumerable: true,
+      value: descriptor.value,
+      writable: true
+    });
   }
   return result;
 }
@@ -144,6 +149,28 @@ function assertExactKeys(value, required, optional, label) {
   const keys = Object.keys(value);
   if (required.some((key) => !Object.hasOwn(value, key)) || keys.some((key) => !allowed.has(key)))
     throw new Error(`${label} is malformed`);
+}
+var clientReadFailureRetryDisposition = Object.freeze({
+  "target-unavailable": "do-not-retry",
+  "auth-repair-required": "repair-auth",
+  "account-mismatch": "do-not-retry",
+  "provider-throttled": "retry-once-after-60s",
+  "provider-temporary": "retry-once-after-60s",
+  "operation-timeout": "retry-once-after-60s",
+  "contract-drift": "do-not-retry",
+  "cleanup-required": "do-not-retry"
+});
+function parseClientReadFailure(value) {
+  const failure = record(value, "Wrench read failure");
+  assertExactKeys(failure, ["category", "retryDisposition"], [], "Wrench read failure");
+  const category = failure.category;
+  if (typeof category !== "string" || !Object.hasOwn(clientReadFailureRetryDisposition, category))
+    throw new Error("Wrench read failure category is malformed");
+  const retryDisposition = clientReadFailureRetryDisposition[category];
+  if (failure.retryDisposition !== retryDisposition) {
+    throw new Error("Wrench read failure retry disposition is inconsistent");
+  }
+  return Object.freeze({ category, retryDisposition });
 }
 function snapshotJson(value, label) {
   let nodes = 0;
@@ -1378,7 +1405,7 @@ function parseLiveReceipt(value, request, expectedInputHash) {
   throw new Error("Wrench live receipt schema and transport are malformed");
 }
 function parseLiveResult(value, request, expectedInputHash) {
-  assertExactKeys(value, ["ok", "source", "status", "runId", "replayed", "receipt", "output", "cache"], [], "Wrench live response");
+  assertExactKeys(value, ["ok", "source", "status", "runId", "replayed", "receipt", "output", "cache"], ["readFailure"], "Wrench live response");
   if (value.source !== "live")
     throw new Error("Wrench live response has the wrong source");
   const receipt = parseLiveReceipt(value.receipt, request, expectedInputHash);
@@ -1396,12 +1423,30 @@ function parseLiveResult(value, request, expectedInputHash) {
   if (!cacheMatchesReceipt) {
     throw new Error("Wrench live cache outcome is inconsistent with its receipt");
   }
-  return Object.freeze({
-    live: Object.freeze({
+  const live = receipt.status === "failed" ? (() => {
+    if (value.output !== null) {
+      throw new Error("Wrench failed live response retained an output");
+    }
+    return Object.freeze({
+      status: "failed",
+      receipt,
+      output: null,
+      replayed: value.replayed,
+      readFailure: parseClientReadFailure(value.readFailure)
+    });
+  })() : (() => {
+    if (value.readFailure !== undefined) {
+      throw new Error("Wrench successful live response included a read failure");
+    }
+    return Object.freeze({
+      status: "succeeded",
       receipt,
       output: value.output,
       replayed: value.replayed
-    }),
+    });
+  })();
+  return Object.freeze({
+    live,
     cache
   });
 }
@@ -1443,7 +1488,7 @@ function readCachedPreparedCapability(request, options, now) {
 function selectCurrentCapability(cachedBefore, cachedAfter, parsed) {
   const before = cachedBefore?.status === "hit" ? cachedBefore : null;
   const after = cachedAfter?.status === "hit" ? cachedAfter : null;
-  if (parsed.live.receipt.status === "failed")
+  if (parsed.live.status === "failed")
     return after;
   if (parsed.cache.status === "stored") {
     if (after !== null)

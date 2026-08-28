@@ -7,6 +7,16 @@
   terminal staging job requires maintainer approval through the protected
   `npm-stage` environment before npm's separate two-factor approval.
 
+## 0.16.2 - 2026-08-28
+
+- Add a strict machine-readable Hraness social-profile collection manifest,
+  correct the second X account to Life Days Left, and bind the current Twitch
+  and GitHub organization metrics plus the expected Threads eligibility gap.
+- Project stable, secret-free failure categories and retry dispositions for
+  failed R1 reads across every provider in the Hraness manifest. Consumers can
+  distinguish target, auth, account, provider, timeout, contract, and cleanup
+  failures without exposing provider responses or inventing retry policy.
+
 ## 0.16.1 - 2026-08-27
 
 - Add a provider-neutral agentic messaging facade that keeps exact routes,

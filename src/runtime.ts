@@ -46,6 +46,7 @@ import {
   type OperationRisk,
   type WrenchManifest,
 } from "./model";
+import { OperationDeadlineError } from "./operation-deadline";
 import {
   getLocalCliContract,
   localCliContractHash,
@@ -101,8 +102,11 @@ import {
   webSessionContractHash,
 } from "./web-session-contracts";
 import {
+  parseReadFailureProjection,
+  readFailureProjection,
   runWebSessionOperationWithDeadline,
   WebSessionCleanupUnverifiedError,
+  type ReadFailureProjection,
   type WebSessionCleanupBarrierRegistrar,
   type WebSessionExecutionOptions,
   type WebSessionDispatchEvent,
@@ -3906,6 +3910,8 @@ export type InvocationResult = {
   readonly receipt: RunReceipt;
   readonly output: unknown;
   readonly replayed: boolean;
+  /** Stable, secret-free retry policy for a failed R1 invocation. */
+  readonly readFailure?: ReadFailureProjection;
   /** Internal cleanup signal; public renderers intentionally omit it. */
   readonly privateArtifactsPreserved?: boolean;
   /** Exact bounded handle retained even when receipt or journal projection fails. */
@@ -3919,6 +3925,7 @@ type BoundedExecution = {
   readonly dispatchStarted: boolean;
   readonly dispatch: RunReceipt["dispatch"];
   readonly error?: string;
+  readonly readFailure?: ReadFailureProjection;
   readonly noOp?: true;
   readonly privateArtifactsPreserved?: boolean;
   readonly recoveryHandle?: string;
@@ -4084,6 +4091,7 @@ function boundedExecutionResult(
   const allowedKeys = new Set([
     ...requiredKeys,
     "error",
+    "readFailure",
     ...(kind === "web-session" || kind === "local-cli" ? ["noOp"] : []),
     ...(kind === "browser" ? ["privateArtifactsPreserved", "recoveryHandle"] : []),
   ]);
@@ -4136,6 +4144,26 @@ function boundedExecutionResult(
     }
     error = record.error;
   }
+  const readFailure = record.readFailure === undefined
+    ? undefined
+    : parseReadFailureProjection(record.readFailure);
+  if (status === "failed" && record.output !== null) {
+    throw new Error("executor failed result retained an output");
+  }
+  if (
+    readFailure !== undefined
+    && (
+      status !== "failed"
+      || record.dispatchStarted !== false
+      || dispatch.planned !== 0
+      || dispatch.started !== 0
+      || dispatch.verified !== 0
+    )
+  ) {
+    throw new Error(
+      "executor read failure projection crossed a dispatch or success boundary",
+    );
+  }
   const noOp = record.noOp;
   if (noOp !== undefined && noOp !== true) {
     throw new Error("executor result has a malformed noOp flag");
@@ -4165,6 +4193,7 @@ function boundedExecutionResult(
     dispatchStarted: record.dispatchStarted,
     dispatch,
     ...(error === undefined ? {} : { error }),
+    ...(readFailure === undefined ? {} : { readFailure }),
     ...(noOp === true ? { noOp: true as const } : {}),
     ...(privateArtifactsPreserved === undefined ? {} : { privateArtifactsPreserved }),
     ...(recoveryHandle === undefined ? {} : { recoveryHandle }),
@@ -5048,6 +5077,15 @@ async function runPreparedCore(
             ? "local CLI child/private-root cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves every pinned process group quiescent and removes the exact private root, or reboot recovery proves quiescence"
             : "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves exact browser-closed evidence, or reboot recovery proves quiescence"
           : boundedThrownExecutorReason(error),
+      ...(operation.risk === "R1"
+        && error instanceof WebSessionCleanupUnverifiedError
+        ? { readFailure: readFailureProjection("cleanup-required") }
+        : operation.risk === "R1"
+          && started === 0
+          && error instanceof OperationDeadlineError
+          && error.failure === "timed-out"
+          ? { readFailure: readFailureProjection("operation-timeout") }
+          : {}),
       ...(preservedArtifactsError === null
         ? {}
         : {
@@ -5059,6 +5097,7 @@ async function runPreparedCore(
   const executionNoOp = "noOp" in execution && execution.noOp === true;
   const validExecutionProgress = isDispatchProgress(execution.dispatch)
     && execution.dispatch.planned === planned
+    && (execution.readFailure === undefined || operation.risk === "R1")
     && execution.dispatch.started === durableReceipt.dispatch.started
     && execution.dispatch.verified === durableReceipt.dispatch.verified
     && execution.dispatchStarted === (execution.dispatch.started > 0)
@@ -5094,6 +5133,10 @@ async function runPreparedCore(
   const receiptStatus: RunReceipt["status"] = execution.status === "succeeded"
     ? isWrite && !executionNoOp ? "submitted" : "succeeded"
     : execution.status;
+  const readFailure = operation.risk === "R1" && receiptStatus === "failed"
+    ? execution.readFailure ?? readFailureProjection("contract-drift")
+    : undefined;
+  const publishedOutput = readFailure === undefined ? execution.output : null;
   const finishedAt = (options.now ?? new Date()).toISOString();
   const privateArtifactsPreserved = "privateArtifactsPreserved" in execution
     && execution.privateArtifactsPreserved === true;
@@ -5185,7 +5228,7 @@ async function runPreparedCore(
       }
       return {
         receipt,
-        output: execution.output,
+        output: publishedOutput,
         replayed: false,
         privateArtifactsPreserved,
         ...(recoveryHandle === null ? {} : { recoveryHandle }),
@@ -5220,14 +5263,18 @@ async function runPreparedCore(
       },
       output: null,
       replayed: false,
+      readFailure: readFailure?.category === "cleanup-required"
+        ? readFailure
+        : readFailureProjection("contract-drift"),
       privateArtifactsPreserved,
       ...(recoveryHandle === null ? {} : { recoveryHandle }),
     };
   }
   return {
     receipt,
-    output: execution.output,
+    output: publishedOutput,
     replayed: false,
+    ...(readFailure === undefined ? {} : { readFailure }),
     privateArtifactsPreserved,
     ...(recoveryHandle === null ? {} : { recoveryHandle }),
   };

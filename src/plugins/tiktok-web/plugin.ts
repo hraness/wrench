@@ -17,10 +17,11 @@ if (tiktokContracts === undefined) {
 export const tiktokWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "tiktok-web",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "TikTok Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["providers/tiktok-web.ts", "../../providers/tiktok-web.ts"],
     ["providers/tiktok-web-runtime.ts", "../../providers/tiktok-web-runtime.ts"],
     ["providers/tiktok-video-mp4.ts", "../../providers/tiktok-video-mp4.ts"],

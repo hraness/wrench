@@ -22,6 +22,7 @@ import type {
   OperationInput,
   WebSessionRecipe,
 } from "../model";
+import { OperationDeadlineError } from "../operation-deadline";
 import { canonicalJson } from "../canonical-json";
 import {
   createWebSessionClient,
@@ -32,7 +33,9 @@ import {
   type WebSessionNetworkDependencies,
 } from "../web-session-client";
 import {
+  readFailureProjection,
   startWebSessionCleanupTrackedOperation,
+  type ReadFailureProjection,
   type WebSessionCleanupBarrierRegistrar,
   type WebSessionDispatchEvent,
   type WebSessionExecution,
@@ -67,6 +70,7 @@ import {
   validateXWebDesiredStateMutation,
   validateXWebRichArticleContentState,
   xWebQueryDescriptorEvidenceSnapshot,
+  XProfileTargetUnavailableError,
   type XWebBundleQueryDescriptor,
   type XWebMutationOperationId,
   type XWebOperationType,
@@ -152,6 +156,80 @@ const viewerEvidence = Object.freeze({
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type XProfileReadStage = "bootstrap" | "viewer" | "target";
+
+function xProfileReadFailure(
+  error: unknown,
+  stage: XProfileReadStage,
+): ReadFailureProjection {
+  let deadlineCause: unknown = error;
+  for (let depth = 0; depth < 8 && deadlineCause !== undefined; depth += 1) {
+    if (deadlineCause instanceof OperationDeadlineError) {
+      return deadlineCause.failure === "timed-out"
+        ? readFailureProjection("operation-timeout")
+        : readFailureProjection("contract-drift");
+    }
+    deadlineCause = deadlineCause instanceof Error
+      ? deadlineCause.cause
+      : undefined;
+  }
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && current !== undefined; depth += 1) {
+    const message = current instanceof Error ? current.message : "";
+    if (message.includes("viewer no longer matches")) {
+      return readFailureProjection("account-mismatch");
+    }
+    if (stage === "target" && current instanceof XProfileTargetUnavailableError) {
+      return readFailureProjection("target-unavailable");
+    }
+    if (message.includes("ct0 session cookie is invalid or expired")) {
+      return readFailureProjection("auth-repair-required");
+    }
+    const response = /status(?:\/content type)? (302|401|403|404|408|429|5[0-9]{2})(?:\/|$)/u
+      .exec(message);
+    if (response?.[1] === "401" || response?.[1] === "403") {
+      return readFailureProjection("auth-repair-required");
+    }
+    if (response?.[1] === "404") {
+      return readFailureProjection("contract-drift");
+    }
+    if (response?.[1] === "429") {
+      return readFailureProjection("provider-throttled");
+    }
+    if (
+      response?.[1] === "302"
+      || response?.[1] === "408"
+      || response?.[1]?.startsWith("5")
+    ) {
+      return readFailureProjection("provider-temporary");
+    }
+    if (
+      message.includes("failed before a reviewed response was received")
+      || message === "authenticated web response body stream failed before completion"
+      || message === "public first-party web asset request failed"
+      || message.includes("Failed to fetch")
+    ) return readFailureProjection("provider-temporary");
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return readFailureProjection("contract-drift");
+}
+
+function failedXProfileRead(
+  error: unknown,
+  finalUrl: string | null,
+  stage: XProfileReadStage,
+): WebSessionExecution {
+  return {
+    status: "failed",
+    output: null,
+    finalUrl,
+    dispatchStarted: false,
+    dispatch: { planned: 0, started: 0, verified: 0 },
+    error: "X profile read failed before the dispatch boundary",
+    readFailure: xProfileReadFailure(error, stage),
+  };
 }
 
 function record(value: unknown, label: string): JsonRecord {
@@ -3238,12 +3316,24 @@ export async function executeXWebOperation(
   ) {
     rejectUnsupportedPostBranches(input);
   }
-  const bootstrap = await bootstrapX(
-    auth,
-    recipe,
-    options.dependencies,
-    options,
-  );
+  let profileUrl: string | null = null;
+  let bootstrap: XBootstrap;
+  try {
+    if (recipe.action === "profiles.read") {
+      profileUrl = `${X_ORIGIN}/${normalizeXWebProfileHandle(input.handle)}`;
+    }
+    bootstrap = await bootstrapX(
+      auth,
+      recipe,
+      options.dependencies,
+      options,
+    );
+  } catch (error) {
+    if (recipe.action === "profiles.read") {
+      return failedXProfileRead(error, profileUrl, "bootstrap");
+    }
+    throw error;
+  }
   if (recipe.action === "feeds.read") {
     await requireBoundViewer(bootstrap, auth);
     const output = await readFeed(bootstrap, input);
@@ -3256,15 +3346,23 @@ export async function executeXWebOperation(
     };
   }
   if (recipe.action === "profiles.read") {
-    await requireBoundViewer(bootstrap, auth);
-    const output = await readProfile(bootstrap, input);
-    return {
-      status: "succeeded",
-      output,
-      finalUrl: output.target.url,
-      dispatchStarted: false,
-      dispatch: { planned: 0, started: 0, verified: 0 },
-    };
+    try {
+      await requireBoundViewer(bootstrap, auth);
+    } catch (error) {
+      return failedXProfileRead(error, profileUrl, "viewer");
+    }
+    try {
+      const output = await readProfile(bootstrap, input);
+      return {
+        status: "succeeded",
+        output,
+        finalUrl: output.target.url,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      };
+    } catch (error) {
+      return failedXProfileRead(error, profileUrl, "target");
+    }
   }
   if (recipe.action === "posts.read" || recipe.action === "comments.read") {
     await requireBoundViewer(bootstrap, auth);
