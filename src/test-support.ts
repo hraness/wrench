@@ -46,7 +46,10 @@ export function propertyReplayParameters(
   if (
     typeof rawPath !== "string"
     || Buffer.byteLength(rawPath, "utf8") > MAX_FAST_CHECK_PATH_BYTES
-    || !/^\d+(?::\d+)*$/u.test(rawPath)
+    || !/^(?:0|[1-9]\d*)(?::(?:0|[1-9]\d*))*$/u.test(rawPath)
+    || !rawPath.split(":").every((segment) =>
+      Number.isSafeInteger(Number(segment))
+    )
   ) {
     throw new Error("WRENCH_PROPERTY_PATH must be a bounded fast-check path");
   }
@@ -55,6 +58,8 @@ export function propertyReplayParameters(
 
 export const propertyParameters = {
   numRuns: 200,
+  interruptAfterTimeLimit: 10_000,
+  markInterruptAsFailure: true,
   ...propertyReplayParameters(),
 } satisfies Parameters<unknown>;
 

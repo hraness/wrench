@@ -1,8 +1,16 @@
 import { describe, expect, test } from "bun:test";
 
-import { propertyReplayParameters } from "./test-support";
+import { propertyParameters, propertyReplayParameters } from "./test-support";
 
 describe("property replay coordinates", () => {
+  test("preserves the bounded fail-closed property defaults", () => {
+    expect(propertyParameters).toMatchObject({
+      numRuns: 200,
+      interruptAfterTimeLimit: 10_000,
+      markInterruptAsFailure: true,
+    });
+  });
+
   test("accepts one exact seed with an optional shrink path", () => {
     expect(propertyReplayParameters({
       WRENCH_PROPERTY_SEED: "-17",
@@ -11,6 +19,10 @@ describe("property replay coordinates", () => {
       WRENCH_PROPERTY_SEED: "2147483647",
       WRENCH_PROPERTY_PATH: "3:0:12:1",
     })).toEqual({ seed: 2_147_483_647, path: "3:0:12:1" });
+    expect(propertyReplayParameters({
+      WRENCH_PROPERTY_SEED: "1",
+      WRENCH_PROPERTY_PATH: "0:1:9007199254740991",
+    })).toEqual({ seed: 1, path: "0:1:9007199254740991" });
   });
 
   test("fails closed on ambiguous, noncanonical, or unbounded input", () => {
@@ -27,7 +39,16 @@ describe("property replay coordinates", () => {
         WRENCH_PROPERTY_SEED: seed,
       })).toThrow("canonical 32-bit integer");
     }
-    for (const path of ["", "1::2", "-1", "1/a", `1:${"2".repeat(513)}`]) {
+    for (const path of [
+      "",
+      "1::2",
+      "-1",
+      "1/a",
+      "01:0",
+      "1:00",
+      "9007199254740992",
+      `1:${"2".repeat(513)}`,
+    ]) {
       expect(() => propertyReplayParameters({
         WRENCH_PROPERTY_SEED: "1",
         WRENCH_PROPERTY_PATH: path,
