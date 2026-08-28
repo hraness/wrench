@@ -236,6 +236,12 @@ the verified artifact to the current `main` commit, refetches `main` before
 staging, and aborts if that commit is no longer the default-branch head. The
 `npm-stage` environment applies only to the terminal OIDC job.
 
+`scripts/package-budget.ts` owns the shared packed-byte, unpacked-byte, and
+file-count ceilings used by artifact inspection and the clean-consumer smoke.
+Remeasure the candidate with the pinned npm version after any reviewed payload
+change. Keep enough packed-byte room for the observed Linux and macOS gzip
+spread without replacing the path and content checks with a broad size limit.
+
 ## Deploy the release-bound website
 
 Configure the Vercel project's Production Branch as `website-production` and

@@ -2,16 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 
+import { packageArtifactBudget } from "./package-budget.js";
+
 const blockSize = 512;
 const packagePrefix = "package/";
 const maximumTarBytes = 12_000_000;
-
-export const packageArtifactBudget = Object.freeze({
-  entryCount: Object.freeze({ min: 350, max: 450 }),
-  fileCount: Object.freeze({ min: 350, max: 450 }),
-  packedBytes: Object.freeze({ min: 1_600_000, max: 2_050_000 }),
-  unpackedBytes: Object.freeze({ min: 9_000_000, max: 11_100_000 }),
-});
 
 const requiredPaths = Object.freeze([
   "CHANGELOG.md",
