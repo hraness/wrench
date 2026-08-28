@@ -541,7 +541,9 @@ describe("wrench.rip static site", () => {
     expect(html).toContain("Discovering and running eligible Apify Store Actors");
     expect(html).toContain('href="https://docs.browserbase.com/platform/browser/observability/session-recording">Browserbase</a>');
     expect(html).toContain("Parallel browser automation on managed cloud sessions");
-    expect(html).toContain("Encrypted local state, mutation previews and receipts, and fail-closed contract drift");
+    expect(html).toContain(
+      "Encrypted provider snapshots and projections, mutation previews and receipts, and fail-closed contract drift",
+    );
 
     const gettingStarted = pages.find((page) => page.definition.canonicalPath === "/getting-started/");
     expect(gettingStarted?.html).toContain("Wrench developer resources");
@@ -609,8 +611,19 @@ describe("wrench.rip static site", () => {
     expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(providerMarkdown).toContain("### Beeper");
     expect(providerMarkdown).toContain("32 supported actions");
-    expect(providerMarkdown).toContain("**List accounts**");
-    expect(providerMarkdown).toContain("`accounts.list`");
+    expect(providerMarkdown).toContain("- **List accounts** — `accounts.list` · Local app");
+    expect(providerMarkdown).toContain(
+      "- **Focus conversation** — `conversations.focus` · Local app",
+    );
+    expect(providerMarkdown).toContain(
+      "- **Send Notify Anyway** — `conversations.notify` · Local app",
+    );
+    expect(providerMarkdown).toContain("- **Send message** — `messaging.send` · Local app");
+    const providerActionLines = providerMarkdown.split("\n").filter((line) =>
+      line.startsWith("- **"));
+    expect(providerActionLines.length).toBeGreaterThan(0);
+    expect(providerActionLines.every((line) =>
+      /^- \*\*[^*]+\*\* — `[^`]+` · [^\s].+$/u.test(line))).toBe(true);
     expect(providerMarkdown).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
 
     const beeper = pages.find((page) => page.definition.canonicalPath === "/providers/beeper/");

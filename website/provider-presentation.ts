@@ -374,15 +374,23 @@ const operationTitleOverrides: Readonly<Record<string, string>> = Object.freeze(
   "conversations.description.set": "Update conversation description",
   "conversations.disappearing.set": "Update disappearing messages",
   "conversations.draft.set": "Update conversation draft",
+  "conversations.focus": "Focus conversation",
   "conversations.mute.set": "Update conversation mute setting",
+  "conversations.notify": "Send Notify Anyway",
   "conversations.pin.set": "Update conversation pin",
   "conversations.priority.set": "Update conversation priority",
   "conversations.read-state.set": "Update conversation read state",
   "conversations.reminder.set": "Update conversation reminder",
+  "conversations.start": "Start conversation",
   "conversations.title.set": "Update conversation title",
   "messaging.content.search": "Search message content",
   "messaging.context.read": "Read message context",
+  "messaging.edit": "Edit message",
+  "messaging.list": "List messages",
   "messaging.message.read": "Read message",
+  "messaging.read": "Read messages",
+  "messaging.search": "Search messages",
+  "messaging.send": "Send message",
   "relationships.follow.set": "Update follow relationship",
   "relationships.recommendations.read": "Read account recommendations",
 });
@@ -436,8 +444,9 @@ export function renderProviderAttestationGroups(
         .sort(compareStrings).join(" + ");
       return [
         "<li>",
-        `<span><strong>${escapeHtml(operationTitle(operation))}</strong><code>${escapeHtml(operation)}</code></span>`,
-        `<span>${escapeHtml(access)}</span>`,
+        `<span><strong>${escapeHtml(operationTitle(operation))}</strong> — <code>${escapeHtml(operation)}</code></span>`,
+        " ",
+        `<span>· ${escapeHtml(access)}</span>`,
         "</li>",
       ].join("");
     }).join("");
