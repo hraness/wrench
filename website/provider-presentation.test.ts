@@ -154,7 +154,7 @@ describe("provider presentation", () => {
     expect(groups).toContain("Update conversation read state");
     expect(groups).toContain("Search message content");
     expect(groups).toContain("Read message context");
-    expect(groups).toContain("<strong>Read message</strong><code>messaging.message.read</code>");
+    expect(groups).toContain("<strong>Read message</strong> — <code>messaging.message.read</code>");
     expect(groups).toContain("Local app");
     expect(groups).not.toMatch(/observed|capture-required|adapter|completeness|<th/iu);
     for (const row of attestation.rows.filter((candidate) =>
