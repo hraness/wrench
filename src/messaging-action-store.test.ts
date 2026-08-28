@@ -343,16 +343,21 @@ describe("messaging composite run journal", () => {
     const binding = messagingReceiptBinding(submitted);
     expect(binding.schemaVersion).toBe(2);
     if (binding.schemaVersion !== 2) throw new Error("expected V2 receipt binding");
+    const currentPlan = plan();
+    if (
+      currentPlan.contextBindingSha256 === null
+      || currentPlan.sourceConversationCoordinateSha256 === null
+    ) throw new Error("expected current messaging plan evidence");
     expect(binding.state).toBe("submitted");
-    expect(binding.contextBindingSha256).toBe(plan().contextBindingSha256);
+    expect(binding.contextBindingSha256).toBe(currentPlan.contextBindingSha256);
     expect(binding.sourceConversationCoordinateSha256)
-      .toBe(plan().sourceConversationCoordinateSha256);
+      .toBe(currentPlan.sourceConversationCoordinateSha256);
     expect(binding.routeRefSha256).not.toContain("wmroute");
     expect(messagingRunReceipt(submitted)).toMatchObject({
       schemaVersion: 2,
-      contextBindingSha256: plan().contextBindingSha256,
+      contextBindingSha256: currentPlan.contextBindingSha256,
       sourceConversationCoordinateSha256:
-        plan().sourceConversationCoordinateSha256,
+        currentPlan.sourceConversationCoordinateSha256,
       receiptBindingSha256: binding.receiptSha256,
     });
   });

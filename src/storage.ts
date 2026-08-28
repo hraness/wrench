@@ -1750,7 +1750,7 @@ export function writePrivateJsonIfUnchanged(
         content: `${canonicalJson(value)}\n`,
         createOnly: false,
         expectedContentSha256: options.expectedCurrentContentSha256,
-        maximumExpectedContentBytes,
+        maximumExpectedContentBytes: maximumExpectedCurrentBytes,
       });
       return true;
     } catch (error) {

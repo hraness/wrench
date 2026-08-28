@@ -685,7 +685,7 @@ export function reserveMessagingPrivateOutputPair(
 export function writeReservedMessagingPrivateOutput(
   reservation: MessagingPrivateOutputReservationV1,
   artifact: MessagingPrivateOutputArtifactV1,
-  environment: Environment = process.env,
+  _environment: Environment = process.env,
 ): MessagingPrivateOutputReceiptV1 {
   if (artifact.format !== reservation.artifactFormat) {
     throw new Error("messaging private output reservation has another artifact format");

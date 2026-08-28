@@ -77,7 +77,7 @@ function rawConversation(lastActivity: string | null = "2026-08-27T12:00:00.000Z
   };
 }
 
-function exactConversationOutput(lastActivity?: string | null): unknown {
+function exactConversationOutput(lastActivity?: string | null) {
   return {
     provider: "beeper",
     operation: "conversations.read",
