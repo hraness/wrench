@@ -1,0 +1,1430 @@
+From 292db82d89293867ef847a2875667fea0fdd5dc1 Mon Sep 17 00:00:00 2001
+From: 0thernet <ben@substrate.run>
+Date: Thu, 27 Aug 2026 16:32:47 -0400
+Subject: [PATCH] fix: keep AppleScript send payloads out of child argv
+
+---
+ CHANGELOG.md                                  |  10 +
+ .../IMsgCore/AppleScriptPrivatePayload.swift  | 485 ++++++++++++++++++
+ .../IMsgCore/AppleScriptSendTransport.swift   |  97 ++--
+ Sources/IMsgCore/MessageSender.swift          |  20 +-
+ ...AppleScriptPrivatePayloadTestSupport.swift |  90 ++++
+ .../AppleScriptPrivatePayloadTests.swift      | 455 ++++++++++++++++
+ docs/private-applescript-transport.md         | 107 ++++
+ docs/rpc.md                                   |  14 +
+ docs/send.md                                  |   9 +-
+ 9 files changed, 1247 insertions(+), 40 deletions(-)
+ create mode 100644 Sources/IMsgCore/AppleScriptPrivatePayload.swift
+ create mode 100644 Tests/IMsgCoreTests/AppleScriptPrivatePayloadTestSupport.swift
+ create mode 100644 Tests/IMsgCoreTests/AppleScriptPrivatePayloadTests.swift
+ create mode 100644 docs/private-applescript-transport.md
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e236f77..dcf90d8 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,15 @@
+ # Changelog
+ 
++## Unreleased
++
++### Security
++
++- Keep AppleScript send recipients, message bodies, service selection, attachment paths, chat targets, and routing flags out of the nested `osascript` process arguments. Each send now uses a random owner-only payload directory with checked `0600` field files, immutable namespace sealing for the child lifetime, and cleanup only after the child has been reaped.
++
++### Documentation
++
++- Clarify that AppleScript itself returns no message GUID. A GUID in CLI or RPC output comes from the separately observed outgoing `chat.db` row, and a missing row remains an uncertain, no-retry result.
++
+ ## 0.14.1 - 2026-08-11
+ 
+ **Highlight:** search now finds messages whose text lives only in the rich-text
+diff --git a/Sources/IMsgCore/AppleScriptPrivatePayload.swift b/Sources/IMsgCore/AppleScriptPrivatePayload.swift
+new file mode 100644
+index 0000000..b733d2e
+--- /dev/null
++++ b/Sources/IMsgCore/AppleScriptPrivatePayload.swift
+@@ -0,0 +1,485 @@
++import Foundation
++
++#if canImport(Darwin)
++  import Darwin
++#elseif canImport(Glibc)
++  import Glibc
++#endif
++
++/// A short-lived, owner-only payload consumed by the AppleScript send child.
++///
++/// Messages can carry arbitrary private text. None of it belongs in a process
++/// argument, where unrelated same-user process inspection can expose it. The
++/// parent writes each field to an independently checked file and gives
++/// `osascript` only this directory's random locator.
++final class AppleScriptPrivatePayload {
++  static let fieldNames = [
++    "recipient",
++    "text",
++    "service",
++    "attachment-path",
++    "use-attachment",
++    "chat-target",
++    "use-chat",
++  ]
++  private static let captureNames = ["stdout", "stderr"]
++
++  let directoryURL: URL
++
++  private let expectedOwner: uid_t
++  private let directoryFD: Int32
++  private let directoryIdentity: FileIdentity
++  private let fieldDescriptors: [String: Int32]
++  private let fieldIdentities: [String: FileIdentity]
++  private let fieldContents: [String: Data]
++  private var sealed = false
++  private var cleaned = false
++
++  private struct FileIdentity: Equatable {
++    let device: UInt64
++    let inode: UInt64
++    let owner: uid_t
++    let mode: mode_t
++    let links: UInt64
++    let size: Int64
++
++    init(_ info: stat) {
++      device = UInt64(info.st_dev)
++      inode = UInt64(info.st_ino)
++      owner = info.st_uid
++      mode = info.st_mode
++      links = UInt64(info.st_nlink)
++      size = Int64(info.st_size)
++    }
++  }
++
++  private init(
++    directoryURL: URL,
++    expectedOwner: uid_t,
++    directoryFD: Int32,
++    directoryIdentity: FileIdentity,
++    fieldDescriptors: [String: Int32],
++    fieldIdentities: [String: FileIdentity],
++    fieldContents: [String: Data]
++  ) {
++    self.directoryURL = directoryURL
++    self.expectedOwner = expectedOwner
++    self.directoryFD = directoryFD
++    self.directoryIdentity = directoryIdentity
++    self.fieldDescriptors = fieldDescriptors
++    self.fieldIdentities = fieldIdentities
++    self.fieldContents = fieldContents
++  }
++
++  deinit {
++    cleanup()
++  }
++
++  static func create(
++    arguments: [String],
++    expectedOwner: uid_t = geteuid(),
++    temporaryRoot: URL = FileManager.default.temporaryDirectory
++  ) throws -> AppleScriptPrivatePayload {
++    guard arguments.count == fieldNames.count else {
++      throw PrivatePayloadError.invalidFieldCount
++    }
++
++    let canonicalRoot = temporaryRoot.resolvingSymlinksInPath()
++    let template =
++      canonicalRoot
++      .appendingPathComponent("imsg-private-send.XXXXXXXX", isDirectory: true)
++      .path
++    var templateBytes = Array(template.utf8CString)
++    let createdPath: String? = templateBytes.withUnsafeMutableBufferPointer { buffer in
++      guard let baseAddress = buffer.baseAddress, mkdtemp(baseAddress) != nil else { return nil }
++      return String(cString: baseAddress)
++    }
++    guard let createdPath else {
++      throw PrivatePayloadError.createDirectory
++    }
++
++    let directoryURL = URL(fileURLWithPath: createdPath, isDirectory: true)
++    var shouldRemoveDirectory = true
++    defer {
++      if shouldRemoveDirectory {
++        try? FileManager.default.removeItem(at: directoryURL)
++      }
++    }
++
++    let directoryFD = open(
++      createdPath,
++      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
++    )
++    guard directoryFD >= 0 else {
++      throw PrivatePayloadError.openDirectory
++    }
++    var shouldCloseDirectory = true
++    defer {
++      if shouldCloseDirectory { close(directoryFD) }
++    }
++
++    guard fchmod(directoryFD, 0o700) == 0 else {
++      throw PrivatePayloadError.secureDirectory
++    }
++    let directoryIdentity = try checkedDirectoryIdentity(
++      descriptor: directoryFD,
++      expectedOwner: expectedOwner
++    )
++
++    var descriptors: [String: Int32] = [:]
++    var identities: [String: FileIdentity] = [:]
++    var contents: [String: Data] = [:]
++    var shouldCloseFields = true
++    defer {
++      if shouldCloseFields {
++        for descriptor in descriptors.values { close(descriptor) }
++      }
++    }
++    for (name, value) in zip(fieldNames, arguments) {
++      let content = Data(value.utf8)
++      let descriptor = openat(
++        directoryFD,
++        name,
++        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
++        0o600
++      )
++      guard descriptor >= 0 else {
++        throw PrivatePayloadError.createField
++      }
++      descriptors[name] = descriptor
++
++      guard fchmod(descriptor, 0o600) == 0 else {
++        throw PrivatePayloadError.secureField
++      }
++      try writeAll(content, to: descriptor)
++      guard fsync(descriptor) == 0 else {
++        throw PrivatePayloadError.writeField
++      }
++      identities[name] = try checkedFileIdentity(
++        descriptor: descriptor,
++        expectedOwner: expectedOwner,
++        expectedSize: content.count
++      )
++      contents[name] = content
++    }
++
++    shouldCloseDirectory = false
++    shouldCloseFields = false
++    shouldRemoveDirectory = false
++    return AppleScriptPrivatePayload(
++      directoryURL: directoryURL,
++      expectedOwner: expectedOwner,
++      directoryFD: directoryFD,
++      directoryIdentity: directoryIdentity,
++      fieldDescriptors: descriptors,
++      fieldIdentities: identities,
++      fieldContents: contents
++    )
++  }
++}
++
++extension AppleScriptPrivatePayload {
++  /// Re-check every pathname immediately before launch. The identity checks
++  /// reject root replacement, field replacement, symlinks, hard links,
++  /// ownership changes, and permission changes.
++  func validateForLaunch() throws {
++    var pathInfo = stat()
++    guard lstat(directoryURL.path, &pathInfo) == 0 else {
++      throw PrivatePayloadError.substitutedDirectory
++    }
++    let pathIdentity = FileIdentity(pathInfo)
++    guard Self.isSecureDirectory(pathIdentity, expectedOwner: expectedOwner),
++      Self.sameObject(pathIdentity, directoryIdentity)
++    else {
++      throw PrivatePayloadError.substitutedDirectory
++    }
++
++    let pathFD = open(
++      directoryURL.path,
++      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
++    )
++    guard pathFD >= 0 else {
++      throw PrivatePayloadError.substitutedDirectory
++    }
++    defer { close(pathFD) }
++    let reopenedDirectory = try Self.checkedDirectoryIdentity(
++      descriptor: pathFD,
++      expectedOwner: expectedOwner
++    )
++    guard Self.sameObject(reopenedDirectory, directoryIdentity) else {
++      throw PrivatePayloadError.substitutedDirectory
++    }
++
++    let pinnedDirectory = try Self.checkedDirectoryIdentity(
++      descriptor: directoryFD,
++      expectedOwner: expectedOwner
++    )
++    guard Self.sameObject(pinnedDirectory, directoryIdentity) else {
++      throw PrivatePayloadError.substitutedDirectory
++    }
++
++    for name in Self.fieldNames {
++      guard let expected = fieldIdentities[name],
++        let expectedContent = fieldContents[name],
++        let pinnedDescriptor = fieldDescriptors[name]
++      else {
++        throw PrivatePayloadError.missingField
++      }
++      let pinned = try Self.checkedFileIdentity(
++        descriptor: pinnedDescriptor,
++        expectedOwner: expectedOwner,
++        expectedSize: Int(expected.size)
++      )
++      guard pinned == expected else {
++        throw PrivatePayloadError.substitutedField
++      }
++      let descriptor = openat(
++        pathFD,
++        name,
++        O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
++      )
++      guard descriptor >= 0 else {
++        throw PrivatePayloadError.substitutedField
++      }
++      defer { close(descriptor) }
++      let current = try Self.checkedFileIdentity(
++        descriptor: descriptor,
++        expectedOwner: expectedOwner,
++        expectedSize: Int(expected.size)
++      )
++      guard current == expected else {
++        throw PrivatePayloadError.substitutedField
++      }
++      guard try Self.readAll(from: descriptor) == expectedContent else {
++        throw PrivatePayloadError.substitutedField
++      }
++    }
++  }
++
++  /// Seal the namespace between the final identity check and child exit. On
++  /// Darwin, user-immutable field and directory flags reject ordinary
++  /// replacement or editing through a discovered payload path. This is not an
++  /// isolation boundary against a compromised process running as the same
++  /// user, which can deliberately clear user flags. The parent retains pinned
++  /// descriptors so it can unseal during cleanup.
++  func sealForLaunch() throws {
++    sealed = true
++    #if canImport(Darwin)
++      for descriptor in fieldDescriptors.values {
++        guard fchflags(descriptor, UInt32(UF_IMMUTABLE)) == 0 else {
++          throw PrivatePayloadError.sealField
++        }
++      }
++      guard fchflags(directoryFD, UInt32(UF_IMMUTABLE)) == 0 else {
++        throw PrivatePayloadError.sealDirectory
++      }
++      guard Self.hasImmutableFlag(descriptor: directoryFD) else {
++        throw PrivatePayloadError.sealDirectory
++      }
++      for descriptor in fieldDescriptors.values {
++        guard Self.hasImmutableFlag(descriptor: descriptor) else {
++          throw PrivatePayloadError.sealField
++        }
++      }
++    #endif
++  }
++
++  /// Create an output sink under the same private root without resolving any
++  /// caller-controlled pathname.
++  func makeCaptureFile(named name: String) throws -> FileHandle {
++    guard !name.isEmpty, !name.contains("/"), !Self.fieldNames.contains(name) else {
++      throw PrivatePayloadError.invalidCaptureName
++    }
++    let descriptor = openat(
++      directoryFD,
++      name,
++      O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
++      0o600
++    )
++    guard descriptor >= 0 else {
++      throw PrivatePayloadError.createCapture
++    }
++    guard fchmod(descriptor, 0o600) == 0 else {
++      close(descriptor)
++      throw PrivatePayloadError.secureCapture
++    }
++    do {
++      _ = try Self.checkedFileIdentity(
++        descriptor: descriptor,
++        expectedOwner: expectedOwner,
++        expectedSize: 0
++      )
++    } catch {
++      close(descriptor)
++      throw error
++    }
++    return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
++  }
++
++  func cleanup() {
++    guard !cleaned else { return }
++    cleaned = true
++
++    #if canImport(Darwin)
++      if sealed {
++        _ = fchflags(directoryFD, 0)
++        for descriptor in fieldDescriptors.values {
++          _ = fchflags(descriptor, 0)
++        }
++      }
++    #endif
++
++    // Unlink only known entries through the retained directory descriptor.
++    // This removes private fields even if the directory itself was renamed and
++    // avoids recursively deleting a substituted tree at the public locator.
++    for name in Self.fieldNames + Self.captureNames {
++      _ = unlinkat(directoryFD, name, 0)
++    }
++
++    // Remove only the exact directory we created. If the path was replaced,
++    // preserving an empty opaque directory is safer than deleting whatever now
++    // occupies the locator. `rmdir` cannot recursively consume a tree swapped
++    // in after this identity check.
++    var pathInfo = stat()
++    if lstat(directoryURL.path, &pathInfo) == 0 {
++      let current = FileIdentity(pathInfo)
++      if (current.mode & S_IFMT) == S_IFDIR,
++        current.owner == expectedOwner,
++        Self.sameObject(current, directoryIdentity)
++      {
++        // Validation deliberately rejects a mode change. Cleanup can safely
++        // repair it through the still-pinned descriptor after proving this is
++        // the same owner and inode, so a failed launch does not leak payloads.
++        _ = fchmod(directoryFD, 0o700)
++        _ = rmdir(directoryURL.path)
++      }
++    }
++    for descriptor in fieldDescriptors.values { close(descriptor) }
++    close(directoryFD)
++  }
++}
++
++extension AppleScriptPrivatePayload {
++  private static func checkedDirectoryIdentity(
++    descriptor: Int32,
++    expectedOwner: uid_t
++  ) throws -> FileIdentity {
++    var info = stat()
++    guard fstat(descriptor, &info) == 0 else {
++      throw PrivatePayloadError.inspectDirectory
++    }
++    let identity = FileIdentity(info)
++    guard isSecureDirectory(identity, expectedOwner: expectedOwner) else {
++      throw PrivatePayloadError.insecureDirectory
++    }
++    return identity
++  }
++
++  private static func checkedFileIdentity(
++    descriptor: Int32,
++    expectedOwner: uid_t,
++    expectedSize: Int
++  ) throws -> FileIdentity {
++    var info = stat()
++    guard fstat(descriptor, &info) == 0 else {
++      throw PrivatePayloadError.inspectField
++    }
++    let identity = FileIdentity(info)
++    guard (identity.mode & S_IFMT) == S_IFREG,
++      identity.owner == expectedOwner,
++      (identity.mode & 0o7777) == 0o600,
++      identity.links == 1,
++      identity.size == Int64(expectedSize)
++    else {
++      throw PrivatePayloadError.insecureField
++    }
++    return identity
++  }
++
++  private static func isSecureDirectory(
++    _ identity: FileIdentity,
++    expectedOwner: uid_t
++  ) -> Bool {
++    (identity.mode & S_IFMT) == S_IFDIR
++      && identity.owner == expectedOwner
++      && (identity.mode & 0o7777) == 0o700
++  }
++
++  private static func sameObject(_ lhs: FileIdentity, _ rhs: FileIdentity) -> Bool {
++    lhs.device == rhs.device && lhs.inode == rhs.inode
++  }
++
++  #if canImport(Darwin)
++    private static func hasImmutableFlag(descriptor: Int32) -> Bool {
++      var info = stat()
++      return fstat(descriptor, &info) == 0
++        && (info.st_flags & UInt32(UF_IMMUTABLE)) == UInt32(UF_IMMUTABLE)
++    }
++  #endif
++
++  private static func writeAll(_ data: Data, to descriptor: Int32) throws {
++    try data.withUnsafeBytes { rawBuffer in
++      guard var cursor = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
++        return
++      }
++      var remaining = rawBuffer.count
++      while remaining > 0 {
++        let count: Int
++        #if canImport(Darwin)
++          count = Darwin.write(descriptor, cursor, remaining)
++        #else
++          count = Glibc.write(descriptor, cursor, remaining)
++        #endif
++        if count < 0, errno == EINTR { continue }
++        guard count > 0 else {
++          throw PrivatePayloadError.writeField
++        }
++        cursor = cursor.advanced(by: count)
++        remaining -= count
++      }
++    }
++  }
++
++  private static func readAll(from descriptor: Int32) throws -> Data {
++    var result = Data()
++    var buffer = [UInt8](repeating: 0, count: 64 * 1024)
++    while true {
++      let count: Int = buffer.withUnsafeMutableBytes { rawBuffer in
++        #if canImport(Darwin)
++          Darwin.read(descriptor, rawBuffer.baseAddress, rawBuffer.count)
++        #else
++          Glibc.read(descriptor, rawBuffer.baseAddress, rawBuffer.count)
++        #endif
++      }
++      if count < 0, errno == EINTR { continue }
++      guard count >= 0 else {
++        throw PrivatePayloadError.readField
++      }
++      if count == 0 { return result }
++      result.append(contentsOf: buffer.prefix(count))
++    }
++  }
++}
++
++private enum PrivatePayloadError: Error {
++  case invalidFieldCount
++  case createDirectory
++  case openDirectory
++  case secureDirectory
++  case inspectDirectory
++  case insecureDirectory
++  case createField
++  case secureField
++  case writeField
++  case readField
++  case inspectField
++  case insecureField
++  case missingField
++  case substitutedDirectory
++  case substitutedField
++  case invalidCaptureName
++  case createCapture
++  case secureCapture
++  case sealField
++  case sealDirectory
++}
+diff --git a/Sources/IMsgCore/AppleScriptSendTransport.swift b/Sources/IMsgCore/AppleScriptSendTransport.swift
+index 3086d5c..385dee1 100644
+--- a/Sources/IMsgCore/AppleScriptSendTransport.swift
++++ b/Sources/IMsgCore/AppleScriptSendTransport.swift
+@@ -1,43 +1,51 @@
+ import Foundation
+ 
++#if canImport(Darwin)
++  import Darwin
++#elseif canImport(Glibc)
++  import Glibc
++#endif
++
+ enum AppleScriptSendTransport {
+   /// Messages can legitimately take longer than the short helper default, but
+   /// the child is always bounded.
+   static let timeout: TimeInterval = IMsgBridgeProtocol.defaultSendResponseTimeout
+ 
+-  static func run(source: String, arguments: [String]) throws {
++  static func run(
++    source: String,
++    arguments: [String],
++    executableURL: URL = URL(fileURLWithPath: "/usr/bin/osascript"),
++    processTimeout: TimeInterval = timeout,
++    expectedOwner: uid_t = geteuid(),
++    beforeLaunch: ((URL) throws -> Void)? = nil,
++    afterLaunch: (() throws -> Void)? = nil
++  ) throws {
++    let payload: AppleScriptPrivatePayload
++    do {
++      payload = try AppleScriptPrivatePayload.create(
++        arguments: arguments,
++        expectedOwner: expectedOwner
++      )
++    } catch {
++      throw failure(.notStarted, "Unable to prepare the private osascript payload.")
++    }
++    defer { payload.cleanup() }
++
+     let process = Process()
+-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+-    process.arguments = ["-l", "AppleScript", "-"] + arguments
++    process.executableURL = executableURL
++    process.arguments = ["-l", "AppleScript", "-", payload.directoryURL.path]
+     let stdinPipe = Pipe()
+-    let captureDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+-      "imsg-osascript-\(UUID().uuidString)", isDirectory: true)
+-    let stdoutURL = captureDirectory.appendingPathComponent("stdout")
+-    let stderrURL = captureDirectory.appendingPathComponent("stderr")
++    let stdoutHandle: FileHandle
++    let stderrHandle: FileHandle
+     do {
+-      try FileManager.default.createDirectory(
+-        at: captureDirectory,
+-        withIntermediateDirectories: true,
+-        attributes: [.posixPermissions: 0o700])
+-      guard
+-        FileManager.default.createFile(atPath: stdoutURL.path, contents: nil),
+-        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+-      else {
+-        throw CocoaError(.fileWriteUnknown)
+-      }
+-      try FileManager.default.setAttributes(
+-        [.posixPermissions: 0o600], ofItemAtPath: stdoutURL.path)
+-      try FileManager.default.setAttributes(
+-        [.posixPermissions: 0o600], ofItemAtPath: stderrURL.path)
++      stdoutHandle = try payload.makeCaptureFile(named: "stdout")
++      stderrHandle = try payload.makeCaptureFile(named: "stderr")
++      try beforeLaunch?(payload.directoryURL)
++      try payload.validateForLaunch()
++      try payload.sealForLaunch()
++      try payload.validateForLaunch()
+     } catch {
+-      throw failure(.notStarted, "Unable to prepare bounded osascript output capture.")
+-    }
+-    defer { try? FileManager.default.removeItem(at: captureDirectory) }
+-    guard
+-      let stdoutHandle = FileHandle(forWritingAtPath: stdoutURL.path),
+-      let stderrHandle = FileHandle(forWritingAtPath: stderrURL.path)
+-    else {
+-      throw failure(.notStarted, "Unable to prepare bounded osascript output capture.")
++      throw failure(.notStarted, "The private osascript payload failed its launch check.")
+     }
+     defer {
+       try? stdoutHandle.close()
+@@ -51,6 +59,16 @@ enum AppleScriptSendTransport {
+     } catch {
+       throw failure(.notStarted, "osascript could not be launched.")
+     }
++    do {
++      try afterLaunch?()
++    } catch {
++      ProcessTimeout.terminate(process)
++      process.waitUntilExit()
++      throw failure(
++        .mayHaveCompleted,
++        "The osascript launch supervisor failed after process launch."
++      )
++    }
+     do {
+       if let data = source.data(using: .utf8) {
+         try stdinPipe.fileHandleForWriting.write(contentsOf: data)
+@@ -64,9 +82,15 @@ enum AppleScriptSendTransport {
+         "The osascript input channel failed after process launch."
+       )
+     }
+-    if ProcessTimeout.waitUntilExit(process, timeout: timeout) {
+-      throw failure(.mayHaveCompleted, "osascript timed out after \(Int(timeout)) seconds.")
++    if ProcessTimeout.waitUntilExit(process, timeout: processTimeout) {
++      throw failure(
++        .mayHaveCompleted,
++        "osascript timed out after \(Int(processTimeout)) seconds."
++      )
+     }
++    // `isRunning == false` is not the ownership boundary we promise here.
++    // Explicitly reap the child before any defer can unseal or remove payloads.
++    process.waitUntilExit()
+     try? stdoutHandle.synchronize()
+     if process.terminationReason == .uncaughtSignal || process.terminationStatus != 0 {
+       throw failure(
+@@ -74,7 +98,16 @@ enum AppleScriptSendTransport {
+         "osascript exited without an authoritative delivery phase."
+       )
+     }
+-    let output = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
++    let output: String
++    do {
++      try stdoutHandle.seek(toOffset: 0)
++      output = String(data: try stdoutHandle.readToEnd() ?? Data(), encoding: .utf8) ?? ""
++    } catch {
++      throw failure(
++        .mayHaveCompleted,
++        "osascript exited but its structured delivery result could not be read."
++      )
++    }
+     switch interpret(output) {
+     case .success:
+       return
+diff --git a/Sources/IMsgCore/MessageSender.swift b/Sources/IMsgCore/MessageSender.swift
+index fe81a73..195311f 100644
+--- a/Sources/IMsgCore/MessageSender.swift
++++ b/Sources/IMsgCore/MessageSender.swift
+@@ -185,16 +185,22 @@ public struct MessageSender {
+ 
+   private func appleScript() -> String {
+     return """
++      on readPrivateField(payloadRoot, fieldName)
++          return read POSIX file (payloadRoot & "/" & fieldName) as «class utf8»
++      end readPrivateField
++
+       on run argv
+           set dispatchPhase to "pre_dispatch"
+           try
+-          set theRecipient to item 1 of argv
+-          set theMessage to item 2 of argv
+-          set theService to item 3 of argv
+-          set theFilePath to item 4 of argv
+-          set useAttachment to item 5 of argv
+-          set chatId to item 6 of argv
+-          set useChat to item 7 of argv
++          if (count of argv) is not 1 then error number -1701
++          set payloadRoot to item 1 of argv
++          set theRecipient to my readPrivateField(payloadRoot, "recipient")
++          set theMessage to my readPrivateField(payloadRoot, "text")
++          set theService to my readPrivateField(payloadRoot, "service")
++          set theFilePath to my readPrivateField(payloadRoot, "attachment-path")
++          set useAttachment to my readPrivateField(payloadRoot, "use-attachment")
++          set chatId to my readPrivateField(payloadRoot, "chat-target")
++          set useChat to my readPrivateField(payloadRoot, "use-chat")
+ 
+           tell application "Messages"
+               if useChat is "1" then
+diff --git a/Tests/IMsgCoreTests/AppleScriptPrivatePayloadTestSupport.swift b/Tests/IMsgCoreTests/AppleScriptPrivatePayloadTestSupport.swift
+new file mode 100644
+index 0000000..1525212
+--- /dev/null
++++ b/Tests/IMsgCoreTests/AppleScriptPrivatePayloadTestSupport.swift
+@@ -0,0 +1,90 @@
++import Darwin
++import Foundation
++import Testing
++
++@testable import IMsgCore
++
++func deliveryFailure(_ operation: () throws -> Void) -> DeliveryFailure? {
++  do {
++    try operation()
++    return nil
++  } catch let failure as DeliveryFailure {
++    return failure
++  } catch {
++    return nil
++  }
++}
++
++func processHasExited(_ processID: pid_t) -> Bool {
++  let deadline = ContinuousClock().now + .seconds(2)
++  let clock = ContinuousClock()
++  while clock.now < deadline {
++    errno = 0
++    if kill(processID, 0) == -1, errno == ESRCH {
++      return true
++    }
++    Thread.sleep(forTimeInterval: 0.02)
++  }
++  return false
++}
++
++func waitForFile(_ url: URL, timeout: TimeInterval) -> Bool {
++  let clock = ContinuousClock()
++  let deadline = clock.now + .seconds(timeout)
++  while clock.now < deadline {
++    if FileManager.default.fileExists(atPath: url.path) { return true }
++    Thread.sleep(forTimeInterval: 0.01)
++  }
++  return false
++}
++
++enum PrivateTransportTestError: Error {
++  case helperDidNotStart
++  case fieldWriteFailed
++}
++
++final class PrivateTransportFixture {
++  let root: URL
++
++  init() throws {
++    root = FileManager.default.temporaryDirectory
++      .appendingPathComponent("imsg-private-transport-tests-\(UUID().uuidString)")
++    try FileManager.default.createDirectory(
++      at: root,
++      withIntermediateDirectories: false,
++      attributes: [.posixPermissions: 0o700]
++    )
++  }
++
++  func cleanup() {
++    try? FileManager.default.removeItem(at: root)
++  }
++
++  func executable(named name: String, source: String) throws -> URL {
++    let url = root.appendingPathComponent(name)
++    try source.write(to: url, atomically: false, encoding: .utf8)
++    try FileManager.default.setAttributes(
++      [.posixPermissions: 0o700],
++      ofItemAtPath: url.path
++    )
++    return url
++  }
++
++  func successHelper(launchMarker: URL? = nil) throws -> URL {
++    let marker = launchMarker.map { ": > '\($0.path)'" } ?? ":"
++    return try executable(
++      named: "success-\(UUID().uuidString)",
++      source: """
++        #!/bin/sh
++        \(marker)
++        cat >/dev/null
++        printf 'IMSG_RESULT\\tok\\tcompleted\\t0\\n'
++        """
++    )
++  }
++
++  func mode(of url: URL) throws -> Int {
++    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
++    return try #require((attributes[.posixPermissions] as? NSNumber)?.intValue)
++  }
++}
+diff --git a/Tests/IMsgCoreTests/AppleScriptPrivatePayloadTests.swift b/Tests/IMsgCoreTests/AppleScriptPrivatePayloadTests.swift
+new file mode 100644
+index 0000000..88f8657
+--- /dev/null
++++ b/Tests/IMsgCoreTests/AppleScriptPrivatePayloadTests.swift
+@@ -0,0 +1,455 @@
++import Darwin
++import Foundation
++import Testing
++
++@testable import IMsgCore
++
++private let privateSendArguments = [
++  "+15550001111-CANARY",
++  "private body CANARY two lines\nsecond line",
++  "imessage-CANARY",
++  "/private/tmp/private-attachment-CANARY",
++  "1",
++  "iMessage;+;private-chat-CANARY",
++  "1",
++]
++
++@Test
++func osascriptChildArgvContainsOnlyTheOpaquePayloadLocator() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let argvCapture = fixture.root.appendingPathComponent("argv")
++  let helper = try fixture.executable(
++    named: "capture-argv",
++    source: """
++      #!/bin/sh
++      : > '\(argvCapture.path)'
++      for argument in "$@"; do
++        printf '%s\\n' "$argument" >> '\(argvCapture.path)'
++      done
++      cat >/dev/null
++      printf 'IMSG_RESULT\\tok\\tcompleted\\t0\\n'
++      """
++  )
++
++  var payloadRoot: URL?
++  try AppleScriptSendTransport.run(
++    source: "return \"unused\"",
++    arguments: privateSendArguments,
++    executableURL: helper,
++    processTimeout: 2,
++    beforeLaunch: { directory in
++      payloadRoot = directory
++      let directoryMode = try fixture.mode(of: directory)
++      #expect(directoryMode == 0o700)
++      for (name, expectedValue) in zip(
++        AppleScriptPrivatePayload.fieldNames,
++        privateSendArguments
++      ) {
++        let file = directory.appendingPathComponent(name)
++        #expect(try fixture.mode(of: file) == 0o600)
++        #expect(try String(contentsOf: file, encoding: .utf8) == expectedValue)
++      }
++    }
++  )
++
++  let argv = try String(contentsOf: argvCapture, encoding: .utf8)
++    .split(separator: "\n", omittingEmptySubsequences: false)
++    .dropLast()
++    .map(String.init)
++  #expect(argv.count == 4)
++  #expect(argv[0...2] == ["-l", "AppleScript", "-"])
++  let locator = argv[3]
++  #expect(locator.contains("imsg-private-send."))
++  for privateValue in privateSendArguments where !privateValue.isEmpty {
++    #expect(!argv.contains(privateValue))
++  }
++  let joined = argv.joined(separator: " ")
++  #expect(!joined.contains("CANARY"))
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++}
++
++@Test
++func launchedPayloadCannotBeEditedOrReplacedByTheChild() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let helper = try fixture.executable(
++    named: "try-to-replace",
++    source: """
++      #!/bin/sh
++      cat >/dev/null
++      if chmod 0644 "$4/text" 2>/dev/null; then exit 71; fi
++      if rm "$4/text" 2>/dev/null; then exit 72; fi
++      if printf 'changed' > "$4/text" 2>/dev/null; then exit 73; fi
++      printf 'IMSG_RESULT\\tok\\tcompleted\\t0\\n'
++      """
++  )
++  var payloadRoot: URL?
++
++  try AppleScriptSendTransport.run(
++    source: "return \"unused\"",
++    arguments: privateSendArguments,
++    executableURL: helper,
++    processTimeout: 2,
++    beforeLaunch: { payloadRoot = $0 }
++  )
++
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++}
++
++@Test(arguments: ["text", "chat-target", "use-chat"])
++func privatePayloadRejectsSymlinkedFields(_ fieldName: String) throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let launchMarker = fixture.root.appendingPathComponent("launched")
++  let helper = try fixture.successHelper(launchMarker: launchMarker)
++  let external = fixture.root.appendingPathComponent("external")
++  try Data("outside".utf8).write(to: external)
++  var payloadRoot: URL?
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 2,
++        beforeLaunch: { directory in
++          payloadRoot = directory
++          let field = directory.appendingPathComponent(fieldName)
++          try FileManager.default.removeItem(at: field)
++          try FileManager.default.createSymbolicLink(
++            at: field,
++            withDestinationURL: external
++          )
++        }
++      )
++    }
++  )
++  #expect(failure.disposition == .notStarted)
++  #expect(failure.retrySafe)
++  #expect(!FileManager.default.fileExists(atPath: launchMarker.path))
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++  #expect(try String(contentsOf: external, encoding: .utf8) == "outside")
++}
++
++@Test
++func privatePayloadRejectsSameModeSameSizeFileSubstitution() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let launchMarker = fixture.root.appendingPathComponent("launched")
++  let helper = try fixture.successHelper(launchMarker: launchMarker)
++  var payloadRoot: URL?
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 2,
++        beforeLaunch: { directory in
++          payloadRoot = directory
++          let field = directory.appendingPathComponent("text")
++          let size = try Data(contentsOf: field).count
++          try FileManager.default.removeItem(at: field)
++          try Data(repeating: UInt8(ascii: "x"), count: size).write(to: field)
++          try FileManager.default.setAttributes(
++            [.posixPermissions: 0o600],
++            ofItemAtPath: field.path
++          )
++        }
++      )
++    }
++  )
++  #expect(failure.disposition == .notStarted)
++  #expect(!FileManager.default.fileExists(atPath: launchMarker.path))
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++}
++
++@Test
++func privatePayloadRejectsSameInodeSameSizeContentChanges() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let launchMarker = fixture.root.appendingPathComponent("launched")
++  let helper = try fixture.successHelper(launchMarker: launchMarker)
++  var payloadRoot: URL?
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 2,
++        beforeLaunch: { directory in
++          payloadRoot = directory
++          let field = directory.appendingPathComponent("text")
++          let original = try Data(contentsOf: field)
++          let descriptor = open(field.path, O_WRONLY | O_CLOEXEC)
++          #expect(descriptor >= 0)
++          defer { close(descriptor) }
++          let replacement = Data(repeating: UInt8(ascii: "x"), count: original.count)
++          try replacement.withUnsafeBytes { bytes in
++            guard Darwin.write(descriptor, bytes.baseAddress, bytes.count) == bytes.count else {
++              throw PrivateTransportTestError.fieldWriteFailed
++            }
++          }
++          #expect(try Data(contentsOf: field).count == original.count)
++          #expect(try fixture.mode(of: field) == 0o600)
++        }
++      )
++    }
++  )
++  #expect(failure.disposition == .notStarted)
++  #expect(!FileManager.default.fileExists(atPath: launchMarker.path))
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++}
++
++@Test
++func privatePayloadRejectsRootSymlinkSubstitution() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let launchMarker = fixture.root.appendingPathComponent("launched")
++  let helper = try fixture.successHelper(launchMarker: launchMarker)
++  let movedRoot = fixture.root.appendingPathComponent("moved-payload")
++  var originalRoot: URL?
++  defer {
++    if let originalRoot {
++      try? FileManager.default.removeItem(at: originalRoot)
++    }
++    try? FileManager.default.removeItem(at: movedRoot)
++  }
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 2,
++        beforeLaunch: { directory in
++          originalRoot = directory
++          try FileManager.default.moveItem(at: directory, to: movedRoot)
++          try FileManager.default.createSymbolicLink(
++            at: directory,
++            withDestinationURL: movedRoot
++          )
++        }
++      )
++    }
++  )
++  #expect(failure.disposition == .notStarted)
++  #expect(!FileManager.default.fileExists(atPath: launchMarker.path))
++  #expect(FileManager.default.fileExists(atPath: movedRoot.path))
++  for name in AppleScriptPrivatePayload.fieldNames {
++    #expect(!FileManager.default.fileExists(atPath: movedRoot.appendingPathComponent(name).path))
++  }
++}
++
++@Test(arguments: [0o400, 0o644])
++func privatePayloadRejectsFieldModeChanges(_ changedMode: Int) throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let helper = try fixture.successHelper()
++  var payloadRoot: URL?
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 2,
++        beforeLaunch: { directory in
++          payloadRoot = directory
++          try FileManager.default.setAttributes(
++            [.posixPermissions: changedMode],
++            ofItemAtPath: directory.appendingPathComponent("recipient").path
++          )
++        }
++      )
++    }
++  )
++  #expect(failure.disposition == .notStarted)
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++}
++
++@Test
++func privatePayloadRejectsDirectoryModeChangesAndCleansUp() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let helper = try fixture.successHelper()
++  var payloadRoot: URL?
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 2,
++        beforeLaunch: { directory in
++          payloadRoot = directory
++          try FileManager.default.setAttributes(
++            [.posixPermissions: 0o755],
++            ofItemAtPath: directory.path
++          )
++        }
++      )
++    }
++  )
++  #expect(failure.disposition == .notStarted)
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++}
++
++@Test
++func privatePayloadRejectsUnexpectedOwnerBeforeLaunch() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let launchMarker = fixture.root.appendingPathComponent("launched")
++  let helper = try fixture.successHelper(launchMarker: launchMarker)
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 2,
++        expectedOwner: geteuid() &+ 1
++      )
++    }
++  )
++  #expect(failure.disposition == .notStarted)
++  #expect(!FileManager.default.fileExists(atPath: launchMarker.path))
++}
++
++@Test
++func crashedChildIsReapedAndPrivatePayloadIsRemoved() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let pidFile = fixture.root.appendingPathComponent("pid")
++  let helper = try fixture.executable(
++    named: "crash",
++    source: """
++      #!/bin/sh
++      printf '%s' "$$" > '\(pidFile.path)'
++      cat >/dev/null
++      kill -SEGV "$$"
++      """
++  )
++  var payloadRoot: URL?
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 2,
++        beforeLaunch: { payloadRoot = $0 }
++      )
++    }
++  )
++  #expect(failure.disposition == .mayHaveCompleted)
++  let pid = try #require(pid_t(String(contentsOf: pidFile, encoding: .utf8)))
++  #expect(processHasExited(pid))
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++}
++
++@Test
++func timedOutChildIsReapedBeforePrivatePayloadCleanup() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  let pidFile = fixture.root.appendingPathComponent("pid")
++  let exitMarker = fixture.root.appendingPathComponent("payload-existed-at-exit")
++  let helper = try fixture.executable(
++    named: "hang",
++    source: """
++      #!/bin/sh
++      printf '%s' "$$" > '\(pidFile.path)'
++      trap 'test -d "$4" && : > "\(exitMarker.path)"; exit 0' TERM
++      cat >/dev/null
++      while :; do :; done
++      """
++  )
++  var payloadRoot: URL?
++
++  let failure = try #require(
++    deliveryFailure {
++      try AppleScriptSendTransport.run(
++        source: "return \"unused\"",
++        arguments: privateSendArguments,
++        executableURL: helper,
++        processTimeout: 0.2,
++        beforeLaunch: { payloadRoot = $0 },
++        afterLaunch: {
++          guard waitForFile(pidFile, timeout: 5) else {
++            throw PrivateTransportTestError.helperDidNotStart
++          }
++        }
++      )
++    }
++  )
++  #expect(failure.disposition == .mayHaveCompleted)
++  #expect(!failure.retrySafe)
++  let pid = try #require(pid_t(String(contentsOf: pidFile, encoding: .utf8)))
++  #expect(processHasExited(pid))
++  #expect(FileManager.default.fileExists(atPath: exitMarker.path))
++  #expect(payloadRoot.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
++}
++
++@Test
++func productionAppleScriptReadsEveryPrivateFieldFromTheLocator() throws {
++  var source = ""
++  let sender = MessageSender(runner: { script, _ in source = script })
++  try sender.send(
++    MessageSendOptions(
++      recipient: "+15550001111",
++      text: "hello",
++      service: .imessage,
++      chatGUID: "iMessage;+;opaque-chat",
++      allowSMSFallback: false
++    )
++  )
++
++  #expect(source.contains("if (count of argv) is not 1"))
++  #expect(source.contains("set payloadRoot to item 1 of argv"))
++  for fieldName in AppleScriptPrivatePayload.fieldNames {
++    #expect(source.contains("readPrivateField(payloadRoot, \"\(fieldName)\")"))
++  }
++  #expect(!source.contains("item 2 of argv"))
++  #expect(!source.contains("item 7 of argv"))
++}
++
++@Test
++func productionAppleScriptCompilesWithoutExecutingIt() throws {
++  let fixture = try PrivateTransportFixture()
++  defer { fixture.cleanup() }
++  var source = ""
++  let sender = MessageSender(runner: { script, _ in source = script })
++  try sender.send(
++    MessageSendOptions(
++      recipient: "+15550001111",
++      text: "hello",
++      service: .imessage,
++      allowSMSFallback: false
++    )
++  )
++
++  let compiled = fixture.root.appendingPathComponent("send.scpt")
++  let process = Process()
++  let input = Pipe()
++  process.executableURL = URL(fileURLWithPath: "/usr/bin/osacompile")
++  process.arguments = ["-l", "AppleScript", "-o", compiled.path]
++  process.standardInput = input
++  process.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
++  process.standardError = FileHandle(forWritingAtPath: "/dev/null")
++  try process.run()
++  try input.fileHandleForWriting.write(contentsOf: Data(source.utf8))
++  try input.fileHandleForWriting.close()
++  #expect(!ProcessTimeout.waitUntilExit(process, timeout: 5))
++  #expect(process.terminationStatus == 0)
++  #expect(FileManager.default.fileExists(atPath: compiled.path))
++}
+diff --git a/docs/private-applescript-transport.md b/docs/private-applescript-transport.md
+new file mode 100644
+index 0000000..20cac67
+--- /dev/null
++++ b/docs/private-applescript-transport.md
+@@ -0,0 +1,107 @@
++---
++title: Private AppleScript transport payload
++description: "Security boundary, provenance, evidence, and qualification limits for AppleScript sends."
++---
++
++## Provenance
++
++This transport change is based narrowly on
++[`openclaw/imsg` v0.14.1 at `25beb76c902b0acf2dd7ae392f1b0792f6813240`](https://github.com/openclaw/imsg/tree/25beb76c902b0acf2dd7ae392f1b0792f6813240).
++It changes only the published AppleScript send path, its tests, and the
++documentation of that path. It does not change bridge sends or provider
++routing.
++
++## Security boundary
++
++The AppleScript source remains on the child's standard input. The nested
++`osascript` process receives four arguments: `-l`, `AppleScript`, `-`, and one
++random payload-directory locator. Recipient, text, service, attachment path,
++attachment flag, chat target, and chat flag are stored separately in that
++directory.
++
++The parent creates the directory atomically with mode `0700`. It creates every
++field with `openat`, `O_EXCL`, and `O_NOFOLLOW`, then requires a regular,
++single-link, exact-size file owned by the effective user with mode `0600`.
++Immediately before launch it reopens the directory and every field, compares
++device and inode identities with retained descriptors, compares every field's
++contents with the staged value, and rejects symlinks, replacement, in-place
++edits, hard links, ownership changes, and mode changes. On macOS it then applies
++the user-immutable flag to the fields and directory for the child lifetime. The
++parent retains descriptors, reaps the child, clears the flags, unlinks only
++known entries through the retained directory descriptor, and removes the exact
++directory it created.
++
++This design reduces exposure through process arguments and ordinary diagnostic
++records. It is not process isolation from malicious software already running as
++the same macOS user. Such a process shares owner access to `0600` files and can
++deliberately clear user-immutable flags. That stronger threat model requires a
++separate privilege or sandbox boundary.
++
++The transport preserves the existing delivery-state boundary:
++
++- A payload or launch check that fails before `Process.run()` is `not_started`.
++- Lost input after launch, timeout, signal, nonzero exit, malformed output, or
++  unreadable output is `may_have_completed`.
++- It does not infer a retry, add a retry, or convert uncertainty into success.
++
++SMS fallback remains available to existing callers only for the already
++qualified `not_started` case. A caller that requires one iMessage attempt can
++set `transport: "applescript"`, `service: "imessage"`, and
++`allow_sms_fallback: false`.
++
++## Receipt limit
++
++Messages' AppleScript `send` command does not return a message GUID. Its
++structured `completed` result proves only that the automation call returned.
++The CLI and RPC server obtain any outgoing GUID by separately matching a new
++`chat.db` row by chat, text, and a bounded time window. No matching row is
++`may_have_completed`; it is not proof that nothing was sent. An unknown GUID
++reported as pending by `message.send_status` is also not proof of submission.
++
++For a caller that launches one fresh supervised `imsg rpc` process per visible
++message part, the safe topology is one request, explicit AppleScript transport,
++SMS fallback disabled, stdin closed after the request, and the process awaited
++through response and exit. This repository's RPC server still supports many
++requests per process. The transport patch does not enforce the one-request
++topology.
++
++## Deterministic evidence
++
++`AppleScriptPrivatePayloadTests` verifies:
++
++- nested child argv contains no recipient, body, service, attachment path,
++  chat target, or flag canary;
++- the payload directory and files have exact modes and contents;
++- symlink, root replacement, field replacement, in-place field editing, owner
++  mismatch, and mode changes fail before child launch;
++- immutable sealing blocks child-side edit, unlink, and replacement;
++- crash and timeout paths reap the child and remove the payload;
++- timeout cleanup begins only after the child's exit handler observes the
++  payload still present;
++- the complete production AppleScript compiles without executing it.
++
++Existing delivery, SMS-fallback, RPC fallback-control, queue-state, and
++outgoing-row verification tests continue to cover the unchanged typed outcome
++contract.
++
++## Production qualification still required
++
++This local patch is not a distributable provider by itself. Production use
++still requires:
++
++1. upstream or maintained-fork review of the exact diff;
++2. a pinned release build with checksum, signing, notarization, and installer
++   attestation;
++3. macOS CI for the full test suite and Linux CI for the read-only build;
++4. argv inspection against the signed release binary, including the nested
++   `osascript` child;
++5. a separately authorized self-chat test for Automation permission, exact
++   chat routing, outgoing-row/GUID reconciliation, timeout classification, and
++   no SMS fallback;
++6. caller integration that launches one supervised RPC process per visible
++   message part and never retries `may_have_completed` or `still_in_flight`;
++7. an operational rule that treats a missing or ambiguous outgoing row as
++   unresolved rather than delivered or absent.
++
++No live message send is part of the deterministic test suite or this
++prototype's qualification evidence.
+diff --git a/docs/rpc.md b/docs/rpc.md
+index 94cdc43..c788989 100644
+--- a/docs/rpc.md
++++ b/docs/rpc.md
+@@ -754,6 +754,12 @@ Send and receive verification:
+ {"jsonrpc":"2.0","id":"3","result":{"ok":true,"transport":"applescript","id":1979,"guid":"8DF..."}}
+ ```
+ 
++Require the published AppleScript surface without an automatic SMS retry:
++
++```json
++{"jsonrpc":"2.0","id":"4","method":"send","params":{"chat_guid":"iMessage;+;chat123","text":"hi","service":"imessage","transport":"applescript","allow_sms_fallback":false}}
++```
++
+ `send` accepts `transport: "auto" | "bridge" | "applescript"`. `auto`
+ uses the IMCore bridge for existing chats when it is running. It falls back to
+ AppleScript only when the bridge is not ready or returns authoritative
+@@ -761,3 +767,11 @@ AppleScript only when the bridge is not ready or returns authoritative
+ malformed response, or other uncertain post-publication failure never falls
+ back. Use `bridge` when the caller requires private-API delivery and should
+ fail instead of falling back. Replies remain bridge-only.
++
++For AppleScript sends, the nested `osascript` argv contains only fixed
++interpreter switches and a random private-payload locator. Recipient, body,
++service, attachment path, chat target, and routing flags are owner-only files
++sealed for the child lifetime. AppleScript does not return a message GUID. Any
++`guid` in the response came from the independently matched outgoing database
++row; failure to observe that row is `may_have_completed`, never a retry-safe
++absence.
+diff --git a/docs/send.md b/docs/send.md
+index ba2403d..b3d40ce 100644
+--- a/docs/send.md
++++ b/docs/send.md
+@@ -3,7 +3,7 @@ title: Send
+ description: "Send text and files to direct chats and groups through Messages.app automation, plus standard tapbacks."
+ ---
+ 
+-`imsg send` rides Messages' published AppleScript surface — no private send APIs, no IMCore injection. Production sends run in a bounded `/usr/bin/osascript` child so a stuck Messages automation call can be terminated and reaped. Sending requires Automation permission for Messages (see [Permissions](permissions.md)).
++`imsg send` rides Messages' published AppleScript surface — no private send APIs, no IMCore injection. Production sends run in a bounded `/usr/bin/osascript` child so a stuck Messages automation call can be terminated and reaped. The recipient, body, service, attachment path, chat target, and routing flags never enter that child's process arguments. They live in checked `0600` files under one random `0700` directory, whose namespace stays immutable until the child exits. Sending requires Automation permission for Messages (see [Permissions](permissions.md)).
+ 
+ ## Direct sends
+ 
+@@ -99,6 +99,13 @@ verification is unchanged.
+ 
+ The [JSON-RPC `send` method](rpc.md#send) includes the rowid and GUID of the inserted message when available. RPC `send` also accepts `transport` (`auto`, `bridge`, or `applescript`) for callers that want to prefer or require the IMCore bridge.
+ 
++AppleScript's `send` command does not return a message GUID. A GUID reported by
++`imsg` is evidence from the separately observed outgoing `chat.db` row, not an
++AppleScript receipt. If the row cannot be matched, a text send reports
++`may_have_completed` and must not be retried automatically. `message.send_status`
++can inspect a GUID only after some transport or database observation supplied
++that exact GUID.
++
+ ## Tahoe ghost-row protection
+ 
+ On macOS 26 (Tahoe), Messages.app has a failure mode where AppleScript reports success but writes an empty outgoing SMS row that isn't joined to the target chat. The send looks fine to the caller but never reaches the recipient.

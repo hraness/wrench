@@ -24,6 +24,7 @@ import type { LocalCliRecipe, OperationInput } from "../model";
 import { OperationDeadline } from "../operation-deadline";
 import { boundedJsonOutput } from "../runtime";
 import {
+  materializeBeeperExactConversation,
   materializeBeeperMessagingList,
   materializeBeeperMessagingRead,
 } from "./beeper-omni";
@@ -342,6 +343,30 @@ async function execute(
 }
 
 describe("Beeper local read runtime", () => {
+  test("proves and materializes one exact account/network conversation", async () => {
+    const path = privateStore();
+    try {
+      const input = {
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        max_participants: 500,
+      } as const;
+      const result = await execute(path, "conversations.read", input, []);
+      expect(materializeBeeperExactConversation(input, result.output)).toMatchObject({
+        kind: "conversation",
+        detail: "summary",
+        title: "Ada Fixture",
+        participants: [{ displayName: "Ada Fixture" }, { displayName: "Fixture Self" }],
+      });
+      expect(() => materializeBeeperExactConversation({
+        ...input,
+        conversation_id: "another-chat",
+      }, result.output)).toThrow("must bind the exact requested account and conversation");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("preserves the pinned CLI account selector aliases independently", () => {
     const parsed = parseBeeperExportAccounts(accounts());
     expect(parsed[0]?.selectorAliases).toEqual({

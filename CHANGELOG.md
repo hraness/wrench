@@ -7,6 +7,30 @@
   terminal staging job requires maintainer approval through the protected
   `npm-stage` environment before npm's separate two-factor approval.
 
+## 0.16.1 - 2026-08-27
+
+- Add a provider-neutral agentic messaging facade that keeps exact routes,
+  current context, prose, replies, and receipts in encrypted state and
+  explicit owner-only artifacts. One private preview authorizes one ordered
+  one-to-eight-bubble turn; the durable journal preserves submitted, failed,
+  partial, and indeterminate outcomes without retrying uncertain work.
+- Qualify Beeper Desktop for exact live agentic actions through its loopback
+  API. Wrench binds one account and conversation, checks participants and the
+  exact expected own-message prefix before every remaining bubble, and stops
+  on foreign activity, edits, deletions, reorderings, or provider drift.
+- Add a reviewed direct iMessage local transport with fixed JSON-RPC stdin,
+  exact chat-row revalidation, AppleScript private files, disabled SMS
+  fallback, and independent outgoing `chat.db` acceptance evidence. Threaded
+  replies remain unsupported and every bubble has a separate no-retry fence.
+- Vendor and verify a patched Wacli/Whatsmeow stdin-only private transport.
+  The registered WhatsApp action remains unavailable until controlled live
+  freshness, acceptance, and reconciliation qualification is complete.
+- Ship the reviewed iMessage transport installer through the public CLI with
+  digest verification, no-overwrite semantics, path-private diagnostics, and
+  fail-closed handling for unsafe source and state paths.
+- Add an exact lightweight `wrench --version` command and bind package smoke
+  tests to the installed binary's immutable release identity.
+
 ## 0.16.0 - 2026-08-27
 
 - Redesign wrench.rip as a restrained editorial site with a supported-actions-only

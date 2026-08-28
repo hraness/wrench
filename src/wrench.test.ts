@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseCaptureArguments } from "@hraness/kb/capture";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -10,6 +11,7 @@ import type * as MediaRuntimeModule from "./media";
 import type { DoctorReport as MediaDoctorReport } from "./media/doctor";
 import { canonicalJson, isWebSessionOperation, sha256, type WrenchManifest } from "./model";
 import { planAssetBundlePath } from "./plan-assets";
+import { imsgInstalledBinaryPath } from "./providers/imessage-direct-install";
 import {
   defineProviderPlugin,
   lazyProviderApiRuntime,
@@ -3949,6 +3951,172 @@ describe("CLI previews and exit semantics", () => {
     }
   });
 
+  test("installs reviewed iMessage transport bytes through the public CLI boundary", async () => {
+    const testState = state();
+    try {
+      const wrench = capture();
+      const observedBinaries: string[] = [];
+      const observedStateHomes: Array<string | undefined> = [];
+      const dependencies: Partial<WrenchDependencies> = {
+        loadImsgDirectInstallRuntime: async () => ({
+          installReviewedImsgBinary: async (
+            binary: string,
+            environment: Readonly<Record<string, string | undefined>>,
+          ) => {
+            observedBinaries.push(binary);
+            observedStateHomes.push(environment.WRENCH_STATE_HOME);
+            return Object.freeze({
+              path: "/private/wrench/tools/imsg/0.14.1/imsg",
+              executableSha256: "7".repeat(64),
+              version: "0.14.1" as const,
+              alreadyPresent: false,
+            });
+          },
+        } as unknown as Awaited<ReturnType<
+          WrenchDependencies["loadImsgDirectInstallRuntime"]
+        >>),
+      };
+      const invalid = capture();
+      expect(await main([
+        "imessage",
+        "transport",
+        "install",
+        "--binary",
+        "relative-imsg",
+        "--json",
+      ], testState.environment, invalid.output, dependencies)).toBe(2);
+      expect(observedBinaries).toEqual([]);
+      expect(invalid.stdout()).toBe("");
+      expect(invalid.stderr()).toContain("normalized-absolute-reviewed-imsg-file");
+
+      const code = await main([
+        "imessage",
+        "transport",
+        "install",
+        "--binary",
+        "/tmp/reviewed-imsg",
+        "--json",
+      ], testState.environment, wrench.output, dependencies);
+
+      expect(code).toBe(0);
+      expect(observedBinaries).toEqual(["/tmp/reviewed-imsg"]);
+      expect(observedStateHomes).toEqual([testState.directory]);
+      expect(wrench.stderr()).toBe("");
+      expect(JSON.parse(wrench.stdout())).toEqual({
+        ok: true,
+        installed: true,
+        alreadyPresent: false,
+        tool: "imsg-private-transport",
+        version: "0.14.1",
+        executableSha256: "7".repeat(64),
+      });
+      expect(wrench.stdout()).not.toContain("/private/wrench");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform !== "darwin" || process.arch !== "arm64")(
+    "keeps public iMessage installer filesystem failures prompt and path-free",
+    async () => {
+      const testState = state();
+      const sourceRoot = realpathSync(mkdtempSync(join(
+        tmpdir(),
+        "wrench-imsg-private-source-canary-",
+      )));
+      chmodSync(sourceRoot, 0o700);
+      const target = join(sourceRoot, "unreviewed-target");
+      const symlink = join(sourceRoot, "private-symlink-canary");
+      const fifo = join(sourceRoot, "private-fifo-canary");
+      const missing = join(sourceRoot, "private-missing-canary");
+      writeFileSync(target, "#!/bin/sh\nexit 0\n", { mode: 0o500 });
+      symlinkSync(target, symlink);
+      expect(spawnSync("/usr/bin/mkfifo", [fifo]).status).toBe(0);
+      try {
+        for (const source of [missing, symlink, fifo]) {
+          const output = capture();
+          const startedAt = performance.now();
+          expect(await main([
+            "imessage",
+            "transport",
+            "install",
+            "--binary",
+            source,
+            "--json",
+          ], testState.environment, output.output)).toBe(3);
+          expect(performance.now() - startedAt).toBeLessThan(2_000);
+          expect(output.stdout()).toBe("");
+          expect(output.stderr()).toMatch(
+            /source (?:file does not exist|is not a trusted executable file)/u,
+          );
+          expect(output.stderr()).not.toContain(source);
+          expect(output.stderr()).not.toContain("private-source-canary");
+          expect(output.stderr()).not.toContain("private-missing-canary");
+          expect(output.stderr()).not.toContain("private-symlink-canary");
+          expect(output.stderr()).not.toContain("private-fifo-canary");
+          expect(existsSync(imsgInstalledBinaryPath(testState.environment)))
+            .toBeFalse();
+        }
+
+        const digestOutput = capture();
+        expect(await main([
+          "imessage",
+          "transport",
+          "install",
+          "--binary",
+          target,
+          "--json",
+        ], testState.environment, digestOutput.output)).toBe(3);
+        expect(digestOutput.stderr()).toContain("reviewed digest");
+        expect(digestOutput.stderr()).not.toContain(target);
+        const destination = imsgInstalledBinaryPath(testState.environment);
+        expect(existsSync(destination)).toBeFalse();
+
+        const mismatchedBytes = "existing unreviewed destination\n";
+        writeFileSync(destination, mismatchedBytes, { mode: 0o500 });
+        const destinationOutput = capture();
+        expect(await main([
+          "imessage",
+          "transport",
+          "install",
+          "--binary",
+          target,
+          "--json",
+        ], testState.environment, destinationOutput.output)).toBe(3);
+        expect(destinationOutput.stderr()).toContain(
+          "existing imsg install does not match the reviewed artifact",
+        );
+        expect(destinationOutput.stderr()).not.toContain(target);
+        expect(destinationOutput.stderr()).not.toContain(destination);
+        expect(readFileSync(destination, "utf8")).toBe(mismatchedBytes);
+
+        const unsafeState = join(sourceRoot, "private-state-canary");
+        writeFileSync(unsafeState, "not a directory", { mode: 0o600 });
+        const output = capture();
+        expect(await main([
+          "imessage",
+          "transport",
+          "install",
+          "--binary",
+          target,
+          "--json",
+        ], {
+          ...testState.environment,
+          WRENCH_STATE_HOME: unsafeState,
+        }, output.output)).toBe(3);
+        expect(output.stdout()).toBe("");
+        expect(output.stderr()).toContain(
+          "imsg install state directory is unavailable or unsafe",
+        );
+        expect(output.stderr()).not.toContain(unsafeState);
+        expect(output.stderr()).not.toContain("private-state-canary");
+      } finally {
+        rmSync(sourceRoot, { recursive: true, force: true });
+        rmSync(testState.directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("renders the canonical Wrench command surface", async () => {
     const usage = renderWrenchUsage();
     expect(usage).toStartWith("Usage:\n  wrench ");
@@ -3956,6 +4124,7 @@ describe("CLI previews and exit semantics", () => {
     expect(usage).toContain("Shorthand for 'wrench invoke'");
     expect(usage).toContain("wrench plugin list [--json]");
     expect(usage).toContain("wrench plugin show <id> [--json]");
+    expect(usage).toContain("wrench imessage transport install --binary");
     expect(usage).toContain("wrench plugin scaffold --site <id>");
     expect(usage).toContain("wrench plugin check <directory> [--json]");
     expect(usage).toContain(

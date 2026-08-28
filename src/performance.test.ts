@@ -186,11 +186,12 @@ function receipt(index: number): Readonly<Record<string, unknown>> {
 }
 
 describe("Wrench hardening performance gates", () => {
-  test("keeps static help lazy and fast without provider or state initialization", async () => {
+  test("keeps static help and release identity lazy without provider or state initialization", async () => {
     const cliSource = readFileSync(cliPath, "utf8");
     const usageSource = readFileSync(join(import.meta.dir, "usage.ts"), "utf8");
     expect(runtimeImportDeclarations(cliSource)).toEqual([
       'import { wrenchUsage } from "./usage";',
+      'import { WRENCH_VERSION } from "./version";',
     ]);
     expect(runtimeImportDeclarations(usageSource)).toEqual([]);
 

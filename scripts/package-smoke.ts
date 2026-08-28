@@ -9,11 +9,12 @@ const importSpecifiers = [
   "@hraness/wrench/client",
   "@hraness/wrench/beeper",
   "@hraness/wrench/omni",
+  "@hraness/wrench/messaging",
 ];
 const binNames = ["wrench"];
 const MAX_PACKED_BYTES = 2_000_000;
-const MAX_PACKED_FILES = 400;
-const MAX_UNPACKED_BYTES = 10_000_000;
+const MAX_PACKED_FILES = 425;
+const MAX_UNPACKED_BYTES = 11_000_000;
 const NPM_REGISTRY = "https://registry.npmjs.org";
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";
 const sweetCookieVerificationIntegrity = "sha512-HddZketABRWbHiLYqMbGlYuqEaWdtqAjES28eKHr2cPDdPvrXiF4JQxD4pl9WzSOre6p/B3zA4Z3uIsCHo/+uQ==";
@@ -100,6 +101,29 @@ async function run(
       });
   const exitCode = await process.exited;
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
+}
+
+async function runExpectingExactSuccess(
+  command: string[],
+  cwd: string,
+  expectedStdout: string,
+): Promise<void> {
+  const child = Bun.spawn(command, {
+    cwd,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  if (exitCode !== 0 || stdout !== expectedStdout || stderr.length !== 0) {
+    throw new Error(
+      `Installed CLI output contract drifted for: ${command.join(" ")}; exit=${String(exitCode)}; stdout=${JSON.stringify(stdout)}; stderr=${JSON.stringify(stderr)}`,
+    );
+  }
 }
 
 type ExactNpmArtifact = Readonly<{
@@ -263,8 +287,17 @@ async function runExpectingFailure(
   cwd: string,
   expectedExitCode: number,
   expectedDiagnostic: string,
+  forbiddenDiagnostics: readonly string[] = [],
+  env?: Readonly<Record<string, string>>,
 ): Promise<void> {
-  const child = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(command, env === undefined
+    ? { cwd, stdout: "pipe", stderr: "pipe" }
+    : {
+        cwd,
+        env: { ...globalThis.process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -274,6 +307,7 @@ async function runExpectingFailure(
     exitCode !== expectedExitCode
     || stdout.length !== 0
     || !stderr.includes(expectedDiagnostic)
+    || forbiddenDiagnostics.some((diagnostic) => stderr.includes(diagnostic))
   ) {
     throw new Error(
       `Installed CLI failure contract drifted for: ${command.join(" ")}; exit=${String(exitCode)}; stdout=${JSON.stringify(stdout)}; stderr=${JSON.stringify(stderr)}`,
@@ -397,6 +431,7 @@ async function verifyPackagedSkill(
     readonly contentPolicy?: unknown;
     readonly engines?: unknown;
     readonly publishConfig?: unknown;
+    readonly scripts?: unknown;
   };
 
   if (!skill.startsWith("---\nname: wrench\ndescription:")) {
@@ -472,6 +507,21 @@ async function verifyPackagedSkill(
     || manifest.publishConfig.registry !== NPM_REGISTRY
   ) {
     throw new Error("Packed Wrench must pin public publication to the canonical npm registry.");
+  }
+  if (
+    typeof manifest.scripts === "object"
+    && manifest.scripts !== null
+    && Object.hasOwn(manifest.scripts, "imessage:transport:install")
+  ) {
+    throw new Error("Packed Wrench must expose only the path-safe public iMessage installer CLI.");
+  }
+  if (await Bun.file(join(
+    packageRoot,
+    "src",
+    "scripts",
+    "install-imessage-direct-transport.ts",
+  )).exists()) {
+    throw new Error("Packed Wrench retained the superseded iMessage installer script.");
   }
   const npmDisclosure = await readFile(join(packageRoot, "DISCLOSURE"), "utf8");
   for (const required of ["dual-use", "browser profile", "explicit confirmation", "authorized"] as const) {
@@ -565,6 +615,38 @@ try {
   for (const binName of binNames) {
     await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);
   }
+  await runExpectingExactSuccess(
+    [join(consumer, "node_modules", ".bin", "wrench"), "--version"],
+    consumer,
+    `${packageVersion}\n`,
+  );
+  await runExpectingFailure([
+    join(consumer, "node_modules", ".bin", "wrench"),
+    "imessage",
+    "transport",
+    "install",
+    "--binary",
+    "relative-imsg",
+    "--json",
+  ], consumer, 2, "normalized-absolute-reviewed-imsg-file");
+  const missingReviewedImsg = join(
+    consumer,
+    "private-missing-reviewed-imsg-canary",
+  );
+  const imsgInstallerState = join(work, "imsg-installer-state");
+  await mkdir(imsgInstallerState, { mode: 0o700 });
+  await runExpectingFailure([
+    join(consumer, "node_modules", ".bin", "wrench"),
+    "imessage",
+    "transport",
+    "install",
+    "--binary",
+    missingReviewedImsg,
+    "--json",
+  ], consumer, 3, "imsg", [
+    missingReviewedImsg,
+    "private-missing-reviewed-imsg-canary",
+  ], { WRENCH_STATE_HOME: imsgInstallerState });
   await access(join(
     consumer,
     "node_modules",
@@ -599,7 +681,7 @@ try {
     "-e",
     `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
   ], consumer);
-  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nimport * as surface1 from \"@hraness/wrench/client\";\nimport * as surface2 from \"@hraness/wrench/omni\";\nimport * as surface3 from \"@hraness/wrench/beeper\";\nvoid [surface0, surface1, surface2, surface3];\n");
+  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nimport * as surface1 from \"@hraness/wrench/client\";\nimport * as surface2 from \"@hraness/wrench/omni\";\nimport * as surface3 from \"@hraness/wrench/beeper\";\nimport * as surface4 from \"@hraness/wrench/messaging\";\nvoid [surface0, surface1, surface2, surface3, surface4];\n");
   await writeFile(join(consumer, "tsconfig.bundler.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"types\": [\n      \"bun\",\n      \"node\"\n    ],\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"Preserve\",\n    \"moduleResolution\": \"Bundler\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);
 

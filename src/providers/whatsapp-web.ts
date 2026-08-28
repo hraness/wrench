@@ -13,12 +13,18 @@ export const WHATSAPP_PROTOCOL_PIN = Object.freeze({
   implementation: "github.com/openclaw/wacli",
   version: "0.13.0",
   commit: "1e15f646d23598ef5db2bdb4659ac39cc5188ad2",
-  darwinArm64ArchiveSha256:
-    "9e6c1ddbe9e4163960689526b714213867533bc4b2eb656c345a4411b70ccdd5",
+  transport: "wrench-private-v1",
+  whatsmeowCommit: "85d99080dee8ebd10ca7021751fe432d880d3b76",
+  wacliPatchSha256:
+    "ffa7fb2a6100bfff1a4cfed300fb0f854d0d3254058d8e33d87073ad0c0bac9f",
+  whatsmeowPatchSha256:
+    "cbf6f0b72963b365ca4c81f86993cf8a77a7eec6ffcd973d13aa68fe7331fcdc",
+  protocolSha256:
+    "6032c414835e4370de96718d9cc5add08e7f9f59354217e3e46d73a97d3e2ba1",
   darwinArm64BinarySha256:
-    "b9ce58668cb0a1ed60115cfe4d59df02b99c876c8ee5671515fce3425aae520b",
-  releaseUrl:
-    "https://github.com/openclaw/wacli/releases/tag/v0.13.0",
+    "526eba2dce946afb6cefc852b9080245e0f03f79b5c0472879b17c145b24a667",
+  sourceManifest:
+    "src/vendor/whatsapp-private-transport/manifest.json",
 } as const);
 
 export const WHATSAPP_WEB_OPERATION_NAMES = Object.freeze([
@@ -95,7 +101,7 @@ export const WHATSAPP_WEB_OPERATIONS = Object.freeze({
   "messaging.send": captureRequired(
     "write",
     "R3",
-    "the exact text/media send and local readback are reserved, but a low-stakes live fixture and process-private message delivery are not yet proven",
+    "the checked private no-retry text transport and generic action codec are installed but remain inactive until a controlled low-stakes live fixture and exact hash-bound reconciliation read are proven",
   ),
   "content.edit": captureRequired(
     "write",

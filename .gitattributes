@@ -1,0 +1,2 @@
+src/vendor/whatsapp-private-transport/*.patch -whitespace
+src/vendor/whatsapp-private-transport/LICENSE.* -whitespace

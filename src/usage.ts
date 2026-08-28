@@ -1,10 +1,12 @@
 /**
  * Static CLI help kept separate from the command implementation graph.
  *
- * The installed entrypoint imports only this module for a valid help request,
- * so help remains available even when an optional provider runtime is broken.
+ * The installed entrypoint imports only this module and the static release
+ * identity for a valid help request, so help remains available even when an
+ * optional provider runtime is broken.
  */
 export const wrenchUsage = `Usage:
+  wrench --version                                  Print the exact Wrench release version
   wrench init [directory] [--json]                    Initialize a Markdown vault
   wrench inspect <url> [capture-options]              Inspect capture without persistence
   wrench pdf <file-or-url> [pdf-options]               Capture a PDF into the vault
@@ -28,6 +30,8 @@ export const wrenchUsage = `Usage:
   wrench transcriber setup --engine whisper-cpp --model <file> [media-options]
   wrench doctor [--json]                         Check capture, media, auth, and action dependencies
   wrench capabilities [adapter] [--json]         List installed semantic capabilities
+  wrench imessage transport install --binary <absolute-reviewed-imsg-file> [--json]
+                                                 Install only the current reviewed iMessage transport bytes
   wrench plugin list [--json]                    List trusted source and installed portable plugins
   wrench plugin show <id> [--json]               Inspect one source or portable plugin
   wrench plugin scaffold --site <id> --display-name <name> --origin <https-origin>
@@ -82,6 +86,17 @@ export const wrenchUsage = `Usage:
                 [--max-participants <n>] [--json]
                 # body-free receipt/output envelope on stdout; progress on stderr
 
+  wrench messaging routes --input <-|@absolute-private-file>
+                          --private-output <absolute-mode-0600-file> [--json]
+  wrench messaging resolve --input <-|@absolute-private-file>
+                           --private-output <absolute-mode-0600-file> [--json]
+  wrench messaging context --input <-|@absolute-private-file>
+                           --private-output <absolute-mode-0600-file> [--json]
+  wrench messaging preview --input <-|@absolute-private-file>
+                           --private-output <absolute-mode-0600-file> [--json]
+  wrench messaging reconcile <run-id> [--json]
+                # capability refs and bodies never appear in argv or stdout
+
   wrench adapter init <id> (--origin <https-origin> | --platform <surface-id>)
                              --output <directory> [--force]
   wrench adapter sync-bundled [--json]                 Install or safely upgrade reviewed bundled manifests
@@ -117,11 +132,11 @@ export const wrenchUsage = `Usage:
                 [--cache-only | --identity-only | --from-exact-cache]
                 [--headed] [--json]
   wrench <adapter> <operation> [invoke-options]  Shorthand for 'wrench invoke'
-  wrench confirm <plan-digest> [--headed] [--json]
+  wrench confirm <plan-digest> [--headed] [--private-output <absolute-path> --receipt-binding-output <absolute-path>] [--json]
   wrench plans list [--json]
   wrench plans cancel <plan-digest> --yes
   wrench runs list [--json]
-  wrench runs show <run-id> [--json]
+  wrench runs show <run-id> [--private-output <absolute-path> --receipt-binding-output <absolute-path>] [--json]
   wrench runs reconcile <run-id> [--input <json|@file|->] [--json]  Reconcile from transport-specific external evidence
 
 Local browser admission:

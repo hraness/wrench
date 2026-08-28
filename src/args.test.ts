@@ -3,6 +3,81 @@ import { describe, expect, test } from "bun:test";
 import { parseWrenchArguments } from "./args";
 
 describe("wrench CLI grammar", () => {
+  test("parses only one normalized reviewed iMessage transport install source", () => {
+    expect(parseWrenchArguments([
+      "imessage",
+      "transport",
+      "install",
+      "--binary",
+      "/tmp/reviewed-imsg",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "imessage-transport-install",
+        binary: "/tmp/reviewed-imsg",
+        json: true,
+      },
+    });
+    for (const raw of [
+      ["imessage", "transport", "install"],
+      ["imessage", "transport", "install", "--binary", "relative-imsg"],
+      ["imessage", "transport", "install", "--binary", "/tmp/../tmp/imsg"],
+      ["imessage", "send"],
+      ["imessage", "transport", "install", "--binary", "/tmp/imsg", "--force"],
+    ]) {
+      expect(parseWrenchArguments(raw).ok).toBeFalse();
+    }
+  });
+
+  test("keeps messaging capability data out of argv and requires private output", () => {
+    expect(parseWrenchArguments([
+      "messaging",
+      "resolve",
+      "--input",
+      "-",
+      "--private-output",
+      "/tmp/wrench-private/route.json",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "messaging-resolve",
+        inputSource: "-",
+        privateOutput: "/tmp/wrench-private/route.json",
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "messaging",
+      "context",
+      "--input",
+      "@/tmp/wrench-private/context-request.json",
+      "--private-output",
+      "/tmp/wrench-private/context.json",
+    ]).ok).toBeTrue();
+    for (const input of [
+      '{"routeRef":"wmroute_private"}',
+      "@relative.json",
+      "wmroute_private",
+    ]) {
+      expect(parseWrenchArguments([
+        "messaging",
+        "context",
+        "--input",
+        input,
+        "--private-output",
+        "/tmp/wrench-private/context.json",
+      ]).ok).toBeFalse();
+    }
+    expect(parseWrenchArguments([
+      "messaging",
+      "routes",
+      "--input",
+      "-",
+    ]).ok).toBeFalse();
+  });
+
   test.each([
     { raw: [] },
     { raw: ["help"] },
@@ -1099,6 +1174,72 @@ describe("wrench CLI grammar", () => {
         headed: false,
         json: true,
       },
+    });
+    expect(parseWrenchArguments([
+      "confirm",
+      "a".repeat(64),
+      "--private-output",
+      "/tmp/wrench-private/messaging-run.json",
+      "--receipt-binding-output",
+      "/tmp/wrench-private/messaging-receipt.json",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "confirm",
+        digest: "a".repeat(64),
+        headed: false,
+        privateOutput: "/tmp/wrench-private/messaging-run.json",
+        receiptBindingOutput: "/tmp/wrench-private/messaging-receipt.json",
+        json: true,
+      },
+    });
+    const runId = "00000000-0000-4000-8000-000000000000";
+    expect(parseWrenchArguments([
+      "messaging",
+      "reconcile",
+      runId,
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "messaging-reconcile",
+        runId,
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments(["messaging", "reconcile", runId, "--private-output"]))
+      .toEqual({
+        ok: false,
+        message: "messaging reconcile accepts only --json",
+      });
+    expect(parseWrenchArguments([
+      "runs",
+      "show",
+      runId,
+      "--private-output",
+      "/tmp/wrench-private/messaging-run.json",
+      "--receipt-binding-output",
+      "/tmp/wrench-private/messaging-receipt.json",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "runs-show",
+        runId,
+        privateOutput: "/tmp/wrench-private/messaging-run.json",
+        receiptBindingOutput: "/tmp/wrench-private/messaging-receipt.json",
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "confirm",
+      "a".repeat(64),
+      "--private-output",
+      "relative.json",
+    ])).toEqual({
+      ok: false,
+      message: "confirm --private-output must be a normalized absolute path",
     });
     expect(parseWrenchArguments(["confirm", "a".repeat(64), "--idempotency-key", "new-key"]).ok).toBeFalse();
     expect(parseWrenchArguments(["linkedin", "messaging.send", "--input", "{}"])).toEqual({

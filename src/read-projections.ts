@@ -1482,6 +1482,134 @@ function decryptChunk(
   }
 }
 
+export type AuthenticatedPrivatePayloadV1 = {
+  readonly schemaVersion: 1;
+  readonly encryption: "aes-256-gcm";
+  readonly keyId: string;
+  readonly iv: string;
+  readonly ciphertext: string;
+  readonly tag: string;
+};
+
+function privatePayloadAdditionalData(keyId: string, domain: string): Buffer {
+  if (
+    domain.length < 1
+    || Buffer.byteLength(domain, "utf8") > 256
+    || /[\0\r\n]/u.test(domain)
+  ) throw new Error("authenticated private payload domain is malformed");
+  return Buffer.from(canonicalJson({
+    schemaVersion: 1,
+    format: "wrench.authenticated-private-payload-aad",
+    keyId,
+    domain,
+  }), "utf8");
+}
+
+/** Internal state primitive sharing Wrench's authenticated projection key. */
+export function sealAuthenticatedPrivatePayload(
+  value: unknown,
+  domain: string,
+  environment: Environment = process.env,
+  maximumPlaintextBytes = 2 * 1024 * 1024,
+): AuthenticatedPrivatePayloadV1 {
+  const plaintext = Buffer.from(canonicalJson(value), "utf8");
+  if (
+    !Number.isSafeInteger(maximumPlaintextBytes)
+    || maximumPlaintextBytes < 1
+    || plaintext.byteLength > maximumPlaintextBytes
+  ) throw new Error("authenticated private payload exceeds its plaintext bound");
+  const key = projectionKey(environment, true);
+  if (key === null) throw new Error("projection encryption key is unavailable");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key.value, iv);
+  cipher.setAAD(privatePayloadAdditionalData(key.id, domain));
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return Object.freeze({
+    schemaVersion: 1,
+    encryption: "aes-256-gcm",
+    keyId: key.id,
+    iv: iv.toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+  });
+}
+
+function privatePayloadBase64(
+  value: unknown,
+  label: string,
+  maximumBytes: number,
+): Buffer {
+  if (
+    typeof value !== "string"
+    || value.length > Math.ceil(maximumBytes / 3) * 4 + 4
+    || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)
+  ) throw new Error(`${label} is malformed`);
+  const decoded = Buffer.from(value, "base64");
+  if (
+    decoded.byteLength > maximumBytes
+    || decoded.toString("base64") !== value
+  ) throw new Error(`${label} is malformed`);
+  return decoded;
+}
+
+/** Internal inverse of sealAuthenticatedPrivatePayload. */
+export function openAuthenticatedPrivatePayload(
+  value: unknown,
+  domain: string,
+  environment: Environment = process.env,
+  maximumPlaintextBytes = 2 * 1024 * 1024,
+): unknown {
+  const source = record(value, "authenticated private payload");
+  exactKeys(source, [
+    "schemaVersion",
+    "encryption",
+    "keyId",
+    "iv",
+    "ciphertext",
+    "tag",
+  ], "authenticated private payload");
+  if (
+    source.schemaVersion !== 1
+    || source.encryption !== "aes-256-gcm"
+    || !Number.isSafeInteger(maximumPlaintextBytes)
+    || maximumPlaintextBytes < 1
+  ) throw new Error("authenticated private payload is malformed");
+  const keyId = hexDigest(source.keyId, "authenticated private payload key ID");
+  const key = projectionKey(environment, false);
+  if (key === null || key.id !== keyId) {
+    throw new Error("authenticated private payload encryption key is unavailable");
+  }
+  const iv = privatePayloadBase64(source.iv, "authenticated private payload IV", 12);
+  const tag = privatePayloadBase64(source.tag, "authenticated private payload tag", 16);
+  const ciphertext = privatePayloadBase64(
+    source.ciphertext,
+    "authenticated private payload ciphertext",
+    maximumPlaintextBytes + 16,
+  );
+  if (iv.byteLength !== 12 || tag.byteLength !== 16) {
+    throw new Error("authenticated private payload is malformed");
+  }
+  let plaintext: Buffer;
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key.value, iv);
+    decipher.setAAD(privatePayloadAdditionalData(key.id, domain));
+    decipher.setAuthTag(tag);
+    plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  } catch {
+    throw new Error("authenticated private payload failed authentication");
+  }
+  if (plaintext.byteLength > maximumPlaintextBytes) {
+    throw new Error("authenticated private payload exceeds its plaintext bound");
+  }
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
+  } catch {
+    throw new Error("authenticated private payload plaintext is malformed");
+  }
+  return parseJson(decoded, "authenticated private payload plaintext");
+}
+
 function dataRevision(
   key: ProjectionKey,
   output: unknown,

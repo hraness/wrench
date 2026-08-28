@@ -104,6 +104,7 @@ const stateDirectoryNames = [
   "derivations",
   "idempotency",
   "linked-device-stores",
+  "messaging",
   "omni-read-projections",
   "plan-assets",
   "plans",
@@ -389,6 +390,15 @@ function stateRootFor(path: string): string | null {
     if (pathInside(root, target) && (selected === null || root.length > selected.length)) selected = root;
   }
   return selected;
+}
+
+/** True when a path resolves at or below the selected, validated Wrench state root. */
+export function isWrenchStatePath(
+  path: string,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  const root = wrenchStateHome(environment);
+  return stateRootFor(path) === root;
 }
 
 function sameIdentity(left: StateRootIdentity | null, right: StateRootIdentity | null): boolean {

@@ -12,6 +12,7 @@ import {
   materializeWhatsAppMessagingList,
   materializeWhatsAppMessagingRead,
 } from "../../providers/whatsapp-omni";
+import { whatsappMessagingDefinition } from "../../providers/whatsapp-messaging";
 
 const whatsappContracts = webSessionContractDefinitions.whatsapp;
 if (whatsappContracts === undefined) {
@@ -35,7 +36,17 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
     ["providers/whatsapp-interaction-projection-protocol.ts", "../../providers/whatsapp-interaction-projection-protocol.ts"],
     ["providers/whatsapp-web.ts", "../../providers/whatsapp-web.ts"],
     ["providers/whatsapp-web-runtime.ts", "../../providers/whatsapp-web-runtime.ts"],
+    ["providers/whatsapp-private-transport.ts", "../../providers/whatsapp-private-transport.ts"],
     ["providers/whatsapp-omni.ts", "../../providers/whatsapp-omni.ts"],
+    ["providers/whatsapp-messaging.ts", "../../providers/whatsapp-messaging.ts"],
+    ["scripts/install-whatsapp-protocol.sh", "../../scripts/install-whatsapp-protocol.sh"],
+    ["scripts/resolve-state-home.ts", "../../scripts/resolve-state-home.ts"],
+    ["vendor/whatsapp-private-transport/manifest.json", "../../vendor/whatsapp-private-transport/manifest.json"],
+    ["vendor/whatsapp-private-transport/README.md", "../../vendor/whatsapp-private-transport/README.md"],
+    ["vendor/whatsapp-private-transport/LICENSE.wacli", "../../vendor/whatsapp-private-transport/LICENSE.wacli"],
+    ["vendor/whatsapp-private-transport/LICENSE.whatsmeow", "../../vendor/whatsapp-private-transport/LICENSE.whatsmeow"],
+    ["vendor/whatsapp-private-transport/wacli.patch", "../../vendor/whatsapp-private-transport/wacli-1e15f646d23598ef5db2bdb4659ac39cc5188ad2-wrench-private.patch"],
+    ["vendor/whatsapp-private-transport/whatsmeow.patch", "../../vendor/whatsapp-private-transport/whatsmeow-85d99080dee8-wrench-private.patch"],
   ]),
   bindings: [{
     transport: "linked-device",
@@ -68,6 +79,7 @@ export const whatsappLinkedDevicePlugin = defineProviderPlugin({
       format: "whatsapp:pn:<phone> or whatsapp:lid:<linked-id>",
       matches: (value) => /^whatsapp:(?:pn:[0-9]{5,20}|lid:[0-9]{5,32})$/u.test(value),
     },
+    messaging: whatsappMessagingDefinition,
     linkedDeviceLifecycle: {
       inspect: true,
       pair: true,

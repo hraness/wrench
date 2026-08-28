@@ -4,7 +4,9 @@ description: >-
   Use Wrench to give a bring-your-own coding agent bounded, local-first web
   capabilities: capture or scrape public and signed-in web pages into Markdown;
   archive authorized audio, video, and transcripts with verification; query
-  encrypted cached email, contacts, inbox, and messaging views; publish and
+  encrypted cached email, contacts, inbox, and messaging views; resolve a live
+  conversation, read fresh context, preview ordered message bubbles, and
+  execute an exactly authorized turn through one provider route; publish and
   reconcile text, image, and video posts through observed installed social
   capabilities; inspect or develop bounded provider contracts for X, LinkedIn,
   Bluesky, Substack Notes, Threads, TikTok, Instagram, and YouTube Shorts; save
@@ -39,6 +41,10 @@ automation.
 - Inspect support: `wrench plugin list`, `wrench plugin show <id>`, and `wrench capabilities [adapter]`.
 - Operate Beeper: inspect `wrench capabilities beeper-local --json`, then use
   only its typed read or action operation with the bound local Desktop realm.
+- Read or act on a live conversation: follow
+  [agentic messaging](references/messaging.md). Keep one exact provider route,
+  use private artifacts for prose and capability references, and never expose a
+  provider CLI or API beside Wrench as a second action path.
 - Diagnose state: `wrench operator doctor --json`.
 - Invoke a supported semantic operation: `wrench invoke <adapter> <operation>` or its printed shorthand.
 - Collect exact daily social-account statistics into a checked consumer snapshot: follow [social profile statistics](references/social-profile-stats.md).
@@ -191,7 +197,15 @@ Omni v1 has no write-tag invalidation surface. Auth-incarnation, materializer,
 and plugin implementation identity changes strand prior derivatives. Exact
 query freshness advances only through explicit R1 revalidation.
 
-R2/R3 produce an exact five-minute preview. Review adapter, operation, transport, account, scalar input, attachment hashes and order, side effect, contract hash, and dispatch schedule, then run the printed `wrench confirm <digest>`. Never retry `pending`, `partial`, or `indeterminate` work. Reconcile from independently observed, secret-free evidence only when the installed exact contract advertises reconciliation; image-upload draft contracts deliberately do not. Reconciliation never repeats the original mutation.
+R2/R3 produce an exact five-minute preview. Review adapter, operation,
+transport, account, scalar input, attachment hashes and order, side effect,
+contract hash, and dispatch schedule, then run the printed `wrench confirm
+<digest>`. A messaging turn uses its stricter private preview and same-turn
+authorization procedure in [agentic messaging](references/messaging.md).
+Never retry `pending`, `partial`, or `indeterminate` work. Reconcile from
+independently observed, secret-free evidence only when the installed exact
+contract advertises reconciliation; image-upload draft contracts deliberately
+do not. Reconciliation never repeats the original mutation.
 
 ## Derive only when a contract is missing
 
