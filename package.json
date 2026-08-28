@@ -288,7 +288,6 @@
     "src/local-cli-contracts.ts",
     "src/local-cli-execution.ts",
     "src/local-cli-tool-identity.ts",
-    "src/message-like-me-agentic-messaging.ts",
     "src/model.ts",
     "src/omni-client-types.ts",
     "src/omni-client.ts",

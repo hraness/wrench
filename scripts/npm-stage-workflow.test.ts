@@ -179,6 +179,17 @@ describe("npm publication contract", () => {
     });
   });
 
+  test("keeps the reviewed package file inventory unique", async () => {
+    const value: unknown = JSON.parse(await readFile(manifestUrl, "utf8"));
+    expect(typeof value).toBe("object");
+    expect(value).not.toBeNull();
+    const manifest = value as { readonly files?: unknown };
+    expect(Array.isArray(manifest.files)).toBe(true);
+    const files = manifest.files as readonly unknown[];
+    expect(files.every((path) => typeof path === "string" && path.length > 0)).toBe(true);
+    expect(new Set(files).size).toBe(files.length);
+  });
+
   test("separates read-only classification and verification from tokenless terminal staging", async () => {
     const workflow = await readFile(stageWorkflowUrl, "utf8");
     const classifyStart = workflow.indexOf("\n  classify:\n");
