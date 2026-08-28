@@ -266,6 +266,10 @@ describe("wrench.rip static site", () => {
       expect(providerMarkDisplay.length).toBeGreaterThan(0);
       expect(providerMarkDisplay).not.toContain("none");
       expect(providerMarkDisplay.at(-1)).toBe("inline-flex");
+      const providerFeatureDisplay = cssPropertyValues(css, ".provider-feature-copy", "display");
+      expect(providerFeatureDisplay.length).toBeGreaterThan(0);
+      expect(providerFeatureDisplay).not.toContain("none");
+      expect(providerFeatureDisplay.at(-1)).toBe("block");
     }
     const expectedFooterHrefs = [
       HRANESS_HOME_URL,
@@ -565,6 +569,14 @@ describe("wrench.rip static site", () => {
     expect(html.match(/class="provider-mark"/gu)).toHaveLength(providerDirectory.providerCount);
     expect(providerCapabilities?.html.match(/class="provider-mark"/gu))
       .toHaveLength(providerDirectory.providerCount);
+    expect(html.match(/class="provider-feature-copy"/gu)).toHaveLength(1);
+    expect(providerCapabilities?.html.match(/class="provider-feature-copy"/gu)).toHaveLength(1);
+    expect(html).toContain(
+      "Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.",
+    );
+    expect(providerCapabilities?.html).toContain(
+      "Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.",
+    );
     for (const entry of providerDirectory.entries) {
       expect(html).toContain(`data-provider-icon="${entry.icon}"`);
       expect(providerCapabilities?.html).toContain(`data-provider-icon="${entry.icon}"`);
