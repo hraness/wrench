@@ -16,6 +16,7 @@ import { imsgDirectMessagingDefinition } from "./imessage-direct-messaging";
 import {
   imsgConversationProviderId,
   imsgMessageProviderId,
+  materializeImsgExactConversation,
 } from "./imessage-direct-omni";
 import {
   whatsappMessagingDefinition,
@@ -145,6 +146,63 @@ function imessageMessage(
 }
 
 describe("provider messaging coordinate codecs", () => {
+  test("preserves authoritative iMessage chat kind through route and preflight projections", () => {
+    const exact = (kind: "single" | "group", participants: readonly string[]) => ({
+      provider: "imessage",
+      operation: "conversations.read",
+      accountSubject: `imessage:device-default:${"a".repeat(64)}`,
+      accountSelection: "device-default",
+      service: "iMessage",
+      transport: "applescript",
+      smsFallback: false,
+      conversation: {
+        id: 7,
+        guid: "iMessage;+;fixture-chat",
+        service: "iMessage",
+        identifier: "fixture",
+        title: "Fixture chat",
+        kind,
+        participants,
+        lastMessageAt: "2026-08-27T12:00:00.000Z",
+        unreadCount: 0,
+        observedAccountId: null,
+        observedAccountLogin: null,
+        observedLastAddressedHandle: null,
+      },
+    });
+    const input = {
+      chat_guid: "iMessage;+;fixture-chat",
+      service: "iMessage",
+      observed_chat_row_id: 7,
+    } as const;
+    const single = materializeImsgExactConversation(input, exact("single", ["a", "b"]));
+    const group = materializeImsgExactConversation(input, exact("group", ["a"]));
+    expect(single.conversationKind).toBe("single");
+    expect(group.conversationKind).toBe("group");
+    expect(imsgDirectMessagingDefinition.resolveRoute.candidates(
+      {},
+      { kind: "imessageChat", chatGuid: input.chat_guid, service: "iMessage", observedChatRowId: 7 },
+      exact("group", ["a"]),
+    )[0]?.conversationKind).toBe("group");
+    if (imsgDirectMessagingDefinition.action.state !== "supported") {
+      throw new Error("direct iMessage action changed state");
+    }
+    const snapshot = imsgDirectMessagingDefinition.action.livePreflight.snapshot(
+      exact("single", ["a", "b"]),
+      "imessage:device-default",
+    );
+    expect(snapshot.conversation).toEqual({
+      kind: "single",
+      title: "Fixture chat",
+      participantCount: 2,
+    });
+    expect(() => materializeImsgExactConversation(input, {
+      ...exact("single", ["a"]),
+      conversation: { ...exact("single", ["a"]).conversation, kind: undefined },
+    })).toThrow("kind");
+    expect(snapshot.conversation.kind).not.toBe(group.conversationKind);
+  });
+
   test("binds a Beeper network/chat coordinate to one exact account read", () => {
     const listInput = { account_id: accountId, limit: 100 } as const;
     const coordinate = {
@@ -209,6 +267,7 @@ describe("provider messaging coordinate codecs", () => {
       cursor: { direction: "none" as const, request: null, nextInput: null },
       entities: [{
         kind: "conversation" as const,
+        conversationKind: "single" as const,
         providerId: normalizedConversationId,
         providerRevision: null,
         orderedAt: "2026-08-27T12:00:00.000Z",
@@ -236,15 +295,62 @@ describe("provider messaging coordinate codecs", () => {
     }
     const first = beeperMessagingDefinition.action.livePreflight.snapshot(
       exactConversationOutput("2026-08-27T12:00:00.000Z"),
+      `beeper:local:${"a".repeat(64)}`,
     );
     const later = beeperMessagingDefinition.action.livePreflight.snapshot(
       exactConversationOutput("2026-08-27T12:05:00.000Z"),
+      `beeper:local:${"a".repeat(64)}`,
     );
     expect(first).toEqual(later);
     expect(first).toMatchObject({
       conversationProviderId: normalizedConversationId,
+      network: "beeper",
       providerRevision: null,
     });
+  });
+
+  test("keeps group and read-only Beeper routes readable but outside Message Like Me", () => {
+    const coordinate = {
+      kind: "beeperConversation" as const,
+      network: "Signal",
+      conversationId: rawConversationId,
+    };
+    const group = {
+      ...exactConversationOutput(),
+      conversation: { ...rawConversation(), type: "group" },
+    };
+    const readOnly = {
+      ...exactConversationOutput(),
+      conversation: { ...rawConversation(), isReadOnly: true },
+    };
+    expect(beeperMessagingDefinition.resolveRoute.candidates(
+      { account_id: accountId, limit: 100 },
+      coordinate,
+      group,
+    )[0]?.conversationKind).toBe("group");
+    expect(beeperMessagingDefinition.resolveRoute.sourceConversationCoordinate(
+      { account_id: accountId, limit: 100 },
+      coordinate,
+      group,
+      `beeper:local:${"a".repeat(64)}`,
+    )).toBeNull();
+    expect(beeperMessagingDefinition.resolveRoute.sourceConversationCoordinate(
+      { account_id: accountId, limit: 100 },
+      coordinate,
+      readOnly,
+      `beeper:local:${"a".repeat(64)}`,
+    )).toBeNull();
+    if (beeperMessagingDefinition.action.state !== "supported") {
+      throw new Error("Beeper checked messaging action must remain supported");
+    }
+    expect(() => beeperMessagingDefinition.action.livePreflight.snapshot(
+      group,
+      `beeper:local:${"a".repeat(64)}`,
+    )).toThrow("writable direct conversation");
+    expect(() => beeperMessagingDefinition.action.livePreflight.snapshot(
+      readOnly,
+      `beeper:local:${"a".repeat(64)}`,
+    )).toThrow("writable direct conversation");
   });
 
   test("compiles exact replies, normalizes acceptance, and reconciles by exact raw ID", () => {
@@ -504,6 +610,28 @@ describe("provider messaging coordinate codecs", () => {
     expect(whatsappMessagingDefinition.parseTarget({
       conversationJid: "15551234567@s.whatsapp.net",
     })).toEqual({ conversationJid: "15551234567@s.whatsapp.net" });
+    const exactRead = {
+      accountSubject: "whatsapp:pn:15551234567",
+      projection: "local-store",
+      completeness: "bounded-current-local-projection",
+      conversationJid: coordinate.jid,
+      messages: [],
+      fullTextSearch: true,
+    } as const;
+    expect(whatsappMessagingDefinition.resolveRoute.candidates(
+      { folder: "all", limit: 100 },
+      coordinate,
+      exactRead,
+    )).toMatchObject([{
+      target: { conversationJid: coordinate.jid },
+      conversationProviderId: coordinate.jid,
+    }]);
+    expect(whatsappMessagingDefinition.resolveRoute.sourceConversationCoordinate(
+      { folder: "all", limit: 100 },
+      coordinate,
+      exactRead,
+      "whatsapp:pn:15551234567",
+    )).toBeNull();
     expect(whatsappMessagingDefinition.action).toEqual({
       state: "unavailable",
       reply: "unsupported",

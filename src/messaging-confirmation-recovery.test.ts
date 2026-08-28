@@ -69,6 +69,8 @@ function storedPlan(): StoredPlan {
     routeRef,
     contextRef,
     clientIntentSha256: turn.clientIntentSha256,
+    contextBindingSha256: "8".repeat(64),
+    sourceConversationCoordinateSha256: "9".repeat(64),
     turnDigest: messagingTurnDigest(turn),
     previewDigest: "0".repeat(64),
     contextLimit: 20,
@@ -168,6 +170,8 @@ function writePredecessorMessagingRun(
   const {
     observedAcceptedPrefixCount: _legacyObservation,
     privateProviderOutcome: _laterPrivateOutcome,
+    contextBindingSha256: _laterContextBinding,
+    sourceConversationCoordinateSha256: _laterSourceCoordinate,
     ...predecessor
   } = run;
   writePrivateJson(

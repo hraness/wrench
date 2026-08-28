@@ -4,11 +4,15 @@ import { canonicalJson, sha256 } from "./canonical-json";
 import {
   MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR,
   MESSAGING_CONTEXT_BINDING_CONTRACT_HASH,
+  MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
   MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR,
   MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
+  MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
   messagingTurnDigest,
+  parseMessagingContextBindingV1,
   parseMessagingRouteResolveRequestV1,
   parseMessagingReceiptBindingV1,
+  parseMessagingReceiptBindingV2,
   parseMessagingTurnV1,
 } from "./messaging-types";
 
@@ -18,15 +22,59 @@ const contextRef = "wmcontext_ABCDEFGHIJKLMNOPQRSTUV";
 describe("provider-neutral messaging contracts", () => {
   test("freezes the cross-repository context and receipt descriptors", () => {
     expect(canonicalJson(MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR)).toBe(
-      '{"contractId":"wrench.messaging-context-binding.v1","fields":["schemaVersion:1","format:wrench.messaging-context-binding","contractId:wrench.messaging-context-binding.v1","contractHash:sha256","routeRef:opaque","contextRef:opaque","exactDataRevision:sha256","latestMessageRevision:sha256","validatedAt:rfc3339","expiresAt:rfc3339"],"format":"wrench.messaging-contract-descriptor","schemaVersion":1}',
+      '{"contractId":"wrench.messaging-context-binding.v2","fields":["schemaVersion:2","format:wrench.messaging-context-binding","contractId:wrench.messaging-context-binding.v2","contractHash:sha256","sourceConversationCoordinate:{contractId,schemaVersion,sha256}","routeRef:opaque","contextRef:opaque","exactDataRevision:sha256","latestMessageRevision:sha256","validatedAt:rfc3339","expiresAt:rfc3339"],"format":"wrench.messaging-contract-descriptor","schemaVersion":2}',
     );
     expect(sha256(canonicalJson(MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR)))
       .toBe(MESSAGING_CONTEXT_BINDING_CONTRACT_HASH);
     expect(canonicalJson(MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR)).toBe(
-      '{"contractId":"wrench.messaging-receipt-binding.v1","fields":["schemaVersion:1","format:wrench.messaging-receipt-binding","contractId:wrench.messaging-receipt-binding.v1","contractHash:sha256","clientIntentSha256:sha256","routeRefSha256:sha256","contextRefSha256:sha256","turnDigest:sha256","previewDigest:sha256","runId:opaque","state:submitted|failed|partial|indeterminate","partCount:uint","provenPartCount:uint","receiptSha256:sha256","recordedAt:rfc3339"],"format":"wrench.messaging-contract-descriptor","schemaVersion":1}',
+      '{"contractId":"wrench.messaging-receipt-binding.v2","fields":["schemaVersion:2","format:wrench.messaging-receipt-binding","contractId:wrench.messaging-receipt-binding.v2","contractHash:sha256","clientIntentSha256:sha256","contextBindingSha256:sha256","sourceConversationCoordinateSha256:sha256","routeRefSha256:sha256","contextRefSha256:sha256","turnDigest:sha256","previewDigest:sha256","runId:opaque","state:submitted|failed|partial|indeterminate","partCount:uint","provenPartCount:uint","receiptSha256:sha256","recordedAt:rfc3339"],"format":"wrench.messaging-contract-descriptor","schemaVersion":2}',
     );
     expect(sha256(canonicalJson(MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR)))
       .toBe(MESSAGING_RECEIPT_BINDING_CONTRACT_HASH);
+  });
+
+  test("reads authentic #72 V1 bindings without synthesizing V2 evidence", () => {
+    const context = {
+      schemaVersion: 1,
+      format: "wrench.messaging-context-binding",
+      contractId: "wrench.messaging-context-binding.v1",
+      contractHash: MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
+      routeRef,
+      contextRef,
+      exactDataRevision: "a".repeat(64),
+      latestMessageRevision: "b".repeat(64),
+      validatedAt: "2026-08-27T12:00:00.000Z",
+      expiresAt: "2026-08-27T12:10:00.000Z",
+    } as const;
+    expect(parseMessagingContextBindingV1(context)).toEqual(context);
+    expect(parseMessagingContextBindingV1(context))
+      .not.toHaveProperty("sourceConversationCoordinate");
+
+    const receiptCore = {
+      schemaVersion: 1,
+      format: "wrench.messaging-receipt-binding",
+      contractId: "wrench.messaging-receipt-binding.v1",
+      contractHash: MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+      clientIntentSha256: "c".repeat(64),
+      routeRefSha256: "d".repeat(64),
+      contextRefSha256: "e".repeat(64),
+      turnDigest: "f".repeat(64),
+      previewDigest: "1".repeat(64),
+      runId: "123e4567-e89b-42d3-a456-426614174000",
+      state: "submitted",
+      partCount: 1,
+      provenPartCount: 1,
+      recordedAt: "2026-08-27T12:01:00.000Z",
+    } as const;
+    const receipt = {
+      ...receiptCore,
+      receiptSha256: sha256(canonicalJson(receiptCore)),
+    } as const;
+    expect(parseMessagingReceiptBindingV1(receipt)).toEqual(receipt);
+    expect(parseMessagingReceiptBindingV1(receipt))
+      .not.toHaveProperty("contextBindingSha256");
+    expect(parseMessagingReceiptBindingV1(receipt))
+      .not.toHaveProperty("sourceConversationCoordinateSha256");
   });
 
   test("freezes the canonical client-intent-bound turn digest", () => {
@@ -53,6 +101,34 @@ describe("provider-neutral messaging contracts", () => {
       clientIntentSha256: undefined,
       handoffSha256: "a".repeat(64),
     })).toThrow("unsupported or missing fields");
+    expect(() => parseMessagingTurnV1({
+      ...turn,
+      sourceConversationCoordinateSha256: "b".repeat(64),
+    })).toThrow("unsupported or missing fields");
+  });
+
+  test("freezes the shared two-part turn vector", () => {
+    const turn = parseMessagingTurnV1({
+      schemaVersion: 1,
+      format: "wrench.messaging-turn",
+      clientIntentSha256: "a".repeat(64),
+      routeRef,
+      contextRef,
+      parts: [
+        { partId: "part_1", text: "synthetic first bubble", replyRef: null },
+        {
+          partId: "part_2",
+          text: "synthetic second bubble",
+          replyRef: "wmreply_ABCDEFGHIJKLMNOPQRSTUV",
+        },
+      ],
+    });
+    expect(canonicalJson(turn)).toBe(
+      '{"clientIntentSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","contextRef":"wmcontext_ABCDEFGHIJKLMNOPQRSTUV","format":"wrench.messaging-turn","parts":[{"partId":"part_1","replyRef":null,"text":"synthetic first bubble"},{"partId":"part_2","replyRef":"wmreply_ABCDEFGHIJKLMNOPQRSTUV","text":"synthetic second bubble"}],"routeRef":"wmroute_ABCDEFGHIJKLMNOPQRSTUV","schemaVersion":1}',
+    );
+    expect(messagingTurnDigest(turn)).toBe(
+      "aef4f36bf0f38570a7142e11affe06683130f50ba2e55b1df42cf27e1b021b79",
+    );
   });
 
   test("accepts only the closed tagged exact-route coordinate union", () => {
@@ -105,11 +181,13 @@ describe("provider-neutral messaging contracts", () => {
 
   test("enforces the receipt self-hash and proven-prefix algebra", () => {
     const base = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       format: "wrench.messaging-receipt-binding",
-      contractId: "wrench.messaging-receipt-binding.v1",
+      contractId: "wrench.messaging-receipt-binding.v2",
       contractHash: MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
       clientIntentSha256: "a".repeat(64),
+      contextBindingSha256: "f".repeat(64),
+      sourceConversationCoordinateSha256: "9".repeat(64),
       routeRefSha256: "b".repeat(64),
       contextRefSha256: "c".repeat(64),
       turnDigest: "d".repeat(64),
@@ -122,11 +200,10 @@ describe("provider-neutral messaging contracts", () => {
     } as const;
     const receipt = {
       ...base,
-      receiptSha256:
-        "fc0d2ee0e515999ed02466adad027a5193e9007f1920a3251c480e5cbec59498",
+      receiptSha256: sha256(canonicalJson(base)),
     } as const;
-    expect(parseMessagingReceiptBindingV1(receipt)).toEqual(receipt);
-    expect(() => parseMessagingReceiptBindingV1({
+    expect(parseMessagingReceiptBindingV2(receipt)).toEqual(receipt);
+    expect(() => parseMessagingReceiptBindingV2({
       ...receipt,
       receiptSha256: "f".repeat(64),
     })).toThrow("does not bind the canonical receipt");
@@ -137,7 +214,7 @@ describe("provider-neutral messaging contracts", () => {
       { state: "partial", partCount: 2, provenPartCount: 2 },
       { state: "indeterminate", partCount: 2, provenPartCount: 2 },
     ] as const) {
-      expect(() => parseMessagingReceiptBindingV1({
+      expect(() => parseMessagingReceiptBindingV2({
         ...receipt,
         ...invalid,
       })).toThrow("proven-prefix state law");

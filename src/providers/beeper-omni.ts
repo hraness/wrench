@@ -428,6 +428,7 @@ function conversation(value: unknown, path: string): ProviderConversationV1 {
   boolean(participants.hasMore, `${path}.participants.hasMore`);
   return Object.freeze({
     kind: "conversation",
+    conversationKind: type,
     providerId: normalizeBeeperConversationProviderId(accountId, id),
     providerRevision: null,
     orderedAt,

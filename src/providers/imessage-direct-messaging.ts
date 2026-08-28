@@ -1,4 +1,7 @@
 import { canonicalJson, sha256 } from "../canonical-json";
+import {
+  messageLikeMeSourceConversationCoordinateBindingV1,
+} from "../message-like-me-agentic-messaging";
 import type { OperationInput } from "../model";
 import type { MessagingRouteCoordinateV1 } from "../messaging-types";
 import type { ProviderMessageV1 } from "../omni-model";
@@ -222,9 +225,7 @@ export const imsgDirectMessagingDefinition = Object.freeze({
           observedChatRowId: String(observedChatRowId),
         }),
         conversationProviderId: entity.providerId,
-        conversationKind: entity.participants.length > 1
-          ? "group" as const
-          : "unknown" as const,
+        conversationKind: entity.conversationKind ?? "unknown",
         title: entity.title,
         participants: entity.participants,
         // The chat row's last-message timestamp changes after every send. Route
@@ -270,13 +271,29 @@ export const imsgDirectMessagingDefinition = Object.freeze({
           observedChatRowId: String(coordinate.observedChatRowId),
         }),
         conversationProviderId: entity.providerId,
-        conversationKind: entity.participants.length > 1
-          ? "group" as const
-          : "unknown" as const,
+        conversationKind: entity.conversationKind ?? "unknown",
         title: entity.title,
         participants: entity.participants,
         providerRevision: null,
       })]);
+    },
+    sourceConversationCoordinate: (
+      _listInput,
+      coordinate,
+      output,
+      _expectedAccountSubject,
+    ) => {
+      if (
+        coordinate.kind !== "imessageChat"
+        || coordinate.service !== IMSG_SERVICE
+        || coordinate.observedChatRowId === null
+      ) throw new Error("direct iMessage source coordinate changed during resolution");
+      exactConversationFromOutput(output);
+      return messageLikeMeSourceConversationCoordinateBindingV1({
+        sourceAccountId: null,
+        sourceExternalId: coordinate.chatGuid,
+        coordinate,
+      });
     },
   }),
   parseTarget: parseImsgMessagingTarget,
@@ -309,10 +326,44 @@ export const imsgDirectMessagingDefinition = Object.freeze({
           ),
         });
       },
-      snapshot: (output: unknown) => {
+      snapshot: (output: unknown, _expectedAccountSubject: string) => {
+        const envelope = record(
+          output,
+          "direct iMessage exact conversation output",
+        );
+        const rawConversation = record(
+          envelope.conversation,
+          "direct iMessage exact conversation output conversation",
+        );
         const entity = exactConversationFromOutput(output);
+        const chatGuid = boundedImsgString(
+          rawConversation.guid,
+          "direct iMessage exact conversation GUID",
+          2_048,
+        );
+        const observedChatRowId = positiveNumericRowId(
+          rawConversation.id,
+          "direct iMessage exact conversation row ID",
+        );
         return Object.freeze({
           conversationProviderId: entity.providerId,
+          network: "imessage",
+          conversation: Object.freeze({
+            kind: entity.conversationKind ?? "unknown",
+            title: entity.title,
+            participantCount: entity.participants.length,
+          }),
+          sourceConversationCoordinate:
+            messageLikeMeSourceConversationCoordinateBindingV1({
+              sourceAccountId: null,
+              sourceExternalId: chatGuid,
+              coordinate: {
+                kind: "imessageChat",
+                chatGuid,
+                service: IMSG_SERVICE,
+                observedChatRowId,
+              },
+            }),
           participantFingerprint: sha256(canonicalJson(entity.participants)),
           providerRevision: null,
         });

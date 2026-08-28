@@ -6,6 +6,7 @@ export const MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_SCHEMA_VERSION = 
 export const MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_CONTRACT_ID =
   "wrench.message-like-me.source-conversation-coordinate.v1" as const;
 
+/** Exact read-only predecessor shipped by Wrench #72. */
 export const WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT =
   "wrench.messaging-context-binding" as const;
 export const WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID =
@@ -17,7 +18,6 @@ export const WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR = Object.fr
     "format:wrench.messaging-context-binding",
     "contractId:wrench.messaging-context-binding.v1",
     "contractHash:sha256",
-    "sourceConversationCoordinate:{contractId,schemaVersion,sha256}",
     "routeRef:opaque",
     "contextRef:opaque",
     "exactDataRevision:sha256",
@@ -28,10 +28,10 @@ export const WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR = Object.fr
   format: "wrench.messaging-contract-descriptor" as const,
   schemaVersion: 1 as const,
 });
-export const WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH = sha256(
-  canonicalJson(WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR),
-);
+export const WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH =
+  "5e64da6a3d826e7f6fa3db7dca0a4ba92c10cfb784981e71a25aed9513a5c687" as const;
 
+/** Exact terminal-receipt predecessor shipped by Wrench #72. */
 export const WRENCH_MESSAGING_RECEIPT_BINDING_V1_FORMAT =
   "wrench.messaging-receipt-binding" as const;
 export const WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID =
@@ -42,6 +42,61 @@ export const WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR = Object.fr
     "schemaVersion:1",
     "format:wrench.messaging-receipt-binding",
     "contractId:wrench.messaging-receipt-binding.v1",
+    "contractHash:sha256",
+    "clientIntentSha256:sha256",
+    "routeRefSha256:sha256",
+    "contextRefSha256:sha256",
+    "turnDigest:sha256",
+    "previewDigest:sha256",
+    "runId:opaque",
+    "state:submitted|failed|partial|indeterminate",
+    "partCount:uint",
+    "provenPartCount:uint",
+    "receiptSha256:sha256",
+    "recordedAt:rfc3339",
+  ]),
+  format: "wrench.messaging-contract-descriptor" as const,
+  schemaVersion: 1 as const,
+});
+export const WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH =
+  "7f6cf724f0200b2399e4f4641c637b20b48914fc5c9b13755127a8ec69fe66f4" as const;
+
+export const WRENCH_MESSAGING_CONTEXT_BINDING_V2_FORMAT =
+  "wrench.messaging-context-binding" as const;
+export const WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID =
+  "wrench.messaging-context-binding.v2" as const;
+export const WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR = Object.freeze({
+  contractId: WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID,
+  fields: Object.freeze([
+    "schemaVersion:2",
+    "format:wrench.messaging-context-binding",
+    "contractId:wrench.messaging-context-binding.v2",
+    "contractHash:sha256",
+    "sourceConversationCoordinate:{contractId,schemaVersion,sha256}",
+    "routeRef:opaque",
+    "contextRef:opaque",
+    "exactDataRevision:sha256",
+    "latestMessageRevision:sha256",
+    "validatedAt:rfc3339",
+    "expiresAt:rfc3339",
+  ]),
+  format: "wrench.messaging-contract-descriptor" as const,
+  schemaVersion: 2 as const,
+});
+export const WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH = sha256(
+  canonicalJson(WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR),
+);
+
+export const WRENCH_MESSAGING_RECEIPT_BINDING_V2_FORMAT =
+  "wrench.messaging-receipt-binding" as const;
+export const WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID =
+  "wrench.messaging-receipt-binding.v2" as const;
+export const WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR = Object.freeze({
+  contractId: WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID,
+  fields: Object.freeze([
+    "schemaVersion:2",
+    "format:wrench.messaging-receipt-binding",
+    "contractId:wrench.messaging-receipt-binding.v2",
     "contractHash:sha256",
     "clientIntentSha256:sha256",
     "contextBindingSha256:sha256",
@@ -58,10 +113,10 @@ export const WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR = Object.fr
     "recordedAt:rfc3339",
   ]),
   format: "wrench.messaging-contract-descriptor" as const,
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
 });
-export const WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH = sha256(
-  canonicalJson(WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR),
+export const WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH = sha256(
+  canonicalJson(WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR),
 );
 
 export const WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_FORMAT =
@@ -70,6 +125,8 @@ export const WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_CONTRACT_ID =
   "wrench.messaging-client-intent-binding.v1" as const;
 export const WRENCH_MESSAGING_CONTEXT_INSTANCE_V1_CONTRACT_ID =
   "wrench.messaging-context-instance.v1" as const;
+export const WRENCH_MESSAGING_CONTEXT_INSTANCE_V2_CONTRACT_ID =
+  "wrench.messaging-context-instance.v2" as const;
 
 export type MessageLikeMeSourceConversationCoordinateV1 = Readonly<{
   sourceAccountId: string | null;
@@ -98,6 +155,19 @@ export type WrenchMessagingContextBindingV1 = Readonly<{
   schemaVersion: 1;
   format: typeof WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT;
   contractId: typeof WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID;
+  contractHash: typeof WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH;
+  routeRef: string;
+  contextRef: string;
+  exactDataRevision: string;
+  latestMessageRevision: string;
+  validatedAt: string;
+  expiresAt: string;
+}>;
+
+export type WrenchMessagingContextBindingV2 = Readonly<{
+  schemaVersion: 2;
+  format: typeof WRENCH_MESSAGING_CONTEXT_BINDING_V2_FORMAT;
+  contractId: typeof WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID;
   contractHash: string;
   sourceConversationCoordinate: MessageLikeMeSourceConversationCoordinateBindingV1;
   routeRef: string;
@@ -108,11 +178,13 @@ export type WrenchMessagingContextBindingV1 = Readonly<{
   expiresAt: string;
 }>;
 
-export type WrenchMessagingReceiptStateV1 =
+export type WrenchMessagingReceiptStateV2 =
   | "failed"
   | "indeterminate"
   | "partial"
   | "submitted";
+
+export type WrenchMessagingReceiptStateV1 = WrenchMessagingReceiptStateV2;
 
 export type WrenchMessagingClientIntentBindingV1 = Readonly<{
   schemaVersion: 1;
@@ -127,14 +199,32 @@ export type WrenchMessagingClientIntentBindingV1 = Readonly<{
   partCount: number;
 }>;
 
-export type WrenchMessagingReceiptBindingV1 = Readonly<{
-  schemaVersion: 1;
-  format: typeof WRENCH_MESSAGING_RECEIPT_BINDING_V1_FORMAT;
-  contractId: typeof WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID;
+export type WrenchMessagingReceiptBindingV2 = Readonly<{
+  schemaVersion: 2;
+  format: typeof WRENCH_MESSAGING_RECEIPT_BINDING_V2_FORMAT;
+  contractId: typeof WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID;
   contractHash: string;
   clientIntentSha256: string;
   contextBindingSha256: string;
   sourceConversationCoordinateSha256: string;
+  routeRefSha256: string;
+  contextRefSha256: string;
+  turnDigest: string;
+  previewDigest: string;
+  runId: string;
+  state: WrenchMessagingReceiptStateV2;
+  partCount: number;
+  provenPartCount: number;
+  receiptSha256: string;
+  recordedAt: string;
+}>;
+
+export type WrenchMessagingReceiptBindingV1 = Readonly<{
+  schemaVersion: 1;
+  format: typeof WRENCH_MESSAGING_RECEIPT_BINDING_V1_FORMAT;
+  contractId: typeof WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID;
+  contractHash: typeof WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH;
+  clientIntentSha256: string;
   routeRefSha256: string;
   contextRefSha256: string;
   turnDigest: string;
@@ -196,14 +286,15 @@ function isWellFormedUnicode(value: string): boolean {
   return true;
 }
 
-function text(value: unknown, label: string, maximumBytes = 2_048): string {
+function text(value: unknown, label: string, maximumBytes = 1_024): string {
   if (
     typeof value !== "string"
     || value.length === 0
     || Buffer.byteLength(value, "utf8") > maximumBytes
-    || /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+    || /\p{Cc}|\p{Zl}|\p{Zp}/u.test(value)
+    || value !== value.trim()
     || !isWellFormedUnicode(value)
-  ) return fail(`${label} must be bounded well-formed text without controls`);
+  ) return fail(`${label} must be bounded well-formed text without controls or surrounding space`);
   return value;
 }
 
@@ -220,6 +311,15 @@ function timestamp(value: unknown, label: string): string {
     || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
     || new Date(value).toISOString() !== value
   ) return fail(`${label} must be a canonical RFC 3339 timestamp`);
+  return value;
+}
+
+function legacyTimestamp(value: unknown, label: string): string {
+  if (
+    typeof value !== "string"
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u.test(value)
+    || !Number.isFinite(Date.parse(value))
+  ) return fail(`${label} must be an RFC 3339 UTC timestamp`);
   return value;
 }
 
@@ -320,7 +420,7 @@ export function messageLikeMeSourceConversationCoordinateBindingV1(
   });
 }
 
-function parseSourceConversationCoordinateBindingV1(
+export function parseMessageLikeMeSourceConversationCoordinateBindingV1(
   value: unknown,
 ): MessageLikeMeSourceConversationCoordinateBindingV1 {
   const binding = plainObject(value, "Wrench source-conversation coordinate binding");
@@ -343,6 +443,59 @@ function parseSourceConversationCoordinateBindingV1(
 export function parseWrenchMessagingContextBindingV1(
   value: unknown,
 ): WrenchMessagingContextBindingV1 {
+  const context = plainObject(value, "Wrench messaging context binding V1");
+  exactKeys(context, [
+    "schemaVersion",
+    "format",
+    "contractId",
+    "contractHash",
+    "routeRef",
+    "contextRef",
+    "exactDataRevision",
+    "latestMessageRevision",
+    "validatedAt",
+    "expiresAt",
+  ], "Wrench messaging context binding V1");
+  if (
+    context.schemaVersion !== 1
+    || context.format !== WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT
+    || context.contractId !== WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID
+    || context.contractHash !== WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH
+  ) return fail("Wrench messaging context binding V1 has an unsupported contract identity");
+  const validatedAt = legacyTimestamp(
+    context.validatedAt,
+    "Wrench messaging context binding V1.validatedAt",
+  );
+  const expiresAt = legacyTimestamp(
+    context.expiresAt,
+    "Wrench messaging context binding V1.expiresAt",
+  );
+  if (Date.parse(expiresAt) <= Date.parse(validatedAt)) {
+    return fail("Wrench messaging context binding V1.expiresAt must follow validatedAt");
+  }
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    format: WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT,
+    contractId: WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
+    contractHash: WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
+    routeRef: text(context.routeRef, "Wrench messaging context binding V1.routeRef", 2_048),
+    contextRef: text(context.contextRef, "Wrench messaging context binding V1.contextRef", 2_048),
+    exactDataRevision: digest(
+      context.exactDataRevision,
+      "Wrench messaging context binding V1.exactDataRevision",
+    ),
+    latestMessageRevision: digest(
+      context.latestMessageRevision,
+      "Wrench messaging context binding V1.latestMessageRevision",
+    ),
+    validatedAt,
+    expiresAt,
+  });
+}
+
+export function parseWrenchMessagingContextBindingV2(
+  value: unknown,
+): WrenchMessagingContextBindingV2 {
   const context = plainObject(value, "Wrench messaging context binding");
   exactKeys(context, [
     "schemaVersion",
@@ -358,10 +511,10 @@ export function parseWrenchMessagingContextBindingV1(
     "expiresAt",
   ], "Wrench messaging context binding");
   if (
-    context.schemaVersion !== 1
-    || context.format !== WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT
-    || context.contractId !== WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID
-    || context.contractHash !== WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH
+    context.schemaVersion !== 2
+    || context.format !== WRENCH_MESSAGING_CONTEXT_BINDING_V2_FORMAT
+    || context.contractId !== WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID
+    || context.contractHash !== WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH
   ) return fail("Wrench messaging context binding has an unsupported contract identity");
   const validatedAt = timestamp(context.validatedAt, "Wrench messaging context binding.validatedAt");
   const expiresAt = timestamp(context.expiresAt, "Wrench messaging context binding.expiresAt");
@@ -370,15 +523,15 @@ export function parseWrenchMessagingContextBindingV1(
     return fail("Wrench messaging context binding has an invalid lifetime");
   }
   return Object.freeze({
-    schemaVersion: 1 as const,
-    format: WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT,
-    contractId: WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
-    contractHash: WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
-    sourceConversationCoordinate: parseSourceConversationCoordinateBindingV1(
+    schemaVersion: 2 as const,
+    format: WRENCH_MESSAGING_CONTEXT_BINDING_V2_FORMAT,
+    contractId: WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID,
+    contractHash: WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH,
+    sourceConversationCoordinate: parseMessageLikeMeSourceConversationCoordinateBindingV1(
       context.sourceConversationCoordinate,
     ),
-    routeRef: text(context.routeRef, "Wrench messaging context binding.routeRef"),
-    contextRef: text(context.contextRef, "Wrench messaging context binding.contextRef"),
+    routeRef: text(context.routeRef, "Wrench messaging context binding.routeRef", 2_048),
+    contextRef: text(context.contextRef, "Wrench messaging context binding.contextRef", 2_048),
     exactDataRevision: digest(
       context.exactDataRevision,
       "Wrench messaging context binding.exactDataRevision",
@@ -392,7 +545,8 @@ export function parseWrenchMessagingContextBindingV1(
   });
 }
 
-function parsedContextBindingSha256V1(context: WrenchMessagingContextBindingV1): string {
+export function wrenchMessagingContextBindingSha256V1(value: unknown): string {
+  const context = parseWrenchMessagingContextBindingV1(value);
   return sha256(canonicalJson({
     contractId: WRENCH_MESSAGING_CONTEXT_INSTANCE_V1_CONTRACT_ID,
     schemaVersion: 1,
@@ -400,8 +554,16 @@ function parsedContextBindingSha256V1(context: WrenchMessagingContextBindingV1):
   }));
 }
 
-export function wrenchMessagingContextBindingSha256V1(value: unknown): string {
-  return parsedContextBindingSha256V1(parseWrenchMessagingContextBindingV1(value));
+function parsedContextBindingSha256V2(context: WrenchMessagingContextBindingV2): string {
+  return sha256(canonicalJson({
+    contractId: WRENCH_MESSAGING_CONTEXT_INSTANCE_V2_CONTRACT_ID,
+    schemaVersion: 2,
+    value: context,
+  }));
+}
+
+export function wrenchMessagingContextBindingSha256V2(value: unknown): string {
+  return parsedContextBindingSha256V2(parseWrenchMessagingContextBindingV2(value));
 }
 
 const BEEPER_EXACT_CONVERSATION_KEYS = Object.freeze([
@@ -434,16 +596,12 @@ const BEEPER_EXACT_CONVERSATION_KEYS = Object.freeze([
   "participants",
 ]);
 
-export function createBeeperMessageLikeMeContextBindingV1(input: Readonly<{
-  conversationRead: unknown;
-  expectedAccountSubject: unknown;
-  routeRef: unknown;
-  contextRef: unknown;
-  exactDataRevision: unknown;
-  latestMessageRevision: unknown;
-  validatedAt: unknown;
-  expiresAt: unknown;
-}>): WrenchMessagingContextBindingV1 {
+export function createBeeperMessageLikeMeSourceConversationCoordinateBindingV1(
+  input: Readonly<{
+    conversationRead: unknown;
+    expectedAccountSubject: unknown;
+  }>,
+): MessageLikeMeSourceConversationCoordinateBindingV1 {
   const read = plainObject(input.conversationRead, "Wrench Beeper exact conversation read");
   exactKeys(
     read,
@@ -470,11 +628,17 @@ export function createBeeperMessageLikeMeContextBindingV1(input: Readonly<{
     BEEPER_EXACT_CONVERSATION_KEYS,
     "Wrench Beeper exact conversation read.conversation",
   );
+  if (conversation.type !== "single") {
+    return fail("Wrench Message Like Me context requires a direct Beeper conversation");
+  }
+  if (conversation.isReadOnly !== false) {
+    return fail("Wrench Message Like Me context requires a writable Beeper conversation");
+  }
   const accountId = text(
     conversation.accountId,
     "Wrench Beeper exact conversation read.conversation.accountId",
   );
-  const sourceConversationCoordinate = messageLikeMeSourceConversationCoordinateBindingV1({
+  return messageLikeMeSourceConversationCoordinateBindingV1({
     sourceAccountId: accountId,
     sourceExternalId: accountId,
     coordinate: {
@@ -490,14 +654,69 @@ export function createBeeperMessageLikeMeContextBindingV1(input: Readonly<{
       ),
     },
   });
+}
+
+/**
+ * Compatibility writer for the exact #72 context shape. New checked actions
+ * must use V2 so the source-conversation coordinate is retained durably.
+ */
+export function createBeeperMessageLikeMeContextBindingV1(input: Readonly<{
+  conversationRead: unknown;
+  expectedAccountSubject: unknown;
+  routeRef: unknown;
+  contextRef: unknown;
+  exactDataRevision: unknown;
+  latestMessageRevision: unknown;
+  validatedAt: unknown;
+  expiresAt: unknown;
+}>): WrenchMessagingContextBindingV1 {
+  createBeeperMessageLikeMeSourceConversationCoordinateBindingV1({
+    conversationRead: input.conversationRead,
+    expectedAccountSubject: input.expectedAccountSubject,
+  });
   return parseWrenchMessagingContextBindingV1(Object.freeze({
     schemaVersion: 1 as const,
     format: WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT,
     contractId: WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
     contractHash: WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
+    routeRef: text(input.routeRef, "Wrench messaging context binding V1.routeRef", 2_048),
+    contextRef: text(input.contextRef, "Wrench messaging context binding V1.contextRef", 2_048),
+    exactDataRevision: digest(
+      input.exactDataRevision,
+      "Wrench messaging context binding V1.exactDataRevision",
+    ),
+    latestMessageRevision: digest(
+      input.latestMessageRevision,
+      "Wrench messaging context binding V1.latestMessageRevision",
+    ),
+    validatedAt: input.validatedAt,
+    expiresAt: input.expiresAt,
+  }));
+}
+
+export function createBeeperMessageLikeMeContextBindingV2(input: Readonly<{
+  conversationRead: unknown;
+  expectedAccountSubject: unknown;
+  routeRef: unknown;
+  contextRef: unknown;
+  exactDataRevision: unknown;
+  latestMessageRevision: unknown;
+  validatedAt: unknown;
+  expiresAt: unknown;
+}>): WrenchMessagingContextBindingV2 {
+  const sourceConversationCoordinate =
+    createBeeperMessageLikeMeSourceConversationCoordinateBindingV1({
+      conversationRead: input.conversationRead,
+      expectedAccountSubject: input.expectedAccountSubject,
+    });
+  return parseWrenchMessagingContextBindingV2(Object.freeze({
+    schemaVersion: 2 as const,
+    format: WRENCH_MESSAGING_CONTEXT_BINDING_V2_FORMAT,
+    contractId: WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID,
+    contractHash: WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH,
     sourceConversationCoordinate,
-    routeRef: text(input.routeRef, "Wrench messaging context binding.routeRef"),
-    contextRef: text(input.contextRef, "Wrench messaging context binding.contextRef"),
+    routeRef: text(input.routeRef, "Wrench messaging context binding.routeRef", 2_048),
+    contextRef: text(input.contextRef, "Wrench messaging context binding.contextRef", 2_048),
     exactDataRevision: digest(
       input.exactDataRevision,
       "Wrench messaging context binding.exactDataRevision",
@@ -515,7 +734,7 @@ export function parseWrenchMessagingClientIntentBindingV1(
   value: unknown,
   contextValue: unknown,
 ): WrenchMessagingClientIntentBindingV1 {
-  const context = parseWrenchMessagingContextBindingV1(contextValue);
+  const context = parseWrenchMessagingContextBindingV2(contextValue);
   const intent = plainObject(value, "Wrench messaging client-intent binding");
   exactKeys(intent, [
     "schemaVersion",
@@ -565,7 +784,7 @@ export function parseWrenchMessagingClientIntentBindingV1(
     partCount: intent.partCount as number,
   });
   if (
-    parsed.contextBindingSha256 !== parsedContextBindingSha256V1(context)
+    parsed.contextBindingSha256 !== parsedContextBindingSha256V2(context)
     || parsed.sourceConversationCoordinateSha256
       !== context.sourceConversationCoordinate.sha256
     || parsed.routeRefSha256 !== sha256(context.routeRef)
@@ -574,7 +793,7 @@ export function parseWrenchMessagingClientIntentBindingV1(
   return parsed;
 }
 
-export function createWrenchMessagingReceiptBindingV1(input: Readonly<{
+export function createWrenchMessagingReceiptBindingV2(input: Readonly<{
   context: unknown;
   clientIntent: unknown;
   previewDigest: unknown;
@@ -582,7 +801,7 @@ export function createWrenchMessagingReceiptBindingV1(input: Readonly<{
   state: unknown;
   provenPartCount: unknown;
   recordedAt: unknown;
-}>): WrenchMessagingReceiptBindingV1 {
+}>): WrenchMessagingReceiptBindingV2 {
   const intent = parseWrenchMessagingClientIntentBindingV1(input.clientIntent, input.context);
   if (
     input.state !== "submitted"
@@ -604,10 +823,10 @@ export function createWrenchMessagingReceiptBindingV1(input: Readonly<{
     || (input.state === "indeterminate" && provenPartCount >= intent.partCount)
   ) return fail("Wrench messaging receipt binding state does not match its proven prefix");
   const core = Object.freeze({
-    schemaVersion: 1 as const,
-    format: WRENCH_MESSAGING_RECEIPT_BINDING_V1_FORMAT,
-    contractId: WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
-    contractHash: WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+    schemaVersion: 2 as const,
+    format: WRENCH_MESSAGING_RECEIPT_BINDING_V2_FORMAT,
+    contractId: WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID,
+    contractHash: WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH,
     clientIntentSha256: intent.clientIntentSha256,
     contextBindingSha256: intent.contextBindingSha256,
     sourceConversationCoordinateSha256: intent.sourceConversationCoordinateSha256,
@@ -620,6 +839,39 @@ export function createWrenchMessagingReceiptBindingV1(input: Readonly<{
     partCount: intent.partCount,
     provenPartCount,
     recordedAt: timestamp(input.recordedAt, "Wrench receipt.recordedAt"),
+  });
+  return Object.freeze({
+    ...core,
+    receiptSha256: sha256(canonicalJson(core)),
+  });
+}
+
+/** Exact #72 receipt shape retained only for compatibility tooling. */
+export function createWrenchMessagingReceiptBindingV1(input: Readonly<{
+  context: unknown;
+  clientIntent: unknown;
+  previewDigest: unknown;
+  runId: unknown;
+  state: unknown;
+  provenPartCount: unknown;
+  recordedAt: unknown;
+}>): WrenchMessagingReceiptBindingV1 {
+  const enriched = createWrenchMessagingReceiptBindingV2(input);
+  const core = Object.freeze({
+    schemaVersion: 1 as const,
+    format: WRENCH_MESSAGING_RECEIPT_BINDING_V1_FORMAT,
+    contractId: WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+    contractHash: WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+    clientIntentSha256: enriched.clientIntentSha256,
+    routeRefSha256: enriched.routeRefSha256,
+    contextRefSha256: enriched.contextRefSha256,
+    turnDigest: enriched.turnDigest,
+    previewDigest: enriched.previewDigest,
+    runId: enriched.runId,
+    state: enriched.state,
+    partCount: enriched.partCount,
+    provenPartCount: enriched.provenPartCount,
+    recordedAt: enriched.recordedAt,
   });
   return Object.freeze({
     ...core,

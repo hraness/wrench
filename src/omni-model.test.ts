@@ -200,6 +200,37 @@ describe("omni normalized model", () => {
     }]))).toThrow("cannot be true when body is null");
   });
 
+  test("replays V1 conversation pages that predate conversation classification", () => {
+    const legacyConversation = Object.freeze({
+      kind: "conversation" as const,
+      providerId: "legacy-thread",
+      providerRevision: null,
+      orderedAt: "2026-08-01T00:00:01.000Z",
+      detail: "full" as const,
+      title: "Legacy thread",
+      summary: null,
+      participants: Object.freeze([participant("alice")]),
+      unread: false,
+      unreadCount: 0,
+      archived: false,
+      pending: false,
+    });
+    const legacyPage = page("folder:legacy-conversation", [legacyConversation]);
+    const parsedPage = parseMaterializedPageV1(legacyPage);
+    expect(Object.hasOwn(parsedPage.entities[0]!, "conversationKind")).toBeFalse();
+    expect(canonicalJson(parsedPage)).toBe(canonicalJson(legacyPage));
+
+    const state = reduceOmniSourceStateV1(null, parsedPage, {
+      source,
+      provenance: provenance(2),
+    });
+    const reparsed = parseOmniSourceStateV1(JSON.parse(canonicalJson(state)));
+    const entity = reparsed.entities[0]?.entity;
+    expect(entity?.kind).toBe("conversation");
+    expect(Object.hasOwn(entity!, "conversationKind")).toBeFalse();
+    expect(canonicalJson(reparsed)).toBe(canonicalJson(state));
+  });
+
   test("replays one page idempotently and rejects same-observation conflicts", () => {
     const first = reduceOmniSourceStateV1(null, page(
       "folder:inbox",

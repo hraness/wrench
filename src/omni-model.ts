@@ -73,6 +73,8 @@ type ProviderEntityCommonV1 = {
 
 export type ProviderConversationV1 = ProviderEntityCommonV1 & {
   readonly kind: "conversation";
+  /** Added after the original V1 shape; absence means the provider did not classify it. */
+  readonly conversationKind?: "single" | "group" | "unknown";
   readonly detail: "summary" | "full";
   readonly title: string | null;
   readonly summary: string | null;
@@ -497,13 +499,24 @@ function entity(value: unknown, label: string): ProviderMaterializedEntityV1 {
     orderedAt: nullableTimestamp(source.orderedAt, `${label}.orderedAt`),
   } as const;
   if (kind === "conversation") {
+    const hasConversationKind = Object.hasOwn(source, "conversationKind");
     exactKeys(source, [
-      "kind", "providerId", "providerRevision", "orderedAt", "detail", "title",
+      "kind", "providerId", "providerRevision", "orderedAt",
+      ...(hasConversationKind ? ["conversationKind"] : []), "detail", "title",
       "summary", "participants", "unread", "unreadCount", "archived", "pending",
     ], label);
     return Object.freeze({
       ...common,
       kind,
+      ...(hasConversationKind
+        ? {
+            conversationKind: oneOf(
+              source.conversationKind,
+              ["single", "group", "unknown"] as const,
+              `${label}.conversationKind`,
+            ),
+          }
+        : {}),
       detail: oneOf(source.detail, ["summary", "full"] as const, `${label}.detail`),
       title: nullableText(source.title, `${label}.title`, 4_096, true),
       summary: nullableText(source.summary, `${label}.summary`, 64 * 1024, true),
@@ -756,14 +769,16 @@ function publicEntity(
 function parsePublicEntity(value: unknown, label: string): OmniEntityV1 {
   const source = record(value, label);
   const kind = oneOf(source.kind, ["conversation", "message", "notification"] as const, `${label}.kind`);
+  const hasConversationKind = kind === "conversation"
+    && Object.hasOwn(source, "conversationKind");
   const hasBodyTruncated = kind === "message" && Object.hasOwn(source, "bodyTruncated");
   const providerKeys = kind === "conversation"
-    ? ["kind", "providerId", "providerRevision", "orderedAt", "detail", "title", "summary", "participants", "unread", "unreadCount", "archived", "pending"]
+    ? ["kind", "providerId", "providerRevision", "orderedAt", ...(hasConversationKind ? ["conversationKind"] : []), "detail", "title", "summary", "participants", "unread", "unreadCount", "archived", "pending"]
     : kind === "message"
       ? ["kind", "providerId", "providerRevision", "orderedAt", "conversationProviderId", "sender", "recipients", "direction", "subject", "body", ...(hasBodyTruncated ? ["bodyTruncated"] : []), "unread", "replyToProviderId", "state", "attachments"]
       : ["kind", "providerId", "providerRevision", "orderedAt", "actor", "subject", "body", "unread", "context"];
   const expectedKeys = kind === "conversation"
-    ? ["kind", "providerId", "providerRevision", "orderedAt", "detail", "title", "summary", "participants", "unread", "unreadCount", "archived", "pending", "id", "revision", "source", "conversationId"]
+    ? ["kind", "providerId", "providerRevision", "orderedAt", ...(hasConversationKind ? ["conversationKind"] : []), "detail", "title", "summary", "participants", "unread", "unreadCount", "archived", "pending", "id", "revision", "source", "conversationId"]
     : kind === "message"
       ? ["kind", "providerId", "providerRevision", "orderedAt", "conversationProviderId", "sender", "recipients", "direction", "subject", "body", ...(hasBodyTruncated ? ["bodyTruncated"] : []), "unread", "replyToProviderId", "state", "attachments", "id", "revision", "source", "conversationId"]
       : ["kind", "providerId", "providerRevision", "orderedAt", "actor", "subject", "body", "unread", "context", "id", "revision", "source", "conversationId"];

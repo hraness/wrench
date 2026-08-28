@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -328,6 +329,92 @@ describe("bound path helper traversal", () => {
       expect(names).not.toContain(staleName as string);
       expect(names).toContain(liveName);
       expect(names).not.toContain("target.txt");
+    } finally {
+      child?.kill("SIGKILL");
+      if (child !== null) await child.exited;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("serializes compare-and-swap replacement through one per-leaf claim", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wrench-path-helper-cas-overlap-"));
+    let child: ReturnType<typeof Bun.spawn> | null = null;
+    try {
+      const expectedRoot = identity(lstatSync(root, { bigint: true }));
+      const initial = "reserved\n";
+      writeFileSync(join(root, "target.json"), initial, { mode: 0o600 });
+      const expectedContentSha256 = createHash("sha256")
+        .update(initial)
+        .digest("hex");
+      const request = JSON.stringify({
+        schemaVersion: 1,
+        requestId: randomUUID(),
+        expected: expectedRoot,
+        operation: {
+          kind: "write-file",
+          segments: ["target.json"],
+          directoryExpectations: [],
+          content: "winner\n",
+          createOnly: false,
+          expectedContentSha256,
+          maximumExpectedContentBytes: 4_096,
+        },
+      });
+      const spawned = Bun.spawn([
+        process.execPath,
+        "--no-env-file",
+        "--no-install",
+        "--no-macros",
+        "--no-addons",
+        `--config=${helperConfigPath}`,
+        helperPath,
+      ], {
+        cwd: root,
+        env: {
+          NODE_ENV: "test",
+          WRENCH_TEST_PATH_MUTATION_FAULT: "pause-after-claim",
+        },
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      child = spawned;
+      await spawned.stdin.write(request);
+      await spawned.stdin.end();
+
+      let readyName: string | undefined;
+      const readyDeadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
+      while (performance.now() < readyDeadline) {
+        readyName = readdirSync(root).find((name) =>
+          name.startsWith(".wrench-test-path-mutation-")
+          && name.endsWith("-ready"));
+        if (readyName !== undefined) break;
+        await Bun.sleep(10);
+      }
+      expect(readyName).toBeDefined();
+
+      const competing = runHelper(root, expectedRoot, {
+        kind: "write-file",
+        segments: ["target.json"],
+        directoryExpectations: [],
+        content: "loser\n",
+        createOnly: false,
+        expectedContentSha256,
+        maximumExpectedContentBytes: 4_096,
+      });
+      expect(competing.status).not.toBe(0);
+      expect(competing.stderr).toContain(
+        "file content no longer matches the expected hash",
+      );
+      expect(readFileSync(join(root, "target.json"), "utf8")).toBe(initial);
+
+      const releaseName = (readyName as string).replace(/-ready$/u, "-release");
+      writeFileSync(join(root, releaseName), "release\n", { mode: 0o600 });
+      expect(await spawned.exited).toBe(0);
+      expect(readFileSync(join(root, "target.json"), "utf8")).toBe("winner\n");
+      expect(readdirSync(root).filter((name) =>
+        name.startsWith(".io-path-mutation-")
+        || name.startsWith(".wrench-test-path-mutation-"))).toEqual([]);
     } finally {
       child?.kill("SIGKILL");
       if (child !== null) await child.exited;

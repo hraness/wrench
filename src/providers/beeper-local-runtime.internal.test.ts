@@ -354,6 +354,7 @@ describe("Beeper local read runtime", () => {
       const result = await execute(path, "conversations.read", input, []);
       expect(materializeBeeperExactConversation(input, result.output)).toMatchObject({
         kind: "conversation",
+        conversationKind: "single",
         detail: "summary",
         title: "Ada Fixture",
         participants: [{ displayName: "Ada Fixture" }, { displayName: "Fixture Self" }],

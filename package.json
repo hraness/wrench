@@ -274,6 +274,7 @@
     "src/media/whisper-cpp.ts",
     "src/media/whisper-language.ts",
     "src/media/yt-dlp.ts",
+    "src/message-like-me-agentic-messaging.ts",
     "src/messaging-types.ts",
     "src/messaging.ts",
     "src/messaging-action-store.ts",

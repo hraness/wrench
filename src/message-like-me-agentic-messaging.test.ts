@@ -5,14 +5,14 @@ import {
   MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_CONTRACT_ID,
   WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_CONTRACT_ID,
   WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_FORMAT,
-  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR,
-  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
-  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR,
-  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
-  createBeeperMessageLikeMeContextBindingV1,
-  createWrenchMessagingReceiptBindingV1,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH,
+  createBeeperMessageLikeMeContextBindingV2,
+  createWrenchMessagingReceiptBindingV2,
   messageLikeMeSourceConversationCoordinateBindingV1,
-  wrenchMessagingContextBindingSha256V1,
+  wrenchMessagingContextBindingSha256V2,
 } from "./message-like-me-agentic-messaging";
 
 const HASH_A = "a".repeat(64);
@@ -61,8 +61,10 @@ function exactConversationRead(
   };
 }
 
-function contextBinding() {
-  return createBeeperMessageLikeMeContextBindingV1({
+type ContextBindingInput = Parameters<typeof createBeeperMessageLikeMeContextBindingV2>[0];
+
+function contextBinding(overrides: Partial<ContextBindingInput> = {}) {
+  return createBeeperMessageLikeMeContextBindingV2({
     conversationRead: exactConversationRead(),
     expectedAccountSubject: "beeper-main",
     routeRef: "route_ref_synthetic_001",
@@ -71,6 +73,7 @@ function contextBinding() {
     latestMessageRevision: HASH_B,
     validatedAt: "2026-08-27T12:00:00.000Z",
     expiresAt: "2026-08-27T12:10:00.000Z",
+    ...overrides,
   });
 }
 
@@ -99,7 +102,13 @@ describe("Message Like Me agentic messaging contracts", () => {
     expect(context).not.toHaveProperty("sourceAccountId");
     expect(context).not.toHaveProperty("sourceExternalId");
     expect(context).not.toHaveProperty("coordinate");
-    expect(() => createBeeperMessageLikeMeContextBindingV1({
+    expect(contextBinding({ routeRef: "r".repeat(2_048) }).routeRef)
+      .toBe("r".repeat(2_048));
+    expect(() => contextBinding({ routeRef: "r".repeat(2_049) }))
+      .toThrow("bounded well-formed text");
+    expect(() => contextBinding({ contextRef: " context_ref_synthetic_001" }))
+      .toThrow("surrounding space");
+    expect(() => createBeeperMessageLikeMeContextBindingV2({
       conversationRead: exactConversationRead({ accountId: null }),
       expectedAccountSubject: "beeper-main",
       routeRef: "route_ref_synthetic_001",
@@ -109,7 +118,15 @@ describe("Message Like Me agentic messaging contracts", () => {
       validatedAt: "2026-08-27T12:00:00.000Z",
       expiresAt: "2026-08-27T12:10:00.000Z",
     })).toThrow("accountId");
-    expect(() => createBeeperMessageLikeMeContextBindingV1({
+    expect(() => contextBinding({
+      conversationRead: exactConversationRead({ type: "group" }),
+    })).toThrow("direct Beeper conversation");
+    for (const isReadOnly of [true, null]) {
+      expect(() => contextBinding({
+        conversationRead: exactConversationRead({ isReadOnly }),
+      })).toThrow("writable Beeper conversation");
+    }
+    expect(() => createBeeperMessageLikeMeContextBindingV2({
       conversationRead: {
         ...(exactConversationRead() as object),
         operation: "conversations.list",
@@ -122,7 +139,7 @@ describe("Message Like Me agentic messaging contracts", () => {
       validatedAt: "2026-08-27T12:00:00.000Z",
       expiresAt: "2026-08-27T12:10:00.000Z",
     })).toThrow("exact Beeper conversations.read");
-    expect(() => createBeeperMessageLikeMeContextBindingV1({
+    expect(() => createBeeperMessageLikeMeContextBindingV2({
       conversationRead: {
         provider: "beeper",
         operation: "conversations.read",
@@ -141,7 +158,7 @@ describe("Message Like Me agentic messaging contracts", () => {
       validatedAt: "2026-08-27T12:00:00.000Z",
       expiresAt: "2026-08-27T12:10:00.000Z",
     })).toThrow("must contain exactly");
-    expect(() => createBeeperMessageLikeMeContextBindingV1({
+    expect(() => createBeeperMessageLikeMeContextBindingV2({
       conversationRead: exactConversationRead({}, { extra: true }),
       expectedAccountSubject: "beeper-main",
       routeRef: "route_ref_synthetic_001",
@@ -151,7 +168,7 @@ describe("Message Like Me agentic messaging contracts", () => {
       validatedAt: "2026-08-27T12:00:00.000Z",
       expiresAt: "2026-08-27T12:10:00.000Z",
     })).toThrow("must contain exactly");
-    expect(() => createBeeperMessageLikeMeContextBindingV1({
+    expect(() => createBeeperMessageLikeMeContextBindingV2({
       conversationRead: exactConversationRead(),
       expectedAccountSubject: "beeper-other",
       routeRef: "route_ref_synthetic_001",
@@ -199,14 +216,10 @@ describe("Message Like Me agentic messaging contracts", () => {
   });
 
   test("pins context and receipt contracts and binds the coordinate into receipts", () => {
-    expect(sha256(canonicalJson(WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR)))
-      .toBe(WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH);
-    expect(WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH)
-      .toBe("3976f7f3e7baffe8e8b16b9fdceb11902628398e2337f4989446cef4338885e2");
-    expect(sha256(canonicalJson(WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR)))
-      .toBe(WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH);
-    expect(WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH)
-      .toBe("6b5694f183a6a39b40001a04c62cf767bb5d612cb7c9be5710befa3c7f223ffd");
+    expect(sha256(canonicalJson(WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR)))
+      .toBe(WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH);
+    expect(sha256(canonicalJson(WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR)))
+      .toBe(WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH);
 
     const context = contextBinding();
     const clientIntent = {
@@ -214,14 +227,14 @@ describe("Message Like Me agentic messaging contracts", () => {
       format: WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_FORMAT,
       contractId: WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_CONTRACT_ID,
       clientIntentSha256: HASH_A,
-      contextBindingSha256: wrenchMessagingContextBindingSha256V1(context),
+      contextBindingSha256: wrenchMessagingContextBindingSha256V2(context),
       sourceConversationCoordinateSha256: context.sourceConversationCoordinate.sha256,
       routeRefSha256: sha256(context.routeRef),
       contextRefSha256: sha256(context.contextRef),
       turnDigest: HASH_B,
       partCount: 2,
     };
-    const receipt = createWrenchMessagingReceiptBindingV1({
+    const receipt = createWrenchMessagingReceiptBindingV2({
       context,
       clientIntent,
       previewDigest: HASH_C,
@@ -242,7 +255,7 @@ describe("Message Like Me agentic messaging contracts", () => {
       { routeRefSha256: HASH_C },
       { contextRefSha256: HASH_A },
     ]) {
-      expect(() => createWrenchMessagingReceiptBindingV1({
+      expect(() => createWrenchMessagingReceiptBindingV2({
         context,
         clientIntent: { ...clientIntent, ...changed },
         previewDigest: HASH_C,
@@ -258,7 +271,7 @@ describe("Message Like Me agentic messaging contracts", () => {
       { ...context, validatedAt: "2026-08-27T12:00:01.000Z" },
       { ...context, expiresAt: "2026-08-27T12:09:59.000Z" },
     ]) {
-      expect(() => createWrenchMessagingReceiptBindingV1({
+      expect(() => createWrenchMessagingReceiptBindingV2({
         context: changedContext,
         clientIntent,
         previewDigest: HASH_C,
@@ -268,7 +281,7 @@ describe("Message Like Me agentic messaging contracts", () => {
         recordedAt: "2026-08-27T12:01:00.000Z",
       })).toThrow("does not bind the exact context instance");
     }
-    expect(() => createWrenchMessagingReceiptBindingV1({
+    expect(() => createWrenchMessagingReceiptBindingV2({
       context: { ...context, contractHash: HASH_C },
       clientIntent,
       previewDigest: HASH_C,

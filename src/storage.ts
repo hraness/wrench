@@ -347,6 +347,8 @@ type PathHelperOperation =
       readonly directoryExpectations: readonly StateDirectoryExpectation[];
       readonly content: string;
       readonly createOnly: boolean;
+      readonly expectedContentSha256?: string | null;
+      readonly maximumExpectedContentBytes?: number;
     }
   | {
       readonly kind: "remove-directory-tree";
@@ -1674,7 +1676,10 @@ export function writePrivateJson(path: string, value: unknown, options: { readon
  *
  * The content hash includes the canonical trailing newline written by this
  * module. A false result is an ordinary compare-and-swap conflict; every
- * filesystem, ownership, permission, or helper failure still throws.
+ * filesystem, ownership, permission, or helper failure still throws. State
+ * and non-state Wrench writers participate in the helper's per-leaf mutation
+ * claim. As with the state helper, arbitrary same-UID writes made outside the
+ * bounded Wrench helper are outside that cooperative serialization boundary.
  */
 export function writePrivateJsonIfUnchanged(
   path: string,
@@ -1693,6 +1698,8 @@ export function writePrivateJsonIfUnchanged(
     readonly pauseAfterMutationClaimReadForTest?: boolean;
     /** Test-only seam that reports failure after the replacement is durable. */
     readonly failAfterCommitForTest?: boolean;
+    /** Require a current-user-owned mode-0700 parent for a non-state path. */
+    readonly privateParent?: boolean;
   },
 ): boolean {
   if (!/^[0-9a-f]{64}$/u.test(options.expectedCurrentContentSha256)) {
@@ -1718,7 +1725,41 @@ export function writePrivateJsonIfUnchanged(
   }
   const stateRoot = stateRootFor(path);
   if (stateRoot === null) {
-    throw new Error("compare-and-swap writes require a validated WRENCH_STATE_HOME path");
+    if (
+      options.pauseAfterClaimForTest === true
+      || options.pauseAfterMutationClaimReadForTest === true
+      || options.failAfterCommitForTest === true
+    ) {
+      throw new Error("compare-and-swap fault injection requires a WRENCH_STATE_HOME path");
+    }
+    const parentParts = ensureBoundNonStateDirectory(
+      dirname(path),
+      options.privateParent === true,
+    );
+    const destination = genericPathParts(
+      join(parentParts.canonical, basename(path)),
+    );
+    try {
+      runPathHelper(destination.root, destination.rootIdentity, {
+        kind: "write-file",
+        segments: destination.segments,
+        directoryExpectations: captureGenericDirectoryExpectations(
+          destination.root,
+          destination.segments.slice(0, -1),
+        ),
+        content: `${canonicalJson(value)}\n`,
+        createOnly: false,
+        expectedContentSha256: options.expectedCurrentContentSha256,
+        maximumExpectedContentBytes,
+      });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof Error
+        && error.message.includes("file content no longer matches the expected hash")
+      ) return false;
+      throw error;
+    }
   }
   const identity = ensureClaimedStateRoot(stateRoot);
   const segments = stateSegments(stateRoot, path);

@@ -432,6 +432,7 @@ function materializedConversation(
     : null;
   return Object.freeze({
     kind: "conversation",
+    conversationKind: value.kind === "group" ? "group" : "single",
     providerId: value.providerId,
     providerRevision: null,
     orderedAt: value.orderedAt,

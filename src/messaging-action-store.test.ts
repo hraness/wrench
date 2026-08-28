@@ -37,6 +37,8 @@ function plan(): MessagingCompositeInvocationPlanV1 {
     routeRef: "wmroute_ABCDEFGHIJKLMNOPQRSTUV",
     contextRef: "wmcontext_ABCDEFGHIJKLMNOPQRSTUV",
     clientIntentSha256: "a".repeat(64),
+    contextBindingSha256: "8".repeat(64),
+    sourceConversationCoordinateSha256: "9".repeat(64),
     turnDigest: "b".repeat(64),
     previewDigest: "c".repeat(64),
     contextLimit: 20,
@@ -227,15 +229,31 @@ describe("messaging composite run journal", () => {
     const {
       observedAcceptedPrefixCount: _legacyObservation,
       privateProviderOutcome: _laterPrivateOutcome,
+      contextBindingSha256: _laterContextBinding,
+      sourceConversationCoordinateSha256: _laterSourceCoordinate,
       ...predecessor
     } = submitted;
 
-    expect(parseMessagingRunV1(predecessor)).toMatchObject({
+    const parsed = parseMessagingRunV1(predecessor);
+    expect(parsed).toMatchObject({
       state: "submitted",
       provenPartCount: 2,
       observedAcceptedPrefixCount: 2,
       privateProviderOutcome: null,
+      contextBindingSha256: null,
+      sourceConversationCoordinateSha256: null,
     });
+    const binding = messagingReceiptBinding(parsed);
+    expect(binding).toMatchObject({
+      schemaVersion: 1,
+      contractId: "wrench.messaging-receipt-binding.v1",
+    });
+    expect(binding).not.toHaveProperty("contextBindingSha256");
+    expect(binding).not.toHaveProperty("sourceConversationCoordinateSha256");
+    const receipt = messagingRunReceipt(parsed);
+    expect(receipt.schemaVersion).toBe(1);
+    expect(receipt).not.toHaveProperty("contextBindingSha256");
+    expect(receipt).not.toHaveProperty("sourceConversationCoordinateSha256");
   });
 
   test("implements all four frozen proven-prefix terminal states", () => {
@@ -323,9 +341,20 @@ describe("messaging composite run journal", () => {
       },
     ]);
     const binding = messagingReceiptBinding(submitted);
+    expect(binding.schemaVersion).toBe(2);
+    if (binding.schemaVersion !== 2) throw new Error("expected V2 receipt binding");
     expect(binding.state).toBe("submitted");
+    expect(binding.contextBindingSha256).toBe(plan().contextBindingSha256);
+    expect(binding.sourceConversationCoordinateSha256)
+      .toBe(plan().sourceConversationCoordinateSha256);
     expect(binding.routeRefSha256).not.toContain("wmroute");
-    expect(messagingRunReceipt(submitted).receiptBindingSha256).toBe(binding.receiptSha256);
+    expect(messagingRunReceipt(submitted)).toMatchObject({
+      schemaVersion: 2,
+      contextBindingSha256: plan().contextBindingSha256,
+      sourceConversationCoordinateSha256:
+        plan().sourceConversationCoordinateSha256,
+      receiptBindingSha256: binding.receiptSha256,
+    });
   });
 
   test("retains bounded private provider outcomes only in the encrypted run", () => {

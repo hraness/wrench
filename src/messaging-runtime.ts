@@ -4,22 +4,27 @@ import { isAbsolute, resolve } from "node:path";
 import type { WrenchAuth } from "./auth";
 import { canonicalJson, sha256 } from "./canonical-json";
 import {
+  parseMessageLikeMeSourceConversationCoordinateBindingV1,
+  wrenchMessagingContextBindingSha256V2,
+} from "./message-like-me-agentic-messaging";
+import {
   MESSAGING_CONTEXT_BINDING_CONTRACT_HASH,
   MESSAGING_CONTEXT_BINDING_CONTRACT_ID,
+  parseMessagingContextBindingV2,
   parseMessagingContextRequestV1,
   parseMessagingRouteResolveRequestV1,
   parseMessagingRoutesRequestV1,
   parseMessagingTurnV1,
   messagingTurnDigest,
-  type MessagingContextBindingV1,
+  type MessagingContextBindingV2,
   type MessagingContextMessageV1,
   type MessagingContextV1,
   type MessagingPreviewV1,
   type MessagingPrivateProviderOutcomeV1,
-  type MessagingReceiptBindingV1,
+  type MessagingReceiptBinding,
   type MessagingRouteV1,
   type MessagingRoutesV1,
-  type MessagingRunReceiptV1,
+  type MessagingRunReceipt,
   type MessagingRunV1,
 } from "./messaging-types";
 import {
@@ -76,7 +81,12 @@ import {
   updateMessagingRun,
   type MessagingRunSnapshotV1,
 } from "./messaging-action-store";
-import { isWrenchStatePath, writePrivateJson } from "./storage";
+import {
+  createPrivateJsonIfAbsent,
+  isWrenchStatePath,
+  writePrivateJson,
+  writePrivateJsonIfUnchanged,
+} from "./storage";
 import {
   runWebSessionOperationWithDeadline,
 } from "./web-session-execution";
@@ -151,6 +161,26 @@ export type MessagingPrivateOutputReceiptV1 = {
   readonly itemCount: number;
   readonly generatedAt: string;
   readonly expiresAt: string | null;
+};
+
+type MessagingPrivateOutputArtifactV1 =
+  | MessagingRouteV1
+  | MessagingRoutesV1
+  | MessagingContextV1
+  | MessagingPreviewV1
+  | MessagingRunV1
+  | MessagingReceiptBinding;
+
+export type MessagingPrivateOutputReservationV1 = {
+  readonly path: string;
+  readonly artifactFormat: MessagingPrivateOutputArtifactV1["format"];
+  readonly reservationId: string;
+  readonly reservedContentSha256: string;
+};
+
+export type MessagingPrivateOutputReservationPairV1 = {
+  readonly run: MessagingPrivateOutputReservationV1;
+  readonly receiptBinding: MessagingPrivateOutputReservationV1;
 };
 
 function now(options: MessagingRuntimeOptions): Date {
@@ -360,6 +390,9 @@ function routeFingerprint(record: MessagingRouteRecordV1): string {
     binding: record.binding,
     auth: record.auth,
     target: record.target,
+    resolution: record.resolution,
+    network: record.network,
+    sourceConversationCoordinate: record.sourceConversationCoordinate,
     conversationProviderId: record.conversationProviderId,
   }));
 }
@@ -381,6 +414,9 @@ function assertRouteIdentity(
     binding: identity.binding,
     auth: identity.auth,
     target: resolution.messaging.parseTarget(record.target),
+    resolution: record.resolution,
+    network: record.network,
+    sourceConversationCoordinate: record.sourceConversationCoordinate,
     conversationProviderId: record.conversationProviderId,
   }));
   if (expected !== routeFingerprint(record)) {
@@ -535,20 +571,14 @@ export function validateMessagingPrivateOutputPath(
 
 export function writeMessagingPrivateOutput(
   path: string,
-  artifact:
-    | MessagingRouteV1
-    | MessagingRoutesV1
-    | MessagingContextV1
-    | MessagingPreviewV1
-    | MessagingRunV1
-    | MessagingReceiptBindingV1,
+  artifact: MessagingPrivateOutputArtifactV1,
   environment: Environment = process.env,
 ): MessagingPrivateOutputReceiptV1 {
   const outputPath = validateMessagingPrivateOutputPath(path, environment);
   writePrivateJson(outputPath, artifact, { privateParent: true });
   const artifactSha256 = sha256(canonicalJson(artifact));
   const expiresAt = artifact.format === "wrench.messaging-context"
-    ? artifact.binding.expiresAt
+    ? artifact.binding?.expiresAt ?? null
     : artifact.format === "wrench.messaging-preview"
       ? artifact.expiresAt
       : artifact.format === "wrench.messaging-route"
@@ -577,9 +607,129 @@ export function writeMessagingPrivateOutput(
     generatedAt: artifact.format === "wrench.messaging-routes"
       ? artifact.generatedAt
       : artifact.format === "wrench.messaging-context"
-        ? artifact.binding.validatedAt
+        ? artifact.binding?.validatedAt ?? new Date().toISOString()
       : artifact.format === "wrench.messaging-route"
           ? new Date().toISOString()
+        : artifact.format === "wrench.messaging-run"
+          || artifact.format === "wrench.messaging-receipt-binding"
+          ? artifact.recordedAt
+          : new Date().toISOString(),
+    expiresAt,
+  });
+}
+
+function reserveMessagingPrivateOutput(
+  path: string,
+  artifactFormat: MessagingPrivateOutputArtifactV1["format"],
+  reservationId: string,
+  environment: Environment,
+): MessagingPrivateOutputReservationV1 {
+  const outputPath = validateMessagingPrivateOutputPath(path, environment);
+  const marker = Object.freeze({
+    schemaVersion: 1 as const,
+    format: "wrench.messaging-private-output-reservation" as const,
+    reservationId,
+    artifactFormat,
+  });
+  const reservedContentSha256 = sha256(`${canonicalJson(marker)}\n`);
+  if (!createPrivateJsonIfAbsent(outputPath, marker, { privateParent: true }).created) {
+    throw new Error(`messaging private output sink already exists: ${outputPath}`);
+  }
+  return Object.freeze({
+    path: outputPath,
+    artifactFormat,
+    reservationId,
+    reservedContentSha256,
+  });
+}
+
+export function reserveMessagingPrivateOutputPair(
+  runPath: string,
+  receiptBindingPath: string,
+  environment: Environment = process.env,
+): MessagingPrivateOutputReservationPairV1 {
+  const exactRunPath = validateMessagingPrivateOutputPath(runPath, environment);
+  const exactReceiptBindingPath = validateMessagingPrivateOutputPath(
+    receiptBindingPath,
+    environment,
+  );
+  if (exactRunPath === exactReceiptBindingPath) {
+    throw new Error(
+      "messaging confirmation requires distinct private output and receipt-binding paths",
+    );
+  }
+  const pairId = `wmoutput_${randomBytes(16).toString("base64url")}`;
+  const run = reserveMessagingPrivateOutput(
+    exactRunPath,
+    "wrench.messaging-run",
+    pairId,
+    environment,
+  );
+  let receiptBinding: MessagingPrivateOutputReservationV1;
+  try {
+    receiptBinding = reserveMessagingPrivateOutput(
+      exactReceiptBindingPath,
+      "wrench.messaging-receipt-binding",
+      pairId,
+      environment,
+    );
+  } catch (error) {
+    throw new Error(
+      `messaging receipt-binding sink failed physical reservation after the body-free run sink was reserved at ${exactRunPath}`,
+      { cause: error },
+    );
+  }
+  return Object.freeze({ run, receiptBinding });
+}
+
+export function writeReservedMessagingPrivateOutput(
+  reservation: MessagingPrivateOutputReservationV1,
+  artifact: MessagingPrivateOutputArtifactV1,
+  environment: Environment = process.env,
+): MessagingPrivateOutputReceiptV1 {
+  if (artifact.format !== reservation.artifactFormat) {
+    throw new Error("messaging private output reservation has another artifact format");
+  }
+  const written = writePrivateJsonIfUnchanged(reservation.path, artifact, {
+    expectedCurrentContentSha256: reservation.reservedContentSha256,
+    maximumExpectedCurrentBytes: 4_096,
+    privateParent: true,
+  });
+  if (!written) {
+    throw new Error(
+      "messaging private output reservation changed before final export; recover by run ID",
+    );
+  }
+  const artifactSha256 = sha256(canonicalJson(artifact));
+  const expiresAt = artifact.format === "wrench.messaging-context"
+    ? artifact.binding?.expiresAt ?? null
+    : artifact.format === "wrench.messaging-preview"
+      ? artifact.expiresAt
+      : artifact.format === "wrench.messaging-route"
+        ? artifact.expiresAt
+        : artifact.format === "wrench.messaging-routes"
+          ? artifact.routes.reduce<string | null>((latest, route) =>
+              latest === null || route.expiresAt < latest
+                ? route.expiresAt
+                : latest, null)
+          : null;
+  return Object.freeze({
+    schemaVersion: 1,
+    format: "wrench.messaging-private-output-receipt",
+    artifactFormat: artifact.format,
+    artifactSha256,
+    itemCount: artifact.format === "wrench.messaging-routes"
+      ? artifact.routes.length
+      : artifact.format === "wrench.messaging-context"
+        ? artifact.messages.length
+        : artifact.format === "wrench.messaging-preview"
+          || artifact.format === "wrench.messaging-run"
+          ? artifact.partCount
+          : 1,
+    generatedAt: artifact.format === "wrench.messaging-routes"
+      ? artifact.generatedAt
+      : artifact.format === "wrench.messaging-context"
+        ? artifact.binding?.validatedAt ?? new Date().toISOString()
         : artifact.format === "wrench.messaging-run"
           || artifact.format === "wrench.messaging-receipt-binding"
           ? artifact.recordedAt
@@ -663,6 +813,9 @@ export async function discoverMessagingRoutesInternal(
           validatedAt: generatedAt,
         }),
         target,
+        resolution: "list-candidate",
+        network: resolution.messaging.network,
+        sourceConversationCoordinate: null,
         conversationProviderId: candidate.conversationProviderId,
         conversation: Object.freeze({
           kind: candidate.conversationKind,
@@ -673,7 +826,6 @@ export async function discoverMessagingRoutesInternal(
         }),
       });
       saveMessagingRouteRecord(routeRecord, environment);
-      const action = resolution.messaging.action;
       routes.push(Object.freeze({
         schemaVersion: 1,
         format: "wrench.messaging-route",
@@ -685,24 +837,11 @@ export async function discoverMessagingRoutesInternal(
           participantCount: candidate.participants.length,
         }),
         readiness: Object.freeze({
-          context: resolution.messaging.contextLiveness === "fresh-as-of-live-preflight"
-            ? "ready"
-            : "historical-readable",
-          turn:
-            action.state === "supported"
-            && resolution.messaging.contextLiveness === "fresh-as-of-live-preflight"
-              ? "ready"
-              : "unavailable",
-          reply:
-            action.state === "supported"
-            && resolution.messaging.contextLiveness === "fresh-as-of-live-preflight"
-              ? action.reply
-              : "unsupported",
-          reason: resolution.messaging.contextLiveness === "freshness-unproven"
-            ? "provider context freshness is unproven"
-            : action.state === "supported"
-              ? null
-              : action.reason,
+          context: "resolution-required",
+          turn: "unavailable",
+          reply: "unsupported",
+          reason:
+            "an exact provider coordinate must be resolved before this list candidate can become a context or action capability",
         }),
         completeness: page.completeness,
         expiresAt,
@@ -807,6 +946,14 @@ export async function resolveMessagingRouteInternal(
     || candidate.participants.length > 10_000
   ) throw new Error("provider messaging route candidate is malformed");
   const identity = identityFor(sourceInvocation, resolution, registry);
+  const sourceConversationCoordinate =
+    resolution.messaging.resolveRoute.sourceConversationCoordinate(
+      sourceInvocation.input,
+      request.candidate.coordinate,
+      live.output,
+      identity.auth.subject,
+    );
+  const network = resolution.messaging.network;
   const routeRef = opaque("wmroute");
   const routeRecord: MessagingRouteRecordV1 = Object.freeze({
     schemaVersion: 1,
@@ -823,6 +970,9 @@ export async function resolveMessagingRouteInternal(
       validatedAt: createdAt,
     }),
     target,
+    resolution: "exact-coordinate",
+    network,
+    sourceConversationCoordinate,
     conversationProviderId: candidate.conversationProviderId,
     conversation: Object.freeze({
       kind: candidate.conversationKind,
@@ -838,7 +988,7 @@ export async function resolveMessagingRouteInternal(
     schemaVersion: 1,
     format: "wrench.messaging-route",
     routeRef,
-    network: resolution.messaging.network,
+    network,
     conversation: Object.freeze({
       kind: candidate.conversationKind,
       title: candidate.title,
@@ -846,14 +996,18 @@ export async function resolveMessagingRouteInternal(
     }),
     readiness: Object.freeze({
       context: resolution.messaging.contextLiveness === "fresh-as-of-live-preflight"
-        ? "ready"
-        : "historical-readable",
+          ? "ready"
+          : "historical-readable",
       turn:
+        sourceConversationCoordinate !== null
+        &&
         action.state === "supported"
         && resolution.messaging.contextLiveness === "fresh-as-of-live-preflight"
           ? "ready"
           : "unavailable",
       reply:
+        sourceConversationCoordinate !== null
+        &&
         action.state === "supported"
         && resolution.messaging.contextLiveness === "fresh-as-of-live-preflight"
           ? action.reply
@@ -861,7 +1015,9 @@ export async function resolveMessagingRouteInternal(
       reason: resolution.messaging.contextLiveness === "freshness-unproven"
         ? "provider context freshness is unproven"
         : action.state === "supported"
-          ? null
+          ? sourceConversationCoordinate === null
+            ? "this exact route is not eligible for checked turn actions"
+            : null
           : action.reason,
     }),
     completeness: Object.freeze({
@@ -882,6 +1038,11 @@ async function resolveCurrentRoute(
   readonly resolution: MessagingResolution;
 }> {
   const record = loadMessagingRouteRecord(routeRef, environment, observation);
+  if (record.resolution !== "exact-coordinate") {
+    throw new Error(
+      "messaging route requires exact conversations.read resolution before context or action use",
+    );
+  }
   const invocation = prepareInvocation(
     record.adapter.id,
     record.list.operation,
@@ -950,13 +1111,16 @@ async function currentContextPage(
   });
 }
 
-async function currentMessagingRouteStateRevision(
+async function currentMessagingRouteState(
   record: MessagingRouteRecordV1,
   resolution: MessagingResolution,
   environment: Environment,
   registry: ProviderPluginRegistry,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<{
+  readonly revision: string;
+  readonly recipient: MessagingPreviewV1["recipient"];
+}> {
   const action = resolution.messaging.action;
   if (action.state !== "supported") {
     throw new Error("messaging route does not support an actionable live preflight");
@@ -984,10 +1148,30 @@ async function currentMessagingRouteStateRevision(
   if (live.receipt.status !== "succeeded") {
     throw new Error("messaging live route preflight did not succeed");
   }
-  const snapshot = action.livePreflight.snapshot(live.output);
+  const snapshot = action.livePreflight.snapshot(
+    live.output,
+    record.auth.subject,
+  );
+  const sourceConversationCoordinate =
+    parseMessageLikeMeSourceConversationCoordinateBindingV1(
+      snapshot.sourceConversationCoordinate,
+    );
   if (
     typeof snapshot.conversationProviderId !== "string"
     || snapshot.conversationProviderId !== record.conversationProviderId
+    || typeof snapshot.network !== "string"
+    || !/^[a-z][a-z0-9-]{0,63}$/u.test(snapshot.network)
+    || snapshot.conversation.kind !== "single"
+      && snapshot.conversation.kind !== "group"
+      && snapshot.conversation.kind !== "unknown"
+    || snapshot.conversation.title !== null
+      && (typeof snapshot.conversation.title !== "string"
+        || Buffer.byteLength(snapshot.conversation.title, "utf8") > 4_096
+        || /[\0\r\n]/u.test(snapshot.conversation.title))
+    || typeof snapshot.conversation.participantCount !== "number"
+    || !Number.isSafeInteger(snapshot.conversation.participantCount)
+    || snapshot.conversation.participantCount < 0
+    || snapshot.conversation.participantCount > 10_000
     || typeof snapshot.participantFingerprint !== "string"
     || !/^[a-f0-9]{64}$/u.test(snapshot.participantFingerprint)
     || snapshot.providerRevision !== null
@@ -997,14 +1181,34 @@ async function currentMessagingRouteStateRevision(
         || /[\0\r\n]/u.test(snapshot.providerRevision))
   ) throw new Error("messaging live route preflight returned malformed identity state");
   if (
-    snapshot.participantFingerprint !== record.conversation.participantFingerprint
+    snapshot.network !== record.network
+    || snapshot.conversation.kind !== record.conversation.kind
+    || snapshot.conversation.title !== record.conversation.title
+    || snapshot.conversation.participantCount
+      !== record.conversation.participantCount
+    || sourceConversationCoordinate.sha256
+      !== record.sourceConversationCoordinate?.sha256
+    || snapshot.participantFingerprint !== record.conversation.participantFingerprint
     || snapshot.providerRevision !== record.conversation.providerRevision
-  ) throw new Error("messaging route participants or provider state changed; resolve a new route");
-  return sha256(canonicalJson({
+  ) throw new Error("messaging route recipient or provider state changed; resolve a new route");
+  const recipient = Object.freeze({
+    network: snapshot.network,
+    conversation: Object.freeze({
+      kind: snapshot.conversation.kind,
+      title: snapshot.conversation.title,
+      participantCount: snapshot.conversation.participantCount,
+    }),
+  });
+  return Object.freeze({
+    revision: sha256(canonicalJson({
     conversationProviderId: snapshot.conversationProviderId,
+    recipient,
+    sourceConversationCoordinate,
     participantFingerprint: snapshot.participantFingerprint,
     providerRevision: snapshot.providerRevision,
-  }));
+    })),
+    recipient,
+  });
 }
 
 export async function readMessagingContextInternal(
@@ -1021,6 +1225,18 @@ export async function readMessagingContextInternal(
     environment,
     registry,
   );
+  if (
+    record.sourceConversationCoordinate !== null
+    && resolution.messaging.action.state === "supported"
+  ) {
+    await currentMessagingRouteState(
+      record,
+      resolution,
+      environment,
+      registry,
+      options.signal,
+    );
+  }
   const current = await currentContextPage(
     record,
     resolution,
@@ -1039,38 +1255,45 @@ export async function readMessagingContextInternal(
   ).toISOString();
   const contextRef = opaque("wmcontext");
   const references = randomRefMap(current.messages);
-  const binding: MessagingContextBindingV1 = Object.freeze({
-    schemaVersion: 1,
-    format: "wrench.messaging-context-binding",
-    contractId: MESSAGING_CONTEXT_BINDING_CONTRACT_ID,
-    contractHash: MESSAGING_CONTEXT_BINDING_CONTRACT_HASH,
-    routeRef: record.routeRef,
-    contextRef,
-    exactDataRevision: current.exactDataRevision,
-    latestMessageRevision: current.latestMessageRevision,
-    validatedAt,
-    expiresAt,
-  });
-  const contextRecord: MessagingContextRecordV1 = Object.freeze({
-    schemaVersion: 1,
-    format: "wrench.messaging-context-record",
-    contextRef,
-    routeRef: record.routeRef,
-    routeRecordHash: messagingRouteRecordHash(record),
-    exactDataRevision: current.exactDataRevision,
-    latestMessageRevision: current.latestMessageRevision,
-    validatedAt,
-    expiresAt,
-    limit: request.limit,
-    liveness: resolution.messaging.contextLiveness,
-    replyTargets: references.replyTargets,
-  });
-  saveMessagingContextRecord(contextRecord, environment);
+  const binding: MessagingContextBindingV2 | null =
+    record.sourceConversationCoordinate === null
+      ? null
+      : parseMessagingContextBindingV2({
+          schemaVersion: 2,
+          format: "wrench.messaging-context-binding",
+          contractId: MESSAGING_CONTEXT_BINDING_CONTRACT_ID,
+          contractHash: MESSAGING_CONTEXT_BINDING_CONTRACT_HASH,
+          sourceConversationCoordinate: record.sourceConversationCoordinate,
+          routeRef: record.routeRef,
+          contextRef,
+          exactDataRevision: current.exactDataRevision,
+          latestMessageRevision: current.latestMessageRevision,
+          validatedAt,
+          expiresAt,
+        });
+  if (binding !== null) {
+    const contextRecord: MessagingContextRecordV1 = Object.freeze({
+      schemaVersion: 1,
+      format: "wrench.messaging-context-record",
+      contextRef,
+      routeRef: record.routeRef,
+      routeRecordHash: messagingRouteRecordHash(record),
+      sourceConversationCoordinate: binding.sourceConversationCoordinate,
+      exactDataRevision: current.exactDataRevision,
+      latestMessageRevision: current.latestMessageRevision,
+      validatedAt,
+      expiresAt,
+      limit: request.limit,
+      liveness: resolution.messaging.contextLiveness,
+      replyTargets: references.replyTargets,
+    });
+    saveMessagingContextRecord(contextRecord, environment);
+  }
   return Object.freeze({
     schemaVersion: 1,
     format: "wrench.messaging-context",
     binding,
-    network: resolution.messaging.network,
+    network: record.network,
     liveness: resolution.messaging.contextLiveness,
     truncated:
       current.page.completeness.kind !== "complete"
@@ -1105,6 +1328,9 @@ export async function previewMessagingTurnInternal(
     environment,
     registry,
   );
+  if (record.sourceConversationCoordinate === null) {
+    throw new Error("messaging route is not eligible for checked turn actions");
+  }
   if (resolution.messaging.action.state !== "supported") {
     throw new Error("messaging route does not support checked turn actions");
   }
@@ -1117,6 +1343,9 @@ export async function previewMessagingTurnInternal(
   if (
     context.routeRef !== record.routeRef
     || context.routeRecordHash !== messagingRouteRecordHash(record)
+    || context.sourceConversationCoordinate === null
+    || context.sourceConversationCoordinate.sha256
+      !== record.sourceConversationCoordinate.sha256
     || Date.parse(context.expiresAt) <= observation.getTime()
   ) throw new Error("messaging context is stale or belongs to another route");
   if (context.liveness !== "fresh-as-of-live-preflight") {
@@ -1134,7 +1363,22 @@ export async function previewMessagingTurnInternal(
     current.exactDataRevision !== context.exactDataRevision
     || current.latestMessageRevision !== context.latestMessageRevision
   ) throw new Error("messaging context changed; read a new context before preview");
-  const baseRouteStateRevision = await currentMessagingRouteStateRevision(
+  const exactContextBinding = parseMessagingContextBindingV2({
+    schemaVersion: 2,
+    format: "wrench.messaging-context-binding",
+    contractId: MESSAGING_CONTEXT_BINDING_CONTRACT_ID,
+    contractHash: MESSAGING_CONTEXT_BINDING_CONTRACT_HASH,
+    sourceConversationCoordinate: context.sourceConversationCoordinate,
+    routeRef: context.routeRef,
+    contextRef: context.contextRef,
+    exactDataRevision: context.exactDataRevision,
+    latestMessageRevision: context.latestMessageRevision,
+    validatedAt: context.validatedAt,
+    expiresAt: context.expiresAt,
+  });
+  const contextBindingSha256 =
+    wrenchMessagingContextBindingSha256V2(exactContextBinding);
+  const baseRouteState = await currentMessagingRouteState(
     record,
     resolution,
     environment,
@@ -1188,20 +1432,16 @@ export async function previewMessagingTurnInternal(
       routeRef: record.routeRef,
       contextRef: context.contextRef,
       clientIntentSha256: turn.clientIntentSha256,
+      contextBindingSha256,
+      sourceConversationCoordinateSha256:
+        exactContextBinding.sourceConversationCoordinate.sha256,
       turnDigest: messagingTurnDigest(turn),
       contextLimit: context.limit,
       baseExactDataRevision: context.exactDataRevision,
       baseLatestMessageRevision: context.latestMessageRevision,
-      baseRouteStateRevision,
+      baseRouteStateRevision: baseRouteState.revision,
       baseMessages: messagingBaseMessages(current.messages),
-      recipient: Object.freeze({
-        network: resolution.messaging.network,
-        conversation: Object.freeze({
-          kind: record.conversation.kind,
-          title: record.conversation.title,
-          participantCount: record.conversation.participantCount,
-        }),
-      }),
+      recipient: baseRouteState.recipient,
     }),
     observation,
     registry,
@@ -1282,6 +1522,14 @@ export function initializeMessagingCompositeRunInternal(
   const composite = stored.plan.messagingComposite;
   if (composite === undefined) {
     throw new Error("confirmation plan is not a messaging composite");
+  }
+  if (
+    composite.contextBindingSha256 === null
+    || composite.sourceConversationCoordinateSha256 === null
+  ) {
+    throw new Error(
+      "predecessor messaging plan lacks current context evidence; preview the action again",
+    );
   }
   verifyStoredMessagingPreview(stored);
   return initializeMessagingRun(
@@ -1414,8 +1662,20 @@ export async function executeMessagingCompositeInternal(
     throw new Error("confirmation plan is not a messaging composite");
   }
   if (
+    composite.contextBindingSha256 === null
+    || composite.sourceConversationCoordinateSha256 === null
+  ) {
+    throw new Error(
+      "predecessor messaging plan lacks current context evidence; preview the action again",
+    );
+  }
+  if (
     initialSnapshot.run.planDigest !== stored.digest
     || initialSnapshot.run.turnDigest !== composite.turnDigest
+    || initialSnapshot.run.contextBindingSha256
+      !== composite.contextBindingSha256
+    || initialSnapshot.run.sourceConversationCoordinateSha256
+      !== composite.sourceConversationCoordinateSha256
     || initialSnapshot.run.state !== "pending"
   ) throw new Error("messaging run does not own the exact composite plan");
   const environment = options.environment ?? process.env;
@@ -1485,7 +1745,7 @@ export async function executeMessagingCompositeInternal(
         let record: MessagingRouteRecordV1;
         let routeResolution: MessagingResolution;
         let current: Awaited<ReturnType<typeof currentContextPage>>;
-        let routeStateRevision: string;
+        let routeState: Awaited<ReturnType<typeof currentMessagingRouteState>>;
         try {
           const route = await resolveCurrentRoute(
             composite.routeRef,
@@ -1510,7 +1770,7 @@ export async function executeMessagingCompositeInternal(
             registry,
             operationDeadline.signal,
           );
-          routeStateRevision = await currentMessagingRouteStateRevision(
+          routeState = await currentMessagingRouteState(
             record,
             routeResolution,
             environment,
@@ -1525,7 +1785,11 @@ export async function executeMessagingCompositeInternal(
             options,
           );
         }
-        if (routeStateRevision !== composite.baseRouteStateRevision) {
+        if (
+          routeState.revision !== composite.baseRouteStateRevision
+          || record.sourceConversationCoordinate?.sha256
+            !== composite.sourceConversationCoordinateSha256
+        ) {
           return stopMessagingBeforeDispatch(snapshot, "context-drift", options);
         }
         let proof: ProviderPluginMessagingExpectedOwnPrefixProofV1;
@@ -1785,8 +2049,8 @@ export function showMessagingRunInternal(
   options: Pick<MessagingRuntimeOptions, "environment"> = {},
 ): {
   readonly run: MessagingRunV1;
-  readonly receipt: MessagingRunReceiptV1;
-  readonly receiptBinding: MessagingReceiptBindingV1;
+  readonly receipt: MessagingRunReceipt;
+  readonly receiptBinding: MessagingReceiptBinding;
 } {
   const run = readMessagingRun(runId, options.environment ?? process.env).run;
   if (run.state === "pending") {

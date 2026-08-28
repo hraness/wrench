@@ -1,4 +1,7 @@
 import { canonicalJson, sha256 } from "../canonical-json";
+import {
+  createBeeperMessageLikeMeSourceConversationCoordinateBindingV1,
+} from "../message-like-me-agentic-messaging";
 import type { OperationInput } from "../model";
 import type { ProviderMessageV1 } from "../omni-model";
 import type { MessagingRouteCoordinateV1 } from "../messaging-types";
@@ -108,6 +111,25 @@ function exactConversationFromOutput(output: unknown) {
   }), output);
 }
 
+function messageLikeMeCoordinateIfEligible(
+  output: unknown,
+  expectedAccountSubject: string,
+) {
+  const envelope = record(output, "Beeper exact conversation output");
+  const rawConversation = record(
+    envelope.conversation,
+    "Beeper exact conversation output conversation",
+  );
+  if (
+    rawConversation.type !== "single"
+    || rawConversation.isReadOnly !== false
+  ) return null;
+  return createBeeperMessageLikeMeSourceConversationCoordinateBindingV1({
+    conversationRead: output,
+    expectedAccountSubject,
+  });
+}
+
 function canonicalMessages(messages: readonly ProviderMessageV1[]): readonly ProviderMessageV1[] {
   return Object.freeze([...messages].sort((left, right) => {
     const leftKey = `${left.orderedAt ?? ""}\0${left.providerId}`;
@@ -166,7 +188,7 @@ export const beeperMessagingDefinition = Object.freeze({
           ),
         }),
         conversationProviderId: entity.providerId,
-        conversationKind: "unknown" as const,
+        conversationKind: entity.conversationKind ?? "unknown",
         title: entity.title,
         participants: entity.participants,
         providerRevision: entity.providerRevision,
@@ -236,6 +258,17 @@ export const beeperMessagingDefinition = Object.freeze({
         providerRevision: entity.providerRevision,
       })]);
     },
+    sourceConversationCoordinate: (
+      _listInput,
+      coordinate,
+      output,
+      expectedAccountSubject,
+    ) => {
+      if (coordinate.kind !== "beeperConversation") {
+        throw new Error("Beeper exact source coordinate changed coordinate kind");
+      }
+      return messageLikeMeCoordinateIfEligible(output, expectedAccountSubject);
+    },
   }),
   parseTarget: parseBeeperMessagingTarget,
   contextInput: (target, limit) => {
@@ -260,10 +293,40 @@ export const beeperMessagingDefinition = Object.freeze({
           max_participants: 500,
         });
       },
-      snapshot: (output: unknown) => {
+      snapshot: (output: unknown, expectedAccountSubject: string) => {
+        const envelope = record(output, "Beeper exact conversation output");
+        const rawConversation = record(
+          envelope.conversation,
+          "Beeper exact conversation output conversation",
+        );
         const entity = exactConversationFromOutput(output);
+        bounded(
+          rawConversation.network,
+          "Beeper exact conversation output network",
+          64,
+        );
+        const sourceConversationCoordinate = messageLikeMeCoordinateIfEligible(
+          output,
+          expectedAccountSubject,
+        );
+        if (sourceConversationCoordinate === null) {
+          throw new Error(
+            "Beeper checked turn actions require one writable direct conversation",
+          );
+        }
         return Object.freeze({
           conversationProviderId: entity.providerId,
+          network: "beeper",
+          conversation: Object.freeze({
+            kind: rawConversation.type === "single"
+              ? "single" as const
+              : rawConversation.type === "group"
+                ? "group" as const
+                : "unknown" as const,
+            title: entity.title,
+            participantCount: entity.participants.length,
+          }),
+          sourceConversationCoordinate,
           participantFingerprint: sha256(canonicalJson(entity.participants)),
           providerRevision: null,
         });

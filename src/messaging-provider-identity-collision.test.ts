@@ -134,7 +134,13 @@ function proveExactSuffix(
   });
 }
 
-function inputSchema(name: "messaging.list" | "messaging.read" | "messaging.send"): InputSchema {
+function inputSchema(
+  name:
+    | "messaging.list"
+    | "messaging.read"
+    | "messaging.send"
+    | "conversations.read",
+): InputSchema {
   return Object.freeze({
     properties: Object.freeze({
       account_id: Object.freeze({
@@ -170,14 +176,18 @@ function inputSchema(name: "messaging.list" | "messaging.read" | "messaging.send
     }),
     required: Object.freeze(name === "messaging.list"
       ? ["account_id", "limit"]
-      : name === "messaging.read"
+      : name === "messaging.read" || name === "conversations.read"
         ? ["account_id", "conversation_id", "limit"]
         : ["account_id", "conversation_id", "text"]),
   });
 }
 
 function operation(
-  name: "messaging.list" | "messaging.read" | "messaging.send",
+  name:
+    | "messaging.list"
+    | "messaging.read"
+    | "messaging.send"
+    | "conversations.read",
 ): WebSessionPluginOperationDefinitionV1 {
   const send = name === "messaging.send";
   return Object.freeze({
@@ -195,7 +205,7 @@ function operation(
       ? [{ id: "messaging.send", description: "Submit one exact synthetic message" }]
       : [],
     validateInput: () => [],
-    ...(send ? {} : {
+    ...(send || name === "conversations.read" ? {} : {
       omni: Object.freeze({
         state: "supported" as const,
         schemaVersion: 1 as const,
@@ -208,7 +218,12 @@ function operation(
 }
 
 function manifest() {
-  const operations = ["messaging.list", "messaging.read", "messaging.send"] as const;
+  const operations = [
+    "messaging.list",
+    "messaging.read",
+    "conversations.read",
+    "messaging.send",
+  ] as const;
   return {
     schemaVersion: 4,
     id: "synthetic-fourth-adapter",
@@ -295,10 +310,10 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     contextLiveness: "fresh-as-of-live-preflight",
     listOperation: "messaging.list",
     contextOperation: "messaging.read",
-    coordinateKind: "whatsappJid",
+    coordinateKind: "beeperConversation",
     enumerateRoutes: () => Object.freeze([]),
     resolveRoute: Object.freeze({
-      operation: "messaging.read",
+      operation: "conversations.read",
       input: (input: OperationInput) => Object.freeze({
         account_id: input.account_id as string,
         conversation_id: roomId,
@@ -312,6 +327,11 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
         participants,
         providerRevision: "route-revision-1",
       })]),
+      sourceConversationCoordinate: () => Object.freeze({
+        contractId: "wrench.message-like-me.source-conversation-coordinate.v1" as const,
+        schemaVersion: 1 as const,
+        sha256: "b".repeat(64),
+      }),
     }),
     parseTarget: (value: unknown) => {
       if (
@@ -333,7 +353,7 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
       operation: "messaging.send",
       reply: "supported",
       livePreflight: Object.freeze({
-        operation: "messaging.read",
+        operation: "conversations.read",
         input: () => Object.freeze({
           account_id: "account",
           conversation_id: roomId,
@@ -341,6 +361,17 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
         }),
         snapshot: () => Object.freeze({
           conversationProviderId: roomId,
+          network: "synthetic-fourth",
+          conversation: Object.freeze({
+            kind: "single" as const,
+            title: "Private Synthetic Recipient",
+            participantCount: participants.length,
+          }),
+          sourceConversationCoordinate: Object.freeze({
+            contractId: "wrench.message-like-me.source-conversation-coordinate.v1" as const,
+            schemaVersion: 1 as const,
+            sha256: "b".repeat(64),
+          }),
           participantFingerprint,
           providerRevision: "route-revision-1",
         }),
@@ -387,7 +418,12 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
         surfaceId: "synthetic-fourth",
         origin: "https://synthetic-fourth.example",
         authKinds: ["cookie-source"],
-        operations: [operation("messaging.list"), operation("messaging.read"), operation("messaging.send")],
+        operations: [
+          operation("messaging.list"),
+          operation("messaging.read"),
+          operation("conversations.read"),
+          operation("messaging.send"),
+        ],
         messaging,
         subject: {
           format: "synthetic-fourth:<id>",
@@ -433,7 +469,13 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
       authId: "synthetic-fourth-auth",
       listInput: { account_id: "account", limit: contextLimit },
     },
-    candidate: { coordinate: { kind: "whatsappJid", jid: roomId } },
+    candidate: {
+      coordinate: {
+        kind: "beeperConversation",
+        network: "synthetic-fourth",
+        conversationId: roomId,
+      },
+    },
   }, { environment, registry, now: observation });
   const context = await readMessagingContextInternal({
     schemaVersion: 1,
@@ -441,6 +483,9 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     routeRef: route.routeRef,
     limit: contextLimit,
   }, { environment, registry, now: observation });
+  if (context.binding === null) {
+    throw new Error("synthetic actionable context lost its binding");
+  }
   const preview = await previewMessagingTurnInternal({
     schemaVersion: 1,
     format: "wrench.messaging-turn",
