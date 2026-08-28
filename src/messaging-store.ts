@@ -1,6 +1,10 @@
 import { join } from "node:path";
 
 import { canonicalJson, sha256 } from "./canonical-json";
+import {
+  parseMessageLikeMeSourceConversationCoordinateBindingV1,
+  type MessageLikeMeSourceConversationCoordinateBindingV1,
+} from "./message-like-me-agentic-messaging";
 import type { OperationInput } from "./model";
 import type { ProviderPluginMessagingTargetV1 } from "./provider-plugin";
 import {
@@ -54,6 +58,11 @@ export type MessagingRouteRecordV1 = {
     readonly validatedAt: string;
   };
   readonly target: ProviderPluginMessagingTargetV1;
+  readonly resolution: "list-candidate" | "exact-coordinate";
+  readonly network: string;
+  readonly sourceConversationCoordinate:
+    | MessageLikeMeSourceConversationCoordinateBindingV1
+    | null;
   readonly conversationProviderId: string;
   readonly conversation: {
     readonly kind: "single" | "group" | "unknown";
@@ -70,6 +79,8 @@ export type MessagingContextRecordV1 = {
   readonly contextRef: string;
   readonly routeRef: string;
   readonly routeRecordHash: string;
+  readonly sourceConversationCoordinate:
+    MessageLikeMeSourceConversationCoordinateBindingV1;
   readonly exactDataRevision: string;
   readonly latestMessageRevision: string;
   readonly validatedAt: string;
@@ -216,6 +227,9 @@ export function parseMessagingRouteRecordV1(
     "auth",
     "list",
     "target",
+    "resolution",
+    "network",
+    "sourceConversationCoordinate",
     "conversationProviderId",
     "conversation",
   ], "messaging route record");
@@ -261,6 +275,23 @@ export function parseMessagingRouteRecordV1(
   if (!/^wmroute_[A-Za-z0-9_-]{22}$/u.test(routeRef)) {
     throw new Error("messaging route reference is malformed");
   }
+  if (
+    source.resolution !== "list-candidate"
+    && source.resolution !== "exact-coordinate"
+  ) throw new Error("messaging route resolution state is malformed");
+  const resolution = source.resolution;
+  const network = string(source.network, "messaging route network", 64);
+  if (!/^[a-z][a-z0-9-]{0,63}$/u.test(network)) {
+    throw new Error("messaging route network is malformed");
+  }
+  const sourceConversationCoordinate = source.sourceConversationCoordinate === null
+    ? null
+    : parseMessageLikeMeSourceConversationCoordinateBindingV1(
+        source.sourceConversationCoordinate,
+      );
+  if (resolution === "list-candidate" && sourceConversationCoordinate !== null) {
+    throw new Error("messaging list candidate cannot claim an exact source coordinate");
+  }
   return Object.freeze({
     schemaVersion: 1,
     format: "wrench.messaging-route-record",
@@ -296,6 +327,9 @@ export function parseMessagingRouteRecordV1(
       validatedAt: timestamp(list.validatedAt, "messaging route list validatedAt"),
     }),
     target: parseStringRecord(source.target, "messaging route target"),
+    resolution,
+    network,
+    sourceConversationCoordinate,
     conversationProviderId: string(source.conversationProviderId, "messaging route conversation identity"),
     conversation: Object.freeze({
       kind: conversation.kind,
@@ -317,6 +351,7 @@ export function parseMessagingContextRecordV1(
     "contextRef",
     "routeRef",
     "routeRecordHash",
+    "sourceConversationCoordinate",
     "exactDataRevision",
     "latestMessageRevision",
     "validatedAt",
@@ -360,6 +395,10 @@ export function parseMessagingContextRecordV1(
     contextRef,
     routeRef,
     routeRecordHash: digest(source.routeRecordHash, "messaging context route record hash"),
+    sourceConversationCoordinate:
+      parseMessageLikeMeSourceConversationCoordinateBindingV1(
+        source.sourceConversationCoordinate,
+      ),
     exactDataRevision: digest(source.exactDataRevision, "messaging context data revision"),
     latestMessageRevision: digest(source.latestMessageRevision, "messaging context latest revision"),
     validatedAt: timestamp(source.validatedAt, "messaging context validatedAt"),

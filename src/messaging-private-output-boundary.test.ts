@@ -4,13 +4,19 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { initializeMessagingRun } from "./messaging-action-store";
-import { writeMessagingPrivateOutput } from "./messaging-runtime";
+import {
+  reserveMessagingPrivateOutputPair,
+  writeMessagingPrivateOutput,
+  writeReservedMessagingPrivateOutput,
+} from "./messaging-runtime";
 import type { MessagingCompositeInvocationPlanV1 } from "./runtime";
 
 const roots: string[] = [];
@@ -36,6 +42,8 @@ function plan(): MessagingCompositeInvocationPlanV1 {
     routeRef: "wmroute_ABCDEFGHIJKLMNOPQRSTUV",
     contextRef: "wmcontext_ABCDEFGHIJKLMNOPQRSTUV",
     clientIntentSha256: "a".repeat(64),
+    contextBindingSha256: "8".repeat(64),
+    sourceConversationCoordinateSha256: "9".repeat(64),
     turnDigest: "b".repeat(64),
     previewDigest: "c".repeat(64),
     contextLimit: 20,
@@ -65,6 +73,59 @@ function plan(): MessagingCompositeInvocationPlanV1 {
 }
 
 describe("messaging private output state boundary", () => {
+  test("physically reserves both body-free sinks before either final export", () => {
+    const testState = state();
+    const runId = "123e4567-e89b-42d3-a456-426614174099";
+    const snapshot = initializeMessagingRun(
+      runId,
+      "7".repeat(64),
+      plan(),
+      testState.environment,
+      "2026-08-27T12:00:00.000Z",
+    );
+    const outputRoot = mkdtempSync(join(tmpdir(), "wrench-messaging-reservations-"));
+    chmodSync(outputRoot, 0o700);
+    roots.push(outputRoot);
+    const runPath = join(outputRoot, "run.json");
+    const bindingPath = join(outputRoot, "binding.json");
+    const reservations = reserveMessagingPrivateOutputPair(
+      runPath,
+      bindingPath,
+      testState.environment,
+    );
+
+    for (const path of [runPath, bindingPath]) {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      const marker = readFileSync(path, "utf8");
+      expect(marker).toContain("wrench.messaging-private-output-reservation");
+      expect(marker).not.toContain("private first body");
+    }
+    expect(() => reserveMessagingPrivateOutputPair(
+      runPath,
+      join(outputRoot, "another-binding.json"),
+      testState.environment,
+    )).toThrow("already exists");
+
+    writeReservedMessagingPrivateOutput(
+      reservations.run,
+      snapshot.run,
+      testState.environment,
+    );
+    expect(readFileSync(runPath, "utf8")).toContain("private first body");
+    const tamperedRunPath = join(outputRoot, "tampered-run.json");
+    const tampered = reserveMessagingPrivateOutputPair(
+      tamperedRunPath,
+      join(outputRoot, "tampered-binding.json"),
+      testState.environment,
+    );
+    writeFileSync(tamperedRunPath, "{}\n", { mode: 0o600 });
+    expect(() => writeReservedMessagingPrivateOutput(
+      tampered.run,
+      snapshot.run,
+      testState.environment,
+    )).toThrow("reservation changed");
+  });
+
   test("cannot overwrite encrypted journals or root encryption keys with plaintext artifacts", () => {
     const testState = state();
     const runId = "123e4567-e89b-42d3-a456-426614174000";

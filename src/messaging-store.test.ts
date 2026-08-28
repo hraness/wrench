@@ -69,6 +69,13 @@ function route(reference = "wmroute_ABCDEFGHIJKLMNOPQRSTUV"): MessagingRouteReco
       accountId: "secret-account-coordinate",
       conversationId: "secret-provider-conversation",
     }),
+    resolution: "exact-coordinate",
+    network: "imessage",
+    sourceConversationCoordinate: Object.freeze({
+      contractId: "wrench.message-like-me.source-conversation-coordinate.v1",
+      schemaVersion: 1,
+      sha256: "5".repeat(64),
+    }),
     conversationProviderId: "secret-provider-conversation",
     conversation: Object.freeze({
       kind: "single",
@@ -87,6 +94,11 @@ function context(reference = "wmcontext_ABCDEFGHIJKLMNOPQRSTUV"): MessagingConte
     contextRef: reference,
     routeRef: "wmroute_ABCDEFGHIJKLMNOPQRSTUV",
     routeRecordHash: "2".repeat(64),
+    sourceConversationCoordinate: Object.freeze({
+      contractId: "wrench.message-like-me.source-conversation-coordinate.v1",
+      schemaVersion: 1,
+      sha256: "5".repeat(64),
+    }),
     exactDataRevision: "3".repeat(64),
     latestMessageRevision: "4".repeat(64),
     validatedAt: "2026-08-27T12:00:00.000Z",

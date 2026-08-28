@@ -112,6 +112,17 @@ export const whatsappMessagingDefinition = Object.freeze({
         providerRevision: null,
       })]);
     },
+    sourceConversationCoordinate: (
+      _listInput,
+      coordinate,
+      _output,
+      _expectedAccountSubject,
+    ) => {
+      if (coordinate.kind !== "whatsappJid") {
+        throw new Error("WhatsApp exact source coordinate changed coordinate kind");
+      }
+      return null;
+    },
   }),
   parseTarget,
   contextInput: (target, limit) => {

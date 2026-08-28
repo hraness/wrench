@@ -251,6 +251,8 @@ export type MessagingCompositeInvocationPlanV1 = {
   readonly routeRef: string;
   readonly contextRef: string;
   readonly clientIntentSha256: string;
+  readonly contextBindingSha256: string;
+  readonly sourceConversationCoordinateSha256: string;
   readonly turnDigest: string;
   readonly previewDigest: string;
   readonly contextLimit: number;
@@ -1538,6 +1540,9 @@ export function messagingCompositeInputHash(
     routeRef: composite.routeRef,
     contextRef: composite.contextRef,
     clientIntentSha256: composite.clientIntentSha256,
+    contextBindingSha256: composite.contextBindingSha256,
+    sourceConversationCoordinateSha256:
+      composite.sourceConversationCoordinateSha256,
     turnDigest: composite.turnDigest,
     contextLimit: composite.contextLimit,
     baseExactDataRevision: composite.baseExactDataRevision,
@@ -2169,6 +2174,8 @@ function parseMessagingCompositeInvocationPlan(
     "routeRef",
     "contextRef",
     "clientIntentSha256",
+    "contextBindingSha256",
+    "sourceConversationCoordinateSha256",
     "turnDigest",
     "previewDigest",
     "contextLimit",
@@ -2302,6 +2309,14 @@ function parseMessagingCompositeInvocationPlan(
     routeRef: value.routeRef,
     contextRef: value.contextRef,
     clientIntentSha256: messagingDigest(value.clientIntentSha256, "messaging composite client intent"),
+    contextBindingSha256: messagingDigest(
+      value.contextBindingSha256,
+      "messaging composite context binding",
+    ),
+    sourceConversationCoordinateSha256: messagingDigest(
+      value.sourceConversationCoordinateSha256,
+      "messaging composite source conversation coordinate",
+    ),
     turnDigest: messagingDigest(value.turnDigest, "messaging composite turn digest"),
     previewDigest: messagingDigest(value.previewDigest, "messaging composite preview digest"),
     contextLimit: value.contextLimit,

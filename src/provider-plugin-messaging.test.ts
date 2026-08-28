@@ -14,7 +14,11 @@ import {
 } from "./provider-plugin";
 
 function operation(
-  name: "messaging.list" | "messaging.read" | "messaging.send",
+  name:
+    | "messaging.list"
+    | "messaging.read"
+    | "messaging.send"
+    | "conversations.read",
 ): WebSessionPluginOperationDefinitionV1 {
   const send = name === "messaging.send";
   const input = {
@@ -27,7 +31,7 @@ function operation(
     },
     required: name === "messaging.list"
       ? ["account_id", "limit"]
-      : name === "messaging.read"
+      : name === "messaging.read" || name === "conversations.read"
         ? ["account_id", "conversation_id", "limit"]
         : ["account_id", "conversation_id", "text"],
   } satisfies InputSchema;
@@ -85,7 +89,7 @@ const messaging = Object.freeze({
   contextLiveness: "fresh-as-of-live-preflight",
   listOperation: "messaging.list",
   contextOperation: "messaging.read",
-  coordinateKind: "whatsappJid",
+  coordinateKind: "beeperConversation",
   enumerateRoutes: (input: OperationInput, page: ProviderMaterializedPageV1) =>
     Object.freeze(page.entities.map((entity) => {
       if (entity.kind !== "conversation" || typeof input.account_id !== "string") {
@@ -101,24 +105,24 @@ const messaging = Object.freeze({
       });
     })),
   resolveRoute: Object.freeze({
-    operation: "messaging.read",
+    operation: "conversations.read",
     input: (input: OperationInput, coordinate: MessagingRouteCoordinateV1) => {
-      if (coordinate.kind !== "whatsappJid") throw new Error("wrong coordinate kind");
+      if (coordinate.kind !== "beeperConversation") throw new Error("wrong coordinate kind");
       return Object.freeze({
         account_id: input.account_id as string,
-        conversation_id: coordinate.jid,
+        conversation_id: coordinate.conversationId,
         limit: 1,
       });
     },
     candidates: (input: OperationInput, coordinate: MessagingRouteCoordinateV1) => {
-      if (coordinate.kind !== "whatsappJid") throw new Error("wrong coordinate kind");
+      if (coordinate.kind !== "beeperConversation") throw new Error("wrong coordinate kind");
       return Object.freeze([
         Object.freeze({
           target: Object.freeze({
             accountId: input.account_id as string,
-            conversationId: coordinate.jid,
+            conversationId: coordinate.conversationId,
           }),
-          conversationProviderId: coordinate.jid,
+          conversationProviderId: coordinate.conversationId,
           conversationKind: "unknown" as const,
           title: null,
           participants: Object.freeze([]),
@@ -126,6 +130,11 @@ const messaging = Object.freeze({
         }),
       ]);
     },
+    sourceConversationCoordinate: () => Object.freeze({
+      contractId: "wrench.message-like-me.source-conversation-coordinate.v1" as const,
+      schemaVersion: 1 as const,
+      sha256: "b".repeat(64),
+    }),
   }),
   parseTarget: target,
   contextInput: (value, limit) => {
@@ -141,7 +150,7 @@ const messaging = Object.freeze({
     operation: "messaging.send",
     reply: "supported",
     livePreflight: Object.freeze({
-      operation: "messaging.read",
+      operation: "conversations.read",
       input: (value: Readonly<Record<string, string>>) => {
         const parsed = target(value);
         return Object.freeze({
@@ -152,6 +161,17 @@ const messaging = Object.freeze({
       },
       snapshot: (_output: unknown) => Object.freeze({
         conversationProviderId: "room",
+        network: "synthetic-fourth",
+        conversation: Object.freeze({
+          kind: "single" as const,
+          title: "Private Synthetic Recipient",
+          participantCount: 1,
+        }),
+        sourceConversationCoordinate: Object.freeze({
+          contractId: "wrench.message-like-me.source-conversation-coordinate.v1" as const,
+          schemaVersion: 1 as const,
+          sha256: "b".repeat(64),
+        }),
         participantFingerprint: "a".repeat(64),
         providerRevision: "route-rev-1",
       }),
@@ -212,6 +232,7 @@ describe("provider messaging SPI conformance", () => {
     const providerOperations = [
       operation("messaging.list"),
       operation("messaging.read"),
+      operation("conversations.read"),
       operation("messaging.send"),
     ].map((definition) => Object.freeze({
       ...definition,
@@ -266,6 +287,7 @@ describe("provider messaging SPI conformance", () => {
         operations: [
           operation("messaging.list"),
           operation("messaging.read"),
+          operation("conversations.read"),
           operation("messaging.send"),
         ],
         messaging,

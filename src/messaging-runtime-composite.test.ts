@@ -57,6 +57,8 @@ function storedPlan(): StoredPlan {
     routeRef,
     contextRef,
     clientIntentSha256: turn.clientIntentSha256,
+    contextBindingSha256: "8".repeat(64),
+    sourceConversationCoordinateSha256: "9".repeat(64),
     turnDigest: messagingTurnDigest(turn),
     previewDigest: "0".repeat(64),
     contextLimit: 20,

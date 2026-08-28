@@ -37,6 +37,8 @@ function plan(): MessagingCompositeInvocationPlanV1 {
     routeRef: "wmroute_ABCDEFGHIJKLMNOPQRSTUV",
     contextRef: "wmcontext_ABCDEFGHIJKLMNOPQRSTUV",
     clientIntentSha256: "a".repeat(64),
+    contextBindingSha256: "8".repeat(64),
+    sourceConversationCoordinateSha256: "9".repeat(64),
     turnDigest: "b".repeat(64),
     previewDigest: "c".repeat(64),
     contextLimit: 20,
@@ -324,8 +326,16 @@ describe("messaging composite run journal", () => {
     ]);
     const binding = messagingReceiptBinding(submitted);
     expect(binding.state).toBe("submitted");
+    expect(binding.contextBindingSha256).toBe(plan().contextBindingSha256);
+    expect(binding.sourceConversationCoordinateSha256)
+      .toBe(plan().sourceConversationCoordinateSha256);
     expect(binding.routeRefSha256).not.toContain("wmroute");
-    expect(messagingRunReceipt(submitted).receiptBindingSha256).toBe(binding.receiptSha256);
+    expect(messagingRunReceipt(submitted)).toMatchObject({
+      contextBindingSha256: plan().contextBindingSha256,
+      sourceConversationCoordinateSha256:
+        plan().sourceConversationCoordinateSha256,
+      receiptBindingSha256: binding.receiptSha256,
+    });
   });
 
   test("retains bounded private provider outcomes only in the encrypted run", () => {

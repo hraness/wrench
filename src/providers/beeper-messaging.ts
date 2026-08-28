@@ -1,4 +1,7 @@
 import { canonicalJson, sha256 } from "../canonical-json";
+import {
+  createBeeperMessageLikeMeSourceConversationCoordinateBindingV1,
+} from "../message-like-me-agentic-messaging";
 import type { OperationInput } from "../model";
 import type { ProviderMessageV1 } from "../omni-model";
 import type { MessagingRouteCoordinateV1 } from "../messaging-types";
@@ -236,6 +239,20 @@ export const beeperMessagingDefinition = Object.freeze({
         providerRevision: entity.providerRevision,
       })]);
     },
+    sourceConversationCoordinate: (
+      _listInput,
+      coordinate,
+      output,
+      expectedAccountSubject,
+    ) => {
+      if (coordinate.kind !== "beeperConversation") {
+        throw new Error("Beeper exact source coordinate changed coordinate kind");
+      }
+      return createBeeperMessageLikeMeSourceConversationCoordinateBindingV1({
+        conversationRead: output,
+        expectedAccountSubject,
+      });
+    },
   }),
   parseTarget: parseBeeperMessagingTarget,
   contextInput: (target, limit) => {
@@ -260,10 +277,32 @@ export const beeperMessagingDefinition = Object.freeze({
           max_participants: 500,
         });
       },
-      snapshot: (output: unknown) => {
+      snapshot: (output: unknown, expectedAccountSubject: string) => {
+        const envelope = record(output, "Beeper exact conversation output");
+        const rawConversation = record(
+          envelope.conversation,
+          "Beeper exact conversation output conversation",
+        );
         const entity = exactConversationFromOutput(output);
+        const network = bounded(
+          rawConversation.network,
+          "Beeper exact conversation output network",
+          64,
+        );
+        const sourceConversationCoordinate =
+          createBeeperMessageLikeMeSourceConversationCoordinateBindingV1({
+            conversationRead: output,
+            expectedAccountSubject,
+          });
         return Object.freeze({
           conversationProviderId: entity.providerId,
+          network,
+          conversation: Object.freeze({
+            kind: "single" as const,
+            title: entity.title,
+            participantCount: entity.participants.length,
+          }),
+          sourceConversationCoordinate,
           participantFingerprint: sha256(canonicalJson(entity.participants)),
           providerRevision: null,
         });

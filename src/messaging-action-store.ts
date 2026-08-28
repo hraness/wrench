@@ -280,7 +280,9 @@ function parseRun(value: unknown): MessagingRunV1 {
   }
   exactKeys(source, [
     "schemaVersion", "format", "runId", "planDigest", "routeRef", "contextRef",
-    "clientIntentSha256", "turnDigest", "previewDigest", "state", "partCount",
+    "clientIntentSha256", "contextBindingSha256",
+    "sourceConversationCoordinateSha256", "turnDigest", "previewDigest",
+    "state", "partCount",
     "provenPartCount",
     ...(hasObservedAcceptedPrefixCount ? ["observedAcceptedPrefixCount"] : []),
     "possibleSubmittedPartIndex",
@@ -397,6 +399,14 @@ function parseRun(value: unknown): MessagingRunV1 {
     routeRef: source.routeRef,
     contextRef: source.contextRef,
     clientIntentSha256: digest(source.clientIntentSha256, "messaging run client intent"),
+    contextBindingSha256: digest(
+      source.contextBindingSha256,
+      "messaging run context binding",
+    ),
+    sourceConversationCoordinateSha256: digest(
+      source.sourceConversationCoordinateSha256,
+      "messaging run source conversation coordinate",
+    ),
     turnDigest: digest(source.turnDigest, "messaging run turn digest"),
     previewDigest: digest(source.previewDigest, "messaging run preview digest"),
     state: source.state,
@@ -470,6 +480,9 @@ export function initializeMessagingRun(
     routeRef: plan.routeRef,
     contextRef: plan.contextRef,
     clientIntentSha256: plan.clientIntentSha256,
+    contextBindingSha256: plan.contextBindingSha256,
+    sourceConversationCoordinateSha256:
+      plan.sourceConversationCoordinateSha256,
     turnDigest: plan.turnDigest,
     previewDigest: plan.previewDigest,
     state: "pending",
@@ -506,6 +519,9 @@ export function initializeMessagingRun(
     if (
       existing.run.planDigest !== planDigest
       || existing.run.turnDigest !== plan.turnDigest
+      || existing.run.contextBindingSha256 !== plan.contextBindingSha256
+      || existing.run.sourceConversationCoordinateSha256
+        !== plan.sourceConversationCoordinateSha256
     ) throw new Error("existing messaging run belongs to another confirmation");
     return existing;
   }
@@ -655,6 +671,9 @@ export function messagingReceiptBinding(run: MessagingRunV1): MessagingReceiptBi
     contractId: MESSAGING_RECEIPT_BINDING_CONTRACT_ID,
     contractHash: MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
     clientIntentSha256: run.clientIntentSha256,
+    contextBindingSha256: run.contextBindingSha256,
+    sourceConversationCoordinateSha256:
+      run.sourceConversationCoordinateSha256,
     routeRefSha256: sha256(run.routeRef),
     contextRefSha256: sha256(run.contextRef),
     turnDigest: run.turnDigest,
@@ -682,6 +701,9 @@ export function messagingRunReceipt(run: MessagingRunV1): MessagingRunReceiptV1 
     partCount: binding.partCount,
     provenPartCount: binding.provenPartCount,
     clientIntentSha256: binding.clientIntentSha256,
+    contextBindingSha256: binding.contextBindingSha256,
+    sourceConversationCoordinateSha256:
+      binding.sourceConversationCoordinateSha256,
     routeRefSha256: binding.routeRefSha256,
     contextRefSha256: binding.contextRefSha256,
     turnDigest: binding.turnDigest,
