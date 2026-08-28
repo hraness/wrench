@@ -21,6 +21,36 @@ import {
 
 const MAX_IMSG_BINARY_BYTES = 256 * 1024 * 1024;
 
+class ImsgInstallFailure extends Error {}
+
+function installFailure(message: string): ImsgInstallFailure {
+  return new ImsgInstallFailure(message);
+}
+
+function filesystemErrorCode(error: unknown): string | null {
+  if (
+    typeof error !== "object"
+    || error === null
+    || !("code" in error)
+    || typeof error.code !== "string"
+  ) return null;
+  return error.code;
+}
+
+function sourceOpenFailure(error: unknown): ImsgInstallFailure {
+  const code = filesystemErrorCode(error);
+  if (code === "ENOENT") {
+    return installFailure("imsg install source file does not exist");
+  }
+  if (code === "EACCES" || code === "EPERM") {
+    return installFailure("imsg install source file is unreadable");
+  }
+  if (code === "ELOOP") {
+    return installFailure("imsg install source is not a trusted executable file");
+  }
+  return installFailure("imsg install source file could not be opened safely");
+}
+
 export type ImsgInstalledArtifact = Readonly<{
   path: string;
   executableSha256: string;
@@ -54,24 +84,23 @@ async function pinnedBinaryCandidate(
   path: string,
   executableSha256: string,
 ): Promise<string | null> {
-  let canonical: string;
   try {
-    canonical = await realpath(path);
+    const canonical = await realpath(path);
+    if (canonical !== path) return null;
+    const stats = await lstat(canonical);
+    if (
+      !stats.isFile()
+      || stats.isSymbolicLink()
+      || stats.size < 1
+      || stats.size > MAX_IMSG_BINARY_BYTES
+      || (stats.mode & 0o022) !== 0
+      || (stats.mode & 0o111) === 0
+      || (stats.uid !== process.getuid?.() && stats.uid !== 0)
+    ) return null;
+    return await sha256File(canonical) === executableSha256 ? canonical : null;
   } catch {
     return null;
   }
-  if (canonical !== path) return null;
-  const stats = await lstat(canonical);
-  if (
-    !stats.isFile()
-    || stats.isSymbolicLink()
-    || stats.size < 1
-    || stats.size > MAX_IMSG_BINARY_BYTES
-    || (stats.mode & 0o022) !== 0
-    || (stats.mode & 0o111) === 0
-    || (stats.uid !== process.getuid?.() && stats.uid !== 0)
-  ) return null;
-  return await sha256File(canonical) === executableSha256 ? canonical : null;
 }
 
 export function imsgInstalledBinaryPath(
@@ -90,7 +119,14 @@ export async function resolvePinnedImsgBinary(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<string> {
   const artifact = imsgArtifactForCurrentRuntime();
-  const candidate = imsgInstalledBinaryPath(environment);
+  let candidate: string;
+  try {
+    candidate = imsgInstalledBinaryPath(environment);
+  } catch {
+    throw installFailure(
+      `reviewed imsg transport ${IMSG_REVIEWED_VERSION} is unavailable or failed integrity verification`,
+    );
+  }
   const resolved = await pinnedBinaryCandidate(
     candidate,
     artifact.executableSha256,
@@ -104,15 +140,24 @@ export async function resolvePinnedImsgBinary(
 }
 
 async function validateInstallDirectory(path: string): Promise<void> {
-  const canonical = await realpath(path);
-  const stats = await lstat(path);
-  if (
-    canonical !== path
-    || !stats.isDirectory()
-    || stats.isSymbolicLink()
-    || stats.uid !== process.getuid?.()
-    || (stats.mode & 0o077) !== 0
-  ) throw new Error("imsg install directory must be an owned physical private directory");
+  try {
+    const canonical = await realpath(path);
+    const stats = await lstat(path);
+    if (
+      canonical !== path
+      || !stats.isDirectory()
+      || stats.isSymbolicLink()
+      || stats.uid !== process.getuid?.()
+      || (stats.mode & 0o077) !== 0
+    ) {
+      throw installFailure(
+        "imsg install directory must be an owned physical private directory",
+      );
+    }
+  } catch (error) {
+    if (error instanceof ImsgInstallFailure) throw error;
+    throw installFailure("imsg install state directory is unavailable or unsafe");
+  }
 }
 
 async function copyPinnedBinary(
@@ -120,10 +165,15 @@ async function copyPinnedBinary(
   destinationPath: string,
   expectedSha256: string,
 ): Promise<void> {
-  const source = await open(
-    sourcePath,
-    constants.O_RDONLY | constants.O_NOFOLLOW,
-  );
+  let source: Awaited<ReturnType<typeof open>>;
+  try {
+    source = await open(
+      sourcePath,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+  } catch (error) {
+    throw sourceOpenFailure(error);
+  }
   let destination;
   try {
     const before = await source.stat();
@@ -134,7 +184,7 @@ async function copyPinnedBinary(
       || (before.mode & 0o022) !== 0
       || (before.mode & 0o111) === 0
       || (before.uid !== process.getuid?.() && before.uid !== 0)
-    ) throw new Error("imsg install source is not a trusted executable file");
+    ) throw installFailure("imsg install source is not a trusted executable file");
     destination = await open(
       destinationPath,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
@@ -150,7 +200,9 @@ async function copyPinnedBinary(
         Math.min(buffer.byteLength, before.size - offset),
         offset,
       );
-      if (read.bytesRead < 1) throw new Error("imsg install source changed while copied");
+      if (read.bytesRead < 1) {
+        throw installFailure("imsg install source changed while copied");
+      }
       const chunk = buffer.subarray(0, read.bytesRead);
       hash.update(chunk);
       let written = 0;
@@ -161,7 +213,9 @@ async function copyPinnedBinary(
           chunk.byteLength - written,
           offset + written,
         );
-        if (result.bytesWritten < 1) throw new Error("imsg install copy failed");
+        if (result.bytesWritten < 1) {
+          throw installFailure("imsg install copy failed");
+        }
         written += result.bytesWritten;
       }
       offset += read.bytesRead;
@@ -176,7 +230,11 @@ async function copyPinnedBinary(
       || before.mtimeMs !== after.mtimeMs
       || before.ctimeMs !== after.ctimeMs
       || hash.digest("hex") !== expectedSha256
-    ) throw new Error("imsg install source changed or did not match the reviewed digest");
+    ) {
+      throw installFailure(
+        "imsg install source changed or did not match the reviewed digest",
+      );
+    }
     await destination.sync();
   } finally {
     await destination?.close();
@@ -184,7 +242,7 @@ async function copyPinnedBinary(
   }
   await chmod(destinationPath, 0o500);
   if (await sha256File(destinationPath) !== expectedSha256) {
-    throw new Error("installed imsg transport failed its reviewed digest");
+    throw installFailure("installed imsg transport failed its reviewed digest");
   }
 }
 
@@ -197,18 +255,29 @@ export async function installReviewedImsgBinary(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<ImsgInstalledArtifact> {
   if (!isAbsolute(sourcePath)) {
-    throw new Error("imsg install source must be an absolute path");
+    throw installFailure("imsg install source must be an absolute path");
   }
   const artifact = imsgArtifactForCurrentRuntime();
-  const destinationPath = imsgInstalledBinaryPath(environment);
+  let stateHome: string;
+  try {
+    stateHome = wrenchStateHome(environment);
+  } catch {
+    throw installFailure("imsg install state directory is unavailable or unsafe");
+  }
   const installDirectory = join(
-    wrenchStateHome(environment),
+    stateHome,
     "tools",
     "imsg",
     IMSG_REVIEWED_VERSION,
   );
-  ensurePrivateStateDirectory(installDirectory, environment);
-  await validateInstallDirectory(installDirectory);
+  const destinationPath = join(installDirectory, "imsg");
+  try {
+    ensurePrivateStateDirectory(installDirectory, environment);
+    await validateInstallDirectory(installDirectory);
+  } catch (error) {
+    if (error instanceof ImsgInstallFailure) throw error;
+    throw installFailure("imsg install state directory is unavailable or unsafe");
+  }
   const existing = await pinnedBinaryCandidate(
     destinationPath,
     artifact.executableSha256,
@@ -223,52 +292,59 @@ export async function installReviewedImsgBinary(
   }
   try {
     await lstat(destinationPath);
-    throw new Error("existing imsg install does not match the reviewed artifact");
+    throw installFailure(
+      "existing imsg install does not match the reviewed artifact",
+    );
   } catch (error) {
-    if (
-      typeof error !== "object"
-      || error === null
-      || !("code" in error)
-      || error.code !== "ENOENT"
-    ) throw error;
+    if (error instanceof ImsgInstallFailure) throw error;
+    if (filesystemErrorCode(error) !== "ENOENT") {
+      throw installFailure(
+        "existing imsg install could not be inspected safely",
+      );
+    }
   }
   const temporaryPath = join(
     installDirectory,
     `.imsg-install-${randomBytes(16).toString("hex")}`,
   );
   try {
-    await copyPinnedBinary(sourcePath, temporaryPath, artifact.executableSha256);
+    try {
+      await copyPinnedBinary(
+        sourcePath,
+        temporaryPath,
+        artifact.executableSha256,
+      );
+    } catch (error) {
+      if (error instanceof ImsgInstallFailure) throw error;
+      throw installFailure("imsg install I/O failed safely");
+    }
     try {
       await link(temporaryPath, destinationPath);
     } catch (error) {
-      if (
-        typeof error !== "object"
-        || error === null
-        || !("code" in error)
-        || error.code !== "EEXIST"
-      ) throw error;
+      if (filesystemErrorCode(error) !== "EEXIST") {
+        throw installFailure("imsg install I/O failed safely");
+      }
       if (
         await pinnedBinaryCandidate(destinationPath, artifact.executableSha256)
           === null
-      ) throw new Error("concurrent imsg install produced unreviewed bytes");
+      ) throw installFailure("concurrent imsg install produced unreviewed bytes");
     }
   } finally {
     try {
       await unlink(temporaryPath);
     } catch (error) {
-      if (
-        typeof error !== "object"
-        || error === null
-        || !("code" in error)
-        || error.code !== "ENOENT"
-      ) throw error;
+      if (filesystemErrorCode(error) !== "ENOENT") {
+        throw installFailure("imsg install I/O cleanup failed safely");
+      }
     }
   }
   const installed = await pinnedBinaryCandidate(
     destinationPath,
     artifact.executableSha256,
   );
-  if (installed === null) throw new Error("imsg install could not be verified");
+  if (installed === null) {
+    throw installFailure("imsg install could not be verified");
+  }
   return Object.freeze({
     path: installed,
     executableSha256: artifact.executableSha256,

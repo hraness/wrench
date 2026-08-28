@@ -525,6 +525,12 @@ describe("npm publication contract", () => {
       expect(workflow).toContain(checkedSurface);
       expect(artifact).toContain(`"${checkedSurface}"`);
     }
+    expect(artifact).toContain(
+      '"src/providers/imessage-direct-install.ts"',
+    );
+    expect(await readFile(packageSmokeUrl, "utf8")).toContain(
+      "private-missing-reviewed-imsg-canary",
+    );
 
     for (const required of [
       "contentSha256",

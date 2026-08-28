@@ -264,8 +264,17 @@ async function runExpectingFailure(
   cwd: string,
   expectedExitCode: number,
   expectedDiagnostic: string,
+  forbiddenDiagnostics: readonly string[] = [],
+  env?: Readonly<Record<string, string>>,
 ): Promise<void> {
-  const child = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(command, env === undefined
+    ? { cwd, stdout: "pipe", stderr: "pipe" }
+    : {
+        cwd,
+        env: { ...globalThis.process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -275,6 +284,7 @@ async function runExpectingFailure(
     exitCode !== expectedExitCode
     || stdout.length !== 0
     || !stderr.includes(expectedDiagnostic)
+    || forbiddenDiagnostics.some((diagnostic) => stderr.includes(diagnostic))
   ) {
     throw new Error(
       `Installed CLI failure contract drifted for: ${command.join(" ")}; exit=${String(exitCode)}; stdout=${JSON.stringify(stdout)}; stderr=${JSON.stringify(stderr)}`,
@@ -398,6 +408,7 @@ async function verifyPackagedSkill(
     readonly contentPolicy?: unknown;
     readonly engines?: unknown;
     readonly publishConfig?: unknown;
+    readonly scripts?: unknown;
   };
 
   if (!skill.startsWith("---\nname: wrench\ndescription:")) {
@@ -473,6 +484,21 @@ async function verifyPackagedSkill(
     || manifest.publishConfig.registry !== NPM_REGISTRY
   ) {
     throw new Error("Packed Wrench must pin public publication to the canonical npm registry.");
+  }
+  if (
+    typeof manifest.scripts === "object"
+    && manifest.scripts !== null
+    && Object.hasOwn(manifest.scripts, "imessage:transport:install")
+  ) {
+    throw new Error("Packed Wrench must expose only the path-safe public iMessage installer CLI.");
+  }
+  if (await Bun.file(join(
+    packageRoot,
+    "src",
+    "scripts",
+    "install-imessage-direct-transport.ts",
+  )).exists()) {
+    throw new Error("Packed Wrench retained the superseded iMessage installer script.");
   }
   const npmDisclosure = await readFile(join(packageRoot, "DISCLOSURE"), "utf8");
   for (const required of ["dual-use", "browser profile", "explicit confirmation", "authorized"] as const) {
@@ -575,6 +601,24 @@ try {
     "relative-imsg",
     "--json",
   ], consumer, 2, "normalized-absolute-reviewed-imsg-file");
+  const missingReviewedImsg = join(
+    consumer,
+    "private-missing-reviewed-imsg-canary",
+  );
+  const imsgInstallerState = join(work, "imsg-installer-state");
+  await mkdir(imsgInstallerState, { mode: 0o700 });
+  await runExpectingFailure([
+    join(consumer, "node_modules", ".bin", "wrench"),
+    "imessage",
+    "transport",
+    "install",
+    "--binary",
+    missingReviewedImsg,
+    "--json",
+  ], consumer, 3, "imsg", [
+    missingReviewedImsg,
+    "private-missing-reviewed-imsg-canary",
+  ], { WRENCH_STATE_HOME: imsgInstallerState });
   await access(join(
     consumer,
     "node_modules",

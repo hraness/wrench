@@ -32,6 +32,7 @@ const requiredPaths = Object.freeze([
   "skills/wrench/references/install.md",
   "src/cli.ts",
   "src/index.ts",
+  "src/providers/imessage-direct-install.ts",
   "src/provider-plugin-registry.ts",
   "src/wrench.ts",
 ]);
