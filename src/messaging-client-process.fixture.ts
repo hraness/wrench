@@ -6,8 +6,8 @@ import { join } from "node:path";
 
 const originalSpawn = childProcess.spawn;
 const nativeSetTimeout = globalThis.setTimeout;
-globalThis.setTimeout = ((callback: TimerHandler, delay?: number, ...arguments_: unknown[]) =>
-  nativeSetTimeout(callback, delay === 120_000 ? 500 : delay === 1_000 ? 25 : delay, ...arguments_)) as typeof setTimeout;
+globalThis.setTimeout = ((callback: () => void, delay?: number) =>
+  nativeSetTimeout(callback, delay === 120_000 ? 500 : delay === 1_000 ? 25 : delay)) as typeof setTimeout;
 
 await mock.module("node:child_process", () => ({
   ...childProcess,
