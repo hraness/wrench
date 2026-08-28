@@ -1,0 +1,315 @@
+{
+  "schemaVersion": 4,
+  "id": "hacker-news-web",
+  "version": "1.0.0",
+  "displayName": "Hacker News (Authenticated Web API)",
+  "surfaceId": "hacker-news",
+  "origins": [
+    "https://news.ycombinator.com"
+  ],
+  "browserDomains": [
+    "news.ycombinator.com"
+  ],
+  "operations": {
+    "feeds.read": {
+      "description": "Observed contract: read one bounded signed-in Hacker News front-page projection through the exact first-party /news HTML response.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Exact reviewed Hacker News feed",
+            "enum": [
+              "news"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected submissions",
+            "minimum": 1,
+            "maximum": 30
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "posts.read": {
+      "description": "Observed contract: read one exact Hacker News submission through the fixed /item?id page and bind the submission row to the requested decimal ID.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "Exact decimal Hacker News submission ID",
+            "minLength": 1,
+            "maxLength": 20
+          }
+        },
+        "required": [
+          "item_id"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "comments.read": {
+      "description": "Observed contract: read one bounded Hacker News comment tree through the fixed /item?id page and validate ordered indentation parent binding.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal Hacker News submission ID",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected comments",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "post_id"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 4194304
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: favorite or un-favorite one exact Hacker News item only after both real request-bound action states and independent favorites-list readback are reviewed.",
+      "risk": "R2",
+      "sideEffect": "Favorites or un-favorites the exact confirmed Hacker News item for the authenticated account.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "Exact decimal Hacker News item ID",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired favorite state"
+          }
+        },
+        "required": [
+          "item_id",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "reactions.set": {
+      "description": "Capture-required contract reservation: upvote or unvote one exact Hacker News item only after both request-bound states and independent target readback are reviewed.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated account's human-confirmed upvote on the exact Hacker News item.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "Exact decimal Hacker News item ID",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "upvoted": {
+            "type": "boolean",
+            "description": "Exact desired upvote state"
+          }
+        },
+        "required": [
+          "item_id",
+          "upvoted"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "reactions.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "comments.create": {
+      "description": "Capture-required contract reservation: publish one top-level Hacker News comment using only a fresh request-bound form from the exact target page.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible comment on the exact confirmed Hacker News submission.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Exact decimal Hacker News submission ID",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact comment body",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "post_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "comments.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: publish one Hacker News reply using only a fresh request-bound form bound to the exact parent.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible reply to the exact confirmed Hacker News parent.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "parent_id": {
+            "type": "string",
+            "description": "Exact decimal Hacker News parent item ID",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact reply body",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "parent_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "posts.publish": {
+      "description": "Capture-required contract reservation: submit one Hacker News story or text post only through a fresh request-bound fnid/fnop form and exact returned-item binding.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible Hacker News submission.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Exact submission title",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "url": {
+            "type": "string",
+            "description": "Exact link submission URL",
+            "minLength": 1,
+            "maxLength": 4096,
+            "format": "url"
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact text submission body",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "posts.publish",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "content.edit": {
+      "description": "Capture-required contract reservation: edit one exact owned Hacker News item only after the current edit form, optimistic fields, response, and readback are observed.",
+      "risk": "R3",
+      "sideEffect": "Edits the externally visible content of the exact confirmed owned Hacker News item.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "Exact decimal owned Hacker News item ID",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact replacement text",
+            "minLength": 1,
+            "maxLength": 5000
+          }
+        },
+        "required": [
+          "item_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "hacker-news",
+        "action": "content.edit",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}

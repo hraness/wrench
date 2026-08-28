@@ -1,0 +1,684 @@
+{
+  "schemaVersion": 4,
+  "id": "bluesky-web",
+  "version": "1.6.0",
+  "displayName": "Bluesky (AT Protocol API)",
+  "surfaceId": "bluesky",
+  "origins": [
+    "https://bsky.app"
+  ],
+  "browserDomains": [
+    "bsky.app"
+  ],
+  "operations": {
+    "profiles.read": {
+      "description": "Observed contract: read one exact Bluesky profile through the fixed public AppView getProfile query with DID and handle binding plus exact follower, following, and post counts.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "handle": {
+            "type": "string",
+            "description": "Exact fully qualified Bluesky handle",
+            "minLength": 3,
+            "maxLength": 253
+          }
+        },
+        "required": [
+          "handle"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "profiles.read",
+        "contractVersion": 2,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    },
+    "feeds.read": {
+      "description": "Read one bounded authenticated Bluesky home timeline, notification feed, or private bookmark feed through fixed account-bound XRPC queries.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "feed": {
+            "type": "string",
+            "description": "Exact reviewed Bluesky feed",
+            "enum": [
+              "home",
+              "notifications",
+              "bookmarks"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected feed items",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Optional opaque cursor returned by the same feed",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "required": [
+          "feed"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "feeds.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.read": {
+      "description": "Read one exact Bluesky post through a fixed XRPC query with exact AT URI binding and bounded projection.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "post_uri"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "posts.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "comments.read": {
+      "description": "Read one bounded Bluesky reply tree through a fixed XRPC query bound to the exact requested post.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected replies",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "post_uri"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "comments.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "media.read": {
+      "description": "Read metadata-only Bluesky attachments through a fixed XRPC query without returning signed media URLs.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "post_uri"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "media.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "media.publish": {
+      "description": "Publish one confirmed Bluesky video post through a fixed first-party legacy video-service upload, bounded response-bound processing poll, repository record, durable accepted target, and authoritative record plus AppView readback.",
+      "risk": "R3",
+      "sideEffect": "Uploads one video and publishes one externally visible Bluesky post with the exact confirmed text and accessibility description.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact plain-text post body",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "media": {
+            "type": "file",
+            "description": "Exact plan-bound Bluesky MP4",
+            "maxBytes": 100000000,
+            "mediaTypes": [
+              "video/mp4"
+            ]
+          },
+          "alt": {
+            "type": "string",
+            "description": "Optional exact video accessibility text",
+            "minLength": 0,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "body",
+          "media"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "media.publish",
+        "contractVersion": 2,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.list": {
+      "description": "Capture-required contract reservation: list one bounded page of Bluesky conversations only after a live nonempty fixture proves exact bsky_chat proxy routing and viewer membership projection.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected conversations",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Optional opaque conversation cursor",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "required": []
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.read": {
+      "description": "Capture-required contract reservation: read one exact Bluesky conversation only after a live fixture proves exact bsky_chat proxy routing, membership, conversation binding, and message projection.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "convo_id": {
+            "type": "string",
+            "description": "Exact Bluesky conversation ID",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected messages",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Optional opaque message cursor",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "required": [
+          "convo_id"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "messaging.read",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "likes.set": {
+      "description": "Capture-required contract reservation: set or clear one exact like only after an authorized live fixture proves the record exchange and independent post-view readback.",
+      "risk": "R2",
+      "sideEffect": "Sets or clears the authenticated Bluesky account's like on the exact confirmed post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          },
+          "liked": {
+            "type": "boolean",
+            "description": "Exact desired like state"
+          }
+        },
+        "required": [
+          "post_uri",
+          "liked"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "likes.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "content.save": {
+      "description": "Capture-required contract reservation: set or clear one exact private bookmark only after an authorized live fixture proves the procedure and independent post-view readback.",
+      "risk": "R2",
+      "sideEffect": "Saves or unsaves the exact confirmed post in the authenticated Bluesky account's private bookmarks.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Exact desired private bookmark state"
+          }
+        },
+        "required": [
+          "post_uri",
+          "saved"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "content.save",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "content.delete": {
+      "description": "Delete one exact current-account Bluesky post only after an authoritative PDS pre-read binds its confirmed CID; submit deleteRecord with swapRecord and independently verify authoritative RecordNotFound.",
+      "risk": "R3",
+      "sideEffect": "Permanently deletes the exact confirmed authored Bluesky post from the authenticated account repository.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 2592000000,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact current-account app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          },
+          "expected_cid": {
+            "type": "string",
+            "description": "Exact confirmed current record CID",
+            "minLength": 11,
+            "maxLength": 201
+          }
+        },
+        "required": [
+          "post_uri",
+          "expected_cid"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "content.delete",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "relationships.follow.set": {
+      "description": "Capture-required contract reservation: follow or unfollow one exact DID only after an authorized live fixture proves record exchange and independent profile readback.",
+      "risk": "R2",
+      "sideEffect": "Follows or unfollows the exact confirmed Bluesky account as the authenticated viewer.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "actor_did": {
+            "type": "string",
+            "description": "Exact target Bluesky DID",
+            "minLength": 32,
+            "maxLength": 255
+          },
+          "followed": {
+            "type": "boolean",
+            "description": "Exact desired follow state"
+          }
+        },
+        "required": [
+          "actor_did",
+          "followed"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "relationships.follow.set",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.repost": {
+      "description": "Capture-required contract reservation: repost or undo one exact post only after an authorized live fixture proves record exchange and independent post-view readback.",
+      "risk": "R3",
+      "sideEffect": "Reposts or removes the authenticated Bluesky account's repost of the exact confirmed post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          },
+          "reposted": {
+            "type": "boolean",
+            "description": "Exact desired repost state"
+          }
+        },
+        "required": [
+          "post_uri",
+          "reposted"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "posts.repost",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.publish": {
+      "description": "Publish one plain-text or single-image post through the observed uploadBlob/createRecord contract with exact actor, text, attachment, record revision, and independent getPosts readback binding.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible Bluesky post with the exact confirmed text and optional image.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Exact plain-text post body",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional single plan-bound image",
+            "maxBytes": 2000000,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ]
+          },
+          "media_type": {
+            "type": "string",
+            "description": "Exact media type when an image is attached",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ]
+          },
+          "alt": {
+            "type": "string",
+            "description": "Optional exact image alt text",
+            "minLength": 0,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "posts.publish",
+        "contractVersion": 3,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "replies.create": {
+      "description": "Capture-required contract reservation: publish one plain-text or single-image reply only after an authorized live fixture proves actor, root, parent, response, and readback binding.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible reply to the exact confirmed Bluesky post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact parent app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact plain-text reply body",
+            "minLength": 1,
+            "maxLength": 280
+          },
+          "media": {
+            "type": "file",
+            "description": "Optional single plan-bound reply image",
+            "maxBytes": 2000000,
+            "mediaTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ]
+          },
+          "media_type": {
+            "type": "string",
+            "description": "Exact media type when an image is attached",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ]
+          },
+          "alt": {
+            "type": "string",
+            "description": "Optional exact image alt text",
+            "minLength": 0,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "post_uri",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "replies.create",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "posts.quote": {
+      "description": "Capture-required contract reservation: publish one quoted post only after an authorized live fixture proves the exact embedded strong reference and independent readback.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible Bluesky quote post for the exact confirmed source post.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact quoted app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact plain-text quote commentary",
+            "minLength": 1,
+            "maxLength": 280
+          }
+        },
+        "required": [
+          "post_uri",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "posts.quote",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "threads.publish": {
+      "description": "Capture-required contract reservation: publish one ordered one-to-twenty-five-item thread only after an authorized live fixture proves every root/reply dispatch and independent readback.",
+      "risk": "R3",
+      "sideEffect": "Publishes one externally visible ordered Bluesky thread containing every exact confirmed item.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "Exact ordered post texts beginning with the thread root",
+            "items": {
+              "type": "string",
+              "description": "One exact Bluesky thread item",
+              "minLength": 1,
+              "maxLength": 280
+            },
+            "minItems": 1,
+            "maxItems": 25
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "threads.publish",
+        "contractVersion": 1,
+        "timeoutMs": 600000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "messaging.send": {
+      "description": "Capture-required contract reservation: send one exact message only after an authorized live fixture proves conversation membership, sender, response, and independent getMessages readback.",
+      "risk": "R3",
+      "sideEffect": "Sends one message with the exact confirmed text to the exact confirmed Bluesky conversation.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "convo_id": {
+            "type": "string",
+            "description": "Exact Bluesky conversation ID",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "body": {
+            "type": "string",
+            "description": "Exact message text",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "convo_id",
+          "body"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    },
+    "content.share": {
+      "description": "Capture-required contract reservation: no separate native Bluesky share mutation is proven beyond the supported repost and quote operations.",
+      "risk": "R3",
+      "sideEffect": "Shares the exact confirmed Bluesky post through a distinct provider-visible target if such a native contract is proven.",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "post_uri": {
+            "type": "string",
+            "description": "Exact app.bsky.feed.post AT URI",
+            "minLength": 32,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "post_uri"
+        ]
+      },
+      "webSession": {
+        "site": "bluesky",
+        "action": "content.share",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 8388608
+      }
+    }
+  }
+}

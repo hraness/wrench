@@ -8,6 +8,7 @@ import {
   type BrowserSession,
   type CreateBrowserSessionOptions,
 } from "../browser";
+import { OperationDeadline } from "../operation-deadline";
 import {
   createLinkedInProfileBrowserTransport,
   LinkedInProfileBrowserFailure,
@@ -127,6 +128,56 @@ function identityResponse(): string {
 }
 
 describe("LinkedIn profile stats contained-browser transport", () => {
+  test("preserves startup and command deadline state before provider classification", async () => {
+    for (const failure of ["cancelled", "timed-out"] as const) {
+      const createDeadline = (): OperationDeadline => {
+        if (failure === "timed-out") return new OperationDeadline(0);
+        const controller = new AbortController();
+        controller.abort("private cancellation reason");
+        return new OperationDeadline(1_000, { signal: controller.signal });
+      };
+
+      const startupDeadline = createDeadline();
+      try {
+        await expect(createLinkedInProfileBrowserTransport(auth, {
+          timeoutMs: 1_000,
+          maxOutputBytes: 1_024,
+          operationDeadline: startupDeadline,
+          dependencies: {
+            createBrowserSession: () => Promise.reject(
+              new Error("private startup failure"),
+            ),
+          },
+        })).rejects.toMatchObject({ failure });
+      } finally {
+        startupDeadline.dispose();
+      }
+
+      const commandDeadline = createDeadline();
+      const session: BrowserSession = {
+        runBatch: () => Promise.reject(new Error("private command failure")),
+        close: () => Promise.resolve(),
+        cleanup: () => Promise.resolve(),
+      };
+      try {
+        const transport = await createLinkedInProfileBrowserTransport(auth, {
+          timeoutMs: 1_000,
+          maxOutputBytes: 1_024,
+          operationDeadline: commandDeadline,
+          dependencies: {
+            createBrowserSession: () => Promise.resolve(session),
+          },
+        });
+        await expect(transport.currentIdentityResponse()).rejects.toMatchObject({
+          failure,
+        });
+        await transport.close();
+      } finally {
+        commandDeadline.dispose();
+      }
+    }
+  });
+
   test("performs one exact personal identity, profile, and connections sequence with a serialization-safe body bound", async () => {
     const escapeHeavyHtml = `<html>${'"\\\n'.repeat(300)}</html>`;
     expect(Buffer.byteLength(escapeHeavyHtml)).toBeLessThanOrEqual(1_024);

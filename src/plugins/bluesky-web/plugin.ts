@@ -85,10 +85,11 @@ const operations = webSessionContractOperations(
 export const blueskyWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "bluesky-web",
-  version: "1.3.0",
+  version: "1.4.0",
   displayName: "Bluesky Web API",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["kernel/browser.ts", "../../browser.ts"],
     ["kernel/session-secrets.ts", "../../session-secrets.ts"],
     ["providers/iso-bmff.ts", "../../providers/iso-bmff.ts"],

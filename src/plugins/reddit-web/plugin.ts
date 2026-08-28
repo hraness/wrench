@@ -383,10 +383,11 @@ const operations = Object.freeze([
 export const redditWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "reddit-web",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "Reddit Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["providers/reddit-web.ts", "../../providers/reddit-web.ts"],
     ["providers/reddit-web-runtime.ts", "../../providers/reddit-web-runtime.ts"],
     ["providers/reddit-omni.ts", "../../providers/reddit-omni.ts"],

@@ -13,7 +13,7 @@ const importSpecifiers = [
 ];
 const binNames = ["wrench"];
 const MAX_PACKED_BYTES = 2_000_000;
-const MAX_PACKED_FILES = 425;
+const MAX_PACKED_FILES = 450;
 const MAX_UNPACKED_BYTES = 11_000_000;
 const NPM_REGISTRY = "https://registry.npmjs.org";
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";

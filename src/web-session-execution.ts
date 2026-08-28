@@ -1,3 +1,5 @@
+import { types as nodeTypes } from "node:util";
+
 import type { WrenchAuth } from "./auth";
 import type {
   BrowserFileResolver,
@@ -41,6 +43,99 @@ export class WebSessionCleanupUnverifiedError extends Error {
   }
 }
 
+export type ReadFailureProjection =
+  | {
+      readonly category: "target-unavailable";
+      readonly retryDisposition: "do-not-retry";
+    }
+  | {
+      readonly category: "auth-repair-required";
+      readonly retryDisposition: "repair-auth";
+    }
+  | {
+      readonly category:
+        | "account-mismatch"
+        | "contract-drift"
+        | "cleanup-required";
+      readonly retryDisposition: "do-not-retry";
+    }
+  | {
+      readonly category:
+        | "provider-throttled"
+        | "provider-temporary"
+        | "operation-timeout";
+      readonly retryDisposition: "retry-once-after-60s";
+    };
+
+const readFailureRetryDisposition = Object.freeze({
+  "target-unavailable": "do-not-retry",
+  "auth-repair-required": "repair-auth",
+  "account-mismatch": "do-not-retry",
+  "provider-throttled": "retry-once-after-60s",
+  "provider-temporary": "retry-once-after-60s",
+  "operation-timeout": "retry-once-after-60s",
+  "contract-drift": "do-not-retry",
+  "cleanup-required": "do-not-retry",
+} as const satisfies Readonly<Record<
+  ReadFailureProjection["category"],
+  ReadFailureProjection["retryDisposition"]
+>>);
+
+export function readFailureProjection(
+  category: ReadFailureProjection["category"],
+): ReadFailureProjection {
+  return Object.freeze({
+    category,
+    retryDisposition: readFailureRetryDisposition[category],
+  }) as ReadFailureProjection;
+}
+
+export function parseReadFailureProjection(
+  value: unknown,
+): ReadFailureProjection {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || nodeTypes.isProxy(value)
+  ) {
+    throw new Error("read failure projection must be a plain data object");
+  }
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("read failure projection must be a plain data object");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (
+    Reflect.ownKeys(descriptors).some((key) => typeof key !== "string")
+    || Object.keys(descriptors).sort().join(",") !== "category,retryDisposition"
+  ) {
+    throw new Error("read failure projection is malformed");
+  }
+  const categoryDescriptor = descriptors.category;
+  const dispositionDescriptor = descriptors.retryDisposition;
+  if (
+    categoryDescriptor === undefined
+    || dispositionDescriptor === undefined
+    || !categoryDescriptor.enumerable
+    || !dispositionDescriptor.enumerable
+    || !("value" in categoryDescriptor)
+    || !("value" in dispositionDescriptor)
+  ) throw new Error("read failure projection is malformed");
+  const category = categoryDescriptor.value as unknown;
+  if (
+    typeof category !== "string"
+    || !Object.hasOwn(readFailureRetryDisposition, category)
+  ) throw new Error("read failure category is malformed");
+  const expected = readFailureRetryDisposition[
+    category as ReadFailureProjection["category"]
+  ];
+  if (dispositionDescriptor.value !== expected) {
+    throw new Error("read failure retry disposition is inconsistent");
+  }
+  return readFailureProjection(category as ReadFailureProjection["category"]);
+}
+
 export type WebSessionExecution = {
   readonly status: "succeeded" | "failed" | "partial" | "indeterminate";
   readonly output: unknown;
@@ -57,6 +152,8 @@ export type WebSessionExecution = {
     readonly verified: number;
   };
   readonly error?: string;
+  /** Stable redacted failure policy for an R1 result that failed pre-dispatch. */
+  readonly readFailure?: ReadFailureProjection;
 };
 
 export type WebSessionDispatchEvent = {

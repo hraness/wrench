@@ -11,7 +11,7 @@ describe("Twitch provider plugin", () => {
   test("advertises one exact authenticated profile statistics read", () => {
     expect(twitchWebPlugin).toMatchObject({
       id: "twitch-web",
-      version: "1.0.0",
+      version: "1.1.0",
       sourceKind: "built-in",
     });
     expect(binding).toMatchObject({

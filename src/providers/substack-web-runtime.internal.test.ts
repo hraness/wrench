@@ -1291,6 +1291,40 @@ describe("Substack authenticated internal API runtime", () => {
     }
   });
 
+  test("projects only an exact signed-out login flag as auth repair", async () => {
+    for (const [loginState, expectedCategory, expectedDisposition] of [
+      [{ loggedIn: false }, "auth-repair-required", "repair-auth"],
+      [{}, "contract-drift", "do-not-retry"],
+    ] as const) {
+      const calls: CapturedRequest[] = [];
+      const result = await executeSubstackWebOperation(
+        recipe("profiles.read"),
+        { profile: "wrench-reader" },
+        boundAuth,
+        {
+          dependencies: dependencies(calls, (request) => {
+            if (request.url.pathname === "/api/v1/am_i_logged_in") {
+              return jsonResponse(loginState);
+            }
+            throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        readFailure: {
+          category: expectedCategory,
+          retryDisposition: expectedDisposition,
+        },
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      });
+      expect(calls.map((call) => call.url.pathname)).toEqual([
+        "/api/v1/am_i_logged_in",
+      ]);
+    }
+  });
+
   test("executes every observed R1 contract with no dispatch callback", async () => {
     const scenarios: readonly {
       readonly action: WebSessionRecipe["action"];
@@ -1484,6 +1518,44 @@ describe("Substack authenticated internal API runtime", () => {
       );
       scenario.verify(result.output);
     }
+  });
+
+  test("projects a target profile viewer-ID change as account mismatch", async () => {
+    const calls: CapturedRequest[] = [];
+    const result = await executeSubstackWebOperation(
+      recipe("profiles.read"),
+      { profile: "wrench-reader" },
+      boundAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          const bootstrap = bootstrapResponse(request);
+          if (bootstrap !== null) return bootstrap;
+          if (request.url.pathname === "/api/v1/user/wrench-reader/public_profile") {
+            return jsonResponse({
+              id: USER_ID + 1,
+              handle: "wrench-reader",
+              name: "Wrench Reader",
+              followerCount: 178,
+            });
+          }
+          throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/api/v1/am_i_logged_in",
+      "/",
+      "/api/v1/user/wrench-reader/public_profile",
+    ]);
   });
 
   test("binds the exact publication listed in the signed-in viewer dashboard", async () => {

@@ -33,6 +33,7 @@ import {
   type FileInputValue,
   type WrenchManifest,
 } from "./model";
+import { OperationDeadlineError } from "./operation-deadline";
 import {
   readProviderAcceptedMutationTargetEvidence,
   readRecoveryCapsule,
@@ -3812,6 +3813,115 @@ describe("official-provider plans and receipts", () => {
     }
   });
 
+  test("accepts only a consistent pre-dispatch R1 failure projection", async () => {
+    const testState = state();
+    try {
+      installXProviderFixture(testState);
+      const invocation = preparedRead(testState);
+      const failed = {
+        status: "failed",
+        output: null,
+        finalUrl: null,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+        error: "bounded provider failure",
+      } as const;
+      const accepted = await executeReadInvocation(invocation, {
+        headed: false,
+        environment: testState.environment,
+        executeProvider: () => Promise.resolve(foreignProviderExecution({
+          ...failed,
+          readFailure: {
+            category: "provider-throttled",
+            retryDisposition: "retry-once-after-60s",
+          },
+        })),
+      });
+      expect(accepted).toMatchObject({
+        receipt: {
+          status: "failed",
+          dispatchStarted: false,
+          dispatch: { planned: 0, started: 0, verified: 0 },
+        },
+        readFailure: {
+          category: "provider-throttled",
+          retryDisposition: "retry-once-after-60s",
+        },
+      });
+
+      let accessorReads = 0;
+      const accessorFailure: Record<string, unknown> = {
+        retryDisposition: "do-not-retry",
+      };
+      Object.defineProperty(accessorFailure, "category", {
+        enumerable: true,
+        get: () => {
+          accessorReads += 1;
+          return "contract-drift";
+        },
+      });
+      for (const candidate of [
+        {
+          ...failed,
+          readFailure: {
+            category: "provider-throttled",
+            retryDisposition: "do-not-retry",
+          },
+        },
+        {
+          ...failed,
+          readFailure: {
+            category: "contract-drift",
+            retryDisposition: "do-not-retry",
+            detail: "private provider detail",
+          },
+        },
+        {
+          ...failed,
+          output: { private: "private failed output with projection" },
+          readFailure: {
+            category: "contract-drift",
+            retryDisposition: "do-not-retry",
+          },
+        },
+        {
+          ...failed,
+          output: { private: "private failed output without projection" },
+        },
+        {
+          ...providerReadExecution({}),
+          readFailure: {
+            category: "contract-drift",
+            retryDisposition: "do-not-retry",
+          },
+        },
+        { ...failed, readFailure: accessorFailure },
+      ]) {
+        const result = await executeReadInvocation(invocation, {
+          headed: false,
+          environment: testState.environment,
+          executeProvider: () => Promise.resolve(
+            foreignProviderExecution(candidate),
+          ),
+        });
+        expect(result).toMatchObject({
+          receipt: { status: "failed" },
+          output: null,
+          readFailure: {
+            category: "contract-drift",
+            retryDisposition: "do-not-retry",
+          },
+        });
+        expect(JSON.stringify(result)).not.toContain("private provider detail");
+        expect(JSON.stringify(result)).not.toContain("private failed output");
+      }
+      expect(accessorReads).toBe(0);
+      expect(allFileText(testState.directory)).not.toContain("private failed output");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("rejects non-JSON, circular, and oversized executor output", async () => {
     const testState = state();
     try {
@@ -3889,6 +3999,10 @@ describe("official-provider plans and receipts", () => {
         dispatch: { planned: 0, started: 0, verified: 0 },
       });
       expect(result.output).toBeNull();
+      expect(result.readFailure).toEqual({
+        category: "contract-drift",
+        retryDisposition: "do-not-retry",
+      });
       expect(result.receipt.error).toBe(
         "official API operation failed before the dispatch boundary; reason: executor-private-thrown-value",
       );
@@ -4134,6 +4248,55 @@ describe("receipts", () => {
     }
   });
 
+  test.each([
+    ["timed-out", "operation-timeout", "retry-once-after-60s"],
+    ["cancelled", "contract-drift", "do-not-retry"],
+  ] as const)(
+    "projects clean outer web-session %s failures without parsing text",
+    async (failure, expectedCategory, expectedDisposition) => {
+      const testState = state();
+      try {
+        const selectedManifest = xWebManifest();
+        const selectedAuth = createAuth(`x-web-${failure}`, {
+          source: "arc",
+          profile: "Profile 1",
+          subject: "123",
+        });
+        installManifest(selectedManifest, {
+          force: false,
+          environment: testState.environment,
+        });
+        saveAuth(selectedAuth, testState.environment);
+        const result = await executeReadInvocation({
+          manifest: selectedManifest,
+          operationId: "posts.read",
+          input: { post_id: "2078889282404569267" },
+          auth: selectedAuth,
+        }, {
+          headed: false,
+          environment: testState.environment,
+          executeWebSession: () => Promise.reject(
+            new OperationDeadlineError("authenticated web operation deadline", failure),
+          ),
+        });
+        expect(result).toMatchObject({
+          readFailure: {
+            category: expectedCategory,
+            retryDisposition: expectedDisposition,
+          },
+          receipt: {
+            status: "failed",
+            dispatchStarted: false,
+            dispatch: { planned: 0, started: 0, verified: 0 },
+          },
+        });
+      } finally {
+        rmSync(testState.directory, { recursive: true, force: true });
+      }
+    },
+    10_000,
+  );
+
   test("rejects browser-only recovery fields from an official-provider executor", async () => {
     const testState = state();
     try {
@@ -4213,6 +4376,10 @@ describe("receipts", () => {
       expect(result).toMatchObject({
         privateArtifactsPreserved: true,
         recoveryHandle,
+        readFailure: {
+          category: "cleanup-required",
+          retryDisposition: "do-not-retry",
+        },
         receipt: {
           status: "failed",
           dispatchStarted: false,
@@ -4274,6 +4441,10 @@ describe("receipts", () => {
       expect(persistenceFailure).toMatchObject({
         privateArtifactsPreserved: true,
         recoveryHandle,
+        readFailure: {
+          category: "cleanup-required",
+          retryDisposition: "do-not-retry",
+        },
         receipt: { status: "failed" },
       });
       expect(persistenceFailure.receipt.error).toContain(
@@ -4328,6 +4499,10 @@ describe("receipts", () => {
 
       expect(result).toMatchObject({
         privateArtifactsPreserved: false,
+        readFailure: {
+          category: "cleanup-required",
+          retryDisposition: "do-not-retry",
+        },
         receipt: {
           status: "failed",
           dispatchStarted: false,

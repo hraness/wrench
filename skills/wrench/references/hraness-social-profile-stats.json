@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "collectionKey": "hraness-social-profile-statistics",
+  "execution": { "order": "sequential", "observationMode": "live-only" },
+  "accounts": [
+    {
+      "accountKey": "x-hraness",
+      "reads": [
+        {
+          "adapter": "x-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "x-chrome" },
+          "input": { "handle": "hraness" },
+          "expectedOutput": { "provider": "x", "targetUrl": "https://x.com/hraness" },
+          "metricKeys": ["followers", "following"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "x-lifedaysleft",
+      "reads": [
+        {
+          "adapter": "x-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "x-chrome" },
+          "input": { "handle": "lifedaysleft" },
+          "expectedOutput": { "provider": "x", "targetUrl": "https://x.com/lifedaysleft" },
+          "metricKeys": ["followers", "following"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "linkedin-personal",
+      "reads": [
+        {
+          "adapter": "linkedin-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "linkedin-chrome" },
+          "input": {
+            "profile_url": "https://www.linkedin.com/in/hraness",
+            "include_connections": true
+          },
+          "expectedOutput": {
+            "provider": "linkedin",
+            "targetUrl": "https://www.linkedin.com/in/hraness/"
+          },
+          "metricKeys": ["followers", "connections"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "linkedin-company-hraness",
+      "reads": [
+        {
+          "adapter": "linkedin-web",
+          "operation": "organizations.read",
+          "authority": { "kind": "auth", "authId": "linkedin-chrome" },
+          "input": { "organization_url": "https://www.linkedin.com/company/hraness" },
+          "expectedOutput": {
+            "provider": "linkedin",
+            "targetUrl": "https://www.linkedin.com/company/hraness/"
+          },
+          "metricKeys": ["followers"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 60000,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "youtube-hraness",
+      "reads": [
+        {
+          "adapter": "youtube-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "youtube-chrome" },
+          "input": { "profile": "@hraness" },
+          "expectedOutput": { "provider": "youtube", "targetUrl": "https://www.youtube.com/@hraness" },
+          "metricKeys": ["subscribers", "videos", "views"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "twitch-hranessdotcom",
+      "reads": [
+        {
+          "adapter": "twitch-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "twitch-chrome" },
+          "input": { "profile": "hranessdotcom" },
+          "expectedOutput": { "provider": "twitch", "targetUrl": "https://www.twitch.tv/hranessdotcom" },
+          "metricKeys": ["followers"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "bluesky-hraness",
+      "reads": [
+        {
+          "adapter": "bluesky-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "public" },
+          "input": { "handle": "hraness.bsky.social" },
+          "expectedOutput": {
+            "provider": "bluesky",
+            "targetUrl": "https://bsky.app/profile/hraness.bsky.social"
+          },
+          "metricKeys": ["followers", "following", "posts"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "instagram-hraness",
+      "reads": [
+        {
+          "adapter": "instagram-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "instagram-chrome" },
+          "input": { "profile": "hraness" },
+          "expectedOutput": {
+            "provider": "instagram",
+            "targetUrl": "https://www.instagram.com/hraness/"
+          },
+          "metricKeys": ["followers", "following", "posts"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "threads-hraness",
+      "reads": [
+        {
+          "adapter": "threads-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "threads-chrome" },
+          "input": { "profile": "hraness" },
+          "expectedOutput": {
+            "provider": "threads",
+            "targetUrl": "https://www.threads.com/@hraness"
+          },
+          "metricKeys": ["followers", "recentViews"],
+          "expectedCategoricalGaps": [
+            {
+              "metricKey": "recentViews",
+              "reason": "not-authorized",
+              "until": "account-eligible"
+            }
+          ],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "substack-hraness",
+      "reads": [
+        {
+          "adapter": "substack-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "substack-chrome" },
+          "input": { "profile": "hraness" },
+          "expectedOutput": { "provider": "substack", "targetUrl": "https://substack.com/@hraness" },
+          "metricKeys": ["followers"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        },
+        {
+          "adapter": "substack-web",
+          "operation": "organizations.read",
+          "authority": { "kind": "auth", "authId": "substack-chrome" },
+          "input": { "organization": "hraness" },
+          "expectedOutput": {
+            "provider": "substack",
+            "targetUrl": "https://hraness.substack.com/"
+          },
+          "metricKeys": ["freeSubscribers", "paidSubscribers"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "github-0thernet",
+      "reads": [
+        {
+          "adapter": "github-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "public" },
+          "input": { "username": "0thernet" },
+          "expectedOutput": { "provider": "github", "targetUrl": "https://github.com/0thernet" },
+          "metricKeys": ["followers", "following", "publicRepositories"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "github-hraness",
+      "reads": [
+        {
+          "adapter": "github-web",
+          "operation": "organizations.read",
+          "authority": { "kind": "public" },
+          "input": { "organization": "hraness" },
+          "expectedOutput": { "provider": "github", "targetUrl": "https://github.com/hraness" },
+          "metricKeys": ["stars", "followers"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "tiktok-hraness",
+      "reads": [
+        {
+          "adapter": "tiktok-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "tiktok-chrome" },
+          "input": { "profile": "hraness" },
+          "expectedOutput": { "provider": "tiktok", "targetUrl": "https://www.tiktok.com/@hraness" },
+          "metricKeys": ["followers", "following", "likes"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    },
+    {
+      "accountKey": "reddit-bgdotjpg",
+      "reads": [
+        {
+          "adapter": "reddit-web",
+          "operation": "profiles.read",
+          "authority": { "kind": "auth", "authId": "reddit-chrome" },
+          "input": { "profile": "bgdotjpg" },
+          "expectedOutput": { "provider": "reddit", "targetUrl": "https://www.reddit.com/user/bgdotjpg/" },
+          "metricKeys": ["followers", "karma", "contributions"],
+          "expectedCategoricalGaps": [],
+          "requiredDelayBeforeMs": 0,
+          "semantics": { "state": "observed", "risk": "R1", "sideEffect": "none" }
+        }
+      ]
+    }
+  ]
+}

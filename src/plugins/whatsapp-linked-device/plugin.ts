@@ -22,7 +22,7 @@ if (whatsappContracts === undefined) {
 export const whatsappLinkedDevicePlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "whatsapp-linked-device",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "WhatsApp Linked Device",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
