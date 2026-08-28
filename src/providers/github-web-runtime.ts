@@ -1,10 +1,18 @@
 import type { WrenchAuth } from "../auth";
 import type { OperationInput, WebSessionRecipe } from "../model";
+import { OperationDeadlineError } from "../operation-deadline";
 import { pinnedHttpsFetch, type PinnedHttpsFetch } from "../pinned-https";
 import type {
   WebSessionExecution,
   WebSessionOperationDeadline,
 } from "../web-session-execution";
+import {
+  failedProviderRead,
+  ProviderReadResponseRejectedError,
+  ProviderReadThrottledError,
+  ProviderReadTransportError,
+  type ProviderReadFailureStage,
+} from "./read-failure";
 import {
   GITHUB_API_ORIGIN,
   GITHUB_MAX_ORGANIZATION_REPOSITORIES,
@@ -43,7 +51,7 @@ function remainingTimeoutMs(
     deadline?.remainingTimeMs() ?? timeoutMs,
   );
   if (remaining < 1_000) {
-    throw new Error(`${label} timed out`);
+    throw new OperationDeadlineError(label, "timed-out");
   }
   return remaining;
 }
@@ -91,9 +99,16 @@ async function boundedBytes(
   let length = 0;
   try {
     for (;;) {
-      const item = deadline === undefined
-        ? await reader.read()
-        : await deadline.run(() => reader.read(), label);
+      const item = await (async () => {
+        try {
+          return deadline === undefined
+            ? await reader.read()
+            : await deadline.run(() => reader.read(), label);
+        } catch (error) {
+          if (error instanceof OperationDeadlineError) throw error;
+          throw new ProviderReadTransportError(error);
+        }
+      })();
       if (item.done) break;
       if (
         !(item.value instanceof Uint8Array)
@@ -158,17 +173,35 @@ async function requestGitHubJson(
   responseLabel: string,
   readPaginationLink: boolean,
 ): Promise<{ readonly value: unknown; readonly link: string | null }> {
-  const response = await fetch(url, {
-    method: "GET",
-    headers: githubHeaders(userAgent),
-    redirect: "error",
-    signal,
-  }, remainingTimeoutMs(timeoutMs, deadline, operationLabel));
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: githubHeaders(userAgent),
+      redirect: "error",
+      signal,
+    }, remainingTimeoutMs(timeoutMs, deadline, operationLabel));
+  } catch (error) {
+    if (signal.aborted) {
+      if (deadline !== undefined) deadline.throwIfUnavailable(operationLabel);
+      throw new OperationDeadlineError(operationLabel, "timed-out");
+    }
+    throw new ProviderReadTransportError(error);
+  }
   if (response.status !== 200) {
     void response.body?.cancel().catch(() => undefined);
-    throw new Error(
-      `${apiLabel} returned unreviewed status ${response.status}`,
-    );
+    const retryAfter = response.headers.get("retry-after");
+    if (
+      response.status === 403
+      && (
+        response.headers.get("x-ratelimit-remaining") === "0"
+        || (
+          retryAfter !== null
+          && /^(?:0|[1-9][0-9]{0,8})$/u.test(retryAfter)
+        )
+      )
+    ) throw new ProviderReadThrottledError();
+    throw new ProviderReadResponseRejectedError(response.status);
   }
   if (!jsonContentType(response)) {
     void response.body?.cancel().catch(() => undefined);
@@ -316,6 +349,12 @@ export async function executeGitHubPublicProfileRead(
       dispatchStarted: false,
       dispatch: { planned: 0, started: 0, verified: 0 },
     };
+  } catch (error) {
+    return failedProviderRead("GitHub profile", error, `https://github.com/${username}`, {
+      stage: "target",
+      authenticated: false,
+      targetStatusUnavailable: true,
+    });
   } finally {
     operation.dispose();
   }
@@ -338,6 +377,7 @@ export async function executeGitHubPublicOrganizationRead(
   const requestedOrganization = exactOrganizationInput(input);
   const fetch = dependencies?.fetch ?? pinnedHttpsFetch;
   const operation = signalForOperation(recipe, operationDeadline);
+  let stage: ProviderReadFailureStage = "target";
   try {
     const organizationResponse = await requestGitHubJson(
       new URL(`/orgs/${requestedOrganization}`, GITHUB_API_ORIGIN),
@@ -367,6 +407,7 @@ export async function executeGitHubPublicOrganizationRead(
     }
     const repositoryIds = new Set<number>();
     let totalStars = 0;
+    stage = "supplemental";
     for (let page = 1; page <= pageCount; page += 1) {
       const response = await requestGitHubJson(
         organizationRepositoriesUrl(organization.organization, page),
@@ -430,6 +471,17 @@ export async function executeGitHubPublicOrganizationRead(
       dispatchStarted: false,
       dispatch: { planned: 0, started: 0, verified: 0 },
     };
+  } catch (error) {
+    return failedProviderRead(
+      "GitHub organization",
+      error,
+      `https://github.com/${requestedOrganization}`,
+      {
+        stage,
+        authenticated: false,
+        targetStatusUnavailable: true,
+      },
+    );
   } finally {
     operation.dispose();
   }

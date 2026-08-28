@@ -51,13 +51,13 @@ function strictCookie(name: string, value: string): StrictCookie {
   };
 }
 
-function bootstrapHtml(): string {
+function bootstrapHtml(loggedIn: unknown = true): string {
   return [
     "<!doctype html>",
     `<script>ytcfg.set(${JSON.stringify({
       INNERTUBE_API_KEY: API_KEY,
       INNERTUBE_CONTEXT_CLIENT_NAME: 1,
-      LOGGED_IN: true,
+      LOGGED_IN: loggedIn,
       SESSION_INDEX: 0,
       DELEGATED_SESSION_ID: DELEGATE_ID,
     })});</script>`,
@@ -83,8 +83,8 @@ function jsonResponse(value: unknown): Response {
   });
 }
 
-function htmlResponse(): Response {
-  return new Response(bootstrapHtml(), {
+function htmlResponse(loggedIn: unknown = true): Response {
+  return new Response(bootstrapHtml(loggedIn), {
     status: 200,
     headers: { "content-type": "text/html" },
   });
@@ -507,6 +507,36 @@ describe("YouTube authenticated Innertube runtime", () => {
           assertInnertubeEnvelope(request);
         }
       }
+    }
+  });
+
+  test("projects only the exact signed-out bootstrap flag as auth repair", async () => {
+    for (const [loggedIn, expectedCategory, expectedDisposition] of [
+      [false, "auth-repair-required", "repair-auth"],
+      ["false", "contract-drift", "do-not-retry"],
+    ] as const) {
+      const calls: CapturedRequest[] = [];
+      const result = await executeYouTubeWebOperation(
+        recipe("profiles.read"),
+        { profile: "@wrench_test" },
+        youtubeAuth,
+        {
+          dependencies: dependencies(calls, (request) => {
+            if (request.url.pathname === "/") return htmlResponse(loggedIn);
+            throw new Error(`unexpected signed-out fixture request ${request.url.href}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        readFailure: {
+          category: expectedCategory,
+          retryDisposition: expectedDisposition,
+        },
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      });
+      expect(calls.map((call) => call.url.pathname)).toEqual(["/"]);
     }
   });
 

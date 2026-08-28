@@ -275,15 +275,21 @@ describe("TikTok authenticated internal-API runtime", () => {
 
   test("rejects a profile handle that does not match the bound viewer", async () => {
     const calls: CapturedRequest[] = [];
-    const message = await rejectionMessage(executeTikTokWebOperation(
+    const result = await executeTikTokWebOperation(
       recipe("profiles.read"),
       { profile: "another_profile" },
       boundAuth,
       {
         dependencies: dependencies(calls, () => jsonResponse(profileResponse())),
       },
-    ));
-    expect(message).toContain("requested profile did not match");
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
+    });
     expect(calls).toHaveLength(1);
   });
 

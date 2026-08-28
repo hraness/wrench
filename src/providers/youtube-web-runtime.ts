@@ -20,6 +20,7 @@ import type {
   WebSessionExecution,
   WebSessionOperationDeadline,
 } from "../web-session-execution";
+import { failedProviderRead } from "./read-failure";
 import {
   assertYouTubeResponseSuccess,
   assertYouTubeVideoBinding,
@@ -107,6 +108,13 @@ type InnertubeEndpoint =
 export type YouTubeWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
   readonly now?: () => number;
 };
+
+export class YouTubeAuthRepairRequiredError extends Error {
+  constructor() {
+    super("YouTube selected session is not signed in");
+    this.name = "YouTubeAuthRepairRequiredError";
+  }
+}
 
 export type YouTubeWebDesiredStateKind =
   | "like"
@@ -759,6 +767,9 @@ async function bootstrapYouTube(
     maxBytes: MAX_BOOTSTRAP_BYTES,
   });
   const config = parseYouTubeBootstrapHtml(html);
+  if (config.bootstrapLoggedIn === false) {
+    throw new YouTubeAuthRepairRequiredError();
+  }
   const partial = {
     auth,
     client,
@@ -1338,7 +1349,7 @@ export async function executeYouTubeWebOperation(
   ) {
     throw new Error(`YouTube authenticated web operation ${recipe.action} has no executable reviewed contract`);
   }
-  const bootstrap = await bootstrapYouTube(auth, {
+  const bootstrapOptions = {
     timeoutMs: recipe.timeoutMs,
     maxOutputBytes: recipe.maxOutputBytes,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -1346,11 +1357,39 @@ export async function executeYouTubeWebOperation(
       ? {}
       : { operationDeadline: options.operationDeadline }),
     ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
-  });
+  };
+  if (recipe.action === "profiles.read") {
+    const target = youtubeProfileTarget(input.profile);
+    let bootstrap: YouTubeBootstrap;
+    try {
+      bootstrap = await bootstrapYouTube(auth, bootstrapOptions);
+    } catch (error) {
+      return failedProviderRead("YouTube profile", error, target.url, {
+        stage: "bootstrap",
+        authenticated: true,
+        authRepairRequired: (candidate) => candidate.message.includes("cookie")
+          || candidate.message.includes("bound auth subject")
+          || candidate instanceof YouTubeAuthRepairRequiredError,
+        accountMismatch: (candidate) => candidate.message.includes("current account did not match"),
+      });
+    }
+    try {
+      return await executeProfileRead(bootstrap, input);
+    } catch (error) {
+      return failedProviderRead("YouTube profile", error, target.url, {
+        stage: "target",
+        authenticated: true,
+        authRepairRequired: (candidate) => candidate.message.includes("cookie")
+          || candidate.message.includes("bound auth subject")
+          || candidate instanceof YouTubeAuthRepairRequiredError,
+        accountMismatch: (candidate) => candidate.message.includes("current account did not match"),
+      });
+    }
+  }
+  const bootstrap = await bootstrapYouTube(auth, bootstrapOptions);
   if (recipe.action === "feeds.read") return executeFeed(bootstrap, input);
   if (recipe.action === "media.read") return executeMediaRead(bootstrap, input);
   if (recipe.action === "posts.read") return executePostRead(bootstrap, input);
-  if (recipe.action === "profiles.read") return executeProfileRead(bootstrap, input);
   if (recipe.action === "comments.read") return executeCommentsRead(bootstrap, input);
   if (
     recipe.action === "likes.set"

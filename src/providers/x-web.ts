@@ -1112,6 +1112,13 @@ function xProfileObservationTime(value: string): string {
 }
 
 /** Bind and project one exact UserByScreenName response. */
+export class XProfileTargetUnavailableError extends Error {
+  constructor() {
+    super("X profile target is unavailable");
+    this.name = "XProfileTargetUnavailableError";
+  }
+}
+
 export function projectXWebProfileStats(
   response: unknown,
   expectedHandleValue: unknown,
@@ -1122,8 +1129,11 @@ export function projectXWebProfileStats(
     extractXWebGraphQlReadResponseRoot("profiles.by-handle", response),
     "X profile response result",
   );
+  if (result.__typename === "UserUnavailable") {
+    throw new XProfileTargetUnavailableError();
+  }
   if (result.__typename !== "User") {
-    throw new Error("X profile response did not contain one available User");
+    throw new Error("X profile response contained an unreviewed result typename");
   }
   const id = xProfileText(result.rest_id, "X profile rest_id", 19);
   if (id === null || !/^[0-9]{1,19}$/u.test(id)) {

@@ -11,7 +11,7 @@ describe("GitHub provider plugin", () => {
   test("advertises public exact profile and organization statistics reads", () => {
     expect(githubWebPlugin).toMatchObject({
       id: "github-web",
-      version: "1.1.0",
+      version: "1.2.0",
       sourceKind: "built-in",
     });
     expect(binding).toMatchObject({

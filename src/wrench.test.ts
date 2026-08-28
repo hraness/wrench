@@ -3609,6 +3609,69 @@ describe("CLI previews and exit semantics", () => {
     expect(view("indeterminate").ok).toBeFalse();
   });
 
+  test("renders one exact redacted retry policy only for a failed R1 read", () => {
+    const privateProviderDetail = "private-provider-response-body";
+    const failed: InvocationResult = {
+      receipt: {
+        schemaVersion: 4,
+        runId: "00000000-0000-4000-8000-000000000305",
+        planDigest: null,
+        adapter: {
+          id: "x-web",
+          version: "1.0.0",
+          hash: "a".repeat(64),
+        },
+        operation: "profiles.read",
+        risk: "R1",
+        inputHash: "b".repeat(64),
+        auth: {
+          id: "x-main",
+          hash: "c".repeat(64),
+          kind: "cookie-source",
+        },
+        transport: "web-session-api",
+        webSessionContractHash: "d".repeat(64),
+        status: "failed",
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+        startedAt: "2026-08-27T15:00:00.000Z",
+        finishedAt: "2026-08-27T15:00:01.000Z",
+        finalOrigin: "https://x.com",
+        error: "authenticated web API operation failed before the dispatch boundary",
+      },
+      output: null,
+      replayed: false,
+      readFailure: {
+        category: "provider-throttled",
+        retryDisposition: "retry-once-after-60s",
+      },
+    };
+    const view = invocationView(failed);
+    expect(view).toMatchObject({
+      ok: false,
+      status: "failed",
+      readFailure: {
+        category: "provider-throttled",
+        retryDisposition: "retry-once-after-60s",
+      },
+    });
+    expect(Object.keys(view.readFailure as Record<string, unknown>).sort())
+      .toEqual(["category", "retryDisposition"]);
+    expect(JSON.stringify(view.readFailure)).not.toContain(privateProviderDetail);
+
+    const { readFailure: _failedReadPolicy, ...failedWithoutPolicy } = failed;
+    const succeeded = invocationView({
+      ...failedWithoutPolicy,
+      receipt: {
+        ...failed.receipt,
+        status: "succeeded",
+        error: null,
+      },
+      output: {},
+    });
+    expect(succeeded).not.toHaveProperty("readFailure");
+  });
+
   test("uses exit 4 for an unconfirmed write and exit 0 for an explicit preview", async () => {
     const testState = state();
     try {

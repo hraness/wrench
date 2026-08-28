@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "reddit-web",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "displayName": "Reddit (Authenticated Web API)",
   "surfaceId": "reddit",
   "origins": [

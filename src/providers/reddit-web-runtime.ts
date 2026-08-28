@@ -19,6 +19,7 @@ import type {
   WebSessionOperationDeadline,
   WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
+import { failedProviderRead, type ProviderReadFailureStage } from "./read-failure";
 import {
   REDDIT_WEB_OPERATION_NAMES,
   REDDIT_WEB_OPERATIONS,
@@ -623,12 +624,15 @@ async function readProfile(
   input: OperationInput,
   viewer: RedditWebViewer,
   dependencies: RedditWebRuntimeDependencies | undefined,
+  setStage: (stage: ProviderReadFailureStage) => void = () => undefined,
 ): Promise<Readonly<Record<string, unknown>>> {
   const requestedProfile = profileInput(input);
   if (requestedProfile.toLocaleLowerCase("en-US") !== viewer.username.toLocaleLowerCase("en-US")) {
     throw new Error("Reddit requested profile did not match the bound current account");
   }
+  setStage("target");
   const profile = await readProfileAbout(client, requestedProfile, recipe.maxOutputBytes);
+  setStage("supplemental");
   const contributions = await readVisibleContributionCount(
     client,
     requestedProfile,
@@ -1659,14 +1663,25 @@ export async function executeRedditWebOperation(
   if (contract.state !== "observed") {
     throw new Error(`Reddit authenticated web operation ${recipe.action} is capture-required: ${contract.reason}`);
   }
-  const client = await createWebSessionClient(REDDIT_ORIGIN, auth, {
-    timeoutMs: recipe.timeoutMs,
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-    ...(options.operationDeadline === undefined
-      ? {}
-      : { operationDeadline: options.operationDeadline }),
-    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
-  });
+  let client: WebSessionClient;
+  try {
+    client = await createWebSessionClient(REDDIT_ORIGIN, auth, {
+      timeoutMs: recipe.timeoutMs,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+    });
+  } catch (error) {
+    if (recipe.action !== "profiles.read") throw error;
+    return failedProviderRead(
+      "Reddit profile",
+      error,
+      `${REDDIT_ORIGIN}/user/${encodeURIComponent(profileInput(input))}/`,
+      { stage: "bootstrap", authenticated: true },
+    );
+  }
   if (recipe.action === "media.publish") {
     return executeMediaPublish(client, recipe, input, auth, options);
   }
@@ -1677,7 +1692,37 @@ export async function executeRedditWebOperation(
     return executeDesiredState(client, recipe, input, auth, options);
   }
 
-  const viewer = await requireBoundViewer(client, auth);
+  if (recipe.action === "profiles.read") {
+    const finalUrl = `${REDDIT_ORIGIN}/user/${encodeURIComponent(profileInput(input))}/`;
+    let stage: ProviderReadFailureStage = "identity";
+    try {
+      const viewer = await requireBoundViewer(client, auth);
+      const output = await readProfile(
+        client,
+        recipe,
+        input,
+        viewer,
+        options.dependencies,
+        (next) => { stage = next; },
+      );
+      return {
+        status: "succeeded",
+        output,
+        finalUrl,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      };
+    } catch (error) {
+      return failedProviderRead("Reddit profile", error, finalUrl, {
+        stage,
+        authenticated: true,
+        accountMismatch: (candidate) => candidate.message.includes("no longer matches")
+          || candidate.message.includes("did not match the bound current account"),
+        authRepairRequired: (candidate) => candidate.message.includes("auth locator bound"),
+      });
+    }
+  }
+  await requireBoundViewer(client, auth);
   // R1 operations never enter the mutation dispatch ledger.
   void options.beforeDispatch;
   void options.afterDispatchVerified;
@@ -1696,9 +1741,7 @@ export async function executeRedditWebOperation(
     );
     finalUrl = `${REDDIT_ORIGIN}/comments/${targetId.slice(3)}/`;
   } else {
-    output = recipe.action === "profiles.read"
-      ? await readProfile(client, recipe, input, viewer, options.dependencies)
-      : recipe.action === "feeds.read"
+    output = recipe.action === "feeds.read"
         ? await readFeed(client, recipe, input)
         : recipe.action === "posts.read"
           ? await readPostOrComments(client, recipe, input, false)
@@ -1711,9 +1754,7 @@ export async function executeRedditWebOperation(
                 : (() => {
                     throw new Error(`Reddit authenticated web operation ${recipe.action} has no executable reviewed contract`);
                   })();
-    finalUrl = recipe.action === "profiles.read"
-      ? `${REDDIT_ORIGIN}/user/${encodeURIComponent(profileInput(input))}/`
-      : recipe.action === "feeds.read"
+    finalUrl = recipe.action === "feeds.read"
         ? REDDIT_ORIGIN
         : recipe.action === "posts.read" || recipe.action === "comments.read"
           ? `${REDDIT_ORIGIN}/comments/${postInput(input).slice(3)}/`

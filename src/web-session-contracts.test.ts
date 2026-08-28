@@ -62,22 +62,22 @@ describe("authenticated web-session contract identity", () => {
     // Writers use the exact predecessor runtime identities produced with
     // NODE_ENV unset. Runtime source closure is verified independently.
     expect(webSessionContractHash(xLike)).toBe(
-      "b846fde0885e0145379092f857b1bd93fc446f92d6ee8702a2d51d2e43aec294",
+      "4aa23fd3b4d686053414317565323aa02378350fd2a394db8a32d603db95cc80",
     );
     expect(webSessionContractHash(linkedinFeed)).toBe(
-      "0ae0b0279917a5964578558aa3e761d467a121b6fe4d04c09441f279fcb0f30f",
+      "16d654a0ecb8f0c6d9874a9e8c98b02ccdf2cddc4359295de4032b20747da859",
     );
     expect(webSessionContractHash(facebookFeed)).toBe(
-      "c87f38bc96f0e54dd58a58cb91a7877284322729db9d7cdb21c18bfd0e0091bd",
+      "b261229f91340b777cba30528628897bb24b20e185ad9189c38ac65cee550bc3",
     );
     expect(webSessionContractHash(facebookGroupFeed)).toBe(
-      "b6cc776e9a81a359dd50c07922b567789ece27a765dc8b7a670b7f1b71b896e7",
+      "8961baa8706d71471ee60f1e7996db03887bc741c08649e4277388098b55139a",
     );
     expect(webSessionContractHash(marketplaceFeed)).toBe(
-      "bda0da0b1e00d2e240f1acd7e70f78e9e6db89246578e5508810baa5a8cbcdb2",
+      "95799fa76f23d0493f606ce216c2cac85f17f6bfe0dd5d5498bcb945b6f1e0da",
     );
     expect(webSessionContractHash(marketplaceListing)).toBe(
-      "33dc0285d94e8f682b2f487de88a61077adb6e1b4c5070b65e6670a74924db42",
+      "10b32a0e54a4cac7f5af6f875c15bfa6d1e55a79a8bee6411fa84294ce5828f1",
     );
 
     for (const value of [
@@ -168,7 +168,7 @@ describe("authenticated web-session contract identity", () => {
       contractVersion: 1,
     });
     expect(webSessionContractHash(historicalMarketplaceFeed)).toBe(
-      "dabc37e84a27c799b978298f6c87f8b392968105475ea62b5b48fb7ac055828d",
+      "98cd1800fdc9539b5d9a5cc11b8f370c62c21f7eb5feb32a6c4b8c94dd4c3e21",
     );
     expect(() => contract({
       site: "facebook-marketplace",
@@ -345,13 +345,16 @@ describe("authenticated web-session contract identity", () => {
       1,
     )
       .map((value) => value.toString("hex"))).toEqual([
+      "2764fb3c746755b2453279b5a6672f1460a139717c45e83520dfa5d9f753025a",
       "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
     ]);
     expect(providerPluginRegistry.legacyContractImplementationHashes(
       github,
       "organizations.read",
       1,
-    )).toEqual([]);
+    ).map((value) => value.toString("hex"))).toEqual([
+      "2764fb3c746755b2453279b5a6672f1460a139717c45e83520dfa5d9f753025a",
+    ]);
   });
 
   test("observes only the exact Twitch self-profile follower read", () => {
@@ -382,7 +385,9 @@ describe("authenticated web-session contract identity", () => {
       twitch,
       "profiles.read",
       1,
-    )).toEqual([]);
+    ).map((value) => value.toString("hex"))).toEqual([
+      "325065c463ecf8d7b5e6202780c0392c1f7556baeb4a0b33fec1d3af937e5eb9",
+    ]);
   });
 
   test("keeps every Marketplace mutation capture-required", () => {

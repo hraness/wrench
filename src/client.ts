@@ -19,6 +19,7 @@ import type {
   WrenchClientLocalCliContractIdentity,
   WrenchClientLocalCliToolIdentity,
   WrenchClientPortableOperationIdentity,
+  WrenchClientReadFailure,
   WrenchClientRunReceipt,
 } from "./client-types";
 import {
@@ -218,7 +219,12 @@ function record(value: unknown, label: string): JsonRecord {
     if (!descriptor.enumerable || !("value" in descriptor)) {
       throw new Error(`${label} must be a plain data object`);
     }
-    result[key] = descriptor.value;
+    Object.defineProperty(result, key, {
+      configurable: true,
+      enumerable: true,
+      value: descriptor.value,
+      writable: true,
+    });
   }
   return result;
 }
@@ -235,6 +241,42 @@ function assertExactKeys(
     required.some((key) => !Object.hasOwn(value, key))
     || keys.some((key) => !allowed.has(key))
   ) throw new Error(`${label} is malformed`);
+}
+
+const clientReadFailureRetryDisposition = Object.freeze({
+  "target-unavailable": "do-not-retry",
+  "auth-repair-required": "repair-auth",
+  "account-mismatch": "do-not-retry",
+  "provider-throttled": "retry-once-after-60s",
+  "provider-temporary": "retry-once-after-60s",
+  "operation-timeout": "retry-once-after-60s",
+  "contract-drift": "do-not-retry",
+  "cleanup-required": "do-not-retry",
+} as const satisfies Readonly<Record<
+  WrenchClientReadFailure["category"],
+  WrenchClientReadFailure["retryDisposition"]
+>>);
+
+function parseClientReadFailure(value: unknown): WrenchClientReadFailure {
+  const failure = record(value, "Wrench read failure");
+  assertExactKeys(
+    failure,
+    ["category", "retryDisposition"],
+    [],
+    "Wrench read failure",
+  );
+  const category = failure.category;
+  if (
+    typeof category !== "string"
+    || !Object.hasOwn(clientReadFailureRetryDisposition, category)
+  ) throw new Error("Wrench read failure category is malformed");
+  const retryDisposition = clientReadFailureRetryDisposition[
+    category as WrenchClientReadFailure["category"]
+  ];
+  if (failure.retryDisposition !== retryDisposition) {
+    throw new Error("Wrench read failure retry disposition is inconsistent");
+  }
+  return Object.freeze({ category, retryDisposition }) as WrenchClientReadFailure;
 }
 
 /**
@@ -2242,7 +2284,7 @@ function parseLiveResult(
   assertExactKeys(
     value,
     ["ok", "source", "status", "runId", "replayed", "receipt", "output", "cache"],
-    [],
+    ["readFailure"],
     "Wrench live response",
   );
   if (value.source !== "live") throw new Error("Wrench live response has the wrong source");
@@ -2274,12 +2316,36 @@ function parseLiveResult(
       "Wrench live cache outcome is inconsistent with its receipt",
     );
   }
+  const live: WrenchClientInvocationResult = receipt.status === "failed"
+    ? (() => {
+        if (value.output !== null) {
+          throw new Error("Wrench failed live response retained an output");
+        }
+        return Object.freeze({
+          status: "failed" as const,
+          receipt: receipt as WrenchClientRunReceipt & {
+            readonly status: "failed";
+          },
+          output: null,
+          replayed: value.replayed,
+          readFailure: parseClientReadFailure(value.readFailure),
+        });
+      })()
+    : (() => {
+        if (value.readFailure !== undefined) {
+          throw new Error("Wrench successful live response included a read failure");
+        }
+        return Object.freeze({
+          status: "succeeded" as const,
+          receipt: receipt as WrenchClientRunReceipt & {
+            readonly status: "succeeded";
+          },
+          output: value.output,
+          replayed: value.replayed,
+        });
+      })();
   return Object.freeze({
-    live: Object.freeze({
-      receipt,
-      output: value.output,
-      replayed: value.replayed,
-    }),
+    live,
     cache,
   });
 }
@@ -2369,7 +2435,7 @@ function selectCurrentCapability(
 ): RevalidatedCapabilityCurrent {
   const before = cachedBefore?.status === "hit" ? cachedBefore : null;
   const after = cachedAfter?.status === "hit" ? cachedAfter : null;
-  if (parsed.live.receipt.status === "failed") return after;
+  if (parsed.live.status === "failed") return after;
   if (parsed.cache.status === "stored") {
     if (after !== null) return after;
     if (parsed.cache.publication.disposition === "superseded") return null;
@@ -2654,6 +2720,7 @@ export type {
   WrenchClientEnvironment,
   WrenchClientInvocationResult,
   WrenchClientPortableOperationIdentity,
+  WrenchClientReadFailure,
   WrenchClientRunReceipt,
   WrenchClientRunReceiptCommon,
 } from "./client-types";

@@ -352,10 +352,11 @@ const operations = Object.freeze([
 export const xWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "x-web",
-  version: "1.2.0",
+  version: "1.3.0",
   displayName: "X Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["kernel/browser.ts", "../../browser.ts"],
     ["kernel/article-draft-document.ts", "../../article-draft-document.ts"],
     ["kernel/article-draft-images.ts", "../../article-draft-images.ts"],
