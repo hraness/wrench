@@ -35,6 +35,10 @@ function workflowStepScript(workflow: string, name: string): string {
   const lines = workflow.slice(runStart + runMarker.length).split("\n");
   const script: string[] = [];
   for (const line of lines) {
+    if (line.length === 0) {
+      script.push("");
+      continue;
+    }
     if (!line.startsWith("          ")) break;
     script.push(line.slice(10));
   }
@@ -175,18 +179,23 @@ describe("npm publication contract", () => {
     });
   });
 
-  test("separates read-only verification from tokenless terminal staging", async () => {
+  test("separates read-only classification and verification from tokenless terminal staging", async () => {
     const workflow = await readFile(stageWorkflowUrl, "utf8");
+    const classifyStart = workflow.indexOf("\n  classify:\n");
     const verifyStart = workflow.indexOf("\n  verify:\n");
     const stageStart = workflow.indexOf("\n  stage:\n");
 
+    expect(classifyStart).toBeGreaterThan(-1);
+    expect(verifyStart).toBeGreaterThan(classifyStart);
     expect(verifyStart).toBeGreaterThan(-1);
     expect(stageStart).toBeGreaterThan(verifyStart);
 
+    const classifyJob = workflow.slice(classifyStart, verifyStart);
     const verifyJob = workflow.slice(verifyStart, stageStart);
     const stageJob = workflow.slice(stageStart);
 
     for (const required of [
+      "push:\n    branches:\n      - main\n    paths:\n      - package.json",
       "workflow_dispatch:",
       "contents: read",
     ] as const) {
@@ -194,7 +203,48 @@ describe("npm publication contract", () => {
     }
 
     for (const required of [
+      "name: Classify staging request",
+      "permissions:\n      contents: read",
+      "runs-on: ubuntu-latest",
+      "timeout-minutes: 5",
+      "should_stage: ${{ steps.request.outputs.should_stage }}",
+      "source_sha: ${{ steps.request.outputs.source_sha }}",
+      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+      "persist-credentials: false",
+      "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+      "node-version: \"24\"",
+      "package-manager-cache: false",
+      "name: Classify current default-branch package",
+      "BEFORE_SHA: ${{ github.event.before }}",
+      "github.event.repository.default_branch",
+      "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH",
+      'git show "$default_head:package.json"',
+      "read_manifest_version",
+      "Current package manifest must name @hraness/wrench and use a stable semantic version",
+      'case "$GITHUB_EVENT_NAME" in',
+      "workflow_dispatch)",
+      "push)",
+      'git cat-file -e "$BEFORE_SHA^{commit}"',
+      'git merge-base --is-ancestor "$BEFORE_SHA" "$default_head"',
+      'git show "$BEFORE_SHA:package.json"',
+      '[[ "$current_version" == "$previous_version" ]]',
+      "package.json changed without a version change; npm staging is not required",
+      'OLD_VERSION="$previous_version" NEW_VERSION="$current_version" node -e',
+      "Automatic npm staging requires a version newer than $previous_version",
+      "Unsupported npm staging event $GITHUB_EVENT_NAME",
+      "should_stage=%s\\nsource_sha=%s\\n",
+    ] as const) {
+      expect(classifyJob).toContain(required);
+    }
+
+    expect(classifyJob).not.toContain("id-token: write");
+    expect(classifyJob).not.toContain("npm stage publish");
+    expect(classifyJob).not.toContain("npm view");
+
+    for (const required of [
       "name: Verify exact package",
+      "needs: classify",
+      "if: needs.classify.outputs.should_stage == 'true'",
       "permissions:\n      contents: read",
       "runs-on: ubuntu-latest",
       "source_sha: ${{ steps.identity.outputs.source_sha }}",
@@ -206,6 +256,7 @@ describe("npm publication contract", () => {
       "package-manager-cache: false",
       "npm@11.19.0",
       "github.event.repository.default_branch",
+      "EXPECTED_SOURCE_SHA: ${{ needs.classify.outputs.source_sha }}",
       "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH",
       "bun install --frozen-lockfile --ignore-scripts",
       "bun run check",
@@ -233,6 +284,7 @@ describe("npm publication contract", () => {
       "name: Stage exact package",
       "needs: verify",
       "permissions:\n      id-token: write",
+      "environment: npm-stage",
       "timeout-minutes: 10",
       "node-version: \"24\"",
       "package-manager-cache: false",
@@ -300,6 +352,9 @@ describe("npm publication contract", () => {
     }
 
     expect(workflow.match(/id-token: write/gu) ?? []).toHaveLength(1);
+    expect(workflow.match(/environment: npm-stage/gu) ?? []).toHaveLength(1);
+    expect(classifyJob).not.toContain("environment:");
+    expect(verifyJob).not.toContain("environment:");
     expect(stageJob).not.toContain("actions/checkout@");
     expect(stageJob).not.toContain("contents: read");
     expect(stageJob).not.toContain("setup-bun@");
@@ -310,7 +365,8 @@ describe("npm publication contract", () => {
 
     expect(workflow).not.toContain("secrets.NPM_TOKEN");
     expect(workflow).not.toContain("NODE_AUTH_TOKEN");
-    expect(workflow).not.toMatch(/\n\s+push:/u);
+    expect(workflow.match(/\n  push:/gu) ?? []).toHaveLength(1);
+    expect(workflow).not.toContain("pull_request:");
     expect(workflow).not.toMatch(/\bnpm publish\b/u);
     const registryFlags = workflow.match(/--registry=[^\s"']+/gu) ?? [];
     expect(registryFlags).toHaveLength(6);
@@ -344,6 +400,148 @@ describe("npm publication contract", () => {
     expect(tagLookupIndex).toBeGreaterThan(fetchedHeadIndex);
     expect(secondHashIndex).toBeGreaterThan(tagLookupIndex);
     expect(stageIndex).toBeGreaterThan(secondHashIndex);
+  });
+
+  test("classifies only increasing stable versions for automatic staging", async () => {
+    const workflow = await readFile(stageWorkflowUrl, "utf8");
+    const script = workflowStepScript(workflow, "Classify current default-branch package");
+    const directory = await mkdtemp(join(tmpdir(), "wrench-stage-classify-"));
+    const binaryDirectory = join(directory, "bin");
+    const gitStub = join(binaryDirectory, "git");
+    const githubOutput = join(directory, "github-output.txt");
+    const beforeSha = "b".repeat(40);
+    const currentSha = "c".repeat(40);
+
+    try {
+      await mkdir(binaryDirectory, { recursive: true });
+      await writeFile(gitStub, `#!/bin/bash
+set -euo pipefail
+case "\${1-}" in
+  check-ref-format)
+    [[ "\${2-}" == "refs/heads/main" ]]
+    ;;
+  fetch)
+    exit 0
+    ;;
+  rev-parse)
+    case "\${2-}" in
+      origin/main|HEAD) printf '%s\\n' "$CURRENT_SHA" ;;
+      *) echo "unexpected rev-parse target: \${2-}" >&2; exit 1 ;;
+    esac
+    ;;
+  show)
+    case "\${2-}" in
+      "$CURRENT_SHA:package.json") printf '%s\\n' "$CURRENT_MANIFEST" ;;
+      "$BEFORE_SHA:package.json") printf '%s\\n' "$PREVIOUS_MANIFEST" ;;
+      *) echo "unexpected show target: \${2-}" >&2; exit 1 ;;
+    esac
+    ;;
+  cat-file)
+    [[ "$BEFORE_STATUS" == "ancestor" && "\${2-}" == "-e" && \
+       "\${3-}" == "$BEFORE_SHA^{commit}" ]]
+    ;;
+  merge-base)
+    [[ "$BEFORE_STATUS" == "ancestor" && "\${2-}" == "--is-ancestor" && \
+       "\${3-}" == "$BEFORE_SHA" && "\${4-}" == "$CURRENT_SHA" ]]
+    ;;
+  *)
+    echo "unexpected git command: $*" >&2
+    exit 1
+    ;;
+esac
+`, "utf8");
+      await chmod(gitStub, 0o755);
+
+      const manifest = (version: string): string => JSON.stringify({
+        name: "@hraness/wrench",
+        version,
+      });
+      const baseEnvironment = Object.freeze({
+        BEFORE_SHA: beforeSha,
+        BEFORE_STATUS: "ancestor",
+        CURRENT_MANIFEST: manifest("0.16.1"),
+        CURRENT_SHA: currentSha,
+        DEFAULT_BRANCH: "main",
+        GITHUB_EVENT_NAME: "push",
+        GITHUB_OUTPUT: githubOutput,
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_SHA: currentSha,
+        PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
+        PREVIOUS_MANIFEST: manifest("0.16.0"),
+        RUNNER_TEMP: directory,
+      });
+      const runCase = async (
+        overrides: Readonly<Record<string, string>>,
+      ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> => {
+        await rm(githubOutput, { force: true });
+        return runWorkflowScript(script, { ...baseEnvironment, ...overrides });
+      };
+
+      const automatic = await runCase({});
+      if (automatic.exitCode !== 0) {
+        throw new Error(`Automatic classification failed:\n${automatic.stdout}${automatic.stderr}`);
+      }
+      expect(automatic.exitCode).toBe(0);
+      expect(await readFile(githubOutput, "utf8")).toBe(
+        `should_stage=true\nsource_sha=${currentSha}\n`,
+      );
+
+      const unchanged = await runCase({ PREVIOUS_MANIFEST: manifest("0.16.1") });
+      expect(unchanged.exitCode).toBe(0);
+      expect(unchanged.stdout).toContain(
+        "package.json changed without a version change; npm staging is not required",
+      );
+      expect(await readFile(githubOutput, "utf8")).toBe(
+        `should_stage=false\nsource_sha=${currentSha}\n`,
+      );
+
+      const recovery = await runCase({
+        GITHUB_EVENT_NAME: "workflow_dispatch",
+        PREVIOUS_MANIFEST: manifest("0.16.1"),
+      });
+      expect(recovery.exitCode).toBe(0);
+      expect(await readFile(githubOutput, "utf8")).toBe(
+        `should_stage=true\nsource_sha=${currentSha}\n`,
+      );
+
+      for (const [overrides, message] of [
+        [
+          { CURRENT_MANIFEST: manifest("0.15.9") },
+          "Automatic npm staging requires a version newer than 0.16.0",
+        ],
+        [
+          { CURRENT_MANIFEST: manifest("0.16.1-beta.1") },
+          "Current package manifest must name @hraness/wrench and use a stable semantic version",
+        ],
+        [
+          { CURRENT_MANIFEST: manifest("0.16.1\nignored") },
+          "Current package manifest must name @hraness/wrench and use a stable semantic version",
+        ],
+        [
+          { PREVIOUS_MANIFEST: manifest("0.16.0-beta.1") },
+          "Previous package manifest must name @hraness/wrench and use a stable semantic version",
+        ],
+        [
+          { BEFORE_STATUS: "missing" },
+          `Push base ${beforeSha} is not an available ancestor of ${currentSha}`,
+        ],
+        [
+          { BEFORE_SHA: "0".repeat(40) },
+          "Push event has an invalid prior default-branch commit",
+        ],
+        [
+          { GITHUB_REF: "refs/heads/not-main" },
+          "npm staging must run from main",
+        ],
+      ] as const) {
+        const rejected = await runCase(overrides);
+        expect(rejected.exitCode).not.toBe(0);
+        expect(`${rejected.stdout}${rejected.stderr}`).toContain(message);
+        expect(await Bun.file(githubOutput).exists()).toBe(false);
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   test("rejects unsafe or cross-run npm artifact outputs before download", async () => {
@@ -569,8 +767,16 @@ describe("npm publication contract", () => {
       exactPackage,
       "npm publish \"$wrench_npm_archive\"",
       "npm trust github @hraness/wrench",
+      "--environment npm-stage",
       "--allow-stage-publish",
       "npm access set mfa=publish @hraness/wrench",
+      "require reviewer `0thernet`",
+      "`prevent_self_review: false`",
+      "starts **Stage npm package** automatically",
+      "manifest edit with an unchanged version succeeds without running the verify or",
+      "OIDC jobs.",
+      "Manual recovery",
+      "runs the same verification and protected-environment path",
       "scripts/npm-package-identity.ts",
       "--source-archive \"$wrench_npm_archive\"",
       "--registry-archive \"$wrench_registry_archive\"",
@@ -588,6 +794,10 @@ describe("npm publication contract", () => {
       .toBeLessThan(guide.indexOf(`git tag v${manifest.version}`));
 
     expect(agents).toContain("Follow `docs/publishing.md`");
+    expect(agents).toContain("automatically enter the exact staging pipeline");
+    expect(agents).toContain("protected `npm-stage` environment");
+    expect(agents).toContain("required reviewer `0thernet`");
+    expect(agents).toContain("`prevent_self_review: false`");
     expect(agents).toContain("verify that exact public artifact before creating its tag");
     expect(readme).toContain(exactPackage);
     expect(readme).not.toContain("not currently published on npm");

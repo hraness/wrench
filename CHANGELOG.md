@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Start stage-only npm verification automatically when a greater stable package
+  version reaches `main`. Unchanged manifest versions stop before OIDC, and the
+  terminal staging job requires maintainer approval through the protected
+  `npm-stage` environment before npm's separate two-factor approval.
+
 ## 0.16.2 - 2026-08-28
 
 - Add a strict machine-readable Hraness social-profile collection manifest,
