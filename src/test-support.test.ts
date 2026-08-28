@@ -17,8 +17,8 @@ describe("property replay coordinates", () => {
     })).toEqual({ seed: -17 });
     expect(propertyReplayParameters({
       WRENCH_PROPERTY_SEED: "2147483647",
-      WRENCH_PROPERTY_PATH: "3:0:12:1",
-    })).toEqual({ seed: 2_147_483_647, path: "3:0:12:1" });
+      WRENCH_PROPERTY_PATH: "3:0",
+    })).toEqual({ seed: 2_147_483_647, path: "3:0" });
     expect(propertyReplayParameters({
       WRENCH_PROPERTY_SEED: "1",
       WRENCH_PROPERTY_PATH: "0:1:10000",

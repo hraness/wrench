@@ -31,11 +31,13 @@ coordinate and only the named property before changing code:
 
 ```sh
 WRENCH_PROPERTY_SEED=-17 \
-WRENCH_PROPERTY_PATH=3:0:12:1 \
+WRENCH_PROPERTY_PATH=3:0 \
 bun test src/linked-device-lifecycle-journal.property.test.ts \
   --test-name-pattern '^bounded action and fault workloads terminalize with supplied evidence$'
 ```
 
+This checked smoke coordinate is valid for the named property. Replace both
+values with the seed and path emitted by the failure you are investigating.
 Keep the seed and minimized trace free of credentials and provider data, then
 turn the smallest useful counterexample into a named deterministic regression.
 These workloads verify local models and injected ports. They do not establish

@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { assertProperty, fc } from "./test-support";
+import {
+  assertProperty,
+  fc,
+  propertyReplayParameters,
+} from "./test-support";
 
 import {
   classifyLinkedDeviceLifecycleRestart,
@@ -360,8 +364,8 @@ test("arbitrary event schedules either fail closed or advance one monotonic revi
   ));
 });
 
-test("bounded action and fault workloads terminalize with supplied evidence", () => {
-  assertProperty(fc.property(
+function boundedActionAndFaultWorkloadProperty() {
+  return fc.property(
     fc.constantFrom<LifecycleKind>("pair", "sync-once"),
     fc.array(workloadCommandArbitrary, { minLength: 0, maxLength: 48 }),
     (kind, trace) => {
@@ -398,7 +402,22 @@ test("bounded action and fault workloads terminalize with supplied evidence", ()
       expect(settled.journal.phase).toBe("terminal");
       expect(["succeeded", "safe-retry"]).toContain(settled.journal.status);
     },
-  ), { numRuns: 300 });
+  );
+}
+
+test("bounded action and fault workloads terminalize with supplied evidence", () => {
+  assertProperty(boundedActionAndFaultWorkloadProperty(), { numRuns: 300 });
+});
+
+test("the documented lifecycle replay coordinate remains executable", () => {
+  assertProperty(boundedActionAndFaultWorkloadProperty(), {
+    ...propertyReplayParameters({
+      WRENCH_PROPERTY_SEED: "-17",
+      WRENCH_PROPERTY_PATH: "3:0",
+    }),
+    endOnFailure: true,
+    numRuns: 1,
+  });
 });
 
 test("restart classification depends only on exact owner status and external begin", () => {
