@@ -5,6 +5,8 @@
     "types": ["bun"]
   },
   "include": [
+    "./production-release-verifier.ts",
+    "./production-release-verifier.test.ts",
     "./source/**/*.ts",
     "./html-to-markdown.ts",
     "./html-to-markdown.test.ts",
