@@ -468,6 +468,8 @@
   ],
   "scripts": {
     "website:build": "bun run website/build.ts",
+    "website:verify-production-release": "bun run website/production-release-verifier.ts",
+    "website:vercel-build": "bun run website/vercel-build.ts",
     "website:test": "bun test ./website ./edge",
     "website:typecheck": "tsc --noEmit --project website/tsconfig.json && tsc --noEmit --project edge/tsconfig.json",
     "website:check": "bun run website:typecheck && bun run website:test && bun run website:build",

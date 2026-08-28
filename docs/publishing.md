@@ -205,9 +205,10 @@ npm stage approve <stage-id> \
   --registry=https://registry.npmjs.org
 ```
 
-For the current release, download and smoke `@hraness/wrench@0.16.2` after
-approving its stage. Keep the public coordinate and tag literal through the
-final registry checks, then create `v0.16.2` on the exact staged source commit:
+To complete this source version's release, download and smoke
+`@hraness/wrench@0.16.2` after approving its stage. Keep the public coordinate
+and tag literal through the final registry checks, then create `v0.16.2` on the
+exact staged source commit:
 
 ```sh
 npm view @hraness/wrench@0.16.2 name version dist \
@@ -222,6 +223,52 @@ Bun 1.3.14, disabled package-manager caching, and no stored npm token. It binds
 the verified artifact to the current `main` commit, refetches `main` before
 staging, and aborts if that commit is no longer the default-branch head. The
 `npm-stage` environment applies only to the terminal OIDC job.
+
+## Deploy the release-bound website
+
+Configure the Vercel project's Production Branch as `website-production` and
+keep Vercel System Environment Variables enabled for builds. Production
+admission requires both `VERCEL_ENV=production` and
+`VERCEL_GIT_COMMIT_REF=website-production`; missing system state or any other
+production ref fails before external verification or site generation.
+`main` and pull requests are preview sources only; they may describe a package
+candidate that has not completed npm staging, tagging, or immutable Release
+publication, so they must never replace the public production site.
+
+Vercel will not accept a Production Branch that does not exist. For the one-time
+migration only, first verify the current immutable Latest Release against its
+exact remote tag commit and canonical npm version, then create
+`website-production` once at that release commit with the GitHub create-ref API.
+Fail if the branch already exists, and never bootstrap it from `main` or an
+unreleased candidate. Configure Vercel only after that exact ref exists. This
+exception must never be repeated: after initial setup, the release workflow is
+the sole writer and every change is a checked, non-force fast-forward.
+
+After the tag workflow has rebuilt and compared the exact public npm package,
+created or verified the non-draft, non-prerelease immutable GitHub Release, and
+proved that Release is Latest, its final step creates `website-production` at
+the verified tag commit or fast-forwards the existing branch to that commit.
+It compares the existing branch as an ancestor, sends `force=false`, and fails
+closed on a moved tag, divergence, rollback, or post-update mismatch.
+
+Vercel runs `website:vercel-build`. Preview and local builds generate the site
+without external release checks. A production build first requires the checked
+out HEAD and root package version to equal the exact remote `v<version>` tag
+commit, requires canonical npm to contain that version with SHA-512 integrity,
+and requires the matching immutable GitHub Release to be non-draft,
+non-prerelease, and Latest. Response bodies and Git child output are streamed
+under fixed byte bounds. Only then does the build derive the public release
+identity and provider capability attestation from that exact source tree.
+
+This production admission assumes a Vercel Git deployment whose checkout keeps
+a resolvable Git `HEAD`; missing repository metadata is a hard failure, not a
+reason to trust deployment environment variables. Canonical npm name, version,
+and SHA-512 integrity are sufficient at this layer because the only workflow
+allowed to advance `website-production` after that one-time bootstrap first
+rebuilds the tag and compares its
+exact tarball with canonical npm before creating the immutable Release. The
+production verifier then independently rechecks the promoted commit, tag,
+registry coordinate, and immutable Latest Release.
 
 See npm's documentation for [trusted
 publishing](https://docs.npmjs.com/trusted-publishers/), [staged

@@ -46,6 +46,10 @@
     "examples/**/*.ts",
     "examples/**/*.tsx",
     "website/build.ts",
+    "website/production-release-verifier.ts",
+    "website/production-release-verifier.test.ts",
+    "website/vercel-build.ts",
+    "website/vercel-build.test.ts",
     "website/provider-capability-attestation.ts",
     "website/provider-capability-attestation.test.ts",
     "website/site.test.ts"
