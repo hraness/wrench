@@ -53,6 +53,10 @@ describe("provider-neutral messaging contracts", () => {
       clientIntentSha256: undefined,
       handoffSha256: "a".repeat(64),
     })).toThrow("unsupported or missing fields");
+    expect(() => parseMessagingTurnV1({
+      ...turn,
+      sourceConversationCoordinateSha256: "b".repeat(64),
+    })).toThrow("unsupported or missing fields");
   });
 
   test("accepts only the closed tagged exact-route coordinate union", () => {

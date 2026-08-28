@@ -89,6 +89,7 @@ describe("WhatsApp omni materializers", () => {
       cursor: { direction: "none", request: null, nextInput: null },
       entities: [{
         kind: "conversation",
+        conversationKind: "single",
         providerId: CHAT_JID,
         providerRevision: null,
         orderedAt: "2026-07-23T12:00:00.000Z",

@@ -190,6 +190,7 @@ function conversation(value: unknown, path: string): ProviderConversationV1 {
   );
   return Object.freeze({
     kind: "conversation",
+    conversationKind: source.kind,
     providerId: imsgConversationProviderId(guid),
     providerRevision: `${source.id}:${orderedAt}`,
     orderedAt,

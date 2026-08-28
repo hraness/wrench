@@ -741,7 +741,7 @@ function conversationEntity(
   label: string,
 ): OmniConversationV1 {
   exactKeys(source, [
-    "kind", "providerId", "providerRevision", "orderedAt", "detail", "title",
+    "kind", "providerId", "providerRevision", "orderedAt", "conversationKind", "detail", "title",
     "summary", "participants", "unread", "unreadCount", "archived", "pending",
     "id", "revision", "source", "conversationId",
   ], [], label);
@@ -751,6 +751,11 @@ function conversationEntity(
   }
   const semantic = Object.freeze({
     kind: "conversation" as const,
+    conversationKind: oneOf(
+      source.conversationKind,
+      ["single", "group", "unknown"] as const,
+      `${label}.conversationKind`,
+    ),
     providerId: common.providerId,
     providerRevision: common.providerRevision,
     orderedAt: common.orderedAt,
