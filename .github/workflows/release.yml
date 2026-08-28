@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     outputs:
+      verified_sha: ${{ steps.identity.outputs.sha }}
       verified_tag: ${{ steps.identity.outputs.tag }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -57,7 +58,13 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match package version $expected_tag"
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
+          tag_commit="$(git rev-parse --verify "$GITHUB_REF_NAME^{commit}")"
+          head_commit="$(git rev-parse --verify "HEAD^{commit}")"
+          if [[ "$tag_commit" != "$head_commit" ]]; then
+            echo "::error::Checked-out source $head_commit does not match tag commit $tag_commit"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$tag_commit" "origin/$DEFAULT_BRANCH"; then
             echo "::error::Tag $GITHUB_REF_NAME is not reachable from $DEFAULT_BRANCH"
             exit 1
           fi
@@ -67,6 +74,7 @@ jobs:
             exit 1
           fi
           printf 'tag=%s\n' "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run check
       - run: |
@@ -134,6 +142,7 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
+      VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
       VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
     steps:
       - name: Publish verified GitHub Release
@@ -141,6 +150,15 @@ jobs:
           set -euo pipefail
           if [[ -z "$VERIFIED_TAG" || "$VERIFIED_TAG" != "$GITHUB_REF_NAME" ]]; then
             echo "::error::Publish request does not match the verified tag"
+            exit 1
+          fi
+          if [[ ! "$VERIFIED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Publish request has no verified release commit"
+            exit 1
+          fi
+          remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/tags/$VERIFIED_TAG" --jq '.sha')"
+          if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
+            echo "::error::Remote $VERIFIED_TAG resolves to $remote_tag_sha, expected $VERIFIED_SHA"
             exit 1
           fi
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
@@ -189,5 +207,53 @@ jobs:
           latest_tag="$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
           if [[ "$latest_tag" != "$GITHUB_REF_NAME" ]]; then
             echo "::error::Latest release is $latest_tag, expected $GITHUB_REF_NAME"
+            exit 1
+          fi
+      - name: Promote verified website production source
+        run: |
+          set -euo pipefail
+          production_ref="refs/heads/website-production"
+          branch_endpoint="/repos/$GITHUB_REPOSITORY/git/ref/heads/website-production"
+          if [[ -z "$VERIFIED_TAG" || "$VERIFIED_TAG" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::Website promotion tag does not match the verified release"
+            exit 1
+          fi
+          if [[ ! "$VERIFIED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Website promotion has no verified release commit"
+            exit 1
+          fi
+          remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/tags/$VERIFIED_TAG" --jq '.sha')"
+          if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
+            echo "::error::Remote $VERIFIED_TAG resolves to $remote_tag_sha, expected $VERIFIED_SHA"
+            exit 1
+          fi
+
+          if current_sha="$(gh api "$branch_endpoint" --jq '.object.sha' 2>/dev/null)"; then
+            if [[ "$current_sha" != "$VERIFIED_SHA" ]]; then
+              comparison="$(gh api \
+                "/repos/$GITHUB_REPOSITORY/compare/$current_sha...$VERIFIED_SHA" \
+                --jq '[.status, .base_commit.sha, .merge_base_commit.sha, .head_commit.sha] | @tsv')"
+              expected_comparison="ahead"$'\t'"$current_sha"$'\t'"$current_sha"$'\t'"$VERIFIED_SHA"
+              if [[ "$comparison" != "$expected_comparison" ]]; then
+                echo "::error::$production_ref does not fast-forward from $current_sha to $VERIFIED_SHA"
+                exit 1
+              fi
+              gh api \
+                --method PATCH \
+                "$branch_endpoint" \
+                -f sha="$VERIFIED_SHA" \
+                -F force=false >/dev/null
+            fi
+          else
+            gh api \
+              --method POST \
+              "/repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="$production_ref" \
+              -f sha="$VERIFIED_SHA" >/dev/null
+          fi
+
+          promoted_sha="$(gh api "$branch_endpoint" --jq '.object.sha')"
+          if [[ "$promoted_sha" != "$VERIFIED_SHA" ]]; then
+            echo "::error::$production_ref resolved to $promoted_sha after promotion"
             exit 1
           fi

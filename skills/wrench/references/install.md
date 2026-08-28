@@ -17,8 +17,11 @@ If Bun is missing, stop and direct the user to the official
 [Bun installation guide](https://bun.sh/docs/installation). Do not switch
 package managers or pipe an unreviewed installer into a shell.
 
-When the user asked to install or use Wrench, install the current immutable
-release and its reviewed bundled adapter manifests:
+This reference is authored for the exact v0.16.2 release coordinate. Use it
+only from the matching release-bound Agent Skill after that npm version and
+immutable GitHub Release exist. If the coordinate is not public, stop instead
+of substituting `main`, another tag, or a different package version. Install
+that exact release and its reviewed bundled adapter manifests:
 
 ```sh
 bun add --global @hraness/wrench@0.16.2
