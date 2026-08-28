@@ -182,6 +182,10 @@ Never continue into publication.
 
 ## Read one saved X draft
 
+This section documents unreleased source-main preparation. The current npm
+release does not contain `articles.read@2`; do not invoke it until an immutable
+release includes the contract and `wrench capabilities x-web --json` lists it.
+
 `x-web articles.read@2` reads one exact current-viewer-owned private Article
 draft by its 1–19 digit provider ID. It is an R1 operation, uses the same bound
 X cookie realm, and never enters the mutation dispatch ledger.

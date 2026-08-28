@@ -35,7 +35,7 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.16.0" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.15.1" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const DEMO_PUBLIC_FILES = [
   "wrench-first-capture.gif",
@@ -72,7 +72,7 @@ export const PUBLIC_PAGES = [
   {
     canonicalPath: "/provider-capabilities/",
     description:
-      "See which provider actions Wrench supports in the current release and how each service connects.",
+      "Preview provider actions prepared in Wrench's unreleased source tree and how each service connects.",
     outputFile: "provider-capabilities/index.html",
     sourceFile: "provider-capabilities.html",
     title: "Provider support in Wrench",

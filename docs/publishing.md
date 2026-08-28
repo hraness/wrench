@@ -167,17 +167,6 @@ npm stage approve <stage-id> \
   --registry=https://registry.npmjs.org
 ```
 
-For the current release, keep the public coordinate and tag literal through
-the final registry and source checks:
-
-```sh
-npm view @hraness/wrench@0.16.0 name version dist \
-  --json \
-  --registry=https://registry.npmjs.org
-git tag v0.16.0
-git push origin refs/tags/v0.16.0
-```
-
 The staging workflow runs on a GitHub-hosted runner with Node 24, npm 11.19.0,
 Bun 1.3.14, disabled package-manager caching, and no stored npm token. It
 refetches `main` before staging and aborts if the verified commit is no longer

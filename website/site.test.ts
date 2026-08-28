@@ -569,7 +569,7 @@ describe("wrench.rip static site", () => {
     expect(personalAgents?.html).toContain("https://wrench.rip/provider-capabilities/");
     expect(personalAgents?.html).toContain("https://wrench.rip/security/");
     expect(personalAgents?.html).toContain(
-      `The current release offers ${attestation.observedCount} supported provider actions.`,
+      `The unreleased source snapshot prepares ${attestation.observedCount} supported provider actions.`,
     );
     expect(personalAgents?.html).toContain("Telegram is not supported in this release");
     expect(personalAgents?.html).toContain("Instinct");
@@ -613,7 +613,7 @@ describe("wrench.rip static site", () => {
       "We are observing a widespread campaign impersonating AI bots to scan websites for vulnerabilities.",
     );
     expect(agenticWebSpoofing?.html).toContain(
-      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+      `The unreleased source snapshot attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
     );
     expect(agenticWebSpoofing?.html).toContain(
       `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
@@ -645,7 +645,7 @@ describe("wrench.rip static site", () => {
       "https://wrench.rip/compare/personal-agents-browser-use/",
     );
     expect(vmsCannotContainAgents?.html).toContain(
-      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+      `The unreleased source snapshot attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
     );
     expect(vmsCannotContainAgents?.html).toContain(
       `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,

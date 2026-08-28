@@ -101,6 +101,10 @@ capabilities and keep their OAuth plans separate from the `x-web` cookie realm.
 
 ## Read one private Article draft
 
+This section documents unreleased source-main preparation. The current npm
+release does not contain `articles.read@2`; do not invoke it until an immutable
+release includes the contract and `wrench capabilities x-web --json` lists it.
+
 Use `x-web articles.read@2` to read one exact current-viewer-owned private X
 Article in the `Draft` lifecycle. Pass its 1–19 digit private ID through the
 same bound X cookie realm used for other authenticated web operations:

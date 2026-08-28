@@ -44,14 +44,14 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-Wrench v0.16.0 supports actions for 18 services: Beeper, Bluesky, Facebook,
-Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker News, Instagram,
-LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and YouTube.
-LinkedIn and X each have separate official and authenticated-web adapters. The
-[release-bound provider directory](https://wrench.rip/provider-capabilities/)
-lists only executable actions, grouped by the tasks each service supports and
-the access method each action uses. Inspect `wrench capabilities --json` for
-the exact installed contract state.
+The unreleased source tree prepares supported actions for 18 services: Beeper,
+Bluesky, Facebook, Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker
+News, Instagram, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp,
+X, and YouTube. LinkedIn and X each have separate official and
+authenticated-web adapters. The [checked provider directory](https://wrench.rip/provider-capabilities/)
+lists only executable actions from that source tree, grouped by the tasks each
+service supports and the access method each action uses. Inspect
+`wrench capabilities --json` for the exact installed release state.
 
 Beeper is Wrench's first pinned local-CLI provider. Its 32 supported actions
 read accounts, contacts, conversations, and messages; manage reactions, drafts,
@@ -110,7 +110,7 @@ install the CLI if it is missing. Start a new agent session after installation.
 Install the current release from npm:
 
 ```sh
-bun add --global @hraness/wrench@0.16.0
+bun add --global @hraness/wrench@0.15.1
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -134,7 +134,7 @@ Install Wrench in an agent or application that owns its own model, planning,
 tool loop, approvals, and interface:
 
 ```sh
-bun add @hraness/wrench@0.16.0
+bun add @hraness/wrench@0.15.1
 ```
 
 ```ts
@@ -315,8 +315,9 @@ transfer, transcode, status, and video-attachment creation, but remains inert:
 the authorized profile-backed Note create returned 403 in two independent
 attempts, so no exact published-video target or readback exists.
 
-`reddit-web media.read@2` reads one exact Reddit-hosted video post through the
-current-account-bound `/api/info` exchange. It returns only stable post fields,
+In the unreleased source tree, `reddit-web media.read@2` reads one exact
+Reddit-hosted video post through the current-account-bound `/api/info`
+exchange. It returns only stable post fields,
 dimensions, duration, safety flags, and completed-transcode status. Canonical,
 fallback, signed, and expiring playback URLs are deliberately excluded.
 Standalone Threads post and media reads and Facebook Marketplace media reads
@@ -886,7 +887,9 @@ not reconcile automatically because an uncertain upload may have created a
 provider asset absent from the confirmed input; preserve the run and do not
 repeat uploads.
 
-Read one exact saved X draft by its private numeric identity:
+The current npm release does not contain the source-main `articles.read@2`
+contract. After a later immutable release contains it, read one exact saved X
+draft by its private numeric identity:
 
 ```sh
 wrench x-web articles.read \
@@ -894,7 +897,8 @@ wrench x-web articles.read \
   --auth x-main --json
 ```
 
-`x-web articles.read@2` is an R1 read for one current-viewer-owned private
+The source-main `x-web articles.read@2` contract is an R1 read for one
+current-viewer-owned private
 Article in the `Draft` lifecycle. Its closed output binds the exact article and
 owner IDs, `published: false`, one bounded single-line title, and bounded rich
 content. It is not an Article list and does not read published X Articles.

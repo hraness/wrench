@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-## 0.16.0 - 2026-08-27
-
 - Redesign wrench.rip as a restrained editorial site with a supported-actions-only
   provider directory, task-first capability labels, and no zero-action service
   cards in the public catalog.
