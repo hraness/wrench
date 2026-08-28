@@ -44,7 +44,7 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-Wrench v0.16.2 supports actions for 19 services: Beeper, Bluesky, Facebook,
+This v0.16.2 source tree defines actions for 19 services: Beeper, Bluesky, Facebook,
 Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker News, Instagram,
 iMessage, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and
 YouTube.
@@ -104,23 +104,27 @@ owns the narrow capability boundary that can sit beneath them.
 
 ## Install
 
-The CLI and SDK use the exact public npm version shown below. The matching
-GitHub tag and immutable Release identify the same checked source. The Agent
-Skill remains available through skills.sh.
+This README is bound to the package version in this source tree. Its exact npm,
+tag, and Agent Skill coordinates can become individually reachable while a
+release is being staged. Treat them as one completed, supported public release
+only after the workflow has verified the registry package and created the
+matching immutable GitHub Release. The release-bound production site identifies
+the latest release that completed every gate.
 
 Install the single Wrench Agent Skill with either runner:
 
 ```sh
-npx skills add hraness/wrench
+npx skills add hraness/wrench#v0.16.2
 # or
-bunx skills add hraness/wrench
+bunx skills add hraness/wrench#v0.16.2
 ```
 
 The skill teaches Codex, Claude Code, Cursor, and other compatible coding
 agents when to use Wrench, how to preserve its trust boundaries, and how to
 install the CLI if it is missing. Start a new agent session after installation.
 
-Install the current release from npm:
+After the matching immutable Release exists, install this exact version from
+npm:
 
 ```sh
 bun add --global @hraness/wrench@0.16.2
@@ -143,8 +147,8 @@ verifies the resolved closure versions and reviewed entrypoint hashes.
 
 ## SDK and code mode
 
-Install Wrench in an agent or application that owns its own model, planning,
-tool loop, approvals, and interface:
+For that same released coordinate, install Wrench in an agent or application
+that owns its own model, planning, tool loop, approvals, and interface:
 
 ```sh
 bun add @hraness/wrench@0.16.2

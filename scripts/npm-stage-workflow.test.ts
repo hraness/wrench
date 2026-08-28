@@ -22,6 +22,8 @@ const packageIdentityUrl = new URL("./npm-package-identity.ts", import.meta.url)
 const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
 const readmeUrl = new URL("../README.md", import.meta.url);
+const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
+const skillInstallGuideUrl = new URL("../skills/wrench/references/install.md", import.meta.url);
 const npmRegistry = "https://registry.npmjs.org";
 const repository = fileURLToPath(new URL("../", import.meta.url));
 
@@ -723,6 +725,12 @@ esac
       .toHaveLength(4);
     expect(workflow.indexOf("Verify exact public npm delivery"))
       .toBeLessThan(workflow.indexOf("\n  publish:"));
+    const publishScript = workflowStepScript(workflow, "Publish verified GitHub Release");
+    expect(publishScript).toContain('remote_tag_sha="$(gh api');
+    expect(publishScript).toContain("/commits/tags/$VERIFIED_TAG");
+    expect(publishScript.indexOf("remote_tag_sha="))
+      .toBeLessThan(publishScript.indexOf("gh release create"));
+    expect(publishScript).toContain('if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]');
     for (const checkedSurface of [
       "dist/index.js",
       "dist/client.js",
@@ -764,11 +772,132 @@ esac
     }
   });
 
+  test("promotes only the verified Latest release commit to website production", async () => {
+    const workflow = await readFile(releaseWorkflowUrl, "utf8");
+    const script = workflowStepScript(workflow, "Promote verified website production source");
+    const directory = await mkdtemp(join(tmpdir(), "wrench-website-production-"));
+    const binaryDirectory = join(directory, "bin");
+    const ghStub = join(binaryDirectory, "gh");
+    const commandLog = join(directory, "commands.log");
+    const promotedMarker = join(directory, "promoted.txt");
+    const currentSha = "1".repeat(40);
+    const verifiedSha = "2".repeat(40);
+
+    expect(workflow).toContain("verified_sha: ${{ steps.identity.outputs.sha }}");
+    expect(workflow).toContain("VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}");
+    expect(workflow.indexOf("Latest release is $latest_tag"))
+      .toBeLessThan(workflow.indexOf("Promote verified website production source"));
+    expect(workflow).toContain('production_ref="refs/heads/website-production"');
+    expect(workflow.match(/\/commits\/tags\/\$VERIFIED_TAG/gu)).toHaveLength(2);
+    expect(workflow).toContain("-F force=false");
+    expect(workflow).not.toContain("-F force=true");
+    expect(workflow).not.toContain("git push --force");
+
+    try {
+      await mkdir(binaryDirectory, { recursive: true });
+      await writeFile(ghStub, `#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$COMMAND_LOG"
+args="$*"
+if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
+  printf '%s\n' "$TAG_SHA"
+elif [[ "$args" == *"/compare/$CURRENT_SHA...$VERIFIED_SHA"* ]]; then
+  if [[ "$PROMOTION_SCENARIO" == "ahead" ]]; then
+    printf 'ahead\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA"
+  else
+    printf 'diverged\t%s\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" "$VERIFIED_SHA"
+  fi
+elif [[ "$args" == *"--method PATCH"* ]]; then
+  [[ "$args" == *"/git/ref/heads/website-production"* ]]
+  [[ "$args" == *"-f sha=$VERIFIED_SHA"* ]]
+  [[ "$args" == *"-F force=false"* ]]
+  printf 'patch\n' > "$PROMOTED_MARKER"
+elif [[ "$args" == *"--method POST"* ]]; then
+  [[ "$args" == *"/git/refs"* ]]
+  [[ "$args" == *"-f ref=refs/heads/website-production"* ]]
+  [[ "$args" == *"-f sha=$VERIFIED_SHA"* ]]
+  printf 'create\n' > "$PROMOTED_MARKER"
+elif [[ "$args" == *"/git/ref/heads/website-production"* ]]; then
+  if [[ -f "$PROMOTED_MARKER" || "$PROMOTION_SCENARIO" == "identical" ]]; then
+    printf '%s\n' "$VERIFIED_SHA"
+  elif [[ "$PROMOTION_SCENARIO" == "absent" ]]; then
+    exit 1
+  else
+    printf '%s\n' "$CURRENT_SHA"
+  fi
+else
+  echo "unexpected gh command: $args" >&2
+  exit 1
+fi
+`, "utf8");
+      await chmod(ghStub, 0o755);
+
+      const baseEnvironment = Object.freeze({
+        COMMAND_LOG: commandLog,
+        CURRENT_SHA: currentSha,
+        GITHUB_REF_NAME: "v0.16.2",
+        GITHUB_REPOSITORY: "hraness/wrench",
+        PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
+        PROMOTED_MARKER: promotedMarker,
+        TAG_SHA: verifiedSha,
+        VERIFIED_SHA: verifiedSha,
+        VERIFIED_TAG: "v0.16.2",
+      });
+      const runCase = async (
+        overrides: Readonly<Record<string, string>>,
+      ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> => {
+        await Promise.all([
+          rm(commandLog, { force: true }),
+          rm(promotedMarker, { force: true }),
+        ]);
+        return runWorkflowScript(script, { ...baseEnvironment, ...overrides });
+      };
+
+      const created = await runCase({ PROMOTION_SCENARIO: "absent" });
+      expect(created.exitCode).toBe(0);
+      expect(await readFile(promotedMarker, "utf8")).toBe("create\n");
+      expect(await readFile(commandLog, "utf8")).toContain(
+        "--method POST /repos/hraness/wrench/git/refs",
+      );
+
+      const advanced = await runCase({ PROMOTION_SCENARIO: "ahead" });
+      expect(advanced.exitCode).toBe(0);
+      expect(await readFile(promotedMarker, "utf8")).toBe("patch\n");
+      const advancedCommands = await readFile(commandLog, "utf8");
+      expect(advancedCommands).toContain(`/compare/${currentSha}...${verifiedSha}`);
+      expect(advancedCommands).toContain("-F force=false");
+
+      const identical = await runCase({ PROMOTION_SCENARIO: "identical" });
+      expect(identical.exitCode).toBe(0);
+      expect(await Bun.file(promotedMarker).exists()).toBe(false);
+      expect(await readFile(commandLog, "utf8")).not.toMatch(/--method (?:PATCH|POST)/u);
+
+      const diverged = await runCase({ PROMOTION_SCENARIO: "diverged" });
+      expect(diverged.exitCode).not.toBe(0);
+      expect(`${diverged.stdout}${diverged.stderr}`).toContain("does not fast-forward");
+      expect(await Bun.file(promotedMarker).exists()).toBe(false);
+
+      const retagged = await runCase({
+        PROMOTION_SCENARIO: "ahead",
+        TAG_SHA: "4".repeat(40),
+      });
+      expect(retagged.exitCode).not.toBe(0);
+      expect(`${retagged.stdout}${retagged.stderr}`).toContain(
+        "Remote v0.16.2 resolves to",
+      );
+      expect(await Bun.file(promotedMarker).exists()).toBe(false);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   test("documents bootstrap, verification, stage-only trust, MFA, and tag ordering", async () => {
-    const [guide, agents, readme, manifestText] = await Promise.all([
+    const [guide, agents, readme, changelog, skillInstallGuide, manifestText] = await Promise.all([
       readFile(publishingGuideUrl, "utf8"),
       readFile(agentGuideUrl, "utf8"),
       readFile(readmeUrl, "utf8"),
+      readFile(changelogUrl, "utf8"),
+      readFile(skillInstallGuideUrl, "utf8"),
       readFile(manifestUrl, "utf8"),
     ]);
     const manifest = JSON.parse(manifestText) as { readonly version: string };
@@ -807,6 +936,19 @@ esac
       "`beeper`",
       "`messaging`",
       "Do not grant a release workflow repository",
+      "Production Branch as `website-production`",
+      "Vercel System Environment Variables enabled",
+      "`VERCEL_GIT_COMMIT_REF=website-production`",
+      "`main` and pull requests are preview sources only",
+      "For the one-time\nmigration only",
+      "never bootstrap it from `main`",
+      "exception must never be repeated",
+      "fast-forwards the existing branch",
+      "sends `force=false`",
+      "website:vercel-build",
+      "Response bodies and Git child output are streamed",
+      "checkout keeps\na resolvable Git `HEAD`",
+      "exact tarball with canonical npm",
     ] as const) {
       expect(guide).toContain(required);
     }
@@ -828,7 +970,19 @@ esac
     expect(agents).toContain("required reviewer `0thernet`");
     expect(agents).toContain("`prevent_self_review: false`");
     expect(agents).toContain("verify that exact public artifact before creating its tag");
+    expect(agents).toContain("fast-forwards `website-production`");
+    expect(agents).toContain("Vercel's Production Branch on `website-production`");
+    expect(agents).toContain("documented one-time Vercel bootstrap");
+    expect(agents).toContain("`main` and pull requests are preview sources");
     expect(readme).toContain(exactPackage);
+    expect(readme).toContain(`npx skills add hraness/wrench#v${manifest.version}`);
+    expect(readme).toContain("can become individually reachable while a\nrelease is being staged");
+    expect(readme).toContain("completed, supported public release");
+    expect(readme).not.toMatch(/npx skills add hraness\/wrench(?:\s|$)/u);
+    expect(changelog).toContain("Versioned sections identify checked package source");
+    expect(changelog).toContain("publicly\nreleased only after the matching canonical npm package");
+    expect(skillInstallGuide).toContain(`exact v${manifest.version} release coordinate`);
+    expect(skillInstallGuide).toContain("If the coordinate is not public, stop");
     expect(readme).not.toContain("not currently published on npm");
     expect(readme).not.toContain("registries are not supported install paths");
   });

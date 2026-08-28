@@ -18,6 +18,15 @@ project's public `phc_` token; `NEXT_PUBLIC_POSTHOG_HOST` defaults to
 bun run website:check
 ```
 
-The Vercel project uses the repository root and serves `website/dist`.
+The Vercel project uses the repository root and serves `website/dist`. Keep
+Vercel System Environment Variables enabled and configure its Production Branch
+as `website-production`; production admission requires that exact Git ref,
+while `main` and pull requests produce previews only. The release workflow
+creates or fast-forwards that production branch to the exact verified release
+tag commit only after canonical npm and the immutable Latest GitHub Release
+agree. On a production deployment,
+`website:vercel-build` independently verifies checked-out HEAD, the matching
+remote tag, canonical npm, and the immutable Latest Release before building.
+Preview and local builds perform no external release verification.
 Root `middleware.ts` imports only `edge/negotiation.ts` for Accept q-values,
 `406`, and markdown 404 bodies.

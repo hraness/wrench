@@ -1,5 +1,10 @@
 # Changelog
 
+Versioned sections identify checked package source. A version is publicly
+released only after the matching canonical npm package and immutable GitHub
+Release exist; the release-bound production site identifies the latest
+coordinate that completed both checks.
+
 ## Unreleased
 
 ## 0.16.2 - 2026-08-28
