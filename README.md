@@ -578,7 +578,7 @@ coordinate. The same digest is bound into the client intent and body-free
 receipt. Native Messages coordinates remain unsupported by this Beeper
 producer.
 
-This source contract is not part of the immutable v0.15.0 release. Consumers
+This source contract is not part of the immutable v0.15.1 release. Consumers
 must not claim an installed Wrench producer until a later immutable release
 contains it. No tag, package publication, provider action, or message send is
 performed by adding the source contract.
