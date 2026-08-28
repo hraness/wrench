@@ -32,6 +32,8 @@ export const SITE_TITLE = "Wrench: precise web capabilities for AI agents" as co
 export const SITE_DESCRIPTION =
   "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations." as const;
 export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
+export const NPM_PACKAGE_URL = "https://www.npmjs.com/package/@hraness/wrench" as const;
+export const SKILLS_URL = "https://skills.sh/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
@@ -312,7 +314,7 @@ function sharedJsonLd(identity: PackageIdentity): ReadonlyArray<Readonly<Record<
       },
       operatingSystem: ["macOS", "Linux"],
       publisher: { "@id": `${SITE_ORIGIN}/#organization` },
-      sameAs: [REPOSITORY_URL],
+      sameAs: [REPOSITORY_URL, NPM_PACKAGE_URL, SKILLS_URL],
       softwareRequirements: "Bun 1.3.14 on macOS or Linux",
       softwareVersion: identity.version,
       url: `${SITE_ORIGIN}/`,

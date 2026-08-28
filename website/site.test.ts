@@ -395,6 +395,11 @@ describe("wrench.rip static site", () => {
       }),
       expect.objectContaining({
         "@id": `${SITE_ORIGIN}/#software`,
+        sameAs: [
+          "https://github.com/hraness/wrench",
+          "https://www.npmjs.com/package/@hraness/wrench",
+          "https://skills.sh/hraness/wrench",
+        ],
         softwareVersion: packageIdentity.version,
       }),
       expect.objectContaining({
