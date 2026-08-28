@@ -170,6 +170,8 @@ function writePredecessorMessagingRun(
   const {
     observedAcceptedPrefixCount: _legacyObservation,
     privateProviderOutcome: _laterPrivateOutcome,
+    contextBindingSha256: _laterContextBinding,
+    sourceConversationCoordinateSha256: _laterSourceCoordinate,
     ...predecessor
   } = run;
   writePrivateJson(

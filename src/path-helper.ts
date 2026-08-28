@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { createHash } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -25,6 +26,9 @@ const MAX_WRITE_BYTES = 2 * 1024 * 1024;
 const writeTemporaryFaultForTest = process.env.NODE_ENV === "test"
   ? process.env.WRENCH_TEST_WRITE_TEMP_FAULT
   : undefined;
+const pathMutationFaultForTest = process.env.NODE_ENV === "test"
+  ? process.env.WRENCH_TEST_PATH_MUTATION_FAULT
+  : undefined;
 const removeDirectoryFaultForTest = process.env.NODE_ENV === "test"
   ? process.env.WRENCH_TEST_REMOVE_DIRECTORY_FAULT
   : undefined;
@@ -40,6 +44,8 @@ const removeQuarantineScanMaximum = (() => {
 })();
 const writeTemporaryNamePattern =
   /^\.io-write-([1-9][0-9]{0,9})-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.tmp$/u;
+const pathMutationStageNamePattern =
+  /^\.io-path-mutation-stage-([a-f0-9]{64})-([1-9][0-9]{0,9})-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.tmp$/u;
 const removeQuarantineNamePattern =
   /^\.io-remove-([1-9][0-9]{0,9})-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.quarantine$/u;
 
@@ -61,6 +67,18 @@ type DirectoryEntry = {
 };
 type TreeEntry = Omit<DirectoryEntry, "name"> & {
   readonly path: string;
+};
+type PathMutationClaim = {
+  readonly kind: "io-path-mutation-claim";
+  readonly schemaVersion: 1;
+  readonly targetSha256: string;
+  readonly requestId: string;
+  readonly pid: number;
+};
+type PathMutationClaimSnapshot = {
+  readonly claim: PathMutationClaim;
+  readonly content: Buffer;
+  readonly stats: BigIntStats;
 };
 type BatchReadFile = {
   readonly segments: readonly string[];
@@ -111,6 +129,8 @@ type Request = {
       readonly directoryExpectations: readonly DirectoryExpectation[];
       readonly content: string;
       readonly createOnly: boolean;
+      readonly expectedContentSha256: string | null;
+      readonly maximumExpectedContentBytes: number;
     }
     | {
       readonly kind: "remove-directory-tree";
@@ -499,10 +519,30 @@ function parseRequest(value: unknown): Request {
   }
   if (
     operation.kind === "write-file"
-    && exactKeys(operation, ["kind", "segments", "directoryExpectations", "content", "createOnly"])
+    && (
+      exactKeys(operation, ["kind", "segments", "directoryExpectations", "content", "createOnly"])
+      || exactKeys(operation, [
+        "kind", "segments", "directoryExpectations", "content", "createOnly",
+        "expectedContentSha256", "maximumExpectedContentBytes",
+      ])
+    )
     && typeof operation.content === "string"
     && Buffer.byteLength(operation.content, "utf8") <= MAX_WRITE_BYTES
     && typeof operation.createOnly === "boolean"
+    && (
+      operation.expectedContentSha256 === undefined
+      || operation.expectedContentSha256 === null
+      || typeof operation.expectedContentSha256 === "string"
+        && /^[a-f0-9]{64}$/u.test(operation.expectedContentSha256)
+    )
+    && (
+      operation.maximumExpectedContentBytes === undefined
+      || typeof operation.maximumExpectedContentBytes === "number"
+        && Number.isSafeInteger(operation.maximumExpectedContentBytes)
+        && operation.maximumExpectedContentBytes >= 0
+        && operation.maximumExpectedContentBytes <= MAX_READ_BYTES
+    )
+    && (!operation.createOnly || operation.expectedContentSha256 == null)
   ) {
     const segments = parseSegments(operation.segments);
     return {
@@ -515,6 +555,9 @@ function parseRequest(value: unknown): Request {
         directoryExpectations: parseDirectoryExpectations(operation.directoryExpectations, segments.length - 1),
         content: operation.content,
         createOnly: operation.createOnly,
+        expectedContentSha256: operation.expectedContentSha256 ?? null,
+        maximumExpectedContentBytes:
+          operation.maximumExpectedContentBytes ?? MAX_WRITE_BYTES,
       },
     };
   }
@@ -789,6 +832,304 @@ function readBoundLeaf(
   }
 }
 
+function pathMutationTargetSha256(leaf: string): string {
+  return createHash("sha256")
+    .update("io-path-mutation", "utf8")
+    .update("\0", "utf8")
+    .update(leaf, "utf8")
+    .digest("hex");
+}
+
+function pathMutationLockName(targetSha256: string): string {
+  return `.io-path-mutation-${targetSha256}.lock`;
+}
+
+function renderPathMutationClaim(claim: PathMutationClaim): string {
+  return `${JSON.stringify(claim)}\n`;
+}
+
+function parsePathMutationClaim(
+  content: Buffer,
+  targetSha256: string,
+): PathMutationClaim {
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", {
+      fatal: true,
+      ignoreBOM: true,
+    }).decode(content)) as unknown;
+  } catch (error) {
+    throw new Error("path mutation claim is not canonical JSON", { cause: error });
+  }
+  if (
+    !isRecord(value)
+    || !exactKeys(value, [
+      "kind",
+      "schemaVersion",
+      "targetSha256",
+      "requestId",
+      "pid",
+    ])
+    || value.kind !== "io-path-mutation-claim"
+    || value.schemaVersion !== 1
+    || value.targetSha256 !== targetSha256
+    || typeof value.requestId !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+      .test(value.requestId)
+    || typeof value.pid !== "number"
+    || !Number.isSafeInteger(value.pid)
+    || value.pid < 1
+    || value.pid > 2_147_483_647
+  ) throw new Error("path mutation claim is invalid");
+  const claim: PathMutationClaim = {
+    kind: "io-path-mutation-claim",
+    schemaVersion: 1,
+    targetSha256,
+    requestId: value.requestId,
+    pid: value.pid,
+  };
+  if (renderPathMutationClaim(claim) !== content.toString("utf8")) {
+    throw new Error("path mutation claim is not canonical JSON");
+  }
+  return claim;
+}
+
+function readPathMutationClaimSnapshot(
+  name: string,
+  targetSha256: string,
+): PathMutationClaimSnapshot | null {
+  let before: BigIntStats;
+  try {
+    before = lstatSync(name, { bigint: true });
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return null;
+    throw error;
+  }
+  if (
+    before.isSymbolicLink()
+    || !before.isFile()
+    || !ownedByCurrentUser(before)
+    || (before.mode & 0o077n) !== 0n
+    || (before.nlink !== 1n && before.nlink !== 2n)
+  ) throw new Error("path mutation claim is not one private owned file");
+  const content = readBoundLeaf(name, 4 * 1024);
+  const after = lstatSync(name, { bigint: true });
+  if (
+    !sameFileSnapshot(before, after)
+    || before.mode !== after.mode
+    || before.uid !== after.uid
+    || before.gid !== after.gid
+    || before.nlink !== after.nlink
+  ) throw new Error("path mutation claim changed while it was read");
+  return {
+    claim: parsePathMutationClaim(content, targetSha256),
+    content,
+    stats: after,
+  };
+}
+
+function samePathMutationClaimSnapshot(
+  left: PathMutationClaimSnapshot,
+  right: PathMutationClaimSnapshot,
+): boolean {
+  return left.content.equals(right.content)
+    && sameFileSnapshot(left.stats, right.stats)
+    && left.stats.mode === right.stats.mode
+    && left.stats.uid === right.stats.uid
+    && left.stats.gid === right.stats.gid
+    && left.stats.nlink === right.stats.nlink;
+}
+
+function recoverDefinitelyOrphanedPathMutationStages(): void {
+  let removed = false;
+  for (const name of readdirSync(".")) {
+    const pidText = pathMutationStageNamePattern.exec(name)?.[2];
+    if (pidText === undefined) continue;
+    const pid = Number(pidText);
+    if (
+      !Number.isSafeInteger(pid)
+      || pid < 1
+      || pid > 2_147_483_647
+      || !processIsDefinitelyMissing(pid)
+    ) continue;
+    let stats: BigIntStats;
+    try {
+      stats = lstatSync(name, { bigint: true });
+    } catch (error) {
+      if (hasCode(error, "ENOENT")) continue;
+      throw error;
+    }
+    if (
+      stats.isSymbolicLink()
+      || !stats.isFile()
+      || !ownedByCurrentUser(stats)
+      || (stats.mode & 0o077n) !== 0n
+    ) continue;
+    try {
+      unlinkSync(name);
+      removed = true;
+    } catch (error) {
+      if (!hasCode(error, "ENOENT")) throw error;
+    }
+  }
+  if (removed) syncDirectory(".");
+}
+
+function recoverDefinitelyOrphanedPathMutationClaim(
+  lockName: string,
+  targetSha256: string,
+): boolean {
+  const first = readPathMutationClaimSnapshot(lockName, targetSha256);
+  if (first === null) return true;
+  if (!processIsDefinitelyMissing(first.claim.pid)) return false;
+  const second = readPathMutationClaimSnapshot(lockName, targetSha256);
+  if (second === null) return true;
+  if (
+    !samePathMutationClaimSnapshot(first, second)
+    || !processIsDefinitelyMissing(second.claim.pid)
+  ) return false;
+  const quarantine =
+    `.io-path-mutation-recovery-${targetSha256}-${process.pid}-${crypto.randomUUID()}.tmp`;
+  try {
+    renameSync(lockName, quarantine);
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return true;
+    throw error;
+  }
+  const moved = lstatSync(quarantine, { bigint: true });
+  if (!sameIdentity(identity(moved), identity(second.stats))) {
+    throw new Error("path mutation claim changed while it was quarantined");
+  }
+  unlinkSync(quarantine);
+  syncDirectory(".");
+  recoverDefinitelyOrphanedPathMutationStages();
+  return true;
+}
+
+function pauseAfterPathMutationClaimForTest(
+  targetSha256: string,
+  requestId: string,
+): void {
+  if (pathMutationFaultForTest !== "pause-after-claim") return;
+  const prefix = `.wrench-test-path-mutation-${targetSha256}-${requestId}`;
+  const readyName = `${prefix}-ready`;
+  const releaseName = `${prefix}-release`;
+  const descriptor = openSync(
+    readyName,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    0o600,
+  );
+  try {
+    fchmodSync(descriptor, 0o600);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  syncDirectory(".");
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    try {
+      const release = lstatSync(releaseName);
+      if (
+        release.isSymbolicLink()
+        || !release.isFile()
+        || !ownedByCurrentUser(release)
+        || (release.mode & 0o077) !== 0
+      ) throw new Error("path mutation test release is not one private file");
+      break;
+    } catch (error) {
+      if (!hasCode(error, "ENOENT")) throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("path mutation overlap test timed out");
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  unlinkSync(readyName);
+  unlinkSync(releaseName);
+  syncDirectory(".");
+}
+
+function acquirePathMutationClaim(
+  leaf: string,
+  requestId: string,
+): (() => void) | null {
+  const targetSha256 = pathMutationTargetSha256(leaf);
+  const lockName = pathMutationLockName(targetSha256);
+  recoverDefinitelyOrphanedPathMutationStages();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const claim: PathMutationClaim = {
+      kind: "io-path-mutation-claim",
+      schemaVersion: 1,
+      targetSha256,
+      requestId,
+      pid: process.pid,
+    };
+    const stage =
+      `.io-path-mutation-stage-${targetSha256}-${process.pid}-${crypto.randomUUID()}.tmp`;
+    let descriptor: number | null = null;
+    let stageExists = false;
+    try {
+      descriptor = openSync(
+        stage,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
+          | ("O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0),
+        0o600,
+      );
+      stageExists = true;
+      writeFileSync(descriptor, renderPathMutationClaim(claim), "utf8");
+      fchmodSync(descriptor, 0o600);
+      fsyncSync(descriptor);
+      closeSync(descriptor);
+      descriptor = null;
+      try {
+        linkSync(stage, lockName);
+      } catch (error) {
+        if (!hasCode(error, "EEXIST")) throw error;
+        unlinkSync(stage);
+        stageExists = false;
+        syncDirectory(".");
+        if (recoverDefinitelyOrphanedPathMutationClaim(lockName, targetSha256)) {
+          continue;
+        }
+        return null;
+      }
+      unlinkSync(stage);
+      stageExists = false;
+      syncDirectory(".");
+      pauseAfterPathMutationClaimForTest(targetSha256, requestId);
+      return () => {
+        const held = readPathMutationClaimSnapshot(lockName, targetSha256);
+        if (
+          held === null
+          || held.claim.pid !== process.pid
+          || held.claim.requestId !== requestId
+        ) throw new Error("path mutation claim changed before release");
+        const releaseName =
+          `.io-path-mutation-release-${targetSha256}-${process.pid}-${crypto.randomUUID()}.tmp`;
+        renameSync(lockName, releaseName);
+        const moved = lstatSync(releaseName, { bigint: true });
+        if (!sameIdentity(identity(moved), identity(held.stats))) {
+          throw new Error("path mutation claim changed while it was released");
+        }
+        unlinkSync(releaseName);
+        syncDirectory(".");
+      };
+    } finally {
+      if (descriptor !== null) closeSync(descriptor);
+      if (stageExists) {
+        try {
+          unlinkSync(stage);
+          syncDirectory(".");
+        } catch {
+          // A dead helper's private stage is recoverable by the next writer.
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function readFile(
   expected: Identity,
   segments: readonly string[],
@@ -997,6 +1338,9 @@ function writeFile(
   expectations: readonly DirectoryExpectation[],
   content: string,
   createOnly: boolean,
+  expectedContentSha256: string | null,
+  maximumExpectedContentBytes: number,
+  requestId: string,
 ): Response {
   const actual = assertExpectedCwd(expected);
   traverseDirectories(segments.slice(0, -1), expectations, false);
@@ -1008,6 +1352,8 @@ function writeFile(
   const temporary = `.io-write-${process.pid}-${crypto.randomUUID()}.tmp`;
   let descriptor: number | null = null;
   let temporaryExists = false;
+  let releaseMutation: (() => void) | null = null;
+  let mutationDurable = false;
   try {
     descriptor = openSync(
       temporary,
@@ -1024,6 +1370,13 @@ function writeFile(
     closeSync(descriptor);
     descriptor = null;
     pauseAfterWriteTemporaryForTest();
+    releaseMutation = acquirePathMutationClaim(leaf, requestId);
+    if (releaseMutation === null) {
+      if (expectedContentSha256 !== null) {
+        throw new Error("file content no longer matches the expected hash");
+      }
+      throw new Error("file mutation is already active");
+    }
     if (createOnly) {
       try {
         linkSync(temporary, leaf);
@@ -1037,12 +1390,39 @@ function writeFile(
       unlinkSync(temporary);
       temporaryExists = false;
     } else {
+      if (expectedContentSha256 !== null) {
+        let current: Buffer;
+        try {
+          current = readBoundLeaf(leaf, maximumExpectedContentBytes);
+        } catch (error) {
+          if (hasCode(error, "ENOENT")) {
+            throw new Error("file content no longer matches the expected hash");
+          }
+          throw error;
+        }
+        if (
+          createHash("sha256").update(current).digest("hex")
+          !== expectedContentSha256
+        ) {
+          throw new Error("file content no longer matches the expected hash");
+        }
+      }
       renameSync(temporary, leaf);
       temporaryExists = false;
     }
     syncDirectory(".");
+    mutationDurable = true;
     return { ok: true, identity: actual, created: true };
   } finally {
+    if (releaseMutation !== null) {
+      try {
+        releaseMutation();
+      } catch (error) {
+        if (!mutationDurable) throw error;
+        // The target rename and directory sync are authoritative. A dead
+        // helper's exact private claim is recoverable by the next writer.
+      }
+    }
     if (descriptor !== null) closeSync(descriptor);
     if (temporaryExists) {
       try {
@@ -1248,6 +1628,9 @@ function execute(request: Request): Response {
       operation.directoryExpectations,
       operation.content,
       operation.createOnly,
+      operation.expectedContentSha256,
+      operation.maximumExpectedContentBytes,
+      request.requestId,
     );
   }
   return removeDirectoryTree(

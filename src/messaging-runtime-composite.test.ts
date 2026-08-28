@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { canonicalJson, sha256 } from "./canonical-json";
 import { messagingTurnDigest, parseMessagingTurnV1 } from "./messaging-types";
 import {
+  initializeMessagingCompositeRunInternal,
   loadMessagingPreviewForConfirmationInternal,
   previewFromStoredMessagingPlan,
   verifyStoredMessagingPreview,
@@ -14,6 +22,7 @@ import {
   invocationPlanDigest,
   loadInvocationPlan,
   messagingCompositeInputHash,
+  parseMessagingCompositeInvocationPlan,
   saveInvocationPlan,
   type InvocationPlan,
   type StoredPlan,
@@ -112,6 +121,43 @@ function storedPlan(): StoredPlan {
 }
 
 describe("messaging composite preview binding", () => {
+  test("reads the authentic #72 plan shape but refuses to dispatch without V2 evidence", () => {
+    const current = storedPlan();
+    const {
+      contextBindingSha256: _laterContextBinding,
+      sourceConversationCoordinateSha256: _laterSourceCoordinate,
+      ...predecessorValue
+    } = current.plan.messagingComposite!;
+    const parsed = parseMessagingCompositeInvocationPlan(predecessorValue);
+    expect(parsed.contextBindingSha256).toBeNull();
+    expect(parsed.sourceConversationCoordinateSha256).toBeNull();
+    expect(() => parseMessagingCompositeInvocationPlan({
+      ...predecessorValue,
+      contextBindingSha256: null,
+      sourceConversationCoordinateSha256: null,
+    })).toThrow("malformed context evidence");
+
+    const predecessorPlan: InvocationPlan = {
+      ...current.plan,
+      inputHash: messagingCompositeInputHash(parsed),
+      messagingComposite: parsed,
+    };
+    const authenticPredecessorPlan = {
+      ...predecessorPlan,
+      messagingComposite: predecessorValue,
+    };
+    const expectedDigest = sha256(canonicalJson({
+      ...authenticPredecessorPlan,
+      messagingComposite: { ...predecessorValue, previewDigest: null },
+    }));
+    expect(invocationPlanDigest(predecessorPlan)).toBe(expectedDigest);
+    expect(() => initializeMessagingCompositeRunInternal(
+      { digest: expectedDigest, plan: predecessorPlan },
+      "123e4567-e89b-42d3-a456-426614174099",
+      { environment: state(), now: new Date("2026-08-27T12:01:00.000Z") },
+    )).toThrow("preview the action again");
+  });
+
   test("reconstructs the exact private recipient and bubbles before accepting its hash", () => {
     const stored = storedPlan();
     const preview = verifyStoredMessagingPreview(stored);
@@ -186,6 +232,35 @@ describe("messaging composite preview binding", () => {
       wrong.digest,
       { environment: wrongEnvironment },
     )).toThrow("exact reconstructed artifact");
+  });
+
+  test("reserves both private sinks before consuming a confirmation plan", async () => {
+    const environment = state();
+    const stored = storedPlan();
+    saveInvocationPlan(stored, environment);
+    const outputRoot = mkdtempSync(join(tmpdir(), "wrench-messaging-preflight-output-"));
+    chmodSync(outputRoot, 0o700);
+    roots.push(outputRoot);
+    const privateOutput = join(outputRoot, "run.json");
+    const receiptOutput = join(outputRoot, "receipt.json");
+    writeFileSync(receiptOutput, "preexisting\n", { mode: 0o600 });
+    const stderr: string[] = [];
+
+    expect(await main([
+      "confirm",
+      stored.digest,
+      "--private-output",
+      privateOutput,
+      "--receipt-binding-output",
+      receiptOutput,
+      "--json",
+    ], environment, { stdout: () => {}, stderr: (value) => stderr.push(value) })).toBe(3);
+    expect(stderr.join("")).toContain("failed physical reservation");
+    expect(loadInvocationPlan(stored.digest, environment)).toEqual(stored);
+    expect(readFileSync(receiptOutput, "utf8")).toBe("preexisting\n");
+    expect(readFileSync(privateOutput, "utf8"))
+      .toContain("wrench.messaging-private-output-reservation");
+    expect(readFileSync(privateOutput, "utf8")).not.toContain("private bubble");
   });
 
   test("keeps only the circular preview hash outside the canonical confirmation digest", () => {

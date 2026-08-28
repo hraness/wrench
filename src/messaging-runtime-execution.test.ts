@@ -82,6 +82,8 @@ type HarnessOptions = {
   readonly afterFence?: () => void;
   readonly contextLimit?: number;
   readonly privateOutcomeCode?: string;
+  readonly coordinateNetwork?: string;
+  readonly readOnly?: boolean;
 };
 
 class ManualDeadlineClock implements OperationDeadlineClock {
@@ -369,7 +371,7 @@ function manifest() {
   };
 }
 
-async function harness(partCount: number, options: HarnessOptions = {}) {
+async function harnessInternal(partCount: number, options: HarnessOptions = {}) {
   const freshState = sharedRoot === null;
   const root = sharedRoot ?? mkdtempSync(join(tmpdir(), "wrench-messaging-execution-"));
   if (freshState) {
@@ -454,7 +456,9 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     schemaVersion: 1,
     contractId: "wrench.provider-messaging.synthetic-fourth.v1",
     network: "synthetic-fourth",
-    contextLiveness: "fresh-as-of-live-preflight",
+    contextLiveness: options.readOnly
+      ? "freshness-unproven"
+      : "fresh-as-of-live-preflight",
     listOperation: "messaging.list",
     contextOperation: "messaging.read",
     coordinateKind: "beeperConversation",
@@ -481,11 +485,13 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
         participants,
         providerRevision: "route-revision-1",
       })]),
-      sourceConversationCoordinate: () => Object.freeze({
-        contractId: "wrench.message-like-me.source-conversation-coordinate.v1" as const,
-        schemaVersion: 1 as const,
-        sha256: "b".repeat(64),
-      }),
+      sourceConversationCoordinate: () => options.readOnly
+        ? null
+        : Object.freeze({
+            contractId: "wrench.message-like-me.source-conversation-coordinate.v1" as const,
+            schemaVersion: 1 as const,
+            sha256: "b".repeat(64),
+          }),
     }),
     parseTarget: (value: unknown) => {
       if (
@@ -502,7 +508,13 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
       conversation_id: roomId,
       limit,
     }),
-    action: Object.freeze({
+    action: options.readOnly
+      ? Object.freeze({
+          state: "unavailable" as const,
+          reply: "unsupported" as const,
+          reason: "synthetic historical provider has no checked action",
+        })
+      : Object.freeze({
       state: "supported",
       operation: "messaging.send",
       reply: "supported",
@@ -558,10 +570,10 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
         operation: "messaging.read",
         input: Object.freeze({ account_id: "account", conversation_id: roomId, limit: contextLimit }),
       }),
-    }),
+        }),
   }) satisfies ProviderPluginMessagingDefinitionV1;
 
-  const registry = cachedRegistry ?? (() => {
+  const createRegistry = () => {
     const plugin = defineProviderPlugin({
       apiVersion: 1,
       id: "synthetic-fourth-messaging-execution",
@@ -610,9 +622,11 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
         })),
       }],
     });
-    cachedRegistry = createProviderPluginRegistry([plugin]);
-    return cachedRegistry;
-  })();
+    return createProviderPluginRegistry([plugin]);
+  };
+  const registry = options.readOnly
+    ? createRegistry()
+    : cachedRegistry ?? (cachedRegistry = createRegistry());
   const parsed = parseRuntimeManifest(manifest(), registry);
   if (!parsed.ok) throw new Error(parsed.issues.join("; "));
   if (freshState) {
@@ -634,7 +648,7 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     candidate: {
       coordinate: {
         kind: "beeperConversation",
-        network: "synthetic-fourth",
+        network: options.coordinateNetwork ?? "synthetic-fourth",
         conversationId: roomId,
       },
     },
@@ -645,6 +659,25 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     routeRef: route.routeRef,
     limit: contextLimit,
   }, { environment, registry, now: observation });
+  if (context.binding === null && !options.readOnly) {
+    throw new Error("synthetic actionable context lost its binding");
+  }
+  if (context.binding === null) {
+    return Object.freeze({
+      root,
+      environment,
+      registry,
+      route,
+      context,
+      preview: null,
+      observation,
+      messages,
+      attempts: () => attempts,
+      dispatches: () => dispatches,
+      capturedFence: () => capturedFence,
+      capturedFenceReady,
+    });
+  }
   const preview = await previewMessagingTurnInternal({
     schemaVersion: 1,
     format: "wrench.messaging-turn",
@@ -662,6 +695,8 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     root,
     environment,
     registry,
+    route,
+    context,
     preview,
     observation,
     messages,
@@ -672,7 +707,53 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
   });
 }
 
+type HarnessResult = Awaited<ReturnType<typeof harnessInternal>>;
+type ActionableHarnessResult = Omit<HarnessResult, "preview"> & {
+  readonly preview: Exclude<HarnessResult["preview"], null>;
+};
+type HistoricalHarnessResult = Omit<HarnessResult, "preview"> & {
+  readonly preview: null;
+};
+
+function harness(
+  partCount: number,
+  options: HarnessOptions & { readonly readOnly: true },
+): Promise<HistoricalHarnessResult>;
+function harness(
+  partCount: number,
+  options?: HarnessOptions & { readonly readOnly?: false },
+): Promise<ActionableHarnessResult>;
+function harness(
+  partCount: number,
+  options: HarnessOptions = {},
+): Promise<HarnessResult> {
+  return harnessInternal(partCount, options);
+}
+
 describe("generic messaging composite execution", () => {
+  test("returns WhatsApp-style historical context without inventing action evidence", async () => {
+    const setup = await harness(1, { readOnly: true });
+    expect(setup.route.readiness).toEqual({
+      context: "historical-readable",
+      turn: "unavailable",
+      reply: "unsupported",
+      reason: "provider context freshness is unproven",
+    });
+    expect(setup.context).toMatchObject({
+      binding: null,
+      liveness: "freshness-unproven",
+      messages: [{ body: "older incoming" }, { body: "newer incoming" }],
+    });
+    expect(setup.preview).toBeNull();
+  });
+
+  test("stores and reloads a native Signal coordinate under the provider facade", async () => {
+    const setup = await harness(1, { coordinateNetwork: "Signal" });
+    expect(setup.route.network).toBe("synthetic-fourth");
+    expect(setup.context.network).toBe("synthetic-fourth");
+    expect(setup.context.binding).not.toBeNull();
+  });
+
   test("keeps list candidates non-actionable until exact coordinate resolution", async () => {
     const setup = await harness(1);
     const routes = await discoverMessagingRoutesInternal({

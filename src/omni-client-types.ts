@@ -85,7 +85,8 @@ type OmniEntityCommonV1 = {
 
 export type OmniConversationV1 = OmniEntityCommonV1 & {
   readonly kind: "conversation";
-  readonly conversationKind: "single" | "group" | "unknown";
+  /** Absent on durable pages written before conversation classification existed. */
+  readonly conversationKind?: "single" | "group" | "unknown";
   readonly detail: "summary" | "full";
   readonly title: string | null;
   readonly summary: string | null;

@@ -483,6 +483,9 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     routeRef: route.routeRef,
     limit: contextLimit,
   }, { environment, registry, now: observation });
+  if (context.binding === null) {
+    throw new Error("synthetic actionable context lost its binding");
+  }
   const preview = await previewMessagingTurnInternal({
     schemaVersion: 1,
     format: "wrench.messaging-turn",

@@ -80,7 +80,8 @@ export type MessagingContextRecordV1 = {
   readonly routeRef: string;
   readonly routeRecordHash: string;
   readonly sourceConversationCoordinate:
-    MessageLikeMeSourceConversationCoordinateBindingV1;
+    | MessageLikeMeSourceConversationCoordinateBindingV1
+    | null;
   readonly exactDataRevision: string;
   readonly latestMessageRevision: string;
   readonly validatedAt: string;
@@ -395,10 +396,11 @@ export function parseMessagingContextRecordV1(
     contextRef,
     routeRef,
     routeRecordHash: digest(source.routeRecordHash, "messaging context route record hash"),
-    sourceConversationCoordinate:
-      parseMessageLikeMeSourceConversationCoordinateBindingV1(
-        source.sourceConversationCoordinate,
-      ),
+    sourceConversationCoordinate: source.sourceConversationCoordinate === null
+      ? null
+      : parseMessageLikeMeSourceConversationCoordinateBindingV1(
+          source.sourceConversationCoordinate,
+        ),
     exactDataRevision: digest(source.exactDataRevision, "messaging context data revision"),
     latestMessageRevision: digest(source.latestMessageRevision, "messaging context latest revision"),
     validatedAt: timestamp(source.validatedAt, "messaging context validatedAt"),

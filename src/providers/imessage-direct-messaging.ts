@@ -225,7 +225,7 @@ export const imsgDirectMessagingDefinition = Object.freeze({
           observedChatRowId: String(observedChatRowId),
         }),
         conversationProviderId: entity.providerId,
-        conversationKind: entity.conversationKind,
+        conversationKind: entity.conversationKind ?? "unknown",
         title: entity.title,
         participants: entity.participants,
         // The chat row's last-message timestamp changes after every send. Route
@@ -271,7 +271,7 @@ export const imsgDirectMessagingDefinition = Object.freeze({
           observedChatRowId: String(coordinate.observedChatRowId),
         }),
         conversationProviderId: entity.providerId,
-        conversationKind: entity.conversationKind,
+        conversationKind: entity.conversationKind ?? "unknown",
         title: entity.title,
         participants: entity.participants,
         providerRevision: null,
@@ -349,7 +349,7 @@ export const imsgDirectMessagingDefinition = Object.freeze({
           conversationProviderId: entity.providerId,
           network: "imessage",
           conversation: Object.freeze({
-            kind: entity.conversationKind,
+            kind: entity.conversationKind ?? "unknown",
             title: entity.title,
             participantCount: entity.participants.length,
           }),

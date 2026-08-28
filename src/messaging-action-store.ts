@@ -4,11 +4,14 @@ import { canonicalJson, sha256 } from "./canonical-json";
 import {
   MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
   MESSAGING_RECEIPT_BINDING_CONTRACT_ID,
+  MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+  MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
   parseMessagingReceiptBindingV1,
+  parseMessagingReceiptBindingV2,
   type MessagingPartJournalStateV1,
   type MessagingPrivateProviderOutcomeV1,
-  type MessagingReceiptBindingV1,
-  type MessagingRunReceiptV1,
+  type MessagingReceiptBinding,
+  type MessagingRunReceipt,
   type MessagingRunV1,
 } from "./messaging-types";
 import type { ProviderPluginMessagingExpectedOwnPrefixV1 } from "./provider-plugin";
@@ -275,13 +278,31 @@ function parseRun(value: unknown): MessagingRunV1 {
     source,
     "privateProviderOutcome",
   );
+  const hasContextBinding = Object.hasOwn(source, "contextBindingSha256");
+  const hasSourceCoordinate = Object.hasOwn(
+    source,
+    "sourceConversationCoordinateSha256",
+  );
+  if (hasContextBinding !== hasSourceCoordinate) {
+    throw new Error("messaging run has partial context evidence");
+  }
+  const hasCurrentContextEvidence = hasContextBinding
+    && source.contextBindingSha256 !== null;
+  if (
+    hasContextBinding
+    && ((source.contextBindingSha256 === null)
+      !== (source.sourceConversationCoordinateSha256 === null))
+  ) throw new Error("messaging run has partial context evidence");
   if (!hasObservedAcceptedPrefixCount && hasPrivateProviderOutcome) {
     throw new Error("messaging run has unsupported fields");
   }
   exactKeys(source, [
     "schemaVersion", "format", "runId", "planDigest", "routeRef", "contextRef",
-    "clientIntentSha256", "contextBindingSha256",
-    "sourceConversationCoordinateSha256", "turnDigest", "previewDigest",
+    "clientIntentSha256",
+    ...(hasContextBinding
+      ? ["contextBindingSha256", "sourceConversationCoordinateSha256"]
+      : []),
+    "turnDigest", "previewDigest",
     "state", "partCount",
     "provenPartCount",
     ...(hasObservedAcceptedPrefixCount ? ["observedAcceptedPrefixCount"] : []),
@@ -399,14 +420,18 @@ function parseRun(value: unknown): MessagingRunV1 {
     routeRef: source.routeRef,
     contextRef: source.contextRef,
     clientIntentSha256: digest(source.clientIntentSha256, "messaging run client intent"),
-    contextBindingSha256: digest(
-      source.contextBindingSha256,
-      "messaging run context binding",
-    ),
-    sourceConversationCoordinateSha256: digest(
-      source.sourceConversationCoordinateSha256,
-      "messaging run source conversation coordinate",
-    ),
+    contextBindingSha256: hasCurrentContextEvidence
+      ? digest(
+          source.contextBindingSha256,
+          "messaging run context binding",
+        )
+      : null,
+    sourceConversationCoordinateSha256: hasCurrentContextEvidence
+      ? digest(
+          source.sourceConversationCoordinateSha256,
+          "messaging run source conversation coordinate",
+        )
+      : null,
     turnDigest: digest(source.turnDigest, "messaging run turn digest"),
     previewDigest: digest(source.previewDigest, "messaging run preview digest"),
     state: source.state,
@@ -470,6 +495,14 @@ export function initializeMessagingRun(
   environment: Environment,
   at: string,
 ): MessagingRunSnapshotV1 {
+  if (
+    plan.contextBindingSha256 === null
+    || plan.sourceConversationCoordinateSha256 === null
+  ) {
+    throw new Error(
+      "predecessor messaging plan lacks current context evidence; preview the action again",
+    );
+  }
   ensurePrivateStateDirectory(root(environment), environment);
   const startedAt = timestamp(at);
   const run = parseRun({
@@ -663,10 +696,38 @@ export function updateMessagingRun(
   return Object.freeze({ run, contentSha256: sha256(encoded) });
 }
 
-export function messagingReceiptBinding(run: MessagingRunV1): MessagingReceiptBindingV1 {
+export function messagingReceiptBinding(run: MessagingRunV1): MessagingReceiptBinding {
   if (run.state === "pending") throw new Error("pending messaging run has no terminal receipt binding");
+  if (run.contextBindingSha256 === null) {
+    if (run.sourceConversationCoordinateSha256 !== null) {
+      throw new Error("messaging run has partial context evidence");
+    }
+    const predecessorWithoutReceipt = Object.freeze({
+      schemaVersion: 1 as const,
+      format: "wrench.messaging-receipt-binding" as const,
+      contractId: MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+      contractHash: MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+      clientIntentSha256: run.clientIntentSha256,
+      routeRefSha256: sha256(run.routeRef),
+      contextRefSha256: sha256(run.contextRef),
+      turnDigest: run.turnDigest,
+      previewDigest: run.previewDigest,
+      runId: run.runId,
+      state: run.state,
+      partCount: run.partCount,
+      provenPartCount: run.provenPartCount,
+      recordedAt: run.recordedAt,
+    });
+    return parseMessagingReceiptBindingV1({
+      ...predecessorWithoutReceipt,
+      receiptSha256: sha256(canonicalJson(predecessorWithoutReceipt)),
+    });
+  }
+  if (run.sourceConversationCoordinateSha256 === null) {
+    throw new Error("messaging run has partial context evidence");
+  }
   const withoutReceipt = Object.freeze({
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     format: "wrench.messaging-receipt-binding" as const,
     contractId: MESSAGING_RECEIPT_BINDING_CONTRACT_ID,
     contractHash: MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
@@ -684,16 +745,34 @@ export function messagingReceiptBinding(run: MessagingRunV1): MessagingReceiptBi
     provenPartCount: run.provenPartCount,
     recordedAt: run.recordedAt,
   });
-  return parseMessagingReceiptBindingV1({
+  return parseMessagingReceiptBindingV2({
     ...withoutReceipt,
     receiptSha256: sha256(canonicalJson(withoutReceipt)),
   });
 }
 
-export function messagingRunReceipt(run: MessagingRunV1): MessagingRunReceiptV1 {
+export function messagingRunReceipt(run: MessagingRunV1): MessagingRunReceipt {
   const binding = messagingReceiptBinding(run);
+  if (binding.schemaVersion === 1) {
+    return Object.freeze({
+      schemaVersion: 1,
+      format: "wrench.messaging-run-receipt",
+      planDigest: run.planDigest,
+      runId: run.runId,
+      state: binding.state,
+      partCount: binding.partCount,
+      provenPartCount: binding.provenPartCount,
+      clientIntentSha256: binding.clientIntentSha256,
+      routeRefSha256: binding.routeRefSha256,
+      contextRefSha256: binding.contextRefSha256,
+      turnDigest: binding.turnDigest,
+      previewDigest: binding.previewDigest,
+      receiptBindingSha256: binding.receiptSha256,
+      recordedAt: binding.recordedAt,
+    });
+  }
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "wrench.messaging-run-receipt",
     planDigest: run.planDigest,
     runId: run.runId,

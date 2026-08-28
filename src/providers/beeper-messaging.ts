@@ -111,6 +111,25 @@ function exactConversationFromOutput(output: unknown) {
   }), output);
 }
 
+function messageLikeMeCoordinateIfEligible(
+  output: unknown,
+  expectedAccountSubject: string,
+) {
+  const envelope = record(output, "Beeper exact conversation output");
+  const rawConversation = record(
+    envelope.conversation,
+    "Beeper exact conversation output conversation",
+  );
+  if (
+    rawConversation.type !== "single"
+    || rawConversation.isReadOnly !== false
+  ) return null;
+  return createBeeperMessageLikeMeSourceConversationCoordinateBindingV1({
+    conversationRead: output,
+    expectedAccountSubject,
+  });
+}
+
 function canonicalMessages(messages: readonly ProviderMessageV1[]): readonly ProviderMessageV1[] {
   return Object.freeze([...messages].sort((left, right) => {
     const leftKey = `${left.orderedAt ?? ""}\0${left.providerId}`;
@@ -169,7 +188,7 @@ export const beeperMessagingDefinition = Object.freeze({
           ),
         }),
         conversationProviderId: entity.providerId,
-        conversationKind: "unknown" as const,
+        conversationKind: entity.conversationKind ?? "unknown",
         title: entity.title,
         participants: entity.participants,
         providerRevision: entity.providerRevision,
@@ -248,10 +267,7 @@ export const beeperMessagingDefinition = Object.freeze({
       if (coordinate.kind !== "beeperConversation") {
         throw new Error("Beeper exact source coordinate changed coordinate kind");
       }
-      return createBeeperMessageLikeMeSourceConversationCoordinateBindingV1({
-        conversationRead: output,
-        expectedAccountSubject,
-      });
+      return messageLikeMeCoordinateIfEligible(output, expectedAccountSubject);
     },
   }),
   parseTarget: parseBeeperMessagingTarget,
@@ -284,21 +300,29 @@ export const beeperMessagingDefinition = Object.freeze({
           "Beeper exact conversation output conversation",
         );
         const entity = exactConversationFromOutput(output);
-        const network = bounded(
+        bounded(
           rawConversation.network,
           "Beeper exact conversation output network",
           64,
         );
-        const sourceConversationCoordinate =
-          createBeeperMessageLikeMeSourceConversationCoordinateBindingV1({
-            conversationRead: output,
-            expectedAccountSubject,
-          });
+        const sourceConversationCoordinate = messageLikeMeCoordinateIfEligible(
+          output,
+          expectedAccountSubject,
+        );
+        if (sourceConversationCoordinate === null) {
+          throw new Error(
+            "Beeper checked turn actions require one writable direct conversation",
+          );
+        }
         return Object.freeze({
           conversationProviderId: entity.providerId,
-          network,
+          network: "beeper",
           conversation: Object.freeze({
-            kind: "single" as const,
+            kind: rawConversation.type === "single"
+              ? "single" as const
+              : rawConversation.type === "group"
+                ? "group" as const
+                : "unknown" as const,
             title: entity.title,
             participantCount: entity.participants.length,
           }),

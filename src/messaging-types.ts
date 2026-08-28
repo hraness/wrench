@@ -12,33 +12,70 @@ import {
   WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR,
   WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
   WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID,
   WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR,
   WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
   WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID,
   parseWrenchMessagingContextBindingV1,
+  parseWrenchMessagingContextBindingV2,
   type MessageLikeMeSourceConversationCoordinateBindingV1,
   type WrenchMessagingContextBindingV1,
+  type WrenchMessagingContextBindingV2,
   type WrenchMessagingReceiptBindingV1,
+  type WrenchMessagingReceiptBindingV2,
 } from "./message-like-me-agentic-messaging";
 
-export const MESSAGING_CONTEXT_BINDING_CONTRACT_ID =
+export const MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID =
   WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID;
+export const MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR =
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR;
+export const MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH =
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH;
+
+export const MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID =
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID;
+export const MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR =
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR;
+export const MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH =
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH;
+
+export const MESSAGING_CONTEXT_BINDING_CONTRACT_ID =
+  MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID;
 
 export const MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR =
-  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR;
+  MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR;
 
 /** SHA-256 of the canonical descriptor above. */
 export const MESSAGING_CONTEXT_BINDING_CONTRACT_HASH =
-  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH;
+  MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH;
+
+export const MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID =
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID;
+export const MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR =
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR;
+export const MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH =
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH;
+
+export const MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID =
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID;
+export const MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR =
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR;
+export const MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH =
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH;
 
 export const MESSAGING_RECEIPT_BINDING_CONTRACT_ID =
-  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID;
+  MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID;
 
 export const MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR =
-  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR;
+  MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR;
 
 export const MESSAGING_RECEIPT_BINDING_CONTRACT_HASH =
-  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH;
+  MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH;
 
 export type MessagingSourceConversationCoordinateBindingV1 =
   MessageLikeMeSourceConversationCoordinateBindingV1;
@@ -142,6 +179,15 @@ export type MessagingContextBindingV1 = {
     WrenchMessagingContextBindingV1[Key];
 };
 
+export type MessagingContextBindingV2 = {
+  readonly [Key in keyof WrenchMessagingContextBindingV2]:
+    WrenchMessagingContextBindingV2[Key];
+};
+
+export type MessagingContextBinding =
+  | MessagingContextBindingV1
+  | MessagingContextBindingV2;
+
 export type MessagingContextMessageV1 = {
   readonly messageRef: string;
   readonly direction: "incoming" | "outgoing" | "unknown";
@@ -168,7 +214,8 @@ export type MessagingContextMessageV1 = {
 export type MessagingContextV1 = {
   readonly schemaVersion: 1;
   readonly format: "wrench.messaging-context";
-  readonly binding: MessagingContextBindingV1;
+  /** Null for read-only provider history that cannot authorize a checked turn. */
+  readonly binding: MessagingContextBinding | null;
   readonly network: string;
   readonly liveness: "fresh-as-of-live-preflight" | "freshness-unproven";
   readonly truncated: boolean;
@@ -221,6 +268,15 @@ export type MessagingReceiptBindingV1 = {
     WrenchMessagingReceiptBindingV1[Key];
 };
 
+export type MessagingReceiptBindingV2 = {
+  readonly [Key in keyof WrenchMessagingReceiptBindingV2]:
+    WrenchMessagingReceiptBindingV2[Key];
+};
+
+export type MessagingReceiptBinding =
+  | MessagingReceiptBindingV1
+  | MessagingReceiptBindingV2;
+
 export type MessagingPartJournalStateV1 =
   | "unattempted"
   | "claimed"
@@ -245,8 +301,8 @@ export type MessagingRunV1 = {
   readonly routeRef: string;
   readonly contextRef: string;
   readonly clientIntentSha256: string;
-  readonly contextBindingSha256: string;
-  readonly sourceConversationCoordinateSha256: string;
+  readonly contextBindingSha256: string | null;
+  readonly sourceConversationCoordinateSha256: string | null;
   readonly turnDigest: string;
   readonly previewDigest: string;
   readonly state: "pending" | "submitted" | "failed" | "partial" | "indeterminate";
@@ -289,6 +345,23 @@ export type MessagingRunReceiptV1 = {
   readonly partCount: number;
   readonly provenPartCount: number;
   readonly clientIntentSha256: string;
+  readonly routeRefSha256: string;
+  readonly contextRefSha256: string;
+  readonly turnDigest: string;
+  readonly previewDigest: string;
+  readonly receiptBindingSha256: string;
+  readonly recordedAt: string;
+};
+
+export type MessagingRunReceiptV2 = {
+  readonly schemaVersion: 2;
+  readonly format: "wrench.messaging-run-receipt";
+  readonly planDigest: string;
+  readonly runId: string;
+  readonly state: "submitted" | "failed" | "partial" | "indeterminate";
+  readonly partCount: number;
+  readonly provenPartCount: number;
+  readonly clientIntentSha256: string;
   readonly contextBindingSha256: string;
   readonly sourceConversationCoordinateSha256: string;
   readonly routeRefSha256: string;
@@ -298,6 +371,8 @@ export type MessagingRunReceiptV1 = {
   readonly receiptBindingSha256: string;
   readonly recordedAt: string;
 };
+
+export type MessagingRunReceipt = MessagingRunReceiptV1 | MessagingRunReceiptV2;
 
 export type MessagingClientEnvironment = Readonly<
   Record<string, string | undefined>
@@ -710,6 +785,20 @@ export function parseMessagingContextBindingV1(value: unknown): MessagingContext
   return parsed;
 }
 
+export function parseMessagingContextBindingV2(value: unknown): MessagingContextBindingV2 {
+  const parsed = parseWrenchMessagingContextBindingV2(value);
+  routeRef(parsed.routeRef, "messaging context binding.routeRef");
+  contextRef(parsed.contextRef, "messaging context binding.contextRef");
+  return parsed;
+}
+
+export function parseMessagingContextBinding(value: unknown): MessagingContextBinding {
+  const source = record(value, "messaging context binding");
+  return source.contractId === MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID
+    ? parseMessagingContextBindingV1(source)
+    : parseMessagingContextBindingV2(source);
+}
+
 function sha256Digest(candidate: unknown, label: string): string {
   const result = text(candidate, label, 64);
   if (!/^[a-f0-9]{64}$/u.test(result)) return fail(label, "must be a SHA-256 digest");
@@ -1057,7 +1146,9 @@ export function parseMessagingContextV1(value: unknown): MessagingContextV1 {
   return Object.freeze({
     schemaVersion: 1,
     format: "wrench.messaging-context",
-    binding: parseMessagingContextBindingV1(source.binding),
+    binding: source.binding === null
+      ? null
+      : parseMessagingContextBinding(source.binding),
     network: id(source.network, "messaging context.network", 64),
     liveness: source.liveness,
     truncated: bool(source.truncated, "messaging context.truncated"),
@@ -1193,6 +1284,98 @@ export function parseMessagingPrivateOutputReceiptV1(
 export function parseMessagingReceiptBindingV1(
   value: unknown,
 ): MessagingReceiptBindingV1 {
+  const source = record(value, "messaging receipt binding V1");
+  exactKeys(source, [
+    "schemaVersion",
+    "format",
+    "contractId",
+    "contractHash",
+    "clientIntentSha256",
+    "routeRefSha256",
+    "contextRefSha256",
+    "turnDigest",
+    "previewDigest",
+    "runId",
+    "state",
+    "partCount",
+    "provenPartCount",
+    "receiptSha256",
+    "recordedAt",
+  ], [], "messaging receipt binding V1");
+  if (
+    source.schemaVersion !== 1
+    || source.format !== "wrench.messaging-receipt-binding"
+    || source.contractId !== MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID
+    || source.contractHash !== MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH
+    || source.state !== "submitted"
+      && source.state !== "failed"
+      && source.state !== "partial"
+      && source.state !== "indeterminate"
+  ) return fail("messaging receipt binding V1", "has an unsupported contract");
+  const partCount = integer(source.partCount, "messaging receipt binding V1.partCount", 1, 8);
+  const provenPartCount = integer(
+    source.provenPartCount,
+    "messaging receipt binding V1.provenPartCount",
+    0,
+    partCount,
+  );
+  const validPrefix = source.state === "submitted"
+    ? provenPartCount === partCount
+    : source.state === "failed"
+      ? provenPartCount === 0
+      : source.state === "partial"
+        ? provenPartCount >= 1 && provenPartCount < partCount
+        : provenPartCount < partCount;
+  if (!validPrefix) {
+    return fail("messaging receipt binding V1", "violates the proven-prefix state law");
+  }
+  const normalizedWithoutReceipt = Object.freeze({
+    schemaVersion: 1 as const,
+    format: "wrench.messaging-receipt-binding" as const,
+    contractId: MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+    contractHash: MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+    clientIntentSha256: sha256Digest(
+      source.clientIntentSha256,
+      "messaging receipt binding V1.clientIntentSha256",
+    ),
+    routeRefSha256: sha256Digest(
+      source.routeRefSha256,
+      "messaging receipt binding V1.routeRefSha256",
+    ),
+    contextRefSha256: sha256Digest(
+      source.contextRefSha256,
+      "messaging receipt binding V1.contextRefSha256",
+    ),
+    turnDigest: sha256Digest(source.turnDigest, "messaging receipt binding V1.turnDigest"),
+    previewDigest: sha256Digest(
+      source.previewDigest,
+      "messaging receipt binding V1.previewDigest",
+    ),
+    runId: id(source.runId, "messaging receipt binding V1.runId", 256),
+    state: source.state,
+    partCount,
+    provenPartCount,
+    recordedAt: utcTimestamp(
+      source.recordedAt,
+      "messaging receipt binding V1.recordedAt",
+    ),
+  });
+  const receiptSha256 = sha256Digest(
+    source.receiptSha256,
+    "messaging receipt binding V1.receiptSha256",
+  );
+  if (sha256(canonicalJson(normalizedWithoutReceipt)) !== receiptSha256) {
+    return fail(
+      "messaging receipt binding V1.receiptSha256",
+      "does not bind the canonical receipt",
+    );
+  }
+  return Object.freeze({ ...normalizedWithoutReceipt, receiptSha256 });
+}
+
+export function parseMessagingReceiptBindingV2(
+  value: unknown,
+): MessagingReceiptBindingV2 {
   const source = record(value, "messaging receipt binding");
   exactKeys(source, [
     "schemaVersion",
@@ -1214,7 +1397,7 @@ export function parseMessagingReceiptBindingV1(
     "recordedAt",
   ], [], "messaging receipt binding");
   if (
-    source.schemaVersion !== 1
+    source.schemaVersion !== 2
     || source.format !== "wrench.messaging-receipt-binding"
     || source.contractId !== MESSAGING_RECEIPT_BINDING_CONTRACT_ID
     || source.contractHash !== MESSAGING_RECEIPT_BINDING_CONTRACT_HASH
@@ -1242,7 +1425,7 @@ export function parseMessagingReceiptBindingV1(
   }
   const runId = id(source.runId, "messaging receipt binding.runId", 256);
   const normalizedWithoutReceipt = Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "wrench.messaging-receipt-binding",
     contractId: MESSAGING_RECEIPT_BINDING_CONTRACT_ID,
     contractHash: MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
@@ -1279,6 +1462,15 @@ export function parseMessagingReceiptBindingV1(
     ...normalizedWithoutReceipt,
     receiptSha256,
   });
+}
+
+export function parseMessagingReceiptBinding(
+  value: unknown,
+): MessagingReceiptBinding {
+  const source = record(value, "messaging receipt binding");
+  return source.contractId === MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID
+    ? parseMessagingReceiptBindingV1(source)
+    : parseMessagingReceiptBindingV2(source);
 }
 
 export declare function discoverMessagingRoutes(

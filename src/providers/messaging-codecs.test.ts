@@ -304,8 +304,53 @@ describe("provider messaging coordinate codecs", () => {
     expect(first).toEqual(later);
     expect(first).toMatchObject({
       conversationProviderId: normalizedConversationId,
+      network: "beeper",
       providerRevision: null,
     });
+  });
+
+  test("keeps group and read-only Beeper routes readable but outside Message Like Me", () => {
+    const coordinate = {
+      kind: "beeperConversation" as const,
+      network: "Signal",
+      conversationId: rawConversationId,
+    };
+    const group = {
+      ...exactConversationOutput(),
+      conversation: { ...rawConversation(), type: "group" },
+    };
+    const readOnly = {
+      ...exactConversationOutput(),
+      conversation: { ...rawConversation(), isReadOnly: true },
+    };
+    expect(beeperMessagingDefinition.resolveRoute.candidates(
+      { account_id: accountId, limit: 100 },
+      coordinate,
+      group,
+    )[0]?.conversationKind).toBe("group");
+    expect(beeperMessagingDefinition.resolveRoute.sourceConversationCoordinate(
+      { account_id: accountId, limit: 100 },
+      coordinate,
+      group,
+      `beeper:local:${"a".repeat(64)}`,
+    )).toBeNull();
+    expect(beeperMessagingDefinition.resolveRoute.sourceConversationCoordinate(
+      { account_id: accountId, limit: 100 },
+      coordinate,
+      readOnly,
+      `beeper:local:${"a".repeat(64)}`,
+    )).toBeNull();
+    if (beeperMessagingDefinition.action.state !== "supported") {
+      throw new Error("Beeper checked messaging action must remain supported");
+    }
+    expect(() => beeperMessagingDefinition.action.livePreflight.snapshot(
+      group,
+      `beeper:local:${"a".repeat(64)}`,
+    )).toThrow("writable direct conversation");
+    expect(() => beeperMessagingDefinition.action.livePreflight.snapshot(
+      readOnly,
+      `beeper:local:${"a".repeat(64)}`,
+    )).toThrow("writable direct conversation");
   });
 
   test("compiles exact replies, normalizes acceptance, and reconciles by exact raw ID", () => {
@@ -565,6 +610,28 @@ describe("provider messaging coordinate codecs", () => {
     expect(whatsappMessagingDefinition.parseTarget({
       conversationJid: "15551234567@s.whatsapp.net",
     })).toEqual({ conversationJid: "15551234567@s.whatsapp.net" });
+    const exactRead = {
+      accountSubject: "whatsapp:pn:15551234567",
+      projection: "local-store",
+      completeness: "bounded-current-local-projection",
+      conversationJid: coordinate.jid,
+      messages: [],
+      fullTextSearch: true,
+    } as const;
+    expect(whatsappMessagingDefinition.resolveRoute.candidates(
+      { folder: "all", limit: 100 },
+      coordinate,
+      exactRead,
+    )).toMatchObject([{
+      target: { conversationJid: coordinate.jid },
+      conversationProviderId: coordinate.jid,
+    }]);
+    expect(whatsappMessagingDefinition.resolveRoute.sourceConversationCoordinate(
+      { folder: "all", limit: 100 },
+      coordinate,
+      exactRead,
+      "whatsapp:pn:15551234567",
+    )).toBeNull();
     expect(whatsappMessagingDefinition.action).toEqual({
       state: "unavailable",
       reply: "unsupported",

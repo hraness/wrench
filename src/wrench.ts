@@ -197,11 +197,13 @@ import {
   loadMessagingPreviewForConfirmationInternal,
   previewMessagingTurnInternal,
   readMessagingContextInternal,
+  reserveMessagingPrivateOutputPair,
   reconcileMessagingRunInternal,
   resolveMessagingRouteInternal,
   showMessagingRunInternal,
   validateMessagingPrivateOutputPath,
   writeMessagingPrivateOutput,
+  writeReservedMessagingPrivateOutput,
 } from "./messaging-runtime";
 import { readMessagingRunIfPresent } from "./messaging-action-store";
 import {
@@ -3130,6 +3132,13 @@ async function runCommand(
     const selectedPlan = loadInvocationPlan(arguments_.digest, environment);
     if (selectedPlan.plan.messagingComposite !== undefined) {
       if (
+        selectedPlan.plan.messagingComposite.contextBindingSha256 === null
+        || selectedPlan.plan.messagingComposite.sourceConversationCoordinateSha256
+          === null
+      ) throw new Error(
+        "predecessor messaging plan lacks current context evidence; preview the action again",
+      );
+      if (
         arguments_.privateOutput === undefined
         || arguments_.receiptBindingOutput === undefined
       ) throw new Error(
@@ -3149,14 +3158,23 @@ async function runCommand(
           "messaging confirmation requires distinct private output and receipt-binding paths",
         );
       }
+      const reservations = reserveMessagingPrivateOutputPair(
+        privateOutput,
+        receiptBindingOutput,
+        environment,
+      );
       const result = await confirmMessagingInvocation(arguments_.digest, {
         environment,
         registry: dependencies.providerPluginRegistry,
         ...(signal === undefined ? {} : { signal }),
       });
-      writeMessagingPrivateOutput(privateOutput, result.run, environment);
-      writeMessagingPrivateOutput(
-        receiptBindingOutput,
+      writeReservedMessagingPrivateOutput(
+        reservations.run,
+        result.run,
+        environment,
+      );
+      writeReservedMessagingPrivateOutput(
+        reservations.receiptBinding,
         result.receiptBinding,
         environment,
       );
