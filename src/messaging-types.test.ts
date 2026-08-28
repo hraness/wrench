@@ -59,6 +59,30 @@ describe("provider-neutral messaging contracts", () => {
     })).toThrow("unsupported or missing fields");
   });
 
+  test("freezes the shared two-part turn vector", () => {
+    const turn = parseMessagingTurnV1({
+      schemaVersion: 1,
+      format: "wrench.messaging-turn",
+      clientIntentSha256: "a".repeat(64),
+      routeRef,
+      contextRef,
+      parts: [
+        { partId: "part_1", text: "synthetic first bubble", replyRef: null },
+        {
+          partId: "part_2",
+          text: "synthetic second bubble",
+          replyRef: "wmreply_ABCDEFGHIJKLMNOPQRSTUV",
+        },
+      ],
+    });
+    expect(canonicalJson(turn)).toBe(
+      '{"clientIntentSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","contextRef":"wmcontext_ABCDEFGHIJKLMNOPQRSTUV","format":"wrench.messaging-turn","parts":[{"partId":"part_1","replyRef":null,"text":"synthetic first bubble"},{"partId":"part_2","replyRef":"wmreply_ABCDEFGHIJKLMNOPQRSTUV","text":"synthetic second bubble"}],"routeRef":"wmroute_ABCDEFGHIJKLMNOPQRSTUV","schemaVersion":1}',
+    );
+    expect(messagingTurnDigest(turn)).toBe(
+      "aef4f36bf0f38570a7142e11affe06683130f50ba2e55b1df42cf27e1b021b79",
+    );
+  });
+
   test("accepts only the closed tagged exact-route coordinate union", () => {
     const source = {
       adapterId: "adapter",
