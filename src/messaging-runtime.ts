@@ -407,6 +407,12 @@ function assertRouteIdentity(
   if (Date.parse(record.expiresAt) <= observation.getTime()) {
     throw new Error("messaging route is unavailable or expired");
   }
+  if (
+    canonicalJson(invocation.input) !== canonicalJson(record.list.input)
+    || record.list.inputHash !== sha256(canonicalJson(record.list.input))
+  ) {
+    throw new Error("messaging route list input changed; discover a new route");
+  }
   const identity = identityFor(invocation, resolution, registry);
   const expected = sha256(canonicalJson({
     adapter: identity.adapter,
@@ -415,7 +421,7 @@ function assertRouteIdentity(
     auth: identity.auth,
     target: resolution.messaging.parseTarget(record.target),
     resolution: record.resolution,
-    network: record.network,
+    network: resolution.messaging.network,
     sourceConversationCoordinate: record.sourceConversationCoordinate,
     conversationProviderId: record.conversationProviderId,
   }));
@@ -871,12 +877,19 @@ export async function resolveMessagingRouteInternal(
   const observation = now(options);
   const createdAt = observation.toISOString();
   const expiresAt = new Date(observation.getTime() + ROUTE_TTL_MS).toISOString();
-  const source = request.source;
+  const listCandidate = loadMessagingRouteRecord(
+    request.routeRef,
+    environment,
+    observation,
+  );
+  if (listCandidate.resolution !== "list-candidate") {
+    throw new Error("messaging route resolution requires one unresolved list candidate");
+  }
   const sourceInvocation = prepareInvocation(
-    source.adapterId,
-    "messaging.list",
-    source.listInput,
-    source.authId,
+    listCandidate.adapter.id,
+    listCandidate.list.operation,
+    listCandidate.list.input,
+    listCandidate.auth.id,
     environment,
     registry,
   );
@@ -885,24 +898,28 @@ export async function resolveMessagingRouteInternal(
     registry,
     "messaging.list",
   );
+  assertRouteIdentity(
+    listCandidate,
+    sourceInvocation,
+    resolution,
+    registry,
+    observation,
+  );
   await requireRuntimeReady(
     resolution.binding,
     sourceInvocation.auth,
     environment,
     registry,
   );
-  if (request.candidate.coordinate.kind !== resolution.messaging.coordinateKind) {
-    throw new Error("messaging route coordinate does not match the selected provider");
-  }
+  const storedTarget = resolution.messaging.parseTarget(listCandidate.target);
   const exactInput = resolution.messaging.resolveRoute.input(
-    sourceInvocation.input,
-    request.candidate.coordinate,
+    storedTarget,
   );
   const exactInvocation = prepareInvocation(
-    source.adapterId,
+    listCandidate.adapter.id,
     resolution.messaging.resolveRoute.operation,
     exactInput,
-    source.authId,
+    listCandidate.auth.id,
     environment,
     registry,
   );
@@ -926,8 +943,7 @@ export async function resolveMessagingRouteInternal(
   }
   const exactDataRevision = sha256(canonicalJson(live.output));
   const candidates = resolution.messaging.resolveRoute.candidates(
-    sourceInvocation.input,
-    request.candidate.coordinate,
+    storedTarget,
     live.output,
   );
   if (!Array.isArray(candidates) || candidates.length !== 1) {
@@ -945,11 +961,16 @@ export async function resolveMessagingRouteInternal(
     || !Array.isArray(candidate.participants)
     || candidate.participants.length > 10_000
   ) throw new Error("provider messaging route candidate is malformed");
+  if (
+    canonicalJson(target) !== canonicalJson(storedTarget)
+    || candidate.conversationProviderId !== listCandidate.conversationProviderId
+  ) {
+    throw new Error("exact messaging route read returned another conversation");
+  }
   const identity = identityFor(sourceInvocation, resolution, registry);
   const sourceConversationCoordinate =
     resolution.messaging.resolveRoute.sourceConversationCoordinate(
-      sourceInvocation.input,
-      request.candidate.coordinate,
+      storedTarget,
       live.output,
       identity.auth.subject,
     );
@@ -1022,7 +1043,7 @@ export async function resolveMessagingRouteInternal(
     }),
     completeness: Object.freeze({
       kind: "complete",
-      reason: "provider-native exact coordinate read proved one route",
+      reason: "provider-native exact read proved the stored route candidate",
     }),
     expiresAt,
   });

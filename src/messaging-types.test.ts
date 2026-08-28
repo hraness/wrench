@@ -131,52 +131,23 @@ describe("provider-neutral messaging contracts", () => {
     );
   });
 
-  test("accepts only the closed tagged exact-route coordinate union", () => {
-    const source = {
-      adapterId: "adapter",
-      authId: "auth",
-      listInput: { account_id: "account", limit: 100 },
-    } as const;
-    for (const coordinate of [
-      {
-        kind: "beeperConversation",
-        network: "imessage",
-        conversationId: "chat-1",
-      },
-      {
-        kind: "imessageChat",
-        chatGuid: "iMessage;-;+15551234567",
-        service: "iMessage",
-        observedChatRowId: 42,
-      },
-      { kind: "whatsappJid", jid: "15551234567@s.whatsapp.net" },
-    ] as const) {
-      expect(parseMessagingRouteResolveRequestV1({
-        schemaVersion: 1,
-        format: "wrench.messaging-route-resolve-request",
-        source,
-        candidate: { coordinate },
-      }).candidate.coordinate).toEqual(coordinate);
-    }
+  test("accepts only one opaque checked list-candidate reference", () => {
+    expect(parseMessagingRouteResolveRequestV1({
+      schemaVersion: 1,
+      format: "wrench.messaging-route-resolve-request",
+      routeRef,
+    }).routeRef).toBe(routeRef);
     expect(() => parseMessagingRouteResolveRequestV1({
       schemaVersion: 1,
       format: "wrench.messaging-route-resolve-request",
-      source,
-      candidate: { conversationProviderId: "chat-1" },
+      routeRef,
+      candidate: { coordinate: { kind: "beeperConversation" } },
     })).toThrow("unsupported or missing fields");
     expect(() => parseMessagingRouteResolveRequestV1({
       schemaVersion: 1,
       format: "wrench.messaging-route-resolve-request",
-      source,
-      candidate: {
-        coordinate: {
-          kind: "beeperConversation",
-          network: "imessage",
-          conversationId: "chat-1",
-          participant: "+15551234567",
-        },
-      },
-    })).toThrow("unsupported or missing fields");
+      routeRef: "chat-1",
+    })).toThrow("routeRef");
   });
 
   test("enforces the receipt self-hash and proven-prefix algebra", () => {

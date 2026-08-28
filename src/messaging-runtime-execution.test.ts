@@ -48,6 +48,7 @@ let activePage: ((limit: number) => ProviderMaterializedPageV1) | null = null;
 let activePartExecutor: ProviderPluginMessagingActionExecutorV1 | null = null;
 let activePrefixProof = proveExactSuffix;
 let activeRouteParticipantFingerprint = participantFingerprint;
+let activeExactConversationProviderId = roomId;
 let activeAfterContextRead: (() => void) | null = null;
 let confirmationReadsActive = false;
 let cachedRegistry: ReturnType<typeof createProviderPluginRegistry> | null = null;
@@ -82,7 +83,7 @@ type HarnessOptions = {
   readonly afterFence?: () => void;
   readonly contextLimit?: number;
   readonly privateOutcomeCode?: string;
-  readonly coordinateNetwork?: string;
+  readonly exactConversationProviderId?: string;
   readonly readOnly?: boolean;
 };
 
@@ -398,6 +399,7 @@ async function harnessInternal(partCount: number, options: HarnessOptions = {}) 
   });
   activePrefixProof = options.prefixProof ?? proveExactSuffix;
   activeRouteParticipantFingerprint = participantFingerprint;
+  activeExactConversationProviderId = options.exactConversationProviderId ?? roomId;
   activeAfterContextRead = options.afterContextRead ?? null;
   confirmationReadsActive = false;
 
@@ -461,7 +463,6 @@ async function harnessInternal(partCount: number, options: HarnessOptions = {}) 
       : "fresh-as-of-live-preflight",
     listOperation: "messaging.list",
     contextOperation: "messaging.read",
-    coordinateKind: "beeperConversation",
     enumerateRoutes: () => Object.freeze([Object.freeze({
       target: Object.freeze({ accountId: "account", conversationId: roomId }),
       conversationProviderId: roomId,
@@ -472,14 +473,19 @@ async function harnessInternal(partCount: number, options: HarnessOptions = {}) 
     })]),
     resolveRoute: Object.freeze({
       operation: "conversations.read",
-      input: (input: OperationInput) => Object.freeze({
-        account_id: input.account_id as string,
-        conversation_id: roomId,
-        limit: contextLimit,
-      }),
+      input: (target: Readonly<Record<string, string>>) => {
+        if (target.accountId !== "account" || target.conversationId !== roomId) {
+          throw new Error("synthetic resolver received another stored target");
+        }
+        return Object.freeze({
+          account_id: target.accountId,
+          conversation_id: target.conversationId,
+          limit: contextLimit,
+        });
+      },
       candidates: () => Object.freeze([Object.freeze({
         target: Object.freeze({ accountId: "account", conversationId: roomId }),
-        conversationProviderId: roomId,
+        conversationProviderId: activeExactConversationProviderId,
         conversationKind: "single" as const,
         title: "Private Synthetic Recipient",
         participants,
@@ -637,21 +643,23 @@ async function harnessInternal(partCount: number, options: HarnessOptions = {}) 
     }), environment);
   }
   const observation = new Date();
-  const route = await resolveMessagingRouteInternal({
+  const routes = await discoverMessagingRoutesInternal({
     schemaVersion: 1,
-    format: "wrench.messaging-route-resolve-request",
+    format: "wrench.messaging-routes-request",
     source: {
       adapterId: parsed.value.id,
       authId: "synthetic-fourth-auth",
       listInput: { account_id: "account", limit: contextLimit },
     },
-    candidate: {
-      coordinate: {
-        kind: "beeperConversation",
-        network: options.coordinateNetwork ?? "synthetic-fourth",
-        conversationId: roomId,
-      },
-    },
+  }, { environment, registry, now: observation });
+  const candidateRouteRef = routes.routes[0]?.routeRef;
+  if (candidateRouteRef === undefined) {
+    throw new Error("synthetic route discovery returned no checked candidate");
+  }
+  const route = await resolveMessagingRouteInternal({
+    schemaVersion: 1,
+    format: "wrench.messaging-route-resolve-request",
+    routeRef: candidateRouteRef,
   }, { environment, registry, now: observation });
   const context = await readMessagingContextInternal({
     schemaVersion: 1,
@@ -747,14 +755,14 @@ describe("generic messaging composite execution", () => {
     expect(setup.preview).toBeNull();
   });
 
-  test("stores and reloads a native Signal coordinate under the provider facade", async () => {
-    const setup = await harness(1, { coordinateNetwork: "Signal" });
+  test("stores and reloads a provider-proved source coordinate", async () => {
+    const setup = await harness(1);
     expect(setup.route.network).toBe("synthetic-fourth");
     expect(setup.context.network).toBe("synthetic-fourth");
     expect(setup.context.binding).not.toBeNull();
   });
 
-  test("keeps list candidates non-actionable until exact coordinate resolution", async () => {
+  test("keeps list candidates non-actionable until their stored target is exactly resolved", async () => {
     const setup = await harness(1);
     const routes = await discoverMessagingRoutesInternal({
       schemaVersion: 1,
@@ -784,6 +792,35 @@ describe("generic messaging composite execution", () => {
       registry: setup.registry,
       now: setup.observation,
     })).rejects.toThrow("requires exact conversations.read resolution");
+    const resolved = await resolveMessagingRouteInternal({
+      schemaVersion: 1,
+      format: "wrench.messaging-route-resolve-request",
+      routeRef: routes.routes[0]!.routeRef,
+    }, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+    });
+    expect(resolved).toMatchObject({
+      network: "synthetic-fourth",
+      readiness: { context: "ready", turn: "ready", reply: "supported" },
+    });
+    expect(resolved.routeRef).not.toBe(routes.routes[0]!.routeRef);
+    await expect(resolveMessagingRouteInternal({
+      schemaVersion: 1,
+      format: "wrench.messaging-route-resolve-request",
+      routeRef: resolved.routeRef,
+    }, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+    })).rejects.toThrow("requires one unresolved list candidate");
+  });
+
+  test("rejects an exact read that returns another stored conversation identity", async () => {
+    await expect(harnessInternal(1, {
+      exactConversationProviderId: "another-room",
+    })).rejects.toThrow("exact messaging route read returned another conversation");
   });
 
   for (const partCount of [1, 2, 3]) {

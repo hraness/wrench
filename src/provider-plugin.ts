@@ -47,7 +47,6 @@ import type {
   ProviderMessageV1,
 } from "./omni-model";
 import type { LocalCliOperationExecutor } from "./local-cli-execution";
-import type { MessagingRouteCoordinateV1 } from "./messaging-types";
 import type { OperationDeadline } from "./operation-deadline";
 import {
   localCliToolArtifactForCurrentRuntime,
@@ -342,28 +341,23 @@ export type ProviderPluginMessagingDefinitionV1 = {
     | "freshness-unproven";
   readonly listOperation: "messaging.list";
   readonly contextOperation: "messaging.read";
-  /** Closed coordinate variant this exact provider codec accepts. */
-  readonly coordinateKind: MessagingRouteCoordinateV1["kind"];
   readonly enumerateRoutes: (
     input: OperationInput,
     page: ProviderMaterializedPageV1,
   ) => readonly ProviderPluginMessagingRouteCandidateV1[];
-  /** Exact coordinate resolution, independent from bounded list pagination. */
+  /** Exact stored-target resolution, independent from bounded list pagination. */
   readonly resolveRoute: {
     readonly operation: string;
     readonly input: (
-      listInput: OperationInput,
-      coordinate: MessagingRouteCoordinateV1,
+      target: ProviderPluginMessagingTargetV1,
     ) => OperationInput;
     readonly candidates: (
-      listInput: OperationInput,
-      coordinate: MessagingRouteCoordinateV1,
+      target: ProviderPluginMessagingTargetV1,
       output: unknown,
     ) => readonly ProviderPluginMessagingRouteCandidateV1[];
     /** Canonical source coordinate proved only by the exact resolver output. */
     readonly sourceConversationCoordinate: (
-      listInput: OperationInput,
-      coordinate: MessagingRouteCoordinateV1,
+      target: ProviderPluginMessagingTargetV1,
       output: unknown,
       expectedAccountSubject: string,
     ) => MessageLikeMeSourceConversationCoordinateBindingV1 | null;
@@ -3532,7 +3526,6 @@ function freezeProviderPluginMessaging(
     "contextLiveness",
     "listOperation",
     "contextOperation",
-    "coordinateKind",
     "enumerateRoutes",
     "resolveRoute",
     "parseTarget",
@@ -3549,9 +3542,6 @@ function freezeProviderPluginMessaging(
       && value.contextLiveness !== "freshness-unproven"
     || value.listOperation !== "messaging.list"
     || value.contextOperation !== "messaging.read"
-    || value.coordinateKind !== "beeperConversation"
-      && value.coordinateKind !== "imessageChat"
-      && value.coordinateKind !== "whatsappJid"
     || typeof value.enumerateRoutes !== "function"
     || typeof value.resolveRoute !== "object"
     || value.resolveRoute === null
@@ -3631,7 +3621,6 @@ function freezeProviderPluginMessaging(
       contextLiveness: value.contextLiveness,
       listOperation: value.listOperation,
       contextOperation: value.contextOperation,
-      coordinateKind: value.coordinateKind,
       enumerateRoutes: value.enumerateRoutes,
       resolveRoute: Object.freeze({
         operation: value.resolveRoute.operation,
@@ -3716,7 +3705,6 @@ function freezeProviderPluginMessaging(
     contextLiveness: value.contextLiveness,
     listOperation: value.listOperation,
     contextOperation: value.contextOperation,
-    coordinateKind: value.coordinateKind,
     enumerateRoutes: value.enumerateRoutes,
     resolveRoute: Object.freeze({
       operation: value.resolveRoute.operation,

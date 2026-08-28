@@ -118,12 +118,22 @@ wrench auth bind beeper-main --site beeper</code></pre></div>
         </section>
 
         <section aria-labelledby="send">
-          <h2 id="send">Preview one message send</h2>
-          <div class="command-panel"><pre><code>wrench beeper-local messaging.send --auth beeper-main --preview --json \
-  --input '{"account_id":"&lt;account-id&gt;","conversation_id":"&lt;chat-id&gt;","kind":"text","text":"Hello from Wrench"}'
-wrench confirm &lt;preview-digest&gt; --json</code></pre></div>
-          <p><code>messaging.send</code> previews the exact request, requires confirmation, durably records dispatch, and invokes Beeper without <code>--wait</code>. An accepted pending target is evidence of submission, not network delivery.</p>
-          <p>After the child may have reached Desktop, a timeout, signal, malformed response, or lost response remains indeterminate. Wrench does not retry it. A separately obtained exact read must reconcile the outcome.</p>
+          <h2 id="send">Resolve and preview one exact Beeper turn</h2>
+          <p>Keep each request and result in a distinct owner-only file. <code>routes</code> returns bounded discovery evidence and opaque references. Put one candidate <code>routeRef</code> in the private resolve request. Wrench reloads the checked account and conversation target from encrypted private state and performs <code>conversations.read</code>. The caller never resupplies a network, account, conversation ID, name, title, or participant match.</p>
+          <div class="command-panel"><pre><code>{"schemaVersion":1,"format":"wrench.messaging-route-resolve-request","routeRef":"&lt;candidate-route-ref&gt;"}</code></pre></div>
+          <div class="command-panel"><pre><code>wrench messaging routes --input @/absolute/private/beeper-routes-request.json \
+  --private-output /absolute/private/beeper-routes.json --json
+wrench messaging resolve --input @/absolute/private/beeper-resolve-request.json \
+  --private-output /absolute/private/beeper-route.json --json
+wrench messaging context --input @/absolute/private/beeper-context-request.json \
+  --private-output /absolute/private/beeper-context.json --json
+wrench messaging preview --input @/absolute/private/beeper-turn.json \
+  --private-output /absolute/private/beeper-preview.json --json</code></pre></div>
+          <p>The private preview shows the exact recipient, conversation, ordered bubbles, replies, expiry, and digest. Stop after preview by default. Confirm only after the owner reviews that exact private preview and makes a fresh same-turn request to send the visible recipient and bubbles.</p>
+          <div class="command-panel"><pre><code>wrench confirm &lt;preview-digest&gt; \
+  --private-output /absolute/private/beeper-receipt.json \
+  --receipt-binding-output /absolute/private/beeper-receipt-binding.json --json</code></pre></div>
+          <p>Wrench durably records dispatch and invokes Beeper without <code>--wait</code>. An accepted pending target is evidence of submission, not network delivery. After the child may have reached Desktop, a timeout, signal, malformed response, or lost response remains indeterminate. Wrench does not retry it. Reconcile the same run from a separately obtained exact read.</p>
         </section>
 
         <section aria-labelledby="exports">

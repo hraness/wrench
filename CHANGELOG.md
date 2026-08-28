@@ -4,6 +4,10 @@
 
 ## 0.16.2 - 2026-08-28
 
+- Require agentic messaging resolution to consume one opaque list-candidate
+  route reference. Wrench reloads the checked provider target from encrypted
+  private state and proves it with an exact read, so callers cannot inject or
+  replace a provider account, network, conversation ID, or recipient match.
 - Start stage-only npm verification automatically when a greater stable package
   version reaches `main`. Unchanged manifest versions stop before OIDC, and the
   terminal staging job requires maintainer approval through the protected

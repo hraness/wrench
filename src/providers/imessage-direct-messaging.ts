@@ -3,7 +3,6 @@ import {
   messageLikeMeSourceConversationCoordinateBindingV1,
 } from "../message-like-me-agentic-messaging";
 import type { OperationInput } from "../model";
-import type { MessagingRouteCoordinateV1 } from "../messaging-types";
 import type { ProviderMessageV1 } from "../omni-model";
 import type {
   ProviderPluginMessagingDefinitionV1,
@@ -210,7 +209,6 @@ export const imsgDirectMessagingDefinition = Object.freeze({
   contextLiveness: "fresh-as-of-live-preflight",
   listOperation: "messaging.list",
   contextOperation: "messaging.read",
-  coordinateKind: "imessageChat",
   enumerateRoutes: (_input: OperationInput, page) => Object.freeze(
     page.entities.map((entity) => {
       if (entity.kind !== "conversation") {
@@ -236,39 +234,39 @@ export const imsgDirectMessagingDefinition = Object.freeze({
   ),
   resolveRoute: Object.freeze({
     operation: "conversations.read",
-    input: (_listInput: OperationInput, coordinate: MessagingRouteCoordinateV1) => {
-      if (
-        coordinate.kind !== "imessageChat"
-        || coordinate.service !== IMSG_SERVICE
-        || coordinate.observedChatRowId === null
-      ) throw new Error("direct iMessage resolution requires an exact iMessage chat coordinate");
+    input: (target: ProviderPluginMessagingTargetV1) => {
+      const parsed = parseImsgMessagingTarget(target);
       return Object.freeze({
         chat_guid: boundedImsgString(
-          coordinate.chatGuid,
+          targetField(parsed, "chatGuid"),
           "direct iMessage route chat GUID",
           2_048,
         ),
         service: IMSG_SERVICE,
-        observed_chat_row_id: coordinate.observedChatRowId,
+        observed_chat_row_id: positiveRowId(
+          targetField(parsed, "observedChatRowId"),
+          "direct iMessage route row ID",
+        ),
       });
     },
-    candidates: (_listInput, coordinate, output) => {
-      if (
-        coordinate.kind !== "imessageChat"
-        || coordinate.service !== IMSG_SERVICE
-        || coordinate.observedChatRowId === null
-      ) throw new Error("direct iMessage route coordinate changed during resolution");
+    candidates: (target, output) => {
+      const parsed = parseImsgMessagingTarget(target);
+      const chatGuid = targetField(parsed, "chatGuid");
+      const observedChatRowId = positiveRowId(
+        targetField(parsed, "observedChatRowId"),
+        "direct iMessage route row ID",
+      );
       const input = Object.freeze({
-        chat_guid: coordinate.chatGuid,
+        chat_guid: chatGuid,
         service: IMSG_SERVICE,
-        observed_chat_row_id: coordinate.observedChatRowId,
+        observed_chat_row_id: observedChatRowId,
       });
       const entity = materializeImsgExactConversation(input, output);
       return Object.freeze([Object.freeze({
         target: Object.freeze({
-          chatGuid: coordinate.chatGuid,
+          chatGuid,
           service: IMSG_SERVICE,
-          observedChatRowId: String(coordinate.observedChatRowId),
+          observedChatRowId: String(observedChatRowId),
         }),
         conversationProviderId: entity.providerId,
         conversationKind: entity.conversationKind ?? "unknown",
@@ -278,21 +276,26 @@ export const imsgDirectMessagingDefinition = Object.freeze({
       })]);
     },
     sourceConversationCoordinate: (
-      _listInput,
-      coordinate,
+      target,
       output,
       _expectedAccountSubject,
     ) => {
-      if (
-        coordinate.kind !== "imessageChat"
-        || coordinate.service !== IMSG_SERVICE
-        || coordinate.observedChatRowId === null
-      ) throw new Error("direct iMessage source coordinate changed during resolution");
+      const parsed = parseImsgMessagingTarget(target);
+      const chatGuid = targetField(parsed, "chatGuid");
+      const observedChatRowId = positiveRowId(
+        targetField(parsed, "observedChatRowId"),
+        "direct iMessage source row ID",
+      );
       exactConversationFromOutput(output);
       return messageLikeMeSourceConversationCoordinateBindingV1({
         sourceAccountId: null,
-        sourceExternalId: coordinate.chatGuid,
-        coordinate,
+        sourceExternalId: chatGuid,
+        coordinate: Object.freeze({
+          kind: "imessageChat" as const,
+          chatGuid,
+          service: IMSG_SERVICE,
+          observedChatRowId,
+        }),
       });
     },
   }),

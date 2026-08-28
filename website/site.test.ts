@@ -579,6 +579,24 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).not.toContain("exactly once");
     expect(beeper?.html).not.toContain("seamless");
     expect(beeper?.html).not.toContain("Provider capabilities attestation");
+    expect(beeper?.html).toContain("wrench.messaging-route-resolve-request");
+    const agentFacingMessagingDocs = [
+      beeper?.html ?? "",
+      await readFile(join(repositoryRoot, "README.md"), "utf8"),
+      await readFile(
+        join(repositoryRoot, "skills/wrench/references/messaging.md"),
+        "utf8",
+      ),
+    ];
+    for (const document of agentFacingMessagingDocs) {
+      expect(document).not.toContain("wrench beeper-local messaging.send");
+      for (const command of [
+        "wrench messaging routes",
+        "wrench messaging resolve",
+        "wrench messaging context",
+        "wrench messaging preview",
+      ]) expect(document).toContain(command);
+    }
 
     const personalAgents = pages.find((page) =>
       page.definition.canonicalPath === "/compare/personal-agents-browser-use/");

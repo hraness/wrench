@@ -4,7 +4,6 @@ import {
 } from "../message-like-me-agentic-messaging";
 import type { OperationInput } from "../model";
 import type { ProviderMessageV1 } from "../omni-model";
-import type { MessagingRouteCoordinateV1 } from "../messaging-types";
 import type {
   ProviderPluginMessagingDefinitionV1,
   ProviderPluginMessagingTargetV1,
@@ -167,7 +166,6 @@ export const beeperMessagingDefinition = Object.freeze({
   contextLiveness: "fresh-as-of-live-preflight",
   listOperation: "messaging.list",
   contextOperation: "messaging.read",
-  coordinateKind: "beeperConversation",
   enumerateRoutes: (input: OperationInput, page) => {
     const parsed = parseBeeperOperationInput("messaging.list", input);
     if (!("accountId" in parsed) || parsed.accountId === null) {
@@ -197,54 +195,33 @@ export const beeperMessagingDefinition = Object.freeze({
   },
   resolveRoute: Object.freeze({
     operation: "conversations.read",
-    input: (listInput: OperationInput, coordinate: MessagingRouteCoordinateV1) => {
-      const parsed = parseBeeperOperationInput("messaging.list", listInput);
-      if (!("accountId" in parsed) || parsed.accountId === null) {
-        throw new Error("Beeper exact route resolution requires one account_id");
-      }
-      if (coordinate.kind !== "beeperConversation") {
-        throw new Error("Beeper exact route resolution requires a Beeper coordinate");
-      }
+    input: (target: ProviderPluginMessagingTargetV1) => {
+      const parsed = parseBeeperMessagingTarget(target);
       return Object.freeze({
-        account_id: parsed.accountId,
-        conversation_id: bounded(
-          coordinate.conversationId,
-          "Beeper exact conversation candidate",
-          2_048,
-        ),
+        account_id: targetField(parsed, "accountId"),
+        conversation_id: targetField(parsed, "conversationId"),
         max_participants: 500,
       });
     },
-    candidates: (listInput, coordinate, output) => {
-      const parsed = parseBeeperOperationInput("messaging.list", listInput);
-      if (!("accountId" in parsed) || parsed.accountId === null) {
-        throw new Error("Beeper exact route resolution lost its account_id");
-      }
-      if (coordinate.kind !== "beeperConversation") {
-        throw new Error("Beeper exact route resolution changed coordinate kind");
-      }
-      const exactConversationId = bounded(
-        coordinate.conversationId,
-        "Beeper exact conversation candidate",
-        2_048,
-      );
+    candidates: (target, output) => {
+      const parsed = parseBeeperMessagingTarget(target);
+      const accountId = targetField(parsed, "accountId");
+      const exactConversationId = targetField(parsed, "conversationId");
       const envelope = record(output, "Beeper exact route output");
       const rawConversation = record(
         envelope.conversation,
         "Beeper exact route output conversation",
       );
-      if (rawConversation.network !== coordinate.network) {
-        throw new Error("Beeper exact route read returned another network");
-      }
+      bounded(rawConversation.network, "Beeper exact route output network", 512);
       const input = Object.freeze({
-        account_id: parsed.accountId,
+        account_id: accountId,
         conversation_id: exactConversationId,
         max_participants: 500,
       });
       const entity = materializeBeeperExactConversation(input, output);
       return Object.freeze([Object.freeze({
         target: Object.freeze({
-          accountId: parsed.accountId,
+          accountId,
           conversationId: exactConversationId,
         }),
         conversationProviderId: entity.providerId,
@@ -259,14 +236,11 @@ export const beeperMessagingDefinition = Object.freeze({
       })]);
     },
     sourceConversationCoordinate: (
-      _listInput,
-      coordinate,
+      target,
       output,
       expectedAccountSubject,
     ) => {
-      if (coordinate.kind !== "beeperConversation") {
-        throw new Error("Beeper exact source coordinate changed coordinate kind");
-      }
+      parseBeeperMessagingTarget(target);
       return messageLikeMeCoordinateIfEligible(output, expectedAccountSubject);
     },
   }),

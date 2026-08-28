@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import { sha256 } from "./canonical-json";
 import type { InputSchema, OperationInput } from "./model";
-import type { MessagingRouteCoordinateV1 } from "./messaging-types";
 import type { ProviderMaterializedPageV1 } from "./omni-model";
 import {
   defineProviderPlugin,
@@ -89,7 +88,6 @@ const messaging = Object.freeze({
   contextLiveness: "fresh-as-of-live-preflight",
   listOperation: "messaging.list",
   contextOperation: "messaging.read",
-  coordinateKind: "beeperConversation",
   enumerateRoutes: (input: OperationInput, page: ProviderMaterializedPageV1) =>
     Object.freeze(page.entities.map((entity) => {
       if (entity.kind !== "conversation" || typeof input.account_id !== "string") {
@@ -106,23 +104,23 @@ const messaging = Object.freeze({
     })),
   resolveRoute: Object.freeze({
     operation: "conversations.read",
-    input: (input: OperationInput, coordinate: MessagingRouteCoordinateV1) => {
-      if (coordinate.kind !== "beeperConversation") throw new Error("wrong coordinate kind");
+    input: (value: Readonly<Record<string, string>>) => {
+      const parsed = target(value);
       return Object.freeze({
-        account_id: input.account_id as string,
-        conversation_id: coordinate.conversationId,
+        account_id: parsed.accountId!,
+        conversation_id: parsed.conversationId!,
         limit: 1,
       });
     },
-    candidates: (input: OperationInput, coordinate: MessagingRouteCoordinateV1) => {
-      if (coordinate.kind !== "beeperConversation") throw new Error("wrong coordinate kind");
+    candidates: (value: Readonly<Record<string, string>>) => {
+      const parsed = target(value);
       return Object.freeze([
         Object.freeze({
           target: Object.freeze({
-            accountId: input.account_id as string,
-            conversationId: coordinate.conversationId,
+            accountId: parsed.accountId!,
+            conversationId: parsed.conversationId!,
           }),
-          conversationProviderId: coordinate.conversationId,
+          conversationProviderId: parsed.conversationId!,
           conversationKind: "unknown" as const,
           title: null,
           participants: Object.freeze([]),
@@ -309,15 +307,12 @@ describe("provider messaging SPI conformance", () => {
     });
     const conformed = plugin.bindings[0]!.messaging;
     expect(conformed?.contractId).toBe(messaging.contractId);
-    expect(conformed?.coordinateKind).toBe("beeperConversation");
     expect(conformed?.resolveRoute.input(
-      { account_id: "acct", limit: 25 },
-      { kind: "beeperConversation", network: "test", conversationId: "room@example.test" },
+      { accountId: "acct", conversationId: "room@example.test" },
     )).toEqual({ account_id: "acct", conversation_id: "room@example.test", limit: 1 });
     expect(() => conformed?.resolveRoute.input(
-      { account_id: "acct", limit: 25 },
-      { kind: "whatsappJid", jid: "room@example.test" },
-    )).toThrow("wrong coordinate kind");
+      { accountId: "acct", conversationId: "room@example.test", injected: "other" },
+    )).toThrow("synthetic target is malformed");
     const exactTarget = conformed!.parseTarget({ accountId: "acct", conversationId: "room" });
     expect(conformed!.contextInput(exactTarget, 25)).toEqual({
       account_id: "acct",

@@ -11,6 +11,7 @@ import { createAuth, saveAuth } from "./auth";
 import { canonicalJson, sha256 } from "./canonical-json";
 import { parseRuntimeManifest, type InputSchema, type OperationInput } from "./model";
 import {
+  discoverMessagingRoutesInternal,
   previewMessagingTurnInternal,
   readMessagingContextInternal,
   resolveMessagingRouteInternal,
@@ -310,13 +311,19 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     contextLiveness: "fresh-as-of-live-preflight",
     listOperation: "messaging.list",
     contextOperation: "messaging.read",
-    coordinateKind: "beeperConversation",
-    enumerateRoutes: () => Object.freeze([]),
+    enumerateRoutes: () => Object.freeze([Object.freeze({
+      target: Object.freeze({ accountId: "account", conversationId: roomId }),
+      conversationProviderId: roomId,
+      conversationKind: "single" as const,
+      title: "Private Synthetic Recipient",
+      participants,
+      providerRevision: "route-revision-1",
+    })]),
     resolveRoute: Object.freeze({
       operation: "conversations.read",
-      input: (input: OperationInput) => Object.freeze({
-        account_id: input.account_id as string,
-        conversation_id: roomId,
+      input: (target: Readonly<Record<string, string>>) => Object.freeze({
+        account_id: target.accountId!,
+        conversation_id: target.conversationId!,
         limit: contextLimit,
       }),
       candidates: () => Object.freeze([Object.freeze({
@@ -461,21 +468,23 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     subject: "synthetic-fourth:account",
   }), environment);
   const observation = new Date();
-  const route = await resolveMessagingRouteInternal({
+  const routes = await discoverMessagingRoutesInternal({
     schemaVersion: 1,
-    format: "wrench.messaging-route-resolve-request",
+    format: "wrench.messaging-routes-request",
     source: {
       adapterId: parsed.value.id,
       authId: "synthetic-fourth-auth",
       listInput: { account_id: "account", limit: contextLimit },
     },
-    candidate: {
-      coordinate: {
-        kind: "beeperConversation",
-        network: "synthetic-fourth",
-        conversationId: roomId,
-      },
-    },
+  }, { environment, registry, now: observation });
+  const candidateRouteRef = routes.routes[0]?.routeRef;
+  if (candidateRouteRef === undefined) {
+    throw new Error("synthetic route discovery returned no checked candidate");
+  }
+  const route = await resolveMessagingRouteInternal({
+    schemaVersion: 1,
+    format: "wrench.messaging-route-resolve-request",
+    routeRef: candidateRouteRef,
   }, { environment, registry, now: observation });
   const context = await readMessagingContextInternal({
     schemaVersion: 1,

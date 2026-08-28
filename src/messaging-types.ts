@@ -93,31 +93,11 @@ export type MessagingRoutesRequestV1 = {
   readonly source: MessagingRoutesRequestSourceV1;
 };
 
-export type MessagingRouteCoordinateV1 =
-  | {
-      readonly kind: "beeperConversation";
-      readonly network: string;
-      readonly conversationId: string;
-    }
-  | {
-      readonly kind: "imessageChat";
-      readonly chatGuid: string;
-      readonly service: string | null;
-      readonly observedChatRowId: number | null;
-    }
-  | {
-      readonly kind: "whatsappJid";
-      readonly jid: string;
-    };
-
 export type MessagingRouteResolveRequestV1 = {
   readonly schemaVersion: 1;
   readonly format: "wrench.messaging-route-resolve-request";
-  readonly source: MessagingRoutesRequestSourceV1;
-  /** Closed exact provider coordinate, never a name, handle, or participant. */
-  readonly candidate: {
-    readonly coordinate: MessagingRouteCoordinateV1;
-  };
+  /** Opaque reference to one checked list candidate in Wrench private state. */
+  readonly routeRef: string;
 };
 
 export type MessagingRouteV1 = {
@@ -606,7 +586,7 @@ export function parseMessagingRouteResolveRequestV1(
   const source = record(value, "messaging route resolve request");
   exactKeys(
     source,
-    ["schemaVersion", "format", "source", "candidate"],
+    ["schemaVersion", "format", "routeRef"],
     [],
     "messaging route resolve request",
   );
@@ -614,94 +594,13 @@ export function parseMessagingRouteResolveRequestV1(
     source.schemaVersion !== 1
     || source.format !== "wrench.messaging-route-resolve-request"
   ) return fail("messaging route resolve request", "has an unsupported contract");
-  const candidate = record(source.candidate, "messaging route resolve request.candidate");
-  exactKeys(
-    candidate,
-    ["coordinate"],
-    [],
-    "messaging route resolve request.candidate",
-  );
-  const coordinateSource = record(
-    candidate.coordinate,
-    "messaging route resolve request.candidate.coordinate",
-  );
-  let coordinate: MessagingRouteCoordinateV1;
-  if (coordinateSource.kind === "beeperConversation") {
-    exactKeys(
-      coordinateSource,
-      ["kind", "network", "conversationId"],
-      [],
-      "messaging route resolve request.candidate.coordinate",
-    );
-    coordinate = Object.freeze({
-      kind: "beeperConversation",
-      network: id(
-        coordinateSource.network,
-        "messaging route resolve request.candidate.coordinate.network",
-        64,
-      ),
-      conversationId: text(
-        coordinateSource.conversationId,
-        "messaging route resolve request.candidate.coordinate.conversationId",
-        2_048,
-      ),
-    });
-  } else if (coordinateSource.kind === "imessageChat") {
-    exactKeys(
-      coordinateSource,
-      ["kind", "chatGuid", "service", "observedChatRowId"],
-      [],
-      "messaging route resolve request.candidate.coordinate",
-    );
-    coordinate = Object.freeze({
-      kind: "imessageChat",
-      chatGuid: text(
-        coordinateSource.chatGuid,
-        "messaging route resolve request.candidate.coordinate.chatGuid",
-        2_048,
-      ),
-      service: coordinateSource.service === null
-        ? null
-        : id(
-            coordinateSource.service,
-            "messaging route resolve request.candidate.coordinate.service",
-            64,
-          ),
-      observedChatRowId: coordinateSource.observedChatRowId === null
-        ? null
-        : integer(
-            coordinateSource.observedChatRowId,
-            "messaging route resolve request.candidate.coordinate.observedChatRowId",
-            1,
-            Number.MAX_SAFE_INTEGER,
-          ),
-    });
-  } else if (coordinateSource.kind === "whatsappJid") {
-    exactKeys(
-      coordinateSource,
-      ["kind", "jid"],
-      [],
-      "messaging route resolve request.candidate.coordinate",
-    );
-    coordinate = Object.freeze({
-      kind: "whatsappJid",
-      jid: text(
-        coordinateSource.jid,
-        "messaging route resolve request.candidate.coordinate.jid",
-        512,
-      ),
-    });
-  } else {
-    return fail(
-      "messaging route resolve request.candidate.coordinate.kind",
-      "is unsupported",
-    );
-  }
   return Object.freeze({
     schemaVersion: 1,
     format: "wrench.messaging-route-resolve-request",
-    source: parseRoutesSource(source.source, "messaging route resolve request.source"),
-    candidate: Object.freeze({ coordinate }),
+    routeRef: routeRef(
+      source.routeRef,
+      "messaging route resolve request.routeRef",
+    ),
   });
 }
 

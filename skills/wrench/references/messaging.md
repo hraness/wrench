@@ -23,11 +23,20 @@ wrench messaging resolve --input <-|@ABS_PRIVATE_FILE> \
 ```
 
 `routes` is bounded and reports completeness. Every list or search result is a
-non-actionable candidate with `resolution-required` readiness. `resolve`
-accepts only a closed, provider-specific exact coordinate and performs an
-exact `conversations.read` for action-capable providers. Zero or several
-matches fail. Wrench never widens the lookup to a name, handle, participant,
-or another provider.
+non-actionable candidate with `resolution-required` readiness. Its opaque
+`routeRef` names the checked provider target retained in Wrench's encrypted
+private state. The resolve request contains only that reference:
+
+```json
+{"schemaVersion":1,"format":"wrench.messaging-route-resolve-request","routeRef":"<candidate-route-ref>"}
+```
+
+`resolve` reloads and identity-checks the stored adapter, auth realm, provider
+binding, list input, and exact target before it performs the provider-native
+exact read. The caller cannot resupply or replace a network, account,
+conversation ID, name, handle, title, or participant match. Zero or several
+exact results fail. A successful resolution returns a new opaque route
+reference.
 
 Treat every route reference as a private capability. It expires and becomes
 invalid after auth, adapter, plugin, tool, account, participant, or provider
