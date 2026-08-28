@@ -309,14 +309,14 @@ describe("provider messaging SPI conformance", () => {
     });
     const conformed = plugin.bindings[0]!.messaging;
     expect(conformed?.contractId).toBe(messaging.contractId);
-    expect(conformed?.coordinateKind).toBe("whatsappJid");
+    expect(conformed?.coordinateKind).toBe("beeperConversation");
     expect(conformed?.resolveRoute.input(
       { account_id: "acct", limit: 25 },
-      { kind: "whatsappJid", jid: "room@example.test" },
+      { kind: "beeperConversation", network: "test", conversationId: "room@example.test" },
     )).toEqual({ account_id: "acct", conversation_id: "room@example.test", limit: 1 });
     expect(() => conformed?.resolveRoute.input(
       { account_id: "acct", limit: 25 },
-      { kind: "beeperConversation", network: "test", conversationId: "room" },
+      { kind: "whatsappJid", jid: "room@example.test" },
     )).toThrow("wrong coordinate kind");
     const exactTarget = conformed!.parseTarget({ accountId: "acct", conversationId: "room" });
     expect(conformed!.contextInput(exactTarget, 25)).toEqual({

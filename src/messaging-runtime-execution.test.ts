@@ -503,6 +503,7 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
         operation: "conversations.read",
         input: () => Object.freeze({
           account_id: "account",
+          conversation_id: roomId,
           limit: contextLimit,
         }),
         snapshot: () => Object.freeze({
