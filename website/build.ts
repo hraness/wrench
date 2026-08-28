@@ -475,8 +475,10 @@ function renderTemplate(
   const optionalValues = new Map([
     ["{{WRENCH_DESCRIPTION}}", identity.description],
     ["{{WRENCH_INSTALL_COMMAND}}", installCommand],
+    ["{{WRENCH_NPM_PACKAGE}}", NPM_PACKAGE_URL],
     ["{{WRENCH_RELEASE}}", identity.release],
     ["{{WRENCH_REPOSITORY}}", REPOSITORY_URL],
+    ["{{WRENCH_SKILLS}}", SKILLS_URL],
     ["{{WRENCH_SKILL_INSTALL_ASSET}}", options.skillInstallAsset],
     ["{{WRENCH_SKILL_INSTALL_COMMAND}}", SKILL_INSTALL_COMMAND],
     ["{{WRENCH_SKILL_INSTALL_COMMAND_BUNX}}", SKILL_INSTALL_COMMAND_BUNX],

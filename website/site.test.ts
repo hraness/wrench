@@ -14,6 +14,7 @@ import {
   DEFAULT_POSTHOG_HOST,
   DEMO_PUBLIC_FILES,
   markdownSiblingPath,
+  NPM_PACKAGE_URL,
   parsePackageIdentity,
   PUBLIC_PAGES,
   PUBLISHER_URL,
@@ -21,6 +22,7 @@ import {
   SITE_DESCRIPTION,
   SITE_ORIGIN,
   SITE_TITLE,
+  SKILLS_URL,
   SKILL_INSTALL_COMMAND,
   SKILL_INSTALL_COMMAND_BUNX,
 } from "./build";
@@ -139,6 +141,12 @@ describe("wrench.rip static site", () => {
     expect(html).toContain(`Install Wrench ${packageIdentity.release}`);
     expect(html).toContain(`>${SKILL_INSTALL_COMMAND}</code>`);
     expect(html).toContain(`<code>${SKILL_INSTALL_COMMAND_BUNX}</code>`);
+    expect(html).toContain(
+      `<a href="${SKILLS_URL}">View the Wrench Agent Skill on skills.sh.</a>`,
+    );
+    expect(html).toContain(
+      `<a href="${NPM_PACKAGE_URL}"><code>@hraness/wrench</code> package on npm</a>`,
+    );
     expect(html).not.toContain(`value="${SKILL_INSTALL_COMMAND}"`);
     expect(html).toContain('class="skill-install" data-skill-install');
     expect(html).toContain("data-skill-install-copy");
@@ -488,6 +496,12 @@ describe("wrench.rip static site", () => {
 
     const gettingStarted = pages.find((page) => page.definition.canonicalPath === "/getting-started/");
     expect(gettingStarted?.html).toContain("Wrench developer resources");
+    expect(gettingStarted?.html).toContain(
+      `<a href="${NPM_PACKAGE_URL}">Install the <code>@hraness/wrench</code> CLI and TypeScript SDK from npm</a>`,
+    );
+    expect(gettingStarted?.html).toContain(
+      `<a href="${SKILLS_URL}">Install the Wrench Agent Skill from skills.sh</a>`,
+    );
     expect(gettingStarted?.html).toContain("does not publish a hosted API");
     expect(gettingStarted?.html).toContain('id="demo"');
     expect(gettingStarted?.html).toContain('poster="/wrench-first-capture.png"');
