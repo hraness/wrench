@@ -230,6 +230,16 @@
       "source": "/vms-cannot-contain-agents/index.html",
       "destination": "/vms-cannot-contain-agents/",
       "permanent": true
+    },
+    {
+      "source": "/paypal-grapheneos-attestation",
+      "destination": "/paypal-grapheneos-attestation/",
+      "permanent": true
+    },
+    {
+      "source": "/paypal-grapheneos-attestation/index.html",
+      "destination": "/paypal-grapheneos-attestation/",
+      "permanent": true
     }
   ]
 }
