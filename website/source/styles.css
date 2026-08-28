@@ -1298,9 +1298,30 @@ code:not(pre code) {
   width: 44%;
 }
 
-.version-table table,
-.artifact-table table {
+.version-table table {
   min-width: 62rem;
+}
+
+.artifact-table table {
+  min-width: 58rem;
+  table-layout: fixed;
+}
+
+.artifact-table th:nth-child(1),
+.artifact-table td:nth-child(1) {
+  width: 16%;
+}
+
+.artifact-table th:nth-child(2),
+.artifact-table td:nth-child(2) {
+  width: 18%;
+}
+
+.artifact-table th:nth-child(3),
+.artifact-table td:nth-child(3),
+.artifact-table th:nth-child(4),
+.artifact-table td:nth-child(4) {
+  width: 33%;
 }
 
 .artifact-table code {

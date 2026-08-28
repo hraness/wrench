@@ -133,6 +133,14 @@ describe("wrench.rip static site", () => {
     expect(sourceCss).toMatch(/\.preview-copy > p:last-child\s*\{(?![^}]*font-family)[^}]*\}/su);
     expect(sourceCss).toMatch(/\.preview-eyebrow\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
     expect(sourceCss).toMatch(/\.preview-flow li\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
+    expect(cssPropertyValues(sourceCss, ".artifact-table table", "table-layout")).toEqual([
+      "fixed",
+    ]);
+    expect(cssPropertyValues(
+      sourceCss,
+      ".artifact-table td:nth-child(4)",
+      "width",
+    )).toEqual(["33%"]);
     expect(builtCss).toContain('font-family: "Nebula Sans";');
     expect(builtCss).toContain('./fonts/nebula-sans/NebulaSans-Book.woff2');
     expect((await readFile(
