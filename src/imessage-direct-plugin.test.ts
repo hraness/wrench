@@ -687,9 +687,12 @@ describe("reviewed direct iMessage provider", () => {
     const source = join(sourceRoot, "imsg");
     writeFileSync(source, "#!/bin/sh\nexit 0\n", { mode: 0o500 });
     try {
+      const expectedFailure = process.platform === "darwin" && process.arch === "arm64"
+        ? "reviewed digest"
+        : `no artifact for ${process.platform}/${process.arch}`;
       await expect(installReviewedImsgBinary(source, {
         WRENCH_STATE_HOME: state,
-      })).rejects.toThrow("reviewed digest");
+      })).rejects.toThrow(expectedFailure);
       expect(existsSync(imsgInstalledBinaryPath({ WRENCH_STATE_HOME: state })))
         .toBeFalse();
     } finally {
