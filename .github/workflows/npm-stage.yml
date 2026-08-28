@@ -1,6 +1,11 @@
 name: Stage npm package
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
   workflow_dispatch:
 
 permissions:
@@ -11,8 +16,118 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  classify:
+    name: Classify staging request
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_stage: ${{ steps.request.outputs.should_stage }}
+      source_sha: ${{ steps.request.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Classify current default-branch package
+        id: request
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/heads/$DEFAULT_BRANCH"
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "::error::npm staging must run from $DEFAULT_BRANCH"
+            exit 1
+          fi
+          git fetch --no-tags origin \
+            "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          default_head="$(git rev-parse "origin/$DEFAULT_BRANCH")"
+          checked_out_head="$(git rev-parse HEAD)"
+          if [[ ! "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ || \
+                "$GITHUB_SHA" != "$default_head" || \
+                "$checked_out_head" != "$default_head" ]]; then
+            echo "::error::npm staging must run from current $DEFAULT_BRANCH HEAD $default_head"
+            exit 1
+          fi
+
+          read_manifest_version() {
+            node -e '
+              const { readFileSync } = require("node:fs");
+              const value = JSON.parse(readFileSync(process.argv[1], "utf8"));
+              if (value === null || typeof value !== "object" || Array.isArray(value)) process.exit(1);
+              const { name, version } = value;
+              if (name !== "@hraness/wrench" || typeof version !== "string") process.exit(1);
+              if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u.test(version)) process.exit(1);
+              process.stdout.write(version);
+            ' "$1"
+          }
+
+          current_manifest="$RUNNER_TEMP/wrench-current-package.json"
+          git show "$default_head:package.json" > "$current_manifest"
+          if ! current_version="$(read_manifest_version "$current_manifest")"; then
+            echo "::error::Current package manifest must name @hraness/wrench and use a stable semantic version"
+            exit 1
+          fi
+
+          should_stage=true
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch)
+              ;;
+            push)
+              if [[ ! "$BEFORE_SHA" =~ ^[a-f0-9]{40}$ || \
+                    "$BEFORE_SHA" == 0000000000000000000000000000000000000000 || \
+                    "$BEFORE_SHA" == "$default_head" ]]; then
+                echo "::error::Push event has an invalid prior default-branch commit $BEFORE_SHA"
+                exit 1
+              fi
+              if ! git cat-file -e "$BEFORE_SHA^{commit}" || \
+                 ! git merge-base --is-ancestor "$BEFORE_SHA" "$default_head"; then
+                echo "::error::Push base $BEFORE_SHA is not an available ancestor of $default_head"
+                exit 1
+              fi
+              previous_manifest="$RUNNER_TEMP/wrench-previous-package.json"
+              git show "$BEFORE_SHA:package.json" > "$previous_manifest"
+              if ! previous_version="$(read_manifest_version "$previous_manifest")"; then
+                echo "::error::Previous package manifest must name @hraness/wrench and use a stable semantic version"
+                exit 1
+              fi
+              if [[ "$current_version" == "$previous_version" ]]; then
+                should_stage=false
+                echo "::notice::package.json changed without a version change; npm staging is not required"
+              elif ! OLD_VERSION="$previous_version" NEW_VERSION="$current_version" node -e '
+                const parse = (value) => value.split(".").map(BigInt);
+                const oldVersion = parse(process.env.OLD_VERSION ?? "");
+                const newVersion = parse(process.env.NEW_VERSION ?? "");
+                for (let index = 0; index < 3; index += 1) {
+                  if (newVersion[index] === oldVersion[index]) continue;
+                  process.exit(newVersion[index] > oldVersion[index] ? 0 : 1);
+                }
+                process.exit(1);
+              '; then
+                echo "::error::Automatic npm staging requires a version newer than $previous_version, received $current_version"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported npm staging event $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+          printf 'should_stage=%s\nsource_sha=%s\n' \
+            "$should_stage" "$default_head" >> "$GITHUB_OUTPUT"
+
   verify:
     name: Verify exact package
+    needs: classify
+    if: needs.classify.outputs.should_stage == 'true'
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -39,6 +154,7 @@ jobs:
         id: identity
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_SOURCE_SHA: ${{ needs.classify.outputs.source_sha }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
@@ -49,7 +165,10 @@ jobs:
             "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
           default_head="$(git rev-parse "origin/$DEFAULT_BRANCH")"
           checked_out_head="$(git rev-parse HEAD)"
-          if [[ "$GITHUB_SHA" != "$default_head" || "$checked_out_head" != "$default_head" ]]; then
+          if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ || \
+                "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || \
+                "$GITHUB_SHA" != "$default_head" || \
+                "$checked_out_head" != "$default_head" ]]; then
             echo "::error::npm staging must run from current $DEFAULT_BRANCH HEAD $default_head"
             exit 1
           fi
@@ -140,6 +259,7 @@ jobs:
     needs: verify
     permissions:
       id-token: write
+    environment: npm-stage
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

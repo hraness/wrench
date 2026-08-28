@@ -6,6 +6,10 @@ can use it, so the bootstrap cannot use the staging workflow.
 
 ## Bootstrap the npm package
 
+This section records the one-time bootstrap of `@hraness/wrench@0.15.1`.
+That package is already public. Do not reuse these bootstrap commands for any
+later version. Follow [Stage a later version](#stage-a-later-version) instead.
+
 Start from the current `main` commit after the required checks pass. Use Node
 24, npm 11.19.0, and Bun 1.3.14. Do not create the release tag yet.
 
@@ -107,12 +111,31 @@ comparison before it creates the immutable GitHub Release.
 
 ## Configure stage-only trusted publishing
 
-Configure the exact GitHub Actions identity after the first package is public:
+Create a protected GitHub environment named `npm-stage` after the first package
+is public. Restrict it to `main`, require reviewer `0thernet`, and set
+`prevent_self_review: false` so the sole maintainer can approve the deployment.
+Do not add a secret to the environment. npm's separate staged-package inspection
+and two-factor approval remain mandatory before the version becomes public.
+
+If the current npm trust relationship does not name that environment, inspect
+and revoke it before creating the replacement:
+
+```sh
+npm trust list @hraness/wrench \
+  --json \
+  --registry=https://registry.npmjs.org
+npm trust revoke @hraness/wrench \
+  --id <trust-id> \
+  --registry=https://registry.npmjs.org
+```
+
+Configure the exact GitHub Actions identity:
 
 ```sh
 npm trust github @hraness/wrench \
   --file npm-stage.yml \
   --repo hraness/wrench \
+  --environment npm-stage \
   --allow-stage-publish \
   --registry=https://registry.npmjs.org
 npm trust list @hraness/wrench \
@@ -123,10 +146,10 @@ npm access set mfa=publish @hraness/wrench \
 ```
 
 Complete each interactive two-factor authentication prompt. The trust
-relationship must name `hraness/wrench`, the exact `npm-stage.yml` filename, no
-environment, and only `npm stage publish`. The package access setting must
-require two-factor authentication and disallow traditional publishing tokens.
-Do not add an npm token to GitHub.
+relationship must name `hraness/wrench`, the exact `npm-stage.yml` filename, the
+`npm-stage` environment, and only `npm stage publish`. The package access setting
+must require two-factor authentication and disallow traditional publishing
+tokens. Do not add an npm token to GitHub.
 
 ## Create the first tag
 
@@ -142,15 +165,30 @@ The tag is a release request. Wait for the read-only verification job to
 rebuild and compare the exact public npm tarball, then verify that the GitHub
 Release is non-draft, immutable, and Latest.
 
-## Publish later versions
+## Stage a later version
 
-1. Merge the stable version to `main` and wait for the required CI job.
-2. Dispatch **Stage npm package** from the current `main` branch.
-3. Inspect the uploaded tarball and its `npm-pack.json` alongside the staged
-   package.
-4. Approve that stage with two-factor authentication.
+1. Merge a monotonically greater stable version to `main`. A push that changes
+   `package.json` starts **Stage npm package** automatically.
+2. Wait for **Verify exact package**, then inspect the uploaded tarball and its
+   `npm-pack.json`.
+3. As `0thernet`, approve the protected `npm-stage` environment. Self-review is
+   allowed for this sole-maintainer gate. Only its minimal OIDC job can submit
+   the verified tarball to npm's staging area.
+4. Inspect the staged package, then approve it with npm's separate two-factor
+   authentication prompt.
 5. Download and smoke the public registry package.
 6. Create the matching `v<version>` tag on the staged source commit.
+
+The read-only classifier compares the current and prior `package.json` files. A
+manifest edit with an unchanged version succeeds without running the verify or
+OIDC jobs. A prerelease, malformed version, downgrade, unavailable push base, or
+non-current `main` commit fails closed.
+
+If the automatic run did not start or failed before npm accepted the stage,
+dispatch **Stage npm package** from the current `main` branch. Manual recovery
+runs the same verification and protected-environment path. Do not dispatch a
+replacement after npm has accepted a stage for that version; continue with
+inspection and two-factor approval.
 
 Use the canonical registry for every inspection and promotion command:
 
@@ -179,10 +217,11 @@ git tag v0.16.2
 git push origin refs/tags/v0.16.2
 ```
 
-The staging workflow runs on a GitHub-hosted runner with Node 24, npm 11.19.0,
-Bun 1.3.14, disabled package-manager caching, and no stored npm token. It
-refetches `main` before staging and aborts if the verified commit is no longer
-the current default-branch head.
+The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
+Bun 1.3.14, disabled package-manager caching, and no stored npm token. It binds
+the verified artifact to the current `main` commit, refetches `main` before
+staging, and aborts if that commit is no longer the default-branch head. The
+`npm-stage` environment applies only to the terminal OIDC job.
 
 See npm's documentation for [trusted
 publishing](https://docs.npmjs.com/trusted-publishers/), [staged
