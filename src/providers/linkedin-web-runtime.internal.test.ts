@@ -1785,7 +1785,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
           filename: "inline-image-1.png",
           mediaType: "image/png",
         });
-        expect(image.bytes.byteLength).toBe(869_311);
+        expect(image.bytes.byteLength).toBe(243_290);
         return Promise.resolve(assetUrn);
       },
       updateContentV2: (_draftId, receivedDocument, assets) => {

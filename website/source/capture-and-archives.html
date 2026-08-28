@@ -36,13 +36,11 @@
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="topbar guide-topbar">
-      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
       <nav aria-label="Primary">
-        <a href="/getting-started/">Get started</a>
-        <a aria-current="page" href="/capture-and-archives/">Capture</a>
+        <a href="/getting-started/">Install</a>
         <a href="/provider-capabilities/">Providers</a>
-        <a href="/security/">Security</a>
-        <a href="/plugins/">Plugins</a>
+        <a href="https://github.com/hraness/wrench">GitHub <span aria-hidden="true">↗</span></a>
       </nav>
     </header>
     <main class="guide-main" id="main">
@@ -99,7 +97,7 @@ wrench verify path/to/archive-item</code></pre></div>
         <section aria-labelledby="gmail-clip">
           <h2 id="gmail-clip">Email thread clipping is a separate authenticated path</h2>
           <p>A Gmail <code>messaging.list</code> result includes a provider-derived <code>threadUrl</code>. Pass that URL to <code>wrench read</code> or <code>wrench clip</code> with the same Gmail auth locator. Gmail clips default to private Wrench state; <code>--output &lt;directory&gt;</code> is the explicit plaintext export boundary.</p>
-          <p>The default and <code>--media all</code> include every MIME attachment. <code>--media none</code> omits attachment bytes, while <code>--media images</code> is rejected because it would misrepresent non-image files. Attachment objects are content-addressed, integrity-recorded, and stored under deterministic SHA-256 names. See the <a href="/provider-capabilities/">provider capability attestation</a> for inbox, search, thread, and contact-statistics limits.</p>
+          <p>The default and <code>--media all</code> include every MIME attachment. <code>--media none</code> omits attachment bytes, while <code>--media images</code> is rejected because it would misrepresent non-image files. Attachment objects are content-addressed, integrity-recorded, and stored under deterministic SHA-256 names. See the <a href="/provider-capabilities/">provider support directory</a> for available inbox, search, thread, and contact actions.</p>
         </section>
 
         <aside class="guide-callout" aria-labelledby="capture-next">

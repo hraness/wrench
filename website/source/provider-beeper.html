@@ -36,13 +36,11 @@
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="topbar guide-topbar">
-      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
       <nav aria-label="Primary">
-        <a href="/getting-started/">Get started</a>
-        <a href="/capture-and-archives/">Capture</a>
+        <a href="/getting-started/">Install</a>
         <a aria-current="location" href="/provider-capabilities/">Providers</a>
-        <a href="/security/">Security</a>
-        <a href="/plugins/">Plugins</a>
+        <a href="https://github.com/hraness/wrench">GitHub <span aria-hidden="true">↗</span></a>
       </nav>
     </header>
     <main class="guide-main" id="main">
@@ -50,7 +48,7 @@
       <article class="guide-article">
         <header class="guide-hero provider-guide-hero">
           <p class="eyebrow">Beeper adapter · {{WRENCH_RELEASE}}</p>
-          <h1>Beeper through {{BEEPER_OBSERVED_OPERATION_COUNT}} observed operations.</h1>
+          <h1>Use Beeper through {{BEEPER_OBSERVED_OPERATION_COUNT}} supported actions.</h1>
           <p class="answer-lede">Wrench exposes {{BEEPER_OBSERVED_OPERATION_COUNT}} semantic operations over the official Beeper CLI {{BEEPER_CLI_VERSION}} and an already-authorized Beeper Desktop target. Each request binds one executable, account realm, Desktop target, operation contract, input, output, and risk level.</p>
           <p class="review-note">This page describes adapter <code>beeper-local</code> {{BEEPER_ADAPTER_VERSION}} in {{WRENCH_RELEASE}}. Run <code>wrench capabilities beeper-local --json</code> for the exact state installed on your machine.</p>
         </header>
@@ -99,7 +97,7 @@ wrench auth bind beeper-main --site beeper</code></pre></div>
             <table>
               <thead><tr><th scope="col">Boundary</th><th scope="col">Current identity</th><th scope="col">What it controls</th></tr></thead>
               <tbody>
-                <tr><th scope="row">Wrench release</th><td><code>{{WRENCH_RELEASE}}</code></td><td>The installable CLI, SDK, plugin catalog, and public attestation</td></tr>
+                <tr><th scope="row">Wrench release</th><td><code>{{WRENCH_RELEASE}}</code></td><td>The installable CLI, SDK, plugin catalog, and public support directory</td></tr>
                 <tr><th scope="row">Adapter</th><td><code>beeper-local</code> {{BEEPER_ADAPTER_VERSION}}</td><td>The public operation catalog and selected source-plugin contracts</td></tr>
                 <tr><th scope="row">Semantic contracts</th><td>{{BEEPER_SEMANTIC_CONTRACT_VERSION_LABEL}} across the current {{BEEPER_OBSERVED_OPERATION_COUNT}} operations</td><td>Each operation's input, output, risk, side effect, and completeness</td></tr>
                 <tr><th scope="row">Official CLI</th><td>Beeper CLI {{BEEPER_CLI_VERSION}} at <code>{{BEEPER_CLI_COMMIT}}</code></td><td>The exact upstream client, further bound by one executable digest per platform</td></tr>
@@ -130,7 +128,7 @@ wrench confirm &lt;preview-digest&gt; --json</code></pre></div>
 
         <section aria-labelledby="exports">
           <h2 id="exports">Export local history for another bounded tool</h2>
-          <p>Separate Wrench workflows can produce a private Message Like Me bundle or a body-free contact-interaction summary from Beeper's locally materialized history. These workflows are not part of the {{BEEPER_OBSERVED_OPERATION_COUNT}} adapter operations.</p>
+          <p>Separate Wrench workflows can produce a private Message Like Me bundle or a body-free contact-interaction summary from Beeper's locally materialized history. These workflows are not part of the {{BEEPER_OBSERVED_OPERATION_COUNT}} supported actions.</p>
           <div class="command-panel"><pre><code>wrench beeper export-message-like-me --auth beeper-main \
   --output /absolute/path/to/new-message-like-me-bundle --json
 

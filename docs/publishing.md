@@ -168,10 +168,12 @@ npm stage approve <stage-id> \
 ```
 
 For the current release, download and smoke `@hraness/wrench@0.16.0` after
-approving its stage, then create `v0.16.0` on the exact staged source commit:
+approving its stage. Keep the public coordinate and tag literal through the
+final registry checks, then create `v0.16.0` on the exact staged source commit:
 
 ```sh
-npm view @hraness/wrench@0.16.0 version \
+npm view @hraness/wrench@0.16.0 name version dist \
+  --json \
   --registry=https://registry.npmjs.org
 git tag v0.16.0
 git push origin refs/tags/v0.16.0

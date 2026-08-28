@@ -4,16 +4,16 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "482ec20d29414e4200a2fb8d63a6a6e822262a052352dd1534d96af985b6256a";
+  "2b02a37ec65e58786e46845bbdce3cee32b82323c4b4b87e33eddebdcf2e4df5";
 const predecessorLegacyInventorySha256 = [
-  "ba95f351013ac01031f8a2af335547ca03a66572ec3280cc0131542fbd9409d3",
-  "1172e654dc75103138890898c01be77f72506aa2f843086d61d4cddc3f7b2e9e",
-  "a4ab91f56b7470d8a58bd57d1107a1c52f74460be6497f10f54be2dc74a945f3",
-  "ddc0cda46b7d241ee22b49b60d08d983b2cb6038229a4d7a42391a55e0cc5798",
-  "8f1e13a36cb3e3b40c5865bbbad766a585c7607328b8d5aa1fb3b0365141c41b",
-  "dac913ed7113a2bfbb8f22ff4559106f7449b9b28269787e043bbd92f66395d1",
-  "c2819cec7ce8742298e419008d04a55481b9d34235c019404035d403af10d3ca",
-  "6658d53bb5890c3dea9c7e2c6985876fb04c2c5e286b5fed0b49fce4523a4fe8",
+  "180d4d780009c6414ff73b3d11c947f200fb5442a0170671579c0d08a2e5b02f",
+  "d2c5908fc43233e29387f6f68a46fe3674fa1162f3b501c3ec2b2e04be25bd30",
+  "4ae96c6bfc7eb11105054ced427704c3ed5c82f5071f04ec92b8b82a9ec1e486",
+  "a8b4b537091e2935742c382be9ba3fe6a2e6456b529468c4889b49eee804366c",
+  "9f311c5dc9f740c4bfc35f68f1dc26e60e0175744f3768bdd438b080bb4e5dfe",
+  "c051ae3209aef463692b7b5d6bcef404e7cff096fdde80b1eb325880b90bec14",
+  "d625a6d6d9337510daf736b006ba59e8adb8e7697cce5297f4a62f50770e6729",
+  "1032f3df027f75f062371cdefc4b814be06e651e1ffb3bb02de4afc923bf903d",
   "816053f54ce88d4c08f605903f414d096630ed386feca8bb5c87d8c60f0cb1fc",
   "954015a0e5c00dfa8dd51972fec2aa0dd884cf1346d74dcc9abe4b69d8bfd88b",
   "572edee59ca1acae13d68bd545dc14dcf1ee7d5819fa1e5e340f8d35ec1ea0a1",
@@ -260,19 +260,19 @@ describe("durable provider contract inventory", () => {
     ].map((nodeEnv) => inventoryForNodeEnv(nodeEnv)));
     for (const inventory of inventories) {
       expect(inventory).toEqual({
-        rows: 317,
+        rows: 319,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 44,
         currentOnlySha256: "f189a4ffc844ab7c8da5a411f582c241c41561ab41e4fb9e584419895387cdd6",
         legacyRows: [
-          317,
-          317,
-          317,
-          317,
-          317,
-          317,
-          317,
-          226,
+          319,
+          319,
+          319,
+          319,
+          319,
+          319,
+          319,
+          277,
           226,
           226,
           185,

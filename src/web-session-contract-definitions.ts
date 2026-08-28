@@ -394,12 +394,14 @@ const REDDIT_WEB_OPERATIONS = operationPolicies("reddit", [
   "comments.read",
   "content.delete",
   "feeds.read",
+  "media.read",
   "media.publish",
   "messaging.list",
   "messaging.read",
   "posts.read",
   "profiles.read",
 ], {
+  "media.read": 2,
   "media.publish": 8,
 });
 const BEEPER_LOCAL_OPERATIONS = operationPolicies("beeper", [
@@ -634,7 +636,7 @@ const x = {
   "comments.read": contract("x", "comments.read", "R1", "observed", "current TweetDetail conversation entries"),
   "messaging.list": contract("x", "messaging.list", "R1", "capture-required", "current X Chat inbox events are encrypted and require the reviewed key-recovery runtime before plaintext listing"),
   "messaging.read": contract("x", "messaging.read", "R1", "capture-required", "current X Chat conversation events are encrypted and require verified key recovery before plaintext projection"),
-  "articles.read": contract("x", "articles.read", "R1", "capture-required", "native article detail requires entitlement-specific reviewed capture"),
+  "articles.read": contract("x", "articles.read", "R1", "observed", "current-viewer-owned private Draft read through the exact ArticleEntityResultByRestId query with bounded title and rich-content projection; published Articles remain outside this contract", 2),
   "articles.draft.save": contract("x", "articles.draft.save", "R2", "observed", "current bounded media INIT/APPEND/FINALIZE plus Article entity create/title/content mutations save one response-bound private rich-text-and-image draft and never call ArticleEntityPublish", 2),
   "messaging.send": contract("x", "messaging.send", "R3", "capture-required", "DM send requires exact current mutation and target binding"),
   "posts.publish": contract("x", "posts.publish", "R3", "observed", "current optional single-PNG or MP4 upload with pixels-only provenance scrub, strict CreateTweet response, durable accepted-target evidence, and fail-closed TweetResultByRestId readback for Made with AI labels", 4),
@@ -656,7 +658,7 @@ const reddit = {
   "content.edit": contract("reddit", "content.edit", REDDIT_WEB_OPERATIONS["content.edit"].risk, REDDIT_WEB_OPERATIONS["content.edit"].state, REDDIT_WEB_OPERATIONS["content.edit"].reason),
   "content.save": contract("reddit", "content.save", REDDIT_WEB_OPERATIONS["content.save"].risk, REDDIT_WEB_OPERATIONS["content.save"].state, REDDIT_WEB_OPERATIONS["content.save"].reason),
   "feeds.read": contract("reddit", "feeds.read", REDDIT_WEB_OPERATIONS["feeds.read"].risk, REDDIT_WEB_OPERATIONS["feeds.read"].state, REDDIT_WEB_OPERATIONS["feeds.read"].reason),
-  "media.read": contract("reddit", "media.read", REDDIT_WEB_OPERATIONS["media.read"].risk, REDDIT_WEB_OPERATIONS["media.read"].state, REDDIT_WEB_OPERATIONS["media.read"].reason),
+  "media.read": contract("reddit", "media.read", REDDIT_WEB_OPERATIONS["media.read"].risk, REDDIT_WEB_OPERATIONS["media.read"].state, REDDIT_WEB_OPERATIONS["media.read"].reason, 2),
   "media.publish": contract("reddit", "media.publish", REDDIT_WEB_OPERATIONS["media.publish"].risk, REDDIT_WEB_OPERATIONS["media.publish"].state, REDDIT_WEB_OPERATIONS["media.publish"].reason, 9),
   "messaging.list": contract("reddit", "messaging.list", REDDIT_WEB_OPERATIONS["messaging.list"].risk, REDDIT_WEB_OPERATIONS["messaging.list"].state, REDDIT_WEB_OPERATIONS["messaging.list"].reason),
   "messaging.read": contract("reddit", "messaging.read", REDDIT_WEB_OPERATIONS["messaging.read"].risk, REDDIT_WEB_OPERATIONS["messaging.read"].state, REDDIT_WEB_OPERATIONS["messaging.read"].reason),

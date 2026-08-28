@@ -9,7 +9,33 @@ if (binding?.transport !== "web-session-api") {
 
 describe("X web provider plugin", () => {
   test("versions the profile-read source closure independently", () => {
-    expect(xWebPlugin.version).toBe("1.1.0");
+    expect(xWebPlugin.version).toBe("1.2.0");
+  });
+
+  test("keeps the generic Article reservation inert beside the exact private-draft read", () => {
+    const reads = binding.operations.filter((operation) =>
+      operation.name === "articles.read");
+    expect(reads.map((operation) => operation.contractVersion)).toEqual([1, 2]);
+    const current = reads.find((operation) => operation.contractVersion === 2);
+    const archived = reads.find((operation) => operation.contractVersion === 1);
+    expect(current).toMatchObject({
+      contractVersion: 2,
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+      input: {
+        properties: {
+          article_id: { type: "string", minLength: 1, maxLength: 19 },
+        },
+        required: ["article_id"],
+      },
+    });
+    expect(archived).toMatchObject({
+      contractVersion: 1,
+      risk: "R1",
+      state: "capture-required",
+      dispatch: "none",
+    });
   });
 
   test("advertises the observed exact handle-bound profile read", () => {

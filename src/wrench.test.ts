@@ -2014,6 +2014,7 @@ describe("doctor authenticated API readiness", () => {
         adapters: ["x-web"],
         observedOperations: [
           "articles.draft.save",
+          "articles.read",
           "comments.read",
           "content.save",
           "feeds.read",

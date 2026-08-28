@@ -111,10 +111,10 @@ export const REDDIT_WEB_OPERATIONS = Object.freeze({
     "R2",
     "user and post-follow relationships are distinct contracts and need reviewed fixtures",
   ),
-  "media.read": captureRequired(
+  "media.read": observed(
     "read",
     "R1",
-    "media metadata and expiring playback variants need a separate bounded projection",
+    "current-account-bound exact /api/info hosted-video readback with a closed metadata-only projection that omits playback URLs",
   ),
   "media.publish": observed(
     "write",
@@ -379,6 +379,7 @@ export type RedditWebRequestOperation =
   | "comments.read"
   | "messages.list"
   | "messages.read"
+  | "media.read"
   | "state.readback"
   | "media.lease"
   | "media.publish"
@@ -538,14 +539,20 @@ export function authorizeRedditWebRequest(
     return finish();
   }
 
-  if (input.operation === "state.readback") {
+  if (input.operation === "state.readback" || input.operation === "media.read") {
     if (method !== "GET" || url.pathname !== "/api/info.json" || form.size !== 0) {
-      throw new Error("Reddit state readback changed its reviewed exchange");
+      throw new Error(`Reddit ${input.operation} changed its reviewed exchange`);
     }
-    exactNames(query, ["id", "raw_json"], [], "Reddit state query");
-    const target = redditFullname(input.targetId, "Reddit state target", ["t1", "t3"]);
-    if (query.get("id") !== target) throw new Error("Reddit state query did not bind its target");
-    requireFixed(query, "raw_json", "1", "Reddit state query");
+    exactNames(query, ["id", "raw_json"], [], `Reddit ${input.operation} query`);
+    const target = redditFullname(
+      input.targetId,
+      `Reddit ${input.operation} target`,
+      input.operation === "media.read" ? ["t3"] : ["t1", "t3"],
+    );
+    if (query.get("id") !== target) {
+      throw new Error(`Reddit ${input.operation} query did not bind its target`);
+    }
+    requireFixed(query, "raw_json", "1", `Reddit ${input.operation} query`);
     return finish();
   }
 
@@ -1228,6 +1235,66 @@ export function parseRedditVideoPostPresence(
     height,
     nsfw,
     spoiler,
+  });
+}
+
+export type RedditHostedVideoMetadata = Readonly<{
+  provider: "reddit";
+  operation: "media.read";
+  post: Readonly<{
+    id: string;
+    title: string;
+    author: string | null;
+    subreddit: string;
+    createdUtc: number | null;
+    permalink: string;
+  }>;
+  media: Readonly<{
+    kind: "hosted-video";
+    mediaType: "video/mp4";
+    durationSeconds: number;
+    width: number;
+    height: number;
+    nsfw: boolean;
+    spoiler: boolean;
+    transcodingStatus: "completed";
+  }>;
+}>;
+
+/**
+ * Project only durable hosted-video metadata. The parser must observe and bind
+ * Reddit's playback locations, but this closed return shape intentionally
+ * omits both the canonical video URL and the expiring fallback URL.
+ */
+export function projectRedditHostedVideoMetadata(
+  value: unknown,
+  expectedPostId: string,
+): RedditHostedVideoMetadata {
+  const readback = parseRedditVideoPostPresence(value, expectedPostId);
+  if (readback === null) {
+    throw new Error("Reddit media.read did not return the exact hosted-video post");
+  }
+  return Object.freeze({
+    provider: "reddit",
+    operation: "media.read",
+    post: Object.freeze({
+      id: readback.post.id,
+      title: readback.post.title,
+      author: readback.post.author,
+      subreddit: readback.post.subreddit,
+      createdUtc: readback.post.createdUtc,
+      permalink: readback.post.permalink,
+    }),
+    media: Object.freeze({
+      kind: "hosted-video",
+      mediaType: "video/mp4",
+      durationSeconds: readback.durationSeconds,
+      width: readback.width,
+      height: readback.height,
+      nsfw: readback.nsfw,
+      spoiler: readback.spoiler,
+      transcodingStatus: "completed",
+    }),
   });
 }
 

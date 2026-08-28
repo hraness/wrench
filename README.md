@@ -44,17 +44,17 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-Wrench v0.16.0 ships attested adapter surfaces for Beeper, Bluesky, Facebook,
-Facebook Groups, Facebook Marketplace, Facebook Pages, GitHub, Gmail, Hacker
-News, Instagram, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp,
-X, and YouTube. Eighteen of those surfaces have at least one `observed`
-operation; Facebook Pages is currently reservation-only, with zero executable
-operations. LinkedIn and X each have separate official and authenticated-web
-adapters. The [release-bound provider directory](https://wrench.rip/provider-capabilities/)
-puts each `observed` and `capture-required` count beside the provider instead of
-treating a catalog entry as a generic support badge.
+Wrench v0.16.0 supports actions for Beeper, Bluesky, Facebook,
+Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker News, Instagram,
+iMessage, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and
+YouTube.
+LinkedIn and X each have separate official and authenticated-web adapters. The
+[release-bound provider directory](https://wrench.rip/provider-capabilities/)
+lists only executable actions, grouped by the tasks each service supports and
+the access method each action uses. Inspect `wrench capabilities --json` for
+the exact installed contract state.
 
-Beeper is Wrench's first pinned local-CLI provider. Its 32 observed operations
+Beeper is Wrench's first pinned local-CLI provider. Its 32 supported actions
 read accounts, contacts, conversations, and messages; manage reactions, drafts,
 reminders, and conversation state; and preview and confirm sends, edits, group
 changes, and presence. Wrench accepts only the reviewed official Beeper CLI
@@ -315,6 +315,15 @@ Substack's reservation now has live 200 evidence for initialization, multipart
 transfer, transcode, status, and video-attachment creation, but remains inert:
 the authorized profile-backed Note create returned 403 in two independent
 attempts, so no exact published-video target or readback exists.
+
+`reddit-web media.read@2` reads one exact Reddit-hosted video post through the
+current-account-bound `/api/info` exchange. It returns only stable post fields,
+dimensions, duration, safety flags, and completed-transcode status. Canonical,
+fallback, signed, and expiring playback URLs are deliberately excluded.
+Standalone Threads post and media reads and Facebook Marketplace media reads
+remain capture-required; an observed feed, listing, or publication contract
+does not confer those reads.
+
 `substack-web content.delete@1` is observed for one exact current-account
 personal Note. It pre-reads the exact actor and body, dispatches one bodyless
 target-bound DELETE, retains the accepted target, and independently requires
@@ -964,6 +973,21 @@ not call `articles.publish` as recovery. The current image-capable contracts do
 not reconcile automatically because an uncertain upload may have created a
 provider asset absent from the confirmed input; preserve the run and do not
 repeat uploads.
+
+Read one exact saved X draft by its private numeric identity:
+
+```sh
+wrench x-web articles.read \
+  --input '{"article_id":"1234567890123456789"}' \
+  --auth x-main --json
+```
+
+`x-web articles.read@2` is an R1 read for one current-viewer-owned private
+Article in the `Draft` lifecycle. Its closed output binds the exact article and
+owner IDs, `published: false`, one bounded single-line title, and bounded rich
+content. It is not an Article list and does not read published X Articles.
+LinkedIn Article reads remain capture-required; the observed LinkedIn draft
+save contract does not confer a read operation.
 
 Signed-in LinkedIn now exposes the same private R2 seam through
 `linkedin-web articles.draft.save`. Its schemaVersion 2 document supports
