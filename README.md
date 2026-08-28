@@ -27,7 +27,7 @@ wrench capabilities
 wrench plugin list
 ```
 
-[Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md) · [Local CLI transport guide](docs/local-cli-providers.md)
+[Install](#install) · [npm package](https://www.npmjs.com/package/@hraness/wrench) · [Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md) · [Local CLI transport guide](docs/local-cli-providers.md)
 
 ## What Wrench does
 

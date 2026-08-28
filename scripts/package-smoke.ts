@@ -12,6 +12,24 @@ const importSpecifiers = [
   "@hraness/wrench/messaging",
 ];
 const binNames = ["wrench"];
+const packageDiscoveryKeywords = [
+  "ai-agents",
+  "coding-agents",
+  "agent-skills",
+  "agent-tools",
+  "typescript",
+  "typescript-sdk",
+  "cli",
+  "tool-calling",
+  "web-capture",
+  "web-automation",
+  "knowledge-base",
+  "media-archive",
+  "provider-plugins",
+  "cross-provider",
+  "local-first",
+  "bun",
+] as const;
 const MAX_PACKED_BYTES = 2_010_000;
 const MAX_PACKED_FILES = 450;
 const MAX_UNPACKED_BYTES = 11_000_000;
@@ -166,6 +184,18 @@ function requireNonNegativeInteger(
     throw new Error(`${label}.${key} must be a non-negative safe integer.`);
   }
   return field as number;
+}
+
+function assertPackageDiscoveryKeywords(value: unknown, label: string): void {
+  if (
+    !Array.isArray(value)
+    || value.length !== packageDiscoveryKeywords.length
+    || value.some((keyword, index) => keyword !== packageDiscoveryKeywords[index])
+  ) {
+    throw new Error(
+      `${label}.keywords must exactly match the focused Wrench discovery keywords, including agent-skills.`,
+    );
+  }
 }
 
 function parseExactNpmArtifact(args: readonly string[], repository: string): ExactNpmArtifact | null {
@@ -430,6 +460,7 @@ async function verifyPackagedSkill(
     readonly version?: unknown;
     readonly contentPolicy?: unknown;
     readonly engines?: unknown;
+    readonly keywords?: unknown;
     readonly publishConfig?: unknown;
     readonly scripts?: unknown;
   };
@@ -482,6 +513,7 @@ async function verifyPackagedSkill(
       `Packed Wrench identity is ${String(manifest.name)}@${String(manifest.version)}, expected ${packageName}@${expectedVersion}.`,
     );
   }
+  assertPackageDiscoveryKeywords(manifest.keywords, "Packed package.json");
   if (
     typeof manifest.contentPolicy !== "object"
     || manifest.contentPolicy === null
@@ -551,6 +583,7 @@ const sourceManifest = requireRecord(
   "package.json",
 );
 const packageVersion = requireString(sourceManifest, "version", "package.json");
+assertPackageDiscoveryKeywords(sourceManifest.keywords, "package.json");
 if (!/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(packageVersion)) {
   throw new Error(`package.json version is not stable semantic version: ${packageVersion}.`);
 }
