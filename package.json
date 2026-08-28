@@ -32,6 +32,8 @@
     "coding-agents",
     "agent-skills",
     "agent-tools",
+    "beeper",
+    "messaging",
     "typescript",
     "typescript-sdk",
     "cli",

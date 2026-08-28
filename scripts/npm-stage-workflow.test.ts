@@ -802,6 +802,11 @@ esac
       "--registry-archive \"$wrench_registry_archive\"",
       `git tag v${manifest.version}`,
       "npm stage approve <stage-id>",
+      "The exact npm keyword list is checked by `scripts/package-smoke.ts`",
+      "Repository topics are maintainer-managed discovery",
+      "`beeper`",
+      "`messaging`",
+      "Do not grant a release workflow repository",
     ] as const) {
       expect(guide).toContain(required);
     }

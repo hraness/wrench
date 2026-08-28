@@ -17,6 +17,8 @@ const packageDiscoveryKeywords = [
   "coding-agents",
   "agent-skills",
   "agent-tools",
+  "beeper",
+  "messaging",
   "typescript",
   "typescript-sdk",
   "cli",
@@ -193,7 +195,7 @@ function assertPackageDiscoveryKeywords(value: unknown, label: string): void {
     || value.some((keyword, index) => keyword !== packageDiscoveryKeywords[index])
   ) {
     throw new Error(
-      `${label}.keywords must exactly match the focused Wrench discovery keywords, including agent-skills.`,
+      `${label}.keywords must exactly match the focused Wrench discovery keywords, including agent-skills, beeper, and messaging.`,
     );
   }
 }

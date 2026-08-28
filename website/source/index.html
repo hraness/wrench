@@ -284,19 +284,19 @@ wrench capabilities</code></pre>
             <p class="eyebrow">How it fits</p>
             <h2 id="comparison-title">Use Wrench with the tools you already have.</h2>
             <p>
-              Wrench owns the capability and custody layer. Browser tools, provider
-              SDKs, MCP servers, and agent frameworks continue to do the jobs they
-              are designed for.
+              Wrench owns a narrow capability and custody layer. Hosted integration
+              catalogs, cloud Actors, and managed browsers solve broader jobs at
+              different layers.
             </p>
           </div>
           <div aria-labelledby="comparison-title" class="table-scroll" role="region" tabindex="0">
             <table>
-              <thead><tr><th scope="col">Approach</th><th scope="col">Best at</th><th scope="col">What Wrench adds</th></tr></thead>
+              <thead><tr><th scope="col">Approach</th><th scope="col">Best fit</th><th scope="col">Wrench boundary</th></tr></thead>
               <tbody>
-                <tr><th scope="row">Browser automation</th><td>Visual workflows, UI testing, and exploratory interaction</td><td>Reviewed semantic operations with no hidden DOM-action fallback</td></tr>
-                <tr><th scope="row">Direct API scripts</th><td>Calling a known API with complete developer control</td><td>Shared account, risk, preview, receipt, drift, and encrypted-state rules</td></tr>
-                <tr><th scope="row">MCP</th><td>Transporting discoverable tools and context between hosts and servers</td><td>A provider-side custody and execution contract that can sit behind an MCP tool</td></tr>
-                <tr><th scope="row">Agent frameworks</th><td>Models, planning, tool loops, approvals, and interfaces</td><td>A model-agnostic CLI and SDK capability layer beneath the framework</td></tr>
+                <tr><th scope="row"><a href="https://pipedream.com/docs/connect">Pipedream Connect</a></th><td>Hosted integration breadth and managed end-user authentication across thousands of APIs and prebuilt tools</td><td>A smaller local set whose provider operations and implementations are reviewed before they run</td></tr>
+                <tr><th scope="row"><a href="https://docs.apify.com/integrations/mcp">Apify MCP</a></th><td>Discovering and running eligible Apify Store Actors through a hosted MCP service, with access to results and storage</td><td>Each provider operation and implementation must be named and reviewed before it can run</td></tr>
+                <tr><th scope="row"><a href="https://docs.browserbase.com/platform/browser/observability/session-recording">Browserbase</a></th><td>Parallel browser automation on managed cloud sessions, with live inspection and video recording by default</td><td>No remote browser runtime and no hidden browser fallback when a named operation is missing or drifted</td></tr>
+                <tr><th scope="row">Wrench</th><td>Narrow local capabilities whose exact identities, account realms, and risks need review</td><td>Encrypted local state, mutation previews and receipts, and fail-closed contract drift</td></tr>
               </tbody>
             </table>
           </div>

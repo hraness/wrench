@@ -746,10 +746,10 @@ lands between the atomic rename and lease release, recovery recognizes the
 same directory at the requested output path and preserves the published
 bundle.
 
-The [Beeper Desktop API MCP project](https://github.com/beeper/desktop-api-mcp)
-is intended to expose Beeper tools to an MCP client. This export path uses the
-official CLI because Wrench needs a pinned, bounded, read-only file snapshot
-that it can validate and publish atomically.
+The [built-in Beeper Desktop MCP server](https://developers.beeper.com/desktop-api/mcp/)
+gives supported MCP clients a first-party path to Beeper Desktop. This export
+path uses the official CLI because Wrench needs a pinned, bounded, read-only
+file snapshot that it can validate and publish atomically.
 
 Contact and chat lists are bounded to 200 records because CLI 0.6.2 exposes no
 continuation cursor for those commands. Message pages derive the next
