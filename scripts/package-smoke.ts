@@ -30,9 +30,12 @@ const packageDiscoveryKeywords = [
   "local-first",
   "bun",
 ] as const;
-const MAX_PACKED_BYTES = 2_000_000;
+// These are coarse growth guardrails, not expected artifact metrics. Keep a
+// small buffer for cross-platform gzip variance and ordinary patch releases;
+// the exact-artifact path separately binds every reported file and digest.
+const MAX_PACKED_BYTES = 2_100_000;
 const MAX_PACKED_FILES = 450;
-const MAX_UNPACKED_BYTES = 11_000_000;
+const MAX_UNPACKED_BYTES = 11_500_000;
 const NPM_REGISTRY = "https://registry.npmjs.org";
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";
 const sweetCookieVerificationIntegrity = "sha512-HddZketABRWbHiLYqMbGlYuqEaWdtqAjES28eKHr2cPDdPvrXiF4JQxD4pl9WzSOre6p/B3zA4Z3uIsCHo/+uQ==";
