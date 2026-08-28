@@ -205,7 +205,7 @@ function operation(
       ? [{ id: "messaging.send", description: "Submit one exact synthetic message" }]
       : [],
     validateInput: () => [],
-    ...(send ? {} : {
+    ...(send || name === "conversations.read" ? {} : {
       omni: Object.freeze({
         state: "supported" as const,
         schemaVersion: 1 as const,

@@ -138,6 +138,8 @@ describe("provider-neutral messaging contracts", () => {
       contractId: "wrench.messaging-receipt-binding.v1",
       contractHash: MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
       clientIntentSha256: "a".repeat(64),
+      contextBindingSha256: "f".repeat(64),
+      sourceConversationCoordinateSha256: "9".repeat(64),
       routeRefSha256: "b".repeat(64),
       contextRefSha256: "c".repeat(64),
       turnDigest: "d".repeat(64),
@@ -150,8 +152,7 @@ describe("provider-neutral messaging contracts", () => {
     } as const;
     const receipt = {
       ...base,
-      receiptSha256:
-        "fc0d2ee0e515999ed02466adad027a5193e9007f1920a3251c480e5cbec59498",
+      receiptSha256: sha256(canonicalJson(base)),
     } as const;
     expect(parseMessagingReceiptBindingV1(receipt)).toEqual(receipt);
     expect(() => parseMessagingReceiptBindingV1({

@@ -50,7 +50,7 @@ function operation(
       ? [{ id: "messaging.send", description: "Submit one exact message" }]
       : [],
     validateInput: () => [],
-    ...(send
+    ...(send || name === "conversations.read"
       ? {}
       : {
           omni: Object.freeze({
