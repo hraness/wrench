@@ -148,6 +148,14 @@ export const PUBLIC_PAGES = [
     sourceFile: "vms-cannot-contain-agents.html",
     title: "VMs cannot contain agents, and why attested web operations still matter",
   },
+  {
+    canonicalPath: "/paypal-grapheneos-attestation/",
+    description:
+      "The Thursday 27 August 2026 rough.day tech edition ranked PayPal crashing on GrapheneOS with a RootDetectionSecurityException. Device-policy attestation is not a named Wrench operation.",
+    outputFile: "paypal-grapheneos-attestation/index.html",
+    sourceFile: "paypal-grapheneos-attestation.html",
+    title: "PayPal attested a hardened phone as rooted, and why named web operations still matter",
+  },
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];
