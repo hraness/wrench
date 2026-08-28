@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "bluesky-web",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "displayName": "Bluesky (AT Protocol API)",
   "surfaceId": "bluesky",
   "origins": [

@@ -44,6 +44,7 @@ const stateDirectories = new Set([
   "derivations",
   "idempotency",
   "linked-device-stores",
+  "messaging",
   "omni-read-projections",
   "plan-assets",
   "plans",

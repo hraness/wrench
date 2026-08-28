@@ -293,7 +293,7 @@ function recipe(action: WebSessionRecipe["action"]): WebSessionRecipe {
   return {
     site: "reddit",
     action,
-    contractVersion: action === "media.publish" ? 9 : 1,
+    contractVersion: action === "media.publish" ? 9 : action === "media.read" ? 2 : 1,
     timeoutMs: 1_000,
     maxOutputBytes: 4 * 1024 * 1024,
   };
@@ -411,14 +411,20 @@ describe("Reddit authenticated internal API runtime", () => {
 
   test("rejects a profile handle that does not match the bound viewer", async () => {
     const calls: CapturedRequest[] = [];
-    expect(executeRedditWebOperation(
+    expect(await executeRedditWebOperation(
       recipe("profiles.read"),
       { profile: "another_viewer" },
       redditAuth,
       {
         dependencies: dependencies(calls, () => jsonResponse(viewerResponse())),
       },
-    )).rejects.toThrow("requested profile did not match");
+    )).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
+    });
     expect(calls).toHaveLength(1);
   });
 
@@ -507,6 +513,38 @@ describe("Reddit authenticated internal API runtime", () => {
           requested: { id: MESSAGE_ID, body: "Message body" },
         }),
       },
+      {
+        action: "media.read",
+        input: { post_id: POST_ID },
+        expectedPath: "/api/info.json",
+        response: listing([videoPostThing()]),
+        verify: (output) => {
+          expect(output).toEqual({
+            provider: "reddit",
+            operation: "media.read",
+            post: {
+              id: POST_ID,
+              title: "Wrench native video verification",
+              author: "wrench_viewer",
+              subreddit: "testingground4bots",
+              createdUtc: 1_800_000_000,
+              permalink: "https://www.reddit.com/r/testingground4bots/comments/abc123/wrench_native_video_verification/",
+            },
+            media: {
+              kind: "hosted-video",
+              mediaType: "video/mp4",
+              durationSeconds: 8,
+              width: 640,
+              height: 360,
+              nsfw: false,
+              spoiler: false,
+              transcodingStatus: "completed",
+            },
+          });
+          expect(JSON.stringify(output)).not.toContain("v.redd.it");
+          expect(JSON.stringify(output)).not.toContain("source=fallback");
+        },
+      },
     ];
 
     for (const scenario of scenarios) {
@@ -525,6 +563,11 @@ describe("Reddit authenticated internal API runtime", () => {
             expect(request.redirect).toBe("error");
             if (scenario.action === "messaging.list" || scenario.action === "messaging.read") {
               expect(request.url.searchParams.get("mark")).toBe("false");
+            }
+            if (scenario.action === "media.read") {
+              expect(request.url.searchParams.get("id")).toBe(POST_ID);
+              expect(request.url.searchParams.get("raw_json")).toBe("1");
+              expect([...request.url.searchParams.keys()].sort()).toEqual(["id", "raw_json"]);
             }
             return jsonResponse(scenario.response);
           }),

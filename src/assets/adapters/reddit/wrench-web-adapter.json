@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "reddit-web",
-  "version": "1.10.0",
+  "version": "1.12.0",
   "displayName": "Reddit (Authenticated Web API)",
   "surfaceId": "reddit",
   "origins": [
@@ -385,7 +385,7 @@
       }
     },
     "media.read": {
-      "description": "Capture-required contract reservation: project bounded media metadata for one exact Reddit post without retaining expiring playback credentials.",
+      "description": "Observed contract: read one exact Reddit-hosted video post through the current-account-bound /api/info exchange and return a closed metadata-only projection. The output contains post identity, descriptive fields, dimensions, duration, safety flags, and completed status; it omits canonical, fallback, signed, and expiring playback URLs or credentials.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -406,7 +406,7 @@
       "webSession": {
         "site": "reddit",
         "action": "media.read",
-        "contractVersion": 1,
+        "contractVersion": 2,
         "timeoutMs": 60000,
         "maxOutputBytes": 4194304
       }

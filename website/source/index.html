@@ -42,27 +42,35 @@
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="topbar">
-      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
       <nav aria-label="Primary">
-        <a href="/capture-and-archives/">Capture</a>
+        <a href="#start">Install</a>
         <a href="/provider-capabilities/">Providers</a>
-        <a href="/security/">Security</a>
-        <a href="/plugins/">Plugins</a>
-        <a href="/getting-started/">Get started</a>
+        <a
+          data-analytics-event="project link opened"
+          data-analytics-id="nav-github"
+          data-analytics-kind="repository"
+          href="https://github.com/hraness/wrench"
+        >GitHub <span aria-hidden="true">↗</span></a>
       </nav>
     </header>
 
     <main id="main">
       <section aria-labelledby="brand-name" class="hero">
-        <div aria-hidden="true" class="hero-field">
-          <span class="hero-orbit hero-orbit-a"></span>
-          <span class="hero-orbit hero-orbit-b"></span>
-          <span class="hero-glyph"><img alt="" height="64" src="/favicon.svg" width="64"></span>
+        <div class="hero-intro">
+          <p class="eyebrow">Capture · archive · connected services</p>
+          <h1 id="brand-name">Give your coding agent bounded access to the web.</h1>
+          <p class="hero-explainer">
+            Wrench is a local CLI and TypeScript SDK for capturing public pages,
+            preserving finite media, and using supported actions in connected
+            services. You bring the model and interface.
+          </p>
+          <div class="action-row">
+            <a class="button button-primary" href="#start">Install Wrench</a>
+            <a class="button button-secondary" href="/provider-capabilities/">See provider support</a>
+          </div>
         </div>
-        <div class="hero-content">
-          <p class="eyebrow">Local CLI and TypeScript SDK for command-capable agents</p>
-          <h1 id="brand-name"><span>W</span>rench</h1>
-          <p class="hero-statement">Give agents bounded access to pages, media, and connected accounts.</p>
+        <div class="hero-install-panel">
           <div class="skill-install" data-skill-install>
             <p class="skill-install-label" id="hero-skill-install-label">
               Install the Agent Skill
@@ -104,74 +112,35 @@
               role="status"
             ></p>
           </div>
-          <p class="hero-explainer">
-            Capture public pages, preserve finite media, and run reviewed operations
-            for Beeper, Gmail, LinkedIn, X, and other providers. Each authenticated
-            operation binds one account, transport, contract version, implementation,
-            and risk.
-          </p>
-          <p class="hero-explainer">
-            Bring the model and interface you prefer. Wrench supplies the local CLI,
-            SDK, encrypted snapshots, and execution receipts.
-          </p>
-          <div class="action-row">
-            <a class="button button-primary" href="#providers">Browse providers</a>
-            <a class="button button-secondary" href="#start">Install Wrench</a>
-            <a
-              class="button button-quiet"
-              data-analytics-event="project link opened"
-              data-analytics-id="hero-github"
-              data-analytics-kind="repository"
-              href="https://github.com/hraness/wrench"
-            >GitHub <span aria-hidden="true">↗</span></a>
+          <div class="hero-local-install">
+            <p class="skill-install-label">Install the local tools · requires Bun 1.3.14+</p>
+            <ol>
+              <li><span aria-hidden="true">01</span><code>{{WRENCH_INSTALL_COMMAND}}</code></li>
+              <li><span aria-hidden="true">02</span><code>wrench doctor</code></li>
+            </ol>
+            <p>Run <code>wrench doctor</code> in the project where your agent will work.</p>
           </div>
-          <ul aria-label="Project facts" class="proof-list">
-            <li>{{PROVIDER_CAPABILITY_OBSERVED_COUNT}} observed provider operations</li>
-            <li>{{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} unavailable reservations</li>
-            <li>Free and MIT licensed</li>
-            <li>macOS + Linux</li>
-          </ul>
         </div>
       </section>
 
       <div class="content">
         <section aria-labelledby="providers-title" class="section provider-section" id="providers">
           <div class="section-heading section-heading-wide">
-            <p class="eyebrow">Provider support in {{WRENCH_RELEASE}}</p>
-            <h2 id="providers-title">Know which operations can run before you bind an account.</h2>
+            <p class="eyebrow">Provider support</p>
+            <h2 id="providers-title">Work with the services you already use.</h2>
             <p>
-              This release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations
-              across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled adapters.
-              {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>.
-              {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} are
-              <code>capture-required</code> reservations and cannot run.
+              Each card names the actions available in this release and how Wrench
+              connects. If an action is not listed, Wrench does not offer it.
             </p>
           </div>
           <div class="provider-directory">
             {{PROVIDER_OVERVIEW_CARDS}}
           </div>
-          <div class="provider-channel-grid">
-            <article>
-              <h3>Official APIs</h3>
-              <p>Fixed auth scopes, request templates, account proof, and response contracts for named provider operations.</p>
-            </article>
-            <article>
-              <h3>Pinned local CLIs</h3>
-              <p>Exact executable bytes behind semantic operations, with no caller-selected commands or flags. Beeper is the current local-CLI provider.</p>
-            </article>
-            <article>
-              <h3>Authenticated sessions and linked devices</h3>
-              <p>Named operations use one bound transport and stop when the reviewed contract drifts.</p>
-            </article>
-          </div>
           <p class="provider-status-note">
-            <code>observed</code> means a current contract can plan and run after its
-            local doctor and authentication checks pass. Provider names identify
-            compatible surfaces and do not imply endorsement.
+            Provider names identify compatible services and do not imply endorsement.
           </p>
           <div class="action-row provider-actions">
-            <a class="button button-primary" href="/provider-capabilities/">Browse the provider directory</a>
-            <a class="button button-secondary" href="/providers/beeper/">See Beeper support</a>
+            <a class="button button-primary" href="/provider-capabilities/">Browse supported actions</a>
           </div>
         </section>
 
@@ -226,7 +195,7 @@
             </li>
             <li>
               <span aria-hidden="true" class="flow-index">02</span>
-              <div><h3>Select a capability</h3><p>Wrench resolves one installed, observed capability instead of handing the caller a general browser or request tool.</p></div>
+              <div><h3>Select a capability</h3><p>Wrench resolves one installed, supported capability instead of handing the caller a general browser or request tool.</p></div>
             </li>
             <li>
               <span aria-hidden="true" class="flow-index">03</span>
@@ -251,7 +220,7 @@
               Wrench requires Bun 1.3.14 and runs on macOS and Linux.
               <code>wrench read</code> inspects a page without saving it, and
               <code>wrench capabilities</code> reports the operations that are
-              actually installed and observed on this machine.
+              available on this machine.
             </p>
           </div>
           <div class="command-stack">
@@ -282,7 +251,7 @@ wrench capabilities</code></pre>
           <div class="principle-grid">
             <article><h3>Intent over mechanism</h3><p>Operations name the job. Provider requests, browser sessions, cookies, and selectors stay behind the contract.</p></article>
             <article><h3>Evidence before authority</h3><p>A captured exchange is private evidence. It remains inert until its inputs, outputs, account proof, side effects, and failure behavior are reviewed and tested.</p></article>
-            <article><h3>Drift stays visible</h3><p>When an origin, account, status, field, or response shape changes, the capability stops and returns to <code>capture-required</code>. Wrench never switches to a browser fallback silently.</p></article>
+            <article><h3>Drift stays visible</h3><p>When an origin, account, status, field, or response shape changes, the capability becomes unavailable until its contract is reviewed again. Wrench never switches to a browser fallback silently.</p></article>
             <article><h3>Unknown stays unknown</h3><p>Incomplete reads remain incomplete. An ambiguous write stays unsettled until separately obtained evidence can reconcile it.</p></article>
             <article><h3>Local custody</h3><p>Archives stay inspectable, account-bound reads stay encrypted, and exact cached views can load without a provider roundtrip.</p></article>
             <article><h3>Interchangeable intelligence</h3><p>Wrench supplies no model, planning loop, approval interface, or application shell. Use the agent system you already prefer.</p></article>
@@ -339,9 +308,9 @@ wrench capabilities</code></pre>
           </div>
           <div class="faq-list">
             <details><summary>Is Wrench an AI agent?</summary><p>No. Wrench provides <code>@hraness/wrench</code>, a CLI, and an SDK. Your agent owns the model, planning loop, approvals, and interface.</p></details>
-            <details><summary>Does it work with every service?</summary><p>No. Public capture and authenticated provider operations have different boundaries. <code>wrench capabilities</code> is the source of truth for operations installed and observed on the current machine.</p></details>
+            <details><summary>Does it work with every service?</summary><p>No. Public capture and authenticated provider operations have different boundaries. <code>wrench capabilities</code> is the source of truth for operations available on the current machine.</p></details>
             <details><summary>Does it bypass login, paywalls, access controls, or DRM?</summary><p>No. Media acquisition is limited to one authorized, accessible, finite, non-DRM item. Wrench does not bypass payment, authentication, access controls, or DRM.</p></details>
-            <details><summary>What happens when a provider changes?</summary><p>The affected operation fails closed and returns to <code>capture-required</code> until a new contract is captured, reviewed, and tested. Wrench does not switch to a browser fallback silently.</p></details>
+            <details><summary>What happens when a provider changes?</summary><p>The affected operation becomes unavailable until its contract is updated, reviewed, and tested. Wrench does not switch to a browser fallback silently.</p></details>
             <details><summary>Why does Wrench refuse to retry some writes?</summary><p>If a request left the machine and its response was lost, the effect may already exist. Wrench retains that uncertainty and reconciles it from separately obtained evidence.</p></details>
           </div>
         </section>
@@ -369,12 +338,13 @@ wrench capabilities</code></pre>
           <div class="card-grid">
             <article class="card"><h3><a href="/getting-started/">Install and verify Wrench</a></h3><p>Pin the current release, run the doctor, capture a first URL, and inspect local capabilities.</p></article>
             <article class="card"><h3><a href="/capture-and-archives/">Capture URLs and archive media</a></h3><p>Choose between an inspection, durable Markdown capture, or one verified finite-item media archive.</p></article>
-            <article class="card"><h3><a href="/provider-capabilities/">Check provider coverage</a></h3><p>Read the release-bound capability attestation: every bundled adapter operation with its reviewed completeness and limit.</p></article>
-            <article class="card"><h3><a href="/compare/personal-agents-browser-use/">Compare attested operations with browser-using agents</a></h3><p>See which current operations are observed or capture-required, and why Wrench does not fall back to general browser control.</p></article>
-            <article class="card"><h3><a href="/agentic-web-spoofing/">Read why index spoofing still leaves operations unattested</a></h3><p>Known Agents measures inbound impersonation. A failed identity check does not name an operator or make a capture-required reservation ready.</p></article>
-            <article class="card"><h3><a href="/vms-cannot-contain-agents/">Read why a VM still leaves operations unattested</a></h3><p>Trail of Bits argues VMs cannot reliably contain cyber-capable agents. A guest machine does not name an operation or make a capture-required reservation ready.</p></article>
+            <article class="card"><h3><a href="/provider-capabilities/">Check provider support</a></h3><p>See every provider action available in the current release and the access method it uses.</p></article>
+            <article class="card"><h3><a href="/compare/personal-agents-browser-use/">Compare Wrench with browser-using agents</a></h3><p>See why Wrench exposes named operations instead of falling back to general browser control.</p></article>
+            <article class="card"><h3><a href="/agentic-web-spoofing/">Read about agentic web spoofing</a></h3><p>Known Agents measures inbound impersonation. A failed identity check does not establish a safe outbound operation.</p></article>
+            <article class="card"><h3><a href="/vms-cannot-contain-agents/">Read about agents in virtual machines</a></h3><p>Trail of Bits argues that VMs cannot reliably contain cyber-capable agents. A guest machine does not define a safe web operation.</p></article>
+            <article class="card"><h3><a href="/paypal-grapheneos-attestation/">Read about PayPal and GrapheneOS attestation</a></h3><p>PayPal crashed on GrapheneOS after a root-detection check. Device-policy attestation is not a named web operation.</p></article>
             <article class="card"><h3><a href="/security/">Understand the security boundary</a></h3><p>Review local custody, account binding, encrypted state, risk levels, and fail-closed drift behavior.</p></article>
-            <article class="card"><h3><a href="/plugins/">Author a provider plugin</a></h3><p>Create an inert reservation, prove one operation, then check, test, pack, trust, and install exact code.</p></article>
+            <article class="card"><h3><a href="/plugins/">Author a provider plugin</a></h3><p>Define one operation, prove its contract, then check, test, pack, trust, and install the exact code.</p></article>
           </div>
         </section>
       </div>

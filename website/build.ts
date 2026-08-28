@@ -35,7 +35,7 @@ export const REPOSITORY_URL = "https://github.com/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_INSTALL_COMMAND = "npx skills add hraness/wrench" as const;
 export const SKILL_INSTALL_COMMAND_BUNX = "bunx skills add hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.15.1" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.16.2" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const DEMO_PUBLIC_FILES = [
   "wrench-first-capture.gif",
@@ -72,10 +72,10 @@ export const PUBLIC_PAGES = [
   {
     canonicalPath: "/provider-capabilities/",
     description:
-      "Wrench provider capability attestation checked against bundled public adapter manifests. Each listed operation includes its reviewed completeness and current limit.",
+      "See which provider actions Wrench supports in the current release and how each service connects.",
     outputFile: "provider-capabilities/index.html",
     sourceFile: "provider-capabilities.html",
-    title: "Wrench provider capability attestation",
+    title: "Provider support in Wrench",
   },
   {
     canonicalPath: "/providers/beeper/",
@@ -127,7 +127,7 @@ export const PUBLIC_PAGES = [
   {
     canonicalPath: "/compare/personal-agents-browser-use/",
     description:
-      "Compare persistent personal agents that use a general browser with Wrench's attested operation set: named contracts, current observed counts, and capture-required reservations that stay unavailable.",
+      "Compare persistent personal agents that use a general browser with Wrench's named, supported web operations and fail-closed boundaries.",
     outputFile: "compare/personal-agents-browser-use/index.html",
     sourceFile: "compare-personal-agents-browser-use.html",
     title: "Browser-using personal agents, and which web operations Wrench attests",
@@ -135,7 +135,7 @@ export const PUBLIC_PAGES = [
   {
     canonicalPath: "/agentic-web-spoofing/",
     description:
-      "Known Agents measures inbound bot impersonation when a claimed identity fails its supported authentication. That check does not attest an outbound Wrench operation, name its operator, or make a capture-required reservation ready.",
+      "Known Agents measures inbound bot impersonation. That check does not establish a safe outbound Wrench operation or name its operator.",
     outputFile: "agentic-web-spoofing/index.html",
     sourceFile: "agentic-web-spoofing.html",
     title: "Agentic-web index spoofing, and why attested operations still matter",
@@ -143,10 +143,18 @@ export const PUBLIC_PAGES = [
   {
     canonicalPath: "/vms-cannot-contain-agents/",
     description:
-      "The Wednesday 26 August 2026 rough.day tech edition ranked Trail of Bits' argument that VMs cannot reliably contain cyber-capable AI agents. A guest machine is not a Wrench attestation: named operations stay observed or capture-required.",
+      "The Wednesday 26 August 2026 rough.day tech edition ranked Trail of Bits' argument that VMs cannot reliably contain cyber-capable AI agents. A guest machine does not establish a safe Wrench operation.",
     outputFile: "vms-cannot-contain-agents/index.html",
     sourceFile: "vms-cannot-contain-agents.html",
     title: "VMs cannot contain agents, and why attested web operations still matter",
+  },
+  {
+    canonicalPath: "/paypal-grapheneos-attestation/",
+    description:
+      "The Thursday 27 August 2026 rough.day tech edition ranked PayPal crashing on GrapheneOS with a RootDetectionSecurityException. Device-policy attestation is not a named Wrench operation.",
+    outputFile: "paypal-grapheneos-attestation/index.html",
+    sourceFile: "paypal-grapheneos-attestation.html",
+    title: "PayPal attested a hardened phone as rooted, and why named web operations still matter",
   },
 ] as const;
 

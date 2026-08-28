@@ -11,7 +11,7 @@ import {
 } from "@hraness/kb/clip/cookies";
 
 import type { WrenchAuth } from "./auth";
-import { OperationDeadline } from "./operation-deadline";
+import { OperationDeadline, OperationDeadlineError } from "./operation-deadline";
 import { pinnedHttpsFetch } from "./pinned-https";
 import type { WebSessionOperationDeadline } from "./web-session-execution";
 
@@ -262,10 +262,20 @@ async function boundedBytes(
   const buffer = new BoundedByteBuffer(maximum);
   try {
     for (;;) {
-      const item = await deadline.run(
-        () => reader.read(),
-        WEB_SESSION_OPERATION_LABEL,
-      );
+      const item = await (async () => {
+        try {
+          return await deadline.run(
+            () => reader.read(),
+            WEB_SESSION_OPERATION_LABEL,
+          );
+        } catch (error) {
+          if (error instanceof OperationDeadlineError) throw error;
+          throw new Error(
+            "authenticated web response body stream failed before completion",
+            { cause: error },
+          );
+        }
+      })();
       if (item.done) break;
       const value: unknown = item.value;
       if (!(value instanceof Uint8Array)) {

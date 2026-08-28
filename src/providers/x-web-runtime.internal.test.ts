@@ -13,6 +13,7 @@ import type { WrenchAuth } from "../auth";
 import type { BrowserSession } from "../browser";
 import { canonicalJson } from "../canonical-json";
 import type { WebSessionRecipe } from "../model";
+import { OperationDeadlineError } from "../operation-deadline";
 import type { WebSessionDispatchEvent } from "../web-session";
 import { embedPngChunk, encodePixelsOnlyPng, scrubXUploadImage } from "./x-image-provenance";
 import { X_UNLABELED_COPY_POLICY_ERROR } from "./x-made-with-ai";
@@ -691,10 +692,10 @@ describe("X authenticated internal-API runtime", () => {
         },
       },
     });
-    for (const [returnedHandle, followers, expected] of [
-      ["hraness", 1234, "succeeded"],
-      ["switched", 1234, "did not bind the requested handle"],
-      ["hraness", "1.2K", "exact nonnegative safe integer"],
+    for (const [returnedHandle, followers, expectedCategory] of [
+      ["hraness", 1234, null],
+      ["switched", 1234, "contract-drift"],
+      ["hraness", "1.2K", "contract-drift"],
     ] as const) {
       const calls: CapturedRequest[] = [];
       const runtimeDependencies = dependencies(calls, (request) => {
@@ -717,14 +718,14 @@ describe("X authenticated internal-API runtime", () => {
         }
         throw new Error(`unexpected test request ${request.url.href}`);
       }, { now: () => Date.parse("2026-08-21T15:00:00.000Z") });
-      const execution = executeXWebOperation(
+      const execution = await executeXWebOperation(
         xRecipe("profiles.read"),
         { handle: "hraness" },
         xAuth,
         { dependencies: runtimeDependencies },
       );
-      if (expected === "succeeded") {
-        expect(await execution).toMatchObject({
+      if (expectedCategory === null) {
+        expect(execution).toMatchObject({
           status: "succeeded",
           finalUrl: "https://x.com/hraness",
           output: {
@@ -743,8 +744,199 @@ describe("X authenticated internal-API runtime", () => {
           dispatchStarted: false,
         });
       } else {
-        expect(await rejectionMessage(execution)).toContain(expected);
+        expect(execution).toMatchObject({
+          status: "failed",
+          output: null,
+          dispatchStarted: false,
+          dispatch: { planned: 0, started: 0, verified: 0 },
+          readFailure: {
+            category: expectedCategory,
+            retryDisposition: "do-not-retry",
+          },
+        });
       }
+    }
+  });
+
+  test("projects stable profile-read failures without mutation or internal retry", async () => {
+    const cases = [
+      {
+        category: "auth-repair-required",
+        response: () => jsonResponse({}, 401),
+        retryDisposition: "repair-auth",
+      },
+      {
+        category: "provider-throttled",
+        response: () => jsonResponse({}, 429),
+        retryDisposition: "retry-once-after-60s",
+      },
+      {
+        category: "provider-temporary",
+        response: () => jsonResponse({}, 302),
+        retryDisposition: "retry-once-after-60s",
+      },
+      {
+        category: "provider-temporary",
+        response: () => jsonResponse({}, 503),
+        retryDisposition: "retry-once-after-60s",
+      },
+      {
+        category: "provider-temporary",
+        response: () => {
+          throw new Error("authenticated web response body stream failed before completion");
+        },
+        retryDisposition: "retry-once-after-60s",
+      },
+      {
+        category: "contract-drift",
+        response: () => jsonResponse({}, 404),
+        retryDisposition: "do-not-retry",
+      },
+      {
+        category: "operation-timeout",
+        response: () => {
+          throw new OperationDeadlineError("X profile fixture", "timed-out");
+        },
+        retryDisposition: "retry-once-after-60s",
+      },
+    ] as const;
+    for (const item of cases) {
+      const calls: CapturedRequest[] = [];
+      const result = await executeXWebOperation(
+        xRecipe("profiles.read"),
+        { handle: "hraness" },
+        xAuth,
+        { dependencies: dependencies(calls, item.response) },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        output: null,
+        finalUrl: "https://x.com/hraness",
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+        readFailure: {
+          category: item.category,
+          retryDisposition: item.retryDisposition,
+        },
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.method).toBe("GET");
+    }
+
+    const assetCalls: CapturedRequest[] = [];
+    const transientAssetFailure = await executeXWebOperation(
+      xRecipe("profiles.read"),
+      { handle: "hraness" },
+      xAuth,
+      {
+        dependencies: dependencies(assetCalls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), {
+              headers: { "content-type": "text/html" },
+            });
+          }
+          if (request.url.href === MAIN_URL) throw new TypeError("synthetic transport failure");
+          throw new Error(`unexpected asset-failure request ${request.url.href}`);
+        }),
+      },
+    );
+    expect(transientAssetFailure).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(assetCalls.map((call) => call.url.href)).toEqual([
+      "https://x.com/home",
+      MAIN_URL,
+    ]);
+
+    const calls: CapturedRequest[] = [];
+    const unavailable = await executeXWebOperation(
+      xRecipe("profiles.read"),
+      { handle: "retiredname" },
+      xAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), {
+              headers: { "content-type": "text/html" },
+            });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("UserByScreenName", "Gb-d6r0vxPOADdG62OEBpQ", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) {
+            return jsonResponse(viewerResponse());
+          }
+          if (request.url.pathname.endsWith("/UserByScreenName")) {
+            return jsonResponse({
+              data: { user: { result: { __typename: "UserUnavailable" } } },
+            });
+          }
+          throw new Error(`unexpected unavailable-profile request ${request.url.href}`);
+        }),
+      },
+    );
+    expect(unavailable).toMatchObject({
+      status: "failed",
+      readFailure: {
+        category: "target-unavailable",
+        retryDisposition: "do-not-retry",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(calls.every((call) => call.method === "GET")).toBeTrue();
+    expect(calls.filter((call) =>
+      call.url.pathname.endsWith("/UserByScreenName")))
+      .toHaveLength(1);
+
+    for (const response of [
+      () => jsonResponse({}, 404),
+      () => jsonResponse({
+        data: { user: { result: { __typename: "FutureUserShape" } } },
+      }),
+    ]) {
+      const driftCalls: CapturedRequest[] = [];
+      const drift = await executeXWebOperation(
+        xRecipe("profiles.read"),
+        { handle: "hraness" },
+        xAuth,
+        {
+          dependencies: dependencies(driftCalls, (request) => {
+            if (request.url.href === "https://x.com/home") {
+              return new Response(homeHtml(), {
+                headers: { "content-type": "text/html" },
+              });
+            }
+            if (request.url.href === MAIN_URL) {
+              return new Response(mainBundle(
+                descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+                descriptor("UserByScreenName", "Gb-d6r0vxPOADdG62OEBpQ", "query"),
+              ), { headers: { "content-type": "application/javascript" } });
+            }
+            if (request.url.pathname.endsWith("/Viewer")) {
+              return jsonResponse(viewerResponse());
+            }
+            if (request.url.pathname.endsWith("/UserByScreenName")) return response();
+            throw new Error(`unexpected drift request ${request.url.href}`);
+          }),
+        },
+      );
+      expect(drift).toMatchObject({
+        status: "failed",
+        readFailure: {
+          category: "contract-drift",
+          retryDisposition: "do-not-retry",
+        },
+      });
     }
   });
 
@@ -1366,6 +1558,204 @@ describe("X authenticated internal-API runtime", () => {
     expect(switchedCalls.some((call) => call.url.pathname.endsWith("/TweetDetail"))).toBeFalse();
   });
 
+  test("reads one exact current-viewer-owned private Article draft without mutation dispatch", async () => {
+    const calls: CapturedRequest[] = [];
+    let beforeDispatches = 0;
+    let acceptedTargets = 0;
+    let verifiedDispatches = 0;
+    const articleId = "700000000000000001";
+    const title = "Private native Article";
+    const content = buildXWebRichArticleContentState(
+      parseArticleDraftDocument(canonicalJson({
+        schemaVersion: 1,
+        blocks: [{ type: "paragraph", text: "Still private." }],
+      }), {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+      }),
+    );
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(articleHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", VIEWER_QUERY_ID, "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.href === ARTICLE_BUNDLE_URL) {
+        return new Response(
+          descriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+          { headers: { "content-type": "application/javascript" } },
+        );
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+        expect(request.method).toBe("GET");
+        expect(request.url.searchParams.get("variables")).toBe(
+          JSON.stringify({ articleEntityId: articleId }),
+        );
+        return jsonResponse({
+          data: {
+            article_result_by_rest_id: {
+              rest_id: articleId,
+              title,
+              metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+              lifecycle_state: { lifecycle: "Draft" },
+              content_state: content,
+              playback_url: "https://attacker.example/not-part-of-output",
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected private Article read request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("articles.read", 2),
+      { article_id: articleId },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        beforeDispatch: () => {
+          beforeDispatches += 1;
+          return Promise.resolve();
+        },
+        afterProviderAcceptedMutationTarget: () => {
+          acceptedTargets += 1;
+          return Promise.resolve();
+        },
+        afterDispatchVerified: () => {
+          verifiedDispatches += 1;
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      status: "succeeded",
+      output: {
+        provider: "x",
+        operation: "articles.read",
+        article: {
+          id: articleId,
+          ownerId: VIEWER_ID,
+          kind: "private-draft",
+          lifecycle: "Draft",
+          published: false,
+          title,
+          content,
+        },
+      },
+      finalUrl: `https://x.com/compose/articles/edit/${articleId}`,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(beforeDispatches).toBe(0);
+    expect(acceptedTargets).toBe(0);
+    expect(verifiedDispatches).toBe(0);
+    expect(JSON.stringify(result.output)).not.toContain("attacker.example");
+    expect(calls.every((call) => call.method === "GET")).toBeTrue();
+  });
+
+  test("rejects private Article draft reads that drift target, owner, lifecycle, or title bounds", async () => {
+    const articleId = "700000000000000001";
+    const content = buildXWebRichArticleContentState(
+      parseArticleDraftDocument(canonicalJson({
+        schemaVersion: 1,
+        blocks: [{ type: "paragraph", text: "Still private." }],
+      }), {
+        maximumBlocks: 2_000,
+        maximumCharacters: 20_000,
+      }),
+    );
+    const scenarios = [
+      {
+        name: "target",
+        article: {
+          rest_id: "700000000000000002",
+          title: "Private native Article",
+          metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+          lifecycle_state: { lifecycle: "Draft" },
+          content_state: content,
+        },
+        error: "changed the confirmed Article draft",
+      },
+      {
+        name: "owner",
+        article: {
+          rest_id: articleId,
+          title: "Private native Article",
+          metadata: { author_results: { result: { rest_id: "999" } } },
+          lifecycle_state: { lifecycle: "Draft" },
+          content_state: content,
+        },
+        error: "does not belong to the bound viewer",
+      },
+      {
+        name: "lifecycle",
+        article: {
+          rest_id: articleId,
+          title: "Private native Article",
+          metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+          lifecycle_state: { lifecycle: "Published" },
+          content_state: content,
+        },
+        error: "must remain an unpublished private draft",
+      },
+      {
+        name: "title",
+        article: {
+          rest_id: articleId,
+          title: "not\none line",
+          metadata: { author_results: { result: { rest_id: VIEWER_ID } } },
+          lifecycle_state: { lifecycle: "Draft" },
+          content_state: content,
+        },
+        error: "one bounded plain-text line",
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const calls: CapturedRequest[] = [];
+      const runtimeDependencies = dependencies(calls, (request) => {
+        if (request.url.href === "https://x.com/home") {
+          return new Response(articleHtml(), { headers: { "content-type": "text/html" } });
+        }
+        if (request.url.href === MAIN_URL) {
+          return new Response(mainBundle(
+            descriptor("Viewer", VIEWER_QUERY_ID, "query"),
+          ), { headers: { "content-type": "application/javascript" } });
+        }
+        if (request.url.href === ARTICLE_BUNDLE_URL) {
+          return new Response(
+            descriptor("ArticleEntityResultByRestId", ARTICLE_RESULT_QUERY_ID, "query"),
+            { headers: { "content-type": "application/javascript" } },
+          );
+        }
+        if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+        if (request.url.pathname.endsWith("/ArticleEntityResultByRestId")) {
+          return jsonResponse({
+            data: { article_result_by_rest_id: scenario.article },
+          });
+        }
+        throw new Error(`unexpected ${scenario.name} drift request ${request.url.href}`);
+      });
+      expect(executeXWebOperation(
+        xRecipe("articles.read", 2),
+        { article_id: articleId },
+        xAuth,
+        { dependencies: runtimeDependencies },
+      )).rejects.toThrow(scenario.error);
+    }
+
+    expect(executeXWebOperation(
+      xRecipe("articles.read"),
+      { article_id: articleId },
+      xAuth,
+    )).rejects.toThrow("support only articles.read@2");
+  });
+
   test("creates one response-bound private Article draft and never calls the publish mutation", async () => {
     const calls: CapturedRequest[] = [];
     const before: WebSessionDispatchEvent[] = [];
@@ -1748,7 +2138,7 @@ describe("X authenticated internal-API runtime", () => {
         if (command === "INIT") {
           expect(request.url.searchParams.get("media_category")).toBe("tweet_image");
           expect(request.url.searchParams.get("media_type")).toBe("image/png");
-          expect(request.url.searchParams.get("total_bytes")).toBe("869311");
+          expect(request.url.searchParams.get("total_bytes")).toBe("243290");
           return jsonResponse({ media_id_string: mediaId, expires_after_secs: 86_400 }, 202);
         }
         if (command === "APPEND") {

@@ -779,6 +779,36 @@ describe("Bluesky authenticated XRPC runtime", () => {
     ]);
   });
 
+  test("projects a public profile body-stream failure without retrying or leaking it", async () => {
+    const privateSentinel = "private Bluesky stream sentinel";
+    const calls: CapturedRequest[] = [];
+    const result = await executeBlueskyPublicProfileRead(
+      recipe("profiles.read"),
+      { handle: "hraness.bsky.social" },
+      dependencies(calls, () => new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new TypeError(privateSentinel));
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )),
+      undefined,
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      readFailure: {
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+      },
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    });
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain(privateSentinel);
+  });
+
   test("reads all four exact desired states through account-bound XRPC without mutation", async () => {
     const calls: CapturedRequest[] = [];
     const likeUri = `at://${VIEWER_DID}/app.bsky.feed.like/3llike`;

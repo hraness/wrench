@@ -9,6 +9,7 @@ import type { WrenchAuth } from "../auth";
 import { PreservedBrowserArtifactsError } from "../browser";
 import type { WebSessionRecipe } from "../model";
 import { canonicalJson } from "../canonical-json";
+import { OperationDeadlineError } from "../operation-deadline";
 import {
   buildLinkedInArticleContent,
   buildLinkedInArticleContentHtml,
@@ -32,6 +33,7 @@ import {
 } from "./linkedin-web-post-browser";
 import {
   LinkedInProfileBrowserFailure,
+  LinkedInProfileBrowserResponseRejectedError,
   type LinkedInProfileBrowserTransport,
 } from "./linkedin-web-profile-browser";
 
@@ -982,6 +984,10 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       status: "failed",
       output: null,
       dispatchStarted: false,
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
     });
     expect(calls.map((call) => call.url.pathname)).toEqual(["/voyager/api/me"]);
   });
@@ -1040,6 +1046,10 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       status: "failed",
       output: null,
       dispatchStarted: false,
+      readFailure: {
+        category: "account-mismatch",
+        retryDisposition: "do-not-retry",
+      },
     });
     expect(calls.map((call) => call.url.pathname)).toEqual(["/voyager/api/me"]);
   });
@@ -1454,6 +1464,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     const cases = [
       {
         expected: "contained-browser startup",
+        category: "provider-temporary",
         failure: new LinkedInProfileBrowserFailure(
           "startup",
           "private contained browser session detail",
@@ -1462,6 +1473,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       },
       {
         expected: "signed-in browser CSRF cookie",
+        category: "auth-repair-required",
         failure: new LinkedInProfileBrowserFailure(
           "session-cookie",
           "private browser cookie detail",
@@ -1469,7 +1481,35 @@ describe("LinkedIn authenticated internal-API runtime", () => {
         startup: false,
       },
       {
+        expected: "signed-out authwall",
+        category: "auth-repair-required",
+        failure: new LinkedInProfileBrowserFailure(
+          "authwall",
+          "private browser authwall detail",
+        ),
+        startup: false,
+      },
+      {
+        expected: "contained-browser execution context",
+        category: "provider-temporary",
+        failure: new LinkedInProfileBrowserFailure(
+          "execution-context",
+          "private browser execution detail",
+        ),
+        startup: false,
+      },
+      {
+        expected: "contained-browser first-party fetch",
+        category: "provider-temporary",
+        failure: new LinkedInProfileBrowserFailure(
+          "provider-fetch",
+          "private browser fetch detail",
+        ),
+        startup: false,
+      },
+      {
         expected: "contained-browser origin bootstrap",
+        category: "contract-drift",
         failure: new LinkedInProfileBrowserFailure(
           "bootstrap",
           "private browser realm detail",
@@ -1492,8 +1532,128 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       expect(result).toMatchObject({
         status: "failed",
         error: expect.stringContaining("no remote write occurred"),
+        readFailure: { category: item.category },
       });
       expect(JSON.stringify(result)).not.toContain(privateDiagnostic);
+    }
+  });
+
+  test("projects typed profile failures without mutation or provider retry", async () => {
+    const cases = [
+      {
+        failure: new LinkedInProfileBrowserResponseRejectedError(
+          401,
+          "text/html",
+        ),
+        category: "auth-repair-required",
+        retryDisposition: "repair-auth",
+      },
+      {
+        failure: new LinkedInProfileBrowserResponseRejectedError(
+          403,
+          "text/html",
+        ),
+        category: "auth-repair-required",
+        retryDisposition: "repair-auth",
+      },
+      {
+        failure: new LinkedInProfileBrowserResponseRejectedError(
+          429,
+          "text/html",
+        ),
+        category: "provider-throttled",
+        retryDisposition: "retry-once-after-60s",
+      },
+      {
+        failure: new LinkedInProfileBrowserResponseRejectedError(
+          302,
+          "text/html",
+        ),
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+      },
+      {
+        failure: new LinkedInProfileBrowserResponseRejectedError(
+          503,
+          "text/html",
+        ),
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+      },
+      {
+        failure: new Error("authenticated web response body stream failed before completion"),
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+      },
+      {
+        failure: new LinkedInProfileBrowserResponseRejectedError(
+          404,
+          "text/html",
+        ),
+        category: "contract-drift",
+        retryDisposition: "do-not-retry",
+      },
+      {
+        failure: new OperationDeadlineError(
+          "LinkedIn profile fixture",
+          "timed-out",
+        ),
+        category: "operation-timeout",
+        retryDisposition: "retry-once-after-60s",
+      },
+    ] as const;
+    for (const item of cases) {
+      const calls: string[] = [];
+      const transport: LinkedInProfileBrowserTransport = {
+        currentIdentityResponse: () => {
+          calls.push("identity");
+          return Promise.reject(item.failure);
+        },
+        readProfileHtml: () => Promise.reject(
+          new Error("typed failure crossed profile read"),
+        ),
+        readConnectionsHtml: () => Promise.reject(
+          new Error("typed failure crossed connection read"),
+        ),
+        readOrganizationHtml: () => Promise.reject(
+          new Error("typed failure crossed company read"),
+        ),
+        close: () => {
+          calls.push("close");
+          return Promise.resolve();
+        },
+      };
+      const result = await executeLinkedInWebOperation(
+        personalProfileRecipe(),
+        {
+          profile_url: "https://www.linkedin.com/in/0thernet",
+          include_connections: true,
+        },
+        linkedinBrowserProfileAuth,
+        {
+          dependencies: {
+            acquireCookies: () => Promise.reject(
+              new Error("typed failure exported cookies"),
+            ),
+            fetch: () => Promise.reject(
+              new Error("typed failure used direct fetch"),
+            ),
+            createProfileBrowserTransport: () => Promise.resolve(transport),
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        output: null,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+        readFailure: {
+          category: item.category,
+          retryDisposition: item.retryDisposition,
+        },
+      });
+      expect(calls).toEqual(["identity", "close"]);
+      expect(JSON.stringify(result)).not.toContain(item.failure.message);
     }
   });
 
@@ -1530,11 +1690,21 @@ describe("LinkedIn authenticated internal-API runtime", () => {
                 ? { data: { plainId: MEMBER_ID }, included: [] }
                 : currentIdentityResponse());
             }
-            return jsonResponse({ secret: "later-private-response" }, 401);
+            return jsonResponse(
+              { secret: "later-private-response" },
+              mode === "target-page" ? 404 : 401,
+            );
           }),
         },
       });
-      expect(result).toMatchObject({ status: "failed", output: null });
+      expect(result).toMatchObject({
+        status: "failed",
+        output: null,
+        readFailure: {
+          category: "contract-drift",
+          retryDisposition: "do-not-retry",
+        },
+      });
       expect(calls.map((call) => call.url.pathname)).toEqual(
         mode === "identity-shape"
           ? ["/voyager/api/me"]
@@ -1785,7 +1955,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
           filename: "inline-image-1.png",
           mediaType: "image/png",
         });
-        expect(image.bytes.byteLength).toBe(869_311);
+        expect(image.bytes.byteLength).toBe(243_290);
         return Promise.resolve(assetUrn);
       },
       updateContentV2: (_draftId, receivedDocument, assets) => {

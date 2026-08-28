@@ -35,9 +35,10 @@ const identities = Object.freeze({
   },
   "bluesky-web": {
     schemaVersion: 1,
-    pluginVersion: "1.3.0",
-    implementationSha256: "f16f456fd06952bdd28e4bbed6e6faaed9b2c18899487224453e7ef314f585e8",
+    pluginVersion: "1.4.0",
+    implementationSha256: "478d1e92d3f266dde61c4808104da239a0cc60d5a3c7000d7d2733792641e861",
     legacyCurrentReadImplementationSha256: [
+      "f16f456fd06952bdd28e4bbed6e6faaed9b2c18899487224453e7ef314f585e8",
       "81344b367a11c7dcaeff83386bc0f796c41260cb373b9818527f4cb55bc80d48",
       "e824f922748673edb9515055d208cfc4333c832b04cec528aa71f7be736e5846",
       "eb4cc4aa49296d11d2c36d798e5e3dd0b1664aa2d37e885ffd0919ad526d44d4",
@@ -65,9 +66,11 @@ const identities = Object.freeze({
   },
   "github-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "2764fb3c746755b2453279b5a6672f1460a139717c45e83520dfa5d9f753025a",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.2.0",
+    implementationSha256: "42cf485abbc03c95495bd48b946e92f2bece607d26af20efda340699210c170d",
+    legacyCurrentReadImplementationSha256: [
+      "2764fb3c746755b2453279b5a6672f1460a139717c45e83520dfa5d9f753025a",
+    ],
     legacyRouteReadImplementationSha256: {
       "profiles.read@1": [
         "a27e177eb3f874d46ad8ad29d71bc5a1b17b98fb966725a54e9b741f24c7bf9b",
@@ -78,8 +81,8 @@ const identities = Object.freeze({
   },
   "hacker-news-web": {
     schemaVersion: 1,
-    pluginVersion: "1.0.0",
-    implementationSha256: "da3cdd6465b92ce933004fb9e3f2bf3dd48811e766079647d2cdaec43e507e1d",
+    pluginVersion: "1.1.0",
+    implementationSha256: "66b9744caeb514cd9c4a749db4baaca84346098b162cdf4bcba653b7e9d9408a",
     legacyCurrentReadImplementationSha256: [],
     legacyReadImplementationSha256: {
       test: "e4c9e459c0185428d759994a160200b5d883119caca828b6ae7469124ef82f14",
@@ -92,6 +95,14 @@ const identities = Object.freeze({
       production: "c54f71de41c0df51a36f8a1c80b092b4534ffbd16aedacfba599d68e8f6b4130",
       development: "ff716adff5a4f962a765020474325037d0d4795c61f086c13e5d2adc61484ec8",
     },
+  },
+  "imessage-direct": {
+    schemaVersion: 1,
+    pluginVersion: "1.0.0",
+    implementationSha256: "00ef9201e77ffe5258f13b81a5e934af0ccf6317e095644ccfcec258c6928e8d",
+    legacyCurrentReadImplementationSha256: [],
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
   },
   "linkedin-official": {
     schemaVersion: 1,
@@ -112,9 +123,10 @@ const identities = Object.freeze({
   },
   "linkedin-web": {
     schemaVersion: 1,
-    pluginVersion: "1.4.0",
-    implementationSha256: "f327a0baca1831436dc98be657c72b52f4e70494ff0e90204ac8c21a17f6a0ea",
+    pluginVersion: "1.5.0",
+    implementationSha256: "97d1f8169a39f207db27145ef79de0f52ea98ad416ee69d4c5d3689d76211e2a",
     legacyCurrentReadImplementationSha256: [
+      "f327a0baca1831436dc98be657c72b52f4e70494ff0e90204ac8c21a17f6a0ea",
       "baa96307587140a460e39274dd2f0f0aab8bee125c34c62231038d0401a7e737",
       "65d95a47f238acf3fac02116a1c671c7a9659dab766bd8081ccf69d4495dccda",
       "dbda2aee2075a0a3726241fd24932113ae6c2d139ae1f7036ea827a335f7344c",
@@ -140,9 +152,10 @@ const identities = Object.freeze({
   },
   "meta-web": {
     schemaVersion: 1,
-    pluginVersion: "1.3.0",
-    implementationSha256: "cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b",
+    pluginVersion: "1.4.0",
+    implementationSha256: "349991a62eb1b3e08c3917948554ba4e53016cf66f30d0d4513c2c0321548763",
     legacyCurrentReadImplementationSha256: [
+      "cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b",
       "8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101",
       "6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994",
       "af2d809b8a18806c8f36e86660289c219a99eb0799baa42a2afbcfbc428e37c2",
@@ -165,9 +178,12 @@ const identities = Object.freeze({
   },
   "reddit-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "91cc3364ab1ccba66bd2e099f64fcccc187fde94145a8bf1eaa14f0f5533f6d7",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.3.0",
+    implementationSha256: "646a29b320373f50ccdf9ae8b8b60d5147428f0f899a226480c2c5b009294d8a",
+    legacyCurrentReadImplementationSha256: [
+      "16e4e48609c12d5ffdaf47e622764e06cc9b3381c6b8ceb2c9f773fa9d99bdd9",
+      "91cc3364ab1ccba66bd2e099f64fcccc187fde94145a8bf1eaa14f0f5533f6d7",
+    ],
     legacyReadImplementationSha256: {
       test: "64a4c1e78ce8565a50613f63ff605f0f57f488617ef31386b5ddce5e3db885c9",
       production: "058987e5eac61505ca53f80d8494fb5505e697e0313e6e197a198649be7c3a3c",
@@ -182,9 +198,10 @@ const identities = Object.freeze({
   },
   "substack-web": {
     schemaVersion: 1,
-    pluginVersion: "1.2.0",
-    implementationSha256: "d35dda6043e224f4a2d6305a4a6aac9f05bef37ecfbfd087973394cdbe0c6811",
+    pluginVersion: "1.3.0",
+    implementationSha256: "3dfe5b506cef46b6534c7abd195a98df0a825a321bd0690eddae674e4592c041",
     legacyCurrentReadImplementationSha256: [
+      "d35dda6043e224f4a2d6305a4a6aac9f05bef37ecfbfd087973394cdbe0c6811",
       "2062f7c39c75ce286f26e7bd513871e5cbc2b62e2408d20df28af906f8ad5012",
       "e4ba73882eb3f5bf489c88861cdd1fedd790a55af027e03ff5a07b526b8f0f5f",
       "96a992faae17420dc2ec74c9d22903bb7973f69d3f0de198800d357480651269",
@@ -203,9 +220,10 @@ const identities = Object.freeze({
   },
   "tiktok-web": {
     schemaVersion: 1,
-    pluginVersion: "1.2.0",
-    implementationSha256: "59b037c542e5a32290c10a6d16a22e85a1f5b8c7b65d562fda67b6e04364f069",
+    pluginVersion: "1.3.0",
+    implementationSha256: "c0e36121d70d23753ce35019128be01e25d880393217332661de76e724c4169c",
     legacyCurrentReadImplementationSha256: [
+      "59b037c542e5a32290c10a6d16a22e85a1f5b8c7b65d562fda67b6e04364f069",
       "d92111d5ae92e002310ad201144b7a5cd05ad209cebac2fe2b31c3852cfca1cd",
       "d6693ee40e9de8f62a09f44000e7d5005d69715baa50c3034109a381f3c53180",
       "7d7f92ec9bbb5675102dd5cc0d1441334f723e66a7d9f5926e89a163c4cd2989",
@@ -226,17 +244,21 @@ const identities = Object.freeze({
   },
   "twitch-web": {
     schemaVersion: 1,
-    pluginVersion: "1.0.0",
-    implementationSha256: "325065c463ecf8d7b5e6202780c0392c1f7556baeb4a0b33fec1d3af937e5eb9",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.1.0",
+    implementationSha256: "c764d5733bcbbc60d7a5a8ced6d7294bfdfa53a5371567a63804104d9199157b",
+    legacyCurrentReadImplementationSha256: [
+      "325065c463ecf8d7b5e6202780c0392c1f7556baeb4a0b33fec1d3af937e5eb9",
+    ],
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
   },
   "whatsapp-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "1.0.0",
-    implementationSha256: "4c58bd39ab0971764bc1361a8093f5965146c81e9be6785eb2c6c324765518c3",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.1.0",
+    implementationSha256: "b098d86a3fedee6c2a0f5bbd10b683af7ad4c27e4a633930d61e4ee188206a00",
+    legacyCurrentReadImplementationSha256: [
+      "4c58bd39ab0971764bc1361a8093f5965146c81e9be6785eb2c6c324765518c3",
+    ],
     legacyReadImplementationSha256: {
       test: "7647d40e2dc89aa4562fd760b4a5616880412ffe8bc2e4e265b140e0f4515f28",
       production: "6b75371d75a8924b46523338c0ea96ece7cae4680a294bf89edc002bd286e803",
@@ -268,9 +290,12 @@ const identities = Object.freeze({
   },
   "x-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "54589eaf65c7de95442dcff6a81327d0a32ec38f58560769e7b807519db10eeb",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.3.0",
+    implementationSha256: "e464e4e97ed3cbf430c2008251e45e0024508c64357325882718cba31e6bf9ea",
+    legacyCurrentReadImplementationSha256: [
+      "03d906c92bfb5c30eb2d66e161ec67f7a081efa75e2a210a62b117df70b2af00",
+      "54589eaf65c7de95442dcff6a81327d0a32ec38f58560769e7b807519db10eeb",
+    ],
     legacyReadImplementationSha256: {
       test: "bcf7411c6ac01b16dc2a602b9928f8d0f9f5fd3ac0901d2ef197b72a8f763d31",
       production: "ebba20c72150dcef1eb21d3a1ea02a1dee91f8654c1f33621e5217faabf2be25",
@@ -285,9 +310,10 @@ const identities = Object.freeze({
   },
   "youtube-web": {
     schemaVersion: 1,
-    pluginVersion: "1.2.0",
-    implementationSha256: "4d38cceaf871d6885abf76790b3d47b1e77b8b35dbb94bf5411d86f60202acb4",
+    pluginVersion: "1.3.0",
+    implementationSha256: "06480c8aa798ec228e44b7b20a7b35f471400c44439b85548c3d8c513caf8c9d",
     legacyCurrentReadImplementationSha256: [
+      "4d38cceaf871d6885abf76790b3d47b1e77b8b35dbb94bf5411d86f60202acb4",
       "2c73bbfcb49ba86a7dec8b08d62b87c98c234545d8a1fd93cf02f03868dced34",
       "324abc5f2776c5dc16b9f42f65c20d9781ffc3925ba9f80ca098de45e8d29407",
       "e7d4f87718ebfd9e499d5a8a939acaca2f73c2bd78388e360419f9ab098a5cb0",
@@ -307,7 +333,7 @@ const identities = Object.freeze({
 } as const satisfies Readonly<Record<string, ReviewedBuiltInContractIdentityV1>>);
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const MAXIMUM_LATER_CURRENT_IDENTITIES = 10;
+const MAXIMUM_LATER_CURRENT_IDENTITIES = 11;
 
 for (const [pluginId, identity] of Object.entries(identities)) {
   const reviewedIdentity = identity as ReviewedBuiltInContractIdentityV1;

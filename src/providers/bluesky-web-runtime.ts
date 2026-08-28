@@ -19,7 +19,7 @@ import type {
   WebSessionRecipe,
 } from "../model";
 import { canonicalJson, sha256 } from "../canonical-json";
-import { OperationDeadline } from "../operation-deadline";
+import { OperationDeadline, OperationDeadlineError } from "../operation-deadline";
 import { pinnedHttpsFetch } from "../pinned-https";
 import {
   readSessionSecretSnapshot,
@@ -37,6 +37,11 @@ import {
   type WebSessionOperationDeadline,
   type WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
+import {
+  failedProviderRead,
+  ProviderReadResponseRejectedError,
+  ProviderReadTransportError,
+} from "./read-failure";
 import {
   BLUESKY_APPVIEW_PROXY,
   BLUESKY_APP_ORIGIN,
@@ -668,12 +673,19 @@ async function boundedBytes(
   const buffer = new BoundedByteBuffer(maximum);
   try {
     for (;;) {
-      const item = operationDeadline === undefined
-        ? await reader.read()
-        : await operationDeadline.run(
-            () => reader.read(),
-            WEB_SESSION_OPERATION_LABEL,
-          );
+      const item = await (async () => {
+        try {
+          return operationDeadline === undefined
+            ? await reader.read()
+            : await operationDeadline.run(
+                () => reader.read(),
+                WEB_SESSION_OPERATION_LABEL,
+              );
+        } catch (error) {
+          if (error instanceof OperationDeadlineError) throw error;
+          throw new ProviderReadTransportError(error);
+        }
+      })();
       if (item.done) break;
       if (!(item.value instanceof Uint8Array) || !buffer.append(item.value)) {
         void reader.cancel().catch(() => undefined);
@@ -1619,39 +1631,60 @@ export async function executeBlueskyPublicProfileRead(
   const signal = operationDeadline?.signal ?? controller?.signal;
   let response: Response;
   try {
-    response = await fetch(url, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      redirect: "error",
-      ...(signal === undefined ? {} : { signal }),
-    });
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        redirect: "error",
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch (error) {
+      if (signal?.aborted === true) {
+        if (operationDeadline !== undefined) {
+          operationDeadline.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
+        }
+        throw new OperationDeadlineError(WEB_SESSION_OPERATION_LABEL, "timed-out");
+      }
+      throw new ProviderReadTransportError(error);
+    }
+    if (response.status !== 200) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new ProviderReadResponseRejectedError(response.status);
+    }
+    const bytes = await boundedBytes(
+      response,
+      Math.min(recipe.maxOutputBytes, MAX_READ_BYTES),
+      operationDeadline,
+    );
+    if (!jsonContentType(response)) {
+      throw new Error("Bluesky public AppView returned an unreviewed content type");
+    }
+    const output = projectBlueskyProfileStats(
+      parseJson(bytes),
+      handle,
+      new Date(dependencies?.now?.() ?? Date.now()).toISOString(),
+    );
+    return {
+      status: "succeeded",
+      output,
+      finalUrl: output.target.url,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    };
+  } catch (error) {
+    return failedProviderRead(
+      "Bluesky profile",
+      error,
+      `https://bsky.app/profile/${handle}`,
+      {
+        stage: "target",
+        authenticated: false,
+        targetStatusUnavailable: true,
+      },
+    );
   } finally {
     if (timeout !== null) clearTimeout(timeout);
   }
-  if (response.status !== 200) {
-    void response.body?.cancel().catch(() => undefined);
-    throw new Error(`Bluesky public AppView returned unreviewed status ${response.status}`);
-  }
-  const bytes = await boundedBytes(
-    response,
-    Math.min(recipe.maxOutputBytes, MAX_READ_BYTES),
-    operationDeadline,
-  );
-  if (!jsonContentType(response)) {
-    throw new Error("Bluesky public AppView returned an unreviewed content type");
-  }
-  const output = projectBlueskyProfileStats(
-    parseJson(bytes),
-    handle,
-    new Date(dependencies?.now?.() ?? Date.now()).toISOString(),
-  );
-  return {
-    status: "succeeded",
-    output,
-    finalUrl: output.target.url,
-    dispatchStarted: false,
-    dispatch: { planned: 0, started: 0, verified: 0 },
-  };
 }
 
 async function executePostRead(

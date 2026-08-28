@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+    <title>PayPal attested a hardened phone as rooted, and why named web operations still matter</title>
+    <meta name="description" content="The Thursday 27 August 2026 rough.day tech edition ranked PayPal crashing on GrapheneOS with a RootDetectionSecurityException. Device-policy attestation is not a named Wrench operation.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/paypal-grapheneos-attestation/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="PayPal attested a hardened phone as rooted, and why named web operations still matter">
+    <meta property="og:description" content="The Thursday 27 August 2026 rough.day tech edition ranked PayPal crashing on GrapheneOS with a RootDetectionSecurityException. Device-policy attestation is not a named Wrench operation.">
+    <meta property="og:url" content="https://wrench.rip/paypal-grapheneos-attestation/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="PayPal attested a hardened phone as rooted, and why named web operations still matter">
+    <meta name="twitter:description" content="The Thursday 27 August 2026 rough.day tech edition ranked PayPal crashing on GrapheneOS with a RootDetectionSecurityException. Device-policy attestation is not a named Wrench operation.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Install</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="https://github.com/hraness/wrench">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Device policy and attested operations</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Argument · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Device policy is not a named web operation.</h1>
+          <p class="answer-lede">The Thursday 27 August 2026 <a href="https://rough.day">rough.day</a> tech edition ranked “PayPal app crashes on GrapheneOS, citing a root-detection security violation” as item five. The live source is leumon’s 27 August 2026 post <a href="https://news.ycombinator.com/item?id=49462253">Tell HN: PayPal blocks GrapheneOS</a>. <a href="https://wrench.rip/">Wrench</a> does not treat that phone check as its job. It names a provider operation a session can call on purpose, attests whether the current contract can run it, and refuses to pretend a missing operation was proven.</p>
+          <p class="review-note">This argument uses the live Hacker News post fetched for this draft, the Thursday 27 August 2026 <a href="https://rough.day">rough.day</a> tech edition, the <a href="https://rough.day/info">rough.day selection notes</a>, and the public {{WRENCH_RELEASE}} pages for the <a href="https://wrench.rip/">Wrench home</a>, <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>, <a href="https://wrench.rip/agentic-web-spoofing/">inbound index-spoofing argument</a>, and <a href="https://wrench.rip/vms-cannot-contain-agents/">VM-containment argument</a>. Operation counts are the current release attestation, substituted at site build time.</p>
+        </header>
+
+        <section aria-labelledby="thursday-edition">
+          <h2 id="thursday-edition">Thursday ranked a device crash, not a Wrench contract</h2>
+          <p><a href="https://rough.day">rough.day</a> considers reporting from the previous 24 hours, groups related coverage, and publishes up to six stories per category when the day supports that many. Its <a href="https://rough.day/info">selection notes</a> say the tech edition favors demonstrated impact and durable change over product promotion. The Thursday 27 August 2026 tech list placed the PayPal and GrapheneOS crash at rank five, with news.ycombinator.com as the source host.</p>
+          <p>The ranked title is the edition’s headline. The live post title is “Tell HN: PayPal blocks GrapheneOS,” published 27 August 2026 by leumon. This page names both. It does not reprint the edition summary or the comment thread.</p>
+          <p><a href="https://hraness.com">Hraness</a> publishes Wrench and this site. The edition is an independent ranking of a public crash report. It is not a Wrench release note, and a ranked story does not add a provider operation.</p>
+        </section>
+
+        <section aria-labelledby="root-exception">
+          <h2 id="root-exception">The exception names root detection, not a web operation</h2>
+          <p>leumon writes that the PayPal app now refuses to run on GrapheneOS. Opening the app crashes with <code>com.paypal.oslo.app.rasp.RootDetectionSecurityException: Security policy violation: s=root</code>. The ranked edition framed that exception as attestation treating a hardened operating system as rooted or non-standard. This page keeps that bound. It does not claim GrapheneOS is rooted, and it does not claim PayPal measured a named web job.</p>
+          <p>The same post says the submitter does not know whether enabling the PayPal card for contactless NFC payments is required for the crash. That uncertainty stays open. This page does not invent a PayPal API, a GrapheneOS workaround, or a regulator’s answer.</p>
+          <p>The object under test is the phone. A payment app that attests the device and then rejects GrapheneOS is enforcing device policy. That is a different attestation object from the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>, which names operations a session can call on purpose.</p>
+        </section>
+
+        <section aria-labelledby="named-operation">
+          <h2 id="named-operation">Attestation names the operation a caller chose</h2>
+          <p>Wrench’s product is the outbound contract, not the handset. The <a href="https://wrench.rip/">Wrench home</a> states that each authenticated operation is typed, bounded, and tied to one account and transport. The caller brings the model and interface. Wrench supplies the local capability and custody layer. It is not an AI agent, planner, or approval shell. It does not decide which phones may run a payment app.</p>
+          <p>The current release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled public adapters. {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>. {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} remain <code>capture-required</code>. Those figures are the same release-bound counts published on the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>. This page does not add a provider, invent a PayPal operation, or treat a reservation as ready. Telegram is absent from those manifests. Wrench does not install a Telegram Bot API substitute or claim Telegram contact access.</p>
+          <p><code>observed</code> means the current contract can plan and execute after local doctor and auth checks pass. <code>capture-required</code> is an inert reservation. The attestation page says a missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control. A failed root-detection check on a phone does not mark a Wrench reservation <code>observed</code>, and a passing phone check does not invent one.</p>
+        </section>
+
+        <section aria-labelledby="three-objects">
+          <h2 id="three-objects">Device policy, inbound identity, and guest machines answer different questions</h2>
+          <p>The <a href="https://wrench.rip/agentic-web-spoofing/">index-spoofing argument</a> is about inbound identity lies: a request that claims a recognized bot name and then fails that identity’s supported authentication. The <a href="https://wrench.rip/vms-cannot-contain-agents/">VM-containment argument</a> is about sandboxing agents: a guest machine that is supposed to hold a cyber-capable agent. This page is outbound device attestation colliding with a hardened operating system. The pages refuse different substitutes.</p>
+          <div class="table-scroll" role="region" aria-labelledby="three-objects" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Decision</th>
+                  <th scope="col">PayPal root-detection crash on GrapheneOS</th>
+                  <th scope="col">Wrench attested operation</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">What is named</th>
+                  <td>The device and operating system, scored as rooted or non-standard</td>
+                  <td>A named outbound outcome such as <code>messaging.list</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">What is attested</th>
+                  <td>Device policy that decides whether the payment app may run</td>
+                  <td>Exact provider, transport, account realm, contract version, implementation, input, and risk</td>
+                </tr>
+                <tr>
+                  <th scope="row">Failed check</th>
+                  <td>The app crashes with <code>RootDetectionSecurityException</code></td>
+                  <td>The operation stops. A <code>capture-required</code> reservation stays inert</td>
+                </tr>
+                <tr>
+                  <th scope="row">Missing proof</th>
+                  <td>A hardened phone is still not accepted as a standard device</td>
+                  <td>The reservation cannot plan or execute, and Wrench does not invent a browser fallback</td>
+                </tr>
+                <tr>
+                  <th scope="row">Job of the layer</th>
+                  <td>Choose which phones may run the payment app</td>
+                  <td>Name the operation a caller chose and attest whether it is available</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>A <code>RootDetectionSecurityException</code> still does not name <code>messaging.list</code> or mark a reservation <code>observed</code>. The thread is evidence that device-policy attestation can collide with a hardened operating system. It is not a Wrench capability grant.</p>
+          <p>Read the spoofing page for inbound identity. Read the VM page for containment. Read this page for why a rooted-phone check is not an attested operation. The pages do not reprint one another.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="paypal-next">
+          <h2 id="paypal-next">Read the edition and the thread, then the current contract</h2>
+          <p>Start with <a href="https://news.ycombinator.com/item?id=49462253">Tell HN: PayPal blocks GrapheneOS</a>. Keep the Thursday 27 August 2026 ranking on <a href="https://rough.day">rough.day</a> and the <a href="https://rough.day/info">selection notes</a> as the edition record. <a href="https://hraness.com">hraness.com</a> is the publisher of Wrench. Then read the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a> for every current operation and completeness mark, the <a href="https://wrench.rip/agentic-web-spoofing/">index-spoofing argument</a> when the question is a claimed inbound identity rather than a phone check, and the <a href="https://wrench.rip/vms-cannot-contain-agents/">VM-containment argument</a> when the question is a guest machine rather than device policy.</p>
+        </aside>
+      </article>
+    </main>
+    <aside aria-label="Wrench project information" class="site-disclosure">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </aside>
+    {{HRANESS_SITE_FOOTER}}
+  </body>
+</html>

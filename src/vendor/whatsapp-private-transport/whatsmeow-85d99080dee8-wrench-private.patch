@@ -1,0 +1,694 @@
+diff --git a/client.go b/client.go
+index 58179ca..bef1052 100644
+--- a/client.go
++++ b/client.go
+@@ -115,10 +115,11 @@ type Client struct {
+ 	responseWaiters     map[string]chan<- *waBinary.Node
+ 	responseWaitersLock sync.Mutex
+ 
+-	nodeHandlers      map[string]nodeHandler
+-	handlerQueue      chan *waBinary.Node
+-	eventHandlers     []wrappedEventHandler
+-	eventHandlersLock sync.RWMutex
++	nodeHandlers         map[string]nodeHandler
++	handlerQueue         chan wrenchSequencedNode
++	eventHandlers        []wrappedEventHandler
++	eventHandlersLock    sync.RWMutex
++	wrenchReceiveBarrier *wrenchReceiveBarrierState
+ 
+ 	messageRetries     map[string]int
+ 	messageRetriesLock sync.Mutex
+@@ -250,21 +251,22 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
+ 		Transport: (http.DefaultTransport.(*http.Transport)).Clone(),
+ 	}
+ 	cli := &Client{
+-		mediaHTTP:          ptr.Clone(baseHTTPClient),
+-		websocketHTTP:      ptr.Clone(baseHTTPClient),
+-		preLoginHTTP:       ptr.Clone(baseHTTPClient),
+-		Store:              deviceStore,
+-		Log:                log,
+-		recvLog:            log.Sub("Recv"),
+-		sendLog:            log.Sub("Send"),
+-		uniqueID:           fmt.Sprintf("%d.%d-", uniqueIDPrefix[0], uniqueIDPrefix[1]),
+-		responseWaiters:    make(map[string]chan<- *waBinary.Node),
+-		eventHandlers:      make([]wrappedEventHandler, 0, 1),
+-		messageRetries:     make(map[string]int),
+-		handlerQueue:       make(chan *waBinary.Node, handlerQueueSize),
+-		appStateProc:       appstate.NewProcessor(deviceStore, log.Sub("AppState")),
+-		socketWait:         make(chan struct{}),
+-		expectedDisconnect: exsync.NewEvent(),
++		mediaHTTP:            ptr.Clone(baseHTTPClient),
++		websocketHTTP:        ptr.Clone(baseHTTPClient),
++		preLoginHTTP:         ptr.Clone(baseHTTPClient),
++		Store:                deviceStore,
++		Log:                  log,
++		recvLog:              log.Sub("Recv"),
++		sendLog:              log.Sub("Send"),
++		uniqueID:             fmt.Sprintf("%d.%d-", uniqueIDPrefix[0], uniqueIDPrefix[1]),
++		responseWaiters:      make(map[string]chan<- *waBinary.Node),
++		eventHandlers:        make([]wrappedEventHandler, 0, 1),
++		messageRetries:       make(map[string]int),
++		handlerQueue:         make(chan wrenchSequencedNode, handlerQueueSize),
++		wrenchReceiveBarrier: newWrenchReceiveBarrierState(),
++		appStateProc:         appstate.NewProcessor(deviceStore, log.Sub("AppState")),
++		socketWait:           make(chan struct{}),
++		expectedDisconnect:   exsync.NewEvent(),
+ 
+ 		incomingRetryRequestCounter: make(map[incomingRetryKey]int),
+ 
+@@ -563,6 +565,7 @@ func (cli *Client) unlockedConnect(ctx context.Context) error {
+ 		fs.Close(0)
+ 		return fmt.Errorf("noise handshake failed: %w", err)
+ 	}
++	cli.wrenchReceiveBarrier.beginConnection()
+ 	go cli.keepAliveLoop(ctx, fs.Context())
+ 	go cli.handlerQueueLoop(ctx, fs.Context())
+ 	return nil
+@@ -578,6 +581,7 @@ func (cli *Client) onDisconnect(ctx context.Context, ns *socket.NoiseSocket, rem
+ 	cli.socketLock.Lock()
+ 	defer cli.socketLock.Unlock()
+ 	if cli.socket == ns {
++		cli.wrenchReceiveBarrier.endConnection()
+ 		cli.socket = nil
+ 		cli.clearResponseWaiters(xmlStreamEndNode)
+ 		if !cli.isExpectedDisconnect() && (cli.forceAutoReconnect.Swap(false) || remote) {
+@@ -833,22 +837,33 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte) {
+ 		return
+ 	}
+ 	cli.recvLog.Debugf("%s", node)
++	epoch, sequence := cli.wrenchReceiveBarrier.observeFrame()
+ 	if node.Tag == "xmlstreamend" {
+ 		if !cli.isExpectedDisconnect() {
+ 			cli.Log.Warnf("Received stream end frame")
+ 		}
+ 		// TODO should we do something else?
+-	} else if cli.receiveResponse(ctx, node) {
++	} else if func() bool {
++		if !cli.receiveResponse(ctx, node) {
++			return false
++		}
++		id, _ := node.Attrs["id"].(string)
++		cli.wrenchReceiveBarrier.noteResponse(id, epoch, sequence)
++		return true
++	}() {
+ 		// handled
+ 	} else if _, ok := cli.nodeHandlers[node.Tag]; ok {
++		queued := wrenchSequencedNode{node: node, epoch: epoch, sequence: sequence}
++		cli.wrenchReceiveBarrier.registerHandler(epoch, sequence)
+ 		select {
+-		case cli.handlerQueue <- node:
++		case cli.handlerQueue <- queued:
+ 		case <-ctx.Done():
+ 		default:
+ 			cli.Log.Warnf("Handler queue is full, message ordering is no longer guaranteed")
++			cli.wrenchReceiveBarrier.markQueueOverflow(epoch, sequence)
+ 			go func() {
+ 				select {
+-				case cli.handlerQueue <- node:
++				case cli.handlerQueue <- queued:
+ 				case <-ctx.Done():
+ 				}
+ 			}()
+@@ -865,12 +880,17 @@ func (cli *Client) handlerQueueLoop(evtCtx, connCtx context.Context) {
+ Loop:
+ 	for {
+ 		select {
+-		case node := <-cli.handlerQueue:
++		case queued := <-cli.handlerQueue:
++			node := queued.node
++			if !cli.wrenchReceiveBarrier.startHandler(queued.epoch, queued.sequence) {
++				continue Loop
++			}
+ 			doneChan := make(chan struct{})
+ 			start := time.Now()
+ 			go func() {
+ 				cli.nodeHandlers[node.Tag](evtCtx, node)
+ 				duration := time.Since(start)
++				cli.wrenchReceiveBarrier.finishHandler(queued.epoch, queued.sequence)
+ 				close(doneChan)
+ 				if duration > 5*time.Second {
+ 					cli.Log.Warnf("Node handling took %s for %s", duration, node)
+@@ -887,6 +907,7 @@ Loop:
+ 				}
+ 			}
+ 			cli.Log.Warnf("Continuing handling of %s in background as it's taking too long", node)
++			cli.wrenchReceiveBarrier.markHandlerEscaped(queued.epoch, queued.sequence)
+ 			ticker.Stop()
+ 		case <-connCtx.Done():
+ 			cli.Log.Debugf("Closing handler queue loop")
+@@ -926,11 +947,14 @@ func (cli *Client) dispatchEvent(evt any) (handlerFailed bool) {
+ 		cli.eventHandlersLock.RUnlock()
+ 		err := recover()
+ 		if err != nil {
++			cli.wrenchReceiveBarrier.markActiveHandlerFailed()
++			handlerFailed = true
+ 			cli.Log.Errorf("Event handler panicked while handling a %T: %v\n%s", evt, err, debug.Stack())
+ 		}
+ 	}()
+ 	for _, handler := range cli.eventHandlers {
+ 		if !handler.fn(evt) {
++			cli.wrenchReceiveBarrier.markActiveHandlerFailed()
+ 			return true
+ 		}
+ 	}
+diff --git a/retry.go b/retry.go
+index 92d1e6d..03df7c4 100644
+--- a/retry.go
++++ b/retry.go
+@@ -34,6 +34,10 @@ import (
+ // Number of sent messages to cache in memory for handling retry receipts.
+ const recentMessagesSize = 256
+ 
++func shouldCacheMessageForRetry(req SendRequestExtra) bool {
++	return !req.Peer && !req.NoRetry
++}
++
+ type recentMessageKey struct {
+ 	To types.JID
+ 	ID types.MessageID
+diff --git a/send.go b/send.go
+index 0deefb5..274fb37 100644
+--- a/send.go
++++ b/send.go
+@@ -152,6 +152,11 @@ type SendRequestExtra struct {
+ 	Timeout time.Duration
+ 	// When sending media to newsletters, the Handle field returned by the file upload.
+ 	MediaHandle string
++	// NoRetry prevents resending the serialized frame after a disconnect
++	// response and prevents retaining the plaintext for retry receipts.
++	// Mutation callers that cannot safely duplicate an externally visible
++	// effect must set this and reconcile independently.
++	NoRetry bool
+ 
+ 	Meta *types.MsgMetaInfo
+ 	// use this only if you know what you are doing
+@@ -380,7 +385,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
+ 	defer cli.messageSendLock.Unlock()
+ 
+ 	// Peer message retries aren't implemented yet
+-	if !req.Peer {
++	if shouldCacheMessageForRetry(req) {
+ 		err = cli.addRecentMessage(ctx, to, req.ID, message, nil)
+ 		if err != nil {
+ 			return
+@@ -438,6 +443,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
+ 	}
+ 	resp.DebugTimings.Resp = time.Since(start)
+ 	if isDisconnectNode(respNode) {
++		if req.NoRetry {
++			err = &DisconnectedError{Action: "message send", Node: respNode}
++			return
++		}
+ 		start = time.Now()
+ 		respNode, err = cli.retryFrame(ctx, "message send", req.ID, data, respNode, 0)
+ 		resp.DebugTimings.Retry = time.Since(start)
+diff --git a/sendfb.go b/sendfb.go
+index db01ac9..1b855f9 100644
+--- a/sendfb.go
++++ b/sendfb.go
+@@ -137,7 +137,7 @@ func (cli *Client) SendFBMessage(
+ 	resp.DebugTimings.Queue = time.Since(start)
+ 	defer cli.messageSendLock.Unlock()
+ 
+-	if !req.Peer {
++	if shouldCacheMessageForRetry(req) {
+ 		err = cli.addRecentMessage(ctx, to, req.ID, nil, messageAppProto)
+ 		if err != nil {
+ 			return
+@@ -184,6 +184,10 @@ func (cli *Client) SendFBMessage(
+ 	}
+ 	resp.DebugTimings.Resp = time.Since(start)
+ 	if isDisconnectNode(respNode) {
++		if req.NoRetry {
++			err = &DisconnectedError{Action: "message send", Node: respNode}
++			return
++		}
+ 		start = time.Now()
+ 		respNode, err = cli.retryFrame(ctx, "message send", req.ID, data, respNode, 0)
+ 		resp.DebugTimings.Retry = time.Since(start)
+diff --git a/wrench_barrier.go b/wrench_barrier.go
+new file mode 100644
+index 0000000..b347b3c
+--- /dev/null
++++ b/wrench_barrier.go
+@@ -0,0 +1,330 @@
++package whatsmeow
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"sync"
++	"time"
++
++	waBinary "go.mau.fi/whatsmeow/binary"
++	"go.mau.fi/whatsmeow/types"
++)
++
++var (
++	ErrWrenchBarrierNotConnected   = errors.New("wrench receive barrier is not connected")
++	ErrWrenchBarrierEpochDrift     = errors.New("wrench receive barrier connection epoch changed")
++	ErrWrenchBarrierQueueOverflow  = errors.New("wrench receive barrier observed handler queue overflow")
++	ErrWrenchBarrierHandlerEscaped = errors.New("wrench receive barrier observed an escaped or late handler")
++	ErrWrenchBarrierHandlerFailed  = errors.New("wrench receive barrier observed a failed event handler")
++)
++
++// WrenchReceiveBarrierProof proves that an exact keepalive IQ response was
++// received on one connection and that every earlier queued node handler
++// returned. Event handlers invoked synchronously by those node handlers have
++// therefore returned too.
++type WrenchReceiveBarrierProof struct {
++	ConnectionEpoch  uint64
++	ResponseSequence uint64
++}
++
++type wrenchSequencedNode struct {
++	node     *waBinary.Node
++	epoch    uint64
++	sequence uint64
++}
++
++type wrenchResponseSequence struct {
++	epoch    uint64
++	sequence uint64
++}
++
++type wrenchReceiveBarrierState struct {
++	mu sync.Mutex
++
++	changed chan struct{}
++
++	epoch     uint64
++	connected bool
++	sequence  uint64
++	pending   map[uint64]struct{}
++
++	queueOverflowSequence uint64
++	escapedSequence       uint64
++	failedSequence        uint64
++
++	barrierResponses map[string]chan wrenchResponseSequence
++
++	activeEpoch    uint64
++	activeSequence uint64
++}
++
++func newWrenchReceiveBarrierState() *wrenchReceiveBarrierState {
++	return &wrenchReceiveBarrierState{
++		changed:          make(chan struct{}),
++		pending:          make(map[uint64]struct{}),
++		barrierResponses: make(map[string]chan wrenchResponseSequence),
++	}
++}
++
++func (s *wrenchReceiveBarrierState) signalLocked() {
++	close(s.changed)
++	s.changed = make(chan struct{})
++}
++
++func (s *wrenchReceiveBarrierState) beginConnection() uint64 {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.epoch++
++	s.connected = true
++	s.sequence = 0
++	s.pending = make(map[uint64]struct{})
++	s.queueOverflowSequence = 0
++	s.escapedSequence = 0
++	s.failedSequence = 0
++	s.activeEpoch = 0
++	s.activeSequence = 0
++	for id, waiter := range s.barrierResponses {
++		close(waiter)
++		delete(s.barrierResponses, id)
++	}
++	s.signalLocked()
++	return s.epoch
++}
++
++func (s *wrenchReceiveBarrierState) endConnection() {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if !s.connected {
++		return
++	}
++	s.connected = false
++	for id, waiter := range s.barrierResponses {
++		close(waiter)
++		delete(s.barrierResponses, id)
++	}
++	s.signalLocked()
++}
++
++func (s *wrenchReceiveBarrierState) connectionEpoch() (uint64, bool) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	return s.epoch, s.connected
++}
++
++func (s *wrenchReceiveBarrierState) observeFrame() (uint64, uint64) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.sequence++
++	return s.epoch, s.sequence
++}
++
++func (s *wrenchReceiveBarrierState) registerHandler(epoch, sequence uint64) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if s.connected && s.epoch == epoch {
++		s.pending[sequence] = struct{}{}
++		s.signalLocked()
++	}
++}
++
++func (s *wrenchReceiveBarrierState) startHandler(epoch, sequence uint64) bool {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if !s.connected || s.epoch != epoch {
++		if s.escapedSequence == 0 || sequence < s.escapedSequence {
++			s.escapedSequence = sequence
++		}
++		s.signalLocked()
++		return false
++	}
++	s.activeEpoch = epoch
++	s.activeSequence = sequence
++	return true
++}
++
++func (s *wrenchReceiveBarrierState) finishHandler(epoch, sequence uint64) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if s.epoch != epoch {
++		if s.escapedSequence == 0 || sequence < s.escapedSequence {
++			s.escapedSequence = sequence
++		}
++	} else {
++		delete(s.pending, sequence)
++	}
++	if s.activeEpoch == epoch && s.activeSequence == sequence {
++		s.activeEpoch = 0
++		s.activeSequence = 0
++	}
++	s.signalLocked()
++}
++
++func (s *wrenchReceiveBarrierState) markQueueOverflow(epoch, sequence uint64) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if s.epoch == epoch && (s.queueOverflowSequence == 0 || sequence < s.queueOverflowSequence) {
++		s.queueOverflowSequence = sequence
++	}
++	s.signalLocked()
++}
++
++func (s *wrenchReceiveBarrierState) markHandlerEscaped(epoch, sequence uint64) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if s.epoch == epoch && (s.escapedSequence == 0 || sequence < s.escapedSequence) {
++		s.escapedSequence = sequence
++	}
++	s.signalLocked()
++}
++
++func (s *wrenchReceiveBarrierState) markActiveHandlerFailed() {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	sequence := s.activeSequence
++	if sequence == 0 {
++		sequence = s.sequence
++	}
++	if s.failedSequence == 0 || sequence < s.failedSequence {
++		s.failedSequence = sequence
++	}
++	s.signalLocked()
++}
++
++func (s *wrenchReceiveBarrierState) registerBarrierResponse(id string) <-chan wrenchResponseSequence {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	ch := make(chan wrenchResponseSequence, 1)
++	s.barrierResponses[id] = ch
++	return ch
++}
++
++func (s *wrenchReceiveBarrierState) cancelBarrierResponse(id string) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if waiter, ok := s.barrierResponses[id]; ok {
++		delete(s.barrierResponses, id)
++		close(waiter)
++	}
++}
++
++func (s *wrenchReceiveBarrierState) noteResponse(id string, epoch, sequence uint64) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	waiter, ok := s.barrierResponses[id]
++	if !ok {
++		return
++	}
++	delete(s.barrierResponses, id)
++	waiter <- wrenchResponseSequence{epoch: epoch, sequence: sequence}
++	close(waiter)
++}
++
++func (s *wrenchReceiveBarrierState) wait(ctx context.Context, epoch, through uint64) error {
++	for {
++		s.mu.Lock()
++		if !s.connected {
++			s.mu.Unlock()
++			return ErrWrenchBarrierNotConnected
++		}
++		if s.epoch != epoch {
++			s.mu.Unlock()
++			return ErrWrenchBarrierEpochDrift
++		}
++		if s.queueOverflowSequence != 0 && s.queueOverflowSequence <= through {
++			s.mu.Unlock()
++			return ErrWrenchBarrierQueueOverflow
++		}
++		if s.escapedSequence != 0 && s.escapedSequence <= through {
++			s.mu.Unlock()
++			return ErrWrenchBarrierHandlerEscaped
++		}
++		if s.failedSequence != 0 && s.failedSequence <= through {
++			s.mu.Unlock()
++			return ErrWrenchBarrierHandlerFailed
++		}
++		pending := false
++		for sequence := range s.pending {
++			if sequence <= through {
++				pending = true
++				break
++			}
++		}
++		if !pending {
++			s.mu.Unlock()
++			return nil
++		}
++		changed := s.changed
++		s.mu.Unlock()
++		select {
++		case <-changed:
++		case <-ctx.Done():
++			return ctx.Err()
++		}
++	}
++}
++
++func wrenchKeepaliveQuery(id string, timeout time.Duration) infoQuery {
++	return infoQuery{
++		Namespace: "w:p",
++		Type:      iqGet,
++		To:        types.ServerJID,
++		ID:        id,
++		Timeout:   timeout,
++		NoRetry:   true,
++	}
++}
++
++// WrenchConnectionEpoch returns the connection generation used by the Wrench
++// receive barrier. The boolean is false unless a live post-handshake socket is
++// owned by this Client.
++func (cli *Client) WrenchConnectionEpoch() (uint64, bool) {
++	if cli == nil || cli.wrenchReceiveBarrier == nil {
++		return 0, false
++	}
++	return cli.wrenchReceiveBarrier.connectionEpoch()
++}
++
++// WrenchReceiveBarrier sends the same bounded keepalive IQ as whatsmeow's own
++// liveness loop and then drains all earlier non-response handlers. The caller
++// must supply a deadline so blackholed and half-open connections fail closed.
++func (cli *Client) WrenchReceiveBarrier(ctx context.Context) (WrenchReceiveBarrierProof, error) {
++	if cli == nil || cli.wrenchReceiveBarrier == nil {
++		return WrenchReceiveBarrierProof{}, ErrClientIsNil
++	}
++	deadline, ok := ctx.Deadline()
++	if !ok {
++		return WrenchReceiveBarrierProof{}, fmt.Errorf("wrench receive barrier requires a context deadline")
++	}
++	epoch, connected := cli.wrenchReceiveBarrier.connectionEpoch()
++	if !connected {
++		return WrenchReceiveBarrierProof{}, ErrWrenchBarrierNotConnected
++	}
++
++	id := cli.generateRequestID()
++	responseSequence := cli.wrenchReceiveBarrier.registerBarrierResponse(id)
++	defer cli.wrenchReceiveBarrier.cancelBarrierResponse(id)
++	remaining := time.Until(deadline)
++	if remaining <= 0 {
++		return WrenchReceiveBarrierProof{}, context.DeadlineExceeded
++	}
++	_, err := cli.sendIQ(ctx, wrenchKeepaliveQuery(id, remaining))
++	if err != nil {
++		return WrenchReceiveBarrierProof{}, fmt.Errorf("wrench keepalive IQ: %w", err)
++	}
++	marker, ok := <-responseSequence
++	if !ok {
++		return WrenchReceiveBarrierProof{}, ErrWrenchBarrierEpochDrift
++	}
++	if marker.epoch != epoch {
++		return WrenchReceiveBarrierProof{}, ErrWrenchBarrierEpochDrift
++	}
++	if err := cli.wrenchReceiveBarrier.wait(ctx, epoch, marker.sequence); err != nil {
++		return WrenchReceiveBarrierProof{}, err
++	}
++	finalEpoch, connected := cli.wrenchReceiveBarrier.connectionEpoch()
++	if !connected || finalEpoch != epoch {
++		return WrenchReceiveBarrierProof{}, ErrWrenchBarrierEpochDrift
++	}
++	return WrenchReceiveBarrierProof{ConnectionEpoch: epoch, ResponseSequence: marker.sequence}, nil
++}
+diff --git a/wrench_barrier_test.go b/wrench_barrier_test.go
+new file mode 100644
+index 0000000..28be55e
+--- /dev/null
++++ b/wrench_barrier_test.go
+@@ -0,0 +1,124 @@
++package whatsmeow
++
++import (
++	"context"
++	"errors"
++	"testing"
++	"time"
++
++	"go.mau.fi/whatsmeow/types"
++)
++
++func TestWrenchReceiveBarrierUsesExactNoRetryKeepalive(t *testing.T) {
++	timeout := 2 * time.Second
++	query := wrenchKeepaliveQuery("barrier-id", timeout)
++	if query.Namespace != "w:p" || query.Type != iqGet || query.To != types.ServerJID {
++		t.Fatalf("keepalive query = %+v", query)
++	}
++	if query.ID != "barrier-id" || query.Timeout != timeout || !query.NoRetry {
++		t.Fatalf("bounded no-retry query = %+v", query)
++	}
++}
++
++func TestWrenchNoRetryDisablesEveryApplicationLevelRetryPath(t *testing.T) {
++	if shouldCacheMessageForRetry(SendRequestExtra{NoRetry: true}) {
++		t.Fatal("no-retry message retained for retry receipts")
++	}
++	if shouldCacheMessageForRetry(SendRequestExtra{Peer: true}) {
++		t.Fatal("peer message retained for unsupported retry path")
++	}
++	if !shouldCacheMessageForRetry(SendRequestExtra{}) {
++		t.Fatal("ordinary message retry behavior changed")
++	}
++}
++
++func TestWrenchReceiveBarrierWaitsForEarlierHandlers(t *testing.T) {
++	state := newWrenchReceiveBarrierState()
++	epoch := state.beginConnection()
++	_, first := state.observeFrame()
++	state.registerHandler(epoch, first)
++	_, response := state.observeFrame()
++
++	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++	defer cancel()
++	done := make(chan error, 1)
++	go func() { done <- state.wait(ctx, epoch, response) }()
++
++	select {
++	case err := <-done:
++		t.Fatalf("barrier returned before handler completion: %v", err)
++	case <-time.After(20 * time.Millisecond):
++	}
++	state.finishHandler(epoch, first)
++	if err := <-done; err != nil {
++		t.Fatalf("barrier wait: %v", err)
++	}
++}
++
++func TestWrenchReceiveBarrierFailsClosed(t *testing.T) {
++	tests := []struct {
++		name string
++		mark func(*wrenchReceiveBarrierState, uint64, uint64)
++		want error
++	}{
++		{"queue overflow", (*wrenchReceiveBarrierState).markQueueOverflow, ErrWrenchBarrierQueueOverflow},
++		{"escaped handler", (*wrenchReceiveBarrierState).markHandlerEscaped, ErrWrenchBarrierHandlerEscaped},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			state := newWrenchReceiveBarrierState()
++			epoch := state.beginConnection()
++			_, sequence := state.observeFrame()
++			tc.mark(state, epoch, sequence)
++			err := state.wait(context.Background(), epoch, sequence)
++			if !errors.Is(err, tc.want) {
++				t.Fatalf("error = %v, want %v", err, tc.want)
++			}
++		})
++	}
++}
++
++func TestWrenchReceiveBarrierFailsOnHandlerAndTransactionFailure(t *testing.T) {
++	state := newWrenchReceiveBarrierState()
++	epoch := state.beginConnection()
++	_, sequence := state.observeFrame()
++	state.registerHandler(epoch, sequence)
++	if !state.startHandler(epoch, sequence) {
++		t.Fatal("handler did not start")
++	}
++	state.markActiveHandlerFailed()
++	state.finishHandler(epoch, sequence)
++	if err := state.wait(context.Background(), epoch, sequence); !errors.Is(err, ErrWrenchBarrierHandlerFailed) {
++		t.Fatalf("error = %v, want handler failure", err)
++	}
++}
++
++func TestWrenchReceiveBarrierRejectsReconnectAndLateCompletion(t *testing.T) {
++	state := newWrenchReceiveBarrierState()
++	oldEpoch := state.beginConnection()
++	_, sequence := state.observeFrame()
++	state.registerHandler(oldEpoch, sequence)
++	if !state.startHandler(oldEpoch, sequence) {
++		t.Fatal("handler did not start")
++	}
++	state.endConnection()
++	newEpoch := state.beginConnection()
++	if newEpoch == oldEpoch {
++		t.Fatal("connection epoch did not advance")
++	}
++	state.finishHandler(oldEpoch, sequence)
++	if err := state.wait(context.Background(), oldEpoch, sequence); !errors.Is(err, ErrWrenchBarrierEpochDrift) {
++		t.Fatalf("old epoch error = %v, want epoch drift", err)
++	}
++	if err := state.wait(context.Background(), newEpoch, sequence); !errors.Is(err, ErrWrenchBarrierHandlerEscaped) {
++		t.Fatalf("new epoch late-handler error = %v, want escaped handler", err)
++	}
++}
++
++func TestWrenchReceiveBarrierRequiresBoundedContext(t *testing.T) {
++	client := &Client{wrenchReceiveBarrier: newWrenchReceiveBarrierState()}
++	client.wrenchReceiveBarrier.beginConnection()
++	if _, err := client.WrenchReceiveBarrier(context.Background()); err == nil {
++		t.Fatal("expected missing-deadline error")
++	}
++}

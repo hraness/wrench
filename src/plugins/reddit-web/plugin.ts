@@ -15,6 +15,7 @@ import archivedRedditWebManifestV1_6 from "../../assets/adapters/reddit/wrench-w
 import archivedRedditWebManifestV1_7 from "../../assets/adapters/reddit/wrench-web-adapter.v1.7.0.json";
 import archivedRedditWebManifestV1_8 from "../../assets/adapters/reddit/wrench-web-adapter.v1.8.0.json";
 import archivedRedditWebManifestV1_9 from "../../assets/adapters/reddit/wrench-web-adapter.v1.9.0.json";
+import archivedRedditWebMediaReadV1Manifest from "../../assets/adapters/reddit/wrench-web-adapter.v1.10.0.json";
 import type { OperationInput } from "../../model";
 import {
   planWebSessionContractDispatches,
@@ -33,7 +34,7 @@ if (redditContracts === undefined) {
 
 const currentOperations = webSessionContractOperations(
   Object.values(redditContracts),
-  "4e4bec299ecc54bbf083aef95d54215ee24fbadb588c8b044021f8a9140c8fbf",
+  "aadd0505f22d3952968baaf84377911f46921f3b03fc6a05254b88642cfa81ab",
   {},
   {
     "messaging.list": {
@@ -335,8 +336,40 @@ const archivedMediaPublishOperationV8 = Object.freeze({
   validateInput: () => Object.freeze([]),
 });
 
+const archivedMediaReadContract = reviewedArchivedWebSessionContract(
+  archivedRedditWebMediaReadV1Manifest,
+  {
+    adapterId: "reddit-web",
+    adapterVersion: "1.10.0",
+    site: "reddit",
+    operation: "media.read",
+    contractVersion: 1,
+    risk: "R1",
+    state: "capture-required",
+    implementation:
+      "reddit media.read@1 was an unbounded media-variant reservation and remains inert historical identity",
+  },
+);
+
+const archivedMediaReadOperation = Object.freeze({
+  name: archivedMediaReadContract.operation,
+  contractVersion: archivedMediaReadContract.contractVersion,
+  risk: archivedMediaReadContract.risk,
+  input: archivedMediaReadContract.input,
+  sideEffect: archivedMediaReadContract.sideEffect,
+  idempotency: archivedMediaReadContract.idempotency,
+  dedupeWindowMs: archivedMediaReadContract.dedupeWindowMs,
+  state: archivedMediaReadContract.state,
+  dispatch: archivedMediaReadContract.dispatch,
+  implementation: archivedMediaReadContract.implementation,
+  planDispatches: (input: OperationInput) =>
+    planWebSessionContractDispatches(archivedMediaReadContract, input),
+  validateInput: () => Object.freeze([]),
+});
+
 const operations = Object.freeze([
   ...currentOperations,
+  archivedMediaReadOperation,
   archivedMediaPublishOperation,
   archivedMediaPublishOperationV2,
   archivedMediaPublishOperationV3,
@@ -350,10 +383,11 @@ const operations = Object.freeze([
 export const redditWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "reddit-web",
-  version: "1.1.0",
+  version: "1.3.0",
   displayName: "Reddit Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["providers/reddit-web.ts", "../../providers/reddit-web.ts"],
     ["providers/reddit-web-runtime.ts", "../../providers/reddit-web-runtime.ts"],
     ["providers/reddit-omni.ts", "../../providers/reddit-omni.ts"],

@@ -92,7 +92,7 @@ describe("WhatsApp linked-device protocol registry", () => {
     });
     expect(whatsappManifest.schemaVersion).toBe(4);
     expect(whatsappManifest.id).toBe("whatsapp-web");
-    expect(whatsappManifest.version).toBe("1.3.0");
+    expect(whatsappManifest.version).toBe("1.4.0");
     expect(whatsappManifest.displayName).toContain("Linked-Device Protocol");
     expect(whatsappManifest.operations["contacts.list"].description).toContain(
       "account-bound contact table",
@@ -135,7 +135,10 @@ describe("WhatsApp linked-device protocol registry", () => {
       "without opening a WhatsApp connection",
     );
     expect(WHATSAPP_WEB_OPERATIONS["messaging.send"].reason).toContain(
-      "process-private",
+      "private no-retry text transport",
+    );
+    expect(WHATSAPP_WEB_OPERATIONS["messaging.send"].reason).toContain(
+      "remain inactive until a controlled low-stakes live fixture and exact hash-bound reconciliation read are proven",
     );
     expect(WHATSAPP_COMMUNITY_MEMBERSHIP_POLICY).toMatchObject({
       risk: "R4",

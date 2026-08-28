@@ -1064,9 +1064,22 @@ export function parseFacebookViewerId(html: unknown): string {
   return oneStableId(candidates, "Facebook current user");
 }
 
+export class ThreadsAuthRepairRequiredError extends Error {
+  constructor() {
+    super("Threads selected session is signed out");
+    this.name = "ThreadsAuthRepairRequiredError";
+  }
+}
+
 export function parseThreadsViewerId(html: unknown): string {
   const roots = parseMetaJsonScripts(html);
   const sessionPayloads = modulePayloads(roots, "BarcelonaSessionInfo");
+  if (
+    sessionPayloads.length > 0
+    && sessionPayloads.every((payload) =>
+      payload.is_th_session === true && payload.is_logged_out === true
+    )
+  ) throw new ThreadsAuthRepairRequiredError();
   if (
     sessionPayloads.length < 1
     || sessionPayloads.some((payload) => payload.is_th_session !== true || payload.is_logged_out !== false)

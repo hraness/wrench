@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "repository": "https://github.com/openclaw/imsg",
+    "version": "0.14.1",
+    "baseCommit": "25beb76c902b0acf2dd7ae392f1b0792f6813240"
+  },
+  "reviewedPatchStack": {
+    "tipCommit": "c5994f00d17969fd7772fd2772e7b3591089513a",
+    "patches": [
+      {
+        "file": "0001-fix-keep-AppleScript-send-payloads-out-of-child-argv.patch",
+        "commit": "292db82d89293867ef847a2875667fea0fdd5dc1",
+        "sha256": "99cf18953470e85a62a226f207e6a5c0452d3997675c99eabf4d5cb73c6411fd",
+        "purpose": "Keep every private AppleScript send value out of child argv and preserve typed delivery uncertainty.",
+        "changedFiles": [
+          "CHANGELOG.md",
+          "Sources/IMsgCore/AppleScriptPrivatePayload.swift",
+          "Sources/IMsgCore/AppleScriptSendTransport.swift",
+          "Sources/IMsgCore/MessageSender.swift",
+          "Tests/IMsgCoreTests/AppleScriptPrivatePayloadTestSupport.swift",
+          "Tests/IMsgCoreTests/AppleScriptPrivatePayloadTests.swift",
+          "docs/private-applescript-transport.md",
+          "docs/rpc.md",
+          "docs/send.md"
+        ]
+      },
+      {
+        "file": "0002-feat-rpc-add-exact-chat-lookup.patch",
+        "commit": "c5994f00d17969fd7772fd2772e7b3591089513a",
+        "sha256": "b05aa92a078930f96fda611c674436638843f7b148d7bfa3b65ed1ccb0885c13",
+        "purpose": "Expose one read-only exact chat row lookup for live route revalidation without a bounded recency scan.",
+        "changedFiles": [
+          "Sources/IMsgCore/MessageStore+Chats.swift",
+          "Sources/imsg/RPCMethodDescriptors.swift",
+          "Sources/imsg/RPCServer+Handlers.swift",
+          "Sources/imsg/RPCServer.swift",
+          "Tests/imsgTests/RPCServerTests.swift"
+        ]
+      }
+    ]
+  },
+  "artifact": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "executableSha256": "77a0db864dfd247cd0a9142dd98997960582e6f150f76ecd3bf1c38944f2bf71",
+    "reportedVersion": "0.14.1",
+    "build": {
+      "swift": "Apple Swift 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)",
+      "sdk": "/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk",
+      "command": [
+        "env",
+        "SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk",
+        "CLANG_MODULE_CACHE_PATH=<private-build-cache>",
+        "SWIFTPM_MODULECACHE_OVERRIDE=<private-build-cache>",
+        "swift",
+        "build",
+        "--disable-sandbox",
+        "-c",
+        "release",
+        "--product",
+        "imsg"
+      ]
+    }
+  },
+  "reviewBoundary": {
+    "liveSendPerformed": false,
+    "githubRepositoryCreated": false,
+    "externalMutationPerformed": false,
+    "appleScriptReturnsMessageGuid": false,
+    "acceptedEvidence": "A successful send is accepted only when imsg independently observes one matching outgoing chat.db row and returns its exact GUID.",
+    "unobservedEvidence": "An AppleScript call without an independently observed matching row remains may_have_completed and is not retryable.",
+    "accountSelection": "device-default",
+    "selectableAppleAccount": false,
+    "service": "iMessage",
+    "transport": "applescript",
+    "smsFallback": false,
+    "exactRouteLookup": "chats.get(chat_id) returns one exact current chat projection and rejects an unknown row"
+  }
+}

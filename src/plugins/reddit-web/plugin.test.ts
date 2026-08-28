@@ -18,6 +18,27 @@ const auth = {
 } as const satisfies WrenchAuth;
 
 describe("Reddit provider plugin", () => {
+  test("keeps the broad media reservation inert beside metadata-only hosted-video reads", () => {
+    expect(redditWebPlugin.version).toBe("1.3.0");
+    const reads = binding.operations.filter((operation) =>
+      operation.name === "media.read");
+    expect(reads.map((operation) => operation.contractVersion)).toEqual([1, 2]);
+    const current = reads.find((operation) => operation.contractVersion === 2);
+    const archived = reads.find((operation) => operation.contractVersion === 1);
+    expect(current).toMatchObject({
+      contractVersion: 2,
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+    });
+    expect(archived).toMatchObject({
+      contractVersion: 1,
+      risk: "R1",
+      state: "capture-required",
+      dispatch: "none",
+    });
+  });
+
   test("declares exact desired-state and accepted-target reconciliation", async () => {
     const save = binding.operations.find((operation) => operation.name === "content.save");
     const deletion = binding.operations.find((operation) => operation.name === "content.delete");

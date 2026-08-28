@@ -7,6 +7,7 @@ import type { WrenchAuth } from "../auth";
 import type { BrowserFileResolver } from "../browser";
 import { canonicalJson, sha256 } from "../canonical-json";
 import type { FileInputValue, OperationInput, WebSessionRecipe } from "../model";
+import { OperationDeadlineError } from "../operation-deadline";
 import { openCursorToken, sealCursorToken } from "../cursor-token";
 import {
   createWebSessionClient,
@@ -25,6 +26,7 @@ import type {
   WebSessionProviderAcceptedMutationTargetEvent,
   WebSessionProviderBoundMutationTargetEvent,
 } from "../web-session-execution";
+import { failedProviderRead } from "./read-failure";
 import {
   assertInstagramVideoConfigureIndeterminate,
   assertInstagramVideoDeleteAcknowledgement,
@@ -79,6 +81,7 @@ import {
   parseInstagramViewerId,
   parseThreadsViewerId,
   projectThreadsPublishVideo,
+  ThreadsAuthRepairRequiredError,
   type FacebookMarketplaceFeed,
   type MetaWebOperationContract,
   type MetaWebSite,
@@ -2943,10 +2946,27 @@ export async function executeMetaWebOperation(
   }
 
   const environment = options.environment ?? process.env;
-  const expectedSubject = expectedMetaAuthSubject(recipe.site, auth);
   const prepared = prepareMetaRead(recipe, input, auth, environment);
+  const statisticsRead = prepared.kind === "instagram-profile"
+    || prepared.kind === "threads-profile";
 
   const origin = ORIGINS[recipe.site];
+  const statisticsFinalUrl = prepared.kind === "instagram-profile"
+    ? `${origin}/${prepared.profile}/`
+    : prepared.kind === "threads-profile"
+      ? new URL(`/@${encodeURIComponent(prepared.profile)}`, origin).href
+      : null;
+  let expectedSubject: string;
+  try {
+    expectedSubject = expectedMetaAuthSubject(recipe.site, auth);
+  } catch (error) {
+    if (!statisticsRead) throw error;
+    return failedProviderRead(`${recipe.site} profile`, error, statisticsFinalUrl, {
+      stage: "bootstrap",
+      authenticated: true,
+      authRepairRequired: (candidate) => candidate.message.includes("auth subject"),
+    });
+  }
   const dependencies = metaWebSessionDependencies(
     recipe.site,
     auth,
@@ -2956,16 +2976,18 @@ export async function executeMetaWebOperation(
     cookies: Object.freeze([]),
     tombstones: Object.freeze([]),
   });
-  const client = await createWebSessionClient(origin, auth, {
-    timeoutMs: recipe.timeoutMs,
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-    ...(options.operationDeadline === undefined
-      ? {}
-      : { operationDeadline: options.operationDeadline }),
-    ...(dependencies === undefined ? {} : { dependencies }),
-    ...(isThreadsMutation
-      ? {
-          cookieRotation: {
+  let client: WebSessionClient;
+  try {
+    client = await createWebSessionClient(origin, auth, {
+      timeoutMs: recipe.timeoutMs,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(dependencies === undefined ? {} : { dependencies }),
+      ...(isThreadsMutation
+        ? {
+            cookieRotation: {
             // Account-cookie changes are retained only inside this invocation
             // so the mandatory post-upload viewer probe observes and rejects
             // an upload response that moved the browser session to a new user.
@@ -2976,11 +2998,109 @@ export async function executeMetaWebOperation(
             save: (state: WebSessionCookieRotationState) => {
               threadsAccountCookieState = state;
             },
-          },
+            },
+          }
+        : {}),
+    });
+  } catch (error) {
+    if (!statisticsRead) throw error;
+    return failedProviderRead(`${recipe.site} profile`, error, statisticsFinalUrl, {
+      stage: "bootstrap",
+      authenticated: true,
+    });
+  }
+  let viewer: BoundMetaViewer;
+  try {
+    viewer = await requireBoundViewer(recipe.site, client, expectedSubject);
+  } catch (error) {
+    if (!statisticsRead) throw error;
+    return failedProviderRead(`${recipe.site} profile`, error, statisticsFinalUrl, {
+      stage: "identity",
+      authenticated: true,
+      accountMismatch: (candidate) => candidate.message.includes("no longer matches")
+        || candidate.message.includes("did not match the confirmed auth subject")
+        || candidate.message.includes("did not match the selected browser session"),
+      authRepairRequired: (candidate) => candidate.message.includes("cookie")
+        || candidate instanceof ThreadsAuthRepairRequiredError,
+    });
+  }
+  if (prepared.kind === "instagram-profile") {
+    try {
+      const response = await executeInstagramRead(
+        prepared,
+        client,
+        viewer.id,
+        recipe.maxOutputBytes,
+      );
+      const output = normalizeInstagramProfileStats(
+        response,
+        viewer.id,
+        prepared.profile,
+        new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
+      );
+      return {
+        status: "succeeded",
+        output,
+        finalUrl: statisticsFinalUrl,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      };
+    } catch (error) {
+      return failedProviderRead("Instagram profile", error, statisticsFinalUrl, {
+        stage: "target",
+        authenticated: true,
+        accountMismatch: (candidate) => candidate.message.includes(
+          "profile response did not bind the current viewer ID",
+        ),
+      });
+    }
+  }
+  if (prepared.kind === "threads-profile") {
+    try {
+      const profilePath = `/@${encodeURIComponent(prepared.profile)}`;
+      const profileHtml = await metaHtmlPath(client, origin, profilePath);
+      let recentViews = normalizeThreadsRecentViewsAvailability("<main></main>");
+      try {
+        const insightsHtml = await metaHtmlPath(client, origin, "/insights", profilePath);
+        recentViews = normalizeThreadsRecentViewsAvailability(insightsHtml);
+      } catch (error) {
+        let cause: unknown = error;
+        for (let depth = 0; depth < 8 && cause !== undefined; depth += 1) {
+          if (cause instanceof OperationDeadlineError) throw cause;
+          cause = cause instanceof Error ? cause.cause : undefined;
         }
-      : {}),
-  });
-  const viewer = await requireBoundViewer(recipe.site, client, expectedSubject);
+        options.operationDeadline?.throwIfUnavailable(
+          "Threads insights supplemental read",
+        );
+        // Insights are eligibility-gated supplemental data. The exact target
+        // follower projection remains publishable when this page is absent.
+      }
+      const output = normalizeThreadsProfileStats(
+        profileHtml,
+        viewer.id,
+        prepared.profile,
+        recentViews,
+        new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
+      );
+      return {
+        status: "succeeded",
+        output,
+        finalUrl: statisticsFinalUrl,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      };
+    } catch (error) {
+      return failedProviderRead("Threads profile", error, statisticsFinalUrl, {
+        stage: "target",
+        authenticated: true,
+        accountMismatch: (candidate) => candidate.message.includes(
+          "response changed its bound viewer",
+        ) || candidate.message.includes(
+          "did not bind the current viewer ID",
+        ),
+      });
+    }
+  }
   if (prepared.kind === "instagram-video") {
     return executeInstagramVideoPublish(
       client,
@@ -3072,8 +3192,7 @@ export async function executeMetaWebOperation(
   let output: unknown;
   let finalUrl = `${origin}/`;
   if (
-    prepared.kind === "instagram-profile"
-    || prepared.kind === "instagram-feed"
+    prepared.kind === "instagram-feed"
     || prepared.kind === "instagram-media"
     || prepared.kind === "instagram-comments"
     || prepared.kind === "instagram-inbox"
@@ -3085,35 +3204,13 @@ export async function executeMetaWebOperation(
       viewer.id,
       recipe.maxOutputBytes,
     );
-    output = prepared.kind === "instagram-profile"
-      ? normalizeInstagramProfileStats(
-          instagramResponse,
-          viewer.id,
-          prepared.profile,
-          new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
-        )
-      : instagramResponse;
-    if (prepared.kind === "instagram-profile") {
-      finalUrl = `${origin}/${prepared.profile}/`;
-    }
+    output = instagramResponse;
     if (
       prepared.kind === "instagram-inbox"
       || prepared.kind === "instagram-contacts"
     ) {
       finalUrl = `${origin}/direct/inbox/`;
     }
-  } else if (prepared.kind === "threads-profile") {
-    const profilePath = `/@${encodeURIComponent(prepared.profile)}`;
-    const profileHtml = await metaHtmlPath(client, origin, profilePath);
-    const insightsHtml = await metaHtmlPath(client, origin, "/insights", profilePath);
-    output = normalizeThreadsProfileStats(
-      profileHtml,
-      viewer.id,
-      prepared.profile,
-      normalizeThreadsRecentViewsAvailability(insightsHtml),
-      new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
-    );
-    finalUrl = new URL(profilePath, origin).href;
   } else if (prepared.kind === "threads-feed") {
     output = normalizeThreadsFeedHtml(viewer.rootHtml, viewer.id, prepared.limit);
   } else if (prepared.kind === "facebook-feed") {

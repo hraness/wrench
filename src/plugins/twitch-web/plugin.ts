@@ -17,10 +17,11 @@ if (twitchContracts === undefined) {
 export const twitchWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "twitch-web",
-  version: "1.0.0",
+  version: "1.1.0",
   displayName: "Twitch Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
+    ["providers/read-failure.ts", "../../providers/read-failure.ts"],
     ["providers/twitch-web.ts", "../../providers/twitch-web.ts"],
     ["providers/twitch-web-runtime.ts", "../../providers/twitch-web-runtime.ts"],
   ]),

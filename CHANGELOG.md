@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+## 0.16.2 - 2026-08-28
+
+- Add a strict machine-readable Hraness social-profile collection manifest,
+  correct the second X account to Life Days Left, and bind the current Twitch
+  and GitHub organization metrics plus the expected Threads eligibility gap.
+- Project stable, secret-free failure categories and retry dispositions for
+  failed R1 reads across every provider in the Hraness manifest. Consumers can
+  distinguish target, auth, account, provider, timeout, contract, and cleanup
+  failures without exposing provider responses or inventing retry policy.
+
+## 0.16.1 - 2026-08-27
+
+- Add a provider-neutral agentic messaging facade that keeps exact routes,
+  current context, prose, replies, and receipts in encrypted state and
+  explicit owner-only artifacts. One private preview authorizes one ordered
+  one-to-eight-bubble turn; the durable journal preserves submitted, failed,
+  partial, and indeterminate outcomes without retrying uncertain work.
+- Qualify Beeper Desktop for exact live agentic actions through its loopback
+  API. Wrench binds one account and conversation, checks participants and the
+  exact expected own-message prefix before every remaining bubble, and stops
+  on foreign activity, edits, deletions, reorderings, or provider drift.
+- Add a reviewed direct iMessage local transport with fixed JSON-RPC stdin,
+  exact chat-row revalidation, AppleScript private files, disabled SMS
+  fallback, and independent outgoing `chat.db` acceptance evidence. Threaded
+  replies remain unsupported and every bubble has a separate no-retry fence.
+- Vendor and verify a patched Wacli/Whatsmeow stdin-only private transport.
+  The registered WhatsApp action remains unavailable until controlled live
+  freshness, acceptance, and reconciliation qualification is complete.
+- Ship the reviewed iMessage transport installer through the public CLI with
+  digest verification, no-overwrite semantics, path-private diagnostics, and
+  fail-closed handling for unsafe source and state paths.
+- Add an exact lightweight `wrench --version` command and bind package smoke
+  tests to the installed binary's immutable release identity.
+
+## 0.16.0 - 2026-08-27
+
+- Redesign wrench.rip as a restrained editorial site with a supported-actions-only
+  provider directory, task-first capability labels, and no zero-action service
+  cards in the public catalog.
+- Add `x-web articles.read@2` for one exact current-viewer-owned private Article
+  draft. The closed R1 result binds its ID, owner, Draft lifecycle, unpublished
+  state, title, and bounded rich content; published X Articles and LinkedIn
+  Article reads remain unsupported.
+- Add `reddit-web media.read@2` for one exact Reddit-hosted video post through
+  the current-account-bound `/api/info` exchange. The metadata-only R1 result
+  returns post fields, dimensions, duration, safety flags, and completed status
+  without playback URLs; standalone Threads post and media reads and Marketplace
+  media reads remain unsupported.
+
 ## 0.15.1 - 2026-08-27
 
 - Publish Wrench through the public npm registry with an exact Bun runtime

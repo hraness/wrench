@@ -8,6 +8,7 @@ First-party traffic is not the same as a documented public API. Use this local c
 
 - [Install and inspect](#install-and-inspect)
 - [Save an Article draft](#save-an-article-draft)
+- [Read one private Article draft](#read-one-private-article-draft)
 - [Configure and bind the signed-in realm](#configure-and-bind-the-signed-in-realm)
 - [Use observed contracts](#use-observed-contracts)
 - [Export bookmarks](#export-bookmarks)
@@ -98,6 +99,29 @@ public readback. The retired
 durable v2 evidence; it is not selected for a new preview. Inspect both current
 capabilities and keep their OAuth plans separate from the `x-web` cookie realm.
 
+## Read one private Article draft
+
+Use `x-web articles.read@2` to read one exact current-viewer-owned private X
+Article in the `Draft` lifecycle. Pass its 1–19 digit private ID through the
+same bound X cookie realm used for other authenticated web operations:
+
+```sh
+wrench x-web articles.read \
+  --input '{"article_id":"1234567890123456789"}' \
+  --auth x-main --json
+```
+
+This is an R1 read with no mutation dispatch. Wrench resolves the current
+viewer before the Article query, requires the result to echo the requested ID
+and viewer-owner ID, and accepts only `lifecycle: "Draft"` with
+`published: false`. The closed output includes the exact ID, owner ID, private
+draft kind, lifecycle, one bounded single-line title, and bounded normalized
+rich content.
+
+The contract does not list drafts, read another account's draft, or read a
+published Article. Those surfaces remain capture-required. Do not use an edit
+URL, title search, or the separate official OAuth adapter as a fallback.
+
 ## Configure and bind the signed-in realm
 
 Prefer a target-filtered browser cookie source:
@@ -118,9 +142,14 @@ The current registry marks these code-owned reads observed:
 
 - `feeds.read`: one bounded For You, Following, user, List, search, or bookmarks page; bookmarks pages also emit stable `items` keyed by `post_id`;
 - `posts.read`: one exact post through the current TweetDetail query;
-- `comments.read`: one bounded TweetDetail conversation/reply page.
+- `comments.read`: one bounded TweetDetail conversation/reply page;
+- `articles.read@2`: one exact current-viewer-owned private Article Draft.
 
-Authorized direct live evidence for this contract version covers For You, bookmarks, one exact post, and its bounded comments. Following, user, List, and search remain declared modes of the observed `feeds.read` contract; check `wrench capabilities x-web --json` for the installed input schema and let current preflight fail closed on revision drift.
+Authorized direct live evidence for this contract version covers For You,
+bookmarks, one exact post and its bounded comments, plus one exact private
+Article Draft. Following, user, List, and search remain declared modes of the
+observed `feeds.read` contract; check `wrench capabilities x-web --json` for the
+installed input schema and let current preflight fail closed on revision drift.
 
 The observed web writes are `likes.set`, `content.save`, and
 `articles.draft.save`, all R2. Like and bookmark evidence comes from prior
@@ -150,11 +179,18 @@ wrench x-web comments.read \
   --input '{"post_id":"ROOT_POST_ID","limit":50}' \
   --auth x-main --json
 
+wrench x-web articles.read \
+  --input '{"article_id":"1234567890123456789"}' \
+  --auth x-main --json
 ```
 
 One page is not a completeness claim. Return a provider cursor only after projecting the complete provider page. If X returns more matching posts or replies than the requested projection limit, fail without exposing the end cursor instead of silently skipping unseen entries. User and List feeds additionally require the response to echo exactly the requested user/List identity. Keep inbox listing separate from conversation read so the R1 contract can exclude acknowledgement traffic.
 
-DM folder/conversation reads remain `capture-required` because current X Chat events are encrypted. They require the separate reviewed key-recovery, plaintext projection, and acknowledgement-free contract. Native X Article read remains `capture-required` until the entitlement-specific detail exchange is captured and projected.
+DM folder/conversation reads remain `capture-required` because current X Chat
+events are encrypted. They require the separate reviewed key-recovery,
+plaintext projection, and acknowledgement-free contract. Published Article
+reads, draft listing, and any entitlement-specific Article variant beyond the
+exact private Draft contract remain `capture-required`.
 
 ## Export bookmarks
 
@@ -269,7 +305,6 @@ The current `x-web` registry keeps these unavailable:
 
 - `messaging.list` and `messaging.read` (`R1`) until verified X Chat key recovery, plaintext projection, and acknowledgement-free handling are installed;
 - `messaging.send` (`R3`) until its exact current mutation, conversation/user target, response, and media path are captured;
-- `articles.read` (`R1`) until the entitlement-specific detail read is captured;
 - `articles.publish` (`R3`) until the distinct publish mutation and public
   readback are captured and response-bound. `articles.draft.save` never
   authorizes `ArticleEntityPublish`.
@@ -281,9 +316,10 @@ Encrypted X Chat is not a normal HAR template. Plaintext and send require a sepa
 ## Risk and confirmation
 
 R1 reads run only after account binding and exclusion of seen/read
-acknowledgement requests. Likes, bookmarks, and private Article draft saves are
-R2. Posts, replies, quotes, reposts, threads, DMs, and Article publication are
-R3.
+acknowledgement requests. The private Article read additionally binds the exact
+requested Draft to the current viewer. Likes, bookmarks, and private Article
+draft saves are R2. Posts, replies, quotes, reposts, threads, DMs, and Article
+publication are R3.
 
 Preview the exact account realm, target, body/items, attachment hashes, reply settings, desired state, contract hash, and dispatch schedule. Confirm once. Require duplicate refusal. If a request left but its response or target binding is uncertain, report `indeterminate` and preserve the ledger.
 

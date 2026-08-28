@@ -109,8 +109,10 @@ describe("wrench.rip static site", () => {
     const builtCss = await readFile(join(websiteRoot, "dist", cssAsset!.slice(1)), "utf8");
 
     expect(sourceCss).toContain('--font-sans: "Nebula Sans", ui-sans-serif, system-ui');
+    expect(sourceCss).toContain('--font-serif: ui-serif, "Iowan Old Style", Baskerville');
     expect(sourceCss).toMatch(/body\s*\{[^}]*font-family:\s*var\(--font-sans\)/su);
-    expect(sourceCss).toMatch(/\.preview-copy h1\s*\{(?![^}]*font-family)[^}]*\}/su);
+    expect(sourceCss).toMatch(/\.wordmark\s*\{[^}]*font-family:\s*var\(--font-serif\)/su);
+    expect(sourceCss).toMatch(/\.hero h1,[\s\S]*?\.preview-copy h1\s*\{[^}]*font-family:\s*var\(--font-serif\)/u);
     expect(sourceCss).toMatch(/\.preview-copy > p:last-child\s*\{(?![^}]*font-family)[^}]*\}/su);
     expect(sourceCss).toMatch(/\.preview-eyebrow\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
     expect(sourceCss).toMatch(/\.preview-flow li\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
@@ -145,11 +147,8 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain('role="status"');
     expect(html).toContain('/assets/skill-install-');
-    expect(html.indexOf('class="hero-statement"')).toBeLessThan(
+    expect(html.indexOf('class="hero-explainer"')).toBeLessThan(
       html.indexOf('class="skill-install"'),
-    );
-    expect(html.indexOf('class="skill-install"')).toBeLessThan(
-      html.indexOf('class="hero-explainer"'),
     );
     expect(html).not.toContain("{{");
     expect(html).not.toContain("@jungle/");
@@ -164,10 +163,13 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/compare/personal-agents-browser-use/"');
     expect(html).toContain('href="/agentic-web-spoofing/"');
     expect(html).toContain('href="/vms-cannot-contain-agents/"');
+    expect(html).toContain('href="/paypal-grapheneos-attestation/"');
     expect(html).toContain('href="/providers/beeper/"');
-    expect(html).toContain("Give agents bounded access to pages, media, and connected accounts.");
-    expect(html).toContain("Know which operations can run before you bind an account.");
-    expect(html).toContain('src="/favicon.svg"');
+    expect(html).toContain("Give your coding agent bounded access to the web.");
+    expect(html).toContain("Work with the services you already use.");
+    expect(html).toContain('class="wordmark" href="/">Wrench</a>');
+    expect(html).not.toMatch(/hero-field|hero-orbit|hero-glyph/u);
+    expect(html).not.toMatch(/observed provider operations|capture-required|unavailable reservations/iu);
     expect(html).not.toContain("🔧");
     expect(html).toContain(`href="${PUBLISHER_URL}">Hraness GitHub organization</a>`);
     expect(preview).toContain("<title>Wrench preview</title>");
@@ -175,8 +177,10 @@ describe("wrench.rip static site", () => {
     expect(preview).toContain('<link rel="canonical" href="https://wrench.rip/">');
     expect(preview).toContain(`<link rel="stylesheet" href="${cssAsset}">`);
     expect(preview).toContain('<body class="preview-body">');
-    expect(preview).toContain("Precise web capabilities for AI agents.");
-    expect(preview).toContain("Capture pages, preserve media, and run reviewed provider operations");
+    expect(preview).toContain("Give your coding agent bounded access to the web.");
+    expect(preview).toContain("Capture pages, preserve media, and use supported provider actions");
+    expect(preview).toContain('class="preview-wordmark">Wrench</p>');
+    expect(preview).not.toMatch(/preview-field|preview-orbit|src="\/favicon\.svg"/u);
     expect(preview.match(/<h1\b/gu)).toHaveLength(1);
     expect(preview).not.toContain("{{");
     expect(preview).not.toMatch(/<(?:a|button|form|input|script)\b/iu);
@@ -209,8 +213,12 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
     expect(llms).toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/paypal-grapheneos-attestation/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
     expect(llms).toContain("submission is not a delivery claim");
+    expect(llms.replaceAll(/https:\/\/wrench\.rip\/[a-z0-9-/]+/gu, "")).not.toMatch(
+      /observed|capture-required|reservation|attestation/iu,
+    );
     expect(llms).toContain("npx skills add hraness/wrench");
     expect(llms).toContain("Accept: text/markdown");
     expect(llms).not.toContain("{{");
@@ -402,6 +410,8 @@ describe("wrench.rip static site", () => {
       const canonicalUrl = `${SITE_ORIGIN}${definition.canonicalPath}`;
       expect(pageHtml).toContain(`<title>${definition.title}</title>`);
       expect(pageHtml).toContain(`<meta name="description" content="${definition.description}">`);
+      expect(pageHtml).toContain('class="wordmark" href="/">Wrench</a>');
+      expect(pageHtml).not.toContain('class="wordmark" href="/">WRENCH</a>');
       expect(pageHtml).toContain(`<link rel="canonical" href="${canonicalUrl}">`);
       expect(pageHtml).toContain(`<meta property="og:title" content="${definition.title}">`);
       expect(pageHtml).toContain(`<meta property="og:description" content="${definition.description}">`);
@@ -455,7 +465,7 @@ describe("wrench.rip static site", () => {
       if (definition.canonicalPath !== "/") {
         expect(pageHtml).toContain('class="answer-lede"');
         expect(pageHtml).toContain('aria-label="Breadcrumb"');
-        expect(pageHtml.match(/<h2\b/gu)?.length ?? 0).toBeGreaterThanOrEqual(4);
+        expect(pageHtml.match(/<h2\b/gu)?.length ?? 0).toBeGreaterThanOrEqual(2);
         expect(pageGraph).toEqual(expect.arrayContaining([
           expect.objectContaining({
             "@id": `${canonicalUrl}#article`,
@@ -502,27 +512,22 @@ describe("wrench.rip static site", () => {
       "utf8",
     );
     expect(providerCapabilities?.html).toContain(
-      `Wrench ${packageIdentity.version} joins its built-in provider plugins to the bundled public adapter manifests`,
+      "This directory lists the actions supported by the current Wrench release",
     );
     expect(html).toContain(providerCards);
     expect(providerCapabilities?.html).toContain(providerCards);
     expect(providerCapabilities?.html).toContain(providerGroups);
-    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Operation</th>");
-    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Completeness</th>");
-    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Risk</th>");
-    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Contract</th>");
-    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Transport</th>");
-    expect(providerCapabilities?.html).toContain("<th scope=\"col\">Limit</th>");
-    expect(providerCapabilities?.html).toContain(`<code>gmail</code>`);
+    expect(providerCapabilities?.html).toContain("Supported actions by service");
+    expect(providerCapabilities?.html).toContain("Official API");
     expect(providerCapabilities?.html).toContain(`<code>contacts.list</code>`);
-    expect(providerCapabilities?.html).toContain(`<code>observed</code>`);
-    expect(providerCapabilities?.html).toContain(`<code>capture-required</code>`);
-    expect(providerCapabilities?.html).toContain("Telegram is absent from those manifests");
-    expect(providerCapabilities?.html).not.toContain("<th scope=\"row\">Telegram</th>");
+    expect(providerCapabilities?.html).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
+    expect(providerCapabilities?.html).not.toContain("Telegram");
     expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");
-    expect(providerMarkdown).toContain(
-      "### Beeper (Pinned Local CLI) `beeper-local` · v2.0.0 · 32 of 32 observed",
-    );
+    expect(providerMarkdown).toContain("### Beeper");
+    expect(providerMarkdown).toContain("32 supported actions");
+    expect(providerMarkdown).toContain("**List accounts**");
+    expect(providerMarkdown).toContain("`accounts.list`");
+    expect(providerMarkdown).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
 
     const beeper = pages.find((page) => page.definition.canonicalPath === "/providers/beeper/");
     const beeperFacts = createBeeperPresentationFacts(providerDirectory);
@@ -531,7 +536,7 @@ describe("wrench.rip static site", () => {
       `<meta name="description" content="${beeperFacts.pageDescription}">`,
     );
     expect(beeper?.html).toContain(
-      `<h1>Beeper through ${beeperFacts.observedOperationCount} observed operations.</h1>`,
+      `<h1>Use Beeper through ${beeperFacts.observedOperationCount} supported actions.</h1>`,
     );
     expect(beeper?.html).toContain(`adapter <code>beeper-local</code> ${beeperFacts.adapterVersion}`);
     expect(beeper?.html).toContain(`official Beeper CLI ${beeperFacts.cliVersion}`);
@@ -549,7 +554,7 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).toContain("evidence of submission, not network delivery");
     expect(beeper?.html).toContain("Wrench does not retry it");
     expect(beeper?.html).toContain(`all ${beeperFacts.cliCommandCount} canonical CLI commands`);
-    expect(beeper?.html).toContain("These workflows are not part of the 32 adapter operations");
+    expect(beeper?.html).toContain("These workflows are not part of the 32 supported actions");
     expect(beeper?.html).not.toMatch(/all Beeper (?:CLI )?features/iu);
     expect(beeper?.html).not.toMatch(/all (?:your )?chats/iu);
     expect(beeper?.html).not.toContain("exactly once");
@@ -559,7 +564,7 @@ describe("wrench.rip static site", () => {
     const personalAgents = pages.find((page) =>
       page.definition.canonicalPath === "/compare/personal-agents-browser-use/");
     expect(personalAgents?.html).toContain(
-      "<h1>Browser-using personal agents still need attested web operations.</h1>",
+      "<h1>Browser-using personal agents still need named web operations.</h1>",
     );
     expect(personalAgents?.html).toContain(
       "https://hraness.com/reading/personal-agents-notes-instinct-grok-bots-chatgpt-work",
@@ -568,12 +573,9 @@ describe("wrench.rip static site", () => {
     expect(personalAgents?.html).toContain("https://wrench.rip/provider-capabilities/");
     expect(personalAgents?.html).toContain("https://wrench.rip/security/");
     expect(personalAgents?.html).toContain(
-      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+      `The current release offers ${attestation.observedCount} supported provider actions.`,
     );
-    expect(personalAgents?.html).toContain(
-      `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
-    );
-    expect(personalAgents?.html).toContain("Telegram is absent from those manifests");
+    expect(personalAgents?.html).toContain("Telegram is not supported in this release");
     expect(personalAgents?.html).toContain("Instinct");
     expect(personalAgents?.html).toContain("Grok Bots");
     expect(personalAgents?.html).toContain("ChatGPT Work");
@@ -581,6 +583,7 @@ describe("wrench.rip static site", () => {
     expect(personalAgents?.html).toContain("https://wrench.rip/agentic-web-spoofing/");
     expect(personalAgents?.html).toContain("https://wrench.rip/vms-cannot-contain-agents/");
     expect(personalAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
+    expect(personalAgents?.html).not.toMatch(/capture-required|<code>observed<\/code>/iu);
 
     const agenticWebSpoofing = pages.find((page) =>
       page.definition.canonicalPath === "/agentic-web-spoofing/");
@@ -653,10 +656,47 @@ describe("wrench.rip static site", () => {
     );
     expect(vmsCannotContainAgents?.html).toContain("Telegram is absent from those manifests");
     expect(vmsCannotContainAgents?.html).toContain("does not sell a hypervisor, a microVM, or a hostile-code sandbox");
-    expect(vmsCannotContainAgents?.html).toContain("None of the three reprints the others.");
+    expect(vmsCannotContainAgents?.html).toContain("The pages do not reprint one another.");
+    expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/paypal-grapheneos-attestation/");
     expect(vmsCannotContainAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(vmsCannotContainAgents?.html).not.toContain("stripedex.com");
     expect(vmsCannotContainAgents?.html).not.toContain("spongeresearch.com");
+
+    const paypalGrapheneOsAttestation = pages.find((page) =>
+      page.definition.canonicalPath === "/paypal-grapheneos-attestation/");
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      "<h1>Device policy is not a named web operation.</h1>",
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      "https://news.ycombinator.com/item?id=49462253",
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain("Tell HN: PayPal blocks GrapheneOS");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://rough.day");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://rough.day/info");
+    expect(paypalGrapheneOsAttestation?.html).toContain("Thursday 27 August 2026");
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      "PayPal app crashes on GrapheneOS, citing a root-detection security violation",
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      "com.paypal.oslo.app.rasp.RootDetectionSecurityException: Security policy violation: s=root",
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://hraness.com");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/provider-capabilities/");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/agentic-web-spoofing/");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/vms-cannot-contain-agents/");
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain(
+      `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
+    );
+    expect(paypalGrapheneOsAttestation?.html).toContain("Telegram is absent from those manifests");
+    expect(paypalGrapheneOsAttestation?.html).toContain("does not invent a PayPal API");
+    expect(paypalGrapheneOsAttestation?.html).toContain("The pages do not reprint one another.");
+    expect(paypalGrapheneOsAttestation?.html).not.toContain("{{PROVIDER_CAPABILITY");
+    expect(paypalGrapheneOsAttestation?.html).not.toContain("stripedex.com");
+    expect(paypalGrapheneOsAttestation?.html).not.toContain("spongeresearch.com");
     const software = (graph as ReadonlyArray<Readonly<Record<string, unknown>>>).find((node) =>
       node["@id"] === `${SITE_ORIGIN}/#software`);
     expect(software).toMatchObject({
