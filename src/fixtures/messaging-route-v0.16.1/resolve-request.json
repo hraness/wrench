@@ -1,0 +1,1 @@
+{"candidate":{"coordinate":{"conversationId":"chat-1","kind":"beeperConversation","network":"imessage"}},"format":"wrench.messaging-route-resolve-request","schemaVersion":1,"source":{"adapterId":"beeper-local","authId":"beeper-main","listInput":{"account_id":"account-1","limit":100}}}

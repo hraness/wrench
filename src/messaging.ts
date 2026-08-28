@@ -16,19 +16,19 @@ import {
   parseMessagingContextV1,
   parseMessagingPreviewV1,
   parseMessagingPrivateOutputReceiptV1,
-  parseMessagingRouteResolveRequestV1,
-  parseMessagingRouteV1,
+  parseMessagingRouteResolveRequestV2,
+  parseMessagingRouteV2,
   parseMessagingRoutesRequestV1,
-  parseMessagingRoutesV1,
+  parseMessagingRoutesV2,
   parseMessagingTurnV1,
   type MessagingClientOptions,
   type MessagingContextRequestV1,
   type MessagingContextV1,
   type MessagingPreviewV1,
-  type MessagingRouteResolveRequestV1,
-  type MessagingRouteV1,
+  type MessagingRouteResolveRequestV2,
+  type MessagingRouteV2,
   type MessagingRoutesRequestV1,
-  type MessagingRoutesV1,
+  type MessagingRoutesV2,
   type MessagingTurnV1,
 } from "./messaging-types";
 
@@ -291,8 +291,8 @@ async function runCli(
 export async function discoverMessagingRoutes(
   request: MessagingRoutesRequestV1,
   clientOptions?: MessagingClientOptions,
-): Promise<MessagingRoutesV1> {
-  const value = parseMessagingRoutesV1(await runCli(
+): Promise<MessagingRoutesV2> {
+  const value = parseMessagingRoutesV2(await runCli(
     "routes",
     parseMessagingRoutesRequestV1(request),
     clientOptions,
@@ -301,12 +301,12 @@ export async function discoverMessagingRoutes(
 }
 
 export async function resolveMessagingRoute(
-  request: MessagingRouteResolveRequestV1,
+  request: MessagingRouteResolveRequestV2,
   clientOptions?: MessagingClientOptions,
-): Promise<MessagingRouteV1> {
-  return parseMessagingRouteV1(await runCli(
+): Promise<MessagingRouteV2> {
+  return parseMessagingRouteV2(await runCli(
     "resolve",
-    parseMessagingRouteResolveRequestV1(request),
+    parseMessagingRouteResolveRequestV2(request),
     clientOptions,
   ));
 }

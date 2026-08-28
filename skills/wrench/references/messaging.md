@@ -22,13 +22,14 @@ wrench messaging resolve --input <-|@ABS_PRIVATE_FILE> \
   --private-output ABS_PRIVATE_FILE --json
 ```
 
-`routes` is bounded and reports completeness. Every list or search result is a
-non-actionable candidate with `resolution-required` readiness. Its opaque
-`routeRef` names the checked provider target retained in Wrench's encrypted
-private state. The resolve request contains only that reference:
+`routes` returns the V2 bounded artifact and reports completeness. Every list
+or search result is a non-actionable V2 candidate with `resolution-required`
+readiness. Its opaque `routeRef` names the checked provider target retained in
+Wrench's encrypted private state. The V2 resolve request contains only that
+reference:
 
 ```json
-{"schemaVersion":1,"format":"wrench.messaging-route-resolve-request","routeRef":"<candidate-route-ref>"}
+{"schemaVersion":2,"format":"wrench.messaging-route-resolve-request","routeRef":"<candidate-route-ref>"}
 ```
 
 `resolve` reloads and identity-checks the stored adapter, auth realm, provider
@@ -37,6 +38,10 @@ exact read. The caller cannot resupply or replace a network, account,
 conversation ID, name, handle, title, or participant match. Zero or several
 exact results fail. A successful resolution returns a new opaque route
 reference.
+
+V1 route parser exports exist only for archived v0.16.1 artifacts. Do not send
+the old exact-coordinate V1 resolve shape to the current CLI or client; runtime
+resolution accepts only the opaque-reference V2 request above.
 
 Treat every route reference as a private capability. It expires and becomes
 invalid after auth, adapter, plugin, tool, account, participant, or provider

@@ -659,7 +659,7 @@ async function harnessInternal(partCount: number, options: HarnessOptions = {}) 
     throw new Error("synthetic route discovery returned no checked candidate");
   }
   const route = await resolveMessagingRouteInternal({
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "wrench.messaging-route-resolve-request",
     routeRef: candidateRouteRef,
   }, { environment, registry, now: observation });
@@ -779,10 +779,14 @@ describe("generic messaging composite execution", () => {
       registry: setup.registry,
       now: setup.observation,
     });
-    expect(routes.routes[0]?.readiness).toMatchObject({
-      context: "resolution-required",
-      turn: "unavailable",
-      reply: "unsupported",
+    expect(routes).toMatchObject({ schemaVersion: 2 });
+    expect(routes.routes[0]).toMatchObject({
+      schemaVersion: 2,
+      readiness: {
+        context: "resolution-required",
+        turn: "unavailable",
+        reply: "unsupported",
+      },
     });
     await expect(readMessagingContextInternal({
       schemaVersion: 1,
@@ -794,8 +798,24 @@ describe("generic messaging composite execution", () => {
       registry: setup.registry,
       now: setup.observation,
     })).rejects.toThrow("requires exact conversations.read resolution");
-    const resolved = await resolveMessagingRouteInternal({
+    await expect(resolveMessagingRouteInternal({
       schemaVersion: 1,
+      format: "wrench.messaging-route-resolve-request",
+      source: {
+        adapterId: "synthetic-fourth-adapter",
+        authId: "synthetic-fourth-auth",
+        listInput: { account_id: "account", limit: 3 },
+      },
+      candidate: {
+        coordinate: { kind: "whatsappJid", jid: "room@example.test" },
+      },
+    }, {
+      environment: setup.environment,
+      registry: setup.registry,
+      now: setup.observation,
+    })).rejects.toThrow("unsupported or missing fields");
+    const resolved = await resolveMessagingRouteInternal({
+      schemaVersion: 2,
       format: "wrench.messaging-route-resolve-request",
       routeRef: routes.routes[0]!.routeRef,
     }, {
@@ -804,12 +824,13 @@ describe("generic messaging composite execution", () => {
       now: setup.observation,
     });
     expect(resolved).toMatchObject({
+      schemaVersion: 2,
       network: "synthetic-fourth",
       readiness: { context: "ready", turn: "ready", reply: "supported" },
     });
     expect(resolved.routeRef).not.toBe(routes.routes[0]!.routeRef);
     await expect(resolveMessagingRouteInternal({
-      schemaVersion: 1,
+      schemaVersion: 2,
       format: "wrench.messaging-route-resolve-request",
       routeRef: resolved.routeRef,
     }, {

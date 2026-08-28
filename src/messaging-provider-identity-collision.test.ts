@@ -482,7 +482,7 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     throw new Error("synthetic route discovery returned no checked candidate");
   }
   const route = await resolveMessagingRouteInternal({
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "wrench.messaging-route-resolve-request",
     routeRef: candidateRouteRef,
   }, { environment, registry, now: observation });

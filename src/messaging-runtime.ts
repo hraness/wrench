@@ -12,7 +12,7 @@ import {
   MESSAGING_CONTEXT_BINDING_CONTRACT_ID,
   parseMessagingContextBindingV2,
   parseMessagingContextRequestV1,
-  parseMessagingRouteResolveRequestV1,
+  parseMessagingRouteResolveRequestV2,
   parseMessagingRoutesRequestV1,
   parseMessagingTurnV1,
   messagingTurnDigest,
@@ -22,8 +22,8 @@ import {
   type MessagingPreviewV1,
   type MessagingPrivateProviderOutcomeV1,
   type MessagingReceiptBinding,
-  type MessagingRouteV1,
-  type MessagingRoutesV1,
+  type MessagingRouteV2,
+  type MessagingRoutesV2,
   type MessagingRunReceipt,
   type MessagingRunV1,
 } from "./messaging-types";
@@ -163,9 +163,9 @@ export type MessagingPrivateOutputReceiptV1 = {
   readonly expiresAt: string | null;
 };
 
-type MessagingPrivateOutputArtifactV1 =
-  | MessagingRouteV1
-  | MessagingRoutesV1
+type MessagingPrivateOutputArtifact =
+  | MessagingRouteV2
+  | MessagingRoutesV2
   | MessagingContextV1
   | MessagingPreviewV1
   | MessagingRunV1
@@ -173,7 +173,7 @@ type MessagingPrivateOutputArtifactV1 =
 
 export type MessagingPrivateOutputReservationV1 = {
   readonly path: string;
-  readonly artifactFormat: MessagingPrivateOutputArtifactV1["format"];
+  readonly artifactFormat: MessagingPrivateOutputArtifact["format"];
   readonly reservationId: string;
   readonly reservedContentSha256: string;
 };
@@ -577,7 +577,7 @@ export function validateMessagingPrivateOutputPath(
 
 export function writeMessagingPrivateOutput(
   path: string,
-  artifact: MessagingPrivateOutputArtifactV1,
+  artifact: MessagingPrivateOutputArtifact,
   environment: Environment = process.env,
 ): MessagingPrivateOutputReceiptV1 {
   const outputPath = validateMessagingPrivateOutputPath(path, environment);
@@ -626,7 +626,7 @@ export function writeMessagingPrivateOutput(
 
 function reserveMessagingPrivateOutput(
   path: string,
-  artifactFormat: MessagingPrivateOutputArtifactV1["format"],
+  artifactFormat: MessagingPrivateOutputArtifact["format"],
   reservationId: string,
   environment: Environment,
 ): MessagingPrivateOutputReservationV1 {
@@ -700,7 +700,7 @@ export function reserveMessagingPrivateOutputPair(
 
 export function writeReservedMessagingPrivateOutput(
   reservation: MessagingPrivateOutputReservationV1,
-  artifact: MessagingPrivateOutputArtifactV1,
+  artifact: MessagingPrivateOutputArtifact,
   _environment: Environment = process.env,
 ): MessagingPrivateOutputReceiptV1 {
   if (artifact.format !== reservation.artifactFormat) {
@@ -762,14 +762,14 @@ export function writeReservedMessagingPrivateOutput(
 export async function discoverMessagingRoutesInternal(
   value: unknown,
   options: MessagingRuntimeOptions = {},
-): Promise<MessagingRoutesV1> {
+): Promise<MessagingRoutesV2> {
   const request = parseMessagingRoutesRequestV1(value);
   const environment = options.environment ?? process.env;
   const registry = options.registry ?? providerPluginRegistry;
   const observation = now(options);
   const generatedAt = observation.toISOString();
   const expiresAt = new Date(observation.getTime() + ROUTE_TTL_MS).toISOString();
-  const routes: MessagingRouteV1[] = [];
+  const routes: MessagingRouteV2[] = [];
   const routeIdentities = new Set<string>();
   const source = request.source;
     const invocation = prepareInvocation(
@@ -848,7 +848,7 @@ export async function discoverMessagingRoutesInternal(
       });
       saveMessagingRouteRecord(routeRecord, environment);
       routes.push(Object.freeze({
-        schemaVersion: 1,
+        schemaVersion: 2,
         format: "wrench.messaging-route",
         routeRef,
         network: resolution.messaging.network,
@@ -869,7 +869,7 @@ export async function discoverMessagingRoutesInternal(
   }));
 }
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "wrench.messaging-routes",
     generatedAt,
     completeness: page.completeness,
@@ -885,8 +885,8 @@ export async function discoverMessagingRoutesInternal(
 export async function resolveMessagingRouteInternal(
   value: unknown,
   options: MessagingRuntimeOptions = {},
-): Promise<MessagingRouteV1> {
-  const request = parseMessagingRouteResolveRequestV1(value);
+): Promise<MessagingRouteV2> {
+  const request = parseMessagingRouteResolveRequestV2(value);
   const environment = options.environment ?? process.env;
   const registry = options.registry ?? providerPluginRegistry;
   const observation = now(options);
@@ -1021,7 +1021,7 @@ export async function resolveMessagingRouteInternal(
   saveMessagingRouteRecord(routeRecord, environment);
   const action = resolution.messaging.action;
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "wrench.messaging-route",
     routeRef,
     network,

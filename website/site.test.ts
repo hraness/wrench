@@ -654,6 +654,12 @@ describe("wrench.rip static site", () => {
     ];
     for (const document of agentFacingMessagingDocs) {
       expect(document).not.toContain("wrench beeper-local messaging.send");
+      expect(document).toContain(
+        '{"schemaVersion":2,"format":"wrench.messaging-route-resolve-request"',
+      );
+      expect(document).not.toContain(
+        '{"schemaVersion":1,"format":"wrench.messaging-route-resolve-request"',
+      );
       for (const command of [
         "wrench messaging routes",
         "wrench messaging resolve",

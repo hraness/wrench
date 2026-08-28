@@ -11,6 +11,11 @@ import {
   messagingTurnDigest,
   parseMessagingContextBindingV1,
   parseMessagingRouteResolveRequestV1,
+  parseMessagingRouteResolveRequestV2,
+  parseMessagingRouteV1,
+  parseMessagingRouteV2,
+  parseMessagingRoutesV1,
+  parseMessagingRoutesV2,
   parseMessagingReceiptBindingV1,
   parseMessagingReceiptBindingV2,
   parseMessagingTurnV1,
@@ -131,23 +136,112 @@ describe("provider-neutral messaging contracts", () => {
     );
   });
 
-  test("accepts only one opaque checked list-candidate reference", () => {
-    expect(parseMessagingRouteResolveRequestV1({
-      schemaVersion: 1,
+  test("preserves the tagged v0.16.1 route wire fixtures exactly", async () => {
+    const fixtureUrl = (name: string): URL => new URL(
+      `./fixtures/messaging-route-v0.16.1/${name}`,
+      import.meta.url,
+    );
+    const [resolveRequest, route, routes] = await Promise.all([
+      Bun.file(fixtureUrl("resolve-request.json")).json(),
+      Bun.file(fixtureUrl("route.json")).json(),
+      Bun.file(fixtureUrl("routes.json")).json(),
+    ]);
+    for (const [fixture, parsed] of [
+      [resolveRequest, parseMessagingRouteResolveRequestV1(resolveRequest)],
+      [route, parseMessagingRouteV1(route)],
+      [routes, parseMessagingRoutesV1(routes)],
+    ] as const) {
+      expect(canonicalJson(parsed)).toBe(canonicalJson(fixture));
+    }
+    expect(() => parseMessagingRouteResolveRequestV2(resolveRequest))
+      .toThrow("unsupported or missing fields");
+    expect(() => parseMessagingRouteV2(route)).toThrow("unsupported contract");
+    expect(() => parseMessagingRoutesV2(routes)).toThrow("unsupported contract");
+
+    const source = {
+      adapterId: "adapter",
+      authId: "auth",
+      listInput: { account_id: "account", limit: 100 },
+    } as const;
+    for (const coordinate of [
+      {
+        kind: "beeperConversation",
+        network: "imessage",
+        conversationId: "chat-1",
+      },
+      {
+        kind: "imessageChat",
+        chatGuid: "iMessage;-;+15551234567",
+        service: "iMessage",
+        observedChatRowId: 42,
+      },
+      { kind: "whatsappJid", jid: "15551234567@s.whatsapp.net" },
+    ] as const) {
+      expect(parseMessagingRouteResolveRequestV1({
+        schemaVersion: 1,
+        format: "wrench.messaging-route-resolve-request",
+        source,
+        candidate: { coordinate },
+      }).candidate.coordinate).toEqual(coordinate);
+    }
+  });
+
+  test("uses a distinct V2 wire contract for opaque route resolution", () => {
+    const request = parseMessagingRouteResolveRequestV2({
+      schemaVersion: 2,
       format: "wrench.messaging-route-resolve-request",
       routeRef,
-    }).routeRef).toBe(routeRef);
-    expect(() => parseMessagingRouteResolveRequestV1({
-      schemaVersion: 1,
+    });
+    expect(request).toEqual({
+      schemaVersion: 2,
       format: "wrench.messaging-route-resolve-request",
       routeRef,
-      candidate: { coordinate: { kind: "beeperConversation" } },
+    });
+    expect(() => parseMessagingRouteResolveRequestV2({
+      ...request,
+      source: { adapterId: "beeper-local", authId: "beeper-main", listInput: {} },
+      candidate: {
+        coordinate: {
+          kind: "beeperConversation",
+          network: "imessage",
+          conversationId: "chat-1",
+        },
+      },
     })).toThrow("unsupported or missing fields");
-    expect(() => parseMessagingRouteResolveRequestV1({
-      schemaVersion: 1,
-      format: "wrench.messaging-route-resolve-request",
-      routeRef: "chat-1",
-    })).toThrow("routeRef");
+    expect(() => parseMessagingRouteResolveRequestV1(request))
+      .toThrow("unsupported or missing fields");
+
+    const route = parseMessagingRouteV2({
+      schemaVersion: 2,
+      format: "wrench.messaging-route",
+      routeRef,
+      network: "imessage",
+      conversation: { kind: "group", title: "Fixture room", participantCount: 3 },
+      readiness: {
+        context: "resolution-required",
+        turn: "unavailable",
+        reply: "unsupported",
+        reason: "exact resolution is required",
+      },
+      completeness: { kind: "complete", reason: null },
+      expiresAt: "2026-08-27T12:15:00.000Z",
+    });
+    const routes = parseMessagingRoutesV2({
+      schemaVersion: 2,
+      format: "wrench.messaging-routes",
+      generatedAt: "2026-08-27T12:00:00.000Z",
+      completeness: { kind: "complete", reason: null },
+      continuation: { direction: "none", request: null, nextInput: null },
+      routes: [route],
+    });
+    expect(routes.schemaVersion).toBe(2);
+    expect(routes.routes[0]?.schemaVersion).toBe(2);
+    expect(() => parseMessagingRouteV1(route)).toThrow("unsupported contract");
+    expect(() => parseMessagingRoutesV1(routes)).toThrow("unsupported contract");
+    expect(() => parseMessagingRoutesV2({
+      ...routes,
+      routes: [{ ...route, schemaVersion: 1 }],
+    })).toThrow("unsupported contract");
   });
 
   test("enforces the receipt self-hash and proven-prefix algebra", () => {

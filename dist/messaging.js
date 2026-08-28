@@ -210,13 +210,53 @@ function parseMessagingRoutesRequestV1(value) {
 }
 function parseMessagingRouteResolveRequestV1(value) {
   const source = record(value, "messaging route resolve request");
-  exactKeys(source, ["schemaVersion", "format", "routeRef"], [], "messaging route resolve request");
+  exactKeys(source, ["schemaVersion", "format", "source", "candidate"], [], "messaging route resolve request");
   if (source.schemaVersion !== 1 || source.format !== "wrench.messaging-route-resolve-request")
     return fail("messaging route resolve request", "has an unsupported contract");
+  const candidate = record(source.candidate, "messaging route resolve request.candidate");
+  exactKeys(candidate, ["coordinate"], [], "messaging route resolve request.candidate");
+  const coordinateSource = record(candidate.coordinate, "messaging route resolve request.candidate.coordinate");
+  let coordinate;
+  if (coordinateSource.kind === "beeperConversation") {
+    exactKeys(coordinateSource, ["kind", "network", "conversationId"], [], "messaging route resolve request.candidate.coordinate");
+    coordinate = Object.freeze({
+      kind: "beeperConversation",
+      network: id(coordinateSource.network, "messaging route resolve request.candidate.coordinate.network", 64),
+      conversationId: text(coordinateSource.conversationId, "messaging route resolve request.candidate.coordinate.conversationId", 2048)
+    });
+  } else if (coordinateSource.kind === "imessageChat") {
+    exactKeys(coordinateSource, ["kind", "chatGuid", "service", "observedChatRowId"], [], "messaging route resolve request.candidate.coordinate");
+    coordinate = Object.freeze({
+      kind: "imessageChat",
+      chatGuid: text(coordinateSource.chatGuid, "messaging route resolve request.candidate.coordinate.chatGuid", 2048),
+      service: coordinateSource.service === null ? null : id(coordinateSource.service, "messaging route resolve request.candidate.coordinate.service", 64),
+      observedChatRowId: coordinateSource.observedChatRowId === null ? null : integer(coordinateSource.observedChatRowId, "messaging route resolve request.candidate.coordinate.observedChatRowId", 1, Number.MAX_SAFE_INTEGER)
+    });
+  } else if (coordinateSource.kind === "whatsappJid") {
+    exactKeys(coordinateSource, ["kind", "jid"], [], "messaging route resolve request.candidate.coordinate");
+    coordinate = Object.freeze({
+      kind: "whatsappJid",
+      jid: text(coordinateSource.jid, "messaging route resolve request.candidate.coordinate.jid", 512)
+    });
+  } else {
+    return fail("messaging route resolve request.candidate.coordinate.kind", "is unsupported");
+  }
   return Object.freeze({
     schemaVersion: 1,
     format: "wrench.messaging-route-resolve-request",
-    routeRef: routeRef(source.routeRef, "messaging route resolve request.routeRef")
+    source: parseRoutesSource(source.source, "messaging route resolve request.source"),
+    candidate: Object.freeze({ coordinate })
+  });
+}
+function parseMessagingRouteResolveRequestV2(value) {
+  const source = record(value, "messaging route resolve request V2");
+  exactKeys(source, ["schemaVersion", "format", "routeRef"], [], "messaging route resolve request V2");
+  if (source.schemaVersion !== 2 || source.format !== "wrench.messaging-route-resolve-request")
+    return fail("messaging route resolve request V2", "has an unsupported contract");
+  return Object.freeze({
+    schemaVersion: 2,
+    format: "wrench.messaging-route-resolve-request",
+    routeRef: routeRef(source.routeRef, "messaging route resolve request V2.routeRef")
   });
 }
 function parseMessagingContextRequestV1(value) {
@@ -372,7 +412,7 @@ function parseMessagingRouteV1(value) {
   }
   const readiness = record(source.readiness, "messaging route.readiness");
   exactKeys(readiness, ["context", "turn", "reply", "reason"], [], "messaging route.readiness");
-  if (readiness.context !== "ready" && readiness.context !== "historical-readable" && readiness.context !== "resolution-required" && readiness.context !== "unavailable")
+  if (readiness.context !== "ready" && readiness.context !== "historical-readable")
     return fail("messaging route.readiness.context", "is unsupported");
   if (readiness.turn !== "ready" && readiness.turn !== "unavailable") {
     return fail("messaging route.readiness.turn", "is unsupported");
@@ -380,11 +420,8 @@ function parseMessagingRouteV1(value) {
   if (readiness.reply !== "supported" && readiness.reply !== "unsupported") {
     return fail("messaging route.readiness.reply", "is unsupported");
   }
-  if (readiness.context !== "ready" && (readiness.turn !== "unavailable" || readiness.reply !== "unsupported"))
+  if (readiness.context === "historical-readable" && (readiness.turn !== "unavailable" || readiness.reply !== "unsupported"))
     return fail("messaging route.readiness", "must block actions when freshness is unproven");
-  if (readiness.context !== "ready" && readiness.reason === null) {
-    return fail("messaging route.readiness.reason", "is required when context is not actionable");
-  }
   return Object.freeze({
     schemaVersion: 1,
     format: "wrench.messaging-route",
@@ -399,6 +436,52 @@ function parseMessagingRouteV1(value) {
     }),
     completeness: completeness(source.completeness, "messaging route.completeness"),
     expiresAt: utcTimestamp(source.expiresAt, "messaging route.expiresAt")
+  });
+}
+function parseMessagingRouteV2(value) {
+  const source = record(value, "messaging route V2");
+  exactKeys(source, [
+    "schemaVersion",
+    "format",
+    "routeRef",
+    "network",
+    "conversation",
+    "readiness",
+    "completeness",
+    "expiresAt"
+  ], [], "messaging route V2");
+  if (source.schemaVersion !== 2 || source.format !== "wrench.messaging-route") {
+    return fail("messaging route V2", "has an unsupported contract");
+  }
+  const readiness = record(source.readiness, "messaging route V2.readiness");
+  exactKeys(readiness, ["context", "turn", "reply", "reason"], [], "messaging route V2.readiness");
+  if (readiness.context !== "ready" && readiness.context !== "historical-readable" && readiness.context !== "resolution-required" && readiness.context !== "unavailable")
+    return fail("messaging route V2.readiness.context", "is unsupported");
+  if (readiness.turn !== "ready" && readiness.turn !== "unavailable") {
+    return fail("messaging route V2.readiness.turn", "is unsupported");
+  }
+  if (readiness.reply !== "supported" && readiness.reply !== "unsupported") {
+    return fail("messaging route V2.readiness.reply", "is unsupported");
+  }
+  if (readiness.context !== "ready" && (readiness.turn !== "unavailable" || readiness.reply !== "unsupported"))
+    return fail("messaging route V2.readiness", "must block actions when freshness is unproven");
+  if (readiness.context !== "ready" && readiness.reason === null) {
+    return fail("messaging route V2.readiness.reason", "is required when context is not actionable");
+  }
+  return Object.freeze({
+    schemaVersion: 2,
+    format: "wrench.messaging-route",
+    routeRef: routeRef(source.routeRef, "messaging route V2.routeRef"),
+    network: id(source.network, "messaging route V2.network", 64),
+    conversation: conversation(source.conversation, "messaging route V2.conversation"),
+    readiness: Object.freeze({
+      context: readiness.context,
+      turn: readiness.turn,
+      reply: readiness.reply,
+      reason: nullableBoundedText(readiness.reason, "messaging route V2.readiness.reason", 1000)
+    }),
+    completeness: completeness(source.completeness, "messaging route V2.completeness"),
+    expiresAt: utcTimestamp(source.expiresAt, "messaging route V2.expiresAt")
   });
 }
 function parseMessagingRoutesV1(value) {
@@ -428,6 +511,41 @@ function parseMessagingRoutesV1(value) {
     format: "wrench.messaging-routes",
     generatedAt: utcTimestamp(source.generatedAt, "messaging routes.generatedAt"),
     completeness: completeness(source.completeness, "messaging routes.completeness"),
+    continuation: Object.freeze({
+      direction: continuation.direction,
+      request,
+      nextInput
+    }),
+    routes: Object.freeze(routes)
+  });
+}
+function parseMessagingRoutesV2(value) {
+  const source = record(value, "messaging routes V2");
+  exactKeys(source, [
+    "schemaVersion",
+    "format",
+    "generatedAt",
+    "completeness",
+    "continuation",
+    "routes"
+  ], [], "messaging routes V2");
+  if (source.schemaVersion !== 2 || source.format !== "wrench.messaging-routes") {
+    return fail("messaging routes V2", "has an unsupported contract");
+  }
+  const continuation = record(source.continuation, "messaging routes V2.continuation");
+  exactKeys(continuation, ["direction", "request", "nextInput"], [], "messaging routes V2.continuation");
+  if (continuation.direction !== "forward" && continuation.direction !== "backward" && continuation.direction !== "none")
+    return fail("messaging routes V2.continuation.direction", "is unsupported");
+  const request = nullableBoundedText(continuation.request, "messaging routes V2.continuation.request", 8192);
+  const nextInput = continuation.nextInput === null ? null : cloneJsonRecord(continuation.nextInput, "messaging routes V2.continuation.nextInput");
+  if (continuation.direction === "none" && (request !== null || nextInput !== null))
+    return fail("messaging routes V2.continuation", "must be empty when direction is none");
+  const routes = denseArray(source.routes, "messaging routes V2.routes", 1000).map(parseMessagingRouteV2);
+  return Object.freeze({
+    schemaVersion: 2,
+    format: "wrench.messaging-routes",
+    generatedAt: utcTimestamp(source.generatedAt, "messaging routes V2.generatedAt"),
+    completeness: completeness(source.completeness, "messaging routes V2.completeness"),
     continuation: Object.freeze({
       direction: continuation.direction,
       request,
@@ -955,11 +1073,11 @@ async function runCli(operation, request, clientOptions) {
   }
 }
 async function discoverMessagingRoutes(request, clientOptions) {
-  const value = parseMessagingRoutesV1(await runCli("routes", parseMessagingRoutesRequestV1(request), clientOptions));
+  const value = parseMessagingRoutesV2(await runCli("routes", parseMessagingRoutesRequestV1(request), clientOptions));
   return value;
 }
 async function resolveMessagingRoute(request, clientOptions) {
-  return parseMessagingRouteV1(await runCli("resolve", parseMessagingRouteResolveRequestV1(request), clientOptions));
+  return parseMessagingRouteV2(await runCli("resolve", parseMessagingRouteResolveRequestV2(request), clientOptions));
 }
 async function readMessagingContext(request, clientOptions) {
   return parseMessagingContextV1(await runCli("context", parseMessagingContextRequestV1(request), clientOptions));
@@ -972,9 +1090,12 @@ export {
   readMessagingContext,
   previewMessagingTurn,
   parseMessagingTurnV1,
+  parseMessagingRoutesV2,
   parseMessagingRoutesV1,
   parseMessagingRoutesRequestV1,
+  parseMessagingRouteV2,
   parseMessagingRouteV1,
+  parseMessagingRouteResolveRequestV2,
   parseMessagingRouteResolveRequestV1,
   parseMessagingReceiptBindingV2,
   parseMessagingReceiptBindingV1,

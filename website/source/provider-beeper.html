@@ -125,8 +125,8 @@ wrench auth bind beeper-main --site beeper</code></pre></div>
 
         <section aria-labelledby="send">
           <h2 id="send">Resolve and preview one exact Beeper turn</h2>
-          <p>Keep each request and result in a distinct owner-only file. <code>routes</code> returns bounded discovery evidence and opaque references. Put one candidate <code>routeRef</code> in the private resolve request. Wrench reloads the checked account and conversation target from encrypted private state and performs <code>conversations.read</code>. The caller never resupplies a network, account, conversation ID, name, title, or participant match.</p>
-          <div class="command-panel"><pre><code>{"schemaVersion":1,"format":"wrench.messaging-route-resolve-request","routeRef":"&lt;candidate-route-ref&gt;"}</code></pre></div>
+          <p>Keep each request and result in a distinct owner-only file. <code>routes</code> returns the V2 bounded discovery artifact and opaque references. Put one candidate <code>routeRef</code> in the private V2 resolve request. Wrench reloads the checked account and conversation target from encrypted private state and performs <code>conversations.read</code>. The caller never resupplies a network, account, conversation ID, name, title, or participant match.</p>
+          <div class="command-panel"><pre><code>{"schemaVersion":2,"format":"wrench.messaging-route-resolve-request","routeRef":"&lt;candidate-route-ref&gt;"}</code></pre></div>
           <div class="command-panel"><pre><code>wrench messaging routes --input @/absolute/private/beeper-routes-request.json \
   --private-output /absolute/private/beeper-routes.json --json
 wrench messaging resolve --input @/absolute/private/beeper-resolve-request.json \

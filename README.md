@@ -549,18 +549,23 @@ an absolute owner-only private file. Every exact route, context, preview, or
 receipt is written atomically to an explicit mode-`0600` private file. Ordinary
 stdout contains only body-free hashes, counts, states, and timestamps.
 
-`routes` returns bounded discovery evidence. Each result is a non-actionable
-candidate whose opaque `routeRef` names a checked target in Wrench's encrypted
-private state. The resolve request contains only that reference:
+`routes` returns the V2 bounded discovery artifact. Each result is a
+non-actionable V2 candidate whose opaque `routeRef` names a checked target in
+Wrench's encrypted private state. The V2 resolve request contains only that
+reference:
 
 ```json
-{"schemaVersion":1,"format":"wrench.messaging-route-resolve-request","routeRef":"<candidate-route-ref>"}
+{"schemaVersion":2,"format":"wrench.messaging-route-resolve-request","routeRef":"<candidate-route-ref>"}
 ```
 
 Wrench reloads and identity-checks the stored adapter, auth realm, provider
 binding, list input, and exact target before it performs a provider-native
 exact read. The resolved route receives a new opaque reference. No caller may
 replace the stored provider coordinate during resolution.
+
+The exported V1 route, route-list, and exact-coordinate resolve parsers remain
+available for archived schema-1 artifacts. Current client and CLI execution
+use V2 exclusively and never execute a caller-supplied V1 provider coordinate.
 
 ```sh
 wrench messaging routes --input @/absolute/private/routes-request.json \
