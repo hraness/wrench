@@ -31,12 +31,13 @@ import {
   parseRedditAuthoredPostPresence,
   parseRedditMediaLeaseResponse,
   parseRedditProfileContributionPage,
+  parseRedditThingState,
   parseRedditVideoPostPresence,
   parseRedditVideoSubmitResponse,
   parseRedditVideoWebSocketMessage,
-  parseRedditThingState,
   parseRedditWebProfileResponse,
   parseRedditWebViewerResponse,
+  projectRedditHostedVideoMetadata,
   redditCommunity,
   redditFullname,
   redditMediaAssetUrl,
@@ -816,12 +817,13 @@ async function readPostPresenceValue(
   client: WebSessionClient,
   targetId: string,
   maximumBytes: number,
+  operation: "state.readback" | "media.read" = "state.readback",
 ): Promise<unknown> {
   const url = new URL("/api/info.json", REDDIT_ORIGIN);
   url.searchParams.set("id", redditPostId(targetId));
   url.searchParams.set("raw_json", "1");
   authorizeRedditWebRequest({
-    operation: "state.readback",
+    operation,
     url,
     method: "GET",
     targetId,
@@ -1643,10 +1645,13 @@ export async function executeRedditWebOperation(
     readonly dependencies?: RedditWebRuntimeDependencies;
   } = {},
 ): Promise<WebSessionExecution> {
+  const expectedContractVersion = recipe.action === "media.publish"
+    ? 9
+    : recipe.action === "media.read" ? 2 : 1;
   if (
     recipe.site !== "reddit"
     || !isRedditOperation(recipe.action)
-    || recipe.contractVersion !== (recipe.action === "media.publish" ? 9 : 1)
+    || recipe.contractVersion !== expectedContractVersion
   ) {
     throw new Error("Reddit authenticated web recipe is not installed");
   }
@@ -1676,31 +1681,48 @@ export async function executeRedditWebOperation(
   // R1 operations never enter the mutation dispatch ledger.
   void options.beforeDispatch;
   void options.afterDispatchVerified;
-  const output = recipe.action === "profiles.read"
-    ? await readProfile(client, recipe, input, viewer, options.dependencies)
-    : recipe.action === "feeds.read"
-      ? await readFeed(client, recipe, input)
-    : recipe.action === "posts.read"
-      ? await readPostOrComments(client, recipe, input, false)
-      : recipe.action === "comments.read"
-        ? await readPostOrComments(client, recipe, input, true)
-        : recipe.action === "messaging.list"
-          ? await readMessages(client, recipe, input, false)
-          : recipe.action === "messaging.read"
-            ? await readMessages(client, recipe, input, true)
-            : (() => {
-                throw new Error(`Reddit authenticated web operation ${recipe.action} has no executable reviewed contract`);
-              })();
+  let output: unknown;
+  let finalUrl: string;
+  if (recipe.action === "media.read") {
+    const targetId = redditPostId(input.post_id, "input.post_id");
+    output = projectRedditHostedVideoMetadata(
+      await readPostPresenceValue(
+        client,
+        targetId,
+        recipe.maxOutputBytes,
+        "media.read",
+      ),
+      targetId,
+    );
+    finalUrl = `${REDDIT_ORIGIN}/comments/${targetId.slice(3)}/`;
+  } else {
+    output = recipe.action === "profiles.read"
+      ? await readProfile(client, recipe, input, viewer, options.dependencies)
+      : recipe.action === "feeds.read"
+        ? await readFeed(client, recipe, input)
+        : recipe.action === "posts.read"
+          ? await readPostOrComments(client, recipe, input, false)
+          : recipe.action === "comments.read"
+            ? await readPostOrComments(client, recipe, input, true)
+            : recipe.action === "messaging.list"
+              ? await readMessages(client, recipe, input, false)
+              : recipe.action === "messaging.read"
+                ? await readMessages(client, recipe, input, true)
+                : (() => {
+                    throw new Error(`Reddit authenticated web operation ${recipe.action} has no executable reviewed contract`);
+                  })();
+    finalUrl = recipe.action === "profiles.read"
+      ? `${REDDIT_ORIGIN}/user/${encodeURIComponent(profileInput(input))}/`
+      : recipe.action === "feeds.read"
+        ? REDDIT_ORIGIN
+        : recipe.action === "posts.read" || recipe.action === "comments.read"
+          ? `${REDDIT_ORIGIN}/comments/${postInput(input).slice(3)}/`
+          : `${REDDIT_ORIGIN}/message/${messageFolder(input)}/`;
+  }
   return {
     status: "succeeded",
     output,
-    finalUrl: recipe.action === "profiles.read"
-      ? `${REDDIT_ORIGIN}/user/${encodeURIComponent(profileInput(input))}/`
-      : recipe.action === "feeds.read"
-      ? REDDIT_ORIGIN
-      : recipe.action === "posts.read" || recipe.action === "comments.read"
-        ? `${REDDIT_ORIGIN}/comments/${postInput(input).slice(3)}/`
-        : `${REDDIT_ORIGIN}/message/${messageFolder(input)}/`,
+    finalUrl,
     dispatchStarted: false,
     dispatch: { planned: 0, started: 0, verified: 0 },
   };

@@ -20,17 +20,21 @@ describe("provider presentation", () => {
   test("groups the release attestation into exact public surfaces", async () => {
     const attestation = await loadProviderCapabilityAttestation(repositoryRoot);
     const directory = createProviderDirectory(attestation);
+    const supportedSurfaceIds = PROVIDER_PRESENTATIONS
+      .map((entry) => entry.surfaceId)
+      .filter((surfaceId) => attestation.rows.some((row) =>
+        row.surfaceId === surfaceId && row.completeness === "observed"));
 
-    expect(directory.providerCount).toBe(19);
+    expect(directory.providerCount).toBe(supportedSurfaceIds.length);
     expect(directory.entries.map((entry) => entry.surfaceId)).toEqual(
-      PROVIDER_PRESENTATIONS.map((entry) => entry.surfaceId),
+      supportedSurfaceIds,
     );
     expect(directory.entries.reduce((sum, entry) => sum + entry.operationCount, 0))
-      .toBe(attestation.operationCount);
+      .toBe(attestation.observedCount);
     expect(directory.entries.reduce((sum, entry) => sum + entry.observedCount, 0))
       .toBe(attestation.observedCount);
-    expect(directory.entries.reduce((sum, entry) => sum + entry.captureRequiredCount, 0))
-      .toBe(attestation.captureRequiredCount);
+    expect(directory.entries.every((entry) =>
+      entry.supportedActionCount > 0 && entry.capabilities.length > 0)).toBe(true);
 
     expect(directory.entries[0]).toMatchObject({
       adapterCount: 1,
@@ -41,25 +45,24 @@ describe("provider presentation", () => {
       name: "Beeper",
       observedCount: 32,
       operationCount: 32,
+      supportedActionCount: 32,
       surfaceId: "beeper",
       transports: ["local-cli"],
     });
-    expect(directory.entries.find((entry) => entry.surfaceId === "linkedin")).toMatchObject({
-      adapterCount: 2,
-      captureRequiredCount: 17,
-      observedCount: 12,
-      operationCount: 29,
-      transports: ["provider-api", "web-session-api"],
-    });
-    expect(directory.entries.find((entry) => entry.surfaceId === "x")).toMatchObject({
-      adapterCount: 2,
-      captureRequiredCount: 10,
-      observedCount: 21,
-      operationCount: 31,
-      transports: ["provider-api", "web-session-api"],
-    });
-    expect(directory.entries.find((entry) => entry.surfaceId === "facebook-page"))
-      .toMatchObject({ captureRequiredCount: 20, observedCount: 0, operationCount: 20 });
+    for (const entry of directory.entries) {
+      const supportedRows = attestation.rows.filter((row) =>
+        row.surfaceId === entry.surfaceId && row.completeness === "observed");
+      expect(entry.observedCount).toBe(supportedRows.length);
+      expect(entry.operationCount).toBe(supportedRows.length);
+      expect(entry.supportedActionCount).toBe(new Set(supportedRows.map((row) => row.operation)).size);
+      expect(entry.transports).toEqual(
+        [...new Set(supportedRows.map((row) => row.transport))].sort(),
+      );
+    }
+    for (const surfaceId of PROVIDER_PRESENTATIONS.map((entry) => entry.surfaceId)) {
+      const hasSupport = supportedSurfaceIds.includes(surfaceId);
+      expect(directory.entries.some((entry) => entry.surfaceId === surfaceId)).toBe(hasSupport);
+    }
   });
 
   test("binds Beeper marketing facts to reviewed code and adapter identity", async () => {
@@ -105,27 +108,37 @@ describe("provider presentation", () => {
     expect(facts.semanticContractVersionLabel).toBe("Contract versions 1, 2");
   });
 
-  test("renders crawlable cards and grouped operation evidence", async () => {
+  test("renders supported tasks without exposing internal readiness states", async () => {
     const attestation = await loadProviderCapabilityAttestation(repositoryRoot);
     const directory = createProviderDirectory(attestation);
     const cards = renderProviderOverviewCards(directory);
     const groups = renderProviderAttestationGroups(directory, attestation);
 
-    expect(cards.match(/<article class="provider-card/gu)).toHaveLength(19);
+    expect(cards.match(/<article class="provider-card/gu)).toHaveLength(directory.providerCount);
     expect(cards.indexOf(">Beeper</a>")).toBeLessThan(cards.indexOf(">Bluesky</a>"));
-    expect(cards).toContain("32 of 32 observed");
-    expect(cards).toContain("0 of 20 observed · 20 capture-required");
-    expect(cards).toContain('aria-hidden="true"');
+    expect(cards).toContain("32 supported actions");
+    expect(cards).toContain("Accounts · Bridges · Contacts · Conversations · Messages · Presence · Reactions");
     expect(cards).not.toContain("{{");
-    expect(groups.match(/class="provider-attestation-group"/gu)).toHaveLength(19);
-    expect(groups.match(/class="provider-adapter"/gu)).toHaveLength(attestation.adapterCount);
+    expect(cards).not.toMatch(/observed|capture-required|adapter/iu);
+    expect(groups.match(/class="provider-attestation-group"/gu)).toHaveLength(directory.providerCount);
     expect(groups).toContain('id="provider-linkedin"');
-    expect(groups).toContain("LinkedIn (Official API)");
-    expect(groups).toContain("LinkedIn (Authenticated Web API)");
-    expect(groups).toContain('aria-label="Beeper (Pinned Local CLI) beeper-local operations"');
-    expect(groups).toContain('<code>beeper-local</code> ·</span> <span>v2.0.0');
-    expect(groups).toContain('<th scope="col">Risk</th>');
-    expect(groups).toContain('<th scope="col">Contract</th>');
+    expect(groups).toContain("List accounts");
+    expect(groups).toContain("Save article draft");
+    expect(groups).toContain("Update conversation read state");
+    expect(groups).toContain("Search message content");
+    expect(groups).toContain("Read message context");
+    expect(groups).toContain("<strong>Read message</strong><code>messaging.message.read</code>");
+    expect(groups).toContain("Local app");
+    expect(groups).not.toMatch(/observed|capture-required|adapter|completeness|<th/iu);
+    for (const row of attestation.rows.filter((candidate) =>
+      candidate.completeness === "observed")) {
+      expect(groups).toContain(`<code>${row.operation}</code>`);
+    }
+    for (const entry of PROVIDER_PRESENTATIONS.filter((definition) =>
+      !directory.entries.some((candidate) => candidate.surfaceId === definition.surfaceId))) {
+      expect(cards).not.toContain(`>${entry.name}</a>`);
+      expect(groups).not.toContain(`id="provider-${entry.surfaceId}"`);
+    }
   });
 
   test("escapes presentation strings even when supplied by reviewed metadata", () => {
@@ -158,6 +171,53 @@ describe("provider presentation", () => {
     const html = renderProviderOverviewCards(directory);
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).not.toContain("<script>");
+  });
+
+  test("omits surfaces that have no supported actions from the public directory", () => {
+    const attestation = Object.freeze({
+      adapterCount: 2,
+      captureRequiredCount: 1,
+      observedCount: 1,
+      operationCount: 2,
+      rows: Object.freeze([
+        Object.freeze({
+          adapterId: "beeper-local",
+          adapterVersion: "1.0.0",
+          completeness: "observed" as const,
+          contractVersion: 1,
+          displayName: "Beeper fixture",
+          kind: "local-cli" as const,
+          limit: "List contacts.",
+          operation: "contacts.list",
+          pluginId: "beeper-fixture",
+          risk: "R1" as const,
+          surfaceId: "beeper",
+          transport: "local-cli" as const,
+        }),
+        Object.freeze({
+          adapterId: "fixture-api",
+          adapterVersion: "1.0.0",
+          completeness: "capture-required" as const,
+          contractVersion: 1,
+          displayName: "Fixture API",
+          kind: "official-api" as const,
+          limit: "Read posts.",
+          operation: "posts.read",
+          pluginId: "fixture",
+          risk: "R1" as const,
+          surfaceId: "fixture",
+          transport: "provider-api" as const,
+        }),
+      ]),
+    } satisfies ProviderCapabilityAttestation);
+    const directory = createProviderDirectory(attestation, [
+      { accent: "blue", icon: "chat", name: "Beeper", surfaceId: "beeper" },
+      { accent: "ink", icon: "code", name: "Fixture", surfaceId: "fixture" },
+    ]);
+
+    expect(directory.entries.map((entry) => entry.surfaceId)).toEqual(["beeper"]);
+    expect(renderProviderOverviewCards(directory)).not.toContain("Fixture");
+    expect(renderProviderAttestationGroups(directory, attestation)).not.toContain("provider-fixture");
   });
 
   test("rejects drifted totals, identities, channels, and metadata sets", async () => {

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.16.0 - 2026-08-27
+
+- Redesign wrench.rip as a restrained editorial site with a supported-actions-only
+  provider directory, task-first capability labels, and no zero-action service
+  cards in the public catalog.
+- Add `x-web articles.read@2` for one exact current-viewer-owned private Article
+  draft. The closed R1 result binds its ID, owner, Draft lifecycle, unpublished
+  state, title, and bounded rich content; published X Articles and LinkedIn
+  Article reads remain unsupported.
+- Add `reddit-web media.read@2` for one exact Reddit-hosted video post through
+  the current-account-bound `/api/info` exchange. The metadata-only R1 result
+  returns post fields, dimensions, duration, safety flags, and completed status
+  without playback URLs; standalone Threads post and media reads and Marketplace
+  media reads remain unsupported.
+
 ## 0.15.1 - 2026-08-27
 
 - Publish Wrench through the public npm registry with an exact Bun runtime

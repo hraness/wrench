@@ -19,6 +19,7 @@ import {
   parseRedditVideoWebSocketMessage,
   parseRedditWebProfileResponse,
   parseRedditWebViewerResponse,
+  projectRedditHostedVideoMetadata,
   redditFullname,
 } from "./reddit-web";
 
@@ -187,7 +188,7 @@ describe("Reddit internal-web operation registry", () => {
       expect(operation.webSession).toMatchObject({
         site: "reddit",
         action,
-        contractVersion: action === "media.publish" ? 9 : 1,
+        contractVersion: action === "media.publish" ? 9 : action === "media.read" ? 2 : 1,
       });
       expect("browser" in operation).toBe(false);
       expect("provider" in operation).toBe(false);
@@ -207,6 +208,7 @@ describe("Reddit internal-web operation registry", () => {
       "content.delete",
       "feeds.read",
       "media.publish",
+      "media.read",
       "messaging.list",
       "messaging.read",
       "posts.read",
@@ -223,7 +225,7 @@ describe("Reddit internal-web operation registry", () => {
       expect(REDDIT_WEB_OPERATIONS[operation].state).toBe("capture-required");
       expect(REDDIT_WEB_OPERATIONS[operation].risk).toBe("R3");
     }
-    expect(REDDIT_WEB_OPERATIONS["media.read"].state).toBe("capture-required");
+    expect(REDDIT_WEB_OPERATIONS["media.read"].state).toBe("observed");
     expect(REDDIT_WEB_OPERATIONS["communities.membership.set"].state).toBe("capture-required");
     expect(REDDIT_WEB_OPERATIONS["content.save"].state).toBe("capture-required");
     expect(REDDIT_WEB_OPERATIONS["reactions.set"].state).toBe("capture-required");
@@ -276,6 +278,18 @@ describe("Reddit exact request authorization", () => {
       folder: "inbox",
       targetId: MESSAGE_ID,
     }).queryNames).toEqual(["limit", "mark", "max_replies", "mid", "raw_json"]);
+    expect(authorizeRedditWebRequest({
+      operation: "media.read",
+      url: `https://www.reddit.com/api/info.json?id=${POST_ID}&raw_json=1`,
+      method: "GET",
+      targetId: POST_ID,
+    })).toEqual({
+      operation: "media.read",
+      method: "GET",
+      path: "/api/info.json",
+      queryNames: ["id", "raw_json"],
+      formNames: [],
+    });
   });
 
   test("accepts only exact mutation forms and redacts the modhash from its binding", () => {
@@ -638,6 +652,83 @@ describe("Reddit bounded response normalization", () => {
       nsfw: false,
       spoiler: true,
     });
+    const metadata = projectRedditHostedVideoMetadata(listing([postThing(POST_ID, {
+      author: "viewer",
+      author_fullname: "t2_viewer1",
+      subreddit: "testingground4bots",
+      selftext: "ignored body",
+      over_18: false,
+      spoiler: true,
+      is_video: true,
+      post_hint: "hosted:video",
+      domain: "v.redd.it",
+      url: "https://v.redd.it/video123",
+      secure_media: {
+        reddit_video: {
+          dash_url: "https://v.redd.it/video123/DASHPlaylist.mpd?token=private-playback-token",
+        },
+      },
+      media: {
+        reddit_video: {
+          duration: 8,
+          fallback_url: "https://v.redd.it/video123/DASH_360.mp4?token=private-playback-token",
+          height: 360,
+          is_gif: false,
+          transcoding_status: "completed",
+          width: 640,
+          unexpected_playback_secret: "must-not-escape",
+        },
+      },
+      preview: {
+        reddit_video_preview: {
+          fallback_url: "https://v.redd.it/video123/preview.mp4?token=private-playback-token",
+        },
+      },
+    })]), POST_ID);
+    expect(metadata).toEqual({
+      provider: "reddit",
+      operation: "media.read",
+      post: {
+        id: POST_ID,
+        title: "A post",
+        author: "viewer",
+        subreddit: "testingground4bots",
+        createdUtc: 1_700_000_000,
+        permalink: "https://www.reddit.com/r/wrench/comments/abc123/a_post/",
+      },
+      media: {
+        kind: "hosted-video",
+        mediaType: "video/mp4",
+        durationSeconds: 8,
+        width: 640,
+        height: 360,
+        nsfw: false,
+        spoiler: true,
+        transcodingStatus: "completed",
+      },
+    });
+    expect(Object.keys(metadata).sort()).toEqual(["media", "operation", "post", "provider"]);
+    expect(Object.keys(metadata.post).sort()).toEqual([
+      "author",
+      "createdUtc",
+      "id",
+      "permalink",
+      "subreddit",
+      "title",
+    ]);
+    expect(Object.keys(metadata.media).sort()).toEqual([
+      "durationSeconds",
+      "height",
+      "kind",
+      "mediaType",
+      "nsfw",
+      "spoiler",
+      "transcodingStatus",
+      "width",
+    ]);
+    expect(JSON.stringify(metadata)).not.toContain("v.redd.it");
+    expect(JSON.stringify(metadata)).not.toContain("private-playback-token");
+    expect(JSON.stringify(metadata)).not.toContain("must-not-escape");
     expect(parseRedditAuthoredPostPresence(listing([]), POST_ID)).toEqual({
       present: false,
       post: null,
@@ -672,6 +763,13 @@ describe("Reddit bounded response normalization", () => {
     expect(() => parseRedditVideoPostPresence(listing([postThing(POST_ID, {
       is_video: false,
     })]), POST_ID)).toThrow("hosted video");
+    expect(() => projectRedditHostedVideoMetadata(listing([]), POST_ID))
+      .toThrow("exact hosted-video post");
+    expect(() => projectRedditHostedVideoMetadata(listing([postThing("t3_wrong", {
+      is_video: true,
+      post_hint: "hosted:video",
+      domain: "v.redd.it",
+    })]), POST_ID)).toThrow("changed its exact target");
   });
 
   test("rejects invalid fullname kinds and over-limit Listing pages", () => {

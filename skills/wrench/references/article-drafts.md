@@ -6,6 +6,7 @@
 - [Build the mixed document](#build-the-mixed-document)
 - [Project source-post embeds](#project-source-post-embeds)
 - [Save without publishing](#save-without-publishing)
+- [Read one saved X draft](#read-one-saved-x-draft)
 - [Handle uncertainty](#handle-uncertainty)
 - [Check provider state](#check-provider-state)
 
@@ -179,6 +180,29 @@ separate cover asset, text/link structure, inline-image order, alt text,
 captions, and stable asset URNs.
 Never continue into publication.
 
+## Read one saved X draft
+
+`x-web articles.read@2` reads one exact current-viewer-owned private Article
+draft by its 1–19 digit provider ID. It is an R1 operation, uses the same bound
+X cookie realm, and never enters the mutation dispatch ledger.
+
+```sh
+wrench x-web articles.read \
+  --input '{"article_id":"1234567890123456789"}' \
+  --auth x-main --json
+```
+
+The closed result identifies `provider: "x"` and `operation: "articles.read"`.
+Its `article` binds the requested ID, current viewer's owner ID,
+`kind: "private-draft"`, `lifecycle: "Draft"`, `published: false`, one bounded
+single-line title, and bounded rich content. The contract fails closed if the
+Article is missing, published, not in the Draft lifecycle, or owned by another
+account.
+
+This operation does not list drafts or read published X Articles. LinkedIn
+Article reads remain capture-required; do not infer them from
+`linkedin-web articles.draft.save` or switch transports to fill the gap.
+
 ## Handle uncertainty
 
 Do not retry a partial or indeterminate image save. An upload may have produced
@@ -198,13 +222,14 @@ contracts retain read-only replacement reconciliation for an exact confirmed
   not a substitute for `x-web` and does not accept this mixed document.
 - `x-web`: `articles.draft.save@2` creates or replaces one private structured
   Article with native links, styles, ordered inline images, and captions, then
-  verifies the unpublished result. Alt text and covers remain
-  capture-required; `articles.publish` remains capture-required.
+  verifies the unpublished result. `articles.read@2` separately reads one exact
+  current-viewer-owned private Draft. Alt text, covers, published Article reads,
+  and `articles.publish` remain capture-required.
 - `linkedin-web`: `articles.draft.save@7` creates or replaces one private
   paragraphs/headings/blockquotes/links Article with one separate new or preserved banner plus
   ordered inline images, required alt text, and optional captions, then
-  verifies the exact current-author unpublished result. Styles, lists, and
-  `articles.publish` remain capture-required.
+  verifies the exact current-author unpublished result. Styles, lists,
+  `articles.read`, and `articles.publish` remain capture-required.
 
 Never switch between an official API and a signed-in web adapter because one
 lacks a field or publishing capability.

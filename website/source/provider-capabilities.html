@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
-    <title>Wrench provider capability attestation</title>
-    <meta name="description" content="Wrench provider capability attestation checked against bundled public adapter manifests. Each listed operation includes its reviewed completeness and current limit.">
+    <title>Provider support in Wrench</title>
+    <meta name="description" content="See which provider actions Wrench supports in the current release and how each service connects.">
     <meta name="robots" content="max-image-preview:large">
     <link rel="canonical" href="https://wrench.rip/provider-capabilities/">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -16,16 +16,16 @@
     {{MARKDOWN_ALTERNATE}}
     <meta property="og:type" content="article">
     <meta property="og:site_name" content="Wrench">
-    <meta property="og:title" content="Wrench provider capability attestation">
-    <meta property="og:description" content="Wrench provider capability attestation checked against bundled public adapter manifests. Each listed operation includes its reviewed completeness and current limit.">
+    <meta property="og:title" content="Provider support in Wrench">
+    <meta property="og:description" content="See which provider actions Wrench supports in the current release and how each service connects.">
     <meta property="og:url" content="https://wrench.rip/provider-capabilities/">
     <meta property="og:image" content="https://wrench.rip/og.png">
     <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Wrench provider capability attestation">
-    <meta name="twitter:description" content="Wrench provider capability attestation checked against bundled public adapter manifests. Each listed operation includes its reviewed completeness and current limit.">
+    <meta name="twitter:title" content="Provider support in Wrench">
+    <meta name="twitter:description" content="See which provider actions Wrench supports in the current release and how each service connects.">
     <meta name="twitter:image" content="https://wrench.rip/og.png">
     <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
     <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
@@ -36,99 +36,42 @@
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="topbar guide-topbar">
-      <a aria-label="Wrench home" class="wordmark" href="/">WRENCH</a>
+      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
       <nav aria-label="Primary">
-        <a href="/getting-started/">Get started</a>
-        <a href="/capture-and-archives/">Capture</a>
+        <a href="/getting-started/">Install</a>
         <a aria-current="page" href="/provider-capabilities/">Providers</a>
-        <a href="/security/">Security</a>
-        <a href="/plugins/">Plugins</a>
+        <a href="https://github.com/hraness/wrench">GitHub <span aria-hidden="true">↗</span></a>
       </nav>
     </header>
     <main class="guide-main" id="main">
-      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Provider capabilities</li></ol></nav>
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Provider support</li></ol></nav>
       <article class="guide-article">
         <header class="guide-hero">
-          <p class="eyebrow">Provider directory · Wrench {{WRENCH_VERSION}}</p>
-          <h1>See what is observed before your agent runs it.</h1>
-          <p class="answer-lede">Wrench {{WRENCH_VERSION}} joins its built-in provider plugins to the bundled public adapter manifests for {{WRENCH_RELEASE}}. The result names every current adapter operation, transport, contract version, risk, completeness state, and limit. A missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control.</p>
-          <p class="review-note">Run <code>wrench capabilities --json</code> for the exact state installed on your machine. This release page is generated from reviewed source at build time.</p>
+          <p class="eyebrow">Provider support · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Choose a service. See what your agent can do.</h1>
+          <p class="answer-lede">This directory lists the actions supported by the current Wrench release and the access method each service uses. An action that is not listed is not available.</p>
+          <p class="review-note">Run <code>wrench capabilities --json</code> to see the exact support installed on your machine.</p>
         </header>
 
         <section aria-labelledby="directory">
-          <h2 id="directory">{{PROVIDER_SURFACE_COUNT}} provider surfaces, with readiness beside each name</h2>
-          <p>This release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled adapters. {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>. {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} remain <code>capture-required</code>. The cards group adapters by exact provider surface; LinkedIn and X each retain separate official and authenticated-web adapters inside one card.</p>
+          <h2 id="directory">{{PROVIDER_SURFACE_COUNT}} connected services</h2>
           <div class="provider-directory provider-directory-guide">
             {{PROVIDER_OVERVIEW_CARDS}}
           </div>
-          <p class="provider-status-note">Provider names identify compatible surfaces and do not imply endorsement. Telegram is absent from those manifests. Wrench does not install a Telegram Bot API substitute or claim Telegram contact access.</p>
+          <p class="provider-status-note">Provider names identify compatible services and do not imply endorsement. Wrench does not claim support for services or actions that are absent from this page.</p>
         </section>
 
-        <section aria-labelledby="completeness">
-          <h2 id="completeness">Observed and reserved are different states</h2>
-          <p><code>observed</code> means the current contract can plan and execute after local doctor and authentication checks pass. It does not waive the operation's account, dependency, input, risk, or completeness checks.</p>
-          <p><code>capture-required</code> is an inert reservation. It cannot plan or execute until authorized evidence establishes a newly reviewed contract. Historical plugin versions, local plugins, portable bundles, and retired manifests can differ from this release snapshot.</p>
-        </section>
-
-        <section aria-labelledby="beeper">
-          <h2 id="beeper">Beeper contributes {{BEEPER_OBSERVED_OPERATION_COUNT}} observed local-CLI operations</h2>
-          <p>Wrench accepts only the pinned official Beeper CLI {{BEEPER_CLI_VERSION}} executable for the current macOS or Linux architecture and one already-authorized Desktop target. Its named contracts cover accounts, bridges, contacts, conversations, messages, sends, edits, reactions, conversation state, metadata, reminders, drafts, local focus, and presence.</p>
-          <p>The caller cannot choose an arbitrary Beeper command or flag. Every mutation keeps Wrench's preview, confirmation, durable dispatch, and at-most-once evidence. Exact reconciliation is available where a separately reviewed readback exists; other indeterminate mutations remain fenced and unretried. Submission does not assert network delivery.</p>
-          <div class="action-row guide-actions">
-            <a class="button button-primary" href="/providers/beeper/">Read the Beeper guide</a>
-            <a class="button button-secondary" href="#provider-beeper">Inspect all {{BEEPER_OBSERVED_OPERATION_COUNT}} operations</a>
-          </div>
-        </section>
-
-        <section aria-labelledby="gmail">
-          <h2 id="gmail">Gmail contacts, inbox search, thread reads, and clips</h2>
-          <p>Gmail uses the official Gmail and Google People APIs. Its auth locator must match a current-user-owned mode-0600 token document with the exact provider, subject, and sorted <code>contacts.readonly</code> and <code>gmail.readonly</code> scopes.</p>
-          <div class="command-panel"><pre><code>wrench gmail contacts.list --auth gmail-main \
-  --input '{"limit":20,"stats_scan_limit":100}' --json
-
-wrench gmail messaging.list --auth gmail-main \
-  --input '{"view":"inbox","limit":25}' --json
-
-wrench gmail messaging.list --auth gmail-main \
-  --input '{"view":"search","query":"from:example.com has:attachment","limit":25}' --json
-
-wrench gmail messaging.read --auth gmail-main \
-  --input '{"thread_id":"thread-id-from-list"}' --json</code></pre></div>
-          <p>Contact statistics report sent and received counts plus the maximum internal date across each bounded matched-message scan. A count is complete, a lower bound, or <code>null</code>; dates carry the same basis and completeness evidence. <code>limit * stats_scan_limit</code> cannot exceed 2,000 per-direction query candidates before paired metadata reads.</p>
-          <p>Inbox and search rows include a provider-derived <code>threadUrl</code> and the exact <code>messaging.read</code> input. Reading does not mark a message seen or emit an acknowledgement. Pass the returned URL to <code>wrench read</code> or <code>wrench clip</code> with the same auth locator. Clips default to private Wrench state and can include every MIME attachment as content-addressed, integrity-recorded objects. The <a href="/capture-and-archives/">capture guide</a> documents the plaintext export and attachment boundary.</p>
-        </section>
-
-        <section aria-labelledby="social-contacts">
-          <h2 id="social-contacts">LinkedIn, Instagram, and WhatsApp contacts keep their missing data visible</h2>
-          <div class="command-panel"><pre><code>wrench linkedin contacts.list --auth linkedin-main \
-  --input '{"start":0,"count":25}' --json
-
-wrench instagram-web contacts.list --auth instagram-main \
-  --input '{"thread_limit":25,"contact_limit":50}' --json
-
-wrench whatsapp-web contacts.list --auth whatsapp-main \
-  --input '{"limit":50}' --json</code></pre></div>
-          <p>LinkedIn's official Connections API does not expose ordinary inbox history, so Wrench reports directional statistics as unavailable. Its separate consumer-web contact and inbox reservations do not inherit authority from the official adapter.</p>
-          <p>Instagram projects only participants visible in one reviewed first inbox page. Provider pagination and local thread or contact limits remain incomplete. WhatsApp reads one page from the authenticated account owner's private, quiescent contact store without opening a connection; it does not reinterpret a linked-device message cache as complete account-owned history.</p>
-        </section>
-
-        <section aria-labelledby="persistent">
-          <h2 id="persistent">Verified reads can remain available locally</h2>
-          <p>Successful R1 calls with a verified account subject can publish encrypted snapshots of the exact validated query and bounded output. Repeating the same operation with <code>--cache-only</code> can return the last verified state without opening a browser or provider connection.</p>
-          <p>A failed refresh does not erase the last good snapshot. Provider paging, completeness, and unsupported states remain explicit. WhatsApp revalidation reads its local linked-device projection; synchronizing that projection remains the separate explicit <code>wrench auth sync &lt;id&gt; --once</code> operation.</p>
-        </section>
-
-        <section aria-labelledby="attestation">
-          <h2 id="attestation">Operation-level attestation</h2>
-          <p>Each group below preserves the adapter version, operation name, completeness, risk, semantic contract version, transport, and reviewed limit. The groups are collapsed for scanning in a browser and remain fully present in the static HTML and <a href="/provider-capabilities.md">Markdown edition</a>.</p>
+        <section aria-labelledby="actions">
+          <h2 id="actions">Supported actions by service</h2>
+          <p>The action name is the stable command surface your agent uses. The access label tells you whether Wrench connects through an official API, a signed-in session, a linked device, or a local app.</p>
           <div class="provider-attestation-groups">
             {{PROVIDER_ATTESTATION_GROUPS}}
           </div>
         </section>
 
         <aside class="guide-callout" aria-labelledby="provider-next">
-          <h2 id="provider-next">Capability discovery comes before credentials</h2>
-          <p>Follow the <a href="/getting-started/">installation guide</a>, inspect <code>wrench capabilities PROVIDER --json</code>, then read the <a href="/security/">security and local-custody guide</a> before binding an account.</p>
+          <h2 id="provider-next">Set up only the service you need</h2>
+          <p>Follow the <a href="/getting-started/">installation guide</a>, inspect <code>wrench capabilities PROVIDER --json</code>, then read the <a href="/security/">security and local-custody guide</a> before connecting an account. The <a href="/providers/beeper/">Beeper guide</a> documents its local app integration in detail.</p>
         </aside>
       </article>
     </main>

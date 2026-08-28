@@ -165,9 +165,11 @@ const identities = Object.freeze({
   },
   "reddit-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "91cc3364ab1ccba66bd2e099f64fcccc187fde94145a8bf1eaa14f0f5533f6d7",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.2.0",
+    implementationSha256: "16e4e48609c12d5ffdaf47e622764e06cc9b3381c6b8ceb2c9f773fa9d99bdd9",
+    legacyCurrentReadImplementationSha256: [
+      "91cc3364ab1ccba66bd2e099f64fcccc187fde94145a8bf1eaa14f0f5533f6d7",
+    ],
     legacyReadImplementationSha256: {
       test: "64a4c1e78ce8565a50613f63ff605f0f57f488617ef31386b5ddce5e3db885c9",
       production: "058987e5eac61505ca53f80d8494fb5505e697e0313e6e197a198649be7c3a3c",
@@ -268,9 +270,11 @@ const identities = Object.freeze({
   },
   "x-web": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "54589eaf65c7de95442dcff6a81327d0a32ec38f58560769e7b807519db10eeb",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "1.2.0",
+    implementationSha256: "03d906c92bfb5c30eb2d66e161ec67f7a081efa75e2a210a62b117df70b2af00",
+    legacyCurrentReadImplementationSha256: [
+      "54589eaf65c7de95442dcff6a81327d0a32ec38f58560769e7b807519db10eeb",
+    ],
     legacyReadImplementationSha256: {
       test: "bcf7411c6ac01b16dc2a602b9928f8d0f9f5fd3ac0901d2ef197b72a8f763d31",
       production: "ebba20c72150dcef1eb21d3a1ea02a1dee91f8654c1f33621e5217faabf2be25",
