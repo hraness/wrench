@@ -458,7 +458,14 @@ async function harness(partCount: number, options: HarnessOptions = {}) {
     listOperation: "messaging.list",
     contextOperation: "messaging.read",
     coordinateKind: "beeperConversation",
-    enumerateRoutes: () => Object.freeze([]),
+    enumerateRoutes: () => Object.freeze([Object.freeze({
+      target: Object.freeze({ accountId: "account", conversationId: roomId }),
+      conversationProviderId: roomId,
+      conversationKind: "single" as const,
+      title: "Private Synthetic Recipient",
+      participants,
+      providerRevision: "route-revision-1",
+    })]),
     resolveRoute: Object.freeze({
       operation: "conversations.read",
       input: (input: OperationInput) => Object.freeze({
