@@ -566,6 +566,15 @@ try {
   for (const binName of binNames) {
     await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);
   }
+  await runExpectingFailure([
+    join(consumer, "node_modules", ".bin", "wrench"),
+    "imessage",
+    "transport",
+    "install",
+    "--binary",
+    "relative-imsg",
+    "--json",
+  ], consumer, 2, "normalized-absolute-reviewed-imsg-file");
   await access(join(
     consumer,
     "node_modules",
@@ -600,7 +609,7 @@ try {
     "-e",
     `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
   ], consumer);
-  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nimport * as surface1 from \"@hraness/wrench/client\";\nimport * as surface2 from \"@hraness/wrench/omni\";\nimport * as surface3 from \"@hraness/wrench/beeper\";\nvoid [surface0, surface1, surface2, surface3];\n");
+  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nimport * as surface1 from \"@hraness/wrench/client\";\nimport * as surface2 from \"@hraness/wrench/omni\";\nimport * as surface3 from \"@hraness/wrench/beeper\";\nimport * as surface4 from \"@hraness/wrench/messaging\";\nvoid [surface0, surface1, surface2, surface3, surface4];\n");
   await writeFile(join(consumer, "tsconfig.bundler.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"types\": [\n      \"bun\",\n      \"node\"\n    ],\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"Preserve\",\n    \"moduleResolution\": \"Bundler\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);
 

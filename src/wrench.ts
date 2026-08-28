@@ -231,6 +231,8 @@ type MediaRuntime = typeof MediaRuntimeModule;
 type BeeperMessageLikeMeCliRuntime = typeof BeeperMessageLikeMeCliRuntimeModule;
 type BeeperContactInteractionCliRuntime =
   typeof BeeperContactInteractionCliRuntimeModule;
+type ImsgDirectInstallRuntime =
+  typeof import("./providers/imessage-direct-install");
 
 /**
  * Wrench's stable boundary around the independently versioned KB doctor.
@@ -255,6 +257,8 @@ const loadBeeperMessageLikeMeCliRuntime = (): Promise<BeeperMessageLikeMeCliRunt
   import("./beeper-message-like-me-cli");
 const loadBeeperContactInteractionCliRuntime = (): Promise<BeeperContactInteractionCliRuntime> =>
   import("./beeper-contact-interactions-cli");
+const loadImsgDirectInstallRuntime = (): Promise<ImsgDirectInstallRuntime> =>
+  import("./providers/imessage-direct-install");
 
 const runDefaultGmailCapture: GmailCaptureRunner = async (...arguments_) => {
   const { runGmailCapture } = await import("./gmail-capture");
@@ -290,6 +294,8 @@ export type WrenchDependencies = {
     () => Promise<BeeperMessageLikeMeCliRuntime>;
   readonly loadBeeperContactInteractionCliRuntime:
     () => Promise<BeeperContactInteractionCliRuntime>;
+  readonly loadImsgDirectInstallRuntime:
+    () => Promise<ImsgDirectInstallRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
   readonly probePluginSubject: (
     binding: ProviderPluginBindingV1,
@@ -346,6 +352,7 @@ const defaultDependencies: WrenchDependencies = {
   loadMediaRuntime,
   loadBeeperMessageLikeMeCliRuntime,
   loadBeeperContactInteractionCliRuntime,
+  loadImsgDirectInstallRuntime,
   providerPluginRegistry,
   probePluginSubject: async (
     binding,
@@ -432,6 +439,9 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
     loadBeeperContactInteractionCliRuntime:
       overrides.loadBeeperContactInteractionCliRuntime
       ?? defaultDependencies.loadBeeperContactInteractionCliRuntime,
+    loadImsgDirectInstallRuntime:
+      overrides.loadImsgDirectInstallRuntime
+      ?? defaultDependencies.loadImsgDirectInstallRuntime,
     providerPluginRegistry: overrides.providerPluginRegistry
       ?? defaultDependencies.providerPluginRegistry,
     probePluginSubject: overrides.probePluginSubject
@@ -1883,6 +1893,23 @@ async function runCommand(
 ): Promise<number> {
   if (arguments_.command === "help") {
     output.stdout(renderWrenchUsage());
+    return 0;
+  }
+  if (arguments_.command === "imessage-transport-install") {
+    const runtime = await dependencies.loadImsgDirectInstallRuntime();
+    const installed = await runtime.installReviewedImsgBinary(
+      arguments_.binary,
+      environment,
+    );
+    const result = Object.freeze({
+      ok: true,
+      installed: true,
+      alreadyPresent: installed.alreadyPresent,
+      tool: "imsg-private-transport",
+      version: installed.version,
+      executableSha256: installed.executableSha256,
+    });
+    print(output, result, arguments_.json);
     return 0;
   }
   if (arguments_.command === "messaging-reconcile") {

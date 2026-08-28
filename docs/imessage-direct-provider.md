@@ -57,7 +57,7 @@ not this reviewed transport, even if it prints version 0.14.1.
 Install only that byte sequence through the checked installer:
 
 ```sh
-bun run imessage:transport:install -- --binary /absolute/path/to/imsg
+wrench imessage transport install --binary /absolute/path/to/imsg --json
 ```
 
 The installer supports only the declared current platform, reads the source

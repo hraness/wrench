@@ -52,6 +52,11 @@ export type WrenchArguments =
       readonly maxParticipants?: number;
       readonly json: boolean;
     }
+  | {
+      readonly command: "imessage-transport-install";
+      readonly binary: string;
+      readonly json: boolean;
+    }
   | { readonly command: "doctor"; readonly json: boolean }
   | MessagingArguments
   | { readonly command: "capabilities"; readonly adapterId?: string; readonly json: boolean }
@@ -867,6 +872,38 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         command: "beeper-export-message-like-me",
         ...common,
         output: output!,
+      },
+    };
+  }
+  if (first === "imessage") {
+    if (raw[1] !== "transport" || raw[2] !== "install") {
+      return {
+        ok: false,
+        message: "imessage requires transport install",
+      };
+    }
+    const parsed = optionValues(raw.slice(3), ["--binary"], ["--json"]);
+    if (isFailure(parsed)) return parsed;
+    const binary = parsed.values["--binary"];
+    if (
+      binary === undefined
+      || !isAbsolute(binary)
+      || resolve(binary) !== binary
+      || Buffer.byteLength(binary, "utf8") > 4_096
+      || /[\0\r\n]/u.test(binary)
+    ) {
+      return {
+        ok: false,
+        message:
+          "imessage transport install requires --binary <normalized-absolute-reviewed-imsg-file>",
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        command: "imessage-transport-install",
+        binary,
+        json: parsed.booleans.has("--json"),
       },
     };
   }

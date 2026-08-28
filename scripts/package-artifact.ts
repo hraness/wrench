@@ -25,6 +25,7 @@ const requiredPaths = Object.freeze([
   "dist/beeper-client.js",
   "dist/client.js",
   "dist/index.js",
+  "dist/messaging.js",
   "dist/omni-client.js",
   "skills/wrench/SKILL.md",
   "skills/wrench/agents/openai.yaml",

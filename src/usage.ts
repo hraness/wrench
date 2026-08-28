@@ -28,6 +28,8 @@ export const wrenchUsage = `Usage:
   wrench transcriber setup --engine whisper-cpp --model <file> [media-options]
   wrench doctor [--json]                         Check capture, media, auth, and action dependencies
   wrench capabilities [adapter] [--json]         List installed semantic capabilities
+  wrench imessage transport install --binary <absolute-reviewed-imsg-file> [--json]
+                                                 Install only the current reviewed iMessage transport bytes
   wrench plugin list [--json]                    List trusted source and installed portable plugins
   wrench plugin show <id> [--json]               Inspect one source or portable plugin
   wrench plugin scaffold --site <id> --display-name <name> --origin <https-origin>

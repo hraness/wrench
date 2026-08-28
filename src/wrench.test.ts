@@ -3949,6 +3949,71 @@ describe("CLI previews and exit semantics", () => {
     }
   });
 
+  test("installs reviewed iMessage transport bytes through the public CLI boundary", async () => {
+    const testState = state();
+    try {
+      const wrench = capture();
+      const observedBinaries: string[] = [];
+      const observedStateHomes: Array<string | undefined> = [];
+      const dependencies: Partial<WrenchDependencies> = {
+        loadImsgDirectInstallRuntime: async () => ({
+          installReviewedImsgBinary: async (
+            binary: string,
+            environment: Readonly<Record<string, string | undefined>>,
+          ) => {
+            observedBinaries.push(binary);
+            observedStateHomes.push(environment.WRENCH_STATE_HOME);
+            return Object.freeze({
+              path: "/private/wrench/tools/imsg/0.14.1/imsg",
+              executableSha256: "7".repeat(64),
+              version: "0.14.1" as const,
+              alreadyPresent: false,
+            });
+          },
+        } as unknown as Awaited<ReturnType<
+          WrenchDependencies["loadImsgDirectInstallRuntime"]
+        >>),
+      };
+      const invalid = capture();
+      expect(await main([
+        "imessage",
+        "transport",
+        "install",
+        "--binary",
+        "relative-imsg",
+        "--json",
+      ], testState.environment, invalid.output, dependencies)).toBe(2);
+      expect(observedBinaries).toEqual([]);
+      expect(invalid.stdout()).toBe("");
+      expect(invalid.stderr()).toContain("normalized-absolute-reviewed-imsg-file");
+
+      const code = await main([
+        "imessage",
+        "transport",
+        "install",
+        "--binary",
+        "/tmp/reviewed-imsg",
+        "--json",
+      ], testState.environment, wrench.output, dependencies);
+
+      expect(code).toBe(0);
+      expect(observedBinaries).toEqual(["/tmp/reviewed-imsg"]);
+      expect(observedStateHomes).toEqual([testState.directory]);
+      expect(wrench.stderr()).toBe("");
+      expect(JSON.parse(wrench.stdout())).toEqual({
+        ok: true,
+        installed: true,
+        alreadyPresent: false,
+        tool: "imsg-private-transport",
+        version: "0.14.1",
+        executableSha256: "7".repeat(64),
+      });
+      expect(wrench.stdout()).not.toContain("/private/wrench");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("renders the canonical Wrench command surface", async () => {
     const usage = renderWrenchUsage();
     expect(usage).toStartWith("Usage:\n  wrench ");
@@ -3956,6 +4021,7 @@ describe("CLI previews and exit semantics", () => {
     expect(usage).toContain("Shorthand for 'wrench invoke'");
     expect(usage).toContain("wrench plugin list [--json]");
     expect(usage).toContain("wrench plugin show <id> [--json]");
+    expect(usage).toContain("wrench imessage transport install --binary");
     expect(usage).toContain("wrench plugin scaffold --site <id>");
     expect(usage).toContain("wrench plugin check <directory> [--json]");
     expect(usage).toContain(

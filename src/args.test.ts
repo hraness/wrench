@@ -3,6 +3,33 @@ import { describe, expect, test } from "bun:test";
 import { parseWrenchArguments } from "./args";
 
 describe("wrench CLI grammar", () => {
+  test("parses only one normalized reviewed iMessage transport install source", () => {
+    expect(parseWrenchArguments([
+      "imessage",
+      "transport",
+      "install",
+      "--binary",
+      "/tmp/reviewed-imsg",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "imessage-transport-install",
+        binary: "/tmp/reviewed-imsg",
+        json: true,
+      },
+    });
+    for (const raw of [
+      ["imessage", "transport", "install"],
+      ["imessage", "transport", "install", "--binary", "relative-imsg"],
+      ["imessage", "transport", "install", "--binary", "/tmp/../tmp/imsg"],
+      ["imessage", "send"],
+      ["imessage", "transport", "install", "--binary", "/tmp/imsg", "--force"],
+    ]) {
+      expect(parseWrenchArguments(raw).ok).toBeFalse();
+    }
+  });
+
   test("keeps messaging capability data out of argv and requires private output", () => {
     expect(parseWrenchArguments([
       "messaging",
