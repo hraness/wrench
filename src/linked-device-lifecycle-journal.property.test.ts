@@ -256,6 +256,24 @@ function assertSafety(journal: LinkedDeviceLifecycleJournal): void {
   }
 }
 
+type TransitionAttempt =
+  | Readonly<{ kind: "success"; journal: LinkedDeviceLifecycleJournal }>
+  | Readonly<{ kind: "failure"; error: unknown }>;
+
+function attemptTransition(
+  journal: LinkedDeviceLifecycleJournal,
+  event: LinkedDeviceLifecycleJournalEvent,
+): TransitionAttempt {
+  try {
+    return {
+      kind: "success",
+      journal: transitionLinkedDeviceLifecycleJournal(journal, event),
+    };
+  } catch (error) {
+    return { kind: "failure", error };
+  }
+}
+
 function terminalizeWithSuppliedEvidence(
   journal: LinkedDeviceLifecycleJournal,
   firstStep: number,
@@ -306,31 +324,32 @@ test("arbitrary event schedules either fail closed or advance one monotonic revi
       let journal = initial(kind);
       for (const [index, command] of commands.entries()) {
         const before = journal;
-        try {
-          journal = transitionLinkedDeviceLifecycleJournal(
-            journal,
-            eventFor(command, journal, index + 1),
-          );
-          expect(journal.revision).toBe(before.revision + 1);
-          expect(Date.parse(journal.updatedAt))
-            .toBeGreaterThanOrEqual(Date.parse(before.updatedAt));
-          expect(journal.journalId).toBe(before.journalId);
-          expect(journal.kind).toBe(before.kind);
-          expect(journal.pluginId).toBe(before.pluginId);
-          expect(journal.pluginVersion).toBe(before.pluginVersion);
-          expect(journal.pluginImplementationHash)
-            .toBe(before.pluginImplementationHash);
-          expect(journal.lifecycleContractVersion)
-            .toBe(before.lifecycleContractVersion);
-          expect(journal.authRealmHash).toBe(before.authRealmHash);
-          expect(journal.authContentHash).toBe(before.authContentHash);
-          expect(journal.initialSubjectState)
-            .toBe(before.initialSubjectState);
-          expect(journal.phoneProvided).toBe(before.phoneProvided);
-        } catch (error) {
-          expect(error).toBeInstanceOf(Error);
+        const attempt = attemptTransition(
+          journal,
+          eventFor(command, journal, index + 1),
+        );
+        if (attempt.kind === "failure") {
+          expect(attempt.error).toBeInstanceOf(Error);
           expect(journal).toBe(before);
+          continue;
         }
+        journal = attempt.journal;
+        expect(journal.revision).toBe(before.revision + 1);
+        expect(Date.parse(journal.updatedAt))
+          .toBeGreaterThanOrEqual(Date.parse(before.updatedAt));
+        expect(journal.journalId).toBe(before.journalId);
+        expect(journal.kind).toBe(before.kind);
+        expect(journal.pluginId).toBe(before.pluginId);
+        expect(journal.pluginVersion).toBe(before.pluginVersion);
+        expect(journal.pluginImplementationHash)
+          .toBe(before.pluginImplementationHash);
+        expect(journal.lifecycleContractVersion)
+          .toBe(before.lifecycleContractVersion);
+        expect(journal.authRealmHash).toBe(before.authRealmHash);
+        expect(journal.authContentHash).toBe(before.authContentHash);
+        expect(journal.initialSubjectState)
+          .toBe(before.initialSubjectState);
+        expect(journal.phoneProvided).toBe(before.phoneProvided);
       }
       expect(
         parseLinkedDeviceLifecycleJournal(
@@ -351,27 +370,25 @@ test("bounded action and fault workloads terminalize with supplied evidence", ()
       for (const [index, command] of trace.entries()) {
         const before = journal;
         const isFault = (faultCommands as readonly string[]).includes(command);
-        try {
-          journal = transitionLinkedDeviceLifecycleJournal(
-            journal,
-            isFault
-              ? faultEventFor(command as FaultCommand, journal, index + 1)
-              : eventFor(command as Command, journal, index + 1),
-          );
-          if (isFault) {
-            throw new Error(
-              `fault command was accepted at trace ${JSON.stringify(trace.slice(0, index + 1))}`,
-            );
-          }
-          expect(journal.revision).toBe(before.revision + 1);
-        } catch (error) {
-          if (
-            error instanceof Error
-            && error.message.startsWith("fault command was accepted")
-          ) throw error;
-          expect(error).toBeInstanceOf(Error);
+        const attempt = attemptTransition(
+          journal,
+          isFault
+            ? faultEventFor(command as FaultCommand, journal, index + 1)
+            : eventFor(command as Command, journal, index + 1),
+        );
+        if (attempt.kind === "failure") {
+          expect(attempt.error).toBeInstanceOf(Error);
           expect(journal).toBe(before);
+          assertSafety(journal);
+          continue;
         }
+        if (isFault) {
+          throw new Error(
+            `fault command was accepted at trace ${JSON.stringify(trace.slice(0, index + 1))}`,
+          );
+        }
+        journal = attempt.journal;
+        expect(journal.revision).toBe(before.revision + 1);
         assertSafety(journal);
       }
 
