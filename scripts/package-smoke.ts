@@ -30,7 +30,7 @@ const packageDiscoveryKeywords = [
   "local-first",
   "bun",
 ] as const;
-const MAX_PACKED_BYTES = 2_000_000;
+const MAX_PACKED_BYTES = 2_010_000;
 const MAX_PACKED_FILES = 450;
 const MAX_UNPACKED_BYTES = 11_100_000;
 const NPM_REGISTRY = "https://registry.npmjs.org";

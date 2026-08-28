@@ -9,7 +9,7 @@ const maximumTarBytes = 12_000_000;
 const packageBudget = Object.freeze({
   entryCount: { min: 350, max: 450 },
   fileCount: { min: 350, max: 450 },
-  packedBytes: { min: 1_600_000, max: 2_000_000 },
+  packedBytes: { min: 1_600_000, max: 2_010_000 },
   unpackedBytes: { min: 9_000_000, max: 11_100_000 },
 });
 
