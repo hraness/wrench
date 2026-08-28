@@ -10,7 +10,7 @@ const packageBudget = Object.freeze({
   entryCount: { min: 350, max: 450 },
   fileCount: { min: 350, max: 450 },
   packedBytes: { min: 1_600_000, max: 2_000_000 },
-  unpackedBytes: { min: 9_000_000, max: 11_000_000 },
+  unpackedBytes: { min: 9_000_000, max: 11_100_000 },
 });
 
 const requiredPaths = Object.freeze([
@@ -32,6 +32,7 @@ const requiredPaths = Object.freeze([
   "skills/wrench/references/install.md",
   "src/cli.ts",
   "src/index.ts",
+  "src/message-like-me-agentic-messaging.ts",
   "src/providers/imessage-direct-install.ts",
   "src/provider-plugin-registry.ts",
   "src/wrench.ts",
