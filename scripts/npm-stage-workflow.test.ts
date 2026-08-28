@@ -8,6 +8,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 import {
   inspectPackageArtifact,
+  packageArtifactBudget,
   type PackageArtifactInventory,
 } from "./package-artifact.js";
 import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
@@ -170,6 +171,18 @@ function npmCommands(markdown: string): readonly string[] {
 }
 
 describe("npm publication contract", () => {
+  test("keeps one narrow release-authoritative package byte budget", async () => {
+    const smoke = await readFile(packageSmokeUrl, "utf8");
+    expect(packageArtifactBudget.packedBytes).toEqual({ min: 1_600_000, max: 2_050_000 });
+    expect(packageArtifactBudget.unpackedBytes).toEqual({ min: 9_000_000, max: 11_100_000 });
+    expect(smoke).toContain(
+      "const MAX_PACKED_BYTES = packageArtifactBudget.packedBytes.max;",
+    );
+    expect(smoke).toContain(
+      "const MAX_UNPACKED_BYTES = packageArtifactBudget.unpackedBytes.max;",
+    );
+  });
+
   test("pins the public package to the canonical registry", async () => {
     const value: unknown = JSON.parse(await readFile(manifestUrl, "utf8"));
     expect(typeof value).toBe("object");

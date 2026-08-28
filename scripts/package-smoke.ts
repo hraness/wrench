@@ -3,6 +3,8 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import { packageArtifactBudget } from "./package-artifact.js";
+
 const packageName = "@hraness/wrench";
 const importSpecifiers = [
   "@hraness/wrench",
@@ -32,9 +34,9 @@ const packageDiscoveryKeywords = [
   "local-first",
   "bun",
 ] as const;
-const MAX_PACKED_BYTES = 2_010_000;
+const MAX_PACKED_BYTES = packageArtifactBudget.packedBytes.max;
 const MAX_PACKED_FILES = 450;
-const MAX_UNPACKED_BYTES = 11_100_000;
+const MAX_UNPACKED_BYTES = packageArtifactBudget.unpackedBytes.max;
 const NPM_REGISTRY = "https://registry.npmjs.org";
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";
 const sweetCookieVerificationIntegrity = "sha512-HddZketABRWbHiLYqMbGlYuqEaWdtqAjES28eKHr2cPDdPvrXiF4JQxD4pl9WzSOre6p/B3zA4Z3uIsCHo/+uQ==";
