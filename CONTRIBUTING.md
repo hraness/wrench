@@ -22,6 +22,25 @@ redaction, and recovery. A new mutation also needs preview-digest,
 at-most-once, indeterminate-result, and reconciliation evidence. Keep an
 operation `capture-required` until the exact current contract is proved.
 
+For a stateful boundary, drive the production reducer or port with a bounded
+action and fault schedule. Name the safety properties that must hold after
+every step and any conditional progress law, including the evidence or healthy
+boundary behavior supplied by the harness.
+Fast-check reports a seed and shrink path for failures. Replay the exact
+coordinate and only the named property before changing code:
+
+```sh
+WRENCH_PROPERTY_SEED=-17 \
+WRENCH_PROPERTY_PATH=3:0:12:1 \
+bun test src/linked-device-lifecycle-journal.property.test.ts \
+  --test-name-pattern '^bounded action and fault workloads terminalize with supplied evidence$'
+```
+
+Keep the seed and minimized trace free of credentials and provider data, then
+turn the smallest useful counterexample into a named deterministic regression.
+These workloads verify local models and injected ports. They do not establish
+live provider, browser, operating-system, or device behavior.
+
 Media changes must preserve the one-item, finite, non-DRM source boundary and
 must never add an access-control bypass. Keep acquisition output staged until
 the complete artifact contract, manifest, and SHA-256 records verify. Add
