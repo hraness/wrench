@@ -11,7 +11,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { renderHranessSiteFooter } from "@hraness/site-footer";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
+import { AskAiAboutThis } from "./ask-ai-runtime.js";
 import { htmlMainToMarkdown } from "./html-to-markdown";
 import {
   loadProviderCapabilityAttestation,
@@ -160,6 +163,13 @@ export const PUBLIC_PAGES = [
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];
+
+export function renderAskAiAboutThis(canonicalUrl: string): string {
+  return renderToStaticMarkup(createElement(AskAiAboutThis, {
+    className: "wrench-ask-ai",
+    url: canonicalUrl,
+  }));
+}
 
 export function markdownSiblingPath(canonicalPath: string): string {
   return canonicalPath === "/" ? "/index.md" : `${canonicalPath.slice(0, -1)}.md`;
@@ -423,7 +433,9 @@ function renderTemplate(
     rendered = replaceRequired(
       rendered,
       "{{HRANESS_SITE_FOOTER}}",
-      options.hranessSiteFooter,
+      page === undefined
+        ? options.hranessSiteFooter
+        : `${renderAskAiAboutThis(`${SITE_ORIGIN}${page.canonicalPath}`)}\n${options.hranessSiteFooter}`,
     );
   }
   if (page) {
