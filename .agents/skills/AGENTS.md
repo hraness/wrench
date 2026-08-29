@@ -1,6 +1,8 @@
 # Contents
 
-- `phase-orchestrator/` – phased execution with Codex collaboration agents and explicit join gates.
+- `write-phase-plan/` – dependency-ordered plan authoring with explicit acceptance and validation criteria.
+- `phase-orchestrator/` – parent workflow for delegated phased execution, integration, and delivery.
+- `phase-implementer/`, `phase-reviewer/`, and `phase-final-reviewer/` – bounded implementation, independent phase review, and end-to-end review workers.
 - `query-kb/` – scoped repository and knowledge-base retrieval.
 - `plan-kb/` – durable implementation planning in the knowledge base.
 - `percolate-kb/` – evidence-backed concept and relationship promotion.
