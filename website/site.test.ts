@@ -253,6 +253,24 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/vms-cannot-contain-agents/"');
     expect(html).toContain('href="/paypal-grapheneos-attestation/"');
     expect(html).toContain('href="/providers/beeper/"');
+    const argumentsSection = /<section aria-labelledby="arguments-title" class="section editorial-cluster">[\s\S]*?<\/section>/u
+      .exec(html)?.[0];
+    const guidesSection = /<section aria-labelledby="guides-title" class="section guide-cluster">[\s\S]*?<\/section>/u
+      .exec(html)?.[0];
+    expect(argumentsSection).toBeDefined();
+    expect(guidesSection).toBeDefined();
+    expect(argumentsSection).toContain('<h2 id="arguments-title">Arguments and comparisons</h2>');
+    expect(argumentsSection).toContain('<div class="card-grid editorial-card-grid">');
+    expect(argumentsSection?.match(/<article class="card(?: editorial-card)?">/gu)).toHaveLength(4);
+    expect(guidesSection?.match(/<article class="card">/gu)).toHaveLength(5);
+    expect(argumentsSection).toContain('href="/paypal-grapheneos-attestation/"');
+    expect(guidesSection).not.toContain('href="/paypal-grapheneos-attestation/"');
+    for (const image of editorialImages) {
+      expect(argumentsSection).toContain(`href="${image.canonicalPath}"`);
+      expect(guidesSection).not.toContain(`href="${image.canonicalPath}"`);
+    }
+    expect(guidesSection).not.toContain('class="card editorial-card"');
+    expect(html.indexOf(argumentsSection ?? "")).toBeLessThan(html.indexOf(guidesSection ?? ""));
     expect(html).toContain("Give your coding agent bounded access to the web.");
     expect(html).toContain("Work with the services you already use.");
     expect(html).toContain('class="wordmark" href="/">Wrench</a>');
@@ -594,6 +612,16 @@ describe("wrench.rip static site", () => {
       }
     }
     expect(descriptions.size).toBe(PUBLIC_PAGES.length);
+
+    const homepageMarkdown = await readFile(
+      join(websiteRoot, "dist", markdownSiblingPath("/").slice(1)),
+      "utf8",
+    );
+    expect(homepageMarkdown).not.toContain("![](");
+    for (const image of editorialImages) {
+      expect(homepageMarkdown).toContain(image.cardTitle);
+      expect(homepageMarkdown).not.toContain(editorialImageUrl(image));
+    }
 
     const editorialCards = html.match(
       /<article class="card editorial-card">[\s\S]*?<\/article>/gu,

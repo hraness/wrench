@@ -1193,10 +1193,12 @@ code:not(pre code) {
   max-width: 52rem;
 }
 
+.editorial-cluster .card,
 .guide-cluster .card {
   min-height: 0;
 }
 
+.editorial-cluster .card h3 a,
 .guide-cluster .card h3 a {
   text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
@@ -1539,7 +1541,7 @@ code:not(pre code) {
   font-size: 0.68rem;
 }
 
-.guide-cluster .editorial-card {
+.editorial-cluster .editorial-card {
   min-height: 0;
   overflow: hidden;
   padding: 0;

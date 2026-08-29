@@ -63,4 +63,32 @@ describe("HTML main-to-markdown conversion", () => {
     expect(() => htmlMainToMarkdown("<main><div aria-hidden=\"true\">x</div></main>", "https://wrench.rip/"))
       .toThrow("empty document");
   });
+
+  test("omits decorative images and keeps images with meaningful alternatives", () => {
+    const markdown = htmlMainToMarkdown(`
+      <main>
+        <h1>Image boundaries</h1>
+        <p>
+          <img alt="" src="/images/editorial/decorative.webp">
+          <img src="/images/editorial/missing-alt.webp">
+          <img alt="   " src="/images/editorial/blank-alt.webp">
+          Read the argument.
+        </p>
+        <figure>
+          <img alt="A meaningful diagram" src="/images/editorial/diagram.webp">
+          <figcaption>The diagram has a textual alternative.</figcaption>
+        </figure>
+      </main>
+    `, "https://wrench.rip/arguments/");
+
+    expect(markdown).toContain("Read the argument.");
+    expect(markdown).toContain(
+      "![A meaningful diagram](https://wrench.rip/images/editorial/diagram.webp)",
+    );
+    expect(markdown).toContain("The diagram has a textual alternative.");
+    expect(markdown).not.toContain("decorative.webp");
+    expect(markdown).not.toContain("missing-alt.webp");
+    expect(markdown).not.toContain("blank-alt.webp");
+    expect(markdown).not.toContain("![](");
+  });
 });

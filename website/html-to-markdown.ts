@@ -182,8 +182,9 @@ function markdownImage(
   pageUrl: string,
 ): string {
   const src = node.attrs.src;
-  if (src === undefined || src === "") return "";
-  return `![${escapeMarkdown(node.attrs.alt ?? "")}](${resolveHref(src, pageUrl)})`;
+  const alt = node.attrs.alt?.trim();
+  if (src === undefined || src === "" || alt === undefined || alt === "") return "";
+  return `![${escapeMarkdown(alt)}](${resolveHref(src, pageUrl)})`;
 }
 
 function firstElement(
