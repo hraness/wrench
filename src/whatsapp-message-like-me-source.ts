@@ -295,7 +295,7 @@ export function createWhatsAppMessageLikeMeSource(
     let unprovenReactionActorRows = 0;
     let excludedSelfChatRows = 0;
     let payloadPurgedRows = 0;
-    let systemChatExcluded = false;
+    let nonConversationChatsExcluded = false;
 
     yield Object.freeze({
       schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
@@ -363,7 +363,7 @@ export function createWhatsAppMessageLikeMeSource(
         return fail(`fixed read-only projection rejected the store (${response.errorCode})`);
       }
       expectedGeneration = response.projectionGeneration;
-      systemChatExcluded ||= response.systemChatExcluded;
+      nonConversationChatsExcluded ||= response.nonConversationChatsExcluded;
 
       for (const item of response.messages) {
         messageRows += 1;
@@ -538,7 +538,7 @@ export function createWhatsAppMessageLikeMeSource(
       ...(unprovenReactionActorRows > 0 ? ["reaction-actor-unproven"] : []),
       ...(excludedSelfChatRows > 0 ? ["self-chat-excluded"] : []),
       ...(payloadPurgedRows > 0 ? ["message-payload-purged"] : []),
-      ...(systemChatExcluded ? ["non-conversation-chats-excluded"] : []),
+      ...(nonConversationChatsExcluded ? ["non-conversation-chats-excluded"] : []),
     ]);
     completion = Object.freeze({
       completeness: Object.freeze({

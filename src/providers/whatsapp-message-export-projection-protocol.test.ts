@@ -58,9 +58,8 @@ function item(
   };
 }
 
-function response(messages: unknown) {
+function response(messages: unknown, checkpointCursor = "1") {
   const values = Array.isArray(messages) ? messages : [];
-  const last = values.at(-1) as { readonly rowid?: unknown } | undefined;
   return {
     schemaVersion: 1,
     status: "succeeded",
@@ -71,13 +70,13 @@ function response(messages: unknown) {
       ctimeNs: "300",
       schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
     },
-    systemChatExcluded: false,
+    nonConversationChatsExcluded: false,
     messages,
     nextCursor: null,
     localInsertPageComplete: true,
     checkpoint: values.length === 0
       ? { cursor: "0", anchor: null }
-      : { cursor: last?.rowid, anchor: "a".repeat(64) },
+      : { cursor: checkpointCursor, anchor: "a".repeat(64) },
   };
 }
 
@@ -86,7 +85,10 @@ function parses(
   accountSubject = "whatsapp:pn:15551234567",
 ): boolean {
   try {
-    parseWhatsAppMessageExportProjectionResponse(response([value]), request(accountSubject));
+    parseWhatsAppMessageExportProjectionResponse(
+      response([value], value.rowid),
+      request(accountSubject),
+    );
     return true;
   } catch {
     return false;
@@ -123,6 +125,36 @@ describe("WhatsApp message export projection protocol", () => {
     }
   });
 
+  test("enforces the same direction matrix for a LID-bound account without treating its PN alias as self", () => {
+    const accountSubject = "whatsapp:lid:222222222222222";
+    const self = "222222222222222@lid";
+    const sameDigitsPn = "222222222222222@s.whatsapp.net";
+    const peer = "15557654321@s.whatsapp.net";
+    const group = "120363123456789012@g.us";
+    const cases = [
+      { chatKind: "dm", chatJid: peer, fromMe: false, senderJid: null, valid: true },
+      { chatKind: "dm", chatJid: peer, fromMe: false, senderJid: peer, valid: true },
+      { chatKind: "dm", chatJid: peer, fromMe: false, senderJid: self, valid: false },
+      { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: null, valid: true },
+      { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: "222222222222222:3@lid", valid: true },
+      { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: sameDigitsPn, valid: false },
+      { chatKind: "group", chatJid: group, fromMe: true, senderJid: null, valid: true },
+      { chatKind: "group", chatJid: group, fromMe: true, senderJid: self, valid: true },
+      { chatKind: "group", chatJid: group, fromMe: true, senderJid: sameDigitsPn, valid: false },
+      { chatKind: "group", chatJid: group, fromMe: false, senderJid: null, valid: true },
+      { chatKind: "group", chatJid: group, fromMe: false, senderJid: sameDigitsPn, valid: true },
+      { chatKind: "group", chatJid: group, fromMe: false, senderJid: self, valid: false },
+    ] as const;
+    for (const candidate of cases) {
+      expect(parses(item({
+        chatKind: candidate.chatKind,
+        chatJid: candidate.chatJid,
+        fromMe: candidate.fromMe,
+        senderJid: candidate.senderJid,
+      }), accountSubject)).toBe(candidate.valid);
+    }
+  });
+
   test("requires a reaction target and admits target-only removals for omission", () => {
     expect(parses(item({ reactionEmoji: "👍", reactionToMessageId: null }))).toBe(false);
     expect(parses(item({ reactionEmoji: "👍", reactionToMessageId: "TARGET-1" }))).toBe(true);
@@ -152,8 +184,15 @@ describe("WhatsApp message export projection protocol", () => {
   test("rejects every non-ordinary or non-dense public messages array shape", () => {
     const valid = item();
     const sparse = new Array(1);
+    let accessorGetterCalled = false;
     const accessor: unknown[] = [valid];
-    Object.defineProperty(accessor, "0", { enumerable: true, get: () => valid });
+    Object.defineProperty(accessor, "0", {
+      enumerable: true,
+      get: () => {
+        accessorGetterCalled = true;
+        return valid;
+      },
+    });
     const named: unknown[] & { note?: string } = [valid];
     named.note = "unreviewed";
     const symbolled: unknown[] = [valid];
@@ -173,6 +212,7 @@ describe("WhatsApp message export projection protocol", () => {
         request(),
       )).toThrow("response.messages did not match");
     }
+    expect(accessorGetterCalled).toBe(false);
     expect(parseWhatsAppMessageExportProjectionResponse(
       response(Object.freeze([Object.freeze(valid)])),
       request(),

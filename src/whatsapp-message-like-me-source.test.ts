@@ -78,7 +78,7 @@ function item(overrides: Partial<WhatsAppMessageExportProjectionItem>): WhatsApp
 function fakeDependencies(
   store: string,
   messages: readonly WhatsAppMessageExportProjectionItem[],
-  systemChatExcluded = false,
+  nonConversationChatsExcluded = false,
 ): WhatsAppMessageLikeMeSourceDependencies {
   return {
     helperPath: "/private/fixed/helper.ts",
@@ -102,7 +102,7 @@ function fakeDependencies(
             ctimeNs: stats.ctimeNs.toString(),
             schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
           },
-          systemChatExcluded,
+          nonConversationChatsExcluded,
           messages,
           nextCursor: null,
           localInsertPageComplete: true,
@@ -119,11 +119,11 @@ async function collect(
   path: string,
   messages: readonly WhatsAppMessageExportProjectionItem[],
   subject = "whatsapp:pn:15551234567",
-  systemChatExcluded = false,
+  nonConversationChatsExcluded = false,
 ) {
   const source = createWhatsAppMessageLikeMeSource({
     auth: auth(path, subject),
-    dependencies: fakeDependencies(path, messages, systemChatExcluded),
+    dependencies: fakeDependencies(path, messages, nonConversationChatsExcluded),
   });
   const records = [];
   let index = 0;
@@ -241,6 +241,32 @@ describe("WhatsApp Message Like Me source mapping", () => {
           provenance: expect.objectContaining({ providerId: "222222222222222@lid" }),
         }),
       ]);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps LID-bound outgoing direction distinct from the same numeric PN identity", async () => {
+    const path = privateStore();
+    try {
+      const result = await collect(path, [item({
+        fromMe: true,
+        senderJid: "222222222222222:4@lid",
+      })], "whatsapp:lid:222222222222222");
+      expect(result.records.find((record) => record.kind === "message")).toMatchObject({
+        direction: "outgoing",
+      });
+      expect(result.records.find((record) =>
+        record.kind === "participant"
+        && record.provenance.providerId === "222222222222222@lid"
+      )).toMatchObject({ isSelf: true, handle: null });
+
+      await expect(collect(path, [item({
+        fromMe: true,
+        senderJid: "222222222222222@s.whatsapp.net",
+      })], "whatsapp:lid:222222222222222")).rejects.toThrow(
+        "WhatsApp message export projection protocol",
+      );
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

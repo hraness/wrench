@@ -42,7 +42,6 @@ function generation(identity: { readonly dev: string; readonly ino: string } = r
 
 function terminal(interactions: unknown) {
   const values = Array.isArray(interactions) ? interactions : [];
-  const last = values.at(-1) as { readonly rowid?: unknown } | undefined;
   return {
     schemaVersion: 1,
     status: "succeeded",
@@ -52,7 +51,7 @@ function terminal(interactions: unknown) {
     localInsertPageComplete: true,
     checkpoint: values.length === 0
       ? { cursor: request().cursor, anchor: request().cursorAnchor }
-      : { cursor: last?.rowid, anchor: "d".repeat(64) },
+      : { cursor: "42", anchor: "d".repeat(64) },
   };
 }
 
@@ -173,8 +172,15 @@ describe("WhatsApp interaction projection protocol", () => {
   test("rejects sparse, accessor, named, symbolic, derived, and proxy interaction arrays", () => {
     const valid = interaction("42");
     const sparse = new Array(1);
+    let accessorGetterCalled = false;
     const accessor: unknown[] = [valid];
-    Object.defineProperty(accessor, "0", { enumerable: true, get: () => valid });
+    Object.defineProperty(accessor, "0", {
+      enumerable: true,
+      get: () => {
+        accessorGetterCalled = true;
+        return valid;
+      },
+    });
     const named: unknown[] & { note?: string } = [valid];
     named.note = "unreviewed";
     const symbolled: unknown[] = [valid];
@@ -193,5 +199,6 @@ describe("WhatsApp interaction projection protocol", () => {
         request(),
       )).toThrow("response.interactions did not match");
     }
+    expect(accessorGetterCalled).toBe(false);
   });
 });

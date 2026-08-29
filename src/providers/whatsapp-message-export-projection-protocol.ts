@@ -101,7 +101,7 @@ export type WhatsAppMessageExportProjectionSuccess = Readonly<{
   schemaVersion: typeof WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION;
   status: "succeeded";
   projectionGeneration: WhatsAppMessageExportProjectionGeneration;
-  systemChatExcluded: boolean;
+  nonConversationChatsExcluded: boolean;
   messages: readonly WhatsAppMessageExportProjectionItem[];
   nextCursor: string | null;
   localInsertPageComplete: boolean;
@@ -421,13 +421,13 @@ export function parseWhatsAppMessageExportProjectionResponse(
     });
   }
   exactKeys(parsed, [
-    "schemaVersion", "status", "projectionGeneration", "systemChatExcluded", "messages",
+    "schemaVersion", "status", "projectionGeneration", "nonConversationChatsExcluded", "messages",
     "nextCursor", "localInsertPageComplete", "checkpoint",
   ], "response");
   if (
     parsed.schemaVersion !== WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION
     || parsed.status !== "succeeded"
-    || typeof parsed.systemChatExcluded !== "boolean"
+    || typeof parsed.nonConversationChatsExcluded !== "boolean"
     || typeof parsed.localInsertPageComplete !== "boolean"
   ) return fail("response");
   const rawMessages = denseArray(
@@ -480,7 +480,7 @@ export function parseWhatsAppMessageExportProjectionResponse(
     schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
     status: "succeeded",
     projectionGeneration,
-    systemChatExcluded: parsed.systemChatExcluded,
+    nonConversationChatsExcluded: parsed.nonConversationChatsExcluded,
     messages: Object.freeze(messages),
     nextCursor,
     localInsertPageComplete: parsed.localInsertPageComplete,

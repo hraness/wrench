@@ -447,7 +447,7 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       expect(projected).toMatchObject({
         schemaVersion: 1,
         status: "succeeded",
-        systemChatExcluded: true,
+        nonConversationChatsExcluded: true,
         localInsertPageComplete: true,
         nextCursor: null,
         projectionGeneration: {
@@ -513,7 +513,7 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       const projected = await messageResponse(path, messageRequest(path));
       expect(projected).toMatchObject({
         status: "succeeded",
-        systemChatExcluded: true,
+        nonConversationChatsExcluded: true,
         messages: [
           { rowid: "1", messageId: "MSG-1" },
           { rowid: "2", messageId: "MSG-2" },
@@ -617,6 +617,48 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
           { messageId: "MSG-3", reactionToMessageId: "MSG-1", reactionEmoji: null },
         ],
       });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("binds LID-owned outgoing direction without treating the same PN digits as self", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query(`
+          UPDATE messages SET sender_jid = '999999999999999:4@lid' WHERE msg_id = 'MSG-2'
+        `).run();
+      } finally {
+        database.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      const lidProjection = await messageResponse(path, messageRequest(path, {
+        accountSubject: "whatsapp:lid:999999999999999",
+      }));
+      expect(lidProjection).toMatchObject({ status: "succeeded" });
+      if (lidProjection.status !== "succeeded") throw new Error("expected LID projection");
+      expect(lidProjection.messages[1]).toMatchObject({
+        messageId: "MSG-2",
+        senderJid: "999999999999999:4@lid",
+        fromMe: true,
+      });
+
+      const changed = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        changed.query(`
+          UPDATE messages
+          SET sender_jid = '999999999999999@s.whatsapp.net'
+          WHERE msg_id = 'MSG-2'
+        `).run();
+      } finally {
+        changed.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      expect(await messageResponse(path, messageRequest(path, {
+        accountSubject: "whatsapp:lid:999999999999999",
+      }))).toMatchObject({ status: "failed", errorCode: "projection-invalid" });
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

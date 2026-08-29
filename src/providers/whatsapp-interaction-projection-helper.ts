@@ -892,7 +892,7 @@ function projectMessageExport(
     request.expectedGeneration !== null
     && !sameMessageExportGeneration(projectionGeneration, request.expectedGeneration)
   ) return fail("generation-mismatch");
-  const systemChatExcluded = hasExcludedNonConversationMessages(database);
+  const nonConversationChatsExcluded = hasExcludedNonConversationMessages(database);
   assertMessageExportCursorAnchor(database, request);
   let projectedRows: readonly SqliteRow[];
   try {
@@ -924,7 +924,7 @@ function projectMessageExport(
     schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
     status: "succeeded",
     projectionGeneration,
-    systemChatExcluded,
+    nonConversationChatsExcluded,
     messages,
     nextCursor: hasMore ? last?.rowid ?? null : null,
     localInsertPageComplete: !hasMore,
