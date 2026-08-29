@@ -210,13 +210,44 @@ jobs:
             --archive "$registry_archive" \
             --pack-json "$registry_json"
 
+  provider_baseline:
+    name: Snapshot provider baseline
+    needs: verify
+    permissions:
+      contents: read
+      deployments: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      receipt: ${{ steps.baseline.outputs.receipt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.recovery_workflow_sha || needs.verify.outputs.verified_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Snapshot Production deployments before promotion
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+        run: node ./scripts/release-provider-outcome.mjs baseline
+
   publish:
     name: Publish
-    needs: verify
+    needs:
+      - verify
+      - provider_baseline
     permissions:
       contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      promotion_receipt: ${{ steps.promotion.outputs.receipt }}
     env:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
@@ -226,34 +257,15 @@ jobs:
       VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
       VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
     steps:
-      - name: Revalidate recovery workflow source
-        run: |
-          set -euo pipefail
-          case "$EVENT_NAME" in
-            push)
-              if [[ -n "$RECOVERY_WORKFLOW_SHA" ]]; then
-                echo "::error::Tag release unexpectedly carried a recovery workflow source"
-                exit 1
-              fi
-              ;;
-            workflow_dispatch)
-              if [[ ! "$RECOVERY_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "::error::Release recovery has no verified workflow source commit"
-                exit 1
-              fi
-              current_default_sha="$(gh api \
-                "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" \
-                --jq '.object.sha')"
-              if [[ "$current_default_sha" != "$RECOVERY_WORKFLOW_SHA" ]]; then
-                echo "::error::Release recovery workflow source $RECOVERY_WORKFLOW_SHA is not current $DEFAULT_BRANCH head $current_default_sha"
-                exit 1
-              fi
-              ;;
-            *)
-              echo "::error::Unsupported release event $EVENT_NAME"
-              exit 1
-              ;;
-          esac
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.recovery_workflow_sha || needs.verify.outputs.verified_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
       - name: Publish verified GitHub Release
         run: |
           set -euo pipefail
@@ -270,135 +282,92 @@ jobs:
             echo "::error::Remote $VERIFIED_TAG resolves to $remote_tag_sha, expected $VERIFIED_SHA"
             exit 1
           fi
-          if ! gh release view "$VERIFIED_TAG" >/dev/null 2>&1; then
-            published_tags="$(gh api --paginate \
-              "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')"
-            printf '%s\n' "$published_tags" | NEXT_TAG="$VERIFIED_TAG" node -e '
-              const fs = require("node:fs");
-              const pattern = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
-              const parse = (tag) => {
-                const match = pattern.exec(tag);
-                return match === null ? null : match.slice(1).map(BigInt);
-              };
-              const compare = (left, right) => {
-                for (let index = 0; index < 3; index += 1) {
-                  if (left[index] !== right[index]) {
-                    return left[index] > right[index] ? 1 : -1;
-                  }
-                }
-                return 0;
-              };
-              const next = parse(process.env.NEXT_TAG ?? "");
-              if (next === null) process.exit(1);
-              for (const tag of fs.readFileSync(0, "utf8").split(/\r?\n/u)) {
-                const current = parse(tag);
-                if (current !== null && compare(next, current) <= 0) {
-                  console.error("::error::Release " + process.env.NEXT_TAG + " is not newer than " + tag);
-                  process.exit(1);
-                }
-              }
-            '
-            gh release create "$VERIFIED_TAG" \
-              --verify-tag \
-              --generate-notes \
-              --latest \
-              --title "Wrench $VERIFIED_TAG"
+          release_endpoint="/repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG"
+          release_lookup_stderr="$(mktemp)"
+          trap 'rm -f "$release_lookup_stderr"' EXIT
+          set +e
+          release_lookup="$(gh api --include "$release_endpoint" 2>"$release_lookup_stderr")"
+          release_lookup_exit="$?"
+          set -e
+          release_lookup_state="$(printf '%s' "$release_lookup" | \
+            node ./scripts/release-provider-outcome.mjs inspect-release-response)"
+          case "$release_lookup_state" in
+            found)
+              if [[ "$release_lookup_exit" -ne 0 ]]; then
+                echo "::error::Exact Release lookup returned a Release with exit $release_lookup_exit"
+                exit 1
+              fi
+              ;;
+            missing)
+              if [[ "$release_lookup_exit" -ne 1 ]]; then
+                echo "::error::Exact Release absence returned unexpected exit $release_lookup_exit"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Exact Release lookup returned an unsupported state"
+              exit 1
+              ;;
+          esac
+          if [[ "$release_lookup_state" == "missing" ]]; then
+            node ./scripts/release-provider-outcome.mjs release-order
+            node ./scripts/release-provider-outcome.mjs revalidate-source
+            created_release="$(gh api \
+              --method POST \
+              "/repos/$GITHUB_REPOSITORY/releases" \
+              -F draft=false \
+              -F generate_release_notes=true \
+              -f make_latest=true \
+              -f name="Wrench $VERIFIED_TAG" \
+              -F prerelease=false \
+              -f tag_name="$VERIFIED_TAG" \
+              -f target_commitish="$VERIFIED_SHA")"
+            printf '%s' "$created_release" | \
+              node ./scripts/release-provider-outcome.mjs validate-release
           fi
-          release_state="$(gh release view "$VERIFIED_TAG" \
-            --json assets,isDraft,isImmutable,isPrerelease,tagName \
-            --jq '[.tagName, .isDraft, .isPrerelease, .isImmutable, (.assets | length)] | @tsv')"
-          expected_state="$VERIFIED_TAG"$'\tfalse\tfalse\ttrue\t0'
-          if [[ "$release_state" != "$expected_state" ]]; then
-            echo "::error::Release $VERIFIED_TAG is not published and immutable"
-            exit 1
-          fi
+          release_readback="$(gh api "$release_endpoint")"
+          printf '%s' "$release_readback" | \
+            node ./scripts/release-provider-outcome.mjs validate-release
           latest_tag="$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
           if [[ "$latest_tag" != "$VERIFIED_TAG" ]]; then
             echo "::error::Latest release is $latest_tag, expected $VERIFIED_TAG"
             exit 1
           fi
       - name: Promote verified website production source
-        run: |
-          set -euo pipefail
-          production_ref="refs/heads/website-production"
-          branch_read_endpoint="/repos/$GITHUB_REPOSITORY/git/ref/heads/website-production"
-          branch_update_endpoint="/repos/$GITHUB_REPOSITORY/git/refs/heads/website-production"
-          if [[ ! "$VERIFIED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::Website promotion has no verified stable release tag"
-            exit 1
-          fi
-          if [[ ! "$VERIFIED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Website promotion has no verified release commit"
-            exit 1
-          fi
-          remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/tags/$VERIFIED_TAG" --jq '.sha')"
-          if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
-            echo "::error::Remote $VERIFIED_TAG resolves to $remote_tag_sha, expected $VERIFIED_SHA"
-            exit 1
-          fi
+        id: promotion
+        env:
+          BASELINE_RECEIPT: ${{ needs.provider_baseline.outputs.receipt }}
+        run: node ./scripts/release-provider-outcome.mjs promote
 
-          ref_state="$(gh api "$branch_read_endpoint" \
-            --jq '[.ref, .object.type, .object.sha] | @tsv')"
-          if [[ "$ref_state" == *$'\n'* ]]; then
-            echo "::error::$production_ref lookup returned more than one result"
-            exit 1
-          fi
-          IFS=$'\t' read -r ref_name ref_type current_sha ref_end \
-            <<< "$ref_state"$'\t''__END__'
-          if [[ \
-            "$ref_name" != "$production_ref" || \
-            "$ref_type" != "commit" || \
-            ! "$current_sha" =~ ^[0-9a-f]{40}$ || \
-            "$ref_end" != "__END__" \
-          ]]; then
-            echo "::error::$production_ref did not resolve to one exact commit"
-            exit 1
-          fi
-          if [[ "$current_sha" != "$VERIFIED_SHA" ]]; then
-            comparison="$(gh api \
-              "/repos/$GITHUB_REPOSITORY/compare/$current_sha...$VERIFIED_SHA" \
-              --jq '[.status, (.ahead_by | tostring), (.behind_by | tostring), .base_commit.sha, .merge_base_commit.sha] | @tsv')"
-            IFS=$'\t' read -r \
-              comparison_status \
-              comparison_ahead_by \
-              comparison_behind_by \
-              comparison_base \
-              comparison_merge_base \
-              comparison_end <<< "$comparison"$'\t''__END__'
-            if [[ \
-              "$comparison_status" != "ahead" || \
-              ! "$comparison_ahead_by" =~ ^[1-9][0-9]*$ || \
-              "$comparison_behind_by" != "0" || \
-              "$comparison_base" != "$current_sha" || \
-              "$comparison_merge_base" != "$current_sha" || \
-              "$comparison_end" != "__END__" \
-            ]]; then
-              echo "::error::$production_ref does not fast-forward from $current_sha to $VERIFIED_SHA"
-              exit 1
-            fi
-            gh api \
-              --method PATCH \
-              "$branch_update_endpoint" \
-              -f sha="$VERIFIED_SHA" \
-              -F force=false >/dev/null
-          fi
-
-          promoted_state="$(gh api "$branch_read_endpoint" \
-            --jq '[.ref, .object.type, .object.sha] | @tsv')"
-          if [[ "$promoted_state" == *$'\n'* ]]; then
-            echo "::error::$production_ref post-promotion lookup returned more than one result"
-            exit 1
-          fi
-          IFS=$'\t' read -r promoted_ref promoted_type promoted_sha promoted_end \
-            <<< "$promoted_state"$'\t''__END__'
-          if [[ \
-            "$promoted_ref" != "$production_ref" || \
-            "$promoted_type" != "commit" || \
-            ! "$promoted_sha" =~ ^[0-9a-f]{40}$ || \
-            "$promoted_end" != "__END__" || \
-            "$promoted_sha" != "$VERIFIED_SHA" \
-          ]]; then
-            echo "::error::$production_ref resolved to $promoted_sha after promotion"
-            exit 1
-          fi
+  provider_outcome:
+    name: Verify provider outcome
+    needs:
+      - verify
+      - provider_baseline
+      - publish
+    permissions:
+      contents: read
+      deployments: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.recovery_workflow_sha || needs.verify.outputs.verified_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Verify exact Vercel Production outcome
+        env:
+          BASELINE_RECEIPT: ${{ needs.provider_baseline.outputs.receipt }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_RECEIPT: ${{ needs.publish.outputs.promotion_receipt }}
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.recovery_workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs wait
