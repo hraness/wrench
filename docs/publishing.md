@@ -303,9 +303,11 @@ identity and provider capability attestation from that exact source tree.
 
 This production admission assumes a Vercel Git deployment whose checkout keeps
 a resolvable Git `HEAD`; missing repository metadata is a hard failure, not a
-reason to trust deployment environment variables. Canonical npm name, version,
-and SHA-512 integrity are sufficient at this layer because the only workflow
-allowed to advance `website-production` after that one-time bootstrap first
+reason to trust deployment environment variables. Keep `.git` out of
+`.vercelignore` so the Git-connected shallow clone retains the metadata needed
+for this independent check. Canonical npm name, version, and SHA-512 integrity
+are sufficient at this layer because the only workflow allowed to advance
+`website-production` after that one-time bootstrap first
 rebuilds the tag and compares its
 exact tarball with canonical npm before creating the immutable Release. The
 production verifier then independently rechecks the promoted commit, tag,
