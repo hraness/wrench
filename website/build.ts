@@ -16,6 +16,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { AskAiAboutThis } from "./ask-ai-runtime.js";
 import {
+  EDITORIAL_ARTICLE_IMAGE_SIZES,
+  EDITORIAL_CARD_IMAGE_SIZES,
   editorialImage,
   editorialImages,
   editorialImageSrcSet,
@@ -300,8 +302,8 @@ function imageObject(image: EditorialImage): Readonly<Record<string, unknown>> {
 
 function renderEditorialFigure(image: EditorialImage): string {
   return `<figure class="editorial-figure">
-            <img alt="${escapeHtml(image.alt)}" decoding="async" fetchpriority="high"
-              height="${image.height}" sizes="(max-width: 72rem) calc(100vw - 2rem), 72rem"
+            <img alt="${escapeHtml(image.alt)}" decoding="async"
+              height="${image.height}" sizes="${EDITORIAL_ARTICLE_IMAGE_SIZES}"
               src="${image.src}" srcset="${editorialImageSrcSet(image)}" width="${image.width}">
             <figcaption><span>${escapeHtml(image.caption)}</span><small>${escapeHtml(image.credit)}</small></figcaption>
           </figure>`;
@@ -311,7 +313,7 @@ function renderEditorialCards(): string {
   return editorialImages.map((image) => `<article class="card editorial-card">
               <a href="${image.canonicalPath}">
                 <img alt="" decoding="async" height="${image.height}" loading="lazy"
-                  sizes="(max-width: 44rem) calc(100vw - 2rem), 33vw" src="${image.src}"
+                  sizes="${EDITORIAL_CARD_IMAGE_SIZES}" src="${image.src}"
                   srcset="${editorialImageSrcSet(image)}" width="${image.width}">
                 <div class="editorial-card-copy">
                   <h3>${escapeHtml(image.cardTitle)}</h3>

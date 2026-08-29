@@ -11,6 +11,10 @@ describe("HTML main-to-markdown conversion", () => {
           <h1>Install Wrench</h1>
           <a class="button" href="#start">Get started</a>
           <p>Use <code>wrench doctor</code> and the <a href="/security/">security guide</a>.</p>
+          <figure>
+            <img alt="A bounded path [with proof]" src="/images/editorial/example.webp">
+            <figcaption><span>One named operation.</span><small>Generated for Wrench.</small></figcaption>
+          </figure>
           <pre><code>wrench read https://example.com/article</code></pre>
           <ul><li>One <strong>exact</strong> account</li><li>Second</li></ul>
           <table>
@@ -28,6 +32,10 @@ describe("HTML main-to-markdown conversion", () => {
       "[Get started](https://wrench.rip/getting-started/#start)",
       "",
       "Use `wrench doctor` and the [security guide](https://wrench.rip/security/).",
+      "",
+      "![A bounded path \\[with proof\\]](https://wrench.rip/images/editorial/example.webp)",
+      "",
+      "One named operation. Generated for Wrench.",
       "",
       "```",
       "wrench read https://example.com/article",
