@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 const BASELINE_SCHEMA = "wrench-provider-baseline-v2";
@@ -10,8 +11,11 @@ const PROMOTION_SCHEMA = "wrench-provider-promotion-v1";
 const PRODUCTION_REF = "refs/heads/website-production";
 const PAGE_SIZE = 100;
 const MAX_ITEMS = 500;
-const MAX_PROVIDER_POLLS = 15;
+const MAX_PROVIDER_POLLS = 20;
 const PROVIDER_POLL_INTERVAL_MILLISECONDS = 60_000;
+const PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS = 20 * 60_000;
+const PROVIDER_API_CALL_TIMEOUT_MILLISECONDS = 60_000;
+const MAX_SLEEP_ATTEMPTS_PER_INTERVAL = 16;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ENCODED_RECEIPT_BYTES = 64 * 1024;
 const PAGINATED_READ_REQUESTS = MAX_ITEMS / PAGE_SIZE + 1;
@@ -65,6 +69,7 @@ const GRAPHQL_STATUS_STATES = new Set([
   "WAITING",
 ]);
 const GRAPHQL_TERMINAL_STATUS_STATES = new Set(["ERROR", "FAILURE", "INACTIVE", "SUCCESS"]);
+const PROVIDER_TIMEOUT_MESSAGE = "timed out waiting for the exact Vercel Production deployment";
 const COMPATIBLE_GRAPHQL_DEPLOYMENT_STATES = Object.freeze({
   ERROR: new Set(["ERROR"]),
   FAILURE: new Set(["FAILURE"]),
@@ -92,6 +97,7 @@ const PRODUCTION_DEPLOYMENTS_QUERY = `query WrenchProductionDeployments(
       nodes {
         databaseId
         commitOid
+        ref { name }
         createdAt
         updatedAt
         state
@@ -158,6 +164,8 @@ export const releaseRestRequestBudget = Object.freeze({
     OUTCOME_REST_REQUESTS -
     SURROUNDING_RELEASE_REST_REQUESTS,
   maxPolls: MAX_PROVIDER_POLLS,
+  observationDeadlineMilliseconds: PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS,
+  perCallTimeoutMilliseconds: PROVIDER_API_CALL_TIMEOUT_MILLISECONDS,
   pollIntervalMilliseconds: PROVIDER_POLL_INTERVAL_MILLISECONDS,
   providerBaseline: BASELINE_REST_REQUESTS,
   providerOutcome: OUTCOME_REST_REQUESTS,
@@ -185,6 +193,83 @@ export const releaseGraphqlRequestBudget = Object.freeze({
 
 function fail(message) {
   throw new Error(message);
+}
+
+function createProviderDeadline(monotonicNow) {
+  if (typeof monotonicNow !== "function") fail("monotonicNow is not a function");
+  let prior;
+  const read = (label) => {
+    const value = monotonicNow();
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      fail(`${label} is not a finite nonnegative monotonic timestamp`);
+    }
+    if (prior !== undefined && value < prior) fail("provider monotonic clock regressed");
+    prior = value;
+    return value;
+  };
+  const startedAt = read("provider observation start");
+  const expiresAt = startedAt + PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS;
+  if (
+    !Number.isFinite(expiresAt) ||
+    expiresAt > Number.MAX_SAFE_INTEGER ||
+    expiresAt <= startedAt
+  ) {
+    fail("provider observation deadline overflows the monotonic clock");
+  }
+  const complete = (label) => {
+    const now = read(label);
+    const remainingMilliseconds = expiresAt - now;
+    if (remainingMilliseconds < 0) fail(PROVIDER_TIMEOUT_MESSAGE);
+    return Object.freeze({ now, remainingMilliseconds });
+  };
+  const begin = (label) => {
+    const state = complete(label);
+    if (state.remainingMilliseconds < 1) fail(PROVIDER_TIMEOUT_MESSAGE);
+    return state;
+  };
+  return Object.freeze({ begin, complete, expiresAt, read });
+}
+
+function deadlineBoundReadApi(api, deadline) {
+  const invoke = async (method, args, label) => {
+    const operation = api?.[method];
+    if (typeof operation !== "function") fail(`provider API has no ${method} method`);
+    const before = deadline.begin(`begin ${label}`);
+    const timeoutMilliseconds = Math.min(
+      PROVIDER_API_CALL_TIMEOUT_MILLISECONDS,
+      Math.floor(before.remainingMilliseconds),
+    );
+    const result = await operation.call(api, ...args, Object.freeze({ timeoutMilliseconds }));
+    const after = deadline.complete(`complete ${label}`);
+    if (after.now <= before.now) {
+      fail(`${label} did not advance the provider monotonic clock`);
+    }
+    return result;
+  };
+  return Object.freeze({
+    get: (endpoint) => invoke("get", [endpoint], `GET ${String(endpoint)}`),
+    graphql: (request) => invoke("graphql", [request], "GraphQL Production deployments"),
+  });
+}
+
+async function waitForNextProviderObservation(deadline, sleep, pollIntervalMilliseconds) {
+  if (pollIntervalMilliseconds === 0) return;
+  const start = deadline.complete("schedule provider poll sleep");
+  if (start.remainingMilliseconds === 0) return;
+  const target = Math.min(
+    deadline.expiresAt,
+    start.now + pollIntervalMilliseconds,
+  );
+  let current = start.now;
+  for (let attempt = 1; attempt <= MAX_SLEEP_ATTEMPTS_PER_INTERVAL; attempt += 1) {
+    const remaining = target - current;
+    if (remaining <= 0) return;
+    await sleep(remaining);
+    const next = deadline.complete("complete provider poll sleep");
+    if (next.now >= target) return;
+    current = next.now;
+  }
+  fail("provider poll sleep did not reach its monotonic schedule");
 }
 
 function isRecord(value) {
@@ -388,12 +473,16 @@ function basicDeployment(value, label) {
   const record = expectRecord(value, label);
   const id = expectSafeId(record.id, `${label}.id`);
   const created = parseSecondTimestamp(record.created_at, `${label}.created_at`);
+  const sha = expectSha(record.sha, `${label}.sha`);
+  const ref = expectSha(record.ref, `${label}.ref`);
+  if (ref !== sha) fail(`${label}.ref does not bind its exact SHA`);
   return Object.freeze({
     createdAt: created.timestamp,
     createdMilliseconds: created.milliseconds,
     id,
     raw: record,
-    sha: expectSha(record.sha, `${label}.sha`),
+    ref,
+    sha,
   });
 }
 
@@ -561,6 +650,7 @@ function graphqlProductionDeployment(value, label) {
     "environment",
     "latestStatus",
     "originalEnvironment",
+    "ref",
     "state",
     "task",
     "updatedAt",
@@ -574,6 +664,7 @@ function graphqlProductionDeployment(value, label) {
   if (
     record.environment !== "Production" ||
     record.originalEnvironment !== "Production" ||
+    record.ref !== null ||
     record.task !== "deploy"
   ) {
     fail(`${label} is not one Production deploy deployment`);
@@ -604,6 +695,7 @@ function graphqlProductionDeployment(value, label) {
     id,
     latestStatus,
     originalEnvironment: "Production",
+    ref: null,
     sha: expectSha(record.commitOid, `${label}.commitOid`),
     state,
     task: "deploy",
@@ -851,6 +943,7 @@ function deploymentSnapshotValue(item) {
     id: item.id,
     latestStatus: item.latestStatus ?? null,
     originalEnvironment: item.originalEnvironment,
+    ref: item.ref,
     sha: item.sha,
     state: item.state,
     task: item.task,
@@ -996,6 +1089,7 @@ function exactCandidate(item, expectedSha, label) {
   const record = item.raw;
   if (
     item.sha !== expectedSha ||
+    item.ref !== expectedSha ||
     record.task !== "deploy" ||
     record.environment !== "Production" ||
     record.original_environment !== "Production"
@@ -1060,8 +1154,8 @@ function observeRestCurrentStatus(items, graphCandidate) {
   return Object.freeze({ current, newest });
 }
 
-function assertNoTerminalRestFailure(observation, candidateId) {
-  const failed = observation.newest.find(
+function assertNoTerminalRestFailure(statuses, candidateId) {
+  const failed = statuses.find(
     (item) => item.state !== "success" && TERMINAL_STATES.has(item.state),
   );
   if (failed !== undefined) {
@@ -1454,6 +1548,7 @@ function candidateFingerprint(candidate) {
     environment: candidate.raw.environment,
     id: candidate.id,
     originalEnvironment: candidate.raw.original_environment,
+    ref: candidate.ref,
     sha: candidate.sha,
     task: candidate.raw.task,
   });
@@ -1597,7 +1692,15 @@ function reconcileGraphqlRestStatus(graphCandidate, restCandidate, restStatus) {
   }
 }
 
-async function confirmSuccess(api, baseline, promotion, successSnapshot, workflowSource) {
+async function confirmSuccess(
+  api,
+  baseline,
+  promotion,
+  successSnapshot,
+  workflowSource,
+  deadline,
+) {
+  deadline.begin("begin provider success confirmation");
   await readVerifiedTagCommit(
     api,
     promotion.repository,
@@ -1630,7 +1733,7 @@ async function confirmSuccess(api, baseline, promotion, successSnapshot, workflo
   if (statuses.length === 0) fail("candidate Production deployment statuses disappeared after success");
   validateCandidateStatuses(statuses, observed.candidate, promotion.repository);
   const currentObservation = observeRestCurrentStatus(statuses, observed.graphCandidate);
-  assertNoTerminalRestFailure(currentObservation, observed.candidate.id);
+  assertNoTerminalRestFailure(statuses, observed.candidate.id);
   const latest = currentObservation.current;
   if (
     latest === undefined ||
@@ -1652,7 +1755,7 @@ async function confirmSuccess(api, baseline, promotion, successSnapshot, workflo
   );
   validateCandidateStatuses(finalStatuses, observed.candidate, promotion.repository);
   const finalObservation = observeRestCurrentStatus(finalStatuses, observed.graphCandidate);
-  assertNoTerminalRestFailure(finalObservation, observed.candidate.id);
+  assertNoTerminalRestFailure(finalStatuses, observed.candidate.id);
   const finalLatest = finalObservation.current;
   if (
     finalLatest === undefined ||
@@ -1684,6 +1787,7 @@ async function confirmSuccess(api, baseline, promotion, successSnapshot, workflo
   }
   reconcileGraphqlRestStatus(terminalGraphCandidate, observed.candidate, finalLatest);
   await revalidateTerminalAuthority(api, promotion, workflowSource);
+  deadline.complete("complete provider success confirmation");
   return true;
 }
 
@@ -1693,6 +1797,7 @@ export async function waitForProviderOutcome({
   defaultBranch,
   eventName,
   maxPolls = MAX_PROVIDER_POLLS,
+  monotonicNow = () => performance.now(),
   promotionReceipt,
   repository,
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -1723,10 +1828,17 @@ export async function waitForProviderOutcome({
     promotion.verifiedTag,
     promotion.verifiedSha,
   );
-  const release = await readImmutableRelease(api, promotion.repository, promotion.verifiedTag);
+  const release = await readImmutableRelease(
+    api,
+    promotion.repository,
+    promotion.verifiedTag,
+  );
   if (release.publishedAt !== promotion.releasePublishedAt) fail("immutable Release publication time changed");
   await readLatestRelease(api, promotion.repository, promotion.verifiedTag);
   await revalidateWorkflowSource(api, promotion.repository, workflowSource);
+
+  const deadline = createProviderDeadline(monotonicNow);
+  const boundedApi = deadlineBoundReadApi(api, deadline);
 
   let pinnedCandidateId;
   let pinnedCandidateFingerprint;
@@ -1734,7 +1846,13 @@ export async function waitForProviderOutcome({
   let observedAnyStatus = false;
 
   for (let poll = 1; poll <= maxPolls; poll += 1) {
-    const observed = await observeCandidate(api, baseline, promotion, pinnedCandidateId);
+    deadline.begin("begin provider observation");
+    const observed = await observeCandidate(
+      boundedApi,
+      baseline,
+      promotion,
+      pinnedCandidateId,
+    );
     const candidate = observed.candidate;
     const graphCandidate = observed.graphCandidate;
     if (candidate !== undefined) {
@@ -1759,7 +1877,11 @@ export async function waitForProviderOutcome({
         fail(`candidate Production deployment ended in ${graphStatus.state.toLowerCase()}`);
       }
 
-      const statuses = await collectDeploymentStatuses(api, promotion.repository, candidate.id);
+      const statuses = await collectDeploymentStatuses(
+        boundedApi,
+        promotion.repository,
+        candidate.id,
+      );
       if (statuses.length === 0) {
         if (observedAnyStatus) fail("candidate Production deployment statuses disappeared");
       } else {
@@ -1778,7 +1900,7 @@ export async function waitForProviderOutcome({
           observedStatuses.set(status.id, canonicalJson(statusFingerprintValue(status)));
         }
         const currentObservation = observeRestCurrentStatus(statuses, graphCandidate);
-        assertNoTerminalRestFailure(currentObservation, candidate.id);
+        assertNoTerminalRestFailure(statuses, candidate.id);
         const latest = currentObservation.current;
         const currentConverged =
           latest !== undefined &&
@@ -1804,17 +1926,25 @@ export async function waitForProviderOutcome({
             status: latest,
             statusFingerprint: statusFingerprint(statuses),
           });
-          if (await confirmSuccess(api, baseline, promotion, successSnapshot, workflowSource)) {
+          if (await confirmSuccess(
+            boundedApi,
+            baseline,
+            promotion,
+            successSnapshot,
+            workflowSource,
+            deadline,
+          )) {
             return Object.freeze({ deploymentId: candidate.id, statusId: latest.id });
           }
         }
       }
     }
 
-    if (poll === maxPolls) fail("timed out waiting for the exact Vercel Production deployment");
-    await sleep(pollIntervalMilliseconds);
+    await waitForNextProviderObservation(deadline, sleep, pollIntervalMilliseconds);
   }
-  fail("provider outcome loop ended unexpectedly");
+  const exhausted = deadline.complete("complete provider observation poll budget");
+  if (exhausted.remainingMilliseconds === 0) fail(PROVIDER_TIMEOUT_MESSAGE);
+  fail("provider observation poll budget exhausted before its monotonic deadline");
 }
 
 class GitHubApi {
@@ -1824,12 +1954,26 @@ class GitHubApi {
     this.#environment = environment;
   }
 
-  #runRaw(args, label) {
+  #runRaw(
+    args,
+    label,
+    { timeoutMilliseconds = PROVIDER_API_CALL_TIMEOUT_MILLISECONDS } = {},
+  ) {
+    if (
+      !Number.isSafeInteger(timeoutMilliseconds) ||
+      timeoutMilliseconds <= 0 ||
+      timeoutMilliseconds > PROVIDER_API_CALL_TIMEOUT_MILLISECONDS
+    ) {
+      fail(
+        `${label} timeout must be between 1 and ${String(PROVIDER_API_CALL_TIMEOUT_MILLISECONDS)} milliseconds`,
+      );
+    }
     const result = spawnSync("gh", ["api", ...args], {
       encoding: "utf8",
       env: this.#environment,
       maxBuffer: MAX_RESPONSE_BYTES,
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: timeoutMilliseconds,
     });
     if (result.error !== undefined) fail(`${label} could not start: ${result.error.message}`);
     if (result.status !== 0) {
@@ -1839,21 +1983,21 @@ class GitHubApi {
     return result.stdout;
   }
 
-  #run(args, label) {
-    return parseJson(this.#runRaw(args, label), label);
+  #run(args, label, options) {
+    return parseJson(this.#runRaw(args, label, options), label);
   }
 
-  async get(endpoint) {
-    return this.#run([endpoint], `GET ${endpoint}`);
+  async get(endpoint, options) {
+    return this.#run([endpoint], `GET ${endpoint}`, options);
   }
 
-  async getWithServerDate(endpoint) {
+  async getWithServerDate(endpoint, options) {
     const label = `GET with Date ${endpoint}`;
-    const response = this.#runRaw(["--include", endpoint], label);
+    const response = this.#runRaw(["--include", endpoint], label, options);
     return parseIncludedGitHubResponse(response, label);
   }
 
-  async graphql({ after, name, owner, query }) {
+  async graphql({ after, name, owner, query }, options) {
     if (query !== PRODUCTION_DEPLOYMENTS_QUERY) fail("unexpected GraphQL query");
     const args = [
       "graphql",
@@ -1867,16 +2011,17 @@ class GitHubApi {
     if (after !== undefined) {
       args.push("-f", `after=${expectGraphqlId(after, "GraphQL cursor")}`);
     }
-    return this.#run(args, "GraphQL Production deployments");
+    return this.#run(args, "GraphQL Production deployments", options);
   }
 
-  async patch(endpoint, body) {
+  async patch(endpoint, body, options) {
     if (!isRecord(body) || body.force !== false || typeof body.sha !== "string") {
       fail("PATCH body is not the exact non-force ref update");
     }
     return this.#run(
       ["--method", "PATCH", endpoint, "-f", `sha=${body.sha}`, "-F", "force=false"],
       `PATCH ${endpoint}`,
+      options,
     );
   }
 }

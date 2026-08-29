@@ -223,14 +223,15 @@ function providerDeployment(
   createdAt: string,
   overrides: Readonly<Record<string, ProviderJson>> = {},
 ): ProviderJson {
+  const sha = typeof overrides.sha === "string" ? overrides.sha : providerVerifiedSha;
   return {
     created_at: createdAt,
     creator: { id: 35613825, login: "vercel[bot]", type: "Bot" },
     environment: "Production",
     id,
     original_environment: "Production",
-    ref: "ignored-provider-ref",
-    sha: providerVerifiedSha,
+    ref: sha,
+    sha,
     statuses_url: `https://api.github.com/repos/${providerRepository}/deployments/${String(id)}/statuses`,
     task: "deploy",
     ...overrides,
@@ -265,6 +266,7 @@ function providerGraphqlDeployment(
     environment: "Production",
     latestStatus,
     originalEnvironment: "Production",
+    ref: null,
     state: "ACTIVE",
     task: "deploy",
     updatedAt: createdAt,
@@ -418,6 +420,7 @@ class ProviderApiFixture {
   readonly calls: string[] = [];
   readonly graphqlCalls: string[] = [];
   readonly includedCalls: string[] = [];
+  readonly timeoutMilliseconds: number[] = [];
   readonly deploymentDetailSnapshots: readonly ProviderJson[];
   readonly defaultBranchSnapshots: readonly string[];
   readonly defaultBranchShaSnapshots: readonly string[];
@@ -438,6 +441,7 @@ class ProviderApiFixture {
   readonly tagSnapshots: readonly string[];
   latest: ProviderJson = providerLatest();
   release: ProviderJson = providerRelease();
+  readonly readHook: ((timeoutMilliseconds: number | undefined) => void) | undefined;
 
   #deploymentDetailRead = 0;
   #defaultBranchRead = 0;
@@ -466,6 +470,7 @@ class ProviderApiFixture {
     refSnapshots = [],
     refSha = providerPreviousSha,
     refValues = [],
+    readHook,
     releaseSnapshots = [],
     serverDates = [providerPromotionServerDate],
     statuses = new Map<number, ProviderJson[][]>(),
@@ -481,6 +486,7 @@ class ProviderApiFixture {
     refSnapshots?: readonly string[];
     refSha?: string;
     refValues?: readonly ProviderJson[];
+    readHook?: (timeoutMilliseconds: number | undefined) => void;
     releaseSnapshots?: readonly ProviderJson[];
     serverDates?: readonly string[];
     statuses?: Map<number, ProviderJson[][]>;
@@ -496,6 +502,7 @@ class ProviderApiFixture {
     this.refSha = refSha;
     this.refSnapshots = refSnapshots;
     this.refValues = refValues;
+    this.readHook = readHook;
     this.releaseSnapshots = releaseSnapshots;
     this.serverDates = serverDates;
     this.statusSnapshots = statuses;
@@ -507,7 +514,11 @@ class ProviderApiFixture {
     name: string;
     owner: string;
     query: string;
-  }>): Promise<ProviderJson> {
+  }>, options?: Readonly<{ timeoutMilliseconds?: number }>): Promise<ProviderJson> {
+    if (options?.timeoutMilliseconds !== undefined) {
+      this.timeoutMilliseconds.push(options.timeoutMilliseconds);
+    }
+    this.readHook?.(options?.timeoutMilliseconds);
     expect(input.owner).toBe("hraness");
     expect(input.name).toBe("wrench");
     expect(input.query).toContain("query WrenchProductionDeployments");
@@ -551,7 +562,14 @@ class ProviderApiFixture {
     });
   }
 
-  async get(endpoint: string): Promise<ProviderJson> {
+  async get(
+    endpoint: string,
+    options?: Readonly<{ timeoutMilliseconds?: number }>,
+  ): Promise<ProviderJson> {
+    if (options?.timeoutMilliseconds !== undefined) {
+      this.timeoutMilliseconds.push(options.timeoutMilliseconds);
+    }
+    this.readHook?.(options?.timeoutMilliseconds);
     this.calls.push(`GET ${endpoint}`);
     if (endpoint === `/repos/${providerRepository}`) {
       const branch = this.defaultBranchSnapshots[
@@ -1789,7 +1807,7 @@ fi
     expect(publishJob).not.toContain("release-provider-outcome.mjs wait");
     expect(publishJob).not.toContain("/statuses?");
     expect(providerJob).toContain("- publish");
-    expect(providerJob).toContain("timeout-minutes: 20");
+    expect(providerJob).toContain("timeout-minutes: 30");
     expect(permissions(providerJob)).toEqual(["contents: read", "deployments: read"]);
     expect(providerJob).not.toContain("contents: write");
     expect(providerJob).not.toContain("continue-on-error");
@@ -1818,9 +1836,16 @@ fi
     expect(helper).toContain("MAX_GRAPHQL_COST_PER_REQUEST = 2");
     expect(helper).toContain("rateLimit { cost remaining resetAt }");
     expect(helper).toContain("totalCount");
-    expect(helper).toContain("MAX_PROVIDER_POLLS = 15");
+    expect(helper).toContain("MAX_PROVIDER_POLLS = 20");
     expect(helper).toContain("PROVIDER_POLL_INTERVAL_MILLISECONDS = 60_000");
+    expect(helper).toContain("PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS = 20 * 60_000");
+    expect(helper).toContain("PROVIDER_API_CALL_TIMEOUT_MILLISECONDS = 60_000");
+    expect(helper).toContain("timeout: timeoutMilliseconds");
+    expect(helper).toContain("state.remainingMilliseconds < 1");
+    expect(helper).toContain("after.now <= before.now");
+    expect(helper).toContain('deadline.begin("begin provider success confirmation")');
     expect(helper).not.toContain("Date.now");
+    expect(helper).toContain("performance.now()");
     expect(helper).toContain('this.#runRaw(["--include", endpoint]');
     expect(workflow).toContain("release-provider-outcome.mjs release-order");
     expect(workflow).not.toContain("gh api --paginate");
@@ -1835,26 +1860,28 @@ fi
     expect(helper).not.toContain('["--method", "POST"');
     expect(releaseRestRequestBudget).toEqual({
       githubTokenLimit: 1_000,
-      headroom: 812,
-      maxPolls: 15,
+      headroom: 772,
+      maxPolls: 20,
+      observationDeadlineMilliseconds: 1_200_000,
+      perCallTimeoutMilliseconds: 60_000,
       pollIntervalMilliseconds: 60_000,
       providerBaseline: 2,
-      providerOutcome: 157,
+      providerOutcome: 197,
       providerPromotion: 14,
       surroundingRelease: 15,
-      total: 188,
+      total: 228,
     });
     expect(releaseGraphqlRequestBudget).toEqual({
       githubPointLimit: 1_000,
-      headroom: 810,
+      headroom: 760,
       maxCostPerRequest: 2,
-      maxPoints: 190,
+      maxPoints: 240,
       providerBaseline: 10,
-      providerOutcome: 85,
-      totalRequests: 95,
+      providerOutcome: 110,
+      totalRequests: 120,
     });
-    expect(releaseRestRequestBudget.total).toBeLessThan(200);
-    expect(releaseGraphqlRequestBudget.maxPoints).toBeLessThan(200);
+    expect(releaseRestRequestBudget.total).toBeLessThan(250);
+    expect(releaseGraphqlRequestBudget.maxPoints).toBeLessThanOrEqual(250);
   });
 
   test("parses one authenticated GitHub server Date response", () => {
@@ -2071,6 +2098,21 @@ fi
     ] as const) {
       await expect(collectProductionDeployments(
         new ProviderApiFixture({ graphqlResponses: [response] }),
+        providerRepository,
+      )).rejects.toThrow();
+    }
+    for (const deployment of [
+      providerGraphqlDeployment(80_000, "2026-08-29T12:00:00Z", {
+        ref: { name: "website-production" },
+      }),
+      providerGraphqlDeployment(80_000, "2026-08-29T12:00:00Z", {
+        commitOid: providerVerifiedSha.toUpperCase(),
+      }),
+    ] as const) {
+      await expect(collectProductionDeployments(
+        new ProviderApiFixture({
+          graphqlResponses: [providerGraphqlResponse([deployment])],
+        }),
         providerRepository,
       )).rejects.toThrow();
     }
@@ -2725,7 +2767,7 @@ fi
       pollIntervalMilliseconds: 0,
       promotionReceipt: promotion,
       sleep: async () => {},
-    })).rejects.toThrow("timed out");
+    })).rejects.toThrow("poll budget exhausted");
 
     const staleGraphFailureApi = new ProviderApiFixture({
       deployments: [[candidate, baselineDeployment]],
@@ -2776,6 +2818,68 @@ fi
       });
       await expect(waitForProviderOutcome({
         api: graphFailureApi,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      })).rejects.toThrow(`ended in ${state}`);
+    }
+
+    for (const state of ["error", "failure", "inactive"] as const) {
+      const historicalFailure = providerStatus(
+        199,
+        state,
+        "2026-08-29T15:02:45Z",
+        {},
+        20,
+      );
+      const pollHistoryApi = new ProviderApiFixture({
+        deployments: [[candidate, baselineDeployment]],
+        graphqlDeployments: [[successGraph, baselineGraph]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([[20, [[success, historicalFailure]]]]),
+      });
+      await expect(waitForProviderOutcome({
+        api: pollHistoryApi,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      })).rejects.toThrow(`ended in ${state}`);
+
+      const firstConfirmationHistoryApi = new ProviderApiFixture({
+        deployments: [[candidate, baselineDeployment]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([
+          [10, [[baselineStatus]]],
+          [20, [[success], [success, historicalFailure]]],
+        ]),
+      });
+      await expect(waitForProviderOutcome({
+        api: firstConfirmationHistoryApi,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      })).rejects.toThrow(`ended in ${state}`);
+
+      const finalConfirmationHistoryApi = new ProviderApiFixture({
+        deployments: [[candidate, baselineDeployment]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([
+          [10, [[baselineStatus]]],
+          [20, [
+            [success],
+            [success],
+            [success, historicalFailure],
+          ]],
+        ]),
+      });
+      await expect(waitForProviderOutcome({
+        api: finalConfirmationHistoryApi,
         baselineReceipt: baseline,
         maxPolls: 1,
         pollIntervalMilliseconds: 0,
@@ -2889,6 +2993,11 @@ fi
 
     for (const candidate of [
       providerDeployment(20, candidateAt, { sha: "3".repeat(40) }),
+      providerDeployment(20, candidateAt, { ref: "website-production" }),
+      providerDeployment(20, candidateAt, { ref: providerTag }),
+      providerDeployment(20, candidateAt, { ref: "A".repeat(40) }),
+      providerDeployment(20, candidateAt, { ref: null }),
+      providerDeployment(20, candidateAt, { ref: providerPreviousSha }),
       providerDeployment(20, candidateAt, { task: "other" }),
       providerDeployment(20, candidateAt, { environment: "Preview" }),
       providerDeployment(20, candidateAt, { original_environment: null }),
@@ -2903,7 +3012,7 @@ fi
       }),
     ] as const) {
       await expect(run(waitCase(candidate, [[candidateStatus(201, "success", successAt)]])))
-        .rejects.toThrow("Production deployment");
+        .rejects.toThrow("deployment");
     }
 
     const gapCandidate = providerDeployment(20, "2026-08-29T15:01:00Z");
@@ -2926,10 +3035,10 @@ fi
       refSha: providerVerifiedSha,
       statuses: terminalBaselineStatus(),
     });
-    await expect(run(noCandidate, 2)).rejects.toThrow("timed out");
+    await expect(run(noCandidate, 2)).rejects.toThrow("poll budget exhausted");
 
     const emptyStatuses = waitCase(providerDeployment(20, candidateAt), [[], []]);
-    await expect(run(emptyStatuses, 2)).rejects.toThrow("timed out");
+    await expect(run(emptyStatuses, 2)).rejects.toThrow("poll budget exhausted");
 
     const disappearingStatus = waitCase(providerDeployment(20, candidateAt), [
       [candidateStatus(200, "pending", "2026-08-29T15:02:30Z")],
@@ -3082,6 +3191,21 @@ fi
       [[candidateStatus(201, "success", successAt)]],
     );
     await expect(run(wrongDeploymentStatusesUrl)).rejects.toThrow("statuses_url");
+
+    const refBoundCandidate = providerDeployment(20, candidateAt);
+    const refDrift = new ProviderApiFixture({
+      deploymentDetails: [
+        refBoundCandidate,
+        providerDeployment(20, candidateAt, { ref: providerPreviousSha }),
+      ],
+      deployments: [[refBoundCandidate, baselineDeployment]],
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, [[candidateStatus(201, "success", successAt)]]],
+      ]),
+    });
+    await expect(run(refDrift, 1)).rejects.toThrow(".ref does not bind its exact SHA");
 
     const duplicateStatusNodeId = waitCase(
       providerDeployment(20, candidateAt),
@@ -3237,6 +3361,170 @@ fi
       })).rejects.toThrow("authoritative release inputs");
       expect(api.calls).toHaveLength(0);
     }
+  });
+
+  test("enforces one half-open monotonic 20-minute provider observation deadline", async () => {
+    const { baseline, baselineDeployment, promotion } = await providerReceipts("advanced");
+    const candidateAt = "2026-08-29T15:02:00Z";
+    const successAt = "2026-08-29T15:03:00Z";
+    const candidate = providerDeployment(20, candidateAt);
+    const success = providerStatus(201, "success", successAt, {}, 20);
+    const noCandidate = (
+      readHook?: (timeoutMilliseconds: number | undefined) => void,
+    ): ProviderApiFixture => new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      readHook,
+      refSha: providerVerifiedSha,
+      statuses: terminalBaselineStatus(),
+    });
+    const successCase = (
+      readHook?: (timeoutMilliseconds: number | undefined) => void,
+    ): ProviderApiFixture => new ProviderApiFixture({
+      deployments: [[candidate, baselineDeployment]],
+      readHook,
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, [[success], [success], [success]]],
+      ]),
+    });
+    const run = (
+      api: ProviderApiFixture,
+      monotonicNow: () => number,
+      sleep: (milliseconds: number) => Promise<void>,
+      maxPolls = 20,
+      pollIntervalMilliseconds = 60_000,
+    ): Promise<unknown> => waitForProviderOutcome({
+      api,
+      baselineReceipt: baseline,
+      maxPolls,
+      monotonicNow,
+      pollIntervalMilliseconds,
+      promotionReceipt: promotion,
+      sleep,
+    });
+
+    let now = 0;
+    const sleeps: number[] = [];
+    const fullWindowApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 1;
+    });
+    await expect(run(
+      fullWindowApi,
+      () => now,
+      async (milliseconds) => {
+        sleeps.push(milliseconds);
+        now += milliseconds;
+      },
+    )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
+    expect(sleeps).toEqual([
+      ...Array.from({ length: 19 }, () => 60_000),
+      59_960,
+    ]);
+    expect(now).toBe(1_200_000);
+    expect(fullWindowApi.graphqlCalls).toHaveLength(20);
+    expect(fullWindowApi.timeoutMilliseconds).toHaveLength(40);
+    expect(fullWindowApi.timeoutMilliseconds.slice(-2)).toEqual([59_962, 59_961]);
+
+    now = 0;
+    const tailSleeps: number[] = [];
+    const latencyApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 11_000;
+    });
+    await expect(run(
+      latencyApi,
+      () => now,
+      async (milliseconds) => {
+        tailSleeps.push(milliseconds);
+        now += milliseconds;
+      },
+    )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
+    expect(tailSleeps.at(-1)).toBe(30_000);
+    expect(tailSleeps.every((milliseconds) => milliseconds <= 60_000)).toBe(true);
+    expect(now).toBe(1_200_000);
+
+    now = 0;
+    let boundaryRead = 0;
+    const successExternalReads = 36;
+    const exactBoundaryApi = successCase((timeoutMilliseconds) => {
+      if (timeoutMilliseconds === undefined) return;
+      boundaryRead += 1;
+      now = boundaryRead === successExternalReads
+        ? 1_200_000
+        : Math.floor(1_199_999 * boundaryRead / (successExternalReads - 1));
+    });
+    await expect(run(exactBoundaryApi, () => now, async () => {}))
+      .resolves.toEqual({ deploymentId: 20, statusId: 201 });
+    expect(now).toBe(1_200_000);
+    expect(boundaryRead).toBe(successExternalReads);
+    expect(exactBoundaryApi.timeoutMilliseconds).toHaveLength(successExternalReads);
+    expect(exactBoundaryApi.timeoutMilliseconds.at(-1)).toBe(1);
+
+    now = 0;
+    const frozenSuccessApi = successCase();
+    await expect(run(frozenSuccessApi, () => now, async () => {}))
+      .rejects.toThrow("did not advance the provider monotonic clock");
+    expect(frozenSuccessApi.timeoutMilliseconds).toHaveLength(1);
+
+    now = 0;
+    const afterBoundaryApi = successCase((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now = 1_200_001;
+    });
+    await expect(run(afterBoundaryApi, () => now, async () => {}))
+      .rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
+    expect(afterBoundaryApi.timeoutMilliseconds).toHaveLength(1);
+
+    let subMillisecondRead = 0;
+    const subMillisecondApi = noCandidate();
+    await expect(run(
+      subMillisecondApi,
+      () => subMillisecondRead++ === 0 ? 0 : 1_199_999.5,
+      async () => {},
+    )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
+    expect(subMillisecondApi.timeoutMilliseconds).toHaveLength(0);
+    expect(subMillisecondApi.graphqlCalls).toHaveLength(0);
+
+    for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, -1] as const) {
+      await expect(run(noCandidate(), () => invalid, async () => {}))
+        .rejects.toThrow("finite nonnegative monotonic timestamp");
+    }
+    await expect(run(noCandidate(), () => Number.MAX_SAFE_INTEGER, async () => {}))
+      .rejects.toThrow("deadline overflows");
+
+    let read = 0;
+    await expect(run(
+      noCandidate(),
+      () => read++ === 0 ? 100 : 99,
+      async () => {},
+    )).rejects.toThrow("monotonic clock regressed");
+
+    now = 0;
+    const stuckSleeps: number[] = [];
+    const stuckApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 1;
+    });
+    await expect(run(
+      stuckApi,
+      () => now,
+      async (milliseconds) => {
+        stuckSleeps.push(milliseconds);
+        if (stuckSleeps.length === 1) now += 1;
+      },
+    )).rejects.toThrow("poll sleep did not reach its monotonic schedule");
+    expect(stuckSleeps).toHaveLength(16);
+    expect(stuckApi.graphqlCalls).toHaveLength(1);
+
+    now = 0;
+    await expect(run(
+      noCandidate((timeoutMilliseconds) => {
+        if (timeoutMilliseconds !== undefined) now += 1;
+      }),
+      () => now,
+      async () => {},
+      1,
+      0,
+    ))
+      .rejects.toThrow("poll budget exhausted before its monotonic deadline");
   });
 
   test("fails recovery closed on stale success, latest ties, or newer deployments", async () => {
@@ -3501,9 +3789,15 @@ fi
       "workflow never recreates the branch",
       "sends `force=false`",
       "reads the exact branch back, and,\nfor manual recovery, repeats the current default-branch repository/ref/repository\nsource sandwich before writing the receipt",
-      "15 times at a 60-second cadence",
-      "at most 157 REST calls in the provider outcome job and 188",
-      "190-point ceiling and 810 points of headroom",
+      "at most 20 observation starts at a 60-second cadence",
+      "inside the half-open\nmonotonic `[start, deadline)` window",
+      "No provider API process starts\nwith less than one millisecond remaining",
+      "every completed process must\nstrictly advance the injected monotonic clock",
+      "final external read that completes exactly at the\ndeadline remains eligible",
+      "no later API read can start there",
+      "separate 30-minute timeout",
+      "at most 197 REST calls in the provider outcome job and 228",
+      "240-point ceiling and 760 points of headroom",
       "Each API response is capped at 8 MiB",
       "cross-job receipt is capped at 64 KiB",
       "Authenticated GitHub\n`Date` headers bracket that snapshot",
@@ -3556,6 +3850,9 @@ fi
     expect(agents).toContain("Require bounded read-only jobs");
     expect(agents).toContain("complete current state and `latestStatus` of at most 500");
     expect(agents).toContain("exhaustively audit only the pinned candidate's REST status history");
+    expect(agents).toContain("Reject any retained failure, error, or inactive candidate status");
+    expect(agents).toContain("REST deployment's lowercase commit `.ref` and `.sha`");
+    expect(agents).toContain("20-observation provider window");
     expect(agents).toContain("previous deployment statuses that GitHub deletes after 90 days");
     expect(agents).toContain("GitHub preserves the current status on the deployment");
     expect(agents).not.toContain("audit every retained Production deployment status");
@@ -3569,7 +3866,9 @@ fi
     expect(websiteAgents).toContain("only the release workflow may fast-forward the established branch");
     expect(websiteAgents).toContain("a missing branch is a hard failure");
     expect(websiteAgents).toContain("must never recreate, force, or accept divergence");
-    expect(websiteAgents).toContain("A separate 20-minute read-only job");
+    expect(websiteAgents).toContain("A separate 30-minute read-only job");
+    expect(websiteAgents).toContain("20 observation starts inside one injected monotonic 20-minute");
+    expect(websiteAgents).toContain("`[start, deadline)` provider window");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
     expect(websiteAgents).toContain("exact ref readback and event-appropriate terminal workflow-source revalidation");
     expect(websiteAgents).toContain("initial success observation plus two stable");

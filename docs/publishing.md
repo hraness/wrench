@@ -319,32 +319,52 @@ branch instead selects the unique newest deployment for the verified SHA and
 requires it to postdate the immutable Release. A newer or same-second deployment
 for another SHA blocks recovery when its current Vercel status is successful.
 A newer terminal failure, error, or inactive deployment does not displace the
-exact successful candidate. Both paths bind deployment source with `.sha`,
-recheck the exact tag, immutable Release, Latest Release, production ref, and
+exact successful candidate. Both paths require the REST deployment's lowercase
+40-hex `.ref` to equal its `.sha` and the verified release commit. The matching
+GraphQL deployment must expose `ref: null` while `commitOid` equals that same
+commit. These source fields remain in the pinned candidate fingerprint. Both
+paths recheck the exact tag, immutable Release, Latest Release, production ref, and
 event-appropriate workflow source, and pin one deployment. Manual recovery
 remains bound to the current default-branch head; a tag-push release instead
 requires an empty recovery source coordinate.
 Every poll rereads the complete GraphQL current-state inventory. The pinned
 candidate also gets an exhaustive, order-independent REST status-history read
-with a 500-row cap and empty sentinel page. GraphQL `latestStatus.id` must equal
-the REST status `node_id`; that current status must keep its exact GitHub
+with a 500-row cap and empty sentinel page. Any retained failure, error, or
+inactive row rejects the candidate even when a newer row says success. GraphQL
+`latestStatus.id` must equal the REST status `node_id`; that current status must
+keep its exact GitHub
 deployment URL, Production environment, pinned Vercel creator, and one shared
 canonical `https://wrench-<id>-hraness.vercel.app` target, environment, and log
 URL. Same-second status rows are resolved only by that cross-API node identity.
 The job requires the initial success observation plus two complete consistent
 readbacks, repeats the complete deployment inventory after the final status
 read, and sandwiches terminal state with exact tag, Release, Latest, ref, and
-workflow-source authority reads. An empty or nonterminal result may be checked
-15 times at a 60-second cadence inside the 20-minute job deadline.
+workflow-source authority reads. The observation window starts immediately
+before the first provider read, after the initial authority checks. It permits
+at most 20 observation starts at a 60-second cadence inside the half-open
+monotonic `[start, deadline)` window of exactly 20 minutes. API latency and both
+success confirmations consume that same window. Each `gh api` process has a
+60-second cap reduced to the remaining window. No provider API process starts
+with less than one millisecond remaining, and every completed process must
+strictly advance the injected monotonic clock.
+The final sleep is reduced to the remaining cadence or deadline. An early sleep
+resolution cannot trigger another provider read until the full scheduled
+interval has elapsed. A final external read that completes exactly at the
+deadline remains eligible, but no later API read can start there. A later
+completion, a frozen or regressing clock, poll-budget exhaustion before the
+deadline, or an empty or nonterminal result fails closed. The workflow job has
+a separate 30-minute timeout, leaving ten minutes for checkout, Node setup, and
+runner teardown around the product deadline.
 
 The bounded request contract is separate for REST and GraphQL. The current
-control flow can make at most 157 REST calls in the provider outcome job and 188
-REST calls across workflow-owned release checks, leaving 812 calls under the
+control flow can make at most 197 REST calls in the provider outcome job and 228
+REST calls across workflow-owned release checks, leaving 772 calls under the
 repository `GITHUB_TOKEN` limit of 1,000 REST requests per hour. Five
-bounded GraphQL pages across two baseline reads, 15 polls, and two confirmations
-make at most 95 requests. Each response must cost no more than two points, for a
-190-point ceiling and 810 points of headroom under the separate 1,000-point
-GraphQL limit. API errors, malformed or incomplete pagination, rate-limit drift,
+bounded GraphQL pages across two baseline reads, 20 observations, and two
+confirmations make at most 120 requests. Each response must cost no more than
+two points, for a 240-point ceiling and 760 points of headroom under the
+separate 1,000-point GraphQL limit. API errors, malformed or incomplete
+pagination, rate-limit drift,
 timestamp ambiguity, competing deployments, identity drift, Latest Release or
 workflow-source drift, terminal failure, timeout, or final readback drift fail
 the Release workflow. Each API response is capped at 8 MiB, and each encoded
