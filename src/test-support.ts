@@ -5,8 +5,11 @@ export { fc };
 export type * from "fast-check";
 
 type PropertyReplayEnvironment = Readonly<Record<string, unknown>>;
-export type PropertyReplayCoordinate = Readonly<{ seed?: number; path?: string }>;
-type PropertyOverrides<Values> = Omit<Parameters<Values>, "path" | "seed">;
+export type PropertyReplayCoordinate =
+  | Readonly<{ seed: number; path?: string }>
+  | Readonly<{ path?: never; seed?: never }>;
+type PropertyOverrides<Values> = Omit<Parameters<Values>, "path" | "seed">
+  & Readonly<{ path?: never; seed?: never }>;
 
 const MIN_FAST_CHECK_SEED = -2_147_483_648;
 const MAX_FAST_CHECK_SEED = 2_147_483_647;
