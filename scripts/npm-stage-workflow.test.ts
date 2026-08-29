@@ -28,6 +28,7 @@ const packageBudgetUrl = new URL("./package-budget.ts", import.meta.url);
 const packageIdentityUrl = new URL("./npm-package-identity.ts", import.meta.url);
 const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
+const websiteAgentGuideUrl = new URL("../website/AGENTS.md", import.meta.url);
 const readmeUrl = new URL("../README.md", import.meta.url);
 const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
 const skillInstallGuideUrl = new URL("../skills/wrench/references/install.md", import.meta.url);
@@ -1327,14 +1328,16 @@ fi
   });
 
   test("documents bootstrap, verification, stage-only trust, MFA, and tag ordering", async () => {
-    const [guide, agents, readme, changelog, skillInstallGuide, manifestText] = await Promise.all([
-      readFile(publishingGuideUrl, "utf8"),
-      readFile(agentGuideUrl, "utf8"),
-      readFile(readmeUrl, "utf8"),
-      readFile(changelogUrl, "utf8"),
-      readFile(skillInstallGuideUrl, "utf8"),
-      readFile(manifestUrl, "utf8"),
-    ]);
+    const [guide, agents, websiteAgents, readme, changelog, skillInstallGuide, manifestText] =
+      await Promise.all([
+        readFile(publishingGuideUrl, "utf8"),
+        readFile(agentGuideUrl, "utf8"),
+        readFile(websiteAgentGuideUrl, "utf8"),
+        readFile(readmeUrl, "utf8"),
+        readFile(changelogUrl, "utf8"),
+        readFile(skillInstallGuideUrl, "utf8"),
+        readFile(manifestUrl, "utf8"),
+      ]);
     const manifest = JSON.parse(manifestText) as { readonly version: string };
     const exactPackage = `@hraness/wrench@${manifest.version}`;
     const oneTimeBootstrap =
@@ -1426,6 +1429,10 @@ fi
     expect(agents).toContain("Vercel's Production Branch on `website-production`");
     expect(agents).toContain("documented one-time Vercel bootstrap");
     expect(agents).toContain("`main` and pull requests are preview sources");
+    expect(websiteAgents).toContain("only the release workflow may fast-forward the established branch");
+    expect(websiteAgents).toContain("a missing branch is a hard failure");
+    expect(websiteAgents).toContain("must never recreate, force, or accept divergence");
+    expect(websiteAgents).not.toContain("may create or fast-forward");
     expect(readme).toContain(exactPackage);
     expect(readme).toContain(`npx skills add hraness/wrench#v${manifest.version}`);
     expect(readme).toContain("can become individually reachable while a\nrelease is being staged");
