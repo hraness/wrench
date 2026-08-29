@@ -2507,6 +2507,32 @@ fi
     })).rejects.toThrow("workflow source is no longer current main");
     expect(movedAfterPatch.calls.filter((call) => call.startsWith("PATCH "))).toHaveLength(1);
 
+    const alreadyExact = await providerReceipts("already-exact");
+    const alreadyExactSourceDrift = new ProviderApiFixture({
+      defaultBranchShaSnapshots: ["3".repeat(40)],
+      refSha: providerVerifiedSha,
+      serverDates: [providerPromotionServerDate],
+    });
+    await expect(promoteWebsiteProduction({
+      api: alreadyExactSourceDrift,
+      baselineReceipt: alreadyExact.baseline,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      recoveryWorkflowSha: providerVerifiedSha,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("workflow source is no longer current main");
+    const alreadyExactTerminalRefRead = alreadyExactSourceDrift.calls.lastIndexOf(
+      `GET /repos/${providerRepository}/git/ref/heads/website-production`,
+    );
+    const alreadyExactSourceRead = alreadyExactSourceDrift.calls.indexOf(
+      `GET /repos/${providerRepository}`,
+    );
+    expect(alreadyExactTerminalRefRead).toBeGreaterThanOrEqual(0);
+    expect(alreadyExactSourceRead).toBeGreaterThan(alreadyExactTerminalRefRead);
+    expect(alreadyExactSourceDrift.calls.some((call) => call.startsWith("PATCH "))).toBe(false);
+
     const postPatchMismatch = new ProviderApiFixture({
       deployments: [[baselineDeployment]],
       refSnapshots: [providerPreviousSha, providerPreviousSha, providerPreviousSha],

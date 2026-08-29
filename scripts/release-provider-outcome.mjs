@@ -1357,9 +1357,7 @@ export async function promoteWebsiteProduction({
 
   const promotedSha = await readProductionRef(api, coordinate);
   if (promotedSha !== sha) fail(`website-production resolved to ${promotedSha} after promotion`);
-  if (mode === "advanced") {
-    await revalidateWorkflowSource(api, coordinate, workflowSource);
-  }
+  await revalidateWorkflowSource(api, coordinate, workflowSource);
   const receipt = Object.freeze({
     baselineDigest: receiptDigest(baselineValue),
     boundaryAt: prePatchRef.timestamp,
