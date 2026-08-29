@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -27,6 +28,11 @@ import {
   versionedNpmPackageUrl,
 } from "./build";
 import { handleDocumentNegotiation } from "../edge/negotiation";
+import {
+  editorialImageSrcSet,
+  editorialImageUrl,
+  editorialImages,
+} from "./editorial-images";
 import {
   loadProviderCapabilityAttestation,
 } from "./provider-capability-attestation";
@@ -273,9 +279,17 @@ describe("wrench.rip static site", () => {
     expect(llms).not.toContain("{{");
     expect(robots).toBe(`User-agent: *\nAllow: /\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`);
     expect(sitemap.match(/<url>/gu)).toHaveLength(PUBLIC_PAGES.length);
+    expect(sitemap).toContain('xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"');
+    expect(sitemap.match(/<image:image>/gu)).toHaveLength(editorialImages.length);
     for (const page of PUBLIC_PAGES) {
       expect(sitemap).toContain(`<loc>${SITE_ORIGIN}${page.canonicalPath}</loc>`);
     }
+    for (const image of editorialImages) {
+      expect(sitemap).toContain(`<image:loc>${editorialImageUrl(image)}</image:loc>`);
+      expect(sitemap).toContain(`<image:title>${image.title}</image:title>`);
+      expect(sitemap).toContain(`<image:caption>${image.caption}</image:caption>`);
+    }
+    expect(sitemap).not.toContain("paypal-grapheneos-attestation.webp");
     expect(sitemap).not.toContain("<lastmod>");
     expect(sitemap).not.toContain("<changefreq>");
     expect(sitemap).not.toContain("<priority>");
@@ -546,6 +560,72 @@ describe("wrench.rip static site", () => {
     }
     expect(descriptions.size).toBe(PUBLIC_PAGES.length);
 
+    expect(html.match(/class="[^"]*\beditorial-card\b[^"]*"/gu)).toHaveLength(editorialImages.length);
+    for (const image of editorialImages) {
+      const page = pages.find(({ definition }) =>
+        definition.canonicalPath === image.canonicalPath);
+      expect(page).toBeDefined();
+      const imageUrl = editorialImageUrl(image);
+      expect(page?.html).toContain(`<meta property="og:image" content="${imageUrl}">`);
+      expect(page?.html).toContain(`<meta property="og:image:width" content="${image.width}">`);
+      expect(page?.html).toContain(`<meta property="og:image:height" content="${image.height}">`);
+      expect(page?.html).toContain(`<meta property="og:image:alt" content="${image.alt}">`);
+      expect(page?.html).toContain(`<meta name="twitter:image" content="${imageUrl}">`);
+      expect(page?.html).toContain(`<meta name="twitter:image:alt" content="${image.alt}">`);
+      expect(page?.html).toContain(`class="editorial-figure"`);
+      expect(page?.html).toContain(`src="${image.src}"`);
+      expect(page?.html).toContain(`srcset="${editorialImageSrcSet(image)}"`);
+      expect(page?.html).toContain(`alt="${image.alt}"`);
+      expect(page?.html).toContain(image.caption);
+      expect(page?.html).toContain(image.credit);
+      expect(page?.html).not.toContain("editorial-provenance/");
+      expect(page?.html).not.toContain("gateway_");
+
+      const structuredMatch = /<script type="application\/ld\+json">([^<]+)<\/script>/u
+        .exec(page?.html ?? "");
+      const structured = JSON.parse(structuredMatch?.[1] ?? "null") as {
+        "@graph"?: Array<{ "@type"?: string; image?: unknown }>;
+      };
+      const article = structured["@graph"]?.find((entry) => entry["@type"] === "TechArticle");
+      expect(article?.image).toEqual({
+        "@type": "ImageObject",
+        caption: image.caption,
+        contentUrl: imageUrl,
+        creditText: image.credit,
+        height: image.height,
+        url: imageUrl,
+        width: image.width,
+      });
+
+      const fileBytes = new Uint8Array(await Bun.file(join(websiteRoot, "public", image.src)).arrayBuffer());
+      expect(createHash("sha256").update(fileBytes).digest("hex")).toBe(image.imageSha256);
+      const stem = image.src.slice(0, -".webp".length);
+      const smallBytes = await Bun.file(join(websiteRoot, "public", `${stem}-384.webp`)).arrayBuffer();
+      const mediumBytes = await Bun.file(join(websiteRoot, "public", `${stem}-768.webp`)).arrayBuffer();
+      expect(smallBytes.byteLength).toBeLessThan(mediumBytes.byteLength);
+      expect(mediumBytes.byteLength).toBeLessThan(fileBytes.byteLength);
+      const receipt = await Bun.file(join(websiteRoot, image.provenance.receipt)).json() as {
+        localValidation?: { status?: string };
+        outputs?: Array<{ sha256?: string }>;
+      };
+      const job = await Bun.file(join(websiteRoot, image.provenance.job)).json() as {
+        clientMaxRetries?: number;
+        noAtetRetry?: boolean;
+        state?: string;
+      };
+      const prompt = await Bun.file(join(websiteRoot, image.provenance.prompt)).text();
+      expect(receipt.outputs?.[0]?.sha256).toBe(image.imageSha256);
+      expect(receipt.localValidation?.status).toBe("decode-passed");
+      expect(job).toMatchObject({
+        clientMaxRetries: 0,
+        noAtetRetry: true,
+        state: "completed",
+      });
+      expect(prompt.trim().length).toBeGreaterThan(80);
+    }
+    expect(editorialImages.some(({ canonicalPath }) =>
+      canonicalPath === ("/paypal-grapheneos-attestation/" as never))).toBe(false);
+
     expect(html).toContain('href="https://pipedream.com/docs/connect">Pipedream Connect</a>');
     expect(html).toContain("Hosted integration breadth and managed end-user authentication");
     expect(html).toContain('href="https://docs.apify.com/integrations/mcp">Apify MCP</a>');
@@ -572,6 +652,7 @@ describe("wrench.rip static site", () => {
     expect(gettingStarted?.html).toContain('src="/wrench-first-capture.mp4"');
     expect(gettingStarted?.html).toContain('src="/wrench-first-capture.vtt"');
     expect(gettingStarted?.html).toContain('href="/wrench-first-capture.gif"');
+    expect(gettingStarted?.html).not.toContain('class="editorial-figure"');
     expect(gettingStarted?.html).toContain("successful Wrench 0.13.5 run on August 25, 2026");
     expect(gettingStarted?.html).toContain("The terminal text is actual CLI output");
 

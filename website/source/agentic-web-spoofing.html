@@ -19,15 +19,15 @@
     <meta property="og:title" content="Agentic-web index spoofing, and why attested operations still matter">
     <meta property="og:description" content="Known Agents measures inbound bot impersonation. That check does not establish a safe outbound Wrench operation or name its operator.">
     <meta property="og:url" content="https://wrench.rip/agentic-web-spoofing/">
-    <meta property="og:image" content="https://wrench.rip/og.png">
-    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
-    <meta property="og:image:width" content="1200">
-    <meta property="og:image:height" content="630">
+    <meta property="og:image" content="{{EDITORIAL_IMAGE_URL}}">
+    <meta property="og:image:alt" content="{{EDITORIAL_IMAGE_ALT}}">
+    <meta property="og:image:width" content="{{EDITORIAL_IMAGE_WIDTH}}">
+    <meta property="og:image:height" content="{{EDITORIAL_IMAGE_HEIGHT}}">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Agentic-web index spoofing, and why attested operations still matter">
     <meta name="twitter:description" content="Known Agents measures inbound bot impersonation. That check does not establish a safe outbound Wrench operation or name its operator.">
-    <meta name="twitter:image" content="https://wrench.rip/og.png">
-    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="twitter:image" content="{{EDITORIAL_IMAGE_URL}}">
+    <meta name="twitter:image:alt" content="{{EDITORIAL_IMAGE_ALT}}">
     <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
     <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
     <script type="application/ld+json">{{JSON_LD}}</script>
@@ -49,6 +49,7 @@
         <header class="guide-hero">
           <p class="eyebrow">Argument · Wrench {{WRENCH_VERSION}}</p>
           <h1>A claimed agent name is not an attested web operation.</h1>
+          {{EDITORIAL_FIGURE}}
           <p class="answer-lede"><a href="https://knownagents.com/insights">The Agentic Web Index</a> counts inbound impersonation when a request claims a recognized agent identity and then fails that identity's supported authentication. That measurement is useful and bounded. It still leaves the outbound problem that <a href="https://wrench.rip/">Wrench</a> answers: name the job, bind the account and transport, and refuse to treat a familiar bot string, live browser, or missing contract as proof.</p>
           <p class="review-note">This argument uses the live Known Agents insights page fetched for this draft, the dated <a href="https://hraness.com/reading/agentic-web-index-spoofing-and-security">Hraness Reading digest of that index</a>, and the public {{WRENCH_RELEASE}} pages for the <a href="https://wrench.rip/">Wrench home</a>, <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>, <a href="https://wrench.rip/security/">security guide</a>, and <a href="https://wrench.rip/compare/personal-agents-browser-use/">personal-agents comparison</a>. Operation counts are the current release attestation, substituted at site build time. The live spoofing chart does not publish an operator name beside every rate, so this page does not invent those names.</p>
         </header>
