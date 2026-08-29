@@ -390,6 +390,20 @@ describe("authenticated web-session contract identity", () => {
     ]);
   });
 
+  test("observes x-web replies.create@1 as the current CreateTweet reply contract", () => {
+    expect(contract({ site: "x", action: "replies.create", contractVersion: 1 })).toMatchObject({
+      site: "x",
+      operation: "replies.create",
+      contractVersion: 1,
+      risk: "R3",
+      state: "observed",
+      dispatch: "single",
+      idempotency: "local-at-most-once",
+    });
+    expect(contract({ site: "x", action: "posts.quote", contractVersion: 1 }).state)
+      .toBe("capture-required");
+  });
+
   test("keeps every Marketplace mutation capture-required", () => {
     const binding = providerPluginRegistry.requireSessionRoute(
       "facebook-marketplace",

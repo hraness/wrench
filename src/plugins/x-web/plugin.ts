@@ -152,7 +152,7 @@ function xArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "f02eb05f4c709d7a952be298a16bba1ca0df80be275fd19318460f89115d483f",
+  "b537cc2efd1772c4b0c0fd17869deb9037e22367e419606fe977342135a7ac1e",
   {
     "likes.set": [1],
   },
@@ -170,7 +170,7 @@ const currentOperations = webSessionContractOperations(
     "articles.draft.save": xArticleDraftV2Dispatches,
   },
 ).map((operation) => {
-  if (operation.name === "posts.publish") {
+  if (operation.name === "posts.publish" || operation.name === "replies.create") {
     return Object.freeze({
       ...operation,
       reconciliation: Object.freeze({
@@ -382,14 +382,14 @@ export const xWebPlugin = defineProviderPlugin({
         execute: (_manifest, recipe, input, auth, options) =>
           runtime.executeXWebOperation(recipe, input, auth, options),
         reconcile: async (operation, input, auth, context) => {
-          if (operation === "posts.publish") {
+          if (operation === "posts.publish" || operation === "replies.create") {
             if (context?.kind !== "provider-accepted-target-presence") {
-              throw new Error("X posts.publish reconciliation requires one exact accepted target");
+              throw new Error(`X ${operation} reconciliation requires one exact accepted target`);
             }
             const readback = await runtime.readXWebPublishedMutationTarget({
               site: "x",
               action: operation,
-              contractVersion: 4,
+              contractVersion: operation === "posts.publish" ? 4 : 1,
               timeoutMs: 60_000,
               maxOutputBytes: 2 * 1024 * 1024,
             }, input, auth, context.target.identifier);

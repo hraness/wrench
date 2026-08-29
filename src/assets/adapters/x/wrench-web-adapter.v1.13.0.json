@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.14.0",
+  "version": "1.13.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -413,7 +413,7 @@
       }
     },
     "replies.create": {
-      "description": "Observed contract: publish one confirmed text-only X reply to an exact parent through CreateTweet response, durable accepted-target evidence, and fail-closed TweetResultByRestId Made with AI readback.",
+      "description": "Capture-required contract reservation: publish one confirmed text-only reply only after an authorized live fixture proves current transaction-header and parent binding behavior.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible X reply to the exact confirmed parent post.",
       "idempotency": "local-at-most-once",

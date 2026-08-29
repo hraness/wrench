@@ -612,6 +612,51 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
     );
   });
 
+  test("authorizes replies.create parent binding and rejects quote or AI fields", () => {
+    const resolved = descriptor("CreateTweet");
+    const features = Object.fromEntries(resolved.metadata.featureSwitches.map((name) => [name, false]));
+    const fieldToggles = Object.fromEntries(resolved.metadata.fieldToggles.map((name) => [name, false]));
+    const body = (variables: Readonly<Record<string, unknown>>) => ({
+      variables: {
+        tweet_text: "Exact reply",
+        dark_request: false,
+        media: { media_entities: [], possibly_sensitive: false },
+        semantic_annotation_ids: [],
+        ...variables,
+      },
+      features,
+      ...(resolved.metadata.fieldToggles.length === 0 ? {} : { fieldToggles }),
+      queryId: resolved.queryId,
+    });
+    const request = (
+      operationId: "replies.create" | "posts.publish",
+      variables: Readonly<Record<string, unknown>>,
+    ) => authorizeXWebMutationRequest(operationId, {
+      method: "POST",
+      url: graphqlUrl(resolved),
+      descriptor: resolved,
+      body: body(variables),
+    });
+    expect(request("replies.create", {
+      reply: { in_reply_to_tweet_id: "2078889282404569267", exclude_reply_user_ids: [] },
+    })).toMatchObject({ operationName: "CreateTweet" });
+    expect(() => request("replies.create", {})).toThrow("X replies.create variables");
+    expect(() => request("replies.create", {
+      reply: { in_reply_to_tweet_id: "2078889282404569267", exclude_reply_user_ids: [] },
+      made_with_ai: false,
+    })).toThrow("made_with_ai is outside the reviewed CreateTweet contract");
+    expect(() => request("replies.create", {
+      reply: { in_reply_to_tweet_id: "2078889282404569267", exclude_reply_user_ids: [] },
+      attachment_url: "https://x.com/i/status/2078889282404569265",
+    })).toThrow("X replies.create variables");
+    expect(() => request("replies.create", {
+      reply: { in_reply_to_tweet_id: "not-a-post-id", exclude_reply_user_ids: [] },
+    })).toThrow("must be an exact X post ID");
+    expect(() => request("posts.publish", {
+      reply: { in_reply_to_tweet_id: "2078889282404569267", exclude_reply_user_ids: [] },
+    })).toThrow("X posts.publish variables");
+  });
+
   test("authorizes exact native Article links, styles, and inline MEDIA entities", () => {
     const contentState = {
       blocks: [
