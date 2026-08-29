@@ -405,7 +405,7 @@ describe("contained derivation network boundary lifecycle", () => {
             if (inspections > 2) return "unknown";
             return processOwnerStatus(candidate);
           },
-          now: () => {
+          monotonicNow: () => {
             now += 5_000;
             return now;
           },
@@ -426,6 +426,62 @@ describe("contained derivation network boundary lifecycle", () => {
         helperDead = true;
       }
       if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when the cleanup monotonic clock is invalid", async () => {
+    for (const clock of [
+      {
+        expected: "monotonic clock is non-finite",
+        readings: [Number.NaN],
+      },
+      {
+        expected: "monotonic clock is non-finite",
+        readings: [10, Number.POSITIVE_INFINITY],
+      },
+      {
+        expected: "monotonic clock moved backward",
+        readings: [10, 11, 10],
+      },
+      {
+        expected: "monotonic clock did not advance",
+        readings: [10, 10, 10],
+      },
+    ] as const) {
+      const fixture = boundaryFixture("wrench-network-boundary-invalid-clock-test-");
+      const guard = await createFixtureBoundary(fixture);
+      const input = interruptedBoundaryInput(fixture);
+      const controlPath = derivationGuardControlSocketPath(fixture.derivationId);
+      let inspections = 0;
+      let reading = 0;
+      let helperDead = false;
+      try {
+        unlinkSync(controlPath);
+        await expect(closeInterruptedDerivationNetworkBoundary({
+          ...input,
+          dependencies: {
+            inspectOwner: () => {
+              inspections += 1;
+              return inspections <= 2 ? "exact-live-owner" : "unknown";
+            },
+            monotonicNow: () => clock.readings[reading++] ?? clock.readings.at(-1)!,
+          },
+        })).rejects.toThrow(clock.expected);
+        const helperDeadline = Date.now() + 1_000;
+        while (
+          processOwnerStatus(guard.proxy.owner) === "exact-live-owner"
+          && Date.now() < helperDeadline
+        ) await Bun.sleep(25);
+        helperDead = processOwnerStatus(guard.proxy.owner) === "different-or-dead";
+        expect(helperDead).toBeTrue();
+        expect(existsSync(controlPath)).toBeFalse();
+      } finally {
+        if (!helperDead && processOwnerStatus(guard.proxy.owner) === "exact-live-owner") {
+          await closeInterruptedDerivationNetworkBoundary(input);
+          helperDead = true;
+        }
+        if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
+      }
     }
   });
 
