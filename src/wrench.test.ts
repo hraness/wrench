@@ -2024,6 +2024,7 @@ describe("doctor authenticated API readiness", () => {
           "posts.publish",
           "posts.read",
           "profiles.read",
+          "replies.create",
         ],
         accountBoundAuth: [],
         ready: false,

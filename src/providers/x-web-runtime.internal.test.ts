@@ -3394,6 +3394,346 @@ describe("X authenticated internal-API runtime", () => {
     expect(lifecycle).toEqual({ evaluations: 1, closed: 1, cleaned: 1 });
   });
 
+  test("publishes one exact replies.create parent binding and independently reads it back", async () => {
+    const calls: CapturedRequest[] = [];
+    const before: WebSessionDispatchEvent[] = [];
+    const after: WebSessionDispatchEvent[] = [];
+    const accepted: unknown[] = [];
+    const body = "runtime reply fixture";
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+          descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/CreateTweet")) {
+        expect(request.method).toBe("POST");
+        expect(request.headers.get("x-client-transaction-id")).toBe(CLIENT_TRANSACTION_ID);
+        const payload = JSON.parse(request.body ?? "null") as Record<string, unknown>;
+        expect(payload).toEqual({
+          variables: {
+            tweet_text: body,
+            dark_request: false,
+            media: { media_entities: [], possibly_sensitive: false },
+            semantic_annotation_ids: [],
+            reply: { in_reply_to_tweet_id: FOCAL_POST_ID, exclude_reply_user_ids: [] },
+          },
+          features: {},
+          queryId: "WXTdKnLddrQOunD6MhWi3g",
+        });
+        expect(JSON.stringify(payload)).not.toContain("made_with_ai");
+        return jsonResponse(createTweetResponse({ text: body, replyTo: FOCAL_POST_ID }));
+      }
+      if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+        expect(request.method).toBe("GET");
+        expect(JSON.parse(request.url.searchParams.get("variables") ?? "null")).toMatchObject({
+          tweetId: CREATED_POST_ID,
+        });
+        return jsonResponse(publishedTweetReadback({ text: body, replyTo: FOCAL_POST_ID }));
+      }
+      throw new Error(`unexpected test request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("replies.create"),
+      { body, post_id: FOCAL_POST_ID },
+      xAuth,
+      {
+        dependencies: runtimeDependencies,
+        beforeDispatch: (event) => {
+          before.push(event);
+          return Promise.resolve();
+        },
+        afterProviderAcceptedMutationTarget: (event) => {
+          accepted.push(event);
+          return Promise.resolve();
+        },
+        afterDispatchVerified: (event) => {
+          after.push(event);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      status: "succeeded",
+      output: { posts: [{ id: CREATED_POST_ID, url: `https://x.com/i/status/${CREATED_POST_ID}` }] },
+      finalUrl: `https://x.com/i/status/${CREATED_POST_ID}`,
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+    expect(before).toEqual([{
+      id: "replies.create",
+      index: 1,
+      progress: { planned: 1, started: 0, verified: 0 },
+    }]);
+    expect(accepted).toEqual([{
+      id: "replies.create",
+      index: 1,
+      target: {
+        schemaVersion: 1,
+        identifier: canonicalJson({ postId: CREATED_POST_ID, mediaId: null }),
+      },
+    }]);
+    expect(after).toEqual([{
+      id: "replies.create",
+      index: 1,
+      progress: { planned: 1, started: 1, verified: 1 },
+    }]);
+  });
+
+  test("rejects replies.create inputs before CreateTweet", async () => {
+    const unusedCalls: CapturedRequest[] = [];
+    const unused = dependencies(unusedCalls, () => new Response("unused"));
+    await expect(executeXWebOperation(
+      xRecipe("replies.create"),
+      { body: "Exact reply", post_id: FOCAL_POST_ID, made_with_ai: false },
+      xAuth,
+      { dependencies: unused },
+    )).rejects.toThrow("made_with_ai is outside the reviewed CreateTweet contract");
+    await expect(executeXWebOperation(
+      xRecipe("replies.create"),
+      { body: "Exact reply", post_id: FOCAL_POST_ID, quoted_post_id: QUOTED_POST_ID },
+      xAuth,
+      { dependencies: unused },
+    )).rejects.toThrow("quoted_post_id is outside the reviewed reply contract");
+    expect(unusedCalls).toEqual([]);
+
+    const bootstrap = (calls: CapturedRequest[]) => dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      throw new Error(`unexpected replies.create validation request ${request.url.href}`);
+    });
+    await expect(executeXWebOperation(
+      xRecipe("replies.create"),
+      { body: "Exact reply" },
+      xAuth,
+      { dependencies: bootstrap([]) },
+    )).rejects.toThrow("input.post_id must be a bounded string");
+    await expect(executeXWebOperation(
+      xRecipe("replies.create"),
+      { post_id: FOCAL_POST_ID },
+      xAuth,
+      { dependencies: bootstrap([]) },
+    )).rejects.toThrow("input.body must be a bounded string");
+    await expect(executeXWebOperation(
+      xRecipe("replies.create"),
+      { body: "Exact reply", post_id: "not-a-post-id" },
+      xAuth,
+      { dependencies: bootstrap([]) },
+    )).rejects.toThrow("input.post_id must be a 1-19 digit X post ID");
+    const mediaCalls: CapturedRequest[] = [];
+    await expect(executeXWebOperation(
+      xRecipe("replies.create"),
+      {
+        body: "Exact reply",
+        post_id: FOCAL_POST_ID,
+        media: { kind: "file", reference: "fixture" },
+        media_type: "image/png",
+      },
+      xAuth,
+      { dependencies: bootstrap(mediaCalls) },
+    )).rejects.toThrow("X media upload is reviewed only for posts.publish");
+    expect(mediaCalls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeFalse();
+  });
+
+  test("fails closed when replies.create CreateTweet or readback shows Made with AI", async () => {
+    const cases = [
+      {
+        label: "create",
+        createExtra: { tweet_interstitial: { text: { text: "Made with AI" } } },
+        readbackExtra: undefined,
+      },
+      {
+        label: "readback",
+        createExtra: undefined,
+        readbackExtra: { content_disclosure: { label: "Made with AI" } },
+      },
+    ] as const;
+    for (const fixture of cases) {
+      const calls: CapturedRequest[] = [];
+      const body = `labeled reply ${fixture.label}`;
+      const result = await executeXWebOperation(
+        xRecipe("replies.create"),
+        { body, post_id: FOCAL_POST_ID },
+        xAuth,
+        {
+          dependencies: dependencies(calls, (request) => {
+            if (request.url.href === "https://x.com/home") {
+              return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+            }
+            if (request.url.href === MAIN_URL) {
+              return new Response(mainBundle(
+                descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+                descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+              ), { headers: { "content-type": "application/javascript" } });
+            }
+            if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+            if (request.url.pathname.endsWith("/CreateTweet")) {
+              return jsonResponse(createTweetResponse({
+                text: body,
+                replyTo: FOCAL_POST_ID,
+                ...(fixture.createExtra === undefined ? {} : { extra: fixture.createExtra }),
+              }));
+            }
+            if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+              if (fixture.readbackExtra === undefined) {
+                throw new Error(`unexpected labeled CreateTweet follow-up ${request.url.href}`);
+              }
+              return jsonResponse(publishedTweetReadback({
+                text: body,
+                replyTo: FOCAL_POST_ID,
+                extra: fixture.readbackExtra,
+              }));
+            }
+            throw new Error(`unexpected labeled reply request ${request.url.href}`);
+          }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+        error: X_UNLABELED_COPY_POLICY_ERROR,
+        output: { posts: [{ id: CREATED_POST_ID, url: `https://x.com/i/status/${CREATED_POST_ID}` }] },
+      });
+      expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeTrue();
+      expect(calls.some((call) => call.url.pathname.endsWith("/TweetResultByRestId")))
+        .toBe(fixture.label === "readback");
+    }
+  });
+
+  test("fails closed when replies.create response unbinds the parent or viewer", async () => {
+    const mismatchCases = [
+      { label: "author", authorId: "999", replyTo: FOCAL_POST_ID },
+      { label: "parent", authorId: VIEWER_ID, replyTo: QUOTED_POST_ID },
+    ] as const;
+    for (const mismatch of mismatchCases) {
+      const calls: CapturedRequest[] = [];
+      const after: WebSessionDispatchEvent[] = [];
+      const body = `mismatched reply ${mismatch.label}`;
+      const result = await executeXWebOperation(
+        xRecipe("replies.create"),
+        { body, post_id: FOCAL_POST_ID },
+        xAuth,
+        {
+          dependencies: dependencies(calls, (request) => {
+            if (request.url.href === "https://x.com/home") {
+              return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+            }
+            if (request.url.href === MAIN_URL) {
+              return new Response(mainBundle(
+                descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+                descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+              ), { headers: { "content-type": "application/javascript" } });
+            }
+            if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+            if (request.url.pathname.endsWith("/CreateTweet")) {
+              const payload = JSON.parse(request.body ?? "null") as {
+                readonly variables: { readonly reply?: { readonly in_reply_to_tweet_id?: string } };
+              };
+              expect(payload.variables.reply?.in_reply_to_tweet_id).toBe(FOCAL_POST_ID);
+              return jsonResponse(createTweetResponse({
+                text: body,
+                authorId: mismatch.authorId,
+                replyTo: mismatch.replyTo,
+              }));
+            }
+            throw new Error(`unexpected test request ${request.url.href}`);
+          }),
+          afterDispatchVerified: (event) => {
+            after.push(event);
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "indeterminate",
+        dispatchStarted: true,
+        dispatch: { planned: 1, started: 1, verified: 0 },
+        error: "X may have accepted the current post dispatch; failure stage: create-response-binding; reconcile before retrying",
+      });
+      expect(after).toEqual([]);
+      expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+    }
+  });
+
+  test("reconciles one exact accepted X reply without a provider write", async () => {
+    const calls: CapturedRequest[] = [];
+    const body = "Reconciled X reply";
+    const identifier = canonicalJson({ postId: CREATED_POST_ID, mediaId: null });
+    const result = await readXWebPublishedMutationTarget(
+      xRecipe("replies.create"),
+      { body, post_id: FOCAL_POST_ID },
+      xAuth,
+      identifier,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({ text: body, replyTo: FOCAL_POST_ID }));
+          }
+          throw new Error(`unexpected X reply reconciliation request ${request.url.href}`);
+        }),
+      },
+    );
+    expect(result).toEqual({ present: true, postId: CREATED_POST_ID });
+    expect(calls.every((request) => request.method === "GET")).toBeTrue();
+    const labeledCalls: CapturedRequest[] = [];
+    await expect(readXWebPublishedMutationTarget(
+      xRecipe("replies.create"),
+      { body, post_id: FOCAL_POST_ID },
+      xAuth,
+      identifier,
+      {
+        dependencies: dependencies(labeledCalls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({
+              text: body,
+              replyTo: FOCAL_POST_ID,
+              extra: { made_with_ai: true },
+            }));
+          }
+          throw new Error(`unexpected labeled X reply reconciliation request ${request.url.href}`);
+        }),
+      },
+    )).rejects.toThrow(X_UNLABELED_COPY_POLICY_ERROR);
+    expect(labeledCalls.every((request) => request.method === "GET")).toBeTrue();
+  });
+
   test("binds both confirmed quote target and authenticated author after dispatch", async () => {
     const mismatchCases = [
       { label: "author", authorId: "999", quote: QUOTED_POST_ID },
