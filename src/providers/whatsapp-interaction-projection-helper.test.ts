@@ -3,6 +3,7 @@ import {
   lstatSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -12,10 +13,13 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
+import { projectWhatsAppMessageExportSessionFromBoundCwd } from "./whatsapp-interaction-projection-helper";
+
 import {
   runWhatsAppContactProjectionHelperChild,
   runWhatsAppMessageExportSessionHelperChild,
   type WhatsAppContactProjectionHelperResult,
+  type WhatsAppMessageExportSessionHelperResult,
 } from "./whatsapp-web-runtime";
 import {
   WHATSAPP_INTERACTION_PROJECTION_MAX_STDIN_BYTES,
@@ -32,6 +36,18 @@ import {
 const OWNER_JID = "15551234567:3@s.whatsapp.net";
 const helper = join(import.meta.dir, "whatsapp-interaction-projection-helper.ts");
 const config = join(import.meta.dir, "../state-helper.bunfig.toml");
+
+async function consumeSessionFrames(
+  result: WhatsAppMessageExportSessionHelperResult,
+): Promise<readonly unknown[]> {
+  const frames: unknown[] = [];
+  try {
+    for await (const value of result.spool.replay((frame) => frame.value)) frames.push(value);
+    return Object.freeze(frames);
+  } finally {
+    await result.spool.close();
+  }
+}
 
 function privateDirectory(): string {
   const path = realpathSync(mkdtempSync(join(tmpdir(), "wrench-wa-interactions-")));
@@ -522,7 +538,7 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
         maxStderrBytes: 16 * 1024,
       });
       expect(result).toMatchObject({ exitCode: 0, stderr: "" });
-      const frames = result.frames;
+      const frames = await consumeSessionFrames(result);
       expect(frames).toHaveLength(4);
       const pages = frames.slice(0, -1);
       expect(pages).toHaveLength(3);
@@ -610,16 +626,90 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
         maxStderrBytes: 16 * 1024,
       });
       expect(result.exitCode).toBe(0);
-      expect(result.frames).toHaveLength(3);
-      expect(result.frames.slice(0, 2).map((frame) =>
+      const frames = await consumeSessionFrames(result);
+      expect(frames).toHaveLength(3);
+      expect(frames.slice(0, 2).map((frame) =>
         (frame as { messages: readonly unknown[] }).messages.length)).toEqual([500, 1]);
-      expect(result.frames.at(-1)).toMatchObject({
+      expect(frames.at(-1)).toMatchObject({
         kind: "seal",
         pages: 2,
         messages: 501,
         integrityChecks: 1,
       });
     } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("uses lookahead so an exact 500-row multiple is terminal without an empty page", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        const insert = database.query(`
+          INSERT INTO messages(chat_jid, msg_id, sender_jid, ts, from_me, text)
+          VALUES (?1, ?2, ?3, ?4, 0, ?5)
+        `);
+        database.transaction(() => {
+          for (let index = 4; index <= 500; index += 1) {
+            insert.run(
+              "15557654321@s.whatsapp.net",
+              `MSG-${String(index)}`,
+              "15557654321:2@s.whatsapp.net",
+              1_776_513_600 + index,
+              `body-${String(index)}`,
+            );
+          }
+        })();
+      } finally {
+        database.close();
+      }
+      const initial = messageRequest(path, { limit: 500 });
+      const result = await runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "--no-env-file", "--no-install", "--no-macros",
+          "--no-addons", `--config=${config}`, helper],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" },
+        stdin: `${JSON.stringify({ operation: "message-like-me.export-session", request: initial })}\n`,
+        timeoutMs: 10_000,
+        maxOutputBytes: 8 * 1024 * 1024,
+        maxStderrBytes: 16 * 1024,
+      });
+      const frames = await consumeSessionFrames(result);
+      expect(frames).toHaveLength(2);
+      expect(frames[0]).toMatchObject({
+        kind: "page",
+        index: 1,
+        terminal: true,
+      });
+      expect((frames[0] as { messages: readonly unknown[] }).messages).toHaveLength(500);
+      expect(frames[1]).toMatchObject({ kind: "seal", pages: 1, messages: 500 });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("holds and revalidates the exact session database through every page", () => {
+    const path = createStore();
+    const priorCwd = process.cwd();
+    const frames: unknown[] = [];
+    try {
+      const initial = messageRequest(path, { limit: 1 });
+      process.chdir(path);
+      expect(() => projectWhatsAppMessageExportSessionFromBoundCwd(
+        initial,
+        (frame) => {
+          frames.push(frame);
+          if (frames.length !== 1) return;
+          renameSync("session.db", "session.db.original");
+          writeFileSync("session.db", "replacement");
+          chmodSync("session.db", 0o600);
+        },
+      )).toThrow();
+      expect(frames).toHaveLength(1);
+      expect(frames[0]).toMatchObject({ kind: "page", index: 1 });
+    } finally {
+      process.chdir(priorCwd);
       rmSync(path, { recursive: true, force: true });
     }
   });
@@ -659,9 +749,10 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
         maxOutputBytes: 8 * 1024 * 1024,
         maxStderrBytes: 16 * 1024,
       });
-      const encoded = JSON.stringify(result.frames);
+      const frames = await consumeSessionFrames(result);
+      const encoded = JSON.stringify(frames);
       expect(encoded).not.toContain("must-not-cross-stdout");
-      expect(result.frames[0]).toMatchObject({
+      expect(frames[0]).toMatchObject({
         selfJids: ["15551234567@s.whatsapp.net", "999999999999999@lid"],
         selfChatsExcluded: "present-excluded",
       });

@@ -159,6 +159,17 @@ describe("public WhatsApp export receipt parser", () => {
       { ...valid, counts: { ...valid.counts, message: 500_001 } },
       { ...valid, counts: { ...valid.counts, participant: 7 } },
       { ...valid, counts: { ...valid.counts, conversation: 6 } },
+      {
+        ...valid,
+        counts: {
+          account: 1,
+          participant: 200_001,
+          conversation: 100_000,
+          message: 200_000,
+          reaction: 0,
+          tombstone: 0,
+        },
+      },
       { ...valid, output: { ...valid.output, directory: "/" } },
       {
         ...valid,

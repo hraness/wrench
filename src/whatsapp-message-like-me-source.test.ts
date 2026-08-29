@@ -125,6 +125,38 @@ function fakeDependencies(
   };
 }
 
+function sealedPages(pages: readonly Readonly<Record<string, unknown>>[]): readonly unknown[] {
+  const last = pages.at(-1);
+  if (last === undefined) throw new Error("test session requires a page");
+  const framesSha256 = createHash("sha256");
+  let messages = 0;
+  for (const page of pages) {
+    framesSha256.update(canonicalJson(page)).update("\n");
+    messages += (page.messages as readonly unknown[]).length;
+  }
+  return Object.freeze([
+    ...pages,
+    Object.freeze({
+      kind: "seal",
+      pages: pages.length,
+      messages,
+      checkpoint: last.checkpoint,
+      projectionGeneration: last.projectionGeneration,
+      selfJids: last.selfJids,
+      selfChatsExcluded: last.selfChatsExcluded,
+      integrityChecks: 1,
+      framesSha256: framesSha256.digest("hex"),
+    }),
+  ]);
+}
+
+function sessionMessages(start: number, count: number): readonly WhatsAppMessageExportProjectionItem[] {
+  return Object.freeze(Array.from({ length: count }, (_, offset) => {
+    const rowid = String(start + offset);
+    return item({ rowid, messageId: `MSG-${rowid}` });
+  }));
+}
+
 function sealedSessionDependencies(
   store: string,
   transform: (frames: readonly unknown[]) => readonly unknown[] = (frames) => frames,
@@ -157,20 +189,33 @@ function sealedSessionDependencies(
         checkpoint: { cursor: "1", anchor: "a".repeat(64) },
         terminal: true,
       };
-      const hash = createHash("sha256")
-        .update(canonicalJson(page)).update("\n").digest("hex");
-      const seal = {
-        kind: "seal",
-        pages: 1,
-        messages: 1,
-        checkpoint: page.checkpoint,
-        projectionGeneration: generation,
-        selfJids: page.selfJids,
-        selfChatsExcluded: "none-detected",
-        integrityChecks: 1,
-        framesSha256: hash,
+      const values = transform(sealedPages([page]));
+      const frames = values.map((value, index) => Object.freeze({
+        index: index + 1,
+        canonical: canonicalJson(value),
+        value,
+      }));
+      for (const frame of frames) invocation.onCanonicalFrame?.(frame);
+      const stdout = frames.map((frame) => `${frame.canonical}\n`).join("");
+      let replayed = false;
+      let closed = false;
+      return {
+        exitCode: 0,
+        stderr: "",
+        spool: Object.freeze({
+          frameCount: frames.length,
+          totalBytes: Buffer.byteLength(stdout),
+          stdoutSha256: createHash("sha256").update(stdout).digest("hex"),
+          replay: async function* <Value>(
+            project: (frame: (typeof frames)[number]) => Value,
+          ) {
+            if (closed || replayed) throw new Error("invalid test spool replay");
+            replayed = true;
+            for (const frame of frames) yield project(frame);
+          },
+          close: async () => { closed = true; },
+        }),
       };
-      return { exitCode: 0, stderr: "", frames: transform([page, seal]) };
     },
   };
 }
@@ -258,10 +303,103 @@ describe("WhatsApp Message Like Me source mapping", () => {
     }
   });
 
+  test("rejects a consistently sealed third owner alias", async () => {
+    const path = privateStore();
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: sealedSessionDependencies(path, (frames) => {
+          const page = frames[0] as Readonly<Record<string, unknown>>;
+          return sealedPages([Object.freeze({
+            ...page,
+            selfJids: [
+              "15551234567@s.whatsapp.net",
+              "222222222222222@lid",
+              "999999999999999@lid",
+            ],
+          })]);
+        }),
+      });
+      await expect((async () => {
+        for await (const _record of source.records) { /* drain */ }
+      })()).rejects.toThrow("unsupported owner aliases");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects non-conversation exclusion drift between sealed pages", async () => {
+    const path = privateStore();
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: sealedSessionDependencies(path, (frames) => {
+          const base = frames[0] as Readonly<Record<string, unknown>>;
+          const first = Object.freeze({
+            ...base,
+            index: 1,
+            messages: sessionMessages(1, 500),
+            checkpoint: { cursor: "500", anchor: "a".repeat(64) },
+            terminal: false,
+            nonConversationChatsExcluded: false,
+          });
+          const second = Object.freeze({
+            ...base,
+            index: 2,
+            messages: sessionMessages(501, 1),
+            checkpoint: { cursor: "501", anchor: "b".repeat(64) },
+            terminal: true,
+            nonConversationChatsExcluded: true,
+          });
+          return sealedPages([first, second]);
+        }),
+      });
+      await expect((async () => {
+        for await (const _record of source.records) { /* drain */ }
+      })()).rejects.toThrow("non-conversation exclusion changed");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a terminal empty continuation after a full nonterminal page", async () => {
+    const path = privateStore();
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: sealedSessionDependencies(path, (frames) => {
+          const base = frames[0] as Readonly<Record<string, unknown>>;
+          const checkpoint = { cursor: "500", anchor: "a".repeat(64) };
+          return sealedPages([
+            Object.freeze({
+              ...base,
+              index: 1,
+              messages: sessionMessages(1, 500),
+              checkpoint,
+              terminal: false,
+            }),
+            Object.freeze({
+              ...base,
+              index: 2,
+              messages: [],
+              checkpoint,
+              terminal: true,
+            }),
+          ]);
+        }),
+      });
+      await expect((async () => {
+        for await (const _record of source.records) { /* drain */ }
+      })()).rejects.toThrow("contradicted its prior lookahead");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("applies one monotonic deadline across an admitted multi-page traversal", async () => {
     const path = privateStore();
     let helperCalls = 0;
-    const clock = [0, 1, 2, 3];
+    let clockReads = 0;
     try {
       const source = createWhatsAppMessageLikeMeSource({
         auth: auth(path),
@@ -269,7 +407,9 @@ describe("WhatsApp Message Like Me source mapping", () => {
           helperPath: "/private/fixed/helper.ts",
           configPath: "/private/fixed/config.toml",
           totalTimeoutMs: 3,
-          monotonicNow: () => clock.shift() ?? 3,
+          // Admit and consume the first 500-row page, then expire before a
+          // second helper can start. Deadline checks also surround each yield.
+          monotonicNow: () => clockReads++ < 1_507 ? 0 : 3,
           runHelper: async (invocation) => {
             helperCalls += 1;
             const request = JSON.parse(invocation.stdin) as {
@@ -314,6 +454,117 @@ describe("WhatsApp Message Like Me source mapping", () => {
         }
       })()).rejects.toThrow("export exceeded its total deadline");
       expect(helperCalls).toBe(1);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the same deadline through participant and conversation tail emission", async () => {
+    const path = privateStore();
+    let pageCompleted = false;
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        onProgress: (progress) => {
+          if (progress.phase === "page-completed") pageCompleted = true;
+        },
+        dependencies: {
+          ...fakeDependencies(path, [item({})]),
+          totalTimeoutMs: 10,
+          monotonicNow: () => pageCompleted ? 10 : 0,
+        },
+      });
+      await expect((async () => {
+        for await (const _record of source.records) { /* drain */ }
+      })()).rejects.toThrow("export exceeded its total deadline");
+      await expect(source.completion()).rejects.toThrow("record stream did not complete");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("accounts for deferred participant and conversation records before emitting a message", async () => {
+    const path = privateStore();
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: {
+          ...fakeDependencies(path, [item({})]),
+          recordLimit: 4,
+        },
+      });
+      const observed: unknown[] = [];
+      await expect((async () => {
+        for await (const record of source.records) observed.push(record);
+      })()).rejects.toThrow("exceeded the v2 record bound");
+      expect(observed).toHaveLength(1);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a group whose observed participant set exceeds the v2 law", async () => {
+    const path = privateStore();
+    let helperCalls = 0;
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: {
+          helperPath: "/private/fixed/helper.ts",
+          configPath: "/private/fixed/config.toml",
+          runHelper: async (invocation) => {
+            helperCalls += 1;
+            const request = JSON.parse(invocation.stdin) as {
+              readonly cursor: string;
+              readonly messageStoreIdentity: { readonly dev: string; readonly ino: string };
+            };
+            const stats = lstatSync(join(path, "wacli.db"), { bigint: true });
+            const first = Number(request.cursor) + 1;
+            const last = Math.min(first + 499, 10_000);
+            const messages = Array.from({ length: last - first + 1 }, (_, offset) => {
+              const index = first + offset;
+              return item({
+                rowid: String(index),
+                chatJid: "120363123456789012@g.us",
+                chatKind: "group",
+                chatName: "Large group",
+                messageId: `GROUP-${String(index)}`,
+                senderJid: `${String(10_000_000_000_000 + index)}@lid`,
+                senderName: null,
+              });
+            });
+            const terminal = last === 10_000;
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: `${JSON.stringify({
+                schemaVersion: 1,
+                status: "succeeded",
+                projectionGeneration: {
+                  messageStoreIdentity: request.messageStoreIdentity,
+                  size: stats.size.toString(),
+                  mtimeNs: stats.mtimeNs.toString(),
+                  ctimeNs: stats.ctimeNs.toString(),
+                  schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+                },
+                accountJidAliases: {
+                  pnJid: "15551234567@s.whatsapp.net",
+                  lidJid: null,
+                },
+                nonConversationChatsExcluded: false,
+                messages,
+                nextCursor: terminal ? null : String(last),
+                localInsertPageComplete: terminal,
+                checkpoint: { cursor: String(last), anchor: "a".repeat(64) },
+              })}\n`,
+            };
+          },
+        },
+      });
+      await expect((async () => {
+        for await (const _record of source.records) { /* drain */ }
+      })()).rejects.toThrow("conversation exceeded its participant bound");
+      expect(helperCalls).toBe(20);
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
@@ -545,12 +796,12 @@ describe("WhatsApp Message Like Me source mapping", () => {
                       rowid: String(index + 1),
                       messageId: `MSG-${String(index + 1)}`,
                     }))
-                  : [],
+                  : [item({ rowid: "501", messageId: "MSG-501" })],
                 nextCursor: first ? "500" : null,
                 localInsertPageComplete: !first,
                 checkpoint: first
                   ? { cursor: "500", anchor: "a".repeat(64) }
-                  : { cursor: "500", anchor: "a".repeat(64) },
+                  : { cursor: "501", anchor: "b".repeat(64) },
               })}\n`,
             };
           },

@@ -23,6 +23,7 @@ import {
   validateWhatsAppStoreDirectory,
   type WhatsAppContactProjectionHelperInvocation,
   type WhatsAppContactProjectionHelperResult,
+  type WhatsAppMessageExportSessionCanonicalFrame,
   type WhatsAppMessageExportSessionHelperResult,
 } from "./providers/whatsapp-web-runtime";
 import {
@@ -39,6 +40,7 @@ import {
   WHATSAPP_MESSAGE_BUNDLE_V2_PROVIDER,
   WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
   WHATSAPP_MESSAGE_BUNDLE_V2_SOURCE,
+  WHATSAPP_MESSAGE_BUNDLE_V2_LIMITS,
   type WhatsAppMessageBundleV2Attachment,
   type WhatsAppMessageBundleV2Completion,
   type WhatsAppMessageBundleV2Conversation,
@@ -77,6 +79,8 @@ export type WhatsAppMessageLikeMeSourceDependencies = Readonly<{
   totalTimeoutMs?: number;
   /** Test-only monotonic clock seam. */
   monotonicNow?: () => number;
+  /** Test-only smaller v2 aggregate-record bound. */
+  recordLimit?: number;
 }>;
 
 export type WhatsAppMessageLikeMeSourceRequest = Readonly<{
@@ -302,16 +306,37 @@ function latest(current: string | null, candidate: string): string {
   return current === null || candidate > current ? candidate : current;
 }
 
-function isSortedSelfJids(value: unknown): value is readonly string[] {
+const SESSION_PN_JID_PATTERN = /^[1-9][0-9]{4,14}@s\.whatsapp\.net$/u;
+const SESSION_LID_JID_PATTERN = /^[1-9][0-9]{4,19}@lid$/u;
+
+function sessionAccountJidAliases(value: unknown): Readonly<{
+  selfJids: readonly string[];
+  pnJid: string;
+  lidJid: string | null;
+}> {
   if (
     !Array.isArray(value)
     || value.length < 1
     || value.length > 2
     || !value.every((jid) => typeof jid === "string")
     || new Set(value).size !== value.length
-  ) return false;
-  const sorted = [...value].sort();
-  return value.every((jid, index) => jid === sorted[index]);
+  ) return fail("one fixed projection page had unsupported owner aliases");
+  const selfJids = [...value].sort();
+  if (!value.every((jid, index) => jid === selfJids[index])) {
+    return fail("one fixed projection page had unsorted owner aliases");
+  }
+  const pnJids = selfJids.filter((jid) => SESSION_PN_JID_PATTERN.test(jid));
+  const lidJids = selfJids.filter((jid) => SESSION_LID_JID_PATTERN.test(jid));
+  if (
+    pnJids.length !== 1
+    || lidJids.length > 1
+    || pnJids.length + lidJids.length !== selfJids.length
+  ) return fail("one fixed projection page had unsupported owner aliases");
+  return Object.freeze({
+    selfJids: Object.freeze(selfJids),
+    pnJid: pnJids[0]!,
+    lidJid: lidJids[0] ?? null,
+  });
 }
 
 async function* runMessageExportSession(
@@ -321,10 +346,176 @@ async function* runMessageExportSession(
     invocation: WhatsAppContactProjectionHelperInvocation,
   ) => Promise<WhatsAppMessageExportSessionHelperResult>,
   admission: BeeperMessageLikeMeExportAdmission | undefined,
+  checkDeadline: () => void,
 ): AsyncGenerator<unknown> {
+  type SessionPage = Readonly<{
+    response: Extract<ReturnType<typeof parseWhatsAppMessageExportProjectionResponse>, { status: "succeeded" }>;
+    selfChatsExcluded: "none-detected" | "present-excluded";
+  }>;
+
+  class SessionValidator {
+    readonly #framesHash = createHash("sha256");
+    #request = initialRequest;
+    #pages = 0;
+    #messages = 0;
+    #finalCheckpoint: unknown;
+    #finalGeneration: unknown;
+    #finalSelfJids: readonly string[] | undefined;
+    #finalSelfChatsExcluded: "none-detected" | "present-excluded" | undefined;
+    #finalNonConversationChatsExcluded: boolean | undefined;
+    #failed = false;
+    #sealed = false;
+    #terminal = false;
+
+    accept(canonicalFrame: WhatsAppMessageExportSessionCanonicalFrame): SessionPage | null {
+      checkDeadline();
+      if (this.#failed || this.#sealed) {
+        return fail("the fixed projection session emitted an extra frame");
+      }
+      const frame = canonicalFrame.value;
+      if (
+        typeof frame !== "object"
+        || frame === null
+        || Array.isArray(frame)
+        || !("kind" in frame)
+      ) return fail("one fixed projection frame was malformed");
+      if (frame.kind === "failed") {
+        if (
+          Object.keys(frame).sort().join("\0") !== "errorCode\0kind"
+          || !("errorCode" in frame)
+          || typeof frame.errorCode !== "string"
+        ) return fail("the fixed projection failure frame was malformed");
+        const failure = parseWhatsAppMessageExportProjectionResponse({
+          schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
+          status: "failed",
+          errorCode: frame.errorCode,
+        }, this.#request);
+        if (failure.status !== "failed") {
+          return fail("the fixed projection failure frame was invalid");
+        }
+        this.#failed = true;
+        return null;
+      }
+      if (frame.kind === "page") {
+        if (
+          this.#terminal
+          || Object.keys(frame).sort().join("\0")
+            !== "checkpoint\0index\0kind\0messages\0nonConversationChatsExcluded\0projectionGeneration\0selfChatsExcluded\0selfJids\0terminal"
+          || !("index" in frame)
+          || frame.index !== this.#pages + 1
+          || !("selfChatsExcluded" in frame)
+          || (frame.selfChatsExcluded !== "none-detected"
+            && frame.selfChatsExcluded !== "present-excluded")
+          || !("selfJids" in frame)
+          || this.#pages >= 1_000
+          || !("terminal" in frame)
+          || typeof frame.terminal !== "boolean"
+          || !("messages" in frame)
+          || !Array.isArray(frame.messages)
+          || !("checkpoint" in frame)
+          || !("projectionGeneration" in frame)
+          || !("nonConversationChatsExcluded" in frame)
+          || typeof frame.nonConversationChatsExcluded !== "boolean"
+        ) return fail("one fixed projection page frame was unsupported");
+        const aliases = sessionAccountJidAliases(frame.selfJids);
+        const response = parseWhatsAppMessageExportProjectionResponse({
+          schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
+          status: "succeeded",
+          projectionGeneration: frame.projectionGeneration,
+          accountJidAliases: { pnJid: aliases.pnJid, lidJid: aliases.lidJid },
+          nonConversationChatsExcluded: frame.nonConversationChatsExcluded,
+          messages: frame.messages,
+          nextCursor: frame.terminal ? null : (frame.checkpoint as { cursor?: unknown }).cursor,
+          localInsertPageComplete: frame.terminal,
+          checkpoint: frame.checkpoint,
+        }, this.#request);
+        if (response.status !== "succeeded") {
+          return fail("one fixed projection page failed");
+        }
+        if (
+          response.localInsertPageComplete
+          && response.messages.length === 0
+          && this.#request.cursor !== "0"
+        ) return fail("the fixed projection session contradicted its prior lookahead");
+        if (
+          this.#finalGeneration !== undefined
+          && canonicalJson(this.#finalGeneration) !== canonicalJson(response.projectionGeneration)
+        ) return fail("the fixed projection generation changed inside its session");
+        if (
+          this.#finalSelfJids !== undefined
+          && canonicalJson(this.#finalSelfJids) !== canonicalJson(aliases.selfJids)
+        ) return fail("the fixed projection owner aliases changed inside its session");
+        if (
+          this.#finalSelfChatsExcluded !== undefined
+          && this.#finalSelfChatsExcluded !== frame.selfChatsExcluded
+        ) return fail("the fixed projection self-chat exclusion changed inside its session");
+        if (
+          this.#finalNonConversationChatsExcluded !== undefined
+          && this.#finalNonConversationChatsExcluded !== frame.nonConversationChatsExcluded
+        ) return fail("the fixed projection non-conversation exclusion changed inside its session");
+        this.#framesHash.update(canonicalFrame.canonical).update("\n");
+        this.#messages += response.messages.length;
+        if (this.#messages > 500_000) {
+          return fail("the fixed projection session exceeded its message bound");
+        }
+        this.#pages += 1;
+        this.#finalCheckpoint = response.checkpoint;
+        this.#finalGeneration = response.projectionGeneration;
+        this.#finalSelfJids = aliases.selfJids;
+        this.#finalSelfChatsExcluded = frame.selfChatsExcluded;
+        this.#finalNonConversationChatsExcluded = frame.nonConversationChatsExcluded;
+        this.#terminal = response.localInsertPageComplete;
+        this.#request = parseWhatsAppMessageExportProjectionRequest({
+          ...this.#request,
+          cursor: response.checkpoint.cursor,
+          cursorAnchor: response.checkpoint.anchor,
+          expectedGeneration: response.projectionGeneration,
+        });
+        checkDeadline();
+        return Object.freeze({ response, selfChatsExcluded: frame.selfChatsExcluded });
+      }
+      if (
+        frame.kind !== "seal"
+        || Object.keys(frame).sort().join("\0")
+          !== "checkpoint\0framesSha256\0integrityChecks\0kind\0messages\0pages\0projectionGeneration\0selfChatsExcluded\0selfJids"
+        || !("pages" in frame)
+        || frame.pages !== this.#pages
+        || !("messages" in frame)
+        || frame.messages !== this.#messages
+        || !this.#terminal
+        || !("integrityChecks" in frame)
+        || frame.integrityChecks !== 1
+        || !("framesSha256" in frame)
+        || frame.framesSha256 !== this.#framesHash.digest("hex")
+        || !("checkpoint" in frame)
+        || canonicalJson(frame.checkpoint) !== canonicalJson(this.#finalCheckpoint)
+        || !("projectionGeneration" in frame)
+        || canonicalJson(frame.projectionGeneration) !== canonicalJson(this.#finalGeneration)
+        || !("selfJids" in frame)
+        || canonicalJson(frame.selfJids) !== canonicalJson(this.#finalSelfJids)
+        || !("selfChatsExcluded" in frame)
+        || frame.selfChatsExcluded !== this.#finalSelfChatsExcluded
+      ) return fail("the fixed projection session seal was invalid");
+      this.#sealed = true;
+      checkDeadline();
+      return null;
+    }
+
+    finish(): void {
+      checkDeadline();
+      if (this.#failed) return fail("fixed read-only projection rejected the private store");
+      if (!this.#sealed || this.#pages < 1) {
+        return fail("the fixed projection session omitted its seal");
+      }
+    }
+  }
+
+  const captureValidator = new SessionValidator();
   if (admission !== undefined) beginBeeperMessageLikeMeHelperLaunch(admission);
-  let result: WhatsAppMessageExportSessionHelperResult;
+  let result: WhatsAppMessageExportSessionHelperResult | undefined;
+  let operationFailure: unknown;
   try {
+    checkDeadline();
     result = await runHelper(Object.freeze({
       ...invocationBase,
       stdin: `${canonicalJson({
@@ -332,163 +523,72 @@ async function* runMessageExportSession(
         request: initialRequest,
       })}\n`,
       maxOutputBytes: WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDOUT_BYTES,
+      onCanonicalFrame: (frame) => { captureValidator.accept(frame); },
       ...(admission === undefined
         ? {}
         : { onSpawned: (pid: number) => bindBeeperMessageLikeMeHelperOwner(admission, pid) }),
     }));
-    if (admission !== undefined) settleBeeperMessageLikeMeHelper(admission);
+    checkDeadline();
+    if (result.exitCode !== 0 || result.stderr.length !== 0) {
+      return fail("fixed read-only projection session failed before reviewed output");
+    }
+    captureValidator.finish();
+    const replayValidator = new SessionValidator();
+    for await (const page of result.spool.replay(
+      (frame) => replayValidator.accept(frame),
+    )) {
+      if (page !== null) yield page;
+      checkDeadline();
+    }
+    replayValidator.finish();
   } catch (error) {
+    operationFailure = error;
+  } finally {
+    let cleanupFailure: unknown;
+    try {
+      await result?.spool.close();
+    } catch (error) {
+      cleanupFailure = error;
+    }
+    const combinedFailure = operationFailure === undefined
+      ? cleanupFailure
+      : cleanupFailure === undefined
+        ? operationFailure
+        : new AggregateError(
+            [operationFailure, cleanupFailure],
+            "WhatsApp projection session operation and spool cleanup both failed",
+          );
     if (admission !== undefined) {
       try {
-        if (containsWhatsAppContactProjectionCleanupUnverified(error)) {
+        if (
+          combinedFailure !== undefined
+          && containsWhatsAppContactProjectionCleanupUnverified(combinedFailure)
+        ) {
           markBeeperMessageLikeMeHelperCleanupUnsafe(admission);
         } else {
           settleBeeperMessageLikeMeHelper(admission);
         }
       } catch (lifecycleError) {
-        throw new AggregateError([error, lifecycleError], "WhatsApp helper lifecycle failed closed");
+        if (combinedFailure !== undefined) {
+          throw new AggregateError(
+            [combinedFailure, lifecycleError],
+            "WhatsApp helper lifecycle failed closed",
+          );
+        }
+        throw lifecycleError;
       }
     }
-    throw error;
-  }
-  if (result.exitCode !== 0 || result.stderr.length !== 0) {
-    return fail("fixed read-only projection session failed before reviewed output");
-  }
-  const framesHash = createHash("sha256");
-  const pages: unknown[] = [];
-  let messages = 0;
-  let finalCheckpoint: unknown;
-  let finalGeneration: unknown;
-  let finalSelfJids: readonly unknown[] | undefined;
-  let finalSelfChatsExcluded: unknown;
-  let failed = false;
-  let sealed = false;
-  let terminal = false;
-  let request = initialRequest;
-  for (const frame of result.frames) {
-    if (failed || sealed) return fail("the fixed projection session emitted an extra frame");
-    if (
-      typeof frame !== "object"
-      || frame === null
-      || Array.isArray(frame)
-      || !("kind" in frame)
-    ) return fail("one fixed projection frame was malformed");
-    if (frame.kind === "failed") {
-      if (
-        sealed
-        || Object.keys(frame).sort().join("\0") !== "errorCode\0kind"
-        || !("errorCode" in frame)
-        || typeof frame.errorCode !== "string"
-      ) return fail("the fixed projection failure frame was malformed");
-      const failure = parseWhatsAppMessageExportProjectionResponse({
-        schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
-        status: "failed",
-        errorCode: frame.errorCode,
-      }, request);
-      if (failure.status !== "failed") return fail("the fixed projection failure frame was invalid");
-      failed = true;
-      continue;
+    if (cleanupFailure !== undefined) {
+      if (operationFailure !== undefined) {
+        throw new AggregateError(
+          [operationFailure, cleanupFailure],
+          "WhatsApp projection session operation and spool cleanup both failed",
+        );
+      }
+      throw cleanupFailure;
     }
-    if (frame.kind === "page") {
-      if (
-        sealed
-        || failed
-        || terminal
-        || Object.keys(frame).sort().join("\0")
-          !== "checkpoint\0index\0kind\0messages\0nonConversationChatsExcluded\0projectionGeneration\0selfChatsExcluded\0selfJids\0terminal"
-        || !("index" in frame)
-        || frame.index !== pages.length + 1
-        || !("selfChatsExcluded" in frame)
-        || (frame.selfChatsExcluded !== "none-detected"
-          && frame.selfChatsExcluded !== "present-excluded")
-        || !("selfJids" in frame)
-        || !isSortedSelfJids(frame.selfJids)
-        || !("terminal" in frame)
-        || typeof frame.terminal !== "boolean"
-        || !("messages" in frame)
-        || !Array.isArray(frame.messages)
-        || !("checkpoint" in frame)
-        || !("projectionGeneration" in frame)
-        || !("nonConversationChatsExcluded" in frame)
-        || typeof frame.nonConversationChatsExcluded !== "boolean"
-      ) return fail("one fixed projection page frame was unsupported");
-      const pnJid = frame.selfJids.find((jid) =>
-        typeof jid === "string" && jid.endsWith("@s.whatsapp.net"));
-      const lidJid = frame.selfJids.find((jid) =>
-        typeof jid === "string" && jid.endsWith("@lid")) ?? null;
-      if (typeof pnJid !== "string") return fail("one fixed projection page omitted the PN owner alias");
-      const responseValue = {
-        schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
-        status: "succeeded",
-        projectionGeneration: frame.projectionGeneration,
-        accountJidAliases: { pnJid, lidJid },
-        nonConversationChatsExcluded: frame.nonConversationChatsExcluded,
-        messages: frame.messages,
-        nextCursor: frame.terminal ? null : (frame.checkpoint as { cursor?: unknown }).cursor,
-        localInsertPageComplete: frame.terminal,
-        checkpoint: frame.checkpoint,
-      };
-      const response = parseWhatsAppMessageExportProjectionResponse(responseValue, request);
-      if (response.status !== "succeeded") return fail("one fixed projection page failed");
-      if (
-        finalGeneration !== undefined
-        && canonicalJson(finalGeneration) !== canonicalJson(response.projectionGeneration)
-      ) return fail("the fixed projection generation changed inside its session");
-      if (
-        finalSelfJids !== undefined
-        && canonicalJson(finalSelfJids) !== canonicalJson(frame.selfJids)
-      ) return fail("the fixed projection owner aliases changed inside its session");
-      if (
-        finalSelfChatsExcluded !== undefined
-        && finalSelfChatsExcluded !== frame.selfChatsExcluded
-      ) return fail("the fixed projection self-chat exclusion changed inside its session");
-      const canonicalFrame = canonicalJson(frame);
-      framesHash.update(canonicalFrame).update("\n");
-      messages += response.messages.length;
-      if (messages > 500_000) return fail("the fixed projection session exceeded its message bound");
-      pages.push(Object.freeze({ response, selfChatsExcluded: frame.selfChatsExcluded }));
-      finalCheckpoint = response.checkpoint;
-      finalGeneration = response.projectionGeneration;
-      finalSelfJids = Object.freeze([...frame.selfJids]);
-      finalSelfChatsExcluded = frame.selfChatsExcluded;
-      terminal = response.localInsertPageComplete;
-      request = parseWhatsAppMessageExportProjectionRequest({
-        ...request,
-        cursor: response.checkpoint.cursor,
-        cursorAnchor: response.checkpoint.anchor,
-        expectedGeneration: response.projectionGeneration,
-      });
-      continue;
-    }
-    if (
-      frame.kind !== "seal"
-      || sealed
-      || failed
-      || Object.keys(frame).sort().join("\0")
-        !== "checkpoint\0framesSha256\0integrityChecks\0kind\0messages\0pages\0projectionGeneration\0selfChatsExcluded\0selfJids"
-      || !("pages" in frame)
-      || frame.pages !== pages.length
-      || !("messages" in frame)
-      || frame.messages !== messages
-      || !terminal
-      || !("integrityChecks" in frame)
-      || frame.integrityChecks !== 1
-      || !("framesSha256" in frame)
-      || frame.framesSha256 !== framesHash.digest("hex")
-      || !("checkpoint" in frame)
-      || canonicalJson(frame.checkpoint) !== canonicalJson(finalCheckpoint)
-      || !("projectionGeneration" in frame)
-      || canonicalJson(frame.projectionGeneration) !== canonicalJson(finalGeneration)
-      || !("selfJids" in frame)
-      || canonicalJson(frame.selfJids) !== canonicalJson(finalSelfJids)
-      || !("selfChatsExcluded" in frame)
-      || frame.selfChatsExcluded !== finalSelfChatsExcluded
-    ) return fail("the fixed projection session seal was invalid");
-    sealed = true;
   }
-  if (failed) return fail("fixed read-only projection rejected the private store");
-  if (!sealed || pages.length < 1) return fail("the fixed projection session omitted its seal");
-  for (const page of pages) yield page;
+  if (operationFailure !== undefined) throw operationFailure;
 }
 
 export function createWhatsAppMessageLikeMeSource(
@@ -513,8 +613,21 @@ export function createWhatsAppMessageLikeMeSource(
     if (!Number.isFinite(exportStartedAt) || exportStartedAt < 0) {
       return fail("the total export clock is unavailable");
     }
+    const checkExportDeadline = (): void => {
+      throwIfAborted(request.signal);
+      remainingExportTimeout(exportStartedAt, request.dependencies, false);
+    };
+    const recordLimit = request.dependencies?.recordLimit
+      ?? WHATSAPP_MESSAGE_BUNDLE_V2_LIMITS.records;
+    if (
+      !Number.isSafeInteger(recordLimit)
+      || recordLimit < 1
+      || recordLimit > WHATSAPP_MESSAGE_BUNDLE_V2_LIMITS.records
+    ) return fail("the v2 record bound is invalid");
     const store = await validateWhatsAppStoreDirectory(auth.path, "projection");
+    checkExportDeadline();
     const identities = await boundIdentities(store);
+    checkExportDeadline();
     const fixed = fixedHelperFiles(request.dependencies);
     const run = request.dependencies?.runHelper;
     const participants = new Map<string, ParticipantFact>();
@@ -525,12 +638,13 @@ export function createWhatsAppMessageLikeMeSource(
     let expectedGeneration: WhatsAppMessageExportProjectionGeneration | null = null;
     let page = 0;
     let messageRows = 0;
+    let messageRecords = 0;
     let observedFrom: string | null = null;
     let observedThrough: string | null = null;
     let unprovenReactionStateRows = 0;
     let excludedSelfChatRows = 0;
     let payloadPurgedRows = 0;
-    let nonConversationChatsExcluded = false;
+    let nonConversationChatsExcluded: boolean | undefined;
     let accountJidAliases: ReadonlySet<string> | null = null;
 
     yield Object.freeze({
@@ -544,11 +658,14 @@ export function createWhatsAppMessageLikeMeSource(
       handle: userHandle(accountJid),
       selfParticipantId,
     });
+    checkExportDeadline();
 
     let sessionIterator: AsyncIterator<unknown> | undefined;
     try {
     for (;;) {
+      checkExportDeadline();
       page += 1;
+      if (page > 1_000) return fail("the fixed projection session exceeded its page bound");
       request.onProgress?.(Object.freeze({ phase: "page-started", page, messages: messageRows }));
       const projectionRequest = parseWhatsAppMessageExportProjectionRequest({
         schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
@@ -589,7 +706,7 @@ export function createWhatsAppMessageLikeMeSource(
         maxStderrBytes: MAX_STDERR_BYTES,
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       }) satisfies WhatsAppContactProjectionHelperInvocation;
-      let raw: unknown;
+      let response: ReturnType<typeof parseWhatsAppMessageExportProjectionResponse>;
       if (run !== undefined) {
         const result = await run(invocation);
         throwIfAborted(request.signal);
@@ -597,11 +714,13 @@ export function createWhatsAppMessageLikeMeSource(
         if (result.exitCode !== 0 || result.stderr.length !== 0) {
           return fail("fixed read-only projection helper failed before reviewed output");
         }
+        let decoded: unknown;
         try {
-          raw = JSON.parse(result.stdout.trim()) as unknown;
+          decoded = JSON.parse(result.stdout.trim()) as unknown;
         } catch {
           return fail("fixed read-only projection helper returned malformed output");
         }
+        response = parseWhatsAppMessageExportProjectionResponse(decoded, projectionRequest);
       } else {
         sessionIterator ??= runMessageExportSession(
           projectionRequest,
@@ -616,6 +735,7 @@ export function createWhatsAppMessageLikeMeSource(
           request.dependencies?.runSessionHelper
             ?? runWhatsAppMessageExportSessionHelperChild,
           request.admission,
+          checkExportDeadline,
         )[Symbol.asyncIterator]();
         const pageResult = await sessionIterator.next();
         if (pageResult.done) {
@@ -634,14 +754,26 @@ export function createWhatsAppMessageLikeMeSource(
         if (pageResult.value.selfChatsExcluded === "present-excluded") {
           excludedSelfChatRows = Math.max(1, excludedSelfChatRows);
         }
-        raw = pageResult.value.response;
+        // SessionValidator already produced the one final parsed page graph.
+        // Re-parsing it here would retain a second full page during conversion.
+        response = pageResult.value.response as ReturnType<
+          typeof parseWhatsAppMessageExportProjectionResponse
+        >;
       }
-      const response = parseWhatsAppMessageExportProjectionResponse(raw, projectionRequest);
       if (response.status === "failed") {
         return fail(`fixed read-only projection rejected the store (${response.errorCode})`);
       }
+      if (
+        response.localInsertPageComplete
+        && response.messages.length === 0
+        && projectionRequest.cursor !== "0"
+      ) return fail("the fixed projection contradicted its prior lookahead");
       expectedGeneration = response.projectionGeneration;
-      nonConversationChatsExcluded ||= response.nonConversationChatsExcluded;
+      if (nonConversationChatsExcluded === undefined) {
+        nonConversationChatsExcluded = response.nonConversationChatsExcluded;
+      } else if (nonConversationChatsExcluded !== response.nonConversationChatsExcluded) {
+        return fail("fixed projection non-conversation exclusion changed inside its snapshot");
+      }
       const pageAliases = new Set([
         response.accountJidAliases.pnJid,
         response.accountJidAliases.lidJid,
@@ -656,7 +788,11 @@ export function createWhatsAppMessageLikeMeSource(
       }
 
       for (const item of response.messages) {
+        checkExportDeadline();
         messageRows += 1;
+        if (messageRows > 500_000) {
+          return fail("the fixed projection session exceeded its message bound");
+        }
         if (
           item.chatKind === "dm"
           && accountJidAliases.has(canonicalWhatsAppParticipantJid(item.chatJid))
@@ -712,6 +848,10 @@ export function createWhatsAppMessageLikeMeSource(
             });
           } else current.displayName ??= item.senderName;
         }
+        if (
+          conversation.participantJids.size
+            > WHATSAPP_MESSAGE_BUNDLE_V2_LIMITS.participantsPerConversation
+        ) return fail("one conversation exceeded its participant bound");
 
         const providerId = messageProviderId(item);
         const deletion = messageDeletion(item, observedAt);
@@ -725,7 +865,12 @@ export function createWhatsAppMessageLikeMeSource(
               providerRevision: item.editedAt,
             })
           : null;
-        yield Object.freeze({
+        messageRecords += 1;
+        if (
+          1 + messageRecords + participants.size + conversations.size
+            > recordLimit
+        ) return fail("the fixed projection exceeded the v2 record bound");
+        const messageRecord = Object.freeze({
           schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
           kind: "message",
           id: localId("message", accountJid, item.chatJid, item.messageId),
@@ -756,6 +901,9 @@ export function createWhatsAppMessageLikeMeSource(
           deletion,
           attachments: attachment(item),
         });
+        checkExportDeadline();
+        yield messageRecord;
+        checkExportDeadline();
       }
       request.onProgress?.(Object.freeze({ phase: "page-completed", page, messages: messageRows }));
       cursor = response.checkpoint.cursor;
@@ -776,7 +924,8 @@ export function createWhatsAppMessageLikeMeSource(
     }
 
     for (const participant of [...participants.values()].sort((left, right) => left.jid.localeCompare(right.jid))) {
-      yield Object.freeze({
+      checkExportDeadline();
+      const participantRecord = Object.freeze({
         schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
         kind: "participant",
         id: participantId(accountJid, participant.jid),
@@ -787,8 +936,12 @@ export function createWhatsAppMessageLikeMeSource(
         handle: userHandle(participant.jid),
         isSelf: participant.isSelf,
       });
+      checkExportDeadline();
+      yield participantRecord;
+      checkExportDeadline();
     }
     for (const conversation of [...conversations.values()].sort((left, right) => left.jid.localeCompare(right.jid))) {
+      checkExportDeadline();
       const participantIds = [...conversation.participantJids]
         .sort()
         .map((jid) => participantId(accountJid, jid));
@@ -806,16 +959,22 @@ export function createWhatsAppMessageLikeMeSource(
         startedAt: conversation.startedAt,
         lastMessageAt: conversation.lastMessageAt,
       });
+      checkExportDeadline();
       yield record;
+      checkExportDeadline();
     }
+    if (
+      1 + messageRecords + participants.size + conversations.size
+        > recordLimit
+    ) return fail("the fixed projection exceeded the v2 record bound");
     const warnings = Object.freeze([
       "remote-history-incomplete",
       ...(unprovenReactionStateRows > 0 ? ["reaction-state-unproven"] : []),
       ...(excludedSelfChatRows > 0 ? ["self-chat-excluded"] : []),
       ...(payloadPurgedRows > 0 ? ["message-payload-purged"] : []),
-      ...(nonConversationChatsExcluded ? ["non-conversation-chats-excluded"] : []),
+      ...(nonConversationChatsExcluded === true ? ["non-conversation-chats-excluded"] : []),
     ]);
-    completion = Object.freeze({
+    const completed = Object.freeze({
       completeness: Object.freeze({
         kind: "bounded-local",
         reason: "local-store-coverage-unknown",
@@ -830,6 +989,8 @@ export function createWhatsAppMessageLikeMeSource(
       conversations: conversations.size,
       participants: participants.size,
     }));
+    checkExportDeadline();
+    completion = completed;
   })();
 
   return Object.freeze({

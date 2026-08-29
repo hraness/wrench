@@ -4,6 +4,7 @@ import {
   lstatSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -32,6 +33,7 @@ import {
 } from "../web-session-execution";
 import {
   WhatsAppContactProjectionCleanupUnverifiedError,
+  containsWhatsAppContactProjectionCleanupUnverified,
   executeWhatsAppWebOperation,
   pairWhatsAppAuth,
   planWhatsAppPairing,
@@ -1453,6 +1455,181 @@ describe("WhatsApp zero-network read plans", () => {
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
+  });
+
+  test("spools canonical stdout privately and applies the same inclusive newline bound", async () => {
+    const path = privateDirectory();
+    const prefix = "wrench-whatsapp-stdout-";
+    const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)));
+    const output = "{\"a\":1}\n";
+    let spoolDirectory: string | undefined;
+    const captured: unknown[] = [];
+    try {
+      const result = await runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 1_000,
+        maxOutputBytes: Buffer.byteLength(output),
+        maxStderrBytes: 1024,
+        onSpawned: () => {
+          const created = readdirSync(tmpdir())
+            .filter((name) => name.startsWith(prefix) && !before.has(name));
+          expect(created).toHaveLength(1);
+          spoolDirectory = join(tmpdir(), created[0]!);
+          expect(lstatSync(spoolDirectory).mode & 0o777).toBe(0o700);
+          // The 0600 stdout inode is already anonymous and reachable only by
+          // the parent-held descriptor before any helper code executes.
+          expect(readdirSync(spoolDirectory)).toEqual([]);
+        },
+        onCanonicalFrame: (frame) => captured.push(frame.value),
+      });
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect("frames" in result).toBeFalse();
+      expect(result.spool).toMatchObject({ frameCount: 1, totalBytes: output.length });
+      expect(captured).toEqual([{ a: 1 }]);
+      const replayed: unknown[] = [];
+      for await (const value of result.spool.replay((frame) => frame.value)) replayed.push(value);
+      expect(replayed).toEqual([{ a: 1 }]);
+      await result.spool.close();
+      expect(spoolDirectory === undefined ? true : existsSync(spoolDirectory)).toBeFalse();
+
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 1_000,
+        maxOutputBytes: Buffer.byteLength(output) - 1,
+        maxStderrBytes: 1024,
+      })).rejects.toThrow("frame exceeded its bound");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+      if (spoolDirectory !== undefined) rmSync(spoolDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects noncanonical, unterminated, and over-count stdout without retaining frames", async () => {
+    const path = privateDirectory();
+    try {
+      for (const output of ["{\"b\":1,\"a\":2}\n", "{\"a\":1}"]) {
+        await expect(runWhatsAppMessageExportSessionHelperChild({
+          command: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`],
+          cwd: path,
+          environment: { PATH: "/usr/bin:/bin" },
+          stdin: "{}\n",
+          timeoutMs: 1_000,
+          maxOutputBytes: 1024,
+          maxStderrBytes: 1024,
+        })).rejects.toThrow();
+      }
+      const exactMaximum = "{}\n".repeat(1_001);
+      const exact = await runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(exactMaximum)})`],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 1_000,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+      });
+      let frameCount = 0;
+      for await (const _frame of exact.spool.replay(() => undefined)) frameCount += 1;
+      expect(frameCount).toBe(1_001);
+      await exact.spool.close();
+
+      const tooMany = "{}\n".repeat(1_002);
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(tooMany)})`],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 1_000,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+      })).rejects.toThrow("frame exceeded its bound");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds callback failure and recursively reaps an unexpected process group", async () => {
+    const path = privateDirectory();
+    try {
+      const spawnCallbackStarted = performance.now();
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", "setInterval(() => undefined, 1000)"],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 10_000,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+        onSpawned: () => { throw new Error("synthetic spawn rejection"); },
+      })).rejects.toThrow("synthetic spawn rejection");
+      expect(performance.now() - spawnCallbackStarted).toBeLessThan(3_000);
+
+      const callbackStarted = performance.now();
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", [
+          "process.on('SIGTERM', () => undefined);",
+          "process.stdout.write('{}\\n');",
+          "setInterval(() => undefined, 1000);",
+        ].join("")],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 10_000,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+        onCanonicalFrame: () => { throw new Error("synthetic frame rejection"); },
+      })).rejects.toThrow("synthetic frame rejection");
+      expect(performance.now() - callbackStarted).toBeLessThan(3_000);
+
+      let descendantPid: number | undefined;
+      const descendantReady = join(path, "descendant.ready");
+      const descendantStarted = performance.now();
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", [
+          "const { existsSync } = require('node:fs');",
+          "void (async () => {",
+          `const child = Bun.spawn([${JSON.stringify(process.execPath)}, '-e',`,
+          `  ${JSON.stringify(`const { writeFileSync } = require("node:fs"); process.on("SIGTERM", () => undefined); writeFileSync(${JSON.stringify(descendantReady)}, "ready\\n"); setInterval(() => undefined, 1000);`)}],`,
+          "  { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });",
+          `while (!existsSync(${JSON.stringify(descendantReady)})) await Bun.sleep(5);`,
+          "process.stdout.write(JSON.stringify({ pid: child.pid }) + '\\n', () => process.exit(0));",
+          "})();",
+        ].join("\n")],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 10_000,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+        onCanonicalFrame: (frame) => {
+          descendantPid = (frame.value as { pid: number }).pid;
+        },
+      })).rejects.toThrow("unexpected descendant");
+      expect(performance.now() - descendantStarted).toBeLessThan(3_000);
+      expect(descendantPid).toBeNumber();
+      expect(() => process.kill(descendantPid!, 0)).toThrow();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("finds cleanup uncertainty through AggregateError causes without looping on cycles", () => {
+    const cleanup = new WhatsAppContactProjectionCleanupUnverifiedError();
+    expect(containsWhatsAppContactProjectionCleanupUnverified(
+      new AggregateError([], "wrapped", { cause: new Error("middle", { cause: cleanup }) }),
+    )).toBeTrue();
+
+    const errors: unknown[] = [];
+    const cycle = new AggregateError(errors, "cycle");
+    errors.push(cycle);
+    Object.defineProperty(cycle, "cause", { value: cycle, enumerable: false });
+    expect(containsWhatsAppContactProjectionCleanupUnverified(cycle)).toBeFalse();
   });
 
   test("executes paired chat, message, and media reads through read-only local projections", async () => {

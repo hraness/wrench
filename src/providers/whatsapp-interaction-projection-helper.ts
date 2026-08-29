@@ -50,6 +50,7 @@ import {
 } from "./whatsapp-message-export-projection-protocol";
 
 const MESSAGE_DATABASE_NAME = "wacli.db";
+const SESSION_DATABASE_NAME = "session.db";
 const IMMUTABLE_MESSAGE_DATABASE_URI = `file:${MESSAGE_DATABASE_NAME}?mode=ro&immutable=1`;
 const IMMUTABLE_MESSAGE_DATABASE_FLAGS = sqliteConstants.SQLITE_OPEN_READONLY
   | sqliteConstants.SQLITE_OPEN_URI
@@ -168,6 +169,36 @@ function assertMessageFile(
   if (stats.size < 1n || stats.size > MAX_MESSAGE_DATABASE_BYTES) {
     fail("message-store-file-too-large");
   }
+}
+
+function assertSessionOwnerFile(
+  stats: BigIntStats,
+  request: BoundMessageStoreRequest,
+): void {
+  const uid = currentUid();
+  if (
+    !stats.isFile()
+    || stats.isSymbolicLink()
+    || stats.nlink !== 1n
+    || (uid !== null && stats.uid !== uid)
+    || !isExactWhatsAppContactProjectionMode(stats.mode, 0o600)
+    || stats.dev.toString() !== request.sessionIdentity.dev
+    || stats.ino.toString() !== request.sessionIdentity.ino
+  ) fail("session-binding-invalid");
+}
+
+function exactSessionOwnerPathSnapshot(
+  initial: BigIntStats,
+  request: BoundMessageStoreRequest,
+): void {
+  let pathStats: BigIntStats;
+  try {
+    pathStats = lstatSync(SESSION_DATABASE_NAME, { bigint: true });
+  } catch {
+    return fail("session-binding-invalid");
+  }
+  assertSessionOwnerFile(pathStats, request);
+  if (!sameSnapshot(initial, pathStats)) fail("session-binding-invalid");
 }
 
 function exactMessagePathSnapshot(
@@ -803,8 +834,10 @@ const MESSAGE_EXPORT_FILTER = `
 `;
 
 const MESSAGE_EXPORT_SELF_CHAT_FILTER = `
-  m.chat_jid <> ?3
-  AND (?4 IS NULL OR m.chat_jid <> ?4)
+  NOT (
+    c.kind = 'dm'
+    AND (m.chat_jid = ?3 OR (?4 IS NOT NULL AND m.chat_jid = ?4))
+  )
 `;
 
 function hasExcludedNonConversationMessages(database: Database): boolean {
@@ -988,8 +1021,21 @@ function projectBoundWhatsAppMessageStore<Result>(
   ) => Result,
 ): Result {
   const initialCwd = assertBoundCwd(request);
+  const noFollow = fsConstants.O_NOFOLLOW;
+  if (typeof noFollow !== "number" || noFollow === 0) return fail("message-store-file-invalid");
+  const nonBlock = typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0;
+  let sessionDescriptor: number;
+  try {
+    sessionDescriptor = openSync(SESSION_DATABASE_NAME, fsConstants.O_RDONLY | noFollow | nonBlock);
+  } catch {
+    return fail("session-binding-invalid");
+  }
+  let initialSession: BigIntStats;
   let owner: WhatsAppMatchedOwnerIdentity;
   try {
+    initialSession = fstatSync(sessionDescriptor, { bigint: true });
+    assertSessionOwnerFile(initialSession, request);
+    exactSessionOwnerPathSnapshot(initialSession, request);
     const contacts = projectWhatsAppContactsFromBoundCwd({
       schemaVersion: WHATSAPP_CONTACT_PROJECTION_PROTOCOL_VERSION,
       operation: "contacts.list",
@@ -1000,18 +1046,29 @@ function projectBoundWhatsAppMessageStore<Result>(
       sessionIdentity: request.sessionIdentity,
     });
     owner = contacts[WHATSAPP_MATCHED_OWNER_IDENTITY];
+    const afterOwner = fstatSync(sessionDescriptor, { bigint: true });
+    if (!sameSnapshot(initialSession, afterOwner)) fail("session-binding-invalid");
+    exactSessionOwnerPathSnapshot(initialSession, request);
   } catch {
+    try { closeSync(sessionDescriptor); } catch { /* owner mismatch remains categorical */ }
     return fail("owner-mismatch");
   }
-  assertBoundCwd(request, initialCwd);
-  assertNoMessageSidecars();
-  const noFollow = fsConstants.O_NOFOLLOW;
-  if (typeof noFollow !== "number" || noFollow === 0) return fail("message-store-file-invalid");
-  const nonBlock = typeof fsConstants.O_NONBLOCK === "number" ? fsConstants.O_NONBLOCK : 0;
+  try {
+    assertBoundCwd(request, initialCwd);
+    assertNoMessageSidecars();
+  } catch (error) {
+    try {
+      closeSync(sessionDescriptor);
+    } catch {
+      return fail("session-binding-invalid");
+    }
+    throw error;
+  }
   let descriptor: number;
   try {
     descriptor = openSync(MESSAGE_DATABASE_NAME, fsConstants.O_RDONLY | noFollow | nonBlock);
   } catch {
+    try { closeSync(sessionDescriptor); } catch { /* message-store failure remains categorical */ }
     return fail("message-store-file-invalid");
   }
   let initialFile: BigIntStats | undefined;
@@ -1042,6 +1099,9 @@ function projectBoundWhatsAppMessageStore<Result>(
       const after = fstatSync(descriptor, { bigint: true });
       if (!sameSnapshot(initialFile, after)) fail("message-store-file-invalid");
       exactMessagePathSnapshot(initialFile, request);
+      const sessionAfter = fstatSync(sessionDescriptor, { bigint: true });
+      if (!sameSnapshot(initialSession, sessionAfter)) fail("session-binding-invalid");
+      exactSessionOwnerPathSnapshot(initialSession, request);
       assertBoundCwd(request, initialCwd);
       assertNoMessageSidecars();
     };
@@ -1061,6 +1121,9 @@ function projectBoundWhatsAppMessageStore<Result>(
       if (!sameSnapshot(initialFile, after)) fail("message-store-file-invalid");
       exactMessagePathSnapshot(initialFile, request);
     }
+    const sessionAfter = fstatSync(sessionDescriptor, { bigint: true });
+    if (!sameSnapshot(initialSession, sessionAfter)) fail("session-binding-invalid");
+    exactSessionOwnerPathSnapshot(initialSession, request);
     assertBoundCwd(request, initialCwd);
     assertNoMessageSidecars();
   } catch (error) {
@@ -1070,6 +1133,11 @@ function projectBoundWhatsAppMessageStore<Result>(
       closeSync(descriptor);
     } catch {
       failure = new HelperFailure("message-store-file-invalid");
+    }
+    try {
+      closeSync(sessionDescriptor);
+    } catch {
+      failure = new HelperFailure("session-binding-invalid");
     }
   }
   if (failure !== undefined) {
@@ -1127,12 +1195,16 @@ export function projectWhatsAppMessageExportSessionFromBoundCwd(
     const framesHash = createHash("sha256");
     let finalResponse: WhatsAppMessageExportProjectionSuccess | undefined;
     const selfJids = Object.freeze([...owner.selfJids].sort());
+    const expectedSelfJids = Object.freeze([
+      owner.accountJidAliases.pnJid,
+      ...(owner.accountJidAliases.lidJid === null
+        ? []
+        : [owner.accountJidAliases.lidJid]),
+    ].sort());
     const excludedSelfChats = selfChatsExcluded(database, owner);
     if (
-      selfJids.length < 1
-      || selfJids.length > 2
-      || !selfJids.includes(owner.accountJidAliases.pnJid)
-      || new Set(selfJids).size !== selfJids.length
+      selfJids.length !== expectedSelfJids.length
+      || selfJids.some((jid, index) => jid !== expectedSelfJids[index])
     ) return fail("owner-mismatch");
     for (;;) {
       revalidate();

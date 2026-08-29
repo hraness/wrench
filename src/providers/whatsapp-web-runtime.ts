@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  constants as fsConstants,
   createReadStream,
   type Stats,
   type BigIntStats,
@@ -7,10 +8,16 @@ import {
 import {
   chmod,
   lstat,
+  mkdtemp,
   mkdir,
+  open,
   readdir,
   realpath,
+  rmdir,
+  unlink,
+  type FileHandle,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -70,6 +77,10 @@ const MAX_SYNC_DB_SIZE = "2GB";
 const MAX_CONTACT_PROJECTION_STDERR_BYTES = 16 * 1024;
 const CONTACT_PROJECTION_FORCE_KILL_DELAY_MS = 1_000;
 const MESSAGE_EXPORT_SESSION_MAX_TOTAL_STDOUT_BYTES = 512 * 1024 * 1024;
+const MESSAGE_EXPORT_SESSION_MAX_FRAMES = 1_001;
+const MESSAGE_EXPORT_SESSION_SPOOL_CHUNK_BYTES = 64 * 1024;
+const MESSAGE_EXPORT_SESSION_PRIVATE_DIRECTORY_MODE = 0o700;
+const MESSAGE_EXPORT_SESSION_PRIVATE_FILE_MODE = 0o600;
 const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
 
 type WhatsAppAuth = Extract<
@@ -103,6 +114,10 @@ export type WhatsAppContactProjectionHelperInvocation = {
   readonly signal?: AbortSignal;
   /** Called exactly once after spawn with the owned helper PID. */
   readonly onSpawned?: (pid: number) => void;
+  /** Internal streaming validator; called synchronously for each canonical frame. */
+  readonly onCanonicalFrame?: (
+    frame: WhatsAppMessageExportSessionCanonicalFrame,
+  ) => void;
 };
 
 export type WhatsAppContactProjectionHelperResult = {
@@ -111,9 +126,25 @@ export type WhatsAppContactProjectionHelperResult = {
   readonly stderr: string;
 };
 
+export type WhatsAppMessageExportSessionCanonicalFrame = Readonly<{
+  index: number;
+  canonical: string;
+  value: unknown;
+}>;
+
+export type WhatsAppMessageExportSessionSpool = Readonly<{
+  frameCount: number;
+  totalBytes: number;
+  stdoutSha256: string;
+  replay: <Value>(
+    project: (frame: WhatsAppMessageExportSessionCanonicalFrame) => Value,
+  ) => AsyncGenerator<Value>;
+  close: () => Promise<void>;
+}>;
+
 export type WhatsAppMessageExportSessionHelperResult = Readonly<{
   exitCode: number;
-  frames: readonly unknown[];
+  spool: WhatsAppMessageExportSessionSpool;
   stderr: string;
 }>;
 
@@ -129,12 +160,25 @@ export class WhatsAppContactProjectionCleanupUnverifiedError extends Error {
 export function containsWhatsAppContactProjectionCleanupUnverified(
   error: unknown,
 ): boolean {
-  if (error instanceof WhatsAppContactProjectionCleanupUnverifiedError) return true;
-  if (error instanceof AggregateError) {
-    return error.errors.some(containsWhatsAppContactProjectionCleanupUnverified);
-  }
-  if (typeof error === "object" && error !== null && "cause" in error) {
-    return containsWhatsAppContactProjectionCleanupUnverified(error.cause);
+  const pending: unknown[] = [error];
+  const visited = new Set<object>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current instanceof WhatsAppContactProjectionCleanupUnverifiedError) return true;
+    if (typeof current !== "object" || current === null || visited.has(current)) continue;
+    visited.add(current);
+    if (current instanceof AggregateError) {
+      try {
+        pending.push(...current.errors);
+      } catch {
+        // A hostile wrapper cannot prove cleanup safety.
+      }
+    }
+    try {
+      if ("cause" in current) pending.push(current.cause);
+    } catch {
+      // A hostile wrapper cannot hide a directly reachable proved error.
+    }
   }
   return false;
 }
@@ -569,22 +613,37 @@ async function readBoundedStream(
   stream: ReadableStream<Uint8Array>,
   maximum: number,
 ): Promise<string> {
+  return readBoundedStreamControlled(stream, maximum).promise;
+}
+
+function readBoundedStreamControlled(
+  stream: ReadableStream<Uint8Array>,
+  maximum: number,
+): Readonly<{ promise: Promise<string>; cancel: () => Promise<void> }> {
   const reader = stream.getReader();
   const output = new BoundedByteBuffer(maximum);
-  try {
-    for (;;) {
-      const item = await reader.read();
-      if (item.done) break;
-      if (!output.append(item.value)) {
-        throw new Error("WhatsApp protocol process output exceeded its bound");
+  const promise = (async (): Promise<string> => {
+    try {
+      for (;;) {
+        const item = await reader.read();
+        if (item.done) break;
+        if (!output.append(item.value)) {
+          throw new Error("WhatsApp protocol process output exceeded its bound");
+        }
       }
+    } finally {
+      reader.releaseLock();
     }
-  } finally {
-    reader.releaseLock();
-  }
-  return new TextDecoder("utf-8", { fatal: true }).decode(
-    output.toUint8Array(),
-  );
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      output.toUint8Array(),
+    );
+  })();
+  return Object.freeze({
+    promise,
+    cancel: async () => {
+      try { await reader.cancel(); } catch { /* settlement remains authoritative */ }
+    },
+  });
 }
 
 async function runWacli(
@@ -1406,70 +1465,427 @@ export async function runWhatsAppContactProjectionHelperChild(
   }
 }
 
-async function readCanonicalSessionFrames(
-  stream: ReadableStream<Uint8Array>,
-  maximumFrameBytes: number,
-): Promise<readonly unknown[]> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  const frames: unknown[] = [];
-  let pending = "";
-  let totalBytes = 0;
-  try {
-    for (;;) {
-      const item = await reader.read();
-      if (item.done) break;
-      totalBytes += item.value.byteLength;
-      if (totalBytes > MESSAGE_EXPORT_SESSION_MAX_TOTAL_STDOUT_BYTES) {
-        throw new Error("WhatsApp projection session output exceeded its total bound");
-      }
-      pending += decoder.decode(item.value, { stream: true });
-      for (;;) {
-        const newline = pending.indexOf("\n");
-        if (newline < 0) break;
-        const line = pending.slice(0, newline);
-        pending = pending.slice(newline + 1);
-        if (
-          line.length < 2
-          || line.includes("\r")
-          || Buffer.byteLength(line, "utf8") > maximumFrameBytes
-          || frames.length >= 1_002
-        ) throw new Error("WhatsApp projection session frame exceeded its bound");
-        let frame: unknown;
-        try {
-          frame = JSON.parse(line) as unknown;
-        } catch {
-          throw new Error("WhatsApp projection session frame was malformed");
-        }
-        if (canonicalJson(frame) !== line) {
-          throw new Error("WhatsApp projection session frame was not canonical");
-        }
-        frames.push(frame);
-      }
-      if (Buffer.byteLength(pending, "utf8") > maximumFrameBytes) {
-        throw new Error("WhatsApp projection session frame exceeded its bound");
-      }
+class CanonicalSessionFrameDecoder {
+  readonly #maximumFrameBytes: number;
+  readonly #onFrame: (frame: WhatsAppMessageExportSessionCanonicalFrame) => void;
+  #chunks: Buffer[] = [];
+  #pendingBytes = 0;
+  #frameCount = 0;
+
+  constructor(
+    maximumFrameBytes: number,
+    onFrame: (frame: WhatsAppMessageExportSessionCanonicalFrame) => void,
+  ) {
+    this.#maximumFrameBytes = maximumFrameBytes;
+    this.#onFrame = onFrame;
+  }
+
+  get frameCount(): number {
+    return this.#frameCount;
+  }
+
+  #append(bytes: Uint8Array): void {
+    if (bytes.byteLength === 0) return;
+    this.#pendingBytes += bytes.byteLength;
+    if (this.#pendingBytes + 1 > this.#maximumFrameBytes) {
+      throw new Error("WhatsApp projection session frame exceeded its bound");
     }
-    pending += decoder.decode();
-    if (pending.length !== 0) {
+    // Copy bounded pieces so replay may safely reuse its fixed read buffer.
+    this.#chunks.push(Buffer.from(bytes));
+  }
+
+  #finishLine(): void {
+    if (
+      this.#pendingBytes < 2
+      || this.#pendingBytes + 1 > this.#maximumFrameBytes
+      || this.#frameCount >= MESSAGE_EXPORT_SESSION_MAX_FRAMES
+    ) throw new Error("WhatsApp projection session frame exceeded its bound");
+    const bytes = this.#chunks.length === 1
+      ? this.#chunks[0]!
+      : Buffer.concat(this.#chunks, this.#pendingBytes);
+    this.#chunks = [];
+    this.#pendingBytes = 0;
+    let line: string;
+    try {
+      line = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+      throw new Error("WhatsApp projection session frame was malformed");
+    }
+    if (line.includes("\r")) {
+      throw new Error("WhatsApp projection session frame exceeded its bound");
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      throw new Error("WhatsApp projection session frame was malformed");
+    }
+    const canonical = canonicalJson(value);
+    if (canonical !== line || !Buffer.from(canonical, "utf8").equals(bytes)) {
+      throw new Error("WhatsApp projection session frame was not canonical");
+    }
+    this.#frameCount += 1;
+    this.#onFrame(Object.freeze({
+      index: this.#frameCount,
+      canonical,
+      value,
+    }));
+  }
+
+  push(bytes: Uint8Array): void {
+    let start = 0;
+    for (let index = 0; index < bytes.byteLength; index += 1) {
+      if (bytes[index] !== 0x0a) continue;
+      this.#append(bytes.subarray(start, index));
+      this.#finishLine();
+      start = index + 1;
+    }
+    this.#append(bytes.subarray(start));
+  }
+
+  finish(): void {
+    if (this.#pendingBytes !== 0 || this.#chunks.length !== 0) {
       throw new Error("WhatsApp projection session ended inside a frame");
     }
-    return Object.freeze(frames);
-  } finally {
-    reader.releaseLock();
   }
 }
 
+type MutableWhatsAppMessageExportSessionSpool = Readonly<{
+  handle: FileHandle;
+  capture: (
+    stream: ReadableStream<Uint8Array>,
+    maximumFrameBytes: number,
+    onFrame: ((frame: WhatsAppMessageExportSessionCanonicalFrame) => void) | undefined,
+  ) => Readonly<{ promise: Promise<void>; cancel: () => Promise<void> }>;
+  publicSpool: WhatsAppMessageExportSessionSpool;
+}>;
+
+function sameSpoolDirectory(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.uid === right.uid
+    && left.mode === right.mode
+    && left.birthtimeNs === right.birthtimeNs;
+}
+
+function assertPrivateSpoolDirectory(stats: BigIntStats): void {
+  const uid = process.getuid?.();
+  if (
+    uid === undefined
+    || !stats.isDirectory()
+    || stats.isSymbolicLink()
+    || stats.uid !== BigInt(uid)
+    || (stats.mode & 0o777n) !== BigInt(MESSAGE_EXPORT_SESSION_PRIVATE_DIRECTORY_MODE)
+  ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+}
+
+function assertPrivateSpoolFile(
+  stats: BigIntStats,
+  identity: Readonly<{ dev: bigint; ino: bigint }>,
+  expectedBytes?: number,
+): void {
+  const uid = process.getuid?.();
+  if (
+    !stats.isFile()
+    || stats.isSymbolicLink()
+    || uid === undefined
+    || stats.uid !== BigInt(uid)
+    || (stats.mode & 0o777n) !== BigInt(MESSAGE_EXPORT_SESSION_PRIVATE_FILE_MODE)
+    || stats.nlink !== 0n
+    || stats.dev !== identity.dev
+    || stats.ino !== identity.ino
+    || (expectedBytes !== undefined && stats.size !== BigInt(expectedBytes))
+  ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+}
+
+async function writeSpoolBytes(
+  handle: FileHandle,
+  bytes: Uint8Array,
+  position: number,
+): Promise<void> {
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const written = await handle.write(
+      bytes,
+      offset,
+      bytes.byteLength - offset,
+      position + offset,
+    );
+    if (written.bytesWritten < 1) {
+      throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    }
+    offset += written.bytesWritten;
+  }
+}
+
+async function createWhatsAppMessageExportSessionSpool(): Promise<
+  MutableWhatsAppMessageExportSessionSpool
+> {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "wrench-whatsapp-stdout-")));
+  const path = join(directory, "stdout.ndjson");
+  let handle: FileHandle | undefined;
+  let directoryHandle: FileHandle | undefined;
+  let cleanupDirectoryIdentity: BigIntStats | undefined;
+  try {
+    await chmod(directory, MESSAGE_EXPORT_SESSION_PRIVATE_DIRECTORY_MODE);
+    const directoryFlags = fsConstants.O_RDONLY
+      | fsConstants.O_NOFOLLOW
+      | (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0);
+    directoryHandle = await open(directory, directoryFlags);
+    const directoryIdentity = await directoryHandle.stat({ bigint: true });
+    cleanupDirectoryIdentity = directoryIdentity;
+    assertPrivateSpoolDirectory(directoryIdentity);
+    const directoryPathIdentity = await lstat(directory, { bigint: true });
+    assertPrivateSpoolDirectory(directoryPathIdentity);
+    if (!sameSpoolDirectory(directoryIdentity, directoryPathIdentity)) {
+      throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    }
+    const assertDirectoryBinding = async (): Promise<void> => {
+      const [descriptor, current] = await Promise.all([
+        directoryHandle!.stat({ bigint: true }),
+        lstat(directory, { bigint: true }),
+      ]);
+      assertPrivateSpoolDirectory(descriptor);
+      assertPrivateSpoolDirectory(current);
+      if (
+        !sameSpoolDirectory(directoryIdentity, descriptor)
+        || !sameSpoolDirectory(directoryIdentity, current)
+      ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    };
+    const uid = process.getuid?.();
+    if (uid === undefined) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    handle = await open(
+      path,
+      fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+      MESSAGE_EXPORT_SESSION_PRIVATE_FILE_MODE,
+    );
+    await handle.chmod(MESSAGE_EXPORT_SESSION_PRIVATE_FILE_MODE);
+    const linked = await handle.stat({ bigint: true });
+    const entry = await lstat(path, { bigint: true });
+    if (
+      !linked.isFile()
+      || linked.isSymbolicLink()
+      || linked.nlink !== 1n
+      || linked.dev !== entry.dev
+      || linked.ino !== entry.ino
+      || linked.uid !== BigInt(uid)
+      || (linked.mode & 0o777n) !== BigInt(MESSAGE_EXPORT_SESSION_PRIVATE_FILE_MODE)
+    ) throw new Error("WhatsApp projection session private spool file was invalid");
+    const fileIdentity = Object.freeze({ dev: linked.dev, ino: linked.ino });
+    await assertDirectoryBinding();
+    await unlink(path);
+    assertPrivateSpoolFile(await handle.stat({ bigint: true }), fileIdentity, 0);
+    await assertDirectoryBinding();
+
+    let sealed: Readonly<{
+      frameCount: number;
+      totalBytes: number;
+      stdoutSha256: string;
+      maximumFrameBytes: number;
+      metadata: BigIntStats;
+    }> | undefined;
+    let closed = false;
+    let replayStarted = false;
+    let replayActive = false;
+
+    const capture = (
+      stream: ReadableStream<Uint8Array>,
+      maximumFrameBytes: number,
+      onFrame: ((frame: WhatsAppMessageExportSessionCanonicalFrame) => void) | undefined,
+    ) => {
+      const reader = stream.getReader();
+      const digest = createHash("sha256");
+      const decoder = new CanonicalSessionFrameDecoder(
+        maximumFrameBytes,
+        onFrame ?? (() => undefined),
+      );
+      let totalBytes = 0;
+      const promise = (async (): Promise<void> => {
+        try {
+          for (;;) {
+            const item = await reader.read();
+            if (item.done) break;
+            const nextTotal = totalBytes + item.value.byteLength;
+            if (nextTotal > MESSAGE_EXPORT_SESSION_MAX_TOTAL_STDOUT_BYTES) {
+              throw new Error("WhatsApp projection session output exceeded its total bound");
+            }
+            await writeSpoolBytes(handle!, item.value, totalBytes);
+            digest.update(item.value);
+            decoder.push(item.value);
+            totalBytes = nextTotal;
+          }
+          decoder.finish();
+          await assertDirectoryBinding();
+          await handle!.sync();
+          const metadata = await handle!.stat({ bigint: true });
+          assertPrivateSpoolFile(metadata, fileIdentity, totalBytes);
+          sealed = Object.freeze({
+            frameCount: decoder.frameCount,
+            totalBytes,
+            stdoutSha256: digest.digest("hex"),
+            maximumFrameBytes,
+            metadata,
+          });
+        } finally {
+          reader.releaseLock();
+        }
+      })();
+      return Object.freeze({
+        promise,
+        cancel: async () => {
+          try { await reader.cancel(); } catch { /* settlement remains authoritative */ }
+        },
+      });
+    };
+
+    const replay = async function* <Value>(
+      project: (frame: WhatsAppMessageExportSessionCanonicalFrame) => Value,
+    ): AsyncGenerator<Value> {
+      if (closed || sealed === undefined || replayStarted || replayActive) {
+        throw new WhatsAppContactProjectionCleanupUnverifiedError();
+      }
+      replayStarted = true;
+      replayActive = true;
+      const expected = sealed;
+      const digest = createHash("sha256");
+      const decoded: WhatsAppMessageExportSessionCanonicalFrame[] = [];
+      const decoder = new CanonicalSessionFrameDecoder(
+        expected.maximumFrameBytes,
+        (frame) => decoded.push(frame),
+      );
+      const buffer = Buffer.allocUnsafe(MESSAGE_EXPORT_SESSION_SPOOL_CHUNK_BYTES);
+      let position = 0;
+      try {
+        await assertDirectoryBinding();
+        assertPrivateSpoolFile(await handle!.stat({ bigint: true }), fileIdentity, expected.totalBytes);
+        while (position < expected.totalBytes) {
+          const length = Math.min(buffer.byteLength, expected.totalBytes - position);
+          const item = await handle!.read(buffer, 0, length, position);
+          if (item.bytesRead < 1) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+          const bytes = buffer.subarray(0, item.bytesRead);
+          digest.update(bytes);
+          decoder.push(bytes);
+          position += item.bytesRead;
+          while (decoded.length > 0) yield project(decoded.shift()!);
+        }
+        decoder.finish();
+        if (
+          position !== expected.totalBytes
+          || decoder.frameCount !== expected.frameCount
+          || digest.digest("hex") !== expected.stdoutSha256
+        ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+        await assertDirectoryBinding();
+        const after = await handle!.stat({ bigint: true });
+        assertPrivateSpoolFile(after, fileIdentity, expected.totalBytes);
+        if (
+          after.mtimeNs !== expected.metadata.mtimeNs
+          || after.ctimeNs !== expected.metadata.ctimeNs
+        ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+      } finally {
+        replayActive = false;
+      }
+    };
+
+    const close = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      let failure: unknown;
+      try {
+        await handle!.close();
+      } catch (error) {
+        failure = error;
+      }
+      try {
+        const descriptor = await directoryHandle!.stat({ bigint: true });
+        const current = await lstat(directory, { bigint: true });
+        const entries = await readdir(directory);
+        assertPrivateSpoolDirectory(descriptor);
+        assertPrivateSpoolDirectory(current);
+        if (
+          !sameSpoolDirectory(directoryIdentity, descriptor)
+          || !sameSpoolDirectory(directoryIdentity, current)
+          || entries.length !== 0
+        ) {
+          throw new WhatsAppContactProjectionCleanupUnverifiedError();
+        }
+        await rmdir(directory);
+      } catch (error) {
+        failure = failure === undefined
+          ? error
+          : new AggregateError([failure, error], "WhatsApp projection spool cleanup failed");
+      }
+      try {
+        await directoryHandle!.close();
+      } catch (error) {
+        failure = failure === undefined
+          ? error
+          : new AggregateError([failure, error], "WhatsApp projection spool cleanup failed");
+      }
+      if (failure !== undefined) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    };
+
+    const publicSpool: WhatsAppMessageExportSessionSpool = Object.freeze({
+      get frameCount() { return sealed?.frameCount ?? 0; },
+      get totalBytes() { return sealed?.totalBytes ?? 0; },
+      get stdoutSha256() { return sealed?.stdoutSha256 ?? ""; },
+      replay,
+      close,
+    });
+    return Object.freeze({ handle, capture, publicSpool });
+  } catch (error) {
+    try { await handle?.close(); } catch { /* original creation failure remains primary */ }
+    let exactDirectory = false;
+    if (directoryHandle !== undefined && cleanupDirectoryIdentity !== undefined) {
+      try {
+        const [descriptor, current] = await Promise.all([
+          directoryHandle.stat({ bigint: true }),
+          lstat(directory, { bigint: true }),
+        ]);
+        exactDirectory = sameSpoolDirectory(cleanupDirectoryIdentity, descriptor)
+          && sameSpoolDirectory(cleanupDirectoryIdentity, current);
+      } catch {
+        exactDirectory = false;
+      }
+    }
+    if (exactDirectory) {
+      try { await unlink(path); } catch { /* it may already be anonymous */ }
+      try {
+        if ((await readdir(directory)).length === 0) await rmdir(directory);
+      } catch { /* empty private residue contains no stdout bytes */ }
+    }
+    try { await directoryHandle?.close(); } catch { /* original creation failure remains primary */ }
+    throw error;
+  }
+}
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  if (typeof timer === "object" && timer !== null && "unref" in timer) {
+    (timer as { unref: () => void }).unref();
+  }
+}
+
+function errnoCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String(error.code)
+    : undefined;
+}
+
 /**
- * Runs the one-process Message Like Me projection session. The returned frames
- * are withheld until stdout EOF, bounded stderr, and exact child exit all
- * settle. Any unproved reap is a durable cleanup-boundary failure.
+ * Runs the one-process Message Like Me projection session. Its anonymous
+ * parent-owned stdout spool is withheld until stdout EOF, bounded stderr,
+ * exact child exit, and process-group absence all settle. Any unproved reap is
+ * a durable cleanup-boundary failure.
  */
 export async function runWhatsAppMessageExportSessionHelperChild(
   invocation: WhatsAppContactProjectionHelperInvocation,
 ): Promise<WhatsAppMessageExportSessionHelperResult> {
   const isAborted = (): boolean => invocation.signal?.aborted === true;
   if (isAborted()) {
+    throw new Error("WhatsApp projection session helper was cancelled");
+  }
+  const spool = await createWhatsAppMessageExportSessionSpool();
+  if (isAborted()) {
+    await spool.publicSpool.close();
     throw new Error("WhatsApp projection session helper was cancelled");
   }
   let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -1482,47 +1898,58 @@ export async function runWhatsAppMessageExportSessionHelperChild(
       stderr: "pipe",
       detached: process.platform !== "win32",
     });
-  } catch {
-    throw new WhatsAppContactProjectionCleanupUnverifiedError();
+  } catch (error) {
+    try {
+      await spool.publicSpool.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "WhatsApp projection session spawn and spool cleanup both failed",
+      );
+    }
+    throw new Error("WhatsApp projection session helper could not start");
   }
 
+  let childExited = false;
   const signalChild = (signal: "SIGTERM" | "SIGKILL"): void => {
     if (process.platform !== "win32") {
       try {
         process.kill(-child.pid, signal);
         return;
       } catch (error) {
-        if (typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH") {
-          return;
-        }
+        if (errnoCode(error) === "ESRCH") return;
+        // Fall through to the exact child handle when group signalling is not
+        // available; child.exited and the post-join group probe remain proof.
       }
     }
     try { child.kill(signal); } catch { /* exact child.exited remains authoritative */ }
   };
   let terminationStarted = false;
   let forceKill: ReturnType<typeof setTimeout> | undefined;
+  let reapTimer: ReturnType<typeof setTimeout> | undefined;
+  let rejectCleanupDeadline: ((error: unknown) => void) | undefined;
+  let cleanupDeadlineExpired = false;
+  const cleanupDeadline = new Promise<never>((_resolve, reject) => {
+    rejectCleanupDeadline = reject;
+  });
   const terminate = (): void => {
     if (!terminationStarted) {
       terminationStarted = true;
       signalChild("SIGTERM");
+      forceKill = setTimeout(() => {
+        signalChild("SIGKILL");
+      }, CONTACT_PROJECTION_FORCE_KILL_DELAY_MS);
+      reapTimer = setTimeout(
+        () => {
+          cleanupDeadlineExpired = true;
+          rejectCleanupDeadline?.(new WhatsAppContactProjectionCleanupUnverifiedError());
+        },
+        CONTACT_PROJECTION_FORCE_KILL_DELAY_MS * 2,
+      );
+      unrefTimer(forceKill);
+      unrefTimer(reapTimer);
     }
-    forceKill ??= setTimeout(
-      () => signalChild("SIGKILL"),
-      CONTACT_PROJECTION_FORCE_KILL_DELAY_MS,
-    );
   };
-  try {
-    invocation.onSpawned?.(child.pid);
-  } catch (error) {
-    terminate();
-    const joined = await Promise.race([
-      child.exited.then(() => true, () => false),
-      Bun.sleep(CONTACT_PROJECTION_FORCE_KILL_DELAY_MS * 2).then(() => false),
-    ]);
-    if (!joined) throw new WhatsAppContactProjectionCleanupUnverifiedError();
-    throw error;
-  }
-
   let timedOut = false;
   let cancelled = false;
   const onAbort = (): void => {
@@ -1535,59 +1962,141 @@ export async function runWhatsAppMessageExportSessionHelperChild(
     timedOut = true;
     terminate();
   }, invocation.timeoutMs);
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  let reapTimer: ReturnType<typeof setTimeout> | undefined;
-  const cleanupDeadline = new Promise<never>((_resolve, reject) => {
-    deadlineTimer = setTimeout(() => {
-      terminate();
-      reapTimer = setTimeout(
-        () => reject(new WhatsAppContactProjectionCleanupUnverifiedError()),
-        CONTACT_PROJECTION_FORCE_KILL_DELAY_MS * 2,
-      );
-    }, invocation.timeoutMs);
-  });
+  unrefTimer(timeout);
   const guarded = <T>(promise: Promise<T>): Promise<T> => promise.catch((error: unknown) => {
     terminate();
     throw error;
   });
-  const stdin = guarded((async () => {
-    await child.stdin.write(invocation.stdin);
-    await child.stdin.end();
-  })());
-  const frames = guarded(readCanonicalSessionFrames(
+  const capture = spool.capture(
     child.stdout,
     invocation.maxOutputBytes,
-  ));
-  const stderr = guarded(readBoundedStream(child.stderr, invocation.maxStderrBytes));
+    invocation.onCanonicalFrame,
+  );
+  const frames = guarded(capture.promise);
+  const stderrRead = readBoundedStreamControlled(child.stderr, invocation.maxStderrBytes);
+  const stderr = guarded(stderrRead.promise);
+  const exited = child.exited.then(
+    (exitCode) => {
+      childExited = true;
+      return exitCode;
+    },
+    (error: unknown) => {
+      terminate();
+      throw error;
+    },
+  );
+  let callbackFailure: unknown;
+  try {
+    invocation.onSpawned?.(child.pid);
+  } catch (error) {
+    callbackFailure = error;
+    terminate();
+  }
+  const stdin = callbackFailure === undefined
+    ? guarded((async () => {
+        await child.stdin.write(invocation.stdin);
+        await child.stdin.end();
+      })())
+    : guarded((async () => {
+        await child.stdin.end();
+      })());
+
+  const processGroupIsAbsent = (): boolean => {
+    if (process.platform === "win32") return true;
+    try {
+      process.kill(-child.pid, 0);
+      return false;
+    } catch (error) {
+      if (errnoCode(error) === "ESRCH") return true;
+      throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    }
+  };
+  let unexpectedDescendantObserved = false;
+  const joinProcessGroup = async (): Promise<void> => {
+    if (processGroupIsAbsent()) return;
+    unexpectedDescendantObserved = true;
+    terminate();
+    for (;;) {
+      if (cleanupDeadlineExpired) {
+        throw new WhatsAppContactProjectionCleanupUnverifiedError();
+      }
+      if (processGroupIsAbsent()) return;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+  };
+  let transferred = false;
   try {
     const settled = await Promise.race([
-      Promise.allSettled([stdin, frames, stderr, child.exited]),
+      Promise.allSettled([stdin, frames, stderr, exited]),
       cleanupDeadline,
     ]);
     const [stdinResult, framesResult, stderrResult, exitResult] = settled;
+    await Promise.race([joinProcessGroup(), cleanupDeadline]);
     if (exitResult.status === "rejected") {
       throw new WhatsAppContactProjectionCleanupUnverifiedError();
     }
+    if (unexpectedDescendantObserved) {
+      throw new Error("WhatsApp projection session helper left an unexpected descendant");
+    }
+    if (callbackFailure !== undefined) throw callbackFailure;
+    if (cancelled) throw new Error("WhatsApp projection session helper was cancelled");
+    if (timedOut) throw new Error("WhatsApp projection session helper timed out");
     if (
       stdinResult.status === "rejected"
       || framesResult.status === "rejected"
       || stderrResult.status === "rejected"
     ) {
-      throw new Error("WhatsApp projection session stream failed within its bound");
+      const failure = framesResult.status === "rejected"
+        ? framesResult.reason
+        : stderrResult.status === "rejected"
+          ? stderrResult.reason
+          : stdinResult.status === "rejected"
+            ? stdinResult.reason
+            : undefined;
+      throw failure instanceof Error
+        ? failure
+        : new Error("WhatsApp projection session stream failed within its bound");
     }
-    if (cancelled) throw new Error("WhatsApp projection session helper was cancelled");
-    if (timedOut) throw new Error("WhatsApp projection session helper timed out");
+    transferred = true;
     return Object.freeze({
       exitCode: exitResult.value,
-      frames: framesResult.value,
+      spool: spool.publicSpool,
       stderr: stderrResult.value,
     });
+  } catch (error) {
+    const detach = (): void => {
+      void capture.cancel();
+      void stderrRead.cancel();
+      void Promise.resolve(child.stdin.end()).catch(() => undefined);
+      if (!childExited) child.unref();
+    };
+    detach();
+    if (cleanupDeadlineExpired) {
+      void spool.publicSpool.close().catch(() => undefined);
+      throw error;
+    }
+    await Promise.allSettled([
+      capture.promise,
+      stderrRead.promise,
+      child.stdin.end(),
+    ]);
+    try {
+      await spool.publicSpool.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "WhatsApp projection session operation and spool cleanup both failed",
+      );
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
-    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
     if (reapTimer !== undefined) clearTimeout(reapTimer);
     if (forceKill !== undefined) clearTimeout(forceKill);
     invocation.signal?.removeEventListener("abort", onAbort);
+    if (!transferred && !childExited) child.unref();
   }
 }
 
@@ -1601,7 +2110,7 @@ export function whatsappContactProjectionCleanupBarrier(
   return operation.then(
     () => undefined,
     (error: unknown) => {
-      if (error instanceof WhatsAppContactProjectionCleanupUnverifiedError) {
+      if (containsWhatsAppContactProjectionCleanupUnverified(error)) {
         throw error;
       }
     },

@@ -17,6 +17,7 @@ import {
 
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES = 8 * 1024;
+const MAX_V2_RECORDS = 500_000;
 const PROCESS_TIMEOUT_MS = 6 * 60 * 60 * 1_000 + 60_000;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
 
@@ -208,6 +209,7 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
     nonNegative(counts[kind], `receipt.counts.${kind}`),
   ])) as Record<(typeof countKinds)[number], number>;
   const observed = observedFrom !== null;
+  const totalRecords = countKinds.reduce((total, kind) => total + parsedCounts[kind], 0);
   if (
     parsedCounts.account !== 1
     || parsedCounts.participant < 1
@@ -216,8 +218,10 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
     || (parsedCounts.message > 0) !== observed
     || (parsedCounts.conversation > 0) !== observed
     || parsedCounts.conversation > parsedCounts.message
-    || parsedCounts.message > 500_000
+    || parsedCounts.message > MAX_V2_RECORDS
     || parsedCounts.participant > parsedCounts.message + 1
+    || !Number.isSafeInteger(totalRecords)
+    || totalRecords > MAX_V2_RECORDS
     || (warnings.includes("message-payload-purged") && parsedCounts.message === 0)
   ) return fail("receipt counts contradict the fixed producer");
   const output = record(root.output, "receipt.output");
