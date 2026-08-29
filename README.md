@@ -21,13 +21,80 @@ Bring the model, planner, tool loop, approval interface, and application shell
 you prefer. Wrench supplies precise web capabilities with local custody and
 explicit evidence.
 
+[Install](#install) · [npm package](https://www.npmjs.com/package/@hraness/wrench) · [Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md) · [Local CLI transport guide](docs/local-cli-providers.md)
+
+## Why Wrench is different
+
+- **Intent over mechanism.** Agents receive labeled operations, not credentials,
+  selectors, scripts, caller-selected endpoints, or unrestricted browser access.
+- **Exact identity.** Authenticated calls bind the provider, origin, transport,
+  account, contract, and implementation instead of relying on ambient state.
+- **Visible drift.** A changed origin, account proof, status, field, or response
+  shape returns to `capture-required` rather than guessing or changing tools.
+- **Local custody.** Archives remain inspectable and exact provider snapshots
+  remain encrypted. Verified cached reads can work without a provider roundtrip.
+- **Honest mutations.** Consequential writes require an exact preview and durable
+  dispatch evidence. An indeterminate write is reconciled and never blindly retried.
+- **Content-bound trust.** Portable plugin approval applies to one verified
+  content-addressed bundle, so changed code requires a new trust decision.
+
+Wrench complements browser automation, direct API clients, MCP, and agent
+frameworks. Those tools own interfaces, transports, models, and planning. Wrench
+owns the narrow capability boundary that can sit beneath them.
+
+## Install
+
+This README is bound to the package version in this source tree. Its exact npm,
+tag, and Agent Skill coordinates can become individually reachable while a
+release is being staged. Treat them as one completed, supported public release
+only after the workflow has verified the registry package and created the
+matching immutable GitHub Release. The release-bound production site identifies
+the latest release that completed every gate.
+
+Install the single Wrench Agent Skill with either runner:
+
+```sh
+npx skills add hraness/wrench#v0.16.2
+# or
+bunx skills add hraness/wrench#v0.16.2
+```
+
+The skill teaches Codex, Claude Code, Cursor, and other compatible coding
+agents when to use Wrench, how to preserve its trust boundaries, and how to
+install the CLI if it is missing. Start a new agent session after installation.
+
+After the matching immutable Release exists, install this exact version from
+npm:
+
+```sh
+bun add --global @hraness/wrench@0.16.2
+wrench adapter sync-bundled --json
+wrench doctor
+wrench read https://example.com/article
+```
+
+Wrench requires Bun 1.3.14. It runs on macOS and Linux. `wrench doctor`
+reports capture, media, authentication, provider, plugin, and durable-recovery
+readiness. Provider-specific commands remain unavailable until their exact
+local dependency and auth contracts are ready.
+
+`wrench read` returns a readable page result without saving it. Pass a URL
+directly to save durable Markdown in a configured knowledge base, then inspect
+the exact operations installed on the machine:
+
 ```sh
 wrench https://example.com/article
 wrench capabilities
 wrench plugin list
 ```
 
-[Install](#install) · [npm package](https://www.npmjs.com/package/@hraness/wrench) · [Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md) · [Local CLI transport guide](docs/local-cli-providers.md)
+`wrench adapter sync-bundled` atomically installs the reviewed data manifests
+shipped by that exact package version. It upgrades only an exact current or
+archived bundled baseline and preserves any independently modified install.
+
+The public manifest projects each closure-attested package as an exact runtime
+dependency. Standalone validation installs without the repository lock, then
+verifies the resolved closure versions and reviewed entrypoint hashes.
 
 ## What Wrench does
 
@@ -83,67 +150,22 @@ same-turn send request.
 Read the focused [Beeper guide](https://wrench.rip/providers/beeper/) for setup,
 version identities, action boundaries, export workflows, and exclusions.
 
-## Why Wrench is different
+## Important limitations
 
-- **Intent over mechanism.** Agents receive labeled operations, not credentials,
-  selectors, scripts, caller-selected endpoints, or unrestricted browser access.
-- **Exact identity.** Authenticated calls bind the provider, origin, transport,
-  account, contract, and implementation instead of relying on ambient state.
-- **Visible drift.** A changed origin, account proof, status, field, or response
-  shape returns to `capture-required` rather than guessing or changing tools.
-- **Local custody.** Archives remain inspectable and exact provider snapshots
-  remain encrypted. Verified cached reads can work without a provider roundtrip.
-- **Honest mutations.** Consequential writes require an exact preview and durable
-  dispatch evidence. An indeterminate write is reconciled and never blindly retried.
-- **Content-bound trust.** Portable plugin approval applies to one verified
-  content-addressed bundle, so changed code requires a new trust decision.
+- Wrench is not an AI agent, hosted API, model, planner, approval interface, or
+  application shell. The caller owns those layers.
+- Authenticated provider operations stay unavailable until their exact local
+  dependency, account binding, and installed contract are ready.
+- Media acquisition accepts one authorized, accessible, finite, non-DRM item.
+  It rejects playlists, live streams, affirmative DRM, unsupported
+  authentication, and access-control bypasses.
+- Source plugins are trusted in-process code. Portable-plugin process
+  separation contains ordinary failures and is not a hostile-code sandbox.
+- Consequential writes require an exact preview and durable dispatch evidence.
+  A partial or indeterminate dispatch remains unsettled and is not retried.
 
-Wrench complements browser automation, direct API clients, MCP, and agent
-frameworks. Those tools own interfaces, transports, models, and planning. Wrench
-owns the narrow capability boundary that can sit beneath them.
-
-## Install
-
-This README is bound to the package version in this source tree. Its exact npm,
-tag, and Agent Skill coordinates can become individually reachable while a
-release is being staged. Treat them as one completed, supported public release
-only after the workflow has verified the registry package and created the
-matching immutable GitHub Release. The release-bound production site identifies
-the latest release that completed every gate.
-
-Install the single Wrench Agent Skill with either runner:
-
-```sh
-npx skills add hraness/wrench#v0.16.2
-# or
-bunx skills add hraness/wrench#v0.16.2
-```
-
-The skill teaches Codex, Claude Code, Cursor, and other compatible coding
-agents when to use Wrench, how to preserve its trust boundaries, and how to
-install the CLI if it is missing. Start a new agent session after installation.
-
-After the matching immutable Release exists, install this exact version from
-npm:
-
-```sh
-bun add --global @hraness/wrench@0.16.2
-wrench adapter sync-bundled --json
-wrench doctor
-```
-
-Wrench requires Bun 1.3.14. It runs on macOS and Linux. `wrench doctor`
-reports capture, media, authentication, provider, plugin, and durable-recovery
-readiness. Provider-specific commands remain unavailable until their exact
-local dependency and auth contracts are ready.
-
-`wrench adapter sync-bundled` atomically installs the reviewed data manifests
-shipped by that exact package version. It upgrades only an exact current or
-archived bundled baseline and preserves any independently modified install.
-
-The public manifest projects each closure-attested package as an exact runtime
-dependency. Standalone validation installs without the repository lock, then
-verifies the resolved closure versions and reviewed entrypoint hashes.
+Read [SECURITY.md](SECURITY.md) for the complete trust boundary and
+[`DISCLOSURE`](DISCLOSURE) for the authorization and dual-use boundary.
 
 ## SDK and code mode
 
@@ -1151,7 +1173,7 @@ platforms while preserving per-provider attachment limits and at-most-once
 dispatch evidence. Packages built from this source carry the same consolidated
 skill as the skills CLI.
 
-## Risk and confirmation
+## Trust, risk, and confirmation
 
 - R1 is a reviewed read with no intended remote mutation.
 - R2 is one bounded, normally reversible change.
@@ -1194,7 +1216,7 @@ directs the operator to `wrench doctor`, the exact predecessor build, or manual
 evidence review. Runtime loading still verifies the current exact source,
 dependency, and execution closure separately.
 
-## Develop
+## Verification
 
 ```sh
 git clone https://github.com/hraness/wrench.git

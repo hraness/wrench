@@ -121,6 +121,7 @@ describe("wrench.rip static site", () => {
       readFile(join(repositoryRoot, "middleware.ts"), "utf8"),
     ]);
     const html = pages[0]!.html;
+    const searchableHtml = html.replace(/\s+/gu, " ");
     const cssAsset = /<link rel="stylesheet" href="([^"?]+)">/u.exec(html)?.[1];
     expect(cssAsset).toMatch(/^\/assets\/styles-[a-f0-9]{12}\.css$/u);
     const builtCss = await readFile(join(websiteRoot, "dist", cssAsset!.slice(1)), "utf8");
@@ -213,6 +214,10 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/paypal-grapheneos-attestation/"');
     expect(html).toContain('href="/providers/beeper/"');
     expect(html).toContain("Give your coding agent bounded access to the web.");
+    expect(searchableHtml).toContain(
+      "An agent asks for a named outcome; Wrench binds it to one reviewed provider",
+    );
+    expect(html).toContain("Use <code>wrench read https://example.com/article</code> as the smallest first run");
     expect(html).toContain("Work with the services you already use.");
     expect(html).toContain('class="wordmark" href="/">Wrench</a>');
     expect(html).not.toMatch(/hero-field|hero-orbit|hero-glyph/u);
@@ -892,6 +897,22 @@ describe("wrench.rip static site", () => {
       "[built-in Beeper Desktop MCP server](https://developers.beeper.com/desktop-api/mcp/)",
     );
     expect(readme).not.toContain("https://github.com/beeper/desktop-api-mcp");
+
+    const readerPath = [
+      "## Why Wrench is different",
+      "## Install",
+      "## What Wrench does",
+      "## Built-in provider catalog",
+      "## Important limitations",
+      "## SDK and code mode",
+      "## Trust, risk, and confirmation",
+      "## Verification",
+    ].map((heading) => readme.indexOf(heading));
+    expect(readerPath.every((position) => position >= 0)).toBe(true);
+    expect(readerPath).toEqual([...readerPath].sort((left, right) => left - right));
+    expect(readme.indexOf("wrench read https://example.com/article")).toBeLessThan(
+      readme.indexOf("## SDK and code mode"),
+    );
   });
 
   test("ships a correctly sized original social card", async () => {

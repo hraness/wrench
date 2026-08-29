@@ -63,7 +63,9 @@
           <p class="hero-explainer">
             Wrench is a local CLI and TypeScript SDK for capturing public pages,
             preserving finite media, and using supported actions in connected
-            services. You bring the model and interface.
+            services. You bring the model and interface. An agent asks for a
+            named outcome; Wrench binds it to one reviewed provider, transport,
+            account realm, contract, implementation, and risk level.
           </p>
           <div class="action-row">
             <a class="button button-primary" href="#start">Install Wrench</a>
@@ -119,7 +121,7 @@
               <li><span aria-hidden="true">01</span><code>{{WRENCH_INSTALL_COMMAND}}</code></li>
               <li><span aria-hidden="true">02</span><code>wrench doctor</code></li>
             </ol>
-            <p>Install the CLI and SDK from the <a href="{{WRENCH_NPM_PACKAGE}}"><code>@hraness/wrench</code> package on npm</a>, then run <code>wrench doctor</code> in the project where your agent will work.</p>
+            <p>Install the CLI and SDK from the <a href="{{WRENCH_NPM_PACKAGE}}"><code>@hraness/wrench</code> package on npm</a>, then run <code>wrench doctor</code> in the project where your agent will work. Use <code>wrench read https://example.com/article</code> as the smallest first run; it returns readable page content without saving it.</p>
           </div>
         </div>
       </section>
