@@ -560,8 +560,32 @@ describe("wrench.rip static site", () => {
     }
     expect(descriptions.size).toBe(PUBLIC_PAGES.length);
 
-    expect(html.match(/class="[^"]*\beditorial-card\b[^"]*"/gu)).toHaveLength(editorialImages.length);
-    for (const image of editorialImages) {
+    const editorialCards = html.match(
+      /<article class="card editorial-card">[\s\S]*?<\/article>/gu,
+    ) ?? [];
+    expect(editorialCards).toHaveLength(editorialImages.length);
+    for (const [index, image] of editorialImages.entries()) {
+      const card = editorialCards[index] ?? "";
+      expect(card).toMatch(
+        /^<article class="card editorial-card">\s*<a href="[^"]+">[\s\S]*<\/a>\s*<\/article>$/u,
+      );
+      expect(card.match(/<a\b/gu)).toHaveLength(1);
+      expect(card).toContain(`<a href="${image.canonicalPath}">`);
+      expect(card.match(/<h[1-6]\b/gu)).toHaveLength(1);
+      expect(card.match(/<h3\b/gu)).toHaveLength(1);
+      expect(card.match(/<\/h3>/gu)).toHaveLength(1);
+      expect(card).toContain(`<h3>${image.cardTitle}</h3>`);
+      expect(card).toContain(
+        `<p class="editorial-card-description">${image.cardDescription}</p>`,
+      );
+      expect(card).toMatch(/<\/h3>\s*<p class="editorial-card-description">/u);
+      expect(card).not.toContain(`</strong>${image.cardDescription}`);
+      expect(card).not.toMatch(/<\/h3>[^<\s]/u);
+      const linkEnd = card.lastIndexOf("</a>");
+      expect(card.indexOf("<img ")).toBeLessThan(linkEnd);
+      expect(card.indexOf("<h3>")).toBeLessThan(linkEnd);
+      expect(card.indexOf('<p class="editorial-card-description">')).toBeLessThan(linkEnd);
+
       const page = pages.find(({ definition }) =>
         definition.canonicalPath === image.canonicalPath);
       expect(page).toBeDefined();

@@ -313,7 +313,10 @@ function renderEditorialCards(): string {
                 <img alt="" decoding="async" height="${image.height}" loading="lazy"
                   sizes="(max-width: 44rem) calc(100vw - 2rem), 33vw" src="${image.src}"
                   srcset="${editorialImageSrcSet(image)}" width="${image.width}">
-                <span><strong>${escapeHtml(image.cardTitle)}</strong>${escapeHtml(image.cardDescription)}</span>
+                <div class="editorial-card-copy">
+                  <h3>${escapeHtml(image.cardTitle)}</h3>
+                  <p class="editorial-card-description">${escapeHtml(image.cardDescription)}</p>
+                </div>
               </a>
             </article>`).join("\n");
 }

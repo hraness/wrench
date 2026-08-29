@@ -1560,24 +1560,27 @@ code:not(pre code) {
   width: 100%;
 }
 
-.editorial-card a > span {
+.editorial-card-copy {
   color: var(--muted);
   display: block;
   line-height: 1.55;
   padding: 1.15rem 1.25rem 1.35rem;
 }
 
-.editorial-card strong {
+.editorial-card h3 {
   color: var(--foreground);
-  display: block;
   font-family: var(--font-serif);
   font-size: 1.35rem;
   font-weight: 400;
   line-height: 1.08;
-  margin-bottom: 0.65rem;
+  margin: 0 0 0.65rem;
 }
 
-.editorial-card a:hover strong {
+.editorial-card-description {
+  margin: 0;
+}
+
+.editorial-card a:hover h3 {
   color: var(--accent);
 }
 
