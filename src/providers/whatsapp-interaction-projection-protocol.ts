@@ -1,3 +1,5 @@
+import { types as nodeTypes } from "node:util";
+
 export const WHATSAPP_INTERACTION_PROJECTION_PROTOCOL_VERSION = 1 as const;
 export const WHATSAPP_INTERACTION_PROJECTION_MAX_LIMIT = 1_000;
 export const WHATSAPP_INTERACTION_PROJECTION_MAX_STDIN_BYTES = 8 * 1024;
@@ -107,6 +109,7 @@ function record(value: unknown, label: string): JsonRecord {
     typeof value !== "object"
     || value === null
     || Array.isArray(value)
+    || nodeTypes.isProxy(value)
     || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
   ) return fail(label);
   const descriptors = Object.getOwnPropertyDescriptors(value);
@@ -118,6 +121,33 @@ function record(value: unknown, label: string): JsonRecord {
     }
   }
   return value as JsonRecord;
+}
+
+function denseArray(value: unknown, label: string, maximum: number): readonly unknown[] {
+  if (
+    !Array.isArray(value)
+    || nodeTypes.isProxy(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+    || value.length > maximum
+  ) return fail(label);
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || keys.some((key) => typeof key !== "string")) {
+    return fail(label);
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    lengthDescriptor === undefined
+    || lengthDescriptor.enumerable
+    || !("value" in lengthDescriptor)
+    || lengthDescriptor.value !== value.length
+  ) return fail(label);
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+      return fail(label);
+    }
+  }
+  return value;
 }
 
 function exactKeys(value: JsonRecord, expected: readonly string[], label: string): void {
@@ -153,6 +183,22 @@ function accountSubject(value: unknown): string {
     return fail("accountSubject");
   }
   return value;
+}
+
+function legacyInteractionAccountSubjectJid(subject: string): string {
+  const match = /^whatsapp:(pn|lid):([0-9]+)$/u.exec(subject);
+  if (match?.[1] === undefined || match[2] === undefined) return fail("accountSubject");
+  return match[1] === "pn"
+    ? `${match[2]}@s.whatsapp.net`
+    : `${match[2]}@lid`;
+}
+
+function legacyInteractionParticipantJid(value: string): string {
+  const match = /^([0-9]{5,32})(?::[0-9]{1,5})?@(s\.whatsapp\.net|lid)$/u.exec(value);
+  if (match?.[1] === undefined || match[2] === undefined) {
+    return fail("response.interactions sender direction");
+  }
+  return `${match[1]}@${match[2]}`;
 }
 
 function jid(
@@ -234,11 +280,17 @@ function interaction(value: unknown, label: string): WhatsAppInteractionProjecti
     || typeof parsed.chatKind !== "string"
     || !CHAT_KINDS.has(parsed.chatKind)
   ) fail(label);
+  const chatJid = jid(parsed.chatJid, `${label}.chatJid`)! as string;
+  const senderJid = jid(parsed.senderJid, `${label}.senderJid`, true, true);
+  if (
+    (parsed.chatKind === "dm" && !chatJid.endsWith("@s.whatsapp.net") && !chatJid.endsWith("@lid"))
+    || (parsed.chatKind === "group" && !chatJid.endsWith("@g.us"))
+  ) fail(`${label}.chatKind`);
   return Object.freeze({
     rowid,
-    chatJid: jid(parsed.chatJid, `${label}.chatJid`)! as string,
+    chatJid,
     messageId,
-    senderJid: jid(parsed.senderJid, `${label}.senderJid`, true, true),
+    senderJid,
     timestamp: timestamp(parsed.timestamp, `${label}.timestamp`),
     fromMe: parsed.fromMe,
     chatKind: parsed.chatKind as WhatsAppInteractionProjectionItem["chatKind"],
@@ -250,7 +302,7 @@ export function parseWhatsAppInteractionProjectionResponse(
   request?: Pick<
     WhatsAppInteractionProjectionRequest,
     "cursor" | "cursorAnchor" | "limit" | "messageStoreIdentity"
-  >,
+  > & Partial<Pick<WhatsAppInteractionProjectionRequest, "accountSubject">>,
 ): WhatsAppInteractionProjectionResponse {
   const parsed = record(value, "response");
   if (parsed.status === "failed") {
@@ -273,10 +325,13 @@ export function parseWhatsAppInteractionProjectionResponse(
   if (
     parsed.schemaVersion !== WHATSAPP_INTERACTION_PROJECTION_PROTOCOL_VERSION
     || parsed.status !== "succeeded"
-    || !Array.isArray(parsed.interactions)
-    || parsed.interactions.length > WHATSAPP_INTERACTION_PROJECTION_MAX_LIMIT
     || typeof parsed.localInsertPageComplete !== "boolean"
   ) fail("response");
+  const rawInteractions = denseArray(
+    parsed.interactions,
+    "response.interactions",
+    WHATSAPP_INTERACTION_PROJECTION_MAX_LIMIT,
+  );
   const projectionGeneration = record(
     parsed.projectionGeneration,
     "response.projectionGeneration",
@@ -296,11 +351,24 @@ export function parseWhatsAppInteractionProjectionResponse(
         || messageStoreIdentity.ino !== request.messageStoreIdentity.ino))
   ) fail("response.projectionGeneration");
   if (request !== undefined && (
-    parsed.interactions.length > request.limit
-    || (!parsed.localInsertPageComplete && parsed.interactions.length !== request.limit)
+    rawInteractions.length > request.limit
+    || (!parsed.localInsertPageComplete && rawInteractions.length !== request.limit)
   )) fail("response.interactions");
-  const interactions = parsed.interactions.map((item, index) =>
+  const interactions = rawInteractions.map((item, index) =>
     interaction(item, `response.interactions[${index}]`));
+  if (request?.accountSubject !== undefined) {
+    const selfJid = legacyInteractionAccountSubjectJid(request.accountSubject);
+    for (const item of interactions) {
+      if (item.chatKind !== "dm" && item.chatKind !== "group") continue;
+      const senderJid = item.senderJid === null
+        ? null
+        : legacyInteractionParticipantJid(item.senderJid);
+      const valid = item.chatKind === "dm"
+        ? senderJid === null || senderJid === (item.fromMe ? selfJid : item.chatJid)
+        : senderJid === null || (item.fromMe ? senderJid === selfJid : senderJid !== selfJid);
+      if (!valid) fail("response.interactions sender direction");
+    }
+  }
   for (let index = 0; index < interactions.length; index += 1) {
     const previous = index === 0 ? request?.cursor : interactions[index - 1]?.rowid;
     if (previous !== undefined && BigInt(interactions[index]!.rowid) <= BigInt(previous)) {

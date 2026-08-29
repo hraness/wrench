@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import type { WrenchAuth } from "./auth";
 import { sha256 } from "./canonical-json";
-import { isCanonicalWhatsAppAccountSubject } from "./providers/whatsapp-account-identity";
+import {
+  canonicalWhatsAppAccountSubjectJid,
+  canonicalWhatsAppParticipantJid,
+  isCanonicalWhatsAppAccountSubject,
+} from "./providers/whatsapp-account-identity";
 import {
   runWhatsAppContactProjectionHelperChild,
   validateWhatsAppStoreDirectory,
@@ -100,22 +104,37 @@ function requireAuth(value: WrenchAuth): WhatsAppAuth & Readonly<{ subject: stri
   return value as WhatsAppAuth & Readonly<{ subject: string }>;
 }
 
-function selfJid(subject: string): string {
-  const match = /^whatsapp:(pn|lid):([0-9]+)$/u.exec(subject);
-  if (match?.[1] === "pn") return `${match[2]}@s.whatsapp.net`;
-  if (match?.[1] === "lid") return `${match[2]}@lid`;
-  return fail("bound account subject is malformed");
-}
-
-function canonicalParticipantJid(value: string): string {
-  const match = /^([1-9][0-9]{4,19})(?::[0-9]{1,5})?@(s\.whatsapp\.net|lid)$/u.exec(value);
-  if (match?.[1] === undefined || match[2] === undefined) {
-    return fail("message sender is not a canonical WhatsApp participant JID");
+function senderJid(
+  item: WhatsAppMessageExportProjectionItem,
+  accountJid: string,
+  directPeer: string | null,
+): string | null {
+  const explicit = item.senderJid === null
+    ? null
+    : canonicalWhatsAppParticipantJid(item.senderJid);
+  if (item.chatKind === "dm") {
+    if (directPeer === null) return fail("direct conversation peer is missing");
+    if (item.fromMe) {
+      if (explicit !== null && explicit !== accountJid) {
+        return fail("outgoing direct sender does not match the bound account");
+      }
+      return accountJid;
+    }
+    if (explicit !== null && explicit !== directPeer) {
+      return fail("incoming direct sender does not match the exact peer");
+    }
+    return explicit ?? directPeer;
   }
-  if (match[2] === "s.whatsapp.net" && match[1].length > 15) {
-    return fail("message sender is not a canonical WhatsApp participant JID");
+  if (item.fromMe) {
+    if (explicit !== null && explicit !== accountJid) {
+      return fail("outgoing group sender does not match the bound account");
+    }
+    return accountJid;
   }
-  return `${match[1]}@${match[2]}`;
+  if (explicit === accountJid) {
+    return fail("incoming group sender cannot be the bound account");
+  }
+  return explicit;
 }
 
 function localId(kind: string, ...coordinates: readonly string[]): string {
@@ -246,7 +265,7 @@ export function createWhatsAppMessageLikeMeSource(
   request: WhatsAppMessageLikeMeSourceRequest,
 ): WhatsAppMessageLikeMeExportSource {
   const auth = requireAuth(request.auth);
-  const accountJid = selfJid(auth.subject);
+  const accountJid = canonicalWhatsAppAccountSubjectJid(auth.subject);
   const accountId = localId("account", accountJid);
   const selfParticipantId = participantId(accountJid, accountJid);
   let consumed = false;
@@ -350,7 +369,7 @@ export function createWhatsAppMessageLikeMeSource(
         messageRows += 1;
         if (
           item.chatKind === "dm"
-          && canonicalParticipantJid(item.chatJid) === accountJid
+          && canonicalWhatsAppParticipantJid(item.chatJid) === accountJid
         ) {
           excludedSelfChatRows += 1;
           continue;
@@ -376,26 +395,24 @@ export function createWhatsAppMessageLikeMeSource(
           if (item.timestamp < conversation.startedAt) conversation.startedAt = item.timestamp;
           if (item.timestamp > conversation.lastMessageAt) conversation.lastMessageAt = item.timestamp;
         }
-        const directPeer = item.chatKind === "dm" ? canonicalParticipantJid(item.chatJid) : null;
+        const directPeer = item.chatKind === "dm"
+          ? canonicalWhatsAppParticipantJid(item.chatJid)
+          : null;
         if (directPeer !== null) {
           conversation.participantJids.add(directPeer);
           if (!participants.has(directPeer)) {
             participants.set(directPeer, { jid: directPeer, displayName: item.chatName, isSelf: false });
           }
         }
-        const senderJid = item.fromMe
-          ? accountJid
-          : item.senderJid === null
-            ? directPeer
-            : canonicalParticipantJid(item.senderJid);
-        if (senderJid !== null) {
-          conversation.participantJids.add(senderJid);
-          const current = participants.get(senderJid);
+        const resolvedSenderJid = senderJid(item, accountJid, directPeer);
+        if (resolvedSenderJid !== null) {
+          conversation.participantJids.add(resolvedSenderJid);
+          const current = participants.get(resolvedSenderJid);
           if (current === undefined) {
-            participants.set(senderJid, {
-              jid: senderJid,
+            participants.set(resolvedSenderJid, {
+              jid: resolvedSenderJid,
               displayName: item.senderName,
-              isSelf: senderJid === accountJid,
+              isSelf: resolvedSenderJid === accountJid,
             });
           } else current.displayName ??= item.senderName;
         }
@@ -409,7 +426,7 @@ export function createWhatsAppMessageLikeMeSource(
             skippedReactionRows += 1;
             continue;
           }
-          if (senderJid === null) {
+          if (resolvedSenderJid === null) {
             unprovenReactionActorRows += 1;
             continue;
           }
@@ -422,7 +439,7 @@ export function createWhatsAppMessageLikeMeSource(
             provenance: provenance(providerId, accountJid, observedAt, null),
             messageId: null,
             messageProviderId: targetProviderId,
-            participantId: participantId(accountJid, senderJid),
+            participantId: participantId(accountJid, resolvedSenderJid),
             body: item.reactionEmoji,
             reactedAt: item.timestamp,
             state: "active",
@@ -454,7 +471,9 @@ export function createWhatsAppMessageLikeMeSource(
             item.editedAt ?? item.deletedAt ?? item.payloadPurgedAt,
           ),
           conversationId: localId("conversation", accountJid, item.chatJid),
-          senderParticipantId: senderJid === null ? null : participantId(accountJid, senderJid),
+          senderParticipantId: resolvedSenderJid === null
+            ? null
+            : participantId(accountJid, resolvedSenderJid),
           direction: item.fromMe ? "outgoing" : "incoming",
           sentAt: item.timestamp,
           sortKey: item.rowid.padStart(19, "0"),
@@ -519,7 +538,7 @@ export function createWhatsAppMessageLikeMeSource(
       ...(unprovenReactionActorRows > 0 ? ["reaction-actor-unproven"] : []),
       ...(excludedSelfChatRows > 0 ? ["self-chat-excluded"] : []),
       ...(payloadPurgedRows > 0 ? ["message-payload-purged"] : []),
-      ...(systemChatExcluded ? ["system-chat-excluded"] : []),
+      ...(systemChatExcluded ? ["non-conversation-chats-excluded"] : []),
     ]);
     completion = Object.freeze({
       completeness: Object.freeze({

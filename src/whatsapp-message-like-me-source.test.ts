@@ -246,7 +246,7 @@ describe("WhatsApp Message Like Me source mapping", () => {
     }
   });
 
-  test("reports a categorical warning when the fixed system chat is excluded", async () => {
+  test("reports a categorical warning when system, status, broadcast, or newsletter chats are excluded", async () => {
     const path = privateStore();
     try {
       const result = await collect(
@@ -256,7 +256,7 @@ describe("WhatsApp Message Like Me source mapping", () => {
         true,
       );
       expect(result.completion).toMatchObject({
-        warnings: ["remote-history-incomplete", "system-chat-excluded"],
+        warnings: ["remote-history-incomplete", "non-conversation-chats-excluded"],
       });
       expect(JSON.stringify(result)).not.toContain("0@s.whatsapp.net");
     } finally {
@@ -301,6 +301,91 @@ describe("WhatsApp Message Like Me source mapping", () => {
       expect(result.completion).toMatchObject({
         warnings: ["remote-history-incomplete", "reaction-actor-unproven"],
       });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("omits reaction removals and reports the exact unproven-removal warning", async () => {
+    const path = privateStore();
+    try {
+      const result = await collect(path, [
+        item({
+          rowid: "1",
+          messageId: "REACTION-REMOVAL-NULL",
+          text: null,
+          reactionToMessageId: "TARGET-1",
+          reactionEmoji: null,
+        }),
+        item({
+          rowid: "2",
+          messageId: "REACTION-REMOVAL-EMPTY",
+          text: null,
+          reactionToMessageId: "TARGET-2",
+          reactionEmoji: "",
+        }),
+      ]);
+      expect(result.records.filter((record) =>
+        record.kind === "message" || record.kind === "reaction")).toEqual([]);
+      expect(result.completion).toMatchObject({
+        warnings: ["remote-history-incomplete", "reaction-removal-unproven"],
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("uses capture observation time for flag-only deletion and never infers deletion from absence", async () => {
+    const path = privateStore();
+    try {
+      const result = await collect(path, [
+        item({ rowid: "1", messageId: "PRESENT", deletedAt: null }),
+        item({
+          rowid: "2",
+          messageId: "FLAG-ONLY",
+          timestamp: "2026-08-28T12:01:00.000Z",
+          revoked: true,
+          deletedAt: null,
+        }),
+      ]);
+      const messages = result.records.filter((record) => record.kind === "message");
+      expect(messages[0]).toMatchObject({ deletion: null });
+      expect(messages[1]).toMatchObject({
+        deletion: {
+          state: "revoked",
+          observedAt: expect.any(String),
+          providerRevision: null,
+        },
+      });
+      expect(messages[1]?.deletion?.observedAt).not.toBe(messages[1]?.sentAt);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects sender directions that contradict the exact account and conversation", async () => {
+    const path = privateStore();
+    try {
+      for (const invalid of [
+        item({ senderJid: "15551234567@s.whatsapp.net", fromMe: false }),
+        item({ senderJid: "15557654321@s.whatsapp.net", fromMe: true }),
+        item({
+          chatJid: "120363123456789012@g.us",
+          chatKind: "group",
+          senderJid: "15551234567@lid",
+          fromMe: true,
+        }),
+        item({
+          chatJid: "120363123456789012@g.us",
+          chatKind: "group",
+          senderJid: "15551234567@s.whatsapp.net",
+          fromMe: false,
+        }),
+      ]) {
+        await expect(collect(path, [invalid])).rejects.toThrow(
+          "WhatsApp message export projection protocol",
+        );
+      }
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

@@ -426,6 +426,18 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
           INSERT INTO messages(chat_jid,msg_id,ts,from_me,text)
           VALUES ('status@broadcast','STATUS-1',1776513604,0,'excluded status body')
         `).run();
+        database.query("INSERT INTO chats(jid, kind) VALUES (?1, ?2)")
+          .run("12345@broadcast", "broadcast");
+        database.query(`
+          INSERT INTO messages(chat_jid,msg_id,ts,from_me,text)
+          VALUES ('12345@broadcast','BROADCAST-1',1776513605,0,'excluded broadcast body')
+        `).run();
+        database.query("INSERT INTO chats(jid, kind) VALUES (?1, ?2)")
+          .run("12345@newsletter", "newsletter");
+        database.query(`
+          INSERT INTO messages(chat_jid,msg_id,ts,from_me,text)
+          VALUES ('12345@newsletter','NEWSLETTER-1',1776513606,0,'excluded newsletter body')
+        `).run();
       } finally {
         database.close();
       }
@@ -435,7 +447,7 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       expect(projected).toMatchObject({
         schemaVersion: 1,
         status: "succeeded",
-        systemChatExcluded: false,
+        systemChatExcluded: true,
         localInsertPageComplete: true,
         nextCursor: null,
         projectionGeneration: {
@@ -472,6 +484,8 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       });
       const encoded = JSON.stringify(projected);
       expect(encoded).not.toContain("excluded status body");
+      expect(encoded).not.toContain("excluded broadcast body");
+      expect(encoded).not.toContain("excluded newsletter body");
       expect(encoded).not.toContain("/private/provider/url");
       expect(encoded).not.toContain("/private/local/file");
       expect(encoded).not.toContain("secret-key");
@@ -544,6 +558,65 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
         expectedGeneration: first.projectionGeneration,
         limit: 1,
       }))).toMatchObject({ status: "failed", errorCode: "generation-mismatch" });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed on contradictory direction, reaction, deletion, and purge rows", async () => {
+    const mutations = [
+      "UPDATE messages SET sender_jid = '15551234567@s.whatsapp.net' WHERE msg_id = 'MSG-1'",
+      "UPDATE messages SET sender_jid = '15557654321@s.whatsapp.net' WHERE msg_id = 'MSG-2'",
+      "UPDATE messages SET reaction_emoji = '👍', reaction_to_id = NULL WHERE msg_id = 'MSG-1'",
+      "UPDATE messages SET deleted_at = ts + 1 WHERE msg_id = 'MSG-1'",
+      "UPDATE messages SET revoked = 1, deleted_at = ts - 1 WHERE msg_id = 'MSG-1'",
+      "UPDATE messages SET payload_purged_at = ts - 1 WHERE msg_id = 'MSG-1'",
+    ] as const;
+    for (const mutation of mutations) {
+      const path = createStore();
+      try {
+        const database = new Database(join(path, "wacli.db"), { strict: true });
+        try {
+          database.exec(mutation);
+        } finally {
+          database.close();
+        }
+        chmodSync(join(path, "wacli.db"), 0o600);
+        expect(await messageResponse(path, messageRequest(path))).toMatchObject({
+          status: "failed",
+          errorCode: "projection-invalid",
+        });
+      } finally {
+        rmSync(path, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("retains flag-only deletion and target-only reaction-removal evidence", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query(`
+          UPDATE messages SET revoked = 1, deleted_at = NULL WHERE msg_id = 'MSG-1'
+        `).run();
+        database.query(`
+          UPDATE messages
+          SET reaction_to_id = 'MSG-1', reaction_emoji = NULL, text = NULL
+          WHERE msg_id = 'MSG-3'
+        `).run();
+      } finally {
+        database.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      expect(await messageResponse(path, messageRequest(path))).toMatchObject({
+        status: "succeeded",
+        messages: [
+          { messageId: "MSG-1", revoked: true, deletedAt: null },
+          { messageId: "MSG-2" },
+          { messageId: "MSG-3", reactionToMessageId: "MSG-1", reactionEmoji: null },
+        ],
+      });
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

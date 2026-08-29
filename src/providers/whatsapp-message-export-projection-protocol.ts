@@ -1,6 +1,10 @@
 import { types as nodeTypes } from "node:util";
 
-import { isCanonicalWhatsAppAccountSubject } from "./whatsapp-account-identity";
+import {
+  canonicalWhatsAppAccountSubjectJid,
+  canonicalWhatsAppParticipantJid,
+  isCanonicalWhatsAppAccountSubject,
+} from "./whatsapp-account-identity";
 
 export const WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION = 1 as const;
 export const WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_LIMIT = 500;
@@ -145,6 +149,33 @@ function exactKeys(value: JsonRecord, expected: readonly string[], label: string
   if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) fail(label);
 }
 
+function denseArray(value: unknown, label: string, maximum: number): readonly unknown[] {
+  if (
+    !Array.isArray(value)
+    || nodeTypes.isProxy(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+    || value.length > maximum
+  ) return fail(label);
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || keys.some((key) => typeof key !== "string")) {
+    return fail(label);
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    lengthDescriptor === undefined
+    || lengthDescriptor.enumerable
+    || !("value" in lengthDescriptor)
+    || lengthDescriptor.value !== value.length
+  ) return fail(label);
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+      return fail(label);
+    }
+  }
+  return value;
+}
+
 function unsigned(value: unknown, label: string, allowZero = true): string {
   if (typeof value !== "string" || !ROWID_PATTERN.test(value) || BigInt(value) > MAX_ROWID) {
     return fail(label);
@@ -231,7 +262,11 @@ function timestamp(value: unknown, label: string, nullable = false): string | nu
   return value;
 }
 
-function item(value: unknown, label: string): WhatsAppMessageExportProjectionItem {
+function item(
+  value: unknown,
+  label: string,
+  accountJid: string | undefined,
+): WhatsAppMessageExportProjectionItem {
   const parsed = record(value, label);
   exactKeys(parsed, [
     "rowid", "chatJid", "chatKind", "chatName", "messageId", "senderJid", "senderName",
@@ -258,10 +293,24 @@ function item(value: unknown, label: string): WhatsAppMessageExportProjectionIte
   }
   const sentAt = timestamp(parsed.timestamp, `${label}.timestamp`)! as string;
   const editedAt = timestamp(parsed.editedAt, `${label}.editedAt`, true);
+  const deletedAt = timestamp(parsed.deletedAt, `${label}.deletedAt`, true);
+  const payloadPurgedAt = timestamp(parsed.payloadPurgedAt, `${label}.payloadPurgedAt`, true);
+  const reactionToMessageId = messageId(
+    parsed.reactionToMessageId,
+    `${label}.reactionToMessageId`,
+    true,
+  );
+  const reactionEmoji = text(parsed.reactionEmoji, `${label}.reactionEmoji`, 8 * 1024);
   if ((parsed.edited && editedAt === null) || (!parsed.edited && editedAt !== null) || (editedAt !== null && editedAt < sentAt)) {
     return fail(`${label}.editedAt`);
   }
-  return Object.freeze({
+  if (
+    (reactionEmoji !== null && reactionEmoji.length > 0 && reactionToMessageId === null)
+    || (deletedAt !== null && !parsed.revoked && !parsed.deletedForMe)
+    || (deletedAt !== null && deletedAt < sentAt)
+    || (payloadPurgedAt !== null && payloadPurgedAt < sentAt)
+  ) return fail(label);
+  const projected = Object.freeze({
     rowid: unsigned(parsed.rowid, `${label}.rowid`, false),
     chatJid: conversationJid(parsed.chatJid, parsed.chatKind, `${label}.chatJid`),
     chatKind: parsed.chatKind,
@@ -275,8 +324,8 @@ function item(value: unknown, label: string): WhatsAppMessageExportProjectionIte
     displayText: text(parsed.displayText, `${label}.displayText`, 1024 * 1024),
     quotedMessageId: messageId(parsed.quotedMessageId, `${label}.quotedMessageId`, true),
     quotedSenderJid: participantJid(parsed.quotedSenderJid, `${label}.quotedSenderJid`, true),
-    reactionToMessageId: messageId(parsed.reactionToMessageId, `${label}.reactionToMessageId`, true),
-    reactionEmoji: text(parsed.reactionEmoji, `${label}.reactionEmoji`, 8 * 1024),
+    reactionToMessageId,
+    reactionEmoji,
     mediaType: text(parsed.mediaType, `${label}.mediaType`, 256),
     mediaCaption: text(parsed.mediaCaption, `${label}.mediaCaption`, 1024 * 1024),
     fileName,
@@ -284,11 +333,24 @@ function item(value: unknown, label: string): WhatsAppMessageExportProjectionIte
     fileLength: parsed.fileLength as number | null,
     revoked: parsed.revoked,
     deletedForMe: parsed.deletedForMe,
-    deletedAt: timestamp(parsed.deletedAt, `${label}.deletedAt`, true),
-    payloadPurgedAt: timestamp(parsed.payloadPurgedAt, `${label}.payloadPurgedAt`, true),
+    deletedAt,
+    payloadPurgedAt,
     edited: parsed.edited,
     editedAt,
   });
+  if (accountJid !== undefined) {
+    const senderJid = projected.senderJid === null
+      ? null
+      : canonicalWhatsAppParticipantJid(projected.senderJid);
+    const senderMustBeSelf = projected.fromMe;
+    const valid = projected.chatKind === "dm"
+      ? senderJid === null
+        || senderJid === (senderMustBeSelf ? accountJid : projected.chatJid)
+      : senderJid === null
+        || (senderMustBeSelf ? senderJid === accountJid : senderJid !== accountJid);
+    if (!valid) return fail(`${label}.senderJid`);
+  }
+  return projected;
 }
 
 export function parseWhatsAppMessageExportProjectionRequest(
@@ -366,19 +428,26 @@ export function parseWhatsAppMessageExportProjectionResponse(
     parsed.schemaVersion !== WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION
     || parsed.status !== "succeeded"
     || typeof parsed.systemChatExcluded !== "boolean"
-    || !Array.isArray(parsed.messages)
-    || parsed.messages.length > WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_LIMIT
     || typeof parsed.localInsertPageComplete !== "boolean"
   ) return fail("response");
+  const rawMessages = denseArray(
+    parsed.messages,
+    "response.messages",
+    WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_LIMIT,
+  );
   const projectionGeneration = generation(parsed.projectionGeneration, "response.projectionGeneration");
   if (request !== undefined && (
     projectionGeneration.messageStoreIdentity.dev !== request.messageStoreIdentity.dev
     || projectionGeneration.messageStoreIdentity.ino !== request.messageStoreIdentity.ino
     || (request.expectedGeneration !== null && !sameGeneration(projectionGeneration, request.expectedGeneration))
-    || parsed.messages.length > request.limit
-    || (!parsed.localInsertPageComplete && parsed.messages.length !== request.limit)
+    || rawMessages.length > request.limit
+    || (!parsed.localInsertPageComplete && rawMessages.length !== request.limit)
   )) return fail("response projection binding");
-  const messages = parsed.messages.map((value, index) => item(value, `response.messages[${index}]`));
+  const accountJid = request === undefined
+    ? undefined
+    : canonicalWhatsAppAccountSubjectJid(request.accountSubject);
+  const messages = rawMessages.map((value, index) =>
+    item(value, `response.messages[${index}]`, accountJid));
   for (let index = 0; index < messages.length; index += 1) {
     const previous = index === 0 ? request?.cursor : messages[index - 1]?.rowid;
     if (previous !== undefined && BigInt(messages[index]!.rowid) <= BigInt(previous)) {

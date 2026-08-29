@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+import {
+  canonicalWhatsAppAccountSubjectJid,
+  canonicalWhatsAppParticipantJid,
+} from "./whatsapp-account-identity";
 import { parseWhatsAppMessageExportProjectionRequest } from "./whatsapp-message-export-projection-protocol";
 import { whatsappSubjectFromLinkedJid } from "./whatsapp-web";
 
@@ -41,6 +45,42 @@ describe("canonical WhatsApp account identity", () => {
     ]) {
       expect(() => whatsappSubjectFromLinkedJid(linkedJid)).toThrow(
         "account identifier is not canonical",
+      );
+    }
+  });
+
+  test("maps canonical PN and LID subjects to distinct exact self JIDs", () => {
+    expect(canonicalWhatsAppAccountSubjectJid("whatsapp:pn:12345"))
+      .toBe("12345@s.whatsapp.net");
+    expect(canonicalWhatsAppAccountSubjectJid("whatsapp:lid:12345"))
+      .toBe("12345@lid");
+    expect(canonicalWhatsAppAccountSubjectJid("whatsapp:pn:12345"))
+      .not.toBe(canonicalWhatsAppAccountSubjectJid("whatsapp:lid:12345"));
+    for (const subject of [
+      "whatsapp:pn:01234",
+      "whatsapp:pn:1234567890123456",
+      "whatsapp:lid:01234",
+      "whatsapp:lid:123456789012345678901",
+      "whatsapp:unknown:12345",
+    ]) {
+      expect(() => canonicalWhatsAppAccountSubjectJid(subject)).toThrow(
+        "WhatsApp account subject is not canonical",
+      );
+    }
+  });
+
+  test("canonicalizes exact participant devices without weakening PN or LID bounds", () => {
+    expect(canonicalWhatsAppParticipantJid("12345:2@s.whatsapp.net"))
+      .toBe("12345@s.whatsapp.net");
+    expect(canonicalWhatsAppParticipantJid("12345:2@lid")).toBe("12345@lid");
+    for (const jid of [
+      "01234@s.whatsapp.net",
+      "1234567890123456@s.whatsapp.net",
+      "01234@lid",
+      "123456789012345678901@lid",
+    ]) {
+      expect(() => canonicalWhatsAppParticipantJid(jid)).toThrow(
+        "WhatsApp participant JID is not canonical",
       );
     }
   });
