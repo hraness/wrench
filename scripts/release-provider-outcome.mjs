@@ -227,7 +227,7 @@ function createProviderDeadline(monotonicNow) {
     if (state.remainingMilliseconds < 1) fail(PROVIDER_TIMEOUT_MESSAGE);
     return state;
   };
-  return Object.freeze({ begin, complete, expiresAt, read });
+  return Object.freeze({ begin, complete, expiresAt, read, startedAt });
 }
 
 function deadlineBoundReadApi(api, deadline) {
@@ -252,14 +252,22 @@ function deadlineBoundReadApi(api, deadline) {
   });
 }
 
-async function waitForNextProviderObservation(deadline, sleep, pollIntervalMilliseconds) {
+async function waitForProviderScheduleTarget(
+  deadline,
+  sleep,
+  pollIntervalMilliseconds,
+  nextObservationIndex,
+  { allowDeadlineTarget = false } = {},
+) {
   if (pollIntervalMilliseconds === 0) return;
   const start = deadline.complete("schedule provider poll sleep");
-  if (start.remainingMilliseconds === 0) return;
-  const target = Math.min(
-    deadline.expiresAt,
-    start.now + pollIntervalMilliseconds,
-  );
+  const target = deadline.startedAt + nextObservationIndex * pollIntervalMilliseconds;
+  if (
+    target > deadline.expiresAt ||
+    (target === deadline.expiresAt && !allowDeadlineTarget)
+  ) {
+    fail("provider poll schedule reached its observation-start deadline");
+  }
   let current = start.now;
   for (let attempt = 1; attempt <= MAX_SLEEP_ATTEMPTS_PER_INTERVAL; attempt += 1) {
     const remaining = target - current;
@@ -1787,7 +1795,6 @@ async function confirmSuccess(
   }
   reconcileGraphqlRestStatus(terminalGraphCandidate, observed.candidate, finalLatest);
   await revalidateTerminalAuthority(api, promotion, workflowSource);
-  deadline.complete("complete provider success confirmation");
   return true;
 }
 
@@ -1940,11 +1947,29 @@ export async function waitForProviderOutcome({
       }
     }
 
-    await waitForNextProviderObservation(deadline, sleep, pollIntervalMilliseconds);
+    if (poll < maxPolls) {
+      await waitForProviderScheduleTarget(
+        deadline,
+        sleep,
+        pollIntervalMilliseconds,
+        poll,
+      );
+    }
   }
-  const exhausted = deadline.complete("complete provider observation poll budget");
-  if (exhausted.remainingMilliseconds === 0) fail(PROVIDER_TIMEOUT_MESSAGE);
-  fail("provider observation poll budget exhausted before its monotonic deadline");
+  if (maxPolls < MAX_PROVIDER_POLLS) {
+    fail("provider observation poll budget exhausted before its monotonic deadline");
+  }
+  if (pollIntervalMilliseconds !== PROVIDER_POLL_INTERVAL_MILLISECONDS) {
+    fail("provider observation test cadence exhausted before its monotonic deadline");
+  }
+  await waitForProviderScheduleTarget(
+    deadline,
+    sleep,
+    pollIntervalMilliseconds,
+    MAX_PROVIDER_POLLS,
+    { allowDeadlineTarget: true },
+  );
+  fail(PROVIDER_TIMEOUT_MESSAGE);
 }
 
 class GitHubApi {

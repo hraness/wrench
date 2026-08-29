@@ -340,17 +340,22 @@ The job requires the initial success observation plus two complete consistent
 readbacks, repeats the complete deployment inventory after the final status
 read, and sandwiches terminal state with exact tag, Release, Latest, ref, and
 workflow-source authority reads. The observation window starts immediately
-before the first provider read, after the initial authority checks. It permits
-at most 20 observation starts at a 60-second cadence inside the half-open
-monotonic `[start, deadline)` window of exactly 20 minutes. API latency and both
-success confirmations consume that same window. Each `gh api` process has a
-60-second cap reduced to the remaining window. No provider API process starts
-with less than one millisecond remaining, and every completed process must
-strictly advance the injected monotonic clock.
-The final sleep is reduced to the remaining cadence or deadline. An early sleep
-resolution cannot trigger another provider read until the full scheduled
-interval has elapsed. A final external read that completes exactly at the
-deadline remains eligible, but no later API read can start there. A later
+before the first provider read, after the initial authority checks. Production
+uses exactly 20 observation slots anchored to that start at offsets zero through
+19 minutes inside the half-open monotonic `[start, deadline)` window. API latency
+reduces the sleep before the next absolute slot instead of sliding the schedule,
+and both success confirmations consume the same 20-minute window. Each `gh api`
+process has a 60-second cap reduced to the remaining window. No provider API
+process starts with less than one millisecond remaining, and every completed
+process must strictly advance the injected monotonic clock.
+After an unsuccessful slot 20, the default cadence performs only a final bounded
+sleep to the 20-minute deadline and rejects without starting another API read.
+A reduced poll count or test cadence rejects immediately after its configured
+final observation. An early sleep resolution cannot trigger another provider
+read before its absolute slot. The contract makes no visibility claim for a
+deployment that changes after the slot-20 query completes. A final external read
+that completes exactly at the deadline remains eligible from its captured
+completion; no redundant clock sample or later API read follows it. A later
 completion, a frozen or regressing clock, poll-budget exhaustion before the
 deadline, or an empty or nonterminal result fails closed. The workflow job has
 a separate 30-minute timeout, leaving ten minutes for checkout, Node setup, and

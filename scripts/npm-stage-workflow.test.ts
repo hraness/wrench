@@ -1840,10 +1840,15 @@ fi
     expect(helper).toContain("PROVIDER_POLL_INTERVAL_MILLISECONDS = 60_000");
     expect(helper).toContain("PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS = 20 * 60_000");
     expect(helper).toContain("PROVIDER_API_CALL_TIMEOUT_MILLISECONDS = 60_000");
+    expect(helper).toContain("MAX_SLEEP_ATTEMPTS_PER_INTERVAL = 16");
     expect(helper).toContain("timeout: timeoutMilliseconds");
     expect(helper).toContain("state.remainingMilliseconds < 1");
     expect(helper).toContain("after.now <= before.now");
     expect(helper).toContain('deadline.begin("begin provider success confirmation")');
+    expect(helper).toContain("deadline.startedAt + nextObservationIndex * pollIntervalMilliseconds");
+    expect(helper).toContain("if (poll < maxPolls)");
+    expect(helper).toContain("{ allowDeadlineTarget: true }");
+    expect(helper).not.toContain('deadline.complete("complete provider success confirmation")');
     expect(helper).not.toContain("Date.now");
     expect(helper).toContain("performance.now()");
     expect(helper).toContain('this.#runRaw(["--include", endpoint]');
@@ -3405,26 +3410,31 @@ fi
     });
 
     let now = 0;
-    const sleeps: number[] = [];
+    const expectedPartialSleepRequests = [59_998, 29_999, 15_000];
+    expect(expectedPartialSleepRequests).toHaveLength(3);
+    const sleepThroughThreePartialWakeups = (
+      requests: number[],
+    ): ((milliseconds: number) => Promise<void>) => async (milliseconds) => {
+      requests.push(milliseconds);
+      const phase = (requests.length - 1) % 3;
+      now += phase === 2 ? milliseconds : Math.floor(milliseconds / 2);
+    };
+    const partialSleeps: number[] = [];
     const fullWindowApi = noCandidate((timeoutMilliseconds) => {
       if (timeoutMilliseconds !== undefined) now += 1;
     });
     await expect(run(
       fullWindowApi,
       () => now,
-      async (milliseconds) => {
-        sleeps.push(milliseconds);
-        now += milliseconds;
-      },
+      sleepThroughThreePartialWakeups(partialSleeps),
     )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
-    expect(sleeps).toEqual([
-      ...Array.from({ length: 19 }, () => 60_000),
-      59_960,
-    ]);
+    expect(partialSleeps).toEqual(
+      Array.from({ length: 20 }, () => expectedPartialSleepRequests).flat(),
+    );
     expect(now).toBe(1_200_000);
     expect(fullWindowApi.graphqlCalls).toHaveLength(20);
     expect(fullWindowApi.timeoutMilliseconds).toHaveLength(40);
-    expect(fullWindowApi.timeoutMilliseconds.slice(-2)).toEqual([59_962, 59_961]);
+    expect(fullWindowApi.timeoutMilliseconds.slice(-2)).toEqual([60_000, 59_999]);
 
     now = 0;
     const tailSleeps: number[] = [];
@@ -3439,12 +3449,13 @@ fi
         now += milliseconds;
       },
     )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
-    expect(tailSleeps.at(-1)).toBe(30_000);
-    expect(tailSleeps.every((milliseconds) => milliseconds <= 60_000)).toBe(true);
+    expect(tailSleeps).toEqual(Array.from({ length: 20 }, () => 38_000));
+    expect(latencyApi.graphqlCalls).toHaveLength(20);
     expect(now).toBe(1_200_000);
 
     now = 0;
     let boundaryRead = 0;
+    let boundarySamples = 0;
     const successExternalReads = 36;
     const exactBoundaryApi = successCase((timeoutMilliseconds) => {
       if (timeoutMilliseconds === undefined) return;
@@ -3453,12 +3464,44 @@ fi
         ? 1_200_000
         : Math.floor(1_199_999 * boundaryRead / (successExternalReads - 1));
     });
-    await expect(run(exactBoundaryApi, () => now, async () => {}))
+    await expect(run(exactBoundaryApi, () => {
+      if (now !== 1_200_000) return now;
+      boundarySamples += 1;
+      return boundarySamples === 1 ? now : now + 0.001;
+    }, async () => {}))
       .resolves.toEqual({ deploymentId: 20, statusId: 201 });
     expect(now).toBe(1_200_000);
     expect(boundaryRead).toBe(successExternalReads);
+    expect(boundarySamples).toBe(1);
     expect(exactBoundaryApi.timeoutMilliseconds).toHaveLength(successExternalReads);
     expect(exactBoundaryApi.timeoutMilliseconds.at(-1)).toBe(1);
+
+    now = 0;
+    const lateSleeps: number[] = [];
+    const lateCandidateApi = new ProviderApiFixture({
+      deployments: [
+        ...Array.from({ length: 19 }, () => [baselineDeployment]),
+        [candidate, baselineDeployment],
+      ],
+      readHook: (timeoutMilliseconds) => {
+        if (timeoutMilliseconds !== undefined) now += 1;
+      },
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, [[success], [success], [success]]],
+      ]),
+    });
+    await expect(run(
+      lateCandidateApi,
+      () => now,
+      sleepThroughThreePartialWakeups(lateSleeps),
+    )).resolves.toEqual({ deploymentId: 20, statusId: 201 });
+    expect(lateSleeps).toEqual(
+      Array.from({ length: 19 }, () => expectedPartialSleepRequests).flat(),
+    );
+    expect(now).toBe(1_140_036);
+    expect(lateCandidateApi.graphqlCalls).toHaveLength(22);
 
     now = 0;
     const frozenSuccessApi = successCase();
@@ -3515,16 +3558,40 @@ fi
     expect(stuckApi.graphqlCalls).toHaveLength(1);
 
     now = 0;
+    const reducedSleeps: number[] = [];
+    const reducedApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 1;
+    });
     await expect(run(
-      noCandidate((timeoutMilliseconds) => {
-        if (timeoutMilliseconds !== undefined) now += 1;
-      }),
+      reducedApi,
       () => now,
-      async () => {},
+      async (milliseconds) => {
+        reducedSleeps.push(milliseconds);
+      },
       1,
-      0,
     ))
       .rejects.toThrow("poll budget exhausted before its monotonic deadline");
+    expect(reducedSleeps).toHaveLength(0);
+    expect(reducedApi.graphqlCalls).toHaveLength(1);
+
+    now = 0;
+    const immediateSleeps: number[] = [];
+    const immediateApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 1;
+    });
+    await expect(run(
+      immediateApi,
+      () => now,
+      async (milliseconds) => {
+        immediateSleeps.push(milliseconds);
+      },
+      20,
+      0,
+    )).rejects.toThrow("test cadence exhausted before its monotonic deadline");
+    expect(immediateSleeps).toHaveLength(0);
+    expect(immediateApi.graphqlCalls).toHaveLength(20);
+    expect(immediateApi.timeoutMilliseconds).toHaveLength(40);
+    expect(now).toBe(40);
   });
 
   test("fails recovery closed on stale success, latest ties, or newer deployments", async () => {
@@ -3789,12 +3856,16 @@ fi
       "workflow never recreates the branch",
       "sends `force=false`",
       "reads the exact branch back, and,\nfor manual recovery, repeats the current default-branch repository/ref/repository\nsource sandwich before writing the receipt",
-      "at most 20 observation starts at a 60-second cadence",
-      "inside the half-open\nmonotonic `[start, deadline)` window",
-      "No provider API process starts\nwith less than one millisecond remaining",
-      "every completed process must\nstrictly advance the injected monotonic clock",
-      "final external read that completes exactly at the\ndeadline remains eligible",
-      "no later API read can start there",
+      "exactly 20 observation slots anchored to that start at offsets zero through\n19 minutes",
+      "half-open monotonic `[start, deadline)` window",
+      "API latency\nreduces the sleep before the next absolute slot instead of sliding the schedule",
+      "default cadence performs only a final bounded\nsleep to the 20-minute deadline",
+      "reduced poll count or test cadence rejects immediately",
+      "makes no visibility claim for a\ndeployment that changes after the slot-20 query completes",
+      "No provider API\nprocess starts with less than one millisecond remaining",
+      "every completed\nprocess must strictly advance the injected monotonic clock",
+      "final external read\nthat completes exactly at the deadline remains eligible",
+      "no redundant clock sample or later API read follows it",
       "separate 30-minute timeout",
       "at most 197 REST calls in the provider outcome job and 228",
       "240-point ceiling and 760 points of headroom",
@@ -3852,7 +3923,8 @@ fi
     expect(agents).toContain("exhaustively audit only the pinned candidate's REST status history");
     expect(agents).toContain("Reject any retained failure, error, or inactive candidate status");
     expect(agents).toContain("REST deployment's lowercase commit `.ref` and `.sha`");
-    expect(agents).toContain("20-observation provider window");
+    expect(agents).toContain("20 observation slots at absolute minute offsets zero through 19");
+    expect(agents).toContain("without sliding later slots");
     expect(agents).toContain("previous deployment statuses that GitHub deletes after 90 days");
     expect(agents).toContain("GitHub preserves the current status on the deployment");
     expect(agents).not.toContain("audit every retained Production deployment status");
@@ -3867,8 +3939,10 @@ fi
     expect(websiteAgents).toContain("a missing branch is a hard failure");
     expect(websiteAgents).toContain("must never recreate, force, or accept divergence");
     expect(websiteAgents).toContain("A separate 30-minute read-only job");
-    expect(websiteAgents).toContain("20 observation starts inside one injected monotonic 20-minute");
+    expect(websiteAgents).toContain("absolute observation slots at minute offsets zero through 19");
     expect(websiteAgents).toContain("`[start, deadline)` provider window");
+    expect(websiteAgents).toContain("charge API latency without sliding those slots");
+    expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
     expect(websiteAgents).toContain("exact ref readback and event-appropriate terminal workflow-source revalidation");
     expect(websiteAgents).toContain("initial success observation plus two stable");
