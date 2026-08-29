@@ -22,10 +22,26 @@ wrench messaging resolve --input <-|@ABS_PRIVATE_FILE> \
   --private-output ABS_PRIVATE_FILE --json
 ```
 
-`routes` is bounded and reports completeness. `resolve` accepts only a closed,
-provider-specific exact coordinate and performs a live provider read. Zero or
-several matches fail. Wrench never widens the lookup to a name, handle,
-participant, or another provider.
+`routes` returns the V2 bounded artifact and reports completeness. Every list
+or search result is a non-actionable V2 candidate with `resolution-required`
+readiness. Its opaque `routeRef` names the checked provider target retained in
+Wrench's encrypted private state. The V2 resolve request contains only that
+reference:
+
+```json
+{"schemaVersion":2,"format":"wrench.messaging-route-resolve-request","routeRef":"<candidate-route-ref>"}
+```
+
+`resolve` reloads and identity-checks the stored adapter, auth realm, provider
+binding, list input, and exact target before it performs the provider-native
+exact read. The caller cannot resupply or replace a network, account,
+conversation ID, name, handle, title, or participant match. Zero or several
+exact results fail. A successful resolution returns a new opaque route
+reference.
+
+V1 route parser exports exist only for archived v0.16.1 artifacts. Do not send
+the old exact-coordinate V1 resolve shape to the current CLI or client; runtime
+resolution accepts only the opaque-reference V2 request above.
 
 Treat every route reference as a private capability. It expires and becomes
 invalid after auth, adapter, plugin, tool, account, participant, or provider
@@ -37,7 +53,9 @@ turns and provider replies. Direct iMessage supports exact text turns through
 the device-default Messages account with SMS fallback disabled; threaded
 replies are unavailable. WhatsApp remains read-only at this facade while its
 checked private transport awaits controlled live freshness and reconciliation
-qualification. X archives are analysis evidence and never routes.
+qualification. Its bounded list projection cannot yet create the canonical
+source-conversation context binding. X archives are analysis evidence and
+never routes.
 
 ## Read fresh context
 
@@ -91,9 +109,13 @@ wrench confirm DIGEST \
 
 Messaging confirmation uses the existing Wrench mutation kernel. One composite
 turn has one canonical digest, one confirmation claim, one run, and one ordered
-dispatch journal. Its exact receipt and body-free client-intent binding are
-written atomically to separate mode-`0600` artifacts. Ordinary output contains
-only hashes, counts, categorical state, and timestamps.
+dispatch journal. Before confirmation can dispatch, Wrench physically creates
+both distinct mode-`0600` sink files as body-free reservations. After the
+provider effect, each final artifact replaces its own reservation atomically;
+the two files are not one filesystem transaction. Wrench prints the body-free
+terminal receipt, including the run ID, before either final export. If export
+fails, use that run ID with `wrench runs show` and two fresh private paths.
+Ordinary output contains only hashes, counts, categorical state, and timestamps.
 
 The provider performs a cache-bypassing revision check before each remaining
 part. It permits only the expected prefix accepted by this run. New foreign

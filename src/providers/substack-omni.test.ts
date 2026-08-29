@@ -67,6 +67,7 @@ describe("Substack omni inbox materializer", () => {
       },
       entities: [{
         kind: "conversation",
+        conversationKind: "unknown",
         providerId: "thread-101",
         providerRevision: null,
         orderedAt: "2026-07-23T12:00:00.000Z",

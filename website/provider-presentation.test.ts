@@ -113,8 +113,35 @@ describe("provider presentation", () => {
     const directory = createProviderDirectory(attestation);
     const cards = renderProviderOverviewCards(directory);
     const groups = renderProviderAttestationGroups(directory, attestation);
+    const iconSignatures = {
+      broadcast: '<rect x="4" y="7" width="16" height="11" rx="2"></rect>',
+      chat: '<path d="M5.5 5.5h13a2.5 2.5 0 0 1 2.5 2.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3v-3A2.5 2.5 0 0 1 3 15V8a2.5 2.5 0 0 1 2.5-2.5Z"></path>',
+      code: '<path d="m9 7-5 5 5 5M15 7l5 5-5 5M13.5 4 10.5 20"></path>',
+      community: '<circle cx="9" cy="8" r="3"></circle><circle cx="17" cy="10" r="2.5"></circle>',
+      mail: '<rect x="3" y="5" width="18" height="14" rx="2"></rect>',
+      network: '<circle cx="5" cy="12" r="2.5"></circle><circle cx="19" cy="6" r="2.5"></circle><circle cx="19" cy="18" r="2.5"></circle>',
+      news: '<rect x="4" y="3" width="16" height="18" rx="2"></rect>',
+      photo: '<rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="15.5" cy="9" r="2"></circle>',
+      publish: '<path d="M5 3h10l4 4v14H5zM15 3v5h4"></path>',
+      store: '<path d="M4 9h16l-1.5-5h-13zM5 9v11h14V9"></path>',
+      video: '<rect x="3" y="5" width="18" height="14" rx="3"></rect>',
+    } as const;
 
     expect(cards.match(/<article class="provider-card/gu)).toHaveLength(directory.providerCount);
+    expect(cards.match(/class="provider-card-heading"/gu)).toHaveLength(directory.providerCount);
+    expect(cards.match(/<span aria-hidden="true" class="provider-mark"/gu))
+      .toHaveLength(directory.providerCount);
+    expect(cards.match(/<svg aria-hidden="true" class="provider-icon" focusable="false"/gu))
+      .toHaveLength(directory.providerCount);
+    expect(new Set(directory.entries.map((entry) => entry.icon)))
+      .toEqual(new Set(Object.keys(iconSignatures)));
+    for (const entry of directory.entries) {
+      expect(cards).toContain([
+        `data-provider-icon="${entry.icon}">`,
+        '<svg aria-hidden="true" class="provider-icon" focusable="false" viewBox="0 0 24 24">',
+        iconSignatures[entry.icon],
+      ].join(""));
+    }
     expect(cards.indexOf(">Beeper</a>")).toBeLessThan(cards.indexOf(">Bluesky</a>"));
     expect(cards).toContain("32 supported actions");
     expect(cards).toContain("Accounts · Bridges · Contacts · Conversations · Messages · Presence · Reactions");
@@ -127,7 +154,7 @@ describe("provider presentation", () => {
     expect(groups).toContain("Update conversation read state");
     expect(groups).toContain("Search message content");
     expect(groups).toContain("Read message context");
-    expect(groups).toContain("<strong>Read message</strong><code>messaging.message.read</code>");
+    expect(groups).toContain("<strong>Read message</strong> — <code>messaging.message.read</code>");
     expect(groups).toContain("Local app");
     expect(groups).not.toMatch(/observed|capture-required|adapter|completeness|<th/iu);
     for (const row of attestation.rows.filter((candidate) =>

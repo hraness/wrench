@@ -128,6 +128,26 @@ function admissionDependencies(
   };
 }
 
+function holdStateMutation(
+  directory: string,
+  targetName: string,
+  claimId: string,
+): string {
+  const mutationPath = join(
+    directory,
+    `.io-mutation-${sha256(`io-state-mutation\0${targetName}`)}-held-${claimId}.lock`,
+  );
+  writeFileSync(mutationPath, `${JSON.stringify({
+    kind: "io-state-mutation-claim",
+    schemaVersion: 1,
+    targetSha256: sha256(`io-state-mutation\0${targetName}`),
+    claimId,
+    pid: process.pid,
+    ...currentProcessStartIdentity(),
+  })}\n`, { mode: 0o600 });
+  return mutationPath;
+}
+
 describe("local browser admission", () => {
   test("admits at most two of eight child processes on a warmed state root", async () => {
     const testState = state();
@@ -330,6 +350,98 @@ describe("local browser admission", () => {
         ...BROWSER_ADMISSION_STATE_DIRECTORY.split("/"),
         "slot-0.json",
       ))).toBeFalse();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("retries exact read drift after create contention", async () => {
+    const testState = state();
+    let mutationPath: string | null = null;
+    let contendedReads = 0;
+    let waits = 0;
+    try {
+      const initialized = await acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies(),
+      });
+      initialized.release();
+      const directory = join(
+        testState.directory,
+        ...BROWSER_ADMISSION_STATE_DIRECTORY.split("/"),
+      );
+      writeFileSync(join(directory, "slot-1.json"), "{}\n", { mode: 0o600 });
+      mutationPath = holdStateMutation(
+        directory,
+        "slot-0.json",
+        "44444444-4444-4444-8444-444444444444",
+      );
+
+      const admission = await acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies({
+          beforeContendedClaimReadForTest: (slot) => {
+            contendedReads += 1;
+            expect(slot).toBe(0);
+            throw new Error(
+              "could not safely open optional browser admission claim",
+              {
+                cause: new Error(
+                  "state helper: state file changed while it was read",
+                ),
+              },
+            );
+          },
+          random: () => 0,
+          sleep: async () => {
+            waits += 1;
+            if (mutationPath === null) {
+              throw new Error("expected browser admission mutation claim");
+            }
+            rmSync(mutationPath, { force: true });
+          },
+        }),
+      });
+
+      expect(admission.slot).toBe(0);
+      expect(contendedReads).toBe(1);
+      expect(waits).toBe(1);
+      admission.release();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps unrelated contended-read storage failures fatal", async () => {
+    const testState = state();
+    try {
+      const initialized = await acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies(),
+      });
+      initialized.release();
+      const directory = join(
+        testState.directory,
+        ...BROWSER_ADMISSION_STATE_DIRECTORY.split("/"),
+      );
+      holdStateMutation(
+        directory,
+        "slot-0.json",
+        "55555555-5555-4555-8555-555555555555",
+      );
+
+      await expect(acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies({
+          beforeContendedClaimReadForTest: () => {
+            throw new Error("unrelated contended-read storage failure");
+          },
+        }),
+      })).rejects.toThrow("unrelated contended-read storage failure");
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

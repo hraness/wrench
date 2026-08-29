@@ -108,6 +108,7 @@ describe("Gmail omni materializers", () => {
       },
       entities: [{
         kind: "conversation",
+        conversationKind: "unknown",
         providerId: "thread_1",
         providerRevision: "91",
         orderedAt: "2026-08-05T00:00:00.000Z",

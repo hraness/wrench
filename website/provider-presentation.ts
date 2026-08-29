@@ -295,10 +295,67 @@ function entryCountLabel(entry: ProviderDirectoryEntry): string {
   return `${entry.supportedActionCount} supported ${entry.supportedActionCount === 1 ? "action" : "actions"}`;
 }
 
+const providerIconPaths: Readonly<Record<ProviderIcon, readonly string[]>> = Object.freeze({
+  broadcast: Object.freeze([
+    '<rect x="4" y="7" width="16" height="11" rx="2"></rect>',
+    '<path d="m9 22 3-4 3 4M8 3c2.7 2.3 5.3 2.3 8 0"></path>',
+  ]),
+  chat: Object.freeze([
+    '<path d="M5.5 5.5h13a2.5 2.5 0 0 1 2.5 2.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3v-3A2.5 2.5 0 0 1 3 15V8a2.5 2.5 0 0 1 2.5-2.5Z"></path>',
+    '<path d="M8 10h8M8 13.5h5"></path>',
+  ]),
+  code: Object.freeze([
+    '<path d="m9 7-5 5 5 5M15 7l5 5-5 5M13.5 4 10.5 20"></path>',
+  ]),
+  community: Object.freeze([
+    '<circle cx="9" cy="8" r="3"></circle><circle cx="17" cy="10" r="2.5"></circle>',
+    '<path d="M3.5 19c.6-3.3 2.4-5 5.5-5s4.9 1.7 5.5 5M14 15c3.6-.5 5.8.8 6.5 4"></path>',
+  ]),
+  mail: Object.freeze([
+    '<rect x="3" y="5" width="18" height="14" rx="2"></rect>',
+    '<path d="m4 7 8 6 8-6"></path>',
+  ]),
+  network: Object.freeze([
+    '<circle cx="5" cy="12" r="2.5"></circle><circle cx="19" cy="6" r="2.5"></circle><circle cx="19" cy="18" r="2.5"></circle>',
+    '<path d="m7.3 11 9.3-4M7.3 13l9.3 4"></path>',
+  ]),
+  news: Object.freeze([
+    '<rect x="4" y="3" width="16" height="18" rx="2"></rect>',
+    '<path d="M8 8h8M8 12h8M8 16h5"></path>',
+  ]),
+  photo: Object.freeze([
+    '<rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="15.5" cy="9" r="2"></circle>',
+    '<path d="m5 17 4.5-4 3.2 2.5 2-1.8L19 17"></path>',
+  ]),
+  publish: Object.freeze([
+    '<path d="M5 3h10l4 4v14H5zM15 3v5h4"></path>',
+    '<path d="M8 12h8M8 16h6"></path>',
+  ]),
+  store: Object.freeze([
+    '<path d="M4 9h16l-1.5-5h-13zM5 9v11h14V9"></path>',
+    '<path d="M9 20v-6h6v6M3 9c0 2 3 3 4.5 1.2C9 12 12 12 13.5 10.2 15 12 18 11 21 9"></path>',
+  ]),
+  video: Object.freeze([
+    '<rect x="3" y="5" width="18" height="14" rx="3"></rect>',
+    '<path d="m10 9 5 3-5 3z"></path>',
+  ]),
+});
+
+function renderProviderIcon(icon: ProviderIcon): string {
+  return [
+    '<svg aria-hidden="true" class="provider-icon" focusable="false" viewBox="0 0 24 24">',
+    ...providerIconPaths[icon],
+    "</svg>",
+  ].join("");
+}
+
 export function renderProviderOverviewCards(directory: ProviderDirectory): string {
   return directory.entries.map((entry) => [
     `<article class="provider-card provider-accent-${entry.accent}${entry.surfaceId === "beeper" ? " provider-card-featured" : ""}">`,
+    '<div class="provider-card-heading">',
+    `<span aria-hidden="true" class="provider-mark" data-provider-icon="${entry.icon}">${renderProviderIcon(entry.icon)}</span>`,
     `<h3><a href="${escapeHtml(entry.href)}">${escapeHtml(entry.name)}</a></h3>`,
+    "</div>",
     `<p class="provider-state"><strong>${entryCountLabel(entry)}</strong></p>`,
     `<p class="provider-capabilities">${entry.capabilities.map(escapeHtml).join(" · ")}</p>`,
     `<p class="provider-transport">${entry.transports.map(transportLabel).join(" + ")}</p>`,
@@ -317,15 +374,23 @@ const operationTitleOverrides: Readonly<Record<string, string>> = Object.freeze(
   "conversations.description.set": "Update conversation description",
   "conversations.disappearing.set": "Update disappearing messages",
   "conversations.draft.set": "Update conversation draft",
+  "conversations.focus": "Focus conversation",
   "conversations.mute.set": "Update conversation mute setting",
+  "conversations.notify": "Send Notify Anyway",
   "conversations.pin.set": "Update conversation pin",
   "conversations.priority.set": "Update conversation priority",
   "conversations.read-state.set": "Update conversation read state",
   "conversations.reminder.set": "Update conversation reminder",
+  "conversations.start": "Start conversation",
   "conversations.title.set": "Update conversation title",
   "messaging.content.search": "Search message content",
   "messaging.context.read": "Read message context",
+  "messaging.edit": "Edit message",
+  "messaging.list": "List messages",
   "messaging.message.read": "Read message",
+  "messaging.read": "Read messages",
+  "messaging.search": "Search messages",
+  "messaging.send": "Send message",
   "relationships.follow.set": "Update follow relationship",
   "relationships.recommendations.read": "Read account recommendations",
 });
@@ -379,8 +444,9 @@ export function renderProviderAttestationGroups(
         .sort(compareStrings).join(" + ");
       return [
         "<li>",
-        `<span><strong>${escapeHtml(operationTitle(operation))}</strong><code>${escapeHtml(operation)}</code></span>`,
-        `<span>${escapeHtml(access)}</span>`,
+        `<span><strong>${escapeHtml(operationTitle(operation))}</strong> — <code>${escapeHtml(operation)}</code></span>`,
+        " ",
+        `<span>· ${escapeHtml(access)}</span>`,
         "</li>",
       ].join("");
     }).join("");

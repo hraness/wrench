@@ -1,5 +1,21 @@
 // @bun
 import {
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID,
+  parseWrenchMessagingContextBindingV1,
+  parseWrenchMessagingContextBindingV2
+} from "./index-pa6wdsqj.js";
+import {
   canonicalJson,
   sha256
 } from "./index-dqv16dt0.js";
@@ -19,49 +35,24 @@ import { fileURLToPath } from "url";
 
 // src/messaging-types.ts
 import { types as nodeTypes } from "util";
-var MESSAGING_CONTEXT_BINDING_CONTRACT_ID = "wrench.messaging-context-binding.v1";
-var MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR = Object.freeze({
-  schemaVersion: 1,
-  format: "wrench.messaging-contract-descriptor",
-  contractId: MESSAGING_CONTEXT_BINDING_CONTRACT_ID,
-  fields: Object.freeze([
-    "schemaVersion:1",
-    "format:wrench.messaging-context-binding",
-    "contractId:wrench.messaging-context-binding.v1",
-    "contractHash:sha256",
-    "routeRef:opaque",
-    "contextRef:opaque",
-    "exactDataRevision:sha256",
-    "latestMessageRevision:sha256",
-    "validatedAt:rfc3339",
-    "expiresAt:rfc3339"
-  ])
-});
-var MESSAGING_CONTEXT_BINDING_CONTRACT_HASH = "5e64da6a3d826e7f6fa3db7dca0a4ba92c10cfb784981e71a25aed9513a5c687";
-var MESSAGING_RECEIPT_BINDING_CONTRACT_ID = "wrench.messaging-receipt-binding.v1";
-var MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR = Object.freeze({
-  schemaVersion: 1,
-  format: "wrench.messaging-contract-descriptor",
-  contractId: MESSAGING_RECEIPT_BINDING_CONTRACT_ID,
-  fields: Object.freeze([
-    "schemaVersion:1",
-    "format:wrench.messaging-receipt-binding",
-    "contractId:wrench.messaging-receipt-binding.v1",
-    "contractHash:sha256",
-    "clientIntentSha256:sha256",
-    "routeRefSha256:sha256",
-    "contextRefSha256:sha256",
-    "turnDigest:sha256",
-    "previewDigest:sha256",
-    "runId:opaque",
-    "state:submitted|failed|partial|indeterminate",
-    "partCount:uint",
-    "provenPartCount:uint",
-    "receiptSha256:sha256",
-    "recordedAt:rfc3339"
-  ])
-});
-var MESSAGING_RECEIPT_BINDING_CONTRACT_HASH = "7f6cf724f0200b2399e4f4641c637b20b48914fc5c9b13755127a8ec69fe66f4";
+var MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID = WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID;
+var MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR = WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR;
+var MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH = WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH;
+var MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID = WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID;
+var MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR = WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR;
+var MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH = WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH;
+var MESSAGING_CONTEXT_BINDING_CONTRACT_ID = MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID;
+var MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR = MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR;
+var MESSAGING_CONTEXT_BINDING_CONTRACT_HASH = MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH;
+var MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID = WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID;
+var MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR = WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR;
+var MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH = WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH;
+var MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID = WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID;
+var MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR = WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR;
+var MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH = WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH;
+var MESSAGING_RECEIPT_BINDING_CONTRACT_ID = MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID;
+var MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR = MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR;
+var MESSAGING_RECEIPT_BINDING_CONTRACT_HASH = MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH;
 function fail(label, detail) {
   throw new Error(`${label} ${detail}`);
 }
@@ -257,6 +248,17 @@ function parseMessagingRouteResolveRequestV1(value) {
     candidate: Object.freeze({ coordinate })
   });
 }
+function parseMessagingRouteResolveRequestV2(value) {
+  const source = record(value, "messaging route resolve request V2");
+  exactKeys(source, ["schemaVersion", "format", "routeRef"], [], "messaging route resolve request V2");
+  if (source.schemaVersion !== 2 || source.format !== "wrench.messaging-route-resolve-request")
+    return fail("messaging route resolve request V2", "has an unsupported contract");
+  return Object.freeze({
+    schemaVersion: 2,
+    format: "wrench.messaging-route-resolve-request",
+    routeRef: routeRef(source.routeRef, "messaging route resolve request V2.routeRef")
+  });
+}
 function parseMessagingContextRequestV1(value) {
   const source = record(value, "messaging context request");
   exactKeys(source, ["schemaVersion", "format", "routeRef", "limit"], [], "messaging context request");
@@ -324,51 +326,20 @@ function messagingTurnDigest(turn) {
   }));
 }
 function parseMessagingContextBindingV1(value) {
+  const parsed = parseWrenchMessagingContextBindingV1(value);
+  routeRef(parsed.routeRef, "messaging context binding.routeRef");
+  contextRef(parsed.contextRef, "messaging context binding.contextRef");
+  return parsed;
+}
+function parseMessagingContextBindingV2(value) {
+  const parsed = parseWrenchMessagingContextBindingV2(value);
+  routeRef(parsed.routeRef, "messaging context binding.routeRef");
+  contextRef(parsed.contextRef, "messaging context binding.contextRef");
+  return parsed;
+}
+function parseMessagingContextBinding(value) {
   const source = record(value, "messaging context binding");
-  exactKeys(source, [
-    "schemaVersion",
-    "format",
-    "contractId",
-    "contractHash",
-    "routeRef",
-    "contextRef",
-    "exactDataRevision",
-    "latestMessageRevision",
-    "validatedAt",
-    "expiresAt"
-  ], [], "messaging context binding");
-  if (source.schemaVersion !== 1 || source.format !== "wrench.messaging-context-binding" || source.contractId !== MESSAGING_CONTEXT_BINDING_CONTRACT_ID || source.contractHash !== MESSAGING_CONTEXT_BINDING_CONTRACT_HASH)
-    return fail("messaging context binding", "has an unsupported contract");
-  const digest = (candidate, label) => {
-    const result = text(candidate, label, 64);
-    if (!/^[a-f0-9]{64}$/u.test(result))
-      return fail(label, "must be a SHA-256 digest");
-    return result;
-  };
-  const timestamp = (candidate, label) => {
-    const result = text(candidate, label, 64);
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u.test(result) || !Number.isFinite(Date.parse(result))) {
-      return fail(label, "must be an RFC3339 UTC timestamp");
-    }
-    return result;
-  };
-  const validatedAt = timestamp(source.validatedAt, "messaging context binding.validatedAt");
-  const expiresAt = timestamp(source.expiresAt, "messaging context binding.expiresAt");
-  if (Date.parse(expiresAt) <= Date.parse(validatedAt)) {
-    return fail("messaging context binding.expiresAt", "must follow validatedAt");
-  }
-  return Object.freeze({
-    schemaVersion: 1,
-    format: "wrench.messaging-context-binding",
-    contractId: MESSAGING_CONTEXT_BINDING_CONTRACT_ID,
-    contractHash: MESSAGING_CONTEXT_BINDING_CONTRACT_HASH,
-    routeRef: routeRef(source.routeRef, "messaging context binding.routeRef"),
-    contextRef: contextRef(source.contextRef, "messaging context binding.contextRef"),
-    exactDataRevision: digest(source.exactDataRevision, "messaging context binding.exactDataRevision"),
-    latestMessageRevision: digest(source.latestMessageRevision, "messaging context binding.latestMessageRevision"),
-    validatedAt,
-    expiresAt
-  });
+  return source.contractId === MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID ? parseMessagingContextBindingV1(source) : parseMessagingContextBindingV2(source);
 }
 function sha256Digest(candidate, label) {
   const result = text(candidate, label, 64);
@@ -467,6 +438,52 @@ function parseMessagingRouteV1(value) {
     expiresAt: utcTimestamp(source.expiresAt, "messaging route.expiresAt")
   });
 }
+function parseMessagingRouteV2(value) {
+  const source = record(value, "messaging route V2");
+  exactKeys(source, [
+    "schemaVersion",
+    "format",
+    "routeRef",
+    "network",
+    "conversation",
+    "readiness",
+    "completeness",
+    "expiresAt"
+  ], [], "messaging route V2");
+  if (source.schemaVersion !== 2 || source.format !== "wrench.messaging-route") {
+    return fail("messaging route V2", "has an unsupported contract");
+  }
+  const readiness = record(source.readiness, "messaging route V2.readiness");
+  exactKeys(readiness, ["context", "turn", "reply", "reason"], [], "messaging route V2.readiness");
+  if (readiness.context !== "ready" && readiness.context !== "historical-readable" && readiness.context !== "resolution-required" && readiness.context !== "unavailable")
+    return fail("messaging route V2.readiness.context", "is unsupported");
+  if (readiness.turn !== "ready" && readiness.turn !== "unavailable") {
+    return fail("messaging route V2.readiness.turn", "is unsupported");
+  }
+  if (readiness.reply !== "supported" && readiness.reply !== "unsupported") {
+    return fail("messaging route V2.readiness.reply", "is unsupported");
+  }
+  if (readiness.context !== "ready" && (readiness.turn !== "unavailable" || readiness.reply !== "unsupported"))
+    return fail("messaging route V2.readiness", "must block actions when freshness is unproven");
+  if (readiness.context !== "ready" && readiness.reason === null) {
+    return fail("messaging route V2.readiness.reason", "is required when context is not actionable");
+  }
+  return Object.freeze({
+    schemaVersion: 2,
+    format: "wrench.messaging-route",
+    routeRef: routeRef(source.routeRef, "messaging route V2.routeRef"),
+    network: id(source.network, "messaging route V2.network", 64),
+    conversation: conversation(source.conversation, "messaging route V2.conversation"),
+    readiness: Object.freeze({
+      context: readiness.context,
+      turn: readiness.turn,
+      reply: readiness.reply,
+      reason: nullableBoundedText(readiness.reason, "messaging route V2.readiness.reason", 1000)
+    }),
+    completeness: completeness(source.completeness, "messaging route V2.completeness"),
+    expiresAt: utcTimestamp(source.expiresAt, "messaging route V2.expiresAt")
+  });
+}
 function parseMessagingRoutesV1(value) {
   const source = record(value, "messaging routes");
   exactKeys(source, [
@@ -494,6 +511,41 @@ function parseMessagingRoutesV1(value) {
     format: "wrench.messaging-routes",
     generatedAt: utcTimestamp(source.generatedAt, "messaging routes.generatedAt"),
     completeness: completeness(source.completeness, "messaging routes.completeness"),
+    continuation: Object.freeze({
+      direction: continuation.direction,
+      request,
+      nextInput
+    }),
+    routes: Object.freeze(routes)
+  });
+}
+function parseMessagingRoutesV2(value) {
+  const source = record(value, "messaging routes V2");
+  exactKeys(source, [
+    "schemaVersion",
+    "format",
+    "generatedAt",
+    "completeness",
+    "continuation",
+    "routes"
+  ], [], "messaging routes V2");
+  if (source.schemaVersion !== 2 || source.format !== "wrench.messaging-routes") {
+    return fail("messaging routes V2", "has an unsupported contract");
+  }
+  const continuation = record(source.continuation, "messaging routes V2.continuation");
+  exactKeys(continuation, ["direction", "request", "nextInput"], [], "messaging routes V2.continuation");
+  if (continuation.direction !== "forward" && continuation.direction !== "backward" && continuation.direction !== "none")
+    return fail("messaging routes V2.continuation.direction", "is unsupported");
+  const request = nullableBoundedText(continuation.request, "messaging routes V2.continuation.request", 8192);
+  const nextInput = continuation.nextInput === null ? null : cloneJsonRecord(continuation.nextInput, "messaging routes V2.continuation.nextInput");
+  if (continuation.direction === "none" && (request !== null || nextInput !== null))
+    return fail("messaging routes V2.continuation", "must be empty when direction is none");
+  const routes = denseArray(source.routes, "messaging routes V2.routes", 1000).map(parseMessagingRouteV2);
+  return Object.freeze({
+    schemaVersion: 2,
+    format: "wrench.messaging-routes",
+    generatedAt: utcTimestamp(source.generatedAt, "messaging routes V2.generatedAt"),
+    completeness: completeness(source.completeness, "messaging routes V2.completeness"),
     continuation: Object.freeze({
       direction: continuation.direction,
       request,
@@ -597,7 +649,7 @@ function parseMessagingContextV1(value) {
   return Object.freeze({
     schemaVersion: 1,
     format: "wrench.messaging-context",
-    binding: parseMessagingContextBindingV1(source.binding),
+    binding: source.binding === null ? null : parseMessagingContextBinding(source.binding),
     network: id(source.network, "messaging context.network", 64),
     liveness: source.liveness,
     truncated: bool(source.truncated, "messaging context.truncated"),
@@ -694,7 +746,7 @@ function parseMessagingPrivateOutputReceiptV1(value) {
   });
 }
 function parseMessagingReceiptBindingV1(value) {
-  const source = record(value, "messaging receipt binding");
+  const source = record(value, "messaging receipt binding V1");
   exactKeys(source, [
     "schemaVersion",
     "format",
@@ -711,8 +763,59 @@ function parseMessagingReceiptBindingV1(value) {
     "provenPartCount",
     "receiptSha256",
     "recordedAt"
+  ], [], "messaging receipt binding V1");
+  if (source.schemaVersion !== 1 || source.format !== "wrench.messaging-receipt-binding" || source.contractId !== MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID || source.contractHash !== MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH || source.state !== "submitted" && source.state !== "failed" && source.state !== "partial" && source.state !== "indeterminate")
+    return fail("messaging receipt binding V1", "has an unsupported contract");
+  const partCount = integer(source.partCount, "messaging receipt binding V1.partCount", 1, 8);
+  const provenPartCount = integer(source.provenPartCount, "messaging receipt binding V1.provenPartCount", 0, partCount);
+  const validPrefix = source.state === "submitted" ? provenPartCount === partCount : source.state === "failed" ? provenPartCount === 0 : source.state === "partial" ? provenPartCount >= 1 && provenPartCount < partCount : provenPartCount < partCount;
+  if (!validPrefix) {
+    return fail("messaging receipt binding V1", "violates the proven-prefix state law");
+  }
+  const normalizedWithoutReceipt = Object.freeze({
+    schemaVersion: 1,
+    format: "wrench.messaging-receipt-binding",
+    contractId: MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+    contractHash: MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+    clientIntentSha256: sha256Digest(source.clientIntentSha256, "messaging receipt binding V1.clientIntentSha256"),
+    routeRefSha256: sha256Digest(source.routeRefSha256, "messaging receipt binding V1.routeRefSha256"),
+    contextRefSha256: sha256Digest(source.contextRefSha256, "messaging receipt binding V1.contextRefSha256"),
+    turnDigest: sha256Digest(source.turnDigest, "messaging receipt binding V1.turnDigest"),
+    previewDigest: sha256Digest(source.previewDigest, "messaging receipt binding V1.previewDigest"),
+    runId: id(source.runId, "messaging receipt binding V1.runId", 256),
+    state: source.state,
+    partCount,
+    provenPartCount,
+    recordedAt: utcTimestamp(source.recordedAt, "messaging receipt binding V1.recordedAt")
+  });
+  const receiptSha256 = sha256Digest(source.receiptSha256, "messaging receipt binding V1.receiptSha256");
+  if (sha256(canonicalJson(normalizedWithoutReceipt)) !== receiptSha256) {
+    return fail("messaging receipt binding V1.receiptSha256", "does not bind the canonical receipt");
+  }
+  return Object.freeze({ ...normalizedWithoutReceipt, receiptSha256 });
+}
+function parseMessagingReceiptBindingV2(value) {
+  const source = record(value, "messaging receipt binding");
+  exactKeys(source, [
+    "schemaVersion",
+    "format",
+    "contractId",
+    "contractHash",
+    "clientIntentSha256",
+    "contextBindingSha256",
+    "sourceConversationCoordinateSha256",
+    "routeRefSha256",
+    "contextRefSha256",
+    "turnDigest",
+    "previewDigest",
+    "runId",
+    "state",
+    "partCount",
+    "provenPartCount",
+    "receiptSha256",
+    "recordedAt"
   ], [], "messaging receipt binding");
-  if (source.schemaVersion !== 1 || source.format !== "wrench.messaging-receipt-binding" || source.contractId !== MESSAGING_RECEIPT_BINDING_CONTRACT_ID || source.contractHash !== MESSAGING_RECEIPT_BINDING_CONTRACT_HASH || source.state !== "submitted" && source.state !== "failed" && source.state !== "partial" && source.state !== "indeterminate")
+  if (source.schemaVersion !== 2 || source.format !== "wrench.messaging-receipt-binding" || source.contractId !== MESSAGING_RECEIPT_BINDING_CONTRACT_ID || source.contractHash !== MESSAGING_RECEIPT_BINDING_CONTRACT_HASH || source.state !== "submitted" && source.state !== "failed" && source.state !== "partial" && source.state !== "indeterminate")
     return fail("messaging receipt binding", "has an unsupported contract");
   const partCount = integer(source.partCount, "messaging receipt binding.partCount", 1, 8);
   const provenPartCount = integer(source.provenPartCount, "messaging receipt binding.provenPartCount", 0, partCount);
@@ -722,11 +825,13 @@ function parseMessagingReceiptBindingV1(value) {
   }
   const runId = id(source.runId, "messaging receipt binding.runId", 256);
   const normalizedWithoutReceipt = Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "wrench.messaging-receipt-binding",
     contractId: MESSAGING_RECEIPT_BINDING_CONTRACT_ID,
     contractHash: MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
     clientIntentSha256: sha256Digest(source.clientIntentSha256, "messaging receipt binding.clientIntentSha256"),
+    contextBindingSha256: sha256Digest(source.contextBindingSha256, "messaging receipt binding.contextBindingSha256"),
+    sourceConversationCoordinateSha256: sha256Digest(source.sourceConversationCoordinateSha256, "messaging receipt binding.sourceConversationCoordinateSha256"),
     routeRefSha256: sha256Digest(source.routeRefSha256, "messaging receipt binding.routeRefSha256"),
     contextRefSha256: sha256Digest(source.contextRefSha256, "messaging receipt binding.contextRefSha256"),
     turnDigest: sha256Digest(source.turnDigest, "messaging receipt binding.turnDigest"),
@@ -746,12 +851,17 @@ function parseMessagingReceiptBindingV1(value) {
     receiptSha256
   });
 }
+function parseMessagingReceiptBinding(value) {
+  const source = record(value, "messaging receipt binding");
+  return source.contractId === MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID ? parseMessagingReceiptBindingV1(source) : parseMessagingReceiptBindingV2(source);
+}
 
 // src/messaging.ts
 var MAX_STDOUT_BYTES = 64 * 1024;
 var MAX_STDERR_BYTES = 64 * 1024;
 var MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
 var COMMAND_TIMEOUT_MS = 120000;
+var COMMAND_TERMINATION_GRACE_MS = 1000;
 function cliSourcePath() {
   const besideSource = fileURLToPath(new URL("./cli.ts", import.meta.url));
   if (existsSync(besideSource))
@@ -823,36 +933,78 @@ async function runCli(operation, request, clientOptions) {
         "--json"
       ], {
         env: prepared.environment,
-        stdio: ["pipe", "pipe", "pipe"]
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32"
       });
       const stdout = [];
       const stderr = [];
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let settled = false;
+      let pendingError = null;
+      let terminationTimer = null;
       const settleFailure = (error) => {
         if (settled)
           return;
         settled = true;
         clearTimeout(timer);
+        if (terminationTimer !== null)
+          clearTimeout(terminationTimer);
         prepared.signal?.removeEventListener("abort", abort);
         reject(error instanceof Error ? error : new Error(String(error)));
       };
+      const signalOwnedTree = (signal) => {
+        try {
+          if (process.platform !== "win32" && child.pid !== undefined) {
+            process.kill(-child.pid, signal);
+          } else {
+            child.kill(signal);
+          }
+        } catch {}
+      };
+      const ownedTreeIsAlive = () => {
+        if (process.platform === "win32" || child.pid === undefined)
+          return false;
+        try {
+          process.kill(-child.pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const rejectAfterOwnedTreeExit = () => {
+        signalOwnedTree("SIGKILL");
+        if (!ownedTreeIsAlive()) {
+          settleFailure(pendingError ?? new Error("Wrench messaging operation failed"));
+          return;
+        }
+        setTimeout(rejectAfterOwnedTreeExit, 10);
+      };
+      const requestTermination = (error) => {
+        pendingError ??= error;
+        if (child.pid === undefined) {
+          settleFailure(pendingError);
+          return;
+        }
+        if (terminationTimer !== null)
+          return;
+        signalOwnedTree("SIGTERM");
+        terminationTimer = setTimeout(() => signalOwnedTree("SIGKILL"), COMMAND_TERMINATION_GRACE_MS);
+        terminationTimer.unref?.();
+      };
       const abort = () => {
-        child.kill("SIGKILL");
-        settleFailure(prepared.signal?.reason instanceof Error ? prepared.signal.reason : new DOMException("Wrench messaging operation was aborted", "AbortError"));
+        requestTermination(prepared.signal?.reason instanceof Error ? prepared.signal.reason : new DOMException("Wrench messaging operation was aborted", "AbortError"));
       };
       const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        settleFailure(new Error("Wrench messaging operation timed out"));
+        requestTermination(new Error("Wrench messaging operation timed out"));
       }, COMMAND_TIMEOUT_MS);
+      timer.unref?.();
       prepared.signal?.addEventListener("abort", abort, { once: true });
-      child.on("error", settleFailure);
+      child.on("error", (error) => requestTermination(error));
       child.stdout.on("data", (chunk) => {
         stdoutBytes += chunk.byteLength;
         if (stdoutBytes > MAX_STDOUT_BYTES) {
-          child.kill("SIGKILL");
-          settleFailure(new Error("Wrench messaging receipt exceeded its byte bound"));
+          requestTermination(new Error("Wrench messaging receipt exceeded its byte bound"));
           return;
         }
         stdout.push(Buffer.from(chunk));
@@ -860,8 +1012,7 @@ async function runCli(operation, request, clientOptions) {
       child.stderr.on("data", (chunk) => {
         stderrBytes += chunk.byteLength;
         if (stderrBytes > MAX_STDERR_BYTES) {
-          child.kill("SIGKILL");
-          settleFailure(new Error("Wrench messaging diagnostic exceeded its byte bound"));
+          requestTermination(new Error("Wrench messaging diagnostic exceeded its byte bound"));
           return;
         }
         stderr.push(Buffer.from(chunk));
@@ -869,16 +1020,22 @@ async function runCli(operation, request, clientOptions) {
       child.on("close", (code) => {
         if (settled)
           return;
-        settled = true;
         clearTimeout(timer);
+        if (terminationTimer !== null)
+          clearTimeout(terminationTimer);
         prepared.signal?.removeEventListener("abort", abort);
+        if (pendingError !== null) {
+          rejectAfterOwnedTreeExit();
+          return;
+        }
+        settled = true;
         resolve(Object.freeze({
           code: code ?? 3,
           stdout: Buffer.concat(stdout),
           stderr: Object.freeze(stderr)
         }));
       });
-      child.stdin.on("error", settleFailure);
+      child.stdin.on("error", (error) => requestTermination(error));
       child.stdin.end(`${canonicalJson(request)}
 `, "utf8");
     });
@@ -916,11 +1073,11 @@ async function runCli(operation, request, clientOptions) {
   }
 }
 async function discoverMessagingRoutes(request, clientOptions) {
-  const value = parseMessagingRoutesV1(await runCli("routes", parseMessagingRoutesRequestV1(request), clientOptions));
+  const value = parseMessagingRoutesV2(await runCli("routes", parseMessagingRoutesRequestV1(request), clientOptions));
   return value;
 }
 async function resolveMessagingRoute(request, clientOptions) {
-  return parseMessagingRouteV1(await runCli("resolve", parseMessagingRouteResolveRequestV1(request), clientOptions));
+  return parseMessagingRouteV2(await runCli("resolve", parseMessagingRouteResolveRequestV2(request), clientOptions));
 }
 async function readMessagingContext(request, clientOptions) {
   return parseMessagingContextV1(await runCli("context", parseMessagingContextRequestV1(request), clientOptions));
@@ -933,21 +1090,40 @@ export {
   readMessagingContext,
   previewMessagingTurn,
   parseMessagingTurnV1,
+  parseMessagingRoutesV2,
   parseMessagingRoutesV1,
   parseMessagingRoutesRequestV1,
+  parseMessagingRouteV2,
   parseMessagingRouteV1,
+  parseMessagingRouteResolveRequestV2,
   parseMessagingRouteResolveRequestV1,
+  parseMessagingReceiptBindingV2,
   parseMessagingReceiptBindingV1,
+  parseMessagingReceiptBinding,
   parseMessagingPrivateOutputReceiptV1,
   parseMessagingPreviewV1,
   parseMessagingContextV1,
   parseMessagingContextRequestV1,
+  parseMessagingContextBindingV2,
   parseMessagingContextBindingV1,
+  parseMessagingContextBinding,
   messagingTurnDigest,
   discoverMessagingRoutes,
+  MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID,
+  MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH,
+  MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+  MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+  MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR,
   MESSAGING_RECEIPT_BINDING_CONTRACT_ID,
   MESSAGING_RECEIPT_BINDING_CONTRACT_HASH,
   MESSAGING_RECEIPT_BINDING_CONTRACT_DESCRIPTOR,
+  MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID,
+  MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH,
+  MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
+  MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
+  MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR,
   MESSAGING_CONTEXT_BINDING_CONTRACT_ID,
   MESSAGING_CONTEXT_BINDING_CONTRACT_HASH,
   MESSAGING_CONTEXT_BINDING_CONTRACT_DESCRIPTOR

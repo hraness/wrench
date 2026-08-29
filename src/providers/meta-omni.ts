@@ -38,6 +38,7 @@ function materializedConversation(
 ): ProviderConversationV1 {
   return Object.freeze({
     kind: "conversation",
+    conversationKind: "unknown",
     providerId: value.providerId,
     providerRevision: null,
     orderedAt: value.orderedAt,

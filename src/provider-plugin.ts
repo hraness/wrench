@@ -27,6 +27,7 @@ import {
 import { fileURLToPath } from "node:url";
 
 import type { WrenchAuth } from "./auth";
+import type { MessageLikeMeSourceConversationCoordinateBindingV1 } from "./message-like-me-agentic-messaging";
 import type {
   BrowserDispatchPlan,
   ArrayInputField,
@@ -46,7 +47,6 @@ import type {
   ProviderMessageV1,
 } from "./omni-model";
 import type { LocalCliOperationExecutor } from "./local-cli-execution";
-import type { MessagingRouteCoordinateV1 } from "./messaging-types";
 import type { OperationDeadline } from "./operation-deadline";
 import {
   localCliToolArtifactForCurrentRuntime,
@@ -238,6 +238,15 @@ export type ProviderPluginMessagingExpectedOwnPrefixProofV1 =
 
 export type ProviderPluginMessagingLiveRouteStateV1 = {
   readonly conversationProviderId: string;
+  /** Fresh provider-native network shown in the confirmation recipient. */
+  readonly network: string;
+  readonly conversation: {
+    readonly kind: "single" | "group" | "unknown";
+    readonly title: string | null;
+    readonly participantCount: number;
+  };
+  readonly sourceConversationCoordinate:
+    MessageLikeMeSourceConversationCoordinateBindingV1;
   readonly participantFingerprint: string;
   readonly providerRevision: string | null;
 };
@@ -292,7 +301,10 @@ export type ProviderPluginMessagingActionDefinitionV1 =
       readonly livePreflight: {
         readonly operation: string;
         readonly input: (target: ProviderPluginMessagingTargetV1) => OperationInput;
-        readonly snapshot: (output: unknown) => ProviderPluginMessagingLiveRouteStateV1;
+        readonly snapshot: (
+          output: unknown,
+          expectedAccountSubject: string,
+        ) => ProviderPluginMessagingLiveRouteStateV1;
       };
       readonly compileTurnPart: (
         target: ProviderPluginMessagingTargetV1,
@@ -329,24 +341,26 @@ export type ProviderPluginMessagingDefinitionV1 = {
     | "freshness-unproven";
   readonly listOperation: "messaging.list";
   readonly contextOperation: "messaging.read";
-  /** Closed coordinate variant this exact provider codec accepts. */
-  readonly coordinateKind: MessagingRouteCoordinateV1["kind"];
   readonly enumerateRoutes: (
     input: OperationInput,
     page: ProviderMaterializedPageV1,
   ) => readonly ProviderPluginMessagingRouteCandidateV1[];
-  /** Exact coordinate resolution, independent from bounded list pagination. */
+  /** Exact stored-target resolution, independent from bounded list pagination. */
   readonly resolveRoute: {
     readonly operation: string;
     readonly input: (
-      listInput: OperationInput,
-      coordinate: MessagingRouteCoordinateV1,
+      target: ProviderPluginMessagingTargetV1,
     ) => OperationInput;
     readonly candidates: (
-      listInput: OperationInput,
-      coordinate: MessagingRouteCoordinateV1,
+      target: ProviderPluginMessagingTargetV1,
       output: unknown,
     ) => readonly ProviderPluginMessagingRouteCandidateV1[];
+    /** Canonical source coordinate proved only by the exact resolver output. */
+    readonly sourceConversationCoordinate: (
+      target: ProviderPluginMessagingTargetV1,
+      output: unknown,
+      expectedAccountSubject: string,
+    ) => MessageLikeMeSourceConversationCoordinateBindingV1 | null;
   };
   readonly parseTarget: (value: unknown) => ProviderPluginMessagingTargetV1;
   readonly contextInput: (
@@ -3512,7 +3526,6 @@ function freezeProviderPluginMessaging(
     "contextLiveness",
     "listOperation",
     "contextOperation",
-    "coordinateKind",
     "enumerateRoutes",
     "resolveRoute",
     "parseTarget",
@@ -3529,9 +3542,6 @@ function freezeProviderPluginMessaging(
       && value.contextLiveness !== "freshness-unproven"
     || value.listOperation !== "messaging.list"
     || value.contextOperation !== "messaging.read"
-    || value.coordinateKind !== "beeperConversation"
-      && value.coordinateKind !== "imessageChat"
-      && value.coordinateKind !== "whatsappJid"
     || typeof value.enumerateRoutes !== "function"
     || typeof value.resolveRoute !== "object"
     || value.resolveRoute === null
@@ -3544,7 +3554,7 @@ function freezeProviderPluginMessaging(
   }
   requireExactKeys(
     value.resolveRoute,
-    ["operation", "input", "candidates"],
+    ["operation", "input", "candidates", "sourceConversationCoordinate"],
     `provider plugin surface ${surfaceId} messaging exact route resolution`,
   );
   if (
@@ -3552,6 +3562,7 @@ function freezeProviderPluginMessaging(
     || !isProviderPluginOperationName(value.resolveRoute.operation)
     || typeof value.resolveRoute.input !== "function"
     || typeof value.resolveRoute.candidates !== "function"
+    || typeof value.resolveRoute.sourceConversationCoordinate !== "function"
   ) throw new Error(
     `provider plugin surface ${surfaceId} has an invalid exact messaging route resolver`,
   );
@@ -3610,12 +3621,13 @@ function freezeProviderPluginMessaging(
       contextLiveness: value.contextLiveness,
       listOperation: value.listOperation,
       contextOperation: value.contextOperation,
-      coordinateKind: value.coordinateKind,
       enumerateRoutes: value.enumerateRoutes,
       resolveRoute: Object.freeze({
         operation: value.resolveRoute.operation,
         input: value.resolveRoute.input,
         candidates: value.resolveRoute.candidates,
+        sourceConversationCoordinate:
+          value.resolveRoute.sourceConversationCoordinate,
       }),
       parseTarget: value.parseTarget,
       contextInput: value.contextInput,
@@ -3629,6 +3641,11 @@ function freezeProviderPluginMessaging(
   if (value.action.state !== "supported") {
     throw new Error(
       `provider plugin surface ${surfaceId} messaging action has an invalid state`,
+    );
+  }
+  if (value.resolveRoute.operation !== "conversations.read") {
+    throw new Error(
+      `provider plugin surface ${surfaceId} actionable messaging requires exact conversations.read route resolution`,
     );
   }
   const action = value.action;
@@ -3688,12 +3705,13 @@ function freezeProviderPluginMessaging(
     contextLiveness: value.contextLiveness,
     listOperation: value.listOperation,
     contextOperation: value.contextOperation,
-    coordinateKind: value.coordinateKind,
     enumerateRoutes: value.enumerateRoutes,
     resolveRoute: Object.freeze({
       operation: value.resolveRoute.operation,
       input: value.resolveRoute.input,
       candidates: value.resolveRoute.candidates,
+      sourceConversationCoordinate:
+        value.resolveRoute.sourceConversationCoordinate,
     }),
     parseTarget: value.parseTarget,
     contextInput: value.contextInput,

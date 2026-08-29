@@ -670,7 +670,8 @@ code:not(pre code) {
 .provider-card-heading {
   align-items: center;
   display: flex;
-  justify-content: space-between;
+  gap: 0.75rem;
+  justify-content: flex-start;
 }
 
 .provider-mark {
@@ -1297,9 +1298,30 @@ code:not(pre code) {
   width: 44%;
 }
 
-.version-table table,
+.version-table table {
+  min-width: 58rem;
+}
+
 .artifact-table table {
-  min-width: 62rem;
+  min-width: 58rem;
+  table-layout: fixed;
+}
+
+.artifact-table th:nth-child(1),
+.artifact-table td:nth-child(1) {
+  width: 16%;
+}
+
+.artifact-table th:nth-child(2),
+.artifact-table td:nth-child(2) {
+  width: 18%;
+}
+
+.artifact-table th:nth-child(3),
+.artifact-table td:nth-child(3),
+.artifact-table th:nth-child(4),
+.artifact-table td:nth-child(4) {
+  width: 33%;
 }
 
 .artifact-table code {
@@ -2096,10 +2118,23 @@ body {
   text-transform: uppercase;
 }
 
-.provider-feature-copy,
-.provider-mark,
 .provider-adapter-count {
   display: none;
+}
+
+.provider-feature-copy {
+  display: block;
+}
+
+.provider-mark {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--provider-accent);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1.75rem;
+  width: 1.75rem;
 }
 
 .provider-status-note {

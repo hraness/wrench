@@ -174,8 +174,8 @@ import {
   updateMessagingRun,
 } from "./messaging-action-store";
 import type {
-  MessagingReceiptBindingV1,
-  MessagingRunReceiptV1,
+  MessagingReceiptBinding,
+  MessagingRunReceipt,
   MessagingRunV1,
 } from "./messaging-types";
 import {
@@ -255,6 +255,10 @@ export type MessagingCompositeInvocationPlanV1 = {
   readonly routeRef: string;
   readonly contextRef: string;
   readonly clientIntentSha256: string;
+  /** Null only when reading an exact #72 predecessor plan. */
+  readonly contextBindingSha256: string | null;
+  /** Null only when reading an exact #72 predecessor plan. */
+  readonly sourceConversationCoordinateSha256: string | null;
   readonly turnDigest: string;
   readonly previewDigest: string;
   readonly contextLimit: number;
@@ -288,8 +292,16 @@ export type CreateMessagingCompositeInvocationPartV1 = {
 
 export type CreateMessagingCompositeInvocationMetadataV1 = Omit<
   MessagingCompositeInvocationPlanV1,
-  "schemaVersion" | "format" | "previewDigest" | "parts"
->;
+  | "schemaVersion"
+  | "format"
+  | "previewDigest"
+  | "parts"
+  | "contextBindingSha256"
+  | "sourceConversationCoordinateSha256"
+> & {
+  readonly contextBindingSha256: string;
+  readonly sourceConversationCoordinateSha256: string;
+};
 
 export type InvocationDuplicateRiskV1 = {
   readonly schemaVersion: 1;
@@ -805,10 +817,26 @@ function planPath(digest: string, environment: Readonly<Record<string, string | 
 
 export function invocationPlanDigest(plan: InvocationPlan): string {
   if (plan.messagingComposite === undefined) return sha256(canonicalJson(plan));
+  const {
+    contextBindingSha256,
+    sourceConversationCoordinateSha256,
+    ...predecessorComposite
+  } = plan.messagingComposite;
+  if (
+    (contextBindingSha256 === null)
+    !== (sourceConversationCoordinateSha256 === null)
+  ) throw new Error("messaging composite invocation has partial context evidence");
+  const messagingComposite = contextBindingSha256 === null
+    ? predecessorComposite
+    : {
+        ...predecessorComposite,
+        contextBindingSha256,
+        sourceConversationCoordinateSha256,
+      };
   return sha256(canonicalJson({
     ...plan,
     messagingComposite: {
-      ...plan.messagingComposite,
+      ...messagingComposite,
       // The preview artifact contains this digest, so its own hash is bound by
       // authenticated plan storage and validation rather than a circular hash.
       previewDigest: null,
@@ -1536,12 +1564,23 @@ export function createInvocationPlan(
 export function messagingCompositeInputHash(
   composite: MessagingCompositeInvocationPlanV1,
 ): string {
+  if (
+    (composite.contextBindingSha256 === null)
+    !== (composite.sourceConversationCoordinateSha256 === null)
+  ) throw new Error("messaging composite invocation has partial context evidence");
   return sha256(canonicalJson({
     schemaVersion: composite.schemaVersion,
     format: composite.format,
     routeRef: composite.routeRef,
     contextRef: composite.contextRef,
     clientIntentSha256: composite.clientIntentSha256,
+    ...(composite.contextBindingSha256 === null
+      ? {}
+      : {
+          contextBindingSha256: composite.contextBindingSha256,
+          sourceConversationCoordinateSha256:
+            composite.sourceConversationCoordinateSha256,
+        }),
     turnDigest: composite.turnDigest,
     contextLimit: composite.contextLimit,
     baseExactDataRevision: composite.baseExactDataRevision,
@@ -2164,15 +2203,25 @@ function messagingDigest(value: unknown, label: string): string {
   return value;
 }
 
-function parseMessagingCompositeInvocationPlan(
+export function parseMessagingCompositeInvocationPlan(
   value: unknown,
 ): MessagingCompositeInvocationPlanV1 {
+  const hasContextBinding = isRecord(value)
+    && Object.hasOwn(value, "contextBindingSha256");
+  const hasSourceCoordinate = isRecord(value)
+    && Object.hasOwn(value, "sourceConversationCoordinateSha256");
+  if (hasContextBinding !== hasSourceCoordinate) {
+    throw new Error("messaging composite invocation has partial context evidence");
+  }
   if (!isRecord(value) || !hasExactKeys(value, [
     "schemaVersion",
     "format",
     "routeRef",
     "contextRef",
     "clientIntentSha256",
+    ...(hasContextBinding
+      ? ["contextBindingSha256", "sourceConversationCoordinateSha256"]
+      : []),
     "turnDigest",
     "previewDigest",
     "contextLimit",
@@ -2183,6 +2232,14 @@ function parseMessagingCompositeInvocationPlan(
     "recipient",
     "parts",
   ])) throw new Error("messaging composite invocation is malformed");
+  if (
+    hasContextBinding
+    && (
+      value.contextBindingSha256 === null
+      || value.sourceConversationCoordinateSha256 === null
+    )
+  ) throw new Error("messaging composite invocation has malformed context evidence");
+  const hasCurrentContextEvidence = hasContextBinding;
   if (
     value.schemaVersion !== 1
     || value.format !== "wrench.messaging-composite-invocation"
@@ -2306,6 +2363,18 @@ function parseMessagingCompositeInvocationPlan(
     routeRef: value.routeRef,
     contextRef: value.contextRef,
     clientIntentSha256: messagingDigest(value.clientIntentSha256, "messaging composite client intent"),
+    contextBindingSha256: hasCurrentContextEvidence
+      ? messagingDigest(
+          value.contextBindingSha256,
+          "messaging composite context binding",
+        )
+      : null,
+    sourceConversationCoordinateSha256: hasCurrentContextEvidence
+      ? messagingDigest(
+          value.sourceConversationCoordinateSha256,
+          "messaging composite source conversation coordinate",
+        )
+      : null,
     turnDigest: messagingDigest(value.turnDigest, "messaging composite turn digest"),
     previewDigest: messagingDigest(value.previewDigest, "messaging composite preview digest"),
     contextLimit: value.contextLimit,
@@ -5556,8 +5625,8 @@ export async function confirmInvocation(
 
 export type MessagingConfirmationResult = {
   readonly run: MessagingRunV1;
-  readonly receipt: MessagingRunReceiptV1;
-  readonly receiptBinding: MessagingReceiptBindingV1;
+  readonly receipt: MessagingRunReceipt;
+  readonly receiptBinding: MessagingReceiptBinding;
   readonly ordinaryReceipt: RunReceipt;
 };
 
@@ -5636,6 +5705,14 @@ export async function confirmMessagingInvocation(
     stored = loadInvocationPlan(digest, environment);
     if (stored.plan.messagingComposite === undefined) {
       throw new Error("confirmation plan is not a messaging composite");
+    }
+    if (
+      stored.plan.messagingComposite.contextBindingSha256 === null
+      || stored.plan.messagingComposite.sourceConversationCoordinateSha256 === null
+    ) {
+      throw new Error(
+        "predecessor messaging plan lacks current context evidence; preview the action again",
+      );
     }
     if (stored.plan.duplicateRisk !== undefined) {
       throw new Error("messaging composite confirmations cannot accept duplicate risk");

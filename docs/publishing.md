@@ -4,6 +4,18 @@ Wrench uses one interactive first publication and stage-only trusted publishing
 for later versions. npm requires a package to exist before `npm stage publish`
 can use it, so the bootstrap cannot use the staging workflow.
 
+## Keep discovery metadata aligned
+
+The exact npm keyword list is checked by `scripts/package-smoke.ts` in source
+and in the packed artifact. Repository topics are maintainer-managed discovery
+metadata, not release identity. Keep this checked topic set aligned through the
+GitHub repository settings: `agent-skills`, `agent-tools`, `ai-agents`, `beeper`,
+`browser-automation`, `bun`, `cli`, `coding-agents`, `cross-provider`,
+`developer-tools`, `knowledge-base`, `local-first`, `media-archive`, `messaging`,
+`provider-plugins`, `tool-calling`, `typescript`, `typescript-sdk`,
+`web-automation`, and `web-capture`. Do not grant a release workflow repository
+administration permission only to synchronize topics.
+
 ## Bootstrap the npm package
 
 This section records the one-time bootstrap of `@hraness/wrench@0.15.1`.

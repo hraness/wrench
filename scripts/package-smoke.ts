@@ -3,6 +3,8 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import { packageArtifactBudget } from "./package-artifact.js";
+
 const packageName = "@hraness/wrench";
 const importSpecifiers = [
   "@hraness/wrench",
@@ -17,6 +19,8 @@ const packageDiscoveryKeywords = [
   "coding-agents",
   "agent-skills",
   "agent-tools",
+  "beeper",
+  "messaging",
   "typescript",
   "typescript-sdk",
   "cli",
@@ -30,9 +34,9 @@ const packageDiscoveryKeywords = [
   "local-first",
   "bun",
 ] as const;
-const MAX_PACKED_BYTES = 2_010_000;
+const MAX_PACKED_BYTES = packageArtifactBudget.packedBytes.max;
 const MAX_PACKED_FILES = 450;
-const MAX_UNPACKED_BYTES = 11_000_000;
+const MAX_UNPACKED_BYTES = packageArtifactBudget.unpackedBytes.max;
 const NPM_REGISTRY = "https://registry.npmjs.org";
 const sweetCookieVerificationUrl = "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2";
 const sweetCookieVerificationIntegrity = "sha512-HddZketABRWbHiLYqMbGlYuqEaWdtqAjES28eKHr2cPDdPvrXiF4JQxD4pl9WzSOre6p/B3zA4Z3uIsCHo/+uQ==";
@@ -193,7 +197,7 @@ function assertPackageDiscoveryKeywords(value: unknown, label: string): void {
     || value.some((keyword, index) => keyword !== packageDiscoveryKeywords[index])
   ) {
     throw new Error(
-      `${label}.keywords must exactly match the focused Wrench discovery keywords, including agent-skills.`,
+      `${label}.keywords must exactly match the focused Wrench discovery keywords, including agent-skills, beeper, and messaging.`,
     );
   }
 }
@@ -714,7 +718,51 @@ try {
     "-e",
     `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
   ], consumer);
-  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/wrench\";\nimport * as surface1 from \"@hraness/wrench/client\";\nimport * as surface2 from \"@hraness/wrench/omni\";\nimport * as surface3 from \"@hraness/wrench/beeper\";\nimport * as surface4 from \"@hraness/wrench/messaging\";\nvoid [surface0, surface1, surface2, surface3, surface4];\n");
+  await writeFile(join(consumer, "index.ts"), `
+import * as surface0 from "@hraness/wrench";
+import * as surface1 from "@hraness/wrench/client";
+import * as surface2 from "@hraness/wrench/omni";
+import * as surface3 from "@hraness/wrench/beeper";
+import * as surface4 from "@hraness/wrench/messaging";
+import {
+  discoverMessagingRoutes,
+  parseMessagingRouteResolveRequestV1,
+  parseMessagingRouteResolveRequestV2,
+  parseMessagingRouteV1,
+  parseMessagingRouteV2,
+  parseMessagingRoutesV1,
+  parseMessagingRoutesV2,
+  resolveMessagingRoute,
+  type MessagingRouteV2,
+  type MessagingRoutesV2,
+} from "@hraness/wrench/messaging";
+
+const discovered: Promise<MessagingRoutesV2> = discoverMessagingRoutes({
+  schemaVersion: 1,
+  format: "wrench.messaging-routes-request",
+  source: { adapterId: "beeper-local", authId: "beeper-main", listInput: {} },
+});
+const resolved: Promise<MessagingRouteV2> = resolveMessagingRoute({
+  schemaVersion: 2,
+  format: "wrench.messaging-route-resolve-request",
+  routeRef: "wmroute_ABCDEFGHIJKLMNOPQRSTUV",
+});
+void [
+  surface0,
+  surface1,
+  surface2,
+  surface3,
+  surface4,
+  discovered,
+  resolved,
+  parseMessagingRouteResolveRequestV1,
+  parseMessagingRouteResolveRequestV2,
+  parseMessagingRouteV1,
+  parseMessagingRouteV2,
+  parseMessagingRoutesV1,
+  parseMessagingRoutesV2,
+];
+`);
   await writeFile(join(consumer, "tsconfig.bundler.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"types\": [\n      \"bun\",\n      \"node\"\n    ],\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"Preserve\",\n    \"moduleResolution\": \"Bundler\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);
 

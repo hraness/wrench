@@ -62,11 +62,23 @@ changes, and presence. Wrench accepts only the reviewed official Beeper CLI
 command runner, and submission is not a claim of network delivery.
 
 ```sh
-wrench beeper-local messaging.list --auth beeper-main \
-  --input '{"limit":100}' --json
-wrench beeper-local messaging.send --auth beeper-main --preview --json \
-  --input '{"account_id":"<account-id>","conversation_id":"<chat-id>","kind":"text","text":"Hello from Wrench"}'
+wrench messaging routes --input @/absolute/private/beeper-routes-request.json \
+  --private-output /absolute/private/beeper-routes.json --json
+wrench messaging resolve --input @/absolute/private/beeper-resolve-request.json \
+  --private-output /absolute/private/beeper-route.json --json
+wrench messaging context --input @/absolute/private/beeper-context-request.json \
+  --private-output /absolute/private/beeper-context.json --json
+wrench messaging preview --input @/absolute/private/beeper-turn.json \
+  --private-output /absolute/private/beeper-preview.json --json
 ```
+
+`routes` returns bounded discovery evidence and opaque candidate references.
+Put one candidate `routeRef` in the private resolve request. Wrench loads the
+checked provider target from encrypted private state and performs the exact
+provider read. The caller never resupplies an account, network, conversation
+ID, name, handle, title, or participant match. Preview is draft-only until the
+owner reviews the exact private recipient and bubbles and makes a fresh
+same-turn send request.
 
 Read the focused [Beeper guide](https://wrench.rip/providers/beeper/) for setup,
 version identities, action boundaries, export workflows, and exclusions.
@@ -537,6 +549,24 @@ an absolute owner-only private file. Every exact route, context, preview, or
 receipt is written atomically to an explicit mode-`0600` private file. Ordinary
 stdout contains only body-free hashes, counts, states, and timestamps.
 
+`routes` returns the V2 bounded discovery artifact. Each result is a
+non-actionable V2 candidate whose opaque `routeRef` names a checked target in
+Wrench's encrypted private state. The V2 resolve request contains only that
+reference:
+
+```json
+{"schemaVersion":2,"format":"wrench.messaging-route-resolve-request","routeRef":"<candidate-route-ref>"}
+```
+
+Wrench reloads and identity-checks the stored adapter, auth realm, provider
+binding, list input, and exact target before it performs a provider-native
+exact read. The resolved route receives a new opaque reference. No caller may
+replace the stored provider coordinate during resolution.
+
+The exported V1 route, route-list, and exact-coordinate resolve parsers remain
+available for archived schema-1 artifacts. Current client and CLI execution
+use V2 exclusively and never execute a caller-supplied V1 provider coordinate.
+
 ```sh
 wrench messaging routes --input @/absolute/private/routes-request.json \
   --private-output /absolute/private/routes.json --json
@@ -725,10 +755,10 @@ lands between the atomic rename and lease release, recovery recognizes the
 same directory at the requested output path and preserves the published
 bundle.
 
-The [Beeper Desktop API MCP project](https://github.com/beeper/desktop-api-mcp)
-is intended to expose Beeper tools to an MCP client. This export path uses the
-official CLI because Wrench needs a pinned, bounded, read-only file snapshot
-that it can validate and publish atomically.
+The [built-in Beeper Desktop MCP server](https://developers.beeper.com/desktop-api/mcp/)
+gives supported MCP clients a first-party path to Beeper Desktop. This export
+path uses the official CLI because Wrench needs a pinned, bounded, read-only
+file snapshot that it can validate and publish atomically.
 
 Contact and chat lists are bounded to 200 records because CLI 0.6.2 exposes no
 continuation cursor for those commands. Message pages derive the next

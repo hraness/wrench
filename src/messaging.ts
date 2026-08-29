@@ -16,19 +16,19 @@ import {
   parseMessagingContextV1,
   parseMessagingPreviewV1,
   parseMessagingPrivateOutputReceiptV1,
-  parseMessagingRouteResolveRequestV1,
-  parseMessagingRouteV1,
+  parseMessagingRouteResolveRequestV2,
+  parseMessagingRouteV2,
   parseMessagingRoutesRequestV1,
-  parseMessagingRoutesV1,
+  parseMessagingRoutesV2,
   parseMessagingTurnV1,
   type MessagingClientOptions,
   type MessagingContextRequestV1,
   type MessagingContextV1,
   type MessagingPreviewV1,
-  type MessagingRouteResolveRequestV1,
-  type MessagingRouteV1,
+  type MessagingRouteResolveRequestV2,
+  type MessagingRouteV2,
   type MessagingRoutesRequestV1,
-  type MessagingRoutesV1,
+  type MessagingRoutesV2,
   type MessagingTurnV1,
 } from "./messaging-types";
 
@@ -38,6 +38,7 @@ const MAX_STDOUT_BYTES = 64 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
 const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 120_000;
+const COMMAND_TERMINATION_GRACE_MS = 1_000;
 
 function cliSourcePath(): string {
   const besideSource = fileURLToPath(new URL("./cli.ts", import.meta.url));
@@ -138,38 +139,79 @@ async function runCli(
       ], {
         env: prepared.environment,
         stdio: ["pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32",
       });
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let settled = false;
+      let pendingError: Error | null = null;
+      let terminationTimer: ReturnType<typeof setTimeout> | null = null;
       const settleFailure = (error: unknown): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (terminationTimer !== null) clearTimeout(terminationTimer);
         prepared.signal?.removeEventListener("abort", abort);
         reject(error instanceof Error ? error : new Error(String(error)));
       };
+      const signalOwnedTree = (signal: "SIGTERM" | "SIGKILL"): void => {
+        try {
+          if (process.platform !== "win32" && child.pid !== undefined) {
+            process.kill(-child.pid, signal);
+          } else {
+            child.kill(signal);
+          }
+        } catch {
+          // The close event remains the authoritative reaping proof.
+        }
+      };
+      const ownedTreeIsAlive = (): boolean => {
+        if (process.platform === "win32" || child.pid === undefined) return false;
+        try {
+          process.kill(-child.pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const rejectAfterOwnedTreeExit = (): void => {
+        signalOwnedTree("SIGKILL");
+        if (!ownedTreeIsAlive()) {
+          settleFailure(pendingError ?? new Error("Wrench messaging operation failed"));
+          return;
+        }
+        setTimeout(rejectAfterOwnedTreeExit, 10);
+      };
+      const requestTermination = (error: Error): void => {
+        pendingError ??= error;
+        if (child.pid === undefined) {
+          settleFailure(pendingError);
+          return;
+        }
+        if (terminationTimer !== null) return;
+        signalOwnedTree("SIGTERM");
+        terminationTimer = setTimeout(() => signalOwnedTree("SIGKILL"), COMMAND_TERMINATION_GRACE_MS);
+        terminationTimer.unref?.();
+      };
       const abort = (): void => {
-        child.kill("SIGKILL");
-        settleFailure(
+        requestTermination(
           prepared.signal?.reason instanceof Error
             ? prepared.signal.reason
             : new DOMException("Wrench messaging operation was aborted", "AbortError"),
         );
       };
       const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        settleFailure(new Error("Wrench messaging operation timed out"));
+        requestTermination(new Error("Wrench messaging operation timed out"));
       }, COMMAND_TIMEOUT_MS);
+      timer.unref?.();
       prepared.signal?.addEventListener("abort", abort, { once: true });
-      child.on("error", settleFailure);
+      child.on("error", (error) => requestTermination(error));
       child.stdout.on("data", (chunk: Buffer) => {
         stdoutBytes += chunk.byteLength;
         if (stdoutBytes > MAX_STDOUT_BYTES) {
-          child.kill("SIGKILL");
-          settleFailure(new Error("Wrench messaging receipt exceeded its byte bound"));
+          requestTermination(new Error("Wrench messaging receipt exceeded its byte bound"));
           return;
         }
         stdout.push(Buffer.from(chunk));
@@ -177,24 +219,28 @@ async function runCli(
       child.stderr.on("data", (chunk: Buffer) => {
         stderrBytes += chunk.byteLength;
         if (stderrBytes > MAX_STDERR_BYTES) {
-          child.kill("SIGKILL");
-          settleFailure(new Error("Wrench messaging diagnostic exceeded its byte bound"));
+          requestTermination(new Error("Wrench messaging diagnostic exceeded its byte bound"));
           return;
         }
         stderr.push(Buffer.from(chunk));
       });
       child.on("close", (code) => {
         if (settled) return;
-        settled = true;
         clearTimeout(timer);
+        if (terminationTimer !== null) clearTimeout(terminationTimer);
         prepared.signal?.removeEventListener("abort", abort);
+        if (pendingError !== null) {
+          rejectAfterOwnedTreeExit();
+          return;
+        }
+        settled = true;
         resolve(Object.freeze({
           code: code ?? 3,
           stdout: Buffer.concat(stdout),
           stderr: Object.freeze(stderr),
         }));
       });
-      child.stdin.on("error", settleFailure);
+      child.stdin.on("error", (error) => requestTermination(error));
       child.stdin.end(`${canonicalJson(request)}\n`, "utf8");
     });
     if (result.code !== 0) {
@@ -245,8 +291,8 @@ async function runCli(
 export async function discoverMessagingRoutes(
   request: MessagingRoutesRequestV1,
   clientOptions?: MessagingClientOptions,
-): Promise<MessagingRoutesV1> {
-  const value = parseMessagingRoutesV1(await runCli(
+): Promise<MessagingRoutesV2> {
+  const value = parseMessagingRoutesV2(await runCli(
     "routes",
     parseMessagingRoutesRequestV1(request),
     clientOptions,
@@ -255,12 +301,12 @@ export async function discoverMessagingRoutes(
 }
 
 export async function resolveMessagingRoute(
-  request: MessagingRouteResolveRequestV1,
+  request: MessagingRouteResolveRequestV2,
   clientOptions?: MessagingClientOptions,
-): Promise<MessagingRouteV1> {
-  return parseMessagingRouteV1(await runCli(
+): Promise<MessagingRouteV2> {
+  return parseMessagingRouteV2(await runCli(
     "resolve",
-    parseMessagingRouteResolveRequestV1(request),
+    parseMessagingRouteResolveRequestV2(request),
     clientOptions,
   ));
 }

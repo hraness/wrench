@@ -415,6 +415,7 @@ function materializedParticipant(value: ParsedParticipant): OmniParticipantV1 {
 function materializedConversation(value: ParsedThreadSummary): ProviderConversationV1 {
   return Object.freeze({
     kind: "conversation",
+    conversationKind: "unknown",
     providerId: value.id,
     providerRevision: value.historyId,
     orderedAt: value.orderedAt,

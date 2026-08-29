@@ -78,6 +78,54 @@ export type {
 } from "./provider-plugin-cleanup-resource";
 
 export {
+  MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_CONTRACT_ID,
+  MESSAGE_LIKE_ME_SOURCE_CONVERSATION_COORDINATE_V1_SCHEMA_VERSION,
+  WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_CLIENT_INTENT_BINDING_V1_FORMAT,
+  WRENCH_MESSAGING_CONTEXT_INSTANCE_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_CONTEXT_INSTANCE_V2_CONTRACT_ID,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_HASH,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V1_FORMAT,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_HASH,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_CONTRACT_ID,
+  WRENCH_MESSAGING_CONTEXT_BINDING_V2_FORMAT,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_HASH,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_CONTRACT_ID,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V1_FORMAT,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_DESCRIPTOR,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_HASH,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_CONTRACT_ID,
+  WRENCH_MESSAGING_RECEIPT_BINDING_V2_FORMAT,
+  createBeeperMessageLikeMeContextBindingV1,
+  createBeeperMessageLikeMeContextBindingV2,
+  createWrenchMessagingReceiptBindingV1,
+  createWrenchMessagingReceiptBindingV2,
+  messageLikeMeSourceConversationCoordinateBindingV1,
+  parseMessageLikeMeSourceConversationCoordinateV1,
+  parseWrenchMessagingClientIntentBindingV1,
+  parseWrenchMessagingContextBindingV1,
+  parseWrenchMessagingContextBindingV2,
+  wrenchMessagingContextBindingSha256V1,
+  wrenchMessagingContextBindingSha256V2,
+} from "./message-like-me-agentic-messaging";
+
+export type {
+  MessageLikeMeSourceConversationCoordinateBindingV1,
+  MessageLikeMeSourceConversationCoordinateV1,
+  WrenchMessagingClientIntentBindingV1,
+  WrenchMessagingContextBindingV1,
+  WrenchMessagingContextBindingV2,
+  WrenchMessagingReceiptBindingV1,
+  WrenchMessagingReceiptBindingV2,
+  WrenchMessagingReceiptStateV1,
+  WrenchMessagingReceiptStateV2,
+} from "./message-like-me-agentic-messaging";
+
+export {
   startProviderPluginCleanupTrackedOperation,
 } from "./provider-plugin-cleanup-execution";
 

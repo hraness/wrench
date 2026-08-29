@@ -1,5 +1,4 @@
 import type { OperationInput } from "../model";
-import type { MessagingRouteCoordinateV1 } from "../messaging-types";
 import type {
   ProviderPluginMessagingDefinitionV1,
   ProviderPluginMessagingTargetV1,
@@ -47,7 +46,6 @@ export const whatsappMessagingDefinition = Object.freeze({
   contextLiveness: "freshness-unproven",
   listOperation: "messaging.list",
   contextOperation: "messaging.read",
-  coordinateKind: "whatsappJid",
   enumerateRoutes: (_input: OperationInput, page) => Object.freeze(
     page.entities.map((entity) => {
       if (entity.kind !== "conversation") {
@@ -70,24 +68,20 @@ export const whatsappMessagingDefinition = Object.freeze({
   ),
   resolveRoute: Object.freeze({
     operation: "messaging.read",
-    input: (_listInput: OperationInput, coordinate: MessagingRouteCoordinateV1) => {
-      if (coordinate.kind !== "whatsappJid") {
-        throw new Error("WhatsApp exact route resolution requires a WhatsApp JID");
-      }
+    input: (target: ProviderPluginMessagingTargetV1) => {
+      const parsed = parseTarget(target);
       return Object.freeze({
         conversation_jid: whatsappTargetJid(
-          coordinate.jid,
+          conversationJid(parsed),
           "WhatsApp exact conversation candidate",
         ),
         limit: 1,
       });
     },
-    candidates: (_listInput, coordinate, output) => {
-      if (coordinate.kind !== "whatsappJid") {
-        throw new Error("WhatsApp exact route resolution changed coordinate kind");
-      }
+    candidates: (target, output) => {
+      const parsed = parseTarget(target);
       const exactJid = whatsappTargetJid(
-        coordinate.jid,
+        conversationJid(parsed),
         "WhatsApp exact conversation candidate",
       );
       const exactInput = Object.freeze({
@@ -111,6 +105,14 @@ export const whatsappMessagingDefinition = Object.freeze({
         participants: Object.freeze([]),
         providerRevision: null,
       })]);
+    },
+    sourceConversationCoordinate: (
+      target,
+      _output,
+      _expectedAccountSubject,
+    ) => {
+      parseTarget(target);
+      return null;
     },
   }),
   parseTarget,

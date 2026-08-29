@@ -501,11 +501,13 @@ function verifyEntityRevision(semantic, revisionValue, label) {
   return Object.freeze({ ...semantic, revision });
 }
 function conversationEntity(source, label) {
+  const hasConversationKind = Object.hasOwn(source, "conversationKind");
   exactKeys(source, [
     "kind",
     "providerId",
     "providerRevision",
     "orderedAt",
+    ...hasConversationKind ? ["conversationKind"] : [],
     "detail",
     "title",
     "summary",
@@ -525,6 +527,9 @@ function conversationEntity(source, label) {
   }
   const semantic = Object.freeze({
     kind: "conversation",
+    ...hasConversationKind ? {
+      conversationKind: oneOf(source.conversationKind, ["single", "group", "unknown"], `${label}.conversationKind`)
+    } : {},
     providerId: common.providerId,
     providerRevision: common.providerRevision,
     orderedAt: common.orderedAt,

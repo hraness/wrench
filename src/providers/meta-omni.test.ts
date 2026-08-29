@@ -54,6 +54,7 @@ describe("Instagram omni inbox materializer", () => {
       cursor: { direction: "none", request: null, nextInput: null },
       entities: [{
         kind: "conversation",
+        conversationKind: "unknown",
         providerId: "340282366841710300949128160279579384001",
         providerRevision: null,
         orderedAt: "2023-11-14T22:13:24.000Z",

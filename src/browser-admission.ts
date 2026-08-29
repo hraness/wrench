@@ -88,6 +88,10 @@ export type BrowserAdmissionDependencies = {
   ) => Promise<void>;
   /** Test-only seam invoked after a durable create and before it is returned. */
   readonly afterCreateCommitForTest?: () => void;
+  /** Test-only seam invoked before rereading a slot after create contention. */
+  readonly beforeContendedClaimReadForTest?: (
+    slot: BrowserAdmissionSlot,
+  ) => void;
   /** Test-only seam invoked once when an exact release loses mutation arbitration. */
   readonly afterReleaseContentionForTest?: () => void;
   /** Test-only monotonic clock for bounded release settlement. */
@@ -402,6 +406,20 @@ function isConcurrentStateDirectoryCreation(error: unknown): boolean {
 
 function isActiveStateFileMutation(error: unknown): boolean {
   return stateHelperErrorDetail(error) === "state file mutation is already active";
+}
+
+function isStateFileReadDrift(error: unknown): boolean {
+  const seen = new Set<Error>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    if (
+      current.message
+        === "state helper: state file changed while it was read"
+    ) return true;
+    current = current.cause;
+  }
+  return false;
 }
 
 async function ensureAdmissionStateDirectory(
@@ -732,10 +750,17 @@ export async function acquireBrowserAdmission(
         }
         if (existing === null) {
           try {
+            dependencies.beforeContendedClaimReadForTest?.(slot);
             existing = readClaim(slot, environment);
           } catch (error) {
             if (error instanceof BrowserAdmissionClaimError) {
               // A competing malformed claim occupies the slot.
+              continue;
+            }
+            if (isStateFileReadDrift(error)) {
+              // The just-contended slot remains occupied until one stable read
+              // proves otherwise. Retry without weakening claim validation.
+              storageContention = true;
               continue;
             }
             throw error;

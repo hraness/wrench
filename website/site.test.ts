@@ -40,6 +40,19 @@ import {
 const repositoryRoot = resolve(import.meta.dir, "..");
 const websiteRoot = import.meta.dir;
 
+function cssPropertyValues(css: string, selector: string, property: string): string[] {
+  const values: string[] = [];
+  for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
+    const selectors = (match[1] ?? "").split(",").map((value) => value.trim());
+    if (!selectors.includes(selector)) continue;
+    const declarations = match[2] ?? "";
+    const value = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, "u")
+      .exec(declarations)?.[1]?.trim();
+    if (value !== undefined) values.push(value);
+  }
+  return values;
+}
+
 describe("wrench.rip static site", () => {
   test("derives the public release from strict root package identity", async () => {
     const manifest: unknown = await Bun.file(join(repositoryRoot, "package.json")).json();
@@ -120,6 +133,17 @@ describe("wrench.rip static site", () => {
     expect(sourceCss).toMatch(/\.preview-copy > p:last-child\s*\{(?![^}]*font-family)[^}]*\}/su);
     expect(sourceCss).toMatch(/\.preview-eyebrow\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
     expect(sourceCss).toMatch(/\.preview-flow li\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
+    expect(cssPropertyValues(sourceCss, ".artifact-table table", "table-layout")).toEqual([
+      "fixed",
+    ]);
+    expect(cssPropertyValues(sourceCss, ".version-table table", "min-width")).toEqual([
+      "58rem",
+    ]);
+    expect(cssPropertyValues(
+      sourceCss,
+      ".artifact-table td:nth-child(4)",
+      "width",
+    )).toEqual(["33%"]);
     expect(builtCss).toContain('font-family: "Nebula Sans";');
     expect(builtCss).toContain('./fonts/nebula-sans/NebulaSans-Book.woff2');
     expect((await readFile(
@@ -223,9 +247,9 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain("Do not use Wrench as an AI agent");
     expect(llms).toContain(`${SITE_ORIGIN}/getting-started/`);
     expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
-    expect(llms).toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
-    expect(llms).toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
-    expect(llms).toContain(`${SITE_ORIGIN}/paypal-grapheneos-attestation/`);
+    expect(llms).not.toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
+    expect(llms).not.toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
+    expect(llms).not.toContain(`${SITE_ORIGIN}/paypal-grapheneos-attestation/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
     expect(llms).toContain("submission is not a delivery claim");
     expect(llms.replaceAll(/https:\/\/wrench\.rip\/[a-z0-9-/]+/gu, "")).not.toMatch(
@@ -254,6 +278,16 @@ describe("wrench.rip static site", () => {
     expect(sourceCss).not.toContain(".footer {");
     expect(builtCss).toContain(".hraness-site-footer {");
     expect(builtCss).toContain("@media (pointer: coarse)");
+    for (const css of [sourceCss, builtCss]) {
+      const providerMarkDisplay = cssPropertyValues(css, ".provider-mark", "display");
+      expect(providerMarkDisplay.length).toBeGreaterThan(0);
+      expect(providerMarkDisplay).not.toContain("none");
+      expect(providerMarkDisplay.at(-1)).toBe("inline-flex");
+      const providerFeatureDisplay = cssPropertyValues(css, ".provider-feature-copy", "display");
+      expect(providerFeatureDisplay.length).toBeGreaterThan(0);
+      expect(providerFeatureDisplay).not.toContain("none");
+      expect(providerFeatureDisplay.at(-1)).toBe("block");
+    }
     const expectedFooterHrefs = [
       HRANESS_HOME_URL,
       HRANESS_NEWSLETTER_URL,
@@ -501,6 +535,16 @@ describe("wrench.rip static site", () => {
     }
     expect(descriptions.size).toBe(PUBLIC_PAGES.length);
 
+    expect(html).toContain('href="https://pipedream.com/docs/connect">Pipedream Connect</a>');
+    expect(html).toContain("Hosted integration breadth and managed end-user authentication");
+    expect(html).toContain('href="https://docs.apify.com/integrations/mcp">Apify MCP</a>');
+    expect(html).toContain("Discovering and running eligible Apify Store Actors");
+    expect(html).toContain('href="https://docs.browserbase.com/platform/browser/observability/session-recording">Browserbase</a>');
+    expect(html).toContain("Parallel browser automation on managed cloud sessions");
+    expect(html).toContain(
+      "Encrypted provider snapshots and projections, mutation previews and receipts, and fail-closed contract drift",
+    );
+
     const gettingStarted = pages.find((page) => page.definition.canonicalPath === "/getting-started/");
     expect(gettingStarted?.html).toContain("Wrench developer resources");
     expect(gettingStarted?.html).toContain(
@@ -543,6 +587,21 @@ describe("wrench.rip static site", () => {
     );
     expect(html).toContain(providerCards);
     expect(providerCapabilities?.html).toContain(providerCards);
+    expect(html.match(/class="provider-mark"/gu)).toHaveLength(providerDirectory.providerCount);
+    expect(providerCapabilities?.html.match(/class="provider-mark"/gu))
+      .toHaveLength(providerDirectory.providerCount);
+    expect(html.match(/class="provider-feature-copy"/gu)).toHaveLength(1);
+    expect(providerCapabilities?.html.match(/class="provider-feature-copy"/gu)).toHaveLength(1);
+    expect(html).toContain(
+      "Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.",
+    );
+    expect(providerCapabilities?.html).toContain(
+      "Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.",
+    );
+    for (const entry of providerDirectory.entries) {
+      expect(html).toContain(`data-provider-icon="${entry.icon}"`);
+      expect(providerCapabilities?.html).toContain(`data-provider-icon="${entry.icon}"`);
+    }
     expect(providerCapabilities?.html).toContain(providerGroups);
     expect(providerCapabilities?.html).toContain("Supported actions by service");
     expect(providerCapabilities?.html).toContain("Official API");
@@ -552,8 +611,19 @@ describe("wrench.rip static site", () => {
     expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(providerMarkdown).toContain("### Beeper");
     expect(providerMarkdown).toContain("32 supported actions");
-    expect(providerMarkdown).toContain("**List accounts**");
-    expect(providerMarkdown).toContain("`accounts.list`");
+    expect(providerMarkdown).toContain("- **List accounts** — `accounts.list` · Local app");
+    expect(providerMarkdown).toContain(
+      "- **Focus conversation** — `conversations.focus` · Local app",
+    );
+    expect(providerMarkdown).toContain(
+      "- **Send Notify Anyway** — `conversations.notify` · Local app",
+    );
+    expect(providerMarkdown).toContain("- **Send message** — `messaging.send` · Local app");
+    const providerActionLines = providerMarkdown.split("\n").filter((line) =>
+      line.startsWith("- **"));
+    expect(providerActionLines.length).toBeGreaterThan(0);
+    expect(providerActionLines.every((line) =>
+      /^- \*\*[^*]+\*\* — `[^`]+` · [^\s].+$/u.test(line))).toBe(true);
     expect(providerMarkdown).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
 
     const beeper = pages.find((page) => page.definition.canonicalPath === "/providers/beeper/");
@@ -580,6 +650,16 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).toContain('aria-current="location" href="/provider-capabilities/"');
     expect(beeper?.html).toContain("evidence of submission, not network delivery");
     expect(beeper?.html).toContain("Wrench does not retry it");
+    expect(beeper?.html).toContain("Use Beeper directly for the lowest-friction access to its first-party breadth");
+    expect(beeper?.html).toContain(
+      'href="https://developers.beeper.com/desktop-api/mcp/">built-in Beeper Desktop MCP</a>',
+    );
+    expect(beeper?.html).toContain('href="https://github.com/beeper/cli">official Beeper CLI</a>');
+    expect(beeper?.html).toContain("exact CLI artifact and adapter-version pinning");
+    expect(beeper?.html).toContain("write previews, durable receipts, and no blind retry");
+    expect(beeper?.html).toContain("encrypted snapshots");
+    expect(beeper?.html).toContain("versioned Message Like Me and contact-interaction exports");
+    expect(beeper?.html).toContain("It wraps only the actions listed for this release");
     expect(beeper?.html).toContain(`all ${beeperFacts.cliCommandCount} canonical CLI commands`);
     expect(beeper?.html).toContain("These workflows are not part of the 32 supported actions");
     expect(beeper?.html).not.toMatch(/all Beeper (?:CLI )?features/iu);
@@ -587,6 +667,30 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).not.toContain("exactly once");
     expect(beeper?.html).not.toContain("seamless");
     expect(beeper?.html).not.toContain("Provider capabilities attestation");
+    expect(beeper?.html).toContain("wrench.messaging-route-resolve-request");
+    const agentFacingMessagingDocs = [
+      beeper?.html ?? "",
+      await readFile(join(repositoryRoot, "README.md"), "utf8"),
+      await readFile(
+        join(repositoryRoot, "skills/wrench/references/messaging.md"),
+        "utf8",
+      ),
+    ];
+    for (const document of agentFacingMessagingDocs) {
+      expect(document).not.toContain("wrench beeper-local messaging.send");
+      expect(document).toContain(
+        '{"schemaVersion":2,"format":"wrench.messaging-route-resolve-request"',
+      );
+      expect(document).not.toContain(
+        '{"schemaVersion":1,"format":"wrench.messaging-route-resolve-request"',
+      );
+      for (const command of [
+        "wrench messaging routes",
+        "wrench messaging resolve",
+        "wrench messaging context",
+        "wrench messaging preview",
+      ]) expect(document).toContain(command);
+    }
 
     const personalAgents = pages.find((page) =>
       page.definition.canonicalPath === "/compare/personal-agents-browser-use/");
@@ -773,6 +877,10 @@ describe("wrench.rip static site", () => {
       .map((match) => match[0]);
     expect(referencedReleases.length).toBeGreaterThan(0);
     expect(new Set(referencedReleases)).toEqual(new Set([identity.release]));
+    expect(readme).toContain(
+      "[built-in Beeper Desktop MCP server](https://developers.beeper.com/desktop-api/mcp/)",
+    );
+    expect(readme).not.toContain("https://github.com/beeper/desktop-api-mcp");
   });
 
   test("ships a correctly sized original social card", async () => {

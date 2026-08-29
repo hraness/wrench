@@ -8,6 +8,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 import {
   inspectPackageArtifact,
+  packageArtifactBudget,
   type PackageArtifactInventory,
 } from "./package-artifact.js";
 import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
@@ -170,6 +171,18 @@ function npmCommands(markdown: string): readonly string[] {
 }
 
 describe("npm publication contract", () => {
+  test("keeps one narrow release-authoritative package byte budget", async () => {
+    const smoke = await readFile(packageSmokeUrl, "utf8");
+    expect(packageArtifactBudget.packedBytes).toEqual({ min: 1_600_000, max: 2_050_000 });
+    expect(packageArtifactBudget.unpackedBytes).toEqual({ min: 9_000_000, max: 11_100_000 });
+    expect(smoke).toContain(
+      "const MAX_PACKED_BYTES = packageArtifactBudget.packedBytes.max;",
+    );
+    expect(smoke).toContain(
+      "const MAX_UNPACKED_BYTES = packageArtifactBudget.unpackedBytes.max;",
+    );
+  });
+
   test("pins the public package to the canonical registry", async () => {
     const value: unknown = JSON.parse(await readFile(manifestUrl, "utf8"));
     expect(typeof value).toBe("object");
@@ -179,6 +192,17 @@ describe("npm publication contract", () => {
       access: "public",
       registry: npmRegistry,
     });
+  });
+
+  test("keeps the reviewed package file inventory unique", async () => {
+    const value: unknown = JSON.parse(await readFile(manifestUrl, "utf8"));
+    expect(typeof value).toBe("object");
+    expect(value).not.toBeNull();
+    const manifest = value as { readonly files?: unknown };
+    expect(Array.isArray(manifest.files)).toBe(true);
+    const files = manifest.files as readonly unknown[];
+    expect(files.every((path) => typeof path === "string" && path.length > 0)).toBe(true);
+    expect(new Set(files).size).toBe(files.length);
   });
 
   test("separates read-only classification and verification from tokenless terminal staging", async () => {
@@ -920,6 +944,11 @@ fi
       "--registry-archive \"$wrench_registry_archive\"",
       `git tag v${manifest.version}`,
       "npm stage approve <stage-id>",
+      "The exact npm keyword list is checked by `scripts/package-smoke.ts`",
+      "Repository topics are maintainer-managed discovery",
+      "`beeper`",
+      "`messaging`",
+      "Do not grant a release workflow repository",
       "Production Branch as `website-production`",
       "Vercel System Environment Variables enabled",
       "`VERCEL_GIT_COMMIT_REF=website-production`",
