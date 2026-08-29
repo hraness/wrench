@@ -21,6 +21,9 @@ coordinate that completed both checks.
   `npm-stage` environment before npm's separate two-factor approval.
 - Add the Agent Skill to npm discovery metadata and link npm, GitHub, and
   skills.sh from the README and public software identity.
+- Centralize the packed, unpacked, and file-count ceilings used by source
+  artifact inspection and clean-consumer package smoke tests. The reviewed
+  limits retain bounded room for the observed Linux and macOS gzip spread.
 
 - Add a strict machine-readable Hraness social-profile collection manifest,
   correct the second X account to Life Days Left, and bind the current Twitch

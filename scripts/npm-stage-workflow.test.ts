@@ -8,9 +8,14 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 import {
   inspectPackageArtifact,
-  packageArtifactBudget,
   type PackageArtifactInventory,
 } from "./package-artifact.js";
+import {
+  MAX_PACKED_BYTES,
+  MAX_PACKED_FILES,
+  MAX_UNPACKED_BYTES,
+  packageArtifactBudget,
+} from "./package-budget.js";
 import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
@@ -19,6 +24,7 @@ const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.me
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packageArtifactUrl = new URL("./package-artifact.ts", import.meta.url);
+const packageBudgetUrl = new URL("./package-budget.ts", import.meta.url);
 const packageIdentityUrl = new URL("./npm-package-identity.ts", import.meta.url);
 const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
@@ -171,16 +177,33 @@ function npmCommands(markdown: string): readonly string[] {
 }
 
 describe("npm publication contract", () => {
-  test("keeps one narrow release-authoritative package byte budget", async () => {
-    const smoke = await readFile(packageSmokeUrl, "utf8");
-    expect(packageArtifactBudget.packedBytes).toEqual({ min: 1_600_000, max: 2_050_000 });
-    expect(packageArtifactBudget.unpackedBytes).toEqual({ min: 9_000_000, max: 11_100_000 });
-    expect(smoke).toContain(
-      "const MAX_PACKED_BYTES = packageArtifactBudget.packedBytes.max;",
+  test("keeps one narrow release-authoritative package budget", async () => {
+    const [artifact, budget, smoke] = await Promise.all([
+      readFile(packageArtifactUrl, "utf8"),
+      readFile(packageBudgetUrl, "utf8"),
+      readFile(packageSmokeUrl, "utf8"),
+    ]);
+
+    expect(artifact).toContain('from "./package-budget.js"');
+    expect(smoke).toContain('from "./package-budget.js"');
+    expect(budget).toContain(
+      "packed this v0.16.2 package-budget candidate twice on macOS",
     );
-    expect(smoke).toContain(
-      "const MAX_UNPACKED_BYTES = packageArtifactBudget.unpackedBytes.max;",
-    );
+    expect(budget).toContain("Prior CI\n// for the same v0.16.2 payload measured a");
+    expect(budget).toContain("2,021,302 packed bytes");
+    expect(MAX_PACKED_BYTES).toBe(2_050_000);
+    expect(MAX_PACKED_FILES).toBe(450);
+    expect(MAX_UNPACKED_BYTES).toBe(11_200_000);
+    expect(Object.isFrozen(packageArtifactBudget)).toBe(true);
+    for (const range of Object.values(packageArtifactBudget)) {
+      expect(Object.isFrozen(range)).toBe(true);
+    }
+    expect(packageArtifactBudget).toEqual({
+      entryCount: { min: 350, max: 450 },
+      fileCount: { min: 350, max: 450 },
+      packedBytes: { min: 1_600_000, max: 2_050_000 },
+      unpackedBytes: { min: 9_000_000, max: 11_200_000 },
+    });
   });
 
   test("pins the public package to the canonical registry", async () => {
