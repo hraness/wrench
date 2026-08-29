@@ -354,6 +354,171 @@ describe("contained derivation network boundary lifecycle", () => {
     rmSync(fixture.root, { recursive: true, force: true });
   });
 
+  test("waits through transient post-signal owner uncertainty before proving quiescence", async () => {
+    const fixture = boundaryFixture("wrench-network-boundary-interrupted-transient-owner-test-");
+    const guard = await createFixtureBoundary(fixture);
+    const input = interruptedBoundaryInput(fixture);
+    const controlPath = derivationGuardControlSocketPath(fixture.derivationId);
+    let inspections = 0;
+    let helperDead = false;
+    try {
+      unlinkSync(controlPath);
+      const owner = await closeInterruptedDerivationNetworkBoundary({
+        ...input,
+        dependencies: {
+          inspectOwner: (candidate) => {
+            inspections += 1;
+            if (inspections === 3) return "unknown";
+            return processOwnerStatus(candidate);
+          },
+        },
+      });
+      expect(owner).toEqual(guard.proxy.owner);
+      expect(inspections).toBeGreaterThan(3);
+      helperDead = processOwnerStatus(guard.proxy.owner) === "different-or-dead";
+      expect(helperDead).toBeTrue();
+      expect(existsSync(controlPath)).toBeFalse();
+    } finally {
+      if (!helperDead && processOwnerStatus(guard.proxy.owner) === "exact-live-owner") {
+        await closeInterruptedDerivationNetworkBoundary(input);
+        helperDead = true;
+      }
+      if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when post-signal owner uncertainty persists through the cleanup bound", async () => {
+    const fixture = boundaryFixture("wrench-network-boundary-interrupted-persistent-owner-test-");
+    const guard = await createFixtureBoundary(fixture);
+    const input = interruptedBoundaryInput(fixture);
+    const controlPath = derivationGuardControlSocketPath(fixture.derivationId);
+    let inspections = 0;
+    let now = 0;
+    let helperDead = false;
+    try {
+      unlinkSync(controlPath);
+      await expect(closeInterruptedDerivationNetworkBoundary({
+        ...input,
+        dependencies: {
+          inspectOwner: (candidate) => {
+            inspections += 1;
+            if (inspections > 2) return "unknown";
+            return processOwnerStatus(candidate);
+          },
+          monotonicNow: () => {
+            now += 5_000;
+            return now;
+          },
+        },
+      })).rejects.toThrow("cannot prove process quiescence");
+      expect(inspections).toBeGreaterThan(2);
+      const helperDeadline = Date.now() + 1_000;
+      while (
+        processOwnerStatus(guard.proxy.owner) === "exact-live-owner"
+        && Date.now() < helperDeadline
+      ) await Bun.sleep(25);
+      helperDead = processOwnerStatus(guard.proxy.owner) === "different-or-dead";
+      expect(helperDead).toBeTrue();
+      expect(existsSync(controlPath)).toBeFalse();
+    } finally {
+      if (!helperDead && processOwnerStatus(guard.proxy.owner) === "exact-live-owner") {
+        await closeInterruptedDerivationNetworkBoundary(input);
+        helperDead = true;
+      }
+      if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when the cleanup monotonic clock is invalid", async () => {
+    for (const clock of [
+      {
+        expected: "monotonic clock is non-finite",
+        readings: [Number.NaN],
+      },
+      {
+        expected: "monotonic clock is non-finite",
+        readings: [10, Number.POSITIVE_INFINITY],
+      },
+      {
+        expected: "monotonic clock moved backward",
+        readings: [10, 11, 10],
+      },
+      {
+        expected: "monotonic clock did not advance",
+        readings: [10, 10, 10],
+      },
+    ] as const) {
+      const fixture = boundaryFixture("wrench-network-boundary-invalid-clock-test-");
+      const guard = await createFixtureBoundary(fixture);
+      const input = interruptedBoundaryInput(fixture);
+      const controlPath = derivationGuardControlSocketPath(fixture.derivationId);
+      let inspections = 0;
+      let reading = 0;
+      let helperDead = false;
+      try {
+        unlinkSync(controlPath);
+        await expect(closeInterruptedDerivationNetworkBoundary({
+          ...input,
+          dependencies: {
+            inspectOwner: () => {
+              inspections += 1;
+              return inspections <= 2 ? "exact-live-owner" : "unknown";
+            },
+            monotonicNow: () => clock.readings[reading++] ?? clock.readings.at(-1)!,
+          },
+        })).rejects.toThrow(clock.expected);
+        const helperDeadline = Date.now() + 1_000;
+        while (
+          processOwnerStatus(guard.proxy.owner) === "exact-live-owner"
+          && Date.now() < helperDeadline
+        ) await Bun.sleep(25);
+        helperDead = processOwnerStatus(guard.proxy.owner) === "different-or-dead";
+        expect(helperDead).toBeTrue();
+        expect(existsSync(controlPath)).toBeFalse();
+      } finally {
+        if (!helperDead && processOwnerStatus(guard.proxy.owner) === "exact-live-owner") {
+          await closeInterruptedDerivationNetworkBoundary(input);
+          helperDead = true;
+        }
+        if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("rejects uncertain owner identity before signalling interrupted-init evidence", async () => {
+    const fixture = boundaryFixture("wrench-network-boundary-interrupted-unknown-owner-test-");
+    const guard = await createFixtureBoundary(fixture);
+    const input = interruptedBoundaryInput(fixture);
+    const controlPath = derivationGuardControlSocketPath(fixture.derivationId);
+    let helperDead = false;
+    try {
+      unlinkSync(controlPath);
+      for (const statuses of [
+        ["unknown"],
+        ["exact-live-owner", "unknown"],
+      ] as const) {
+        let inspections = 0;
+        await expect(closeInterruptedDerivationNetworkBoundary({
+          ...input,
+          dependencies: {
+            inspectOwner: () => statuses[inspections++] ?? "unknown",
+          },
+        })).rejects.toThrow("owner cannot be verified for cleanup");
+        expect(inspections).toBe(statuses.length);
+        expect(processOwnerStatus(guard.proxy.owner)).toBe("exact-live-owner");
+        expect(existsSync(controlPath)).toBeFalse();
+      }
+      await closeInterruptedDerivationNetworkBoundary(input);
+      helperDead = true;
+    } finally {
+      if (!helperDead && processOwnerStatus(guard.proxy.owner) === "exact-live-owner") {
+        await closeInterruptedDerivationNetworkBoundary(input);
+        helperDead = true;
+      }
+      if (helperDead) rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   test("preserves interrupted-init owner, endpoint, and state on a foreign response", async () => {
     const fixture = boundaryFixture("wrench-network-boundary-interrupted-foreign-test-");
     const guard = await createFixtureBoundary(fixture);
