@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 
 import {
   collectBoundedChildOutput,
+  fetchGithubCommitSha,
   fetchPublicJson,
   loadProductionReleaseEvidence,
-  parseGithubTagCommit,
+  parseGithubCommitSha,
   parseProductionReleaseIdentity,
   readBoundedJsonResponse,
   readBoundedStream,
+  readGithubCommitShaResponse,
   verifyProductionRelease,
   verifyProductionReleaseEvidence,
   type BoundedChildProcess,
@@ -47,7 +49,7 @@ function validEvidence(): ProductionReleaseEvidence {
   };
   return {
     githubRelease,
-    githubTagCommit: { sha: headSha },
+    githubTagCommitSha: headSha,
     headSha,
     latestGithubRelease: { ...githubRelease },
     npmManifest: {
@@ -146,6 +148,101 @@ describe("production website release verification", () => {
     )).rejects.toHaveProperty("name", "TimeoutError");
   });
 
+  test("requests one separately bounded GitHub commit SHA", async () => {
+    let requestedUrl: string | undefined;
+    let requestedInit: RequestInit | undefined;
+    await expect(fetchGithubCommitSha(
+      "https://api.github.com/repos/hraness/wrench/commits/tags/v0.16.2",
+      "GitHub SHA fixture",
+      async (url, init) => {
+        requestedUrl = url;
+        requestedInit = init;
+        return new Response(headSha, {
+          headers: { "Content-Length": "40" },
+        });
+      },
+      100,
+    )).resolves.toBe(headSha);
+    expect(requestedUrl).toBe(
+      "https://api.github.com/repos/hraness/wrench/commits/tags/v0.16.2",
+    );
+    expect(new Headers(requestedInit?.headers).get("accept"))
+      .toBe("application/vnd.github.sha");
+    expect(requestedInit?.redirect).toBe("error");
+    expect(requestedInit?.signal).toBeInstanceOf(AbortSignal);
+
+    await expect(fetchGithubCommitSha(
+      "https://api.github.com/example",
+      "timeout SHA fixture",
+      async (_url, init) => {
+        const signal = init.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("timeout SHA fixture has no AbortSignal");
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          const rejectFromAbort = () => { reject(signal.reason); };
+          if (signal.aborted) rejectFromAbort();
+          else signal.addEventListener("abort", rejectFromAbort, { once: true });
+        });
+      },
+      1,
+    )).rejects.toHaveProperty("name", "TimeoutError");
+  });
+
+  test("accepts exactly 40 SHA bytes and rejects malformed response boundaries", async () => {
+    await expect(readGithubCommitShaResponse(
+      new Response(streamFrom([new TextEncoder().encode(headSha)])),
+      "SHA fixture",
+    )).resolves.toBe(headSha);
+
+    for (const value of [
+      headSha.toUpperCase(),
+      headSha.slice(1),
+      `${headSha}\n`,
+      `${headSha.slice(0, -1)}g`,
+      `${headSha.slice(0, -1)}é`,
+    ]) {
+      await expect(readGithubCommitShaResponse(
+        new Response(streamFrom([new TextEncoder().encode(value)])),
+        "hostile SHA fixture",
+      )).rejects.toThrow();
+    }
+
+    let oversizedCancelled = false;
+    await expect(readGithubCommitShaResponse(
+      new Response(streamFrom(
+        [new TextEncoder().encode(headSha), new TextEncoder().encode("0")],
+        () => { oversizedCancelled = true; },
+      )),
+      "oversize SHA fixture",
+    )).rejects.toThrow("exceeded 40 bytes");
+    expect(oversizedCancelled).toBe(true);
+
+    let declaredLengthCancelled = false;
+    await expect(readGithubCommitShaResponse(
+      new Response(
+        streamFrom([new TextEncoder().encode(headSha)], () => {
+          declaredLengthCancelled = true;
+        }),
+        { headers: { "Content-Length": "41" } },
+      ),
+      "declared SHA fixture",
+    )).rejects.toThrow("must be exactly 40 bytes");
+    expect(declaredLengthCancelled).toBe(true);
+
+    let statusCancelled = false;
+    await expect(readGithubCommitShaResponse(
+      new Response(
+        streamFrom([new TextEncoder().encode("not found")], () => {
+          statusCancelled = true;
+        }),
+        { status: 404 },
+      ),
+      "missing SHA fixture",
+    )).rejects.toThrow("returned HTTP 404");
+    expect(statusCancelled).toBe(true);
+  });
+
   test("kills a child when streamed command output crosses its bound", async () => {
     const encoder = new TextEncoder();
     let killed = false;
@@ -182,7 +279,7 @@ describe("production website release verification", () => {
       tag: "v0.16.2",
       version: "0.16.2",
     });
-    expect(parseGithubTagCommit({ sha: headSha, verification: {} })).toBe(headSha);
+    expect(parseGithubCommitSha(headSha)).toBe(headSha);
 
     let requestedIdentity: unknown;
     await expect(verifyProductionRelease(packageValue, async (identity) => {
@@ -192,14 +289,17 @@ describe("production website release verification", () => {
     expect(requestedIdentity).toEqual(parseProductionReleaseIdentity(packageValue));
   });
 
-  test("loads the tag commit through bounded GitHub JSON and never invokes remote Git", async () => {
+  test("loads the tag through a separate bounded GitHub SHA request and never invokes remote Git", async () => {
     const identity = parseProductionReleaseIdentity(packageValue);
     const requested: string[] = [];
     const expected = validEvidence();
     await expect(loadProductionReleaseEvidence(identity, {
+      fetchGithubCommitSha: async (url) => {
+        requested.push(url);
+        return expected.githubTagCommitSha;
+      },
       fetchJson: async (url) => {
         requested.push(url);
-        if (url.includes("/commits/tags/")) return expected.githubTagCommit;
         if (url.includes("registry.npmjs.org")) return expected.npmManifest;
         if (url.endsWith("/releases/latest")) return expected.latestGithubRelease;
         return expected.githubRelease;
@@ -217,15 +317,15 @@ describe("production website release verification", () => {
     expect(source).toContain('["git", "rev-parse", "--verify", "HEAD^{commit}"]');
   });
 
-  test("rejects hostile GitHub tag commit evidence", () => {
+  test("rejects hostile GitHub tag commit SHA evidence", () => {
     for (const value of [
       null,
       {},
-      { sha: headSha.toUpperCase() },
-      { sha: headSha.slice(1) },
-      { sha: `${headSha}\n` },
+      headSha.toUpperCase(),
+      headSha.slice(1),
+      `${headSha}\n`,
     ]) {
-      expect(() => parseGithubTagCommit(value)).toThrow();
+      expect(() => parseGithubCommitSha(value)).toThrow();
     }
   });
 
@@ -245,11 +345,11 @@ describe("production website release verification", () => {
     })).toThrow("lowercase 40-character commit SHA");
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,
-      githubTagCommit: {},
-    })).toThrow("must expose one lowercase 40-character commit SHA");
+      githubTagCommitSha: {},
+    })).toThrow("must be exactly one lowercase 40-character commit SHA");
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,
-      githubTagCommit: { sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      githubTagCommitSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     })).toThrow("is not exact GitHub tag v0.16.2 commit");
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,

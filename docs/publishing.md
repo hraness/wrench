@@ -276,6 +276,19 @@ the verified tag commit or fast-forwards the existing branch to that commit.
 It compares the existing branch as an ancestor, sends `force=false`, and fails
 closed on a moved tag, divergence, rollback, or post-update mismatch.
 
+If that workflow fails after publishing the immutable Release but before the
+website source advances, merge the reviewed workflow fix to `main` first. Then
+dispatch **Release** from the current `main` ref with the required exact stable
+`release_tag`. The recovery path checks out that tag, repeats the complete
+source and public npm verification, requires the tag to remain the newest
+stable tag reachable from `main`, and revalidates the existing immutable Latest
+Release before it can advance `website-production`. It does not recreate or
+modify a conforming existing Release. The dispatch workflow source commit must
+equal the current default-branch head both before the tag checkout and again
+before the write-scoped job; ordinary tag-push releases do not depend on `main`
+remaining unchanged. Never rerun a stale tag workflow or write the production
+branch manually.
+
 Vercel runs the checked-in marked `website:vercel-build` command. Valid preview
 and development builds, plus true local builds with no Vercel signal, generate
 the site without external release checks. A production build first requires the

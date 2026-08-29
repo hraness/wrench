@@ -9,9 +9,12 @@ coordinate that completed both checks.
 
 - Fail closed before every Vercel build unless a true local invocation has no
   Vercel signal or the checked-in release marker and exact platform state agree.
-- Resolve the production release tag through bounded GitHub commit JSON while
-  retaining fixed local `git rev-parse HEAD` evidence, removing the remote Git
-  descendant boundary from website admission.
+- Resolve the production release tag through a separately byte-bounded GitHub
+  SHA response while retaining fixed local `git rev-parse HEAD` evidence,
+  removing the remote Git descendant boundary from website admission.
+- Move automatic main-only npm staging out of GitHub deployment review. npm
+  still requires separate human inspection and two-factor approval before the
+  staged version becomes public.
 
 ## 0.16.2 - 2026-08-28
 
@@ -23,9 +26,8 @@ coordinate that completed both checks.
   v0.16.1 V1 shapes remain available only for strict archival parsing.
 - Start stage-only npm verification automatically when a greater stable package
   version reaches `main`. Unchanged manifest versions stop before OIDC, and the
-  terminal staging job enters the main-only `npm-stage` environment without a
-  GitHub deployment review. npm still requires separate human inspection and
-  two-factor approval before the staged version becomes public.
+  terminal staging job requires maintainer approval through the protected
+  `npm-stage` environment before npm's separate two-factor approval.
 - Add the Agent Skill to npm discovery metadata and link npm, GitHub, and
   skills.sh from the README and public software identity.
 - Centralize the packed, unpacked, and file-count ceilings used by source

@@ -8,6 +8,7 @@ const NPM_REGISTRY_ORIGIN = "https://registry.npmjs.org" as const;
 const GITHUB_API_ORIGIN = "https://api.github.com" as const;
 const NETWORK_DEADLINE_MS = 20_000;
 const MAX_PUBLIC_JSON_BYTES = 1_000_000;
+const GITHUB_COMMIT_SHA_BYTES = 40;
 const MAX_GIT_STDOUT_BYTES = 1_024;
 const MAX_GIT_STDERR_BYTES = 8_192;
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -16,7 +17,7 @@ const stableVersionPattern =
 const commitShaPattern = /^[0-9a-f]{40}$/u;
 const evidenceKeys = [
   "githubRelease",
-  "githubTagCommit",
+  "githubTagCommitSha",
   "headSha",
   "latestGithubRelease",
   "npmManifest",
@@ -30,7 +31,7 @@ export type ProductionReleaseIdentity = Readonly<{
 
 export type ProductionReleaseEvidence = Readonly<{
   githubRelease: unknown;
-  githubTagCommit: unknown;
+  githubTagCommitSha: string;
   headSha: string;
   latestGithubRelease: unknown;
   npmManifest: unknown;
@@ -41,11 +42,12 @@ export type ProductionReleaseEvidenceLoader = (
 ) => Promise<unknown>;
 
 export type ProductionReleaseEvidenceDependencies = Readonly<{
+  fetchGithubCommitSha: (url: string, label: string) => Promise<string>;
   fetchJson: (url: string, label: string) => Promise<unknown>;
   readHeadSha: () => Promise<string>;
 }>;
 
-export type PublicJsonFetch = (
+export type PublicFetch = (
   url: string,
   init: RequestInit,
 ) => Promise<Response>;
@@ -223,22 +225,24 @@ function parseEvidence(value: unknown): ProductionReleaseEvidence {
   }
   return {
     githubRelease: evidence.githubRelease,
-    githubTagCommit: evidence.githubTagCommit,
+    githubTagCommitSha: parseGithubCommitSha(
+      evidence.githubTagCommitSha,
+      "GitHub tag commit SHA evidence",
+    ),
     headSha: evidence.headSha,
     latestGithubRelease: evidence.latestGithubRelease,
     npmManifest: evidence.npmManifest,
   };
 }
 
-export function parseGithubTagCommit(
+export function parseGithubCommitSha(
   value: unknown,
-  label = "GitHub tag commit",
+  label = "GitHub commit SHA",
 ): string {
-  const commit = unknownRecord(value, label);
-  if (typeof commit.sha !== "string" || !commitShaPattern.test(commit.sha)) {
-    throw new Error(`${label} must expose one lowercase 40-character commit SHA.`);
+  if (typeof value !== "string" || !commitShaPattern.test(value)) {
+    throw new Error(`${label} must be exactly one lowercase 40-character commit SHA.`);
   }
-  return commit.sha;
+  return value;
 }
 
 function verifyNpmManifest(
@@ -288,10 +292,7 @@ export function verifyProductionReleaseEvidence(
 ): ProductionReleaseIdentity {
   const identity = parseProductionReleaseIdentity(packageValue);
   const evidence = parseEvidence(evidenceValue);
-  const tagCommit = parseGithubTagCommit(
-    evidence.githubTagCommit,
-    `GitHub tag ${identity.tag} commit`,
-  );
+  const tagCommit = evidence.githubTagCommitSha;
   if (tagCommit !== evidence.headSha) {
     throw new Error(
       `Checked-out HEAD ${evidence.headSha} is not exact GitHub tag ${identity.tag} commit ${tagCommit}.`,
@@ -315,7 +316,7 @@ export function verifyProductionReleaseEvidence(
 export async function fetchPublicJson(
   url: string,
   label: string,
-  fetchImplementation: PublicJsonFetch = fetch,
+  fetchImplementation: PublicFetch = fetch,
   deadlineMs = NETWORK_DEADLINE_MS,
 ): Promise<unknown> {
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0) {
@@ -335,6 +336,55 @@ export async function fetchPublicJson(
     signal: AbortSignal.timeout(deadlineMs),
   });
   return readBoundedJsonResponse(response, MAX_PUBLIC_JSON_BYTES, label);
+}
+
+export async function readGithubCommitShaResponse(
+  response: Response,
+  label: string,
+): Promise<string> {
+  if (response.status !== 200) {
+    await response.body?.cancel();
+    throw new Error(`${label} returned HTTP ${String(response.status)}.`);
+  }
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(contentLength)) {
+      await response.body?.cancel();
+      throw new Error(`${label} returned an invalid Content-Length.`);
+    }
+    if (BigInt(contentLength) !== BigInt(GITHUB_COMMIT_SHA_BYTES)) {
+      await response.body?.cancel();
+      throw new Error(`${label} must be exactly ${String(GITHUB_COMMIT_SHA_BYTES)} bytes.`);
+    }
+  }
+  return parseGithubCommitSha(
+    decodeUtf8(
+      await readBoundedStream(response.body, GITHUB_COMMIT_SHA_BYTES, label),
+      label,
+    ),
+    label,
+  );
+}
+
+export async function fetchGithubCommitSha(
+  url: string,
+  label: string,
+  fetchImplementation: PublicFetch = fetch,
+  deadlineMs = NETWORK_DEADLINE_MS,
+): Promise<string> {
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0) {
+    throw new TypeError("GitHub commit SHA deadline must be a positive safe integer.");
+  }
+  const response = await fetchImplementation(url, {
+    headers: {
+      Accept: "application/vnd.github.sha",
+      "User-Agent": "wrench-production-release-verifier",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    redirect: "error",
+    signal: AbortSignal.timeout(deadlineMs),
+  });
+  return readGithubCommitShaResponse(response, label);
 }
 
 async function readLocalHeadSha(): Promise<string> {
@@ -387,18 +437,19 @@ export function parseHeadSha(output: string): string {
 export async function loadProductionReleaseEvidence(
   identity: ProductionReleaseIdentity,
   dependencies: ProductionReleaseEvidenceDependencies = {
+    fetchGithubCommitSha,
     fetchJson: fetchPublicJson,
     readHeadSha: readLocalHeadSha,
   },
 ): Promise<ProductionReleaseEvidence> {
   const packagePath = encodeURIComponent(identity.name);
   const tagPath = encodeURIComponent(identity.tag);
-  const [headSha, githubTagCommit, npmManifest, githubRelease, latestGithubRelease] =
+  const [headSha, githubTagCommitSha, npmManifest, githubRelease, latestGithubRelease] =
     await Promise.all([
       dependencies.readHeadSha(),
-      dependencies.fetchJson(
+      dependencies.fetchGithubCommitSha(
         `${GITHUB_API_ORIGIN}/repos/${REPOSITORY}/commits/tags/${tagPath}`,
-        `GitHub tag ${identity.tag} commit`,
+        `GitHub tag ${identity.tag} commit SHA`,
       ),
       dependencies.fetchJson(
         `${NPM_REGISTRY_ORIGIN}/${packagePath}/${identity.version}`,
@@ -415,7 +466,7 @@ export async function loadProductionReleaseEvidence(
     ]);
   return {
     githubRelease,
-    githubTagCommit,
+    githubTagCommitSha,
     headSha,
     latestGithubRelease,
     npmManifest,
