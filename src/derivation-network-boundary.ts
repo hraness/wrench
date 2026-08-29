@@ -60,6 +60,7 @@ type ProxyControlResponse = {
 
 type BoundaryDependencies = {
   readonly inspectOwner: (owner: ProcessOwnerIdentity) => ProcessOwnerStatus;
+  readonly monotonicNow: () => number;
 };
 
 export class UnsafeDerivationNetworkBoundaryCleanupError extends Error {
@@ -330,18 +331,37 @@ async function proxyControlAtBoundPath(input: {
 async function waitForProxyOwnerQuiescence(
   owner: ProcessOwnerIdentity,
   inspectOwner: BoundaryDependencies["inspectOwner"],
+  monotonicNow: BoundaryDependencies["monotonicNow"] = () => performance.now(),
 ): Promise<void> {
-  const deadline = Date.now() + PROXY_CONTROL_TIMEOUT_MS;
+  const startedAt = monotonicNow();
+  if (!Number.isFinite(startedAt)) {
+    throw new Error("derivation network proxy cleanup monotonic clock is non-finite");
+  }
+  let previous = startedAt;
+  let waited = false;
   for (;;) {
     const status = inspectOwner(owner);
     if (status === "different-or-dead") return;
-    if (status === "unknown") {
-      throw new Error("derivation network proxy cleanup cannot prove process quiescence");
+    const current = monotonicNow();
+    if (!Number.isFinite(current)) {
+      throw new Error("derivation network proxy cleanup monotonic clock is non-finite");
     }
-    if (Date.now() >= deadline) {
-      throw new Error("derivation network proxy cleanup did not settle");
+    if (current < previous) {
+      throw new Error("derivation network proxy cleanup monotonic clock moved backward");
+    }
+    if (waited && current === previous) {
+      throw new Error("derivation network proxy cleanup monotonic clock did not advance");
+    }
+    previous = current;
+    if (current - startedAt >= PROXY_CONTROL_TIMEOUT_MS) {
+      throw new Error(
+        status === "unknown"
+          ? "derivation network proxy cleanup cannot prove process quiescence"
+          : "derivation network proxy cleanup did not settle",
+      );
     }
     await Bun.sleep(25);
+    waited = true;
   }
 }
 
@@ -377,7 +397,11 @@ async function signalBoundOwnerAtAbsentControl(input: {
       cause: signalError,
     });
   }
-  await waitForProxyOwnerQuiescence(input.owner, inspectOwner);
+  await waitForProxyOwnerQuiescence(
+    input.owner,
+    inspectOwner,
+    input.dependencies?.monotonicNow,
+  );
   if (!privateControlSocketIsAbsent(controlPath)) {
     throw new Error("derivation proxy control endpoint appeared during cleanup");
   }
@@ -454,7 +478,7 @@ export async function closeInterruptedDerivationNetworkBoundary(input: {
     await signalBoundOwnerAtAbsentControl({
       derivationId: input.derivationId,
       owner: ready.owner,
-      dependencies: { inspectOwner },
+      dependencies: { ...input.dependencies, inspectOwner },
     });
     return ready.owner;
   }
@@ -479,7 +503,7 @@ export async function closeInterruptedDerivationNetworkBoundary(input: {
     await signalBoundOwnerAtAbsentControl({
       derivationId: input.derivationId,
       owner: ready.owner,
-      dependencies: { inspectOwner },
+      dependencies: { ...input.dependencies, inspectOwner },
     });
     return ready.owner;
   }
@@ -488,7 +512,11 @@ export async function closeInterruptedDerivationNetworkBoundary(input: {
     || closeResponse.port !== ready.port
     || !sameOwner(closeResponse.owner, ready.owner)
   ) throw new Error("interrupted derivation network control changed identity");
-  await waitForProxyOwnerQuiescence(ready.owner, inspectOwner);
+  await waitForProxyOwnerQuiescence(
+    ready.owner,
+    inspectOwner,
+    input.dependencies?.monotonicNow,
+  );
   if (!privateControlSocketIsAbsent(controlPath)) {
     throw new Error("interrupted derivation control endpoint remains after cleanup");
   }
@@ -787,7 +815,7 @@ export async function closeDerivationNetworkBoundary(input: {
     await signalBoundOwnerAtAbsentControl({
       derivationId: input.derivationId,
       owner: input.guard.proxy.owner,
-      dependencies: { inspectOwner },
+      dependencies: { ...input.dependencies, inspectOwner },
     });
     return;
   }
@@ -796,7 +824,11 @@ export async function closeDerivationNetworkBoundary(input: {
     || response.port !== input.guard.proxy.port
     || !sameOwner(response.owner, input.guard.proxy.owner)
   ) throw new Error("derivation network proxy close acknowledgement changed identity");
-  await waitForProxyOwnerQuiescence(input.guard.proxy.owner, inspectOwner);
+  await waitForProxyOwnerQuiescence(
+    input.guard.proxy.owner,
+    inspectOwner,
+    input.dependencies?.monotonicNow,
+  );
   if (!privateControlSocketIsAbsent(controlPath)) {
     throw new Error("derivation proxy control endpoint remains after authenticated cleanup");
   }
