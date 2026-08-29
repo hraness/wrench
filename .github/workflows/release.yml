@@ -322,8 +322,8 @@ jobs:
         run: |
           set -euo pipefail
           production_ref="refs/heads/website-production"
-          branch_endpoint="/repos/$GITHUB_REPOSITORY/git/ref/heads/website-production"
-          matching_refs_endpoint="/repos/$GITHUB_REPOSITORY/git/matching-refs/heads/website-production"
+          branch_read_endpoint="/repos/$GITHUB_REPOSITORY/git/ref/heads/website-production"
+          branch_update_endpoint="/repos/$GITHUB_REPOSITORY/git/refs/heads/website-production"
           if [[ ! "$VERIFIED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::Website promotion has no verified stable release tag"
             exit 1
@@ -338,53 +338,69 @@ jobs:
             exit 1
           fi
 
-          current_sha="$(gh api "$matching_refs_endpoint" \
-            --jq '[.[] | select(.ref == "refs/heads/website-production") | .object.sha] | @tsv')"
-          if [[ -n "$current_sha" ]]; then
-            if [[ ! "$current_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error::$production_ref did not resolve to one exact commit"
+          ref_state="$(gh api "$branch_read_endpoint" \
+            --jq '[.ref, .object.type, .object.sha] | @tsv')"
+          if [[ "$ref_state" == *$'\n'* ]]; then
+            echo "::error::$production_ref lookup returned more than one result"
+            exit 1
+          fi
+          IFS=$'\t' read -r ref_name ref_type current_sha ref_end \
+            <<< "$ref_state"$'\t''__END__'
+          if [[ \
+            "$ref_name" != "$production_ref" || \
+            "$ref_type" != "commit" || \
+            ! "$current_sha" =~ ^[0-9a-f]{40}$ || \
+            "$ref_end" != "__END__" \
+          ]]; then
+            echo "::error::$production_ref did not resolve to one exact commit"
+            exit 1
+          fi
+          if [[ "$current_sha" != "$VERIFIED_SHA" ]]; then
+            comparison="$(gh api \
+              "/repos/$GITHUB_REPOSITORY/compare/$current_sha...$VERIFIED_SHA" \
+              --jq '[.status, (.ahead_by | tostring), (.behind_by | tostring), .base_commit.sha, .merge_base_commit.sha, (.commits[-1].sha // "")] | @tsv')"
+            IFS=$'\t' read -r \
+              comparison_status \
+              comparison_ahead_by \
+              comparison_behind_by \
+              comparison_base \
+              comparison_merge_base \
+              comparison_final \
+              comparison_end <<< "$comparison"$'\t''__END__'
+            if [[ \
+              "$comparison_status" != "ahead" || \
+              ! "$comparison_ahead_by" =~ ^[1-9][0-9]*$ || \
+              "$comparison_behind_by" != "0" || \
+              "$comparison_base" != "$current_sha" || \
+              "$comparison_merge_base" != "$current_sha" || \
+              "$comparison_final" != "$VERIFIED_SHA" || \
+              "$comparison_end" != "__END__" \
+            ]]; then
+              echo "::error::$production_ref does not fast-forward from $current_sha to $VERIFIED_SHA"
               exit 1
             fi
-            if [[ "$current_sha" != "$VERIFIED_SHA" ]]; then
-              comparison="$(gh api \
-                "/repos/$GITHUB_REPOSITORY/compare/$current_sha...$VERIFIED_SHA" \
-                --jq '[.status, (.ahead_by | tostring), (.behind_by | tostring), .base_commit.sha, .merge_base_commit.sha, (.commits[-1].sha // "")] | @tsv')"
-              IFS=$'\t' read -r \
-                comparison_status \
-                comparison_ahead_by \
-                comparison_behind_by \
-                comparison_base \
-                comparison_merge_base \
-                comparison_final \
-                comparison_end <<< "$comparison"$'\t''__END__'
-              if [[ \
-                "$comparison_status" != "ahead" || \
-                ! "$comparison_ahead_by" =~ ^[1-9][0-9]*$ || \
-                "$comparison_behind_by" != "0" || \
-                "$comparison_base" != "$current_sha" || \
-                "$comparison_merge_base" != "$current_sha" || \
-                "$comparison_final" != "$VERIFIED_SHA" || \
-                "$comparison_end" != "__END__" \
-              ]]; then
-                echo "::error::$production_ref does not fast-forward from $current_sha to $VERIFIED_SHA"
-                exit 1
-              fi
-              gh api \
-                --method PATCH \
-                "$branch_endpoint" \
-                -f sha="$VERIFIED_SHA" \
-                -F force=false >/dev/null
-            fi
-          else
             gh api \
-              --method POST \
-              "/repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="$production_ref" \
-              -f sha="$VERIFIED_SHA" >/dev/null
+              --method PATCH \
+              "$branch_update_endpoint" \
+              -f sha="$VERIFIED_SHA" \
+              -F force=false >/dev/null
           fi
 
-          promoted_sha="$(gh api "$branch_endpoint" --jq '.object.sha')"
-          if [[ "$promoted_sha" != "$VERIFIED_SHA" ]]; then
+          promoted_state="$(gh api "$branch_read_endpoint" \
+            --jq '[.ref, .object.type, .object.sha] | @tsv')"
+          if [[ "$promoted_state" == *$'\n'* ]]; then
+            echo "::error::$production_ref post-promotion lookup returned more than one result"
+            exit 1
+          fi
+          IFS=$'\t' read -r promoted_ref promoted_type promoted_sha promoted_end \
+            <<< "$promoted_state"$'\t''__END__'
+          if [[ \
+            "$promoted_ref" != "$production_ref" || \
+            "$promoted_type" != "commit" || \
+            ! "$promoted_sha" =~ ^[0-9a-f]{40}$ || \
+            "$promoted_end" != "__END__" || \
+            "$promoted_sha" != "$VERIFIED_SHA" \
+          ]]; then
             echo "::error::$production_ref resolved to $promoted_sha after promotion"
             exit 1
           fi

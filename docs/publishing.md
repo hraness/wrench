@@ -269,12 +269,13 @@ unreleased candidate. Configure Vercel only after that exact ref exists. This
 exception must never be repeated: after initial setup, the release workflow is
 the sole writer and every change is a checked, non-force fast-forward.
 
-After the tag workflow has rebuilt and compared the exact public npm package,
-created or verified the non-draft, non-prerelease immutable GitHub Release, and
-proved that Release is Latest, its final step creates `website-production` at
-the verified tag commit or fast-forwards the existing branch to that commit.
-It compares the existing branch as an ancestor, sends `force=false`, and fails
-closed on a moved tag, divergence, rollback, or post-update mismatch.
+After the one-time bootstrap has established `website-production`, the tag
+workflow rebuilds and compares the exact public npm package, creates or verifies
+the non-draft, non-prerelease immutable GitHub Release, and proves that Release
+is Latest. Its final step requires the production branch to resolve to one exact
+commit, then fast-forwards it to the verified tag commit. It sends `force=false`
+and fails closed on a missing or malformed branch, moved tag, divergence,
+rollback, or post-update mismatch. The workflow never recreates the branch.
 
 If that workflow fails after publishing the immutable Release but before the
 website source advances, merge the reviewed workflow fix to `main` first. Then
