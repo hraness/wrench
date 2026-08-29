@@ -1228,27 +1228,30 @@ export async function readXWebPublishedMutationTarget(
     readonly dependencies?: XWebRuntimeDependencies;
   } = {},
 ): Promise<{ readonly present: true; readonly postId: string }> {
-  if (
-    recipe.site !== "x"
-    || recipe.action !== "posts.publish"
-    || (recipe.contractVersion !== 3 && recipe.contractVersion !== 4)
-  ) {
-    throw new Error("X publish recovery supports only posts.publish@3 or posts.publish@4");
+  const publishRecovery = recipe.action === "posts.publish"
+    && (recipe.contractVersion === 3 || recipe.contractVersion === 4);
+  const replyRecovery = recipe.action === "replies.create" && recipe.contractVersion === 1;
+  if (recipe.site !== "x" || (!publishRecovery && !replyRecovery)) {
+    throw new Error("X publish recovery supports only posts.publish@3, posts.publish@4, or replies.create@1");
   }
   const target = parseXWebPublishedMutationTarget(identifier);
   const hasMedia = input.media !== undefined;
+  if (replyRecovery && (hasMedia || input.media_type !== undefined || target.mediaId !== null)) {
+    throw new Error("X replies.create recovery supports only the reviewed text-only reply");
+  }
   const mediaType = xPublishMediaType(input.media_type, hasMedia);
   if (hasMedia !== (target.mediaId !== null)) {
     throw new Error("X provider-accepted post target did not bind the confirmed attachment shape");
   }
   const text = requiredString(input.body, "input.body", 280);
+  const replyTo = replyRecovery ? postId(input.post_id, "input.post_id") : null;
   const bootstrap = await bootstrapX(auth, recipe, options.dependencies);
   const viewer = await requireBoundViewer(bootstrap, auth);
   const readback = await tweetReadback(bootstrap, target.postId);
   const rebound = assertTweetBinding(
     readback,
     text,
-    null,
+    replyTo,
     null,
     viewer.id,
     target.mediaId,
@@ -2799,7 +2802,9 @@ async function publishOne(
     ...created,
     mediaId: media?.id ?? null,
   });
-  if (mutationOperation !== "posts.publish") return created;
+  if (mutationOperation !== "posts.publish" && mutationOperation !== "replies.create") {
+    return created;
+  }
   onFailureStage?.("independent-readback");
   const readback = await waitForTweetPublishReadback(
     bootstrap,
@@ -2822,10 +2827,10 @@ async function publishOne(
   return created;
 }
 
-function rejectUnsupportedPostBranches(input: OperationInput): void {
+function rejectUnsupportedPostBranches(input: OperationInput, operationId: string): void {
   for (const field of ["made_with_ai", "content_disclosure", "ai_generated_disclosure", "semantic_annotation_ids"] as const) {
     if (input[field] !== undefined) {
-      throw new Error(`X posts.publish ${field} is outside the reviewed CreateTweet contract`);
+      throw new Error(`X ${operationId} ${field} is outside the reviewed CreateTweet contract`);
     }
   }
   if (input.root_media !== undefined) {
@@ -2834,6 +2839,13 @@ function rejectUnsupportedPostBranches(input: OperationInput): void {
   const replySettings = optionalStringInput(input, "reply_settings");
   if (replySettings !== undefined && replySettings !== "everyone") {
     throw new Error("X restricted reply settings require a separately reviewed conversation-control contract");
+  }
+  if (operationId === "replies.create") {
+    for (const field of ["attachment_url", "quote_post_id", "quoted_post_id"] as const) {
+      if (input[field] !== undefined) {
+        throw new Error(`X replies.create ${field} is outside the reviewed reply contract`);
+      }
+    }
   }
 }
 
@@ -2854,9 +2866,9 @@ async function executePublish(
     readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
   },
 ): Promise<WebSessionExecution> {
-  rejectUnsupportedPostBranches(input);
-  const currentViewer = await requireBoundViewer(bootstrap, auth);
   const action = recipe.action;
+  rejectUnsupportedPostBranches(input, action);
+  const currentViewer = await requireBoundViewer(bootstrap, auth);
   if (
     action !== "posts.publish"
     && (input.media !== undefined || input.media_type !== undefined)
@@ -3314,7 +3326,7 @@ export async function executeXWebOperation(
     || recipe.action === "replies.create"
     || recipe.action === "posts.quote"
   ) {
-    rejectUnsupportedPostBranches(input);
+    rejectUnsupportedPostBranches(input, recipe.action);
   }
   let profileUrl: string | null = null;
   let bootstrap: XBootstrap;

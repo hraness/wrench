@@ -7,6 +7,12 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+- Graduate `x-web replies.create@1` to an observed text-only CreateTweet reply.
+  The contract binds one exact parent `post_id` and confirmed body, rejects
+  quote IDs, media, and `made_with_ai`, retains the response-bound reply ID,
+  and independently reads that exact reply through TweetResultByRestId. A live
+  Made with AI sparkle is a failed unlabeled-copy publish. Do not open the X
+  composer as a fallback.
 - Fail closed before every Vercel build unless a true local invocation has no
   Vercel signal or the checked-in release marker and exact platform state agree.
 - Resolve the production release tag through a separately byte-bounded GitHub

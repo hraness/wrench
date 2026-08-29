@@ -16,10 +16,11 @@ to compensate for a missing, `capture-required`, or failed contract.
 - Official `x` `posts.publish` exposes optional `made_with_ai`. Leave it unset
   or `false` for user-supplied cross-post copy. Set `true` only as a separate,
   explicit request to label attached media as AI-generated.
-- `x-web` `posts.publish` has no AI-disclosure input. Do not invent one. The
-  reviewed CreateTweet contract sends empty `semantic_annotation_ids` and no
-  content-disclosure field. Wrench rejects `made_with_ai`,
-  `content_disclosure`, and nonempty `semantic_annotation_ids` on this route.
+- `x-web` `posts.publish` and `replies.create` have no AI-disclosure input. Do
+  not invent one. The reviewed CreateTweet contract sends empty
+  `semantic_annotation_ids` and no content-disclosure field. Wrench rejects
+  `made_with_ai`, `content_disclosure`, and nonempty
+  `semantic_annotation_ids` on both routes.
 - Inspect every other installed schema for a comparable flag and leave it unset
   or `false` for the user-supplied package.
 

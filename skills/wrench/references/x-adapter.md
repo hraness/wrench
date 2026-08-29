@@ -152,13 +152,13 @@ observed `feeds.read` contract; check `wrench capabilities x-web --json` for the
 installed input schema and let current preflight fail closed on revision drift.
 
 The observed web writes are `likes.set`, `content.save`, and
-`articles.draft.save`, all R2. Like and bookmark evidence comes from prior
-reversible live fixtures, not the current read-only probes. Preview the exact
-post ID and desired `liked` or `saved` boolean, confirm the returned digest, and
-inspect the receipt. wrench does not mark either desired-state mutation
-verified until an independent TweetResultByRestId readback matches that
-boolean. Article draft saving uses the separate exact unpublished Article
-readback described above.
+`articles.draft.save` (R2), plus `posts.publish` and `replies.create` (R3).
+Like and bookmark evidence comes from prior reversible live fixtures, not the
+current read-only probes. Preview the exact post ID and desired `liked` or
+`saved` boolean, confirm the returned digest, and inspect the receipt. wrench
+does not mark either desired-state mutation verified until an independent
+TweetResultByRestId readback matches that boolean. Article draft saving uses
+the separate exact unpublished Article readback described above.
 
 Examples:
 
@@ -265,7 +265,6 @@ Return `capture-required` on a missing or ambiguous operation revision, feature 
 The current registry keeps these text/desired-state exchanges capture-required:
 
 - `threads.publish` (`R3`): one confirmed ordered root/self-reply schedule;
-- `replies.create` (`R3`): one text reply bound to an exact parent;
 - `posts.repost` (`R3`): exact desired repost state;
 - `posts.quote` (`R3`): one text quote bound to an exact post.
 - `content.delete` (`R3`): the DeleteTweet descriptor is revision evidence only; keep deletion capture-required until an authorized fixture binds the exact authored target and text, request variables, accepted response, and exact not-found readback.
@@ -278,8 +277,16 @@ Current `x-client-transaction-id` generation is code-owned: wrench resolves the 
 text and at most one plan-bound PNG or MP4, binds the account and uploaded media ID,
 admits one CreateTweet dispatch, durably retains the response-bound post/media
 target before readback, and polls only that exact post through
-TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
-Article publishing remain capture-required.
+TweetResultByRestId.
+
+`replies.create@1` is the observed R3 text-reply contract on the same CreateTweet
+path. It accepts exact `post_id` plus `body`, binds `reply.in_reply_to_tweet_id`
+to that parent, rejects quote IDs and media, admits one CreateTweet dispatch,
+durably retains the response-bound reply ID, and polls only that exact reply
+through TweetResultByRestId. The response and independent readback must echo
+the authenticated account and requested parent. Threads, quotes, reposts, DMs,
+and Article publishing remain capture-required. Do not launch the X composer
+as a fallback.
 
 CreateTweet sends empty `semantic_annotation_ids` and no AI or
 content-disclosure field. The reviewed GraphQL contract has no
@@ -288,7 +295,8 @@ OAuth `x` `posts.publish` exposes optional `made_with_ai` and sends `true`
 only when the caller explicitly asks. Leave that field unset or `false` for
 user-supplied cross-post copy. JPEG and PNG uploads are re-encoded to
 pixels-only bytes before INIT or APPEND. A live Made with AI sparkle on
-CreateTweet or TweetResultByRestId is a failed unlabeled-copy publish.
+CreateTweet or TweetResultByRestId is a failed unlabeled-copy publish for
+both `posts.publish` and `replies.create`.
 See [X AI disclosure](x-ai-disclosure.md).
 
 Bind every CreateTweet response to the authenticated account and requested reply/quote parent. For a thread, bind each returned post ID, use it as the next reviewed parent, and durably mark each dispatch. Stop on `partial` or `indeterminate`; never replay the root or remaining continuations automatically.
