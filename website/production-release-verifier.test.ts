@@ -314,7 +314,23 @@ describe("production website release verification", () => {
     ]);
     const source = await Bun.file(new URL("./production-release-verifier.ts", import.meta.url)).text();
     expect(source).not.toContain("ls-remote");
+  });
+
+  test("retains Git metadata for mandatory exact production HEAD evidence", async () => {
+    const source = await Bun.file(new URL("./production-release-verifier.ts", import.meta.url)).text();
+    const vercelIgnore = await Bun.file(new URL("../.vercelignore", import.meta.url)).text();
+    const vercelIgnoreRules = vercelIgnore
+      .split(/\r?\n/gu)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
     expect(source).toContain('["git", "rev-parse", "--verify", "HEAD^{commit}"]');
+    expect(vercelIgnoreRules).toEqual([
+      ".env*",
+      ".vercel",
+      "dist",
+      "node_modules",
+      "website/dist",
+    ]);
   });
 
   test("rejects hostile GitHub tag commit SHA evidence", () => {
