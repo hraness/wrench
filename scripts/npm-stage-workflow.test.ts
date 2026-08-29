@@ -186,8 +186,11 @@ describe("npm publication contract", () => {
 
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
-    expect(budget).toContain("Prior 0.16.2 CI measured a");
-    expect(budget).toContain("2,021,302 bytes");
+    expect(budget).toContain(
+      "packed this v0.16.2 package-budget candidate twice on macOS",
+    );
+    expect(budget).toContain("Prior CI\n// for the same v0.16.2 payload measured a");
+    expect(budget).toContain("2,021,302 packed bytes");
     expect(MAX_PACKED_BYTES).toBe(2_050_000);
     expect(MAX_PACKED_FILES).toBe(450);
     expect(MAX_UNPACKED_BYTES).toBe(11_200_000);

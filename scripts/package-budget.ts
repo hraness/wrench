@@ -1,5 +1,6 @@
-// npm 11.19.0 packed the PR #70 candidate twice on macOS to 2,021,302 bytes,
-// 11,088,754 unpacked bytes, and 434 files. Prior 0.16.2 CI measured a
+// npm 11.19.0 packed this v0.16.2 package-budget candidate twice on macOS:
+// 2,021,302 packed bytes, 11,088,754 unpacked bytes, and 434 files. Prior CI
+// for the same v0.16.2 payload measured a
 // 3,543-byte Linux/macOS gzip spread. Keep bounded room for that observed
 // transport variance and small reviewed payload drift.
 export const MAX_PACKED_BYTES = 2_050_000;
