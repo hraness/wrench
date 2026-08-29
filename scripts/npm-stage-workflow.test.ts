@@ -194,7 +194,15 @@ function npmCommands(markdown: string): readonly string[] {
 const providerRepository = "hraness/wrench";
 const providerPreviousSha = "1".repeat(40);
 const providerVerifiedSha = "2".repeat(40);
+const providerTagObjectSha = "3".repeat(40);
 const providerTag = "v0.16.2";
+const providerTagCommitEndpoint =
+  `/repos/${providerRepository}/commits/refs%2Ftags%2F${providerTag}`;
+const providerAmbiguousTagCommitEndpoints = Object.freeze([
+  `/repos/${providerRepository}/commits/${providerTag}`,
+  `/repos/${providerRepository}/commits/tags/${providerTag}`,
+  `/repos/${providerRepository}/commits/refs/tags/${providerTag}`,
+]);
 const providerReleasePublishedAt = "2026-08-29T14:00:00Z";
 const providerBaselineServerDate = "2026-08-29T15:00:00.000Z";
 const providerPromotionServerDate = "2026-08-29T15:01:00.000Z";
@@ -416,6 +424,17 @@ function providerCompare(overrides: Readonly<Record<string, ProviderJson>> = {})
   };
 }
 
+function providerCommitResponse(sha: string): ProviderJson {
+  return {
+    commit: {
+      message: "deterministic annotated-tag target fixture",
+      tree: { sha: "4".repeat(40) },
+    },
+    parents: [],
+    sha,
+  };
+}
+
 class ProviderApiFixture {
   readonly calls: string[] = [];
   readonly graphqlCalls: string[] = [];
@@ -607,10 +626,13 @@ class ProviderApiFixture {
       this.#latestRead += 1;
       return snapshot ?? this.latest;
     }
-    if (endpoint === `/repos/${providerRepository}/commits/tags/${providerTag}`) {
+    if (endpoint === providerTagCommitEndpoint) {
       const snapshot = this.tagSnapshots[Math.min(this.#tagRead, this.tagSnapshots.length - 1)];
       this.#tagRead += 1;
-      return { sha: snapshot ?? providerVerifiedSha };
+      return providerCommitResponse(snapshot ?? providerVerifiedSha);
+    }
+    if (providerAmbiguousTagCommitEndpoints.includes(endpoint)) {
+      return providerCommitResponse(providerTagObjectSha);
     }
     if (
       endpoint ===
@@ -1518,7 +1540,8 @@ printf '%s\n' "$DEFAULT_HEAD"
       .toBeLessThan(workflow.indexOf("\n  publish:"));
     const publishScript = workflowStepScript(workflow, "Publish verified GitHub Release");
     expect(publishScript).toContain('remote_tag_sha="$(gh api');
-    expect(publishScript).toContain("/commits/tags/$VERIFIED_TAG");
+    expect(publishScript).toContain("/commits/refs%2Ftags%2F$VERIFIED_TAG");
+    expect(publishScript).not.toContain("/commits/tags/");
     expect(publishScript.indexOf("remote_tag_sha="))
       .toBeLessThan(publishScript.indexOf("--method POST"));
     expect(publishScript).toContain('if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]');
@@ -1578,8 +1601,10 @@ printf '%s\n' "$DEFAULT_HEAD"
     const binaryDirectory = join(directory, "bin");
     const ghStub = join(binaryDirectory, "gh");
     const commandLog = join(directory, "commands.log");
-    const verifiedSha = "2".repeat(40);
+    const peeledCommitSha = "2".repeat(40);
+    const tagObjectSha = "3".repeat(40);
     const workflowSha = "1".repeat(40);
+    expect(tagObjectSha).not.toBe(peeledCommitSha);
 
     try {
       await mkdir(binaryDirectory, { recursive: true });
@@ -1590,8 +1615,12 @@ args="$*"
 release_json() {
   printf '{"assets":[],"draft":false,"immutable":%s,"prerelease":false,"published_at":"2026-08-29T14:00:00Z","tag_name":"%s"}' "$RELEASE_IMMUTABLE" "$VERIFIED_TAG"
 }
-if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
-  printf '%s\n' "$TAG_SHA"
+if [[ "$args" == "api /repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG --jq .sha" ]]; then
+  printf '%s\n' "$PEELED_COMMIT_SHA"
+elif [[ "$args" == "api /repos/$GITHUB_REPOSITORY/commits/$VERIFIED_TAG --jq .sha" ||
+        "$args" == "api /repos/$GITHUB_REPOSITORY/commits/tags/$VERIFIED_TAG --jq .sha" ||
+        "$args" == "api /repos/$GITHUB_REPOSITORY/commits/refs/tags/$VERIFIED_TAG --jq .sha" ]]; then
+  printf '%s\n' "$TAG_OBJECT_SHA"
 elif [[ "$args" == "api --include /repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG" ]]; then
   case "$LOOKUP_MODE" in
     existing)
@@ -1667,8 +1696,9 @@ fi
         RECOVERY_WORKFLOW_SHA: workflowSha,
         SOURCE_MODE: "valid",
         SOURCE_SHA: workflowSha,
-        TAG_SHA: verifiedSha,
-        VERIFIED_SHA: verifiedSha,
+        PEELED_COMMIT_SHA: peeledCommitSha,
+        TAG_OBJECT_SHA: tagObjectSha,
+        VERIFIED_SHA: peeledCommitSha,
         VERIFIED_TAG: "v0.16.2",
       });
       const runCase = async (
@@ -1680,7 +1710,14 @@ fi
 
       const recovered = await runCase({});
       expect(recovered.exitCode).toBe(0);
-      expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
+      const recoveredCommands = await readFile(commandLog, "utf8");
+      expect(recoveredCommands).toContain(
+        `api /repos/${providerRepository}/commits/refs%2Ftags%2Fv0.16.2 --jq .sha`,
+      );
+      for (const ambiguousEndpoint of providerAmbiguousTagCommitEndpoints) {
+        expect(recoveredCommands).not.toContain(`api ${ambiguousEndpoint} --jq .sha`);
+      }
+      expect(recoveredCommands).not.toContain("--method POST");
 
       const created = await runCase({ ALLOW_CREATE: "true", LOOKUP_MODE: "missing" });
       expect(created.exitCode).toBe(0);
@@ -1750,8 +1787,13 @@ fi
       expect(falseAbsence.exitCode).not.toBe(0);
       expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
 
+      const tagObjectTarget = await runCase({ PEELED_COMMIT_SHA: tagObjectSha });
+      expect(tagObjectTarget.exitCode).not.toBe(0);
+      expect(`${tagObjectTarget.stdout}${tagObjectTarget.stderr}`)
+        .toContain("Remote v0.16.2 resolves to");
+      expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
+
       for (const [overrides, message] of [
-        [{ TAG_SHA: "3".repeat(40) }, "Remote v0.16.2 resolves to"],
         [{ RELEASE_IMMUTABLE: "false" }, "is not exact, published, immutable, and asset-free"],
         [{ LATEST_TAG: "v0.16.1" }, "Latest release is v0.16.1"],
         [{ VERIFIED_TAG: "v0.16.2\npoison" }, "no verified stable release tag"],
@@ -1857,6 +1899,8 @@ fi
     expect(helper).toContain('mode = "already-exact"');
     expect(helper).toContain('mode = "advanced"');
     expect(helper).toContain("35613825");
+    expect(helper).toContain("encodeURIComponent(`refs/tags/${tag}`)");
+    expect(helper).not.toContain("/commits/tags/");
     expect(helper).toContain("force: false");
     expect(helper).toContain("/git/ref/heads/website-production");
     expect(helper).toContain("/git/refs/heads/website-production");
@@ -2247,6 +2291,12 @@ fi
 
     const advanced = await providerReceipts("advanced");
     expect((advanced.promotion as Readonly<Record<string, unknown>>).mode).toBe("advanced");
+    expect(advanced.promotionCalls.filter((call) => call.includes("/commits/"))).toEqual([
+      `GET ${providerTagCommitEndpoint}`,
+    ]);
+    for (const ambiguousEndpoint of providerAmbiguousTagCommitEndpoints) {
+      expect(advanced.promotionCalls).not.toContain(`GET ${ambiguousEndpoint}`);
+    }
     expect(advanced.promotionCalls.filter((call) => call.startsWith("PATCH "))).toEqual([
       `PATCH /repos/${providerRepository}/git/refs/heads/website-production ${JSON.stringify({
         force: false,
@@ -2256,6 +2306,12 @@ fi
     expect(advanced.promotionCalls.some((call) => call.includes("/deployments"))).toBe(false);
     const recovered = await providerReceipts("already-exact");
     expect((recovered.promotion as Readonly<Record<string, unknown>>).mode).toBe("already-exact");
+    expect(recovered.promotionCalls.filter((call) => call.includes("/commits/"))).toEqual([
+      `GET ${providerTagCommitEndpoint}`,
+    ]);
+    for (const ambiguousEndpoint of providerAmbiguousTagCommitEndpoints) {
+      expect(recovered.promotionCalls).not.toContain(`GET ${ambiguousEndpoint}`);
+    }
     expect(recovered.promotionCalls.some((call) => call.startsWith("PATCH "))).toBe(false);
 
     const concurrent = providerDeployment(11, "2026-08-29T15:01:00Z");
@@ -2487,6 +2543,19 @@ fi
 
   test("fails promotion closed on comparison, ref, and PATCH races", async () => {
     const { baseline, baselineDeployment } = await providerReceipts("advanced");
+    const tagObjectTarget = new ProviderApiFixture({
+      tagSnapshots: [providerTagObjectSha],
+    });
+    await expect(promoteWebsiteProduction({
+      api: tagObjectTarget,
+      baselineReceipt: baseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("tag v0.16.2 moved from the verified release commit");
+    expect(tagObjectTarget.calls).toEqual([`GET ${providerTagCommitEndpoint}`]);
+    expect(tagObjectTarget.calls.some((call) => call.startsWith("PATCH "))).toBe(false);
+
     const staleLatest = new ProviderApiFixture({
       latestSnapshots: [providerLatest({ tag_name: "v0.16.1" })],
       refSha: providerPreviousSha,
@@ -3159,7 +3228,7 @@ fi
       ],
       undefined,
       [],
-      [providerVerifiedSha, providerVerifiedSha, providerVerifiedSha, "3".repeat(40)],
+      [providerVerifiedSha, providerVerifiedSha, providerVerifiedSha, providerTagObjectSha],
     );
     await expect(run(finalTagRace)).rejects.toThrow("tag v0.16.2 moved");
 

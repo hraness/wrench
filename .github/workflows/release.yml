@@ -277,7 +277,7 @@ jobs:
             echo "::error::Publish request has no verified release commit"
             exit 1
           fi
-          remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/tags/$VERIFIED_TAG" --jq '.sha')"
+          remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
           if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
             echo "::error::Remote $VERIFIED_TAG resolves to $remote_tag_sha, expected $VERIFIED_SHA"
             exit 1

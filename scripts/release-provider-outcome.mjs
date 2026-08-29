@@ -1197,8 +1197,9 @@ async function readLatestRelease(api, repository, tag) {
 }
 
 async function readVerifiedTagCommit(api, repository, tag, verifiedSha) {
+  const encodedTagRef = encodeURIComponent(`refs/tags/${tag}`);
   const value = expectRecord(
-    await api.get(`/repos/${repository}/commits/tags/${tag}`),
+    await api.get(`/repos/${repository}/commits/${encodedTagRef}`),
     `tag ${tag}`,
   );
   const tagSha = expectSha(value.sha, `tag ${tag} SHA`);
