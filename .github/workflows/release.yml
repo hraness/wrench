@@ -232,8 +232,8 @@ jobs:
             if [[ "$current_sha" != "$VERIFIED_SHA" ]]; then
               comparison="$(gh api \
                 "/repos/$GITHUB_REPOSITORY/compare/$current_sha...$VERIFIED_SHA" \
-                --jq '[.status, .base_commit.sha, .merge_base_commit.sha, .head_commit.sha] | @tsv')"
-              expected_comparison="ahead"$'\t'"$current_sha"$'\t'"$current_sha"$'\t'"$VERIFIED_SHA"
+                --jq '[.status, .base_commit.sha, .merge_base_commit.sha] | @tsv')"
+              expected_comparison="ahead"$'\t'"$current_sha"$'\t'"$current_sha"
               if [[ "$comparison" != "$expected_comparison" ]]; then
                 echo "::error::$production_ref does not fast-forward from $current_sha to $VERIFIED_SHA"
                 exit 1

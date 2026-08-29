@@ -7,11 +7,15 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+## 0.16.3 - 2026-08-29
+
 - Fail closed before every Vercel build unless a true local invocation has no
   Vercel signal or the checked-in release marker and exact platform state agree.
 - Resolve the production release tag through bounded GitHub commit JSON while
   retaining fixed local `git rev-parse HEAD` evidence, removing the remote Git
   descendant boundary from website admission.
+- Validate release-bound website promotion against the actual GitHub Compare
+  response fields so a verified non-force fast-forward can advance production.
 
 ## 0.16.2 - 2026-08-28
 

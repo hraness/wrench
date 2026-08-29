@@ -825,6 +825,10 @@ esac
       .toBeLessThan(workflow.indexOf("Promote verified website production source"));
     expect(workflow).toContain('production_ref="refs/heads/website-production"');
     expect(workflow.match(/\/commits\/tags\/\$VERIFIED_TAG/gu)).toHaveLength(2);
+    expect(script).toContain(
+      "--jq '[.status, .base_commit.sha, .merge_base_commit.sha] | @tsv'",
+    );
+    expect(script).not.toContain(".head_commit.sha");
     expect(workflow).toContain("-F force=false");
     expect(workflow).not.toContain("-F force=true");
     expect(workflow).not.toContain("git push --force");
@@ -838,10 +842,12 @@ args="$*"
 if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
   printf '%s\n' "$TAG_SHA"
 elif [[ "$args" == *"/compare/$CURRENT_SHA...$VERIFIED_SHA"* ]]; then
+  [[ "$args" == *"[.status, .base_commit.sha, .merge_base_commit.sha] | @tsv"* ]]
+  [[ "$args" != *".head_commit.sha"* ]]
   if [[ "$PROMOTION_SCENARIO" == "ahead" ]]; then
-    printf 'ahead\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA"
+    printf 'ahead\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA"
   else
-    printf 'diverged\t%s\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" "$VERIFIED_SHA"
+    printf 'diverged\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})"
   fi
 elif [[ "$args" == *"--method PATCH"* ]]; then
   [[ "$args" == *"/git/ref/heads/website-production"* ]]
