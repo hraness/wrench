@@ -1080,7 +1080,17 @@ fi
     expect(workflow.indexOf("Latest release is $latest_tag"))
       .toBeLessThan(workflow.indexOf("Promote verified website production source"));
     expect(workflow).toContain('production_ref="refs/heads/website-production"');
-    expect(workflow).toContain("/git/matching-refs/heads/website-production");
+    expect(workflow).not.toContain("/git/matching-refs/heads/website-production");
+    expect(script).toContain(
+      'branch_read_endpoint="/repos/$GITHUB_REPOSITORY/git/ref/heads/website-production"',
+    );
+    expect(script).toContain(
+      'branch_update_endpoint="/repos/$GITHUB_REPOSITORY/git/refs/heads/website-production"',
+    );
+    expect(script).toContain("[.ref, .object.type, .object.sha] | @tsv");
+    expect(script).not.toContain("--include");
+    expect(script).not.toContain("--method POST");
+    expect(script).not.toContain('"/repos/$GITHUB_REPOSITORY/git/refs"');
     expect(workflow.match(/\/commits\/tags\/\$VERIFIED_TAG/gu)).toHaveLength(2);
     expect(workflow).toContain("-F force=false");
     expect(workflow).not.toContain("-F force=true");
@@ -1101,7 +1111,9 @@ if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
   printf '%s\n' "$TAG_SHA"
 elif [[ "$args" == *"/compare/$CURRENT_SHA...$VERIFIED_SHA"* ]]; then
   case "$PROMOTION_SCENARIO" in
-    ahead) printf 'ahead\t1\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
+    ahead|patch-failure|patch-race|post-read-api-failure|post-read-mismatch)
+      printf 'ahead\t1\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA"
+      ;;
     api-failure) exit 1 ;;
     behind-count) printf 'ahead\t1\t1\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
     malformed-ahead) printf 'ahead\t01\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
@@ -1112,33 +1124,73 @@ elif [[ "$args" == *"/compare/$CURRENT_SHA...$VERIFIED_SHA"* ]]; then
     *) printf 'diverged\t1\t1\t%s\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" "$VERIFIED_SHA" ;;
   esac
 elif [[ "$args" == *"--method PATCH"* ]]; then
-  [[ "$args" == *"/git/ref/heads/website-production"* ]]
+  [[ "$args" == *"/git/refs/heads/website-production"* ]]
   [[ "$args" == *"-f sha=$VERIFIED_SHA"* ]]
   [[ "$args" == *"-F force=false"* ]]
-  printf 'patch\n' > "$PROMOTED_MARKER"
-elif [[ "$args" == *"--method POST"* ]]; then
-  [[ "$args" == *"/git/refs"* ]]
-  [[ "$args" == *"-f ref=refs/heads/website-production"* ]]
-  [[ "$args" == *"-f sha=$VERIFIED_SHA"* ]]
-  printf 'create\n' > "$PROMOTED_MARKER"
-elif [[ "$args" == *"/git/matching-refs/heads/website-production"* ]]; then
-  if [[ "$PROMOTION_SCENARIO" == "ref-read-failure" ]]; then
+  if [[ "$PROMOTION_SCENARIO" == "patch-failure" ]]; then
+    echo 'gh: simulated update failure' >&2
     exit 1
-  elif [[ "$PROMOTION_SCENARIO" == "absent" ]]; then
-    printf '\n'
-  elif [[ "$PROMOTION_SCENARIO" == "identical" ]]; then
-    printf '%s\n' "$VERIFIED_SHA"
-  elif [[ "$PROMOTION_SCENARIO" == "malformed-current" ]]; then
-    printf 'not-a-commit\n'
-  else
-    printf '%s\n' "$CURRENT_SHA"
+  elif [[ "$PROMOTION_SCENARIO" == "patch-race" ]]; then
+    echo 'gh: Reference update failed (HTTP 422)' >&2
+    exit 1
   fi
-elif [[ "$args" == *"/git/ref/heads/website-production"* ]]; then
-  if [[ -f "$PROMOTED_MARKER" || "$PROMOTION_SCENARIO" == "identical" ]]; then
-    printf '%s\n' "$VERIFIED_SHA"
-  else
-    printf '%s\n' "$CURRENT_SHA"
+  printf 'patch\n' > "$PROMOTED_MARKER"
+elif [[ "$args" == *"/git/ref/heads/website-production"* && "$args" == *"@tsv"* ]]; then
+  if [[ -f "$PROMOTED_MARKER" ]]; then
+    case "$PROMOTION_SCENARIO" in
+      post-read-api-failure)
+        echo 'gh: simulated post-update read failure' >&2
+        exit 1
+        ;;
+      post-read-mismatch)
+        printf 'refs/heads/website-production\tcommit\t%s\n' "$CURRENT_SHA"
+        exit 0
+        ;;
+    esac
+    printf 'refs/heads/website-production\tcommit\t%s\n' "$VERIFIED_SHA"
+    exit 0
   fi
+  case "$PROMOTION_SCENARIO" in
+    ref-404)
+      echo 'gh: Not Found (HTTP 404)' >&2
+      exit 1
+      ;;
+    ref-api-failure)
+      echo 'gh: simulated API failure' >&2
+      exit 1
+      ;;
+    ref-empty)
+      printf '\n'
+      ;;
+    ref-extra-field)
+      printf 'refs/heads/website-production\tcommit\t%s\textra\n' "$CURRENT_SHA"
+      ;;
+    ref-multiline)
+      printf 'refs/heads/website-production\tcommit\t%s\n' "$CURRENT_SHA"
+      printf 'refs/heads/website-production\tcommit\t%s\n' "$VERIFIED_SHA"
+      ;;
+    ref-uppercase-sha)
+      printf 'refs/heads/website-production\tcommit\t'
+      printf 'A%.0s' {1..40}
+      printf '\n'
+      ;;
+    ref-wrong-ref)
+      printf 'refs/heads/other\tcommit\t%s\n' "$CURRENT_SHA"
+      ;;
+    ref-wrong-type)
+      printf 'refs/heads/website-production\ttag\t%s\n' "$CURRENT_SHA"
+      ;;
+    *)
+      if [[ "$PROMOTION_SCENARIO" == "identical" ]]; then
+        response_sha="$VERIFIED_SHA"
+      elif [[ "$PROMOTION_SCENARIO" == "malformed-current" ]]; then
+        response_sha="not-a-commit"
+      else
+        response_sha="$CURRENT_SHA"
+      fi
+      printf 'refs/heads/website-production\tcommit\t%s\n' "$response_sha"
+      ;;
+  esac
 else
   echo "unexpected gh command: $args" >&2
   exit 1
@@ -1167,24 +1219,48 @@ fi
         return runWorkflowScript(script, { ...baseEnvironment, ...overrides });
       };
 
-      const created = await runCase({ PROMOTION_SCENARIO: "absent" });
-      expect(created.exitCode).toBe(0);
-      expect(await readFile(promotedMarker, "utf8")).toBe("create\n");
-      expect(await readFile(commandLog, "utf8")).toContain(
-        "--method POST /repos/hraness/wrench/git/refs",
-      );
+      const missing = await runCase({ PROMOTION_SCENARIO: "ref-404" });
+      expect(missing.exitCode).not.toBe(0);
+      expect(`${missing.stdout}${missing.stderr}`).toContain("HTTP 404");
+      expect(await Bun.file(promotedMarker).exists()).toBe(false);
+      expect(await readFile(commandLog, "utf8")).not.toMatch(/--method (?:PATCH|POST)/u);
 
       const advanced = await runCase({ PROMOTION_SCENARIO: "ahead" });
       expect(advanced.exitCode).toBe(0);
       expect(await readFile(promotedMarker, "utf8")).toBe("patch\n");
       const advancedCommands = await readFile(commandLog, "utf8");
       expect(advancedCommands).toContain(`/compare/${currentSha}...${verifiedSha}`);
+      expect(advancedCommands).toContain(
+        "--method PATCH /repos/hraness/wrench/git/refs/heads/website-production",
+      );
       expect(advancedCommands).toContain("-F force=false");
+      expect(advancedCommands.match(
+        /\/repos\/hraness\/wrench\/git\/ref\/heads\/website-production/gu,
+      )).toHaveLength(2);
+      expect(advancedCommands).not.toContain("--method POST");
+      const initialReadIndex = advancedCommands.indexOf(
+        "/git/ref/heads/website-production",
+      );
+      const compareIndex = advancedCommands.indexOf(`/compare/${currentSha}...${verifiedSha}`);
+      const patchIndex = advancedCommands.indexOf(
+        "--method PATCH /repos/hraness/wrench/git/refs/heads/website-production",
+      );
+      const finalReadIndex = advancedCommands.lastIndexOf(
+        "/git/ref/heads/website-production",
+      );
+      expect(initialReadIndex).toBeGreaterThan(-1);
+      expect(compareIndex).toBeGreaterThan(initialReadIndex);
+      expect(patchIndex).toBeGreaterThan(compareIndex);
+      expect(finalReadIndex).toBeGreaterThan(patchIndex);
 
       const identical = await runCase({ PROMOTION_SCENARIO: "identical" });
       expect(identical.exitCode).toBe(0);
       expect(await Bun.file(promotedMarker).exists()).toBe(false);
-      expect(await readFile(commandLog, "utf8")).not.toMatch(/--method (?:PATCH|POST)/u);
+      const identicalCommands = await readFile(commandLog, "utf8");
+      expect(identicalCommands).not.toMatch(/--method (?:PATCH|POST)/u);
+      expect(identicalCommands.match(
+        /\/repos\/hraness\/wrench\/git\/ref\/heads\/website-production/gu,
+      )).toHaveLength(2);
 
       const diverged = await runCase({ PROMOTION_SCENARIO: "diverged" });
       expect(diverged.exitCode).not.toBe(0);
@@ -1197,7 +1273,13 @@ fi
         "malformed-ahead",
         "malformed-current",
         "missing-final",
-        "ref-read-failure",
+        "ref-api-failure",
+        "ref-empty",
+        "ref-extra-field",
+        "ref-multiline",
+        "ref-uppercase-sha",
+        "ref-wrong-ref",
+        "ref-wrong-type",
         "wrong-base",
         "wrong-final",
         "zero-ahead",
@@ -1205,6 +1287,29 @@ fi
         const rejected = await runCase({ PROMOTION_SCENARIO: scenario });
         expect(rejected.exitCode).not.toBe(0);
         expect(await Bun.file(promotedMarker).exists()).toBe(false);
+        expect(await readFile(commandLog, "utf8")).not.toMatch(/--method (?:PATCH|POST)/u);
+      }
+
+      for (const scenario of ["patch-failure", "patch-race"] as const) {
+        const rejected = await runCase({ PROMOTION_SCENARIO: scenario });
+        expect(rejected.exitCode).not.toBe(0);
+        expect(await Bun.file(promotedMarker).exists()).toBe(false);
+        const rejectedCommands = await readFile(commandLog, "utf8");
+        expect(rejectedCommands).toContain(
+          "--method PATCH /repos/hraness/wrench/git/refs/heads/website-production",
+        );
+        expect(rejectedCommands).not.toContain("--method POST");
+      }
+
+      for (const scenario of ["post-read-api-failure", "post-read-mismatch"] as const) {
+        const rejected = await runCase({ PROMOTION_SCENARIO: scenario });
+        expect(rejected.exitCode).not.toBe(0);
+        expect(await readFile(promotedMarker, "utf8")).toBe("patch\n");
+        const rejectedCommands = await readFile(commandLog, "utf8");
+        expect(rejectedCommands).toContain(
+          "--method PATCH /repos/hraness/wrench/git/refs/heads/website-production",
+        );
+        expect(rejectedCommands).not.toContain("--method POST");
       }
 
       const retagged = await runCase({
@@ -1275,7 +1380,8 @@ fi
       "For the one-time\nmigration only",
       "never bootstrap it from `main`",
       "exception must never be repeated",
-      "fast-forwards the existing branch",
+      "requires the production branch to resolve to one exact",
+      "workflow never recreates the branch",
       "sends `force=false`",
       "dispatch **Release** from the current `main` ref",
       "required exact stable\n`release_tag`",
@@ -1315,7 +1421,8 @@ fi
     expect(agents).toContain("Verify that exact public artifact before creating its tag");
     expect(`${guide}\n${agents}`).not.toContain("required reviewer `0thernet`");
     expect(`${guide}\n${agents}`).not.toContain("prevent_self_review");
-    expect(agents).toContain("fast-forwards `website-production`");
+    expect(agents).toContain("fast-forwards the established `website-production` branch");
+    expect(agents).toContain("a missing production branch is a hard failure");
     expect(agents).toContain("Vercel's Production Branch on `website-production`");
     expect(agents).toContain("documented one-time Vercel bootstrap");
     expect(agents).toContain("`main` and pull requests are preview sources");
