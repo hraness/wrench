@@ -123,11 +123,12 @@ comparison before it creates the immutable GitHub Release.
 
 ## Configure stage-only trusted publishing
 
-Create a protected GitHub environment named `npm-stage` after the first package
-is public. Restrict it to `main`, require reviewer `0thernet`, and set
-`prevent_self_review: false` so the sole maintainer can approve the deployment.
-Do not add a secret to the environment. npm's separate staged-package inspection
-and two-factor approval remain mandatory before the version becomes public.
+Create a GitHub environment named `npm-stage` after the first package is public.
+Restrict its deployment branches to `main`. The `npm-stage` environment has no
+required deployment reviewers, so passing **Verify exact package** allows
+**Stage exact package** to start automatically. Do not add a secret to the
+environment. npm's separate human inspection and two-factor approval remain
+mandatory before the version becomes public.
 
 If the current npm trust relationship does not name that environment, inspect
 and revoke it before creating the replacement:
@@ -181,13 +182,13 @@ Release is non-draft, immutable, and Latest.
 
 1. Merge a monotonically greater stable version to `main`. A push that changes
    `package.json` starts **Stage npm package** automatically.
-2. Wait for **Verify exact package**, then inspect the uploaded tarball and its
-   `npm-pack.json`.
-3. As `0thernet`, approve the protected `npm-stage` environment. Self-review is
-   allowed for this sole-maintainer gate. Only its minimal OIDC job can submit
-   the verified tarball to npm's staging area.
-4. Inspect the staged package, then approve it with npm's separate two-factor
-   authentication prompt.
+2. Wait for **Verify exact package**. It packs, smokes, and uploads one exact
+   tarball with its `npm-pack.json`.
+3. **Stage exact package** starts automatically through the main-only
+   `npm-stage` environment. Only this minimal OIDC job can submit the verified
+   tarball to npm's staging area.
+4. Inspect the uploaded artifact and the staged npm package, then approve the
+   npm stage with human two-factor authentication.
 5. Download and smoke the public registry package.
 6. Create the matching `v<version>` tag on the staged source commit.
 
@@ -198,7 +199,7 @@ non-current `main` commit fails closed.
 
 If the automatic run did not start or failed before npm accepted the stage,
 dispatch **Stage npm package** from the current `main` branch. Manual recovery
-runs the same verification and protected-environment path. Do not dispatch a
+runs the same verification and main-only environment path. Do not dispatch a
 replacement after npm has accepted a stage for that version; continue with
 inspection and two-factor approval.
 
@@ -234,7 +235,8 @@ The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
 Bun 1.3.14, disabled package-manager caching, and no stored npm token. It binds
 the verified artifact to the current `main` commit, refetches `main` before
 staging, and aborts if that commit is no longer the default-branch head. The
-`npm-stage` environment applies only to the terminal OIDC job.
+main-only `npm-stage` environment applies only to the terminal OIDC job and has
+no required deployment reviewers.
 
 `scripts/package-budget.ts` owns the shared packed-byte, unpacked-byte, and
 file-count ceilings used by artifact inspection and the clean-consumer smoke.
@@ -245,10 +247,15 @@ spread without replacing the path and content checks with a broad size limit.
 ## Deploy the release-bound website
 
 Configure the Vercel project's Production Branch as `website-production` and
-keep Vercel System Environment Variables enabled for builds. Production
-admission requires both `VERCEL_ENV=production` and
-`VERCEL_GIT_COMMIT_REF=website-production`; missing system state or any other
-production ref fails before external verification or site generation.
+keep Vercel System Environment Variables enabled for builds. The checked-in
+build command injects exact non-secret marker
+`WRENCH_VERCEL_BUILD=release-bound-v1`. Local admission is allowed only when
+that marker and every Vercel signal are absent. Any marked or Vercel-signaled
+build requires the exact marker, `VERCEL=1`, a valid `VERCEL_ENV`, and an exact
+nonempty `VERCEL_GIT_COMMIT_REF`; missing, malformed, or inconsistent platform
+state fails before external verification or site generation. Production also
+requires `VERCEL_GIT_COMMIT_REF=website-production`, while that ref is rejected
+for a non-production deployment.
 `main` and pull requests are preview sources only; they may describe a package
 candidate that has not completed npm staging, tagging, or immutable Release
 publication, so they must never replace the public production site.
@@ -269,13 +276,15 @@ the verified tag commit or fast-forwards the existing branch to that commit.
 It compares the existing branch as an ancestor, sends `force=false`, and fails
 closed on a moved tag, divergence, rollback, or post-update mismatch.
 
-Vercel runs `website:vercel-build`. Preview and local builds generate the site
-without external release checks. A production build first requires the checked
-out HEAD and root package version to equal the exact remote `v<version>` tag
-commit, requires canonical npm to contain that version with SHA-512 integrity,
-and requires the matching immutable GitHub Release to be non-draft,
-non-prerelease, and Latest. Response bodies and Git child output are streamed
-under fixed byte bounds. Only then does the build derive the public release
+Vercel runs the checked-in marked `website:vercel-build` command. Valid preview
+and development builds, plus true local builds with no Vercel signal, generate
+the site without external release checks. A production build first requires the
+checked-out HEAD and root package version to equal the exact `v<version>` commit
+returned by GitHub's bounded public commit API, requires canonical npm to
+contain that version with SHA-512 integrity, and requires the matching immutable
+GitHub Release to be non-draft, non-prerelease, and Latest. Public JSON response
+bodies and the fixed local `git rev-parse HEAD` child output are streamed under
+fixed byte bounds. Only then does the build derive the public release
 identity and provider capability attestation from that exact source tree.
 
 This production admission assumes a Vercel Git deployment whose checkout keeps

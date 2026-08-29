@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 
 const PACKAGE_NAME = "@hraness/wrench" as const;
 const REPOSITORY = "hraness/wrench" as const;
-const REPOSITORY_URL = "https://github.com/hraness/wrench.git" as const;
 const NPM_REGISTRY_ORIGIN = "https://registry.npmjs.org" as const;
 const GITHUB_API_ORIGIN = "https://api.github.com" as const;
 const NETWORK_DEADLINE_MS = 20_000;
@@ -17,10 +16,10 @@ const stableVersionPattern =
 const commitShaPattern = /^[0-9a-f]{40}$/u;
 const evidenceKeys = [
   "githubRelease",
+  "githubTagCommit",
   "headSha",
   "latestGithubRelease",
   "npmManifest",
-  "remoteTagRefs",
 ] as const;
 
 export type ProductionReleaseIdentity = Readonly<{
@@ -31,15 +30,25 @@ export type ProductionReleaseIdentity = Readonly<{
 
 export type ProductionReleaseEvidence = Readonly<{
   githubRelease: unknown;
+  githubTagCommit: unknown;
   headSha: string;
   latestGithubRelease: unknown;
   npmManifest: unknown;
-  remoteTagRefs: string;
 }>;
 
 export type ProductionReleaseEvidenceLoader = (
   identity: ProductionReleaseIdentity,
 ) => Promise<unknown>;
+
+export type ProductionReleaseEvidenceDependencies = Readonly<{
+  fetchJson: (url: string, label: string) => Promise<unknown>;
+  readHeadSha: () => Promise<string>;
+}>;
+
+export type PublicJsonFetch = (
+  url: string,
+  init: RequestInit,
+) => Promise<Response>;
 
 export type BoundedChildProcess = Readonly<{
   exited: Promise<number>;
@@ -212,45 +221,24 @@ function parseEvidence(value: unknown): ProductionReleaseEvidence {
   if (typeof evidence.headSha !== "string" || !commitShaPattern.test(evidence.headSha)) {
     throw new TypeError("Production HEAD evidence must be a lowercase 40-character commit SHA.");
   }
-  if (typeof evidence.remoteTagRefs !== "string") {
-    throw new TypeError("Remote tag evidence must be text.");
-  }
   return {
     githubRelease: evidence.githubRelease,
+    githubTagCommit: evidence.githubTagCommit,
     headSha: evidence.headSha,
     latestGithubRelease: evidence.latestGithubRelease,
     npmManifest: evidence.npmManifest,
-    remoteTagRefs: evidence.remoteTagRefs,
   };
 }
 
-function resolveRemoteTagCommit(
-  identity: ProductionReleaseIdentity,
-  remoteTagRefs: string,
+export function parseGithubTagCommit(
+  value: unknown,
+  label = "GitHub tag commit",
 ): string {
-  const tagRef = `refs/tags/${identity.tag}`;
-  const peeledTagRef = `${tagRef}^{}`;
-  const refs = new Map<string, string>();
-  const lines = remoteTagRefs.split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  for (const line of lines) {
-    const match = /^([0-9a-f]{40})\t([^\t\r\n]+)$/u.exec(line);
-    if (match === null) {
-      throw new Error("GitHub returned a malformed tag-ref record.");
-    }
-    const sha = match[1]!;
-    const ref = match[2]!;
-    if (ref !== tagRef && ref !== peeledTagRef) {
-      throw new Error(`GitHub returned an unexpected tag ref: ${ref}.`);
-    }
-    if (refs.has(ref)) {
-      throw new Error(`GitHub returned duplicate evidence for ${ref}.`);
-    }
-    refs.set(ref, sha);
+  const commit = unknownRecord(value, label);
+  if (typeof commit.sha !== "string" || !commitShaPattern.test(commit.sha)) {
+    throw new Error(`${label} must expose one lowercase 40-character commit SHA.`);
   }
-  const direct = refs.get(tagRef);
-  if (direct === undefined) throw new Error(`GitHub does not publish ${tagRef}.`);
-  return refs.get(peeledTagRef) ?? direct;
+  return commit.sha;
 }
 
 function verifyNpmManifest(
@@ -300,10 +288,13 @@ export function verifyProductionReleaseEvidence(
 ): ProductionReleaseIdentity {
   const identity = parseProductionReleaseIdentity(packageValue);
   const evidence = parseEvidence(evidenceValue);
-  const tagCommit = resolveRemoteTagCommit(identity, evidence.remoteTagRefs);
+  const tagCommit = parseGithubTagCommit(
+    evidence.githubTagCommit,
+    `GitHub tag ${identity.tag} commit`,
+  );
   if (tagCommit !== evidence.headSha) {
     throw new Error(
-      `Checked-out HEAD ${evidence.headSha} is not exact remote ${identity.tag} commit ${tagCommit}.`,
+      `Checked-out HEAD ${evidence.headSha} is not exact GitHub tag ${identity.tag} commit ${tagCommit}.`,
     );
   }
   verifyNpmManifest(identity, evidence.npmManifest);
@@ -321,8 +312,16 @@ export function verifyProductionReleaseEvidence(
   return identity;
 }
 
-async function fetchPublicJson(url: string, label: string): Promise<unknown> {
-  const response = await fetch(url, {
+export async function fetchPublicJson(
+  url: string,
+  label: string,
+  fetchImplementation: PublicJsonFetch = fetch,
+  deadlineMs = NETWORK_DEADLINE_MS,
+): Promise<unknown> {
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0) {
+    throw new TypeError("Public JSON deadline must be a positive safe integer.");
+  }
+  const response = await fetchImplementation(url, {
     headers: {
       Accept: url.startsWith(GITHUB_API_ORIGIN)
         ? "application/vnd.github+json"
@@ -333,18 +332,15 @@ async function fetchPublicJson(url: string, label: string): Promise<unknown> {
         : {}),
     },
     redirect: "error",
-    signal: AbortSignal.timeout(NETWORK_DEADLINE_MS),
+    signal: AbortSignal.timeout(deadlineMs),
   });
   return readBoundedJsonResponse(response, MAX_PUBLIC_JSON_BYTES, label);
 }
 
-async function runGit(
-  args: readonly string[],
-  label: string,
-  cwd: string,
-): Promise<string> {
-  const child = Bun.spawn(["git", ...args], {
-    cwd,
+async function readLocalHeadSha(): Promise<string> {
+  const label = "Production HEAD lookup";
+  const child = Bun.spawn(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
+    cwd: repositoryRoot,
     env: {
       GIT_ASKPASS: "/usr/bin/false",
       GIT_CEILING_DIRECTORIES: "/",
@@ -370,7 +366,7 @@ async function runGit(
     try {
       const output = await collectBoundedChildOutput(child, label);
       if (timedOut) throw new Error(`${label} timed out.`);
-      return output;
+      return parseHeadSha(output);
     } catch (error) {
       if (timedOut) throw new Error(`${label} timed out.`, { cause: error });
       throw error;
@@ -380,7 +376,7 @@ async function runGit(
   }
 }
 
-function parseHeadSha(output: string): string {
+export function parseHeadSha(output: string): string {
   const normalized = output.endsWith("\n") ? output.slice(0, -1) : output;
   if (!commitShaPattern.test(normalized)) {
     throw new Error("git rev-parse returned an invalid production HEAD commit.");
@@ -390,41 +386,39 @@ function parseHeadSha(output: string): string {
 
 export async function loadProductionReleaseEvidence(
   identity: ProductionReleaseIdentity,
+  dependencies: ProductionReleaseEvidenceDependencies = {
+    fetchJson: fetchPublicJson,
+    readHeadSha: readLocalHeadSha,
+  },
 ): Promise<ProductionReleaseEvidence> {
-  const tagRef = `refs/tags/${identity.tag}`;
   const packagePath = encodeURIComponent(identity.name);
   const tagPath = encodeURIComponent(identity.tag);
-  const [headOutput, remoteTagRefs, npmManifest, githubRelease, latestGithubRelease] =
+  const [headSha, githubTagCommit, npmManifest, githubRelease, latestGithubRelease] =
     await Promise.all([
-      runGit(
-        ["rev-parse", "--verify", "HEAD^{commit}"],
-        "Production HEAD lookup",
-        repositoryRoot,
+      dependencies.readHeadSha(),
+      dependencies.fetchJson(
+        `${GITHUB_API_ORIGIN}/repos/${REPOSITORY}/commits/tags/${tagPath}`,
+        `GitHub tag ${identity.tag} commit`,
       ),
-      runGit(
-        ["ls-remote", REPOSITORY_URL, tagRef, `${tagRef}^{}`],
-        "GitHub tag-ref lookup",
-        "/",
-      ),
-      fetchPublicJson(
+      dependencies.fetchJson(
         `${NPM_REGISTRY_ORIGIN}/${packagePath}/${identity.version}`,
         "Canonical npm registry",
       ),
-      fetchPublicJson(
+      dependencies.fetchJson(
         `${GITHUB_API_ORIGIN}/repos/${REPOSITORY}/releases/tags/${tagPath}`,
         `GitHub Release ${identity.tag}`,
       ),
-      fetchPublicJson(
+      dependencies.fetchJson(
         `${GITHUB_API_ORIGIN}/repos/${REPOSITORY}/releases/latest`,
         "Latest GitHub Release",
       ),
     ]);
   return {
     githubRelease,
-    headSha: parseHeadSha(headOutput),
+    githubTagCommit,
+    headSha,
     latestGithubRelease,
     npmManifest,
-    remoteTagRefs,
   };
 }
 

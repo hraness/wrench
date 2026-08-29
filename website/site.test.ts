@@ -334,7 +334,7 @@ describe("wrench.rip static site", () => {
     expect(Array.from(demoWebm?.slice(0, 4) ?? [])).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
     expect(new TextDecoder().decode(demoVtt?.slice(0, 6))).toBe("WEBVTT");
     expect(vercel).toMatchObject({
-      buildCommand: "bunx bun@1.3.14 run website:vercel-build",
+      buildCommand: "WRENCH_VERCEL_BUILD=release-bound-v1 bunx bun@1.3.14 run website:vercel-build",
       framework: null,
       outputDirectory: "website/dist",
     });
