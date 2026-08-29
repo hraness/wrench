@@ -10,7 +10,9 @@ import {
 import {
   createWhatsAppMessageLikeMeSource,
   type WhatsAppMessageLikeMeProgress,
+  type WhatsAppMessageLikeMeSourceDependencies,
 } from "./whatsapp-message-like-me-source";
+import { WhatsAppContactProjectionCleanupUnverifiedError } from "./providers/whatsapp-web-runtime";
 import {
   WHATSAPP_MESSAGE_BUNDLE_V2_PROVIDER,
   WHATSAPP_MESSAGE_BUNDLE_V2_SOURCE,
@@ -37,6 +39,8 @@ export type WhatsAppMessageLikeMeCliRequest = Readonly<{
   environment?: Readonly<Record<string, string | undefined>>;
   signal?: AbortSignal;
   onProgress?: (progress: WhatsAppMessageLikeMeCliProgress) => void;
+  /** Test-only source boundary seams. */
+  sourceDependencies?: WhatsAppMessageLikeMeSourceDependencies;
 }>;
 
 export type WhatsAppMessageLikeMeExportReceipt = Readonly<{
@@ -95,6 +99,7 @@ export async function exportWhatsAppMessageLikeMeFromAuth(
   const environment = request.environment ?? process.env;
   request.onProgress?.(Object.freeze({ phase: "recovery-started" }));
   const admission = acquireBeeperMessageLikeMeExportAdmission({ environment });
+  let releaseAdmission = true;
   let bundle: WhatsAppMessageLikeMeExportResult;
   const startedAt = new Date().toISOString();
   try {
@@ -111,15 +116,27 @@ export async function exportWhatsAppMessageLikeMeFromAuth(
       outputRoot: request.outputRoot,
       source: createWhatsAppMessageLikeMeSource({
         auth: request.auth,
+        stateEnvironment: environment,
         ...(request.signal === undefined ? {} : { signal: request.signal }),
         ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
+        ...(request.sourceDependencies === undefined
+          ? {}
+          : { dependencies: request.sourceDependencies }),
       }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
       recoveryEnvironment: environment,
     });
+  } catch (error) {
+    if (error instanceof WhatsAppContactProjectionCleanupUnverifiedError) {
+      // The exact helper may still own the admitted private store. Keep the
+      // durable admission claim occupied so no later export can overlap an
+      // indeterminate process lifetime.
+      releaseAdmission = false;
+    }
+    throw error;
   } finally {
-    releaseBeeperMessageLikeMeExportAdmission(admission);
+    if (releaseAdmission) releaseBeeperMessageLikeMeExportAdmission(admission);
   }
   const finishedAt = new Date().toISOString();
   const projection = Object.freeze({

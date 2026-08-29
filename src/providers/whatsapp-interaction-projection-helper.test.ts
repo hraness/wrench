@@ -2,6 +2,7 @@ import {
   chmodSync,
   lstatSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -500,6 +501,65 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       expect(encoded).not.toContain("deletion_reason");
     } finally {
       rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("serves every cursor from one integrity-checked helper session", async () => {
+    const path = createStore();
+    const outputRoot = privateDirectory();
+    try {
+      const outputPath = join(outputRoot, "pages.ndjson");
+      const initial = messageRequest(path, { limit: 1 });
+      const result = await invoke(path, {
+        operation: "message-like-me.export-session",
+        outputPath,
+        request: initial,
+      });
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({
+        schemaVersion: 1,
+        status: "succeeded",
+        pages: 3,
+        messages: 3,
+      });
+      const frames = readFileSync(outputPath, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line) as unknown);
+      expect(frames).toHaveLength(4);
+      const pages = frames.slice(0, -1).map((frame) =>
+        (frame as { readonly response: unknown }).response);
+      expect(pages).toHaveLength(3);
+      let requestValue = initial;
+      const projected = pages.map((page) => {
+        const parsed = parseWhatsAppMessageExportProjectionResponse(page, requestValue);
+        if (parsed.status !== "succeeded") {
+          throw new Error("expected a successful session page");
+        }
+        requestValue = {
+          ...requestValue,
+          cursor: parsed.checkpoint.cursor,
+          cursorAnchor: parsed.checkpoint.anchor,
+          expectedGeneration: parsed.projectionGeneration,
+        };
+        return parsed;
+      });
+      expect(projected.map((page) => page.messages[0]?.messageId)).toEqual([
+        "MSG-1",
+        "MSG-2",
+        "MSG-3",
+      ]);
+      expect(projected.at(-1)).toMatchObject({
+        localInsertPageComplete: true,
+        nextCursor: null,
+      });
+      expect(frames.at(-1)).toMatchObject({
+        kind: "seal",
+        pages: 3,
+        messages: 3,
+        framesSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+      rmSync(outputRoot, { recursive: true, force: true });
     }
   });
 

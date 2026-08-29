@@ -6,6 +6,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,10 +17,12 @@ import type { WrenchAuth } from "./auth";
 import {
   acquireBeeperMessageLikeMeExportAdmission,
   createBeeperMessageLikeMeDirectoryLease,
+  recoverBeeperMessageLikeMeDirectoryLeases,
   releaseBeeperMessageLikeMeExportAdmission,
   releaseBeeperMessageLikeMeDirectoryLease,
 } from "./beeper-message-like-me-recovery";
 import { exportWhatsAppMessageLikeMeFromAuth } from "./whatsapp-message-like-me-cli";
+import { WhatsAppContactProjectionCleanupUnverifiedError } from "./providers/whatsapp-web-runtime";
 
 const temporaryRoots: string[] = [];
 
@@ -41,6 +44,48 @@ function boundAuth(path: string): WrenchAuth {
 }
 
 describe("WhatsApp Message Like Me CLI recovery preflight", () => {
+  test("keeps a durable helper lease and admission when process death is unproven", async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), "wrench-whatsapp-cli-indeterminate-test-")),
+    );
+    temporaryRoots.push(root);
+    chmodSync(root, 0o700);
+    const store = join(root, "store");
+    mkdirSync(store, { mode: 0o700 });
+    for (const name of ["session.db", "wacli.db"]) {
+      writeFileSync(join(store, name), "fixed");
+    }
+    chmodSync(join(store, "session.db"), 0o600);
+    chmodSync(join(store, "wacli.db"), 0o600);
+    const outputRoot = join(root, "bundle");
+    const environment = { WRENCH_STATE_HOME: join(root, "state") };
+
+    await expect(exportWhatsAppMessageLikeMeFromAuth({
+      auth: boundAuth(store),
+      outputRoot,
+      environment,
+      sourceDependencies: {
+        helperPath: "/private/fixed/helper.ts",
+        configPath: "/private/fixed/config.toml",
+        runSessionHelper: async (invocation) => {
+          invocation.onSpawned?.(process.pid);
+          throw new WhatsAppContactProjectionCleanupUnverifiedError();
+        },
+      },
+    })).rejects.toBeInstanceOf(WhatsAppContactProjectionCleanupUnverifiedError);
+
+    const recovery = await recoverBeeperMessageLikeMeDirectoryLeases({ environment });
+    expect(recovery).toMatchObject({ active: 1, indeterminate: 0 });
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({ environment }))
+      .toThrow("another export is active");
+
+    const cleanup = await recoverBeeperMessageLikeMeDirectoryLeases({
+      environment,
+      inspectOwner: () => "different-or-dead",
+    });
+    expect(cleanup.recovered).toBe(1);
+  });
+
   test("rejects an active private export before inspecting the WhatsApp store", async () => {
     const root = realpathSync(
       mkdtempSync(join(tmpdir(), "wrench-whatsapp-cli-recovery-test-")),

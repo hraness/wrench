@@ -144,6 +144,63 @@ async function collect(
 }
 
 describe("WhatsApp Message Like Me source mapping", () => {
+  test("applies one monotonic deadline across an admitted multi-page traversal", async () => {
+    const path = privateStore();
+    let helperCalls = 0;
+    const clock = [0, 1, 2, 3];
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: {
+          helperPath: "/private/fixed/helper.ts",
+          configPath: "/private/fixed/config.toml",
+          totalTimeoutMs: 3,
+          monotonicNow: () => clock.shift() ?? 3,
+          runHelper: async (invocation) => {
+            helperCalls += 1;
+            const request = JSON.parse(invocation.stdin) as {
+              readonly messageStoreIdentity: { readonly dev: string; readonly ino: string };
+            };
+            const stats = lstatSync(join(path, "wacli.db"), { bigint: true });
+            const messages = Array.from({ length: 500 }, (_, index) => item({
+              rowid: String(index + 1),
+              messageId: `MSG-${String(index + 1)}`,
+              timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+            }));
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: `${JSON.stringify({
+                schemaVersion: 1,
+                status: "succeeded",
+                projectionGeneration: {
+                  messageStoreIdentity: request.messageStoreIdentity,
+                  size: stats.size.toString(),
+                  mtimeNs: stats.mtimeNs.toString(),
+                  ctimeNs: stats.ctimeNs.toString(),
+                  schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+                },
+                nonConversationChatsExcluded: false,
+                messages,
+                nextCursor: "500",
+                localInsertPageComplete: false,
+                checkpoint: { cursor: "500", anchor: "a".repeat(64) },
+              })}\n`,
+            };
+          },
+        },
+      });
+      await expect((async () => {
+        for await (const _record of source.records) {
+          // Drain until the total clock rejects the next page admission.
+        }
+      })()).rejects.toThrow("export exceeded its total deadline");
+      expect(helperCalls).toBe(1);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("preserves bubbles, replies, edits, deletions, rosters, and safe user handles", async () => {
     const path = privateStore();
     try {

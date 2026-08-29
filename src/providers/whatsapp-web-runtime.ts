@@ -99,6 +99,8 @@ export type WhatsAppContactProjectionHelperInvocation = {
   readonly maxOutputBytes: number;
   readonly maxStderrBytes: number;
   readonly signal?: AbortSignal;
+  /** Called exactly once after spawn with the owned helper PID. */
+  readonly onSpawned?: (pid: number) => void;
 };
 
 export type WhatsAppContactProjectionHelperResult = {
@@ -1261,9 +1263,29 @@ export async function runWhatsAppContactProjectionHelperChild(
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
+      detached: process.platform !== "win32",
     });
   } catch {
     throw new Error("WhatsApp contact projection helper could not start");
+  }
+
+  if (invocation.onSpawned !== undefined) {
+    try {
+      invocation.onSpawned(child.pid);
+    } catch (error) {
+      try {
+        if (process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        // child.exited below is still the exact cleanup proof.
+      }
+      try {
+        await child.exited;
+      } catch {
+        throw new WhatsAppContactProjectionCleanupUnverifiedError();
+      }
+      throw error;
+    }
   }
 
   let timedOut = false;
@@ -1271,6 +1293,19 @@ export async function runWhatsAppContactProjectionHelperChild(
   let forceKill: ReturnType<typeof setTimeout> | undefined;
   let terminationStarted = false;
   const signalChild = (signal: "SIGTERM" | "SIGKILL"): void => {
+    if (process.platform !== "win32") {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch (error) {
+        if (
+          typeof error === "object"
+          && error !== null
+          && "code" in error
+          && error.code === "ESRCH"
+        ) return;
+      }
+    }
     try {
       child.kill(signal);
     } catch {

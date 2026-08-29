@@ -5,11 +5,14 @@ import {
   lstatSync,
   openSync,
   realpathSync,
+  unlinkSync,
+  writeSync,
   type BigIntStats,
 } from "node:fs";
 import { createHash } from "node:crypto";
 
 import { Database, constants as sqliteConstants } from "bun:sqlite";
+import { canonicalJson } from "../canonical-json";
 
 import {
   canonicalWhatsAppParticipantJid,
@@ -33,7 +36,6 @@ import {
   type WhatsAppInteractionProjectionErrorCode,
   type WhatsAppInteractionProjectionItem,
   type WhatsAppInteractionProjectionRequest,
-  type WhatsAppInteractionProjectionResponse,
   type WhatsAppInteractionProjectionSuccess,
 } from "./whatsapp-interaction-projection-protocol";
 import {
@@ -45,7 +47,6 @@ import {
   parseWhatsAppMessageExportProjectionRequest,
   type WhatsAppMessageExportProjectionItem,
   type WhatsAppMessageExportProjectionRequest,
-  type WhatsAppMessageExportProjectionResponse,
   type WhatsAppMessageExportProjectionSuccess,
 } from "./whatsapp-message-export-projection-protocol";
 
@@ -60,6 +61,7 @@ const MAX_MESSAGE_DATABASE_BYTES = 2n * 1024n * 1024n * 1024n;
 const SQLITE_CACHE_KIB = 4_096;
 const MAX_UNIX_SECONDS = 253_402_300_799n;
 const SYSTEM_SENTINEL_JID = "0@s.whatsapp.net";
+const MESSAGE_EXPORT_SESSION_MAX_MESSAGES = 500_000;
 
 type BoundMessageStoreRequest = Pick<
   WhatsAppInteractionProjectionRequest,
@@ -936,6 +938,7 @@ function projectBoundWhatsAppMessageStore<Result>(
     database: Database,
     fileStats: BigIntStats,
     owner: WhatsAppMatchedOwnerIdentity,
+    revalidate: () => void,
   ) => Result,
 ): Result {
   const initialCwd = assertBoundCwd(request);
@@ -988,7 +991,15 @@ function projectBoundWhatsAppMessageStore<Result>(
     configureDatabase(database);
     assertIntegrity(database);
     assertPinnedSchema(database);
-    result = projection(database, initialFile, owner);
+    const revalidate = (): void => {
+      if (initialFile === undefined) fail("message-store-file-invalid");
+      const after = fstatSync(descriptor, { bigint: true });
+      if (!sameSnapshot(initialFile, after)) fail("message-store-file-invalid");
+      exactMessagePathSnapshot(initialFile, request);
+      assertBoundCwd(request, initialCwd);
+      assertNoMessageSidecars();
+    };
+    result = projection(database, initialFile, owner, revalidate);
   } catch (error) {
     failure = error;
   } finally {
@@ -1042,6 +1053,86 @@ export function projectWhatsAppMessageExportFromBoundCwd(
   );
 }
 
+export function projectWhatsAppMessageExportSessionFromBoundCwd(
+  requestValue: unknown,
+  outputDescriptor: number,
+): Readonly<{ pages: number; messages: number }> {
+  const initial = parseWhatsAppMessageExportProjectionRequest(requestValue);
+  if (
+    initial.cursor !== "0"
+    || initial.cursorAnchor !== null
+    || initial.expectedGeneration !== null
+  ) return fail("request-invalid");
+  return projectBoundWhatsAppMessageStore(
+    initial,
+    (database, fileStats, owner, revalidate) => {
+    let request = initial;
+    let pages = 0;
+    let messages = 0;
+    const framesHash = createHash("sha256");
+    let finalResponse: WhatsAppMessageExportProjectionSuccess | undefined;
+    for (;;) {
+      revalidate();
+      pages += 1;
+      const response = projectMessageExport(database, request, fileStats, owner);
+      messages += response.messages.length;
+      if (messages > MESSAGE_EXPORT_SESSION_MAX_MESSAGES) {
+        return fail("projection-invalid");
+      }
+      finalResponse = response;
+      const frame = Object.freeze({
+        kind: "page" as const,
+        index: pages,
+        response,
+      });
+      const canonicalFrame = canonicalJson(frame);
+      framesHash.update(canonicalFrame).update("\n");
+      const encoded = `${canonicalFrame}\n`;
+      let offset = 0;
+      const bytes = Buffer.from(encoded, "utf8");
+      while (offset < bytes.length) {
+        const written = writeSync(outputDescriptor, bytes, offset, bytes.length - offset);
+        if (written < 1) return fail("projection-invalid");
+        offset += written;
+      }
+      revalidate();
+      if (response.localInsertPageComplete) break;
+      if (response.nextCursor === null || response.nextCursor !== response.checkpoint.cursor) {
+        return fail("projection-invalid");
+      }
+      request = parseWhatsAppMessageExportProjectionRequest({
+        ...request,
+        cursor: response.checkpoint.cursor,
+        cursorAnchor: response.checkpoint.anchor,
+        expectedGeneration: response.projectionGeneration,
+      });
+    }
+    if (finalResponse === undefined) return fail("projection-invalid");
+    const seal = canonicalJson(Object.freeze({
+      kind: "seal" as const,
+      pages,
+      messages,
+      checkpoint: finalResponse.checkpoint,
+      projectionGeneration: finalResponse.projectionGeneration,
+      framesSha256: framesHash.digest("hex"),
+    }));
+    const sealBytes = Buffer.from(`${seal}\n`, "utf8");
+    let sealOffset = 0;
+    while (sealOffset < sealBytes.length) {
+      const written = writeSync(
+        outputDescriptor,
+        sealBytes,
+        sealOffset,
+        sealBytes.length - sealOffset,
+      );
+      if (written < 1) return fail("projection-invalid");
+      sealOffset += written;
+    }
+      return Object.freeze({ pages, messages });
+    },
+  );
+}
+
 async function readBoundedStdin(): Promise<unknown> {
   const reader = Bun.stdin.stream().getReader();
   const chunks: Uint8Array[] = [];
@@ -1075,7 +1166,7 @@ async function readBoundedStdin(): Promise<unknown> {
 }
 
 export async function runWhatsAppInteractionProjectionHelper(): Promise<
-  WhatsAppInteractionProjectionResponse | WhatsAppMessageExportProjectionResponse
+  unknown
 > {
   let requestValue: unknown;
   try {
@@ -1083,6 +1174,50 @@ export async function runWhatsAppInteractionProjectionHelper(): Promise<
     requestValue = await readBoundedStdin();
   } catch {
     return createWhatsAppInteractionProjectionFailure("request-invalid");
+  }
+  const session = typeof requestValue === "object"
+    && requestValue !== null
+    && !Array.isArray(requestValue)
+    && "operation" in requestValue
+    && requestValue.operation === "message-like-me.export-session";
+  if (session) {
+    const record = requestValue as Readonly<Record<string, unknown>>;
+    if (
+      Object.keys(record).sort().join("\0") !== "operation\0outputPath\0request"
+      || typeof record.outputPath !== "string"
+      || !record.outputPath.startsWith("/")
+      || record.outputPath.length > 4_096
+      || /[\0\r\n]/u.test(record.outputPath)
+    ) return createWhatsAppMessageExportProjectionFailure("request-invalid");
+    let descriptor: number | undefined;
+    try {
+      descriptor = openSync(
+        record.outputPath,
+        fsConstants.O_WRONLY
+          | fsConstants.O_CREAT
+          | fsConstants.O_EXCL
+          | fsConstants.O_NOFOLLOW,
+        0o600,
+      );
+      const summary = projectWhatsAppMessageExportSessionFromBoundCwd(
+        record.request,
+        descriptor,
+      );
+      closeSync(descriptor);
+      descriptor = undefined;
+      return Object.freeze({
+        schemaVersion: 1,
+        status: "succeeded",
+        pages: summary.pages,
+        messages: summary.messages,
+      });
+    } catch (error) {
+      if (descriptor !== undefined) {
+        try { closeSync(descriptor); } catch { /* cleanup below remains authoritative */ }
+      }
+      try { unlinkSync(record.outputPath); } catch { /* parent removes the private root */ }
+      return createWhatsAppMessageExportProjectionFailure(errorCode(error));
+    }
   }
   const messageExport = typeof requestValue === "object"
     && requestValue !== null
