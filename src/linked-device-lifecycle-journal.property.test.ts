@@ -411,13 +411,12 @@ test("bounded action and fault workloads terminalize with supplied evidence", ()
 
 test("the documented lifecycle replay coordinate remains executable", () => {
   assertProperty(boundedActionAndFaultWorkloadProperty(), {
-    ...propertyReplayParameters({
-      WRENCH_PROPERTY_SEED: "-17",
-      WRENCH_PROPERTY_PATH: "3:0",
-    }),
     endOnFailure: true,
     numRuns: 1,
-  });
+  }, propertyReplayParameters({
+    WRENCH_PROPERTY_SEED: "-17",
+    WRENCH_PROPERTY_PATH: "3:0",
+  }));
 });
 
 test("restart classification depends only on exact owner status and external begin", () => {

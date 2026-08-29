@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
-import { propertyParameters, propertyReplayParameters } from "./test-support";
+import {
+  assertAsyncProperty,
+  assertProperty,
+  fc,
+  propertyParameters,
+  propertyReplayParameters,
+} from "./test-support";
 
 describe("property replay coordinates", () => {
   test("preserves the bounded fail-closed property defaults", () => {
@@ -62,6 +68,32 @@ describe("property replay coordinates", () => {
         WRENCH_PROPERTY_SEED: "1",
         WRENCH_PROPERTY_PATH: path,
       })).toThrow("bounded fast-check path");
+    }
+  });
+
+  test("rejects partial or crossed replay coordinates in synchronous overrides", () => {
+    const property = fc.property(fc.constant(null), () => true);
+    for (const overrides of [
+      { seed: -17 },
+      { path: "3:0" },
+      { seed: -17, path: "3:0" },
+    ]) {
+      expect(() => assertProperty(property, overrides as never)).toThrow(
+        "dedicated property replay coordinate",
+      );
+    }
+  });
+
+  test("rejects partial or crossed replay coordinates in asynchronous overrides", async () => {
+    const property = fc.asyncProperty(fc.constant(null), async () => true);
+    for (const overrides of [
+      { seed: -17 },
+      { path: "3:0" },
+      { seed: -17, path: "3:0" },
+    ]) {
+      await expect(assertAsyncProperty(property, overrides as never)).rejects.toThrow(
+        "dedicated property replay coordinate",
+      );
     }
   });
 });
