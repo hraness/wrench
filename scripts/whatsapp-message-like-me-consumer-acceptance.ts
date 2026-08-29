@@ -243,9 +243,7 @@ function exactSourceSummary(
   if (
     typeof source.id !== "string"
     || source.conversations !== 1
-    || typeof source.messages !== "number"
-    || !Number.isSafeInteger(source.messages)
-    || source.messages < 2
+    || source.messages !== 3
     || source.reactions !== 1
   ) {
     throw new Error(
