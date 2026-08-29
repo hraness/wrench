@@ -1093,13 +1093,16 @@ fi
     expect(script).not.toContain("--method POST");
     expect(script).not.toContain('"/repos/$GITHUB_REPOSITORY/git/refs"');
     expect(workflow.match(/\/commits\/tags\/\$VERIFIED_TAG/gu)).toHaveLength(2);
+    expect(script).toContain(
+      "--jq '[.status, (.ahead_by | tostring), (.behind_by | tostring), .base_commit.sha, .merge_base_commit.sha] | @tsv'",
+    );
+    expect(script).not.toContain(".head_commit.sha");
+    expect(script).not.toContain(".commits[-1].sha");
     expect(workflow).toContain("-F force=false");
     expect(workflow).not.toContain("-F force=true");
     expect(workflow).not.toContain("git push --force");
     expect(script).toContain(".ahead_by");
     expect(script).toContain(".behind_by");
-    expect(script).toContain(".commits[-1].sha");
-    expect(script).not.toContain(".head_commit.sha");
     expect(script).not.toContain("GITHUB_REF_NAME");
 
     try {
@@ -1111,18 +1114,22 @@ args="$*"
 if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
   printf '%s\n' "$TAG_SHA"
 elif [[ "$args" == *"/compare/$CURRENT_SHA...$VERIFIED_SHA"* ]]; then
+  [[ "$args" == *"[.status, (.ahead_by | tostring), (.behind_by | tostring), .base_commit.sha, .merge_base_commit.sha] | @tsv"* ]]
+  [[ "$args" != *".head_commit.sha"* ]]
+  [[ "$args" != *".commits[-1].sha"* ]]
   case "$PROMOTION_SCENARIO" in
     ahead|patch-failure|patch-race|post-read-api-failure|post-read-mismatch)
-      printf 'ahead\t1\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA"
+      printf 'ahead\t1\t0\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA"
       ;;
     api-failure) exit 1 ;;
-    behind-count) printf 'ahead\t1\t1\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
-    malformed-ahead) printf 'ahead\t01\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
-    missing-final) printf 'ahead\t1\t0\t%s\t%s\t\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
-    wrong-base) printf 'ahead\t1\t0\t%s\t%s\t%s\n' "$(printf '3%.0s' {1..40})" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
-    wrong-final) printf 'ahead\t1\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" ;;
-    zero-ahead) printf 'ahead\t0\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
-    *) printf 'diverged\t1\t1\t%s\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" "$VERIFIED_SHA" ;;
+    behind-count) printf 'ahead\t1\t1\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
+    compare-extra-field) printf 'ahead\t1\t0\t%s\t%s\textra\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
+    malformed-ahead) printf 'ahead\t01\t0\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
+    missing-merge-base) printf 'ahead\t1\t0\t%s\t\n' "$CURRENT_SHA" ;;
+    wrong-base) printf 'ahead\t1\t0\t%s\t%s\n' "$(printf '3%.0s' {1..40})" "$CURRENT_SHA" ;;
+    wrong-merge-base) printf 'ahead\t1\t0\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" ;;
+    zero-ahead) printf 'ahead\t0\t0\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
+    *) printf 'diverged\t1\t1\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" ;;
   esac
 elif [[ "$args" == *"--method PATCH"* ]]; then
   [[ "$args" == *"/git/refs/heads/website-production"* ]]
@@ -1271,9 +1278,10 @@ fi
       for (const scenario of [
         "api-failure",
         "behind-count",
+        "compare-extra-field",
         "malformed-ahead",
         "malformed-current",
-        "missing-final",
+        "missing-merge-base",
         "ref-api-failure",
         "ref-empty",
         "ref-extra-field",
@@ -1282,7 +1290,7 @@ fi
         "ref-wrong-ref",
         "ref-wrong-type",
         "wrong-base",
-        "wrong-final",
+        "wrong-merge-base",
         "zero-ahead",
       ] as const) {
         const rejected = await runCase({ PROMOTION_SCENARIO: scenario });
