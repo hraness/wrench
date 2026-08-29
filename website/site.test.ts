@@ -161,6 +161,17 @@ describe("wrench.rip static site", () => {
     )).toContain("https://www.nebulasans.com/download/NebulaSans-1.010.zip");
 
     expect(html).toContain(`<title>${SITE_TITLE}</title>`);
+    for (const page of pages) {
+      expect(page.html.match(/data-slot="ask-ai-about-this"/gu)).toHaveLength(1);
+      const destination = new URL("https://chatgpt.com/");
+      destination.searchParams.set(
+        "q",
+        `Tell me about ${SITE_ORIGIN}${page.definition.canonicalPath}`,
+      );
+      expect(page.html).toContain(destination.href.replaceAll("&", "&amp;"));
+    }
+    expect(preview).not.toContain('data-slot="ask-ai-about-this"');
+    expect(notFound).not.toContain('data-slot="ask-ai-about-this"');
     expect(html).toContain(`<meta name="description" content="${SITE_DESCRIPTION}">`);
     expect(html).toContain('<link rel="canonical" href="https://wrench.rip/">');
     expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');

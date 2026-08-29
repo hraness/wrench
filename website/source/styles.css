@@ -2452,3 +2452,65 @@ body {
     margin-top: 0.25rem;
   }
 }
+/* Server-rendered public discovery links from @hraness/ui. */
+.wrench-ask-ai {
+  width: min(calc(100% - 2rem), 72rem);
+  margin: 2.5rem auto 0;
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.wrench-ask-ai [data-slot="ask-ai-about-this-label"] {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wrench-ask-ai,
+.wrench-ask-ai [data-slot="ask-ai-about-this-links"] {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.wrench-ask-ai [data-slot="ask-ai-about-this-link"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.875rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.wrench-ask-ai [data-slot="ask-ai-about-this-link"]:hover {
+  border-color: currentColor;
+  color: var(--foreground);
+}
+
+.wrench-ask-ai [data-slot="ask-ai-about-this-link"]:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.wrench-ask-ai [data-slot="ask-ai-about-this-icon"] {
+  display: block;
+  flex: 0 0 auto;
+}
+
+@media (pointer: coarse) {
+  .wrench-ask-ai [data-slot="ask-ai-about-this-link"] {
+    min-height: 3rem;
+  }
+}
