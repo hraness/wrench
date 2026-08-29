@@ -387,6 +387,33 @@ describe("Beeper Message Like Me export admission", () => {
     })).toThrow("prior export owner cannot be inspected safely");
   });
 
+  test("preserves same-boot active-helper cleanup uncertainty after the recorded child dies", () => {
+    const fixture = recoveryFixture("export-admission-cleanup-unsafe-dead-helper");
+    const admission = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    beginBeeperMessageLikeMeHelperLaunch(admission);
+    bindBeeperMessageLikeMeHelperOwner(admission, process.pid);
+    markBeeperMessageLikeMeHelperCleanupUnsafe(admission);
+    expect(admission.claim).toMatchObject({ phase: "cleanup-unsafe" });
+    expect(admission.claim.helperOwner).not.toBeNull();
+
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: admission.claim.owner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+
+    const rebootBootId = admission.claim.owner.bootId === "f".repeat(64)
+      ? "e".repeat(64)
+      : "f".repeat(64);
+    const recovered = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: rebootBootId,
+    });
+    expect(recovered.claim.id).not.toBe(admission.claim.id);
+    releaseBeeperMessageLikeMeExportAdmission(recovered);
+  });
+
   test("admits exactly one of two synchronized processes", async () => {
     const fixture = recoveryFixture("export-admission-race");
     const barrier = join(fixture.root, "start");

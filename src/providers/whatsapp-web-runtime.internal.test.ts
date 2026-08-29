@@ -7,6 +7,7 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1457,6 +1458,72 @@ describe("WhatsApp zero-network read plans", () => {
     }
   });
 
+  test("charges private-spool setup to the one helper deadline and never spawns afterward", async () => {
+    const path = privateDirectory();
+    const marker = join(path, "helper-started");
+    const prefix = "wrench-whatsapp-stdout-";
+    const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)));
+    try {
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", [
+          "const { writeFileSync } = require('node:fs');",
+          `writeFileSync(${JSON.stringify(marker)}, 'started\\n');`,
+        ].join("\n")],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 20,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+        beforeSpoolReadyForTest: async () => {
+          await Bun.sleep(75);
+        },
+      })).rejects.toThrow("timed out");
+      expect(existsSync(marker)).toBeFalse();
+      expect(
+        readdirSync(tmpdir()).filter((name) => name.startsWith(prefix) && !before.has(name)),
+      ).toEqual([]);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a failing private spool parent out of diagnostics", async () => {
+    const path = privateDirectory();
+    const priorTmpdir = process.env.TMPDIR;
+    const privateTmpdir = join(path, "must-not-appear-in-diagnostics");
+    let rejection: unknown;
+    try {
+      process.env.TMPDIR = privateTmpdir;
+      try {
+        await runWhatsAppMessageExportSessionHelperChild({
+          command: [process.execPath, "-e", "process.exit(0)"],
+          cwd: path,
+          environment: { PATH: "/usr/bin:/bin" },
+          stdin: "{}\n",
+          timeoutMs: 1_000,
+          maxOutputBytes: 1024,
+          maxStderrBytes: 1024,
+        });
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(Error);
+      expect((rejection as Error).message).toBe(
+        "WhatsApp projection session private spool could not be created",
+      );
+      expect((rejection as Error).message).not.toContain(privateTmpdir);
+      expect((rejection as Error).message).not.toContain(path);
+    } finally {
+      if (priorTmpdir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = priorTmpdir;
+      }
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("spools canonical stdout privately and applies the same inclusive newline bound", async () => {
     const path = privateDirectory();
     const prefix = "wrench-whatsapp-stdout-";
@@ -1504,6 +1571,48 @@ describe("WhatsApp zero-network read plans", () => {
         maxOutputBytes: Buffer.byteLength(output) - 1,
         maxStderrBytes: 1024,
       })).rejects.toThrow("frame exceeded its bound");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+      if (spoolDirectory !== undefined) rmSync(spoolDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed without exposing a private spool path after replay custody changes", async () => {
+    const path = privateDirectory();
+    const prefix = "wrench-whatsapp-stdout-";
+    const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)));
+    let spoolDirectory: string | undefined;
+    try {
+      const result = await runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", "process.stdout.write('{\"a\":1}\\n')"],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 1_000,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+        onSpawned: () => {
+          const created = readdirSync(tmpdir())
+            .filter((name) => name.startsWith(prefix) && !before.has(name));
+          expect(created).toHaveLength(1);
+          spoolDirectory = join(tmpdir(), created[0]!);
+        },
+      });
+      if (spoolDirectory === undefined) throw new Error("test spool directory was not observed");
+      rmdirSync(spoolDirectory);
+      let rejection: unknown;
+      try {
+        for await (const _frame of result.spool.replay((frame) => frame.value)) {
+          // Replay must reject before yielding from a custody-changed directory.
+        }
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(WhatsAppContactProjectionCleanupUnverifiedError);
+      expect((rejection as Error).message).not.toContain(spoolDirectory);
+      await expect(result.spool.close()).rejects.toBeInstanceOf(
+        WhatsAppContactProjectionCleanupUnverifiedError,
+      );
     } finally {
       rmSync(path, { recursive: true, force: true });
       if (spoolDirectory !== undefined) rmSync(spoolDirectory, { recursive: true, force: true });
@@ -1625,11 +1734,52 @@ describe("WhatsApp zero-network read plans", () => {
       new AggregateError([], "wrapped", { cause: new Error("middle", { cause: cleanup }) }),
     )).toBeTrue();
 
-    const errors: unknown[] = [];
-    const cycle = new AggregateError(errors, "cycle");
-    errors.push(cycle);
+    const cycle = new AggregateError([], "cycle");
+    cycle.errors.push(cycle);
     Object.defineProperty(cycle, "cause", { value: cycle, enumerable: false });
     expect(containsWhatsAppContactProjectionCleanupUnverified(cycle)).toBeFalse();
+
+    const unreadableErrors = new AggregateError([], "unreadable errors");
+    Object.defineProperty(unreadableErrors, "errors", {
+      configurable: true,
+      get: () => {
+        throw new Error("hostile errors accessor");
+      },
+    });
+    expect(containsWhatsAppContactProjectionCleanupUnverified(unreadableErrors)).toBeTrue();
+
+    const unreadableCause = new Error("unreadable cause");
+    Object.defineProperty(unreadableCause, "cause", {
+      configurable: true,
+      get: () => {
+        throw new Error("hostile cause accessor");
+      },
+    });
+    expect(containsWhatsAppContactProjectionCleanupUnverified(unreadableCause)).toBeTrue();
+  });
+
+  test("cancels the process-group poll when the cleanup deadline settles first", async () => {
+    const path = privateDirectory();
+    let polls = 0;
+    try {
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", "process.exit(0)"],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 10_000,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+        processGroupIsAbsentForTest: () => false,
+        onProcessGroupPollForTest: () => { polls += 1; },
+      })).rejects.toBeInstanceOf(WhatsAppContactProjectionCleanupUnverifiedError);
+      const settledPolls = polls;
+      expect(settledPolls).toBeGreaterThan(0);
+      await Bun.sleep(60);
+      expect(polls).toBe(settledPolls);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
   });
 
   test("executes paired chat, message, and media reads through read-only local projections", async () => {

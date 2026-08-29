@@ -848,13 +848,10 @@ function hasExcludedNonConversationMessages(database: Database): boolean {
         SELECT 1
         FROM messages m
         JOIN chats c ON c.jid = m.chat_jid
-        WHERE m.chat_jid = ?1
-          OR m.chat_jid LIKE '%@broadcast'
-          OR m.chat_jid LIKE '%@newsletter'
-          OR c.kind NOT IN ('dm', 'group')
+        WHERE NOT (${MESSAGE_EXPORT_FILTER})
         LIMIT 1
       ) AS excluded
-    `).iterate(SYSTEM_SENTINEL_JID), 1, "projection-invalid");
+    `).iterate(), 1, "projection-invalid");
   } catch (error) {
     if (error instanceof HelperFailure) throw error;
     return fail("projection-invalid");
@@ -957,13 +954,15 @@ function projectMessageExport(
   request: WhatsAppMessageExportProjectionRequest,
   fileStats: BigIntStats,
   owner: WhatsAppMatchedOwnerIdentity,
+  precomputedNonConversationChatsExcluded?: boolean,
 ): WhatsAppMessageExportProjectionSuccess {
   const projectionGeneration = messageExportGeneration(fileStats);
   if (
     request.expectedGeneration !== null
     && !sameMessageExportGeneration(projectionGeneration, request.expectedGeneration)
   ) return fail("generation-mismatch");
-  const nonConversationChatsExcluded = hasExcludedNonConversationMessages(database);
+  const nonConversationChatsExcluded = precomputedNonConversationChatsExcluded
+    ?? hasExcludedNonConversationMessages(database);
   assertMessageExportCursorAnchor(database, request, owner);
   let projectedRows: readonly SqliteRow[];
   try {
@@ -1170,6 +1169,10 @@ export function projectWhatsAppMessageExportFromBoundCwd(
 export function projectWhatsAppMessageExportSessionFromBoundCwd(
   requestValue: unknown,
   writeFrame: (frame: unknown) => void,
+  options: Readonly<{
+    /** Test-only seam proving the whole-store exclusion scan is session-scoped. */
+    hasExcludedNonConversationMessagesForTest?: (database: Database) => boolean;
+  }> = {},
 ): Readonly<{
   pages: number;
   messages: number;
@@ -1186,6 +1189,10 @@ export function projectWhatsAppMessageExportSessionFromBoundCwd(
     || initial.cursorAnchor !== null
     || initial.expectedGeneration !== null
   ) return fail("request-invalid");
+  if (
+    options.hasExcludedNonConversationMessagesForTest !== undefined
+    && process.env.NODE_ENV !== "test"
+  ) return fail("projection-invalid");
   return projectBoundWhatsAppMessageStore(
     initial,
     (database, fileStats, owner, revalidate) => {
@@ -1202,6 +1209,10 @@ export function projectWhatsAppMessageExportSessionFromBoundCwd(
         : [owner.accountJidAliases.lidJid]),
     ].sort());
     const excludedSelfChats = selfChatsExcluded(database, owner);
+    const nonConversationChatsExcluded = (
+      options.hasExcludedNonConversationMessagesForTest
+      ?? hasExcludedNonConversationMessages
+    )(database);
     if (
       selfJids.length !== expectedSelfJids.length
       || selfJids.some((jid, index) => jid !== expectedSelfJids[index])
@@ -1209,7 +1220,13 @@ export function projectWhatsAppMessageExportSessionFromBoundCwd(
     for (;;) {
       revalidate();
       pages += 1;
-      const response = projectMessageExport(database, request, fileStats, owner);
+      const response = projectMessageExport(
+        database,
+        request,
+        fileStats,
+        owner,
+        nonConversationChatsExcluded,
+      );
       messages += response.messages.length;
       if (messages > MESSAGE_EXPORT_SESSION_MAX_MESSAGES) {
         return fail("projection-invalid");

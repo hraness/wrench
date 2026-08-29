@@ -261,6 +261,44 @@ describe("WhatsApp Message Like Me source mapping", () => {
     }
   });
 
+  test("rejects a sealed helper session that leaks a proved PN or LID self chat", async () => {
+    const path = privateStore();
+    try {
+      for (const selfJid of [
+        "15551234567@s.whatsapp.net",
+        "222222222222222@lid",
+      ]) {
+        const source = createWhatsAppMessageLikeMeSource({
+          auth: auth(path, "whatsapp:lid:222222222222222"),
+          dependencies: sealedSessionDependencies(path, (frames) => {
+            const original = frames[0] as Readonly<Record<string, unknown>>;
+            return sealedPages([Object.freeze({
+              ...original,
+              selfJids: [
+                "15551234567@s.whatsapp.net",
+                "222222222222222@lid",
+              ],
+              selfChatsExcluded: "present-excluded",
+              messages: [item({
+                chatJid: selfJid,
+                chatKind: "dm",
+                senderJid: selfJid,
+                fromMe: true,
+              })],
+            })]);
+          }),
+        });
+        await expect((async () => {
+          for await (const _record of source.records) {
+            // The sealed session must fail before yielding replayed records.
+          }
+        })()).rejects.toThrow("leaked a proved self chat");
+      }
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("withholds a streamed page when its seal is missing or followed by another frame", async () => {
     const path = privateStore();
     try {

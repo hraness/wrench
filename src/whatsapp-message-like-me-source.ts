@@ -432,6 +432,12 @@ async function* runMessageExportSession(
         if (response.status !== "succeeded") {
           return fail("one fixed projection page failed");
         }
+        const provedSelfJids = new Set(aliases.selfJids);
+        if (response.messages.some((message) =>
+          message.chatKind === "dm"
+          && provedSelfJids.has(canonicalWhatsAppParticipantJid(message.chatJid)))) {
+          return fail("the fixed projection helper leaked a proved self chat");
+        }
         if (
           response.localInsertPageComplete
           && response.messages.length === 0

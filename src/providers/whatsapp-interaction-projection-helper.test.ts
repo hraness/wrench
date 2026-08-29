@@ -636,6 +636,28 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
         messages: 501,
         integrityChecks: 1,
       });
+
+      const priorCwd = process.cwd();
+      let exclusionScans = 0;
+      const directFrames: unknown[] = [];
+      try {
+        process.chdir(path);
+        const summary = projectWhatsAppMessageExportSessionFromBoundCwd(
+          initial,
+          (frame) => directFrames.push(frame),
+          {
+            hasExcludedNonConversationMessagesForTest: () => {
+              exclusionScans += 1;
+              return false;
+            },
+          },
+        );
+        expect(summary).toMatchObject({ pages: 2, messages: 501, integrityChecks: 1 });
+      } finally {
+        process.chdir(priorCwd);
+      }
+      expect(directFrames).toHaveLength(2);
+      expect(exclusionScans).toBe(1);
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
@@ -792,6 +814,45 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       expect(encoded).not.toContain("0@s.whatsapp.net");
       expect(encoded).not.toContain("SYSTEM-1");
       expect(encoded).not.toContain("private system body");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("reports unsupported chat JIDs excluded by the exact message filter", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query("INSERT INTO chats(jid, kind) VALUES (?1, ?2)")
+          .run("unsupported@example.invalid", "dm");
+        database.query(`
+          INSERT INTO messages(chat_jid,msg_id,sender_jid,ts,from_me,text)
+          VALUES (?1,?2,NULL,?3,0,?4)
+        `).run(
+          "unsupported@example.invalid",
+          "UNSUPPORTED-1",
+          1_776_513_603,
+          "private unsupported body",
+        );
+      } finally {
+        database.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      const projected = await messageResponse(path, messageRequest(path));
+      expect(projected).toMatchObject({
+        status: "succeeded",
+        nonConversationChatsExcluded: true,
+        messages: [
+          { rowid: "1", messageId: "MSG-1" },
+          { rowid: "2", messageId: "MSG-2" },
+          { rowid: "3", messageId: "MSG-3" },
+        ],
+      });
+      const encoded = JSON.stringify(projected);
+      expect(encoded).not.toContain("unsupported@example.invalid");
+      expect(encoded).not.toContain("UNSUPPORTED-1");
+      expect(encoded).not.toContain("private unsupported body");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

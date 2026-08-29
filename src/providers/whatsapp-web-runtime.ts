@@ -118,6 +118,12 @@ export type WhatsAppContactProjectionHelperInvocation = {
   readonly onCanonicalFrame?: (
     frame: WhatsAppMessageExportSessionCanonicalFrame,
   ) => void;
+  /** Test-only process-group probe seam. */
+  readonly processGroupIsAbsentForTest?: () => boolean;
+  /** Test-only process-group poll observation seam. */
+  readonly onProcessGroupPollForTest?: () => void;
+  /** Test-only delay inside private-spool setup, before custody returns. */
+  readonly beforeSpoolReadyForTest?: () => Promise<void>;
 };
 
 export type WhatsAppContactProjectionHelperResult = {
@@ -172,12 +178,14 @@ export function containsWhatsAppContactProjectionCleanupUnverified(
         pending.push(...current.errors);
       } catch {
         // A hostile wrapper cannot prove cleanup safety.
+        return true;
       }
     }
     try {
       if ("cause" in current) pending.push(current.cause);
     } catch {
-      // A hostile wrapper cannot hide a directly reachable proved error.
+      // An uninspectable wrapper cannot prove cleanup safety.
+      return true;
     }
   }
   return false;
@@ -1618,10 +1626,25 @@ async function writeSpoolBytes(
   }
 }
 
-async function createWhatsAppMessageExportSessionSpool(): Promise<
+async function createWhatsAppMessageExportSessionSpool(
+  beforeReadyForTest?: () => Promise<void>,
+): Promise<
   MutableWhatsAppMessageExportSessionSpool
 > {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "wrench-whatsapp-stdout-")));
+  let createdDirectory: string;
+  try {
+    createdDirectory = await mkdtemp(join(tmpdir(), "wrench-whatsapp-stdout-"));
+  } catch {
+    throw new Error("WhatsApp projection session private spool could not be created");
+  }
+  let directory: string;
+  try {
+    directory = await realpath(createdDirectory);
+  } catch {
+    // A created directory whose physical identity cannot be established cannot
+    // be removed with proof, so retain the durable cleanup-unsafe boundary.
+    throw new WhatsAppContactProjectionCleanupUnverifiedError();
+  }
   const path = join(directory, "stdout.ndjson");
   let handle: FileHandle | undefined;
   let directoryHandle: FileHandle | undefined;
@@ -1729,7 +1752,13 @@ async function createWhatsAppMessageExportSessionSpool(): Promise<
         } finally {
           reader.releaseLock();
         }
-      })();
+      })().catch((error: unknown) => {
+        if (
+          containsWhatsAppContactProjectionCleanupUnverified(error)
+          || errnoCode(error) !== undefined
+        ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+        throw error;
+      });
       return Object.freeze({
         promise,
         cancel: async () => {
@@ -1781,6 +1810,12 @@ async function createWhatsAppMessageExportSessionSpool(): Promise<
           after.mtimeNs !== expected.metadata.mtimeNs
           || after.ctimeNs !== expected.metadata.ctimeNs
         ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+      } catch (error) {
+        if (
+          containsWhatsAppContactProjectionCleanupUnverified(error)
+          || errnoCode(error) !== undefined
+        ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+        throw error;
       } finally {
         replayActive = false;
       }
@@ -1831,9 +1866,11 @@ async function createWhatsAppMessageExportSessionSpool(): Promise<
       replay,
       close,
     });
+    await beforeReadyForTest?.();
     return Object.freeze({ handle, capture, publicSpool });
   } catch (error) {
-    try { await handle?.close(); } catch { /* original creation failure remains primary */ }
+    let cleanupVerified = true;
+    try { await handle?.close(); } catch { cleanupVerified = false; }
     let exactDirectory = false;
     if (directoryHandle !== undefined && cleanupDirectoryIdentity !== undefined) {
       try {
@@ -1848,13 +1885,29 @@ async function createWhatsAppMessageExportSessionSpool(): Promise<
       }
     }
     if (exactDirectory) {
-      try { await unlink(path); } catch { /* it may already be anonymous */ }
       try {
-        if ((await readdir(directory)).length === 0) await rmdir(directory);
-      } catch { /* empty private residue contains no stdout bytes */ }
+        await unlink(path);
+      } catch (unlinkError) {
+        if (errnoCode(unlinkError) !== "ENOENT") cleanupVerified = false;
+      }
+      try {
+        if ((await readdir(directory)).length !== 0) {
+          cleanupVerified = false;
+        } else {
+          await rmdir(directory);
+        }
+      } catch {
+        cleanupVerified = false;
+      }
+    } else {
+      cleanupVerified = false;
     }
-    try { await directoryHandle?.close(); } catch { /* original creation failure remains primary */ }
-    throw error;
+    try { await directoryHandle?.close(); } catch { cleanupVerified = false; }
+    if (
+      !cleanupVerified
+      || containsWhatsAppContactProjectionCleanupUnverified(error)
+    ) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    throw new Error("WhatsApp projection session private spool could not be created");
   }
 }
 
@@ -1879,14 +1932,56 @@ function errnoCode(error: unknown): string | undefined {
 export async function runWhatsAppMessageExportSessionHelperChild(
   invocation: WhatsAppContactProjectionHelperInvocation,
 ): Promise<WhatsAppMessageExportSessionHelperResult> {
-  const isAborted = (): boolean => invocation.signal?.aborted === true;
-  if (isAborted()) {
-    throw new Error("WhatsApp projection session helper was cancelled");
+  if (
+    (invocation.processGroupIsAbsentForTest !== undefined
+      || invocation.onProcessGroupPollForTest !== undefined
+      || invocation.beforeSpoolReadyForTest !== undefined)
+    && process.env.NODE_ENV !== "test"
+  ) throw new Error("WhatsApp projection process-group injection is test-only");
+  const runnerDeadline = new OperationDeadline(invocation.timeoutMs, {
+    ...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
+  });
+  const deadlineFailure = (): Error => new Error(
+    invocation.signal?.aborted === true
+      ? "WhatsApp projection session helper was cancelled"
+      : "WhatsApp projection session helper timed out",
+  );
+  const assertRunnerAvailable = (): void => {
+    try {
+      runnerDeadline.throwIfUnavailable("WhatsApp projection session helper");
+    } catch {
+      throw deadlineFailure();
+    }
+  };
+  try {
+    assertRunnerAvailable();
+  } catch (error) {
+    runnerDeadline.dispose();
+    throw error;
   }
-  const spool = await createWhatsAppMessageExportSessionSpool();
-  if (isAborted()) {
-    await spool.publicSpool.close();
-    throw new Error("WhatsApp projection session helper was cancelled");
+  let spool: MutableWhatsAppMessageExportSessionSpool;
+  try {
+    spool = await createWhatsAppMessageExportSessionSpool(
+      invocation.beforeSpoolReadyForTest,
+    );
+  } catch (error) {
+    runnerDeadline.dispose();
+    throw error;
+  }
+  try {
+    assertRunnerAvailable();
+  } catch (error) {
+    try {
+      await spool.publicSpool.close();
+    } catch (cleanupError) {
+      runnerDeadline.dispose();
+      throw new AggregateError(
+        [error, cleanupError],
+        "WhatsApp projection session deadline and spool cleanup both failed",
+      );
+    }
+    runnerDeadline.dispose();
+    throw error;
   }
   let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
   try {
@@ -1902,11 +1997,13 @@ export async function runWhatsAppMessageExportSessionHelperChild(
     try {
       await spool.publicSpool.close();
     } catch (cleanupError) {
+      runnerDeadline.dispose();
       throw new AggregateError(
         [error, cleanupError],
         "WhatsApp projection session spawn and spool cleanup both failed",
       );
     }
+    runnerDeadline.dispose();
     throw new Error("WhatsApp projection session helper could not start");
   }
 
@@ -1953,16 +2050,12 @@ export async function runWhatsAppMessageExportSessionHelperChild(
   let timedOut = false;
   let cancelled = false;
   const onAbort = (): void => {
-    cancelled = true;
+    cancelled = invocation.signal?.aborted === true;
+    timedOut = !cancelled;
     terminate();
   };
-  invocation.signal?.addEventListener("abort", onAbort, { once: true });
-  if (isAborted()) onAbort();
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    terminate();
-  }, invocation.timeoutMs);
-  unrefTimer(timeout);
+  runnerDeadline.signal.addEventListener("abort", onAbort, { once: true });
+  if (runnerDeadline.signal.aborted) onAbort();
   const guarded = <T>(promise: Promise<T>): Promise<T> => promise.catch((error: unknown) => {
     terminate();
     throw error;
@@ -2002,6 +2095,9 @@ export async function runWhatsAppMessageExportSessionHelperChild(
       })());
 
   const processGroupIsAbsent = (): boolean => {
+    if (invocation.processGroupIsAbsentForTest !== undefined) {
+      return invocation.processGroupIsAbsentForTest();
+    }
     if (process.platform === "win32") return true;
     try {
       process.kill(-child.pid, 0);
@@ -2012,6 +2108,25 @@ export async function runWhatsAppMessageExportSessionHelperChild(
     }
   };
   let unexpectedDescendantObserved = false;
+  let groupPollTimer: ReturnType<typeof setTimeout> | undefined;
+  let resolveGroupPoll: (() => void) | undefined;
+  const cancelGroupPoll = (): void => {
+    if (groupPollTimer !== undefined) clearTimeout(groupPollTimer);
+    groupPollTimer = undefined;
+    const resolve = resolveGroupPoll;
+    resolveGroupPoll = undefined;
+    resolve?.();
+  };
+  const waitForGroupPoll = (): Promise<void> => new Promise<void>((resolve) => {
+    invocation.onProcessGroupPollForTest?.();
+    resolveGroupPoll = resolve;
+    groupPollTimer = setTimeout(() => {
+      groupPollTimer = undefined;
+      resolveGroupPoll = undefined;
+      resolve();
+    }, 20);
+    unrefTimer(groupPollTimer);
+  });
   const joinProcessGroup = async (): Promise<void> => {
     if (processGroupIsAbsent()) return;
     unexpectedDescendantObserved = true;
@@ -2021,9 +2136,7 @@ export async function runWhatsAppMessageExportSessionHelperChild(
         throw new WhatsAppContactProjectionCleanupUnverifiedError();
       }
       if (processGroupIsAbsent()) return;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
+      await waitForGroupPoll();
     }
   };
   let transferred = false;
@@ -2092,10 +2205,11 @@ export async function runWhatsAppMessageExportSessionHelperChild(
     }
     throw error;
   } finally {
-    clearTimeout(timeout);
+    cancelGroupPoll();
     if (reapTimer !== undefined) clearTimeout(reapTimer);
     if (forceKill !== undefined) clearTimeout(forceKill);
-    invocation.signal?.removeEventListener("abort", onAbort);
+    runnerDeadline.signal.removeEventListener("abort", onAbort);
+    runnerDeadline.dispose();
     if (!transferred && !childExited) child.unref();
   }
 }
