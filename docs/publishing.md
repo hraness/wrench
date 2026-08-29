@@ -269,12 +269,26 @@ unreleased candidate. Configure Vercel only after that exact ref exists. This
 exception must never be repeated: after initial setup, the release workflow is
 the sole writer and every change is a checked, non-force fast-forward.
 
-After the tag workflow has rebuilt and compared the exact public npm package,
-created or verified the non-draft, non-prerelease immutable GitHub Release, and
-proved that Release is Latest, its final step creates `website-production` at
-the verified tag commit or fast-forwards the existing branch to that commit.
-It compares the existing branch as an ancestor, sends `force=false`, and fails
-closed on a moved tag, divergence, rollback, or post-update mismatch.
+After the one-time bootstrap has established `website-production`, the tag
+workflow rebuilds and compares the exact public npm package, creates or verifies
+the non-draft, non-prerelease immutable GitHub Release, and proves that Release
+is Latest. Its final step requires the production branch to resolve to one exact
+commit, then fast-forwards it to the verified tag commit. It sends `force=false`
+and fails closed on a missing or malformed branch, moved tag, divergence,
+rollback, or post-update mismatch. The workflow never recreates the branch.
+
+If that workflow fails after publishing the immutable Release but before the
+website source advances, merge the reviewed workflow fix to `main` first. Then
+dispatch **Release** from the current `main` ref with the required exact stable
+`release_tag`. The recovery path checks out that tag, repeats the complete
+source and public npm verification, requires the tag to remain the newest
+stable tag reachable from `main`, and revalidates the existing immutable Latest
+Release before it can advance `website-production`. It does not recreate or
+modify a conforming existing Release. The dispatch workflow source commit must
+equal the current default-branch head both before the tag checkout and again
+before the write-scoped job; ordinary tag-push releases do not depend on `main`
+remaining unchanged. Never rerun a stale tag workflow or write the production
+branch manually.
 
 Vercel runs the checked-in marked `website:vercel-build` command. Valid preview
 and development builds, plus true local builds with no Vercel signal, generate

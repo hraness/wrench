@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact stable release tag to verify and recover
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -20,13 +26,84 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     outputs:
+      recovery_workflow_sha: ${{ steps.recovery_source.outputs.sha }}
       verified_sha: ${{ steps.identity.outputs.sha }}
       verified_tag: ${{ steps.identity.outputs.tag }}
     steps:
+      - name: Resolve release request
+        id: request
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          EVENT_REF_TYPE: ${{ github.ref_type }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            push)
+              if [[ "$EVENT_REF_TYPE" != "tag" || "$EVENT_REF" != "refs/tags/$EVENT_REF_NAME" ]]; then
+                echo "::error::Release push is not one exact tag ref"
+                exit 1
+              fi
+              requested_tag="$EVENT_REF_NAME"
+              ;;
+            workflow_dispatch)
+              expected_ref="refs/heads/$DEFAULT_BRANCH"
+              if [[ "$EVENT_REF" != "$expected_ref" ]]; then
+                echo "::error::Release recovery must run from $expected_ref, not $EVENT_REF"
+                exit 1
+              fi
+              requested_tag="$INPUT_RELEASE_TAG"
+              ;;
+            *)
+              echo "::error::Unsupported release event $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          if [[ ! "$requested_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Release request is not one stable semantic-version tag"
+            exit 1
+          fi
+          printf 'tag=%s\n' "$requested_tag" >> "$GITHUB_OUTPUT"
+      - name: Bind recovery workflow source
+        id: recovery_source
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            push)
+              printf 'sha=\n' >> "$GITHUB_OUTPUT"
+              ;;
+            workflow_dispatch)
+              if [[ ! "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "::error::Release recovery has no exact workflow source commit"
+                exit 1
+              fi
+              current_default_sha="$(gh api \
+                "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" \
+                --jq '.object.sha')"
+              if [[ "$current_default_sha" != "$EVENT_SHA" ]]; then
+                echo "::error::Release recovery workflow source $EVENT_SHA is not current $DEFAULT_BRANCH head $current_default_sha"
+                exit 1
+              fi
+              printf 'sha=%s\n' "$EVENT_SHA" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unsupported release event $EVENT_NAME"
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: refs/tags/${{ steps.request.outputs.tag }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
@@ -46,6 +123,7 @@ jobs:
         id: identity
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_TAG: ${{ steps.request.outputs.tag }}
         run: |
           set -euo pipefail
           package_version="$(bun -e 'const value = await Bun.file("package.json").json(); if (typeof value.version !== "string") process.exit(1); process.stdout.write(value.version)')"
@@ -54,26 +132,26 @@ jobs:
             exit 1
           fi
           expected_tag="v$package_version"
-          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package version $expected_tag"
+          if [[ "$REQUESTED_TAG" != "$expected_tag" ]]; then
+            echo "::error::Tag $REQUESTED_TAG does not match package version $expected_tag"
             exit 1
           fi
-          tag_commit="$(git rev-parse --verify "$GITHUB_REF_NAME^{commit}")"
+          tag_commit="$(git rev-parse --verify "refs/tags/$REQUESTED_TAG^{commit}")"
           head_commit="$(git rev-parse --verify "HEAD^{commit}")"
           if [[ "$tag_commit" != "$head_commit" ]]; then
             echo "::error::Checked-out source $head_commit does not match tag commit $tag_commit"
             exit 1
           fi
           if ! git merge-base --is-ancestor "$tag_commit" "origin/$DEFAULT_BRANCH"; then
-            echo "::error::Tag $GITHUB_REF_NAME is not reachable from $DEFAULT_BRANCH"
+            echo "::error::Tag $REQUESTED_TAG is not reachable from $DEFAULT_BRANCH"
             exit 1
           fi
           newest_stable_tag="$(git tag --list 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | LC_ALL=C sort -V | tail -n 1)"
-          if [[ "$newest_stable_tag" != "$GITHUB_REF_NAME" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME is not newer than $newest_stable_tag"
+          if [[ "$newest_stable_tag" != "$REQUESTED_TAG" ]]; then
+            echo "::error::Tag $REQUESTED_TAG is not newer than $newest_stable_tag"
             exit 1
           fi
-          printf 'tag=%s\n' "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
           printf 'sha=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run check
@@ -142,14 +220,45 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      EVENT_NAME: ${{ github.event_name }}
+      RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.recovery_workflow_sha }}
       VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
       VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
     steps:
+      - name: Revalidate recovery workflow source
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            push)
+              if [[ -n "$RECOVERY_WORKFLOW_SHA" ]]; then
+                echo "::error::Tag release unexpectedly carried a recovery workflow source"
+                exit 1
+              fi
+              ;;
+            workflow_dispatch)
+              if [[ ! "$RECOVERY_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "::error::Release recovery has no verified workflow source commit"
+                exit 1
+              fi
+              current_default_sha="$(gh api \
+                "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" \
+                --jq '.object.sha')"
+              if [[ "$current_default_sha" != "$RECOVERY_WORKFLOW_SHA" ]]; then
+                echo "::error::Release recovery workflow source $RECOVERY_WORKFLOW_SHA is not current $DEFAULT_BRANCH head $current_default_sha"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported release event $EVENT_NAME"
+              exit 1
+              ;;
+          esac
       - name: Publish verified GitHub Release
         run: |
           set -euo pipefail
-          if [[ -z "$VERIFIED_TAG" || "$VERIFIED_TAG" != "$GITHUB_REF_NAME" ]]; then
-            echo "::error::Publish request does not match the verified tag"
+          if [[ ! "$VERIFIED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Publish request has no verified stable release tag"
             exit 1
           fi
           if [[ ! "$VERIFIED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -161,11 +270,11 @@ jobs:
             echo "::error::Remote $VERIFIED_TAG resolves to $remote_tag_sha, expected $VERIFIED_SHA"
             exit 1
           fi
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          if ! gh release view "$VERIFIED_TAG" >/dev/null 2>&1; then
             published_tags="$(gh api --paginate \
               "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
               --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')"
-            printf '%s\n' "$published_tags" | NEXT_TAG="$GITHUB_REF_NAME" node -e '
+            printf '%s\n' "$published_tags" | NEXT_TAG="$VERIFIED_TAG" node -e '
               const fs = require("node:fs");
               const pattern = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
               const parse = (tag) => {
@@ -190,32 +299,33 @@ jobs:
                 }
               }
             '
-            gh release create "$GITHUB_REF_NAME" \
+            gh release create "$VERIFIED_TAG" \
               --verify-tag \
               --generate-notes \
               --latest \
-              --title "Wrench $GITHUB_REF_NAME"
+              --title "Wrench $VERIFIED_TAG"
           fi
-          release_state="$(gh release view "$GITHUB_REF_NAME" \
+          release_state="$(gh release view "$VERIFIED_TAG" \
             --json assets,isDraft,isImmutable,isPrerelease,tagName \
             --jq '[.tagName, .isDraft, .isPrerelease, .isImmutable, (.assets | length)] | @tsv')"
-          expected_state="$GITHUB_REF_NAME"$'\tfalse\tfalse\ttrue\t0'
+          expected_state="$VERIFIED_TAG"$'\tfalse\tfalse\ttrue\t0'
           if [[ "$release_state" != "$expected_state" ]]; then
-            echo "::error::Release $GITHUB_REF_NAME is not published and immutable"
+            echo "::error::Release $VERIFIED_TAG is not published and immutable"
             exit 1
           fi
           latest_tag="$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
-          if [[ "$latest_tag" != "$GITHUB_REF_NAME" ]]; then
-            echo "::error::Latest release is $latest_tag, expected $GITHUB_REF_NAME"
+          if [[ "$latest_tag" != "$VERIFIED_TAG" ]]; then
+            echo "::error::Latest release is $latest_tag, expected $VERIFIED_TAG"
             exit 1
           fi
       - name: Promote verified website production source
         run: |
           set -euo pipefail
           production_ref="refs/heads/website-production"
-          branch_endpoint="/repos/$GITHUB_REPOSITORY/git/ref/heads/website-production"
-          if [[ -z "$VERIFIED_TAG" || "$VERIFIED_TAG" != "$GITHUB_REF_NAME" ]]; then
-            echo "::error::Website promotion tag does not match the verified release"
+          branch_read_endpoint="/repos/$GITHUB_REPOSITORY/git/ref/heads/website-production"
+          branch_update_endpoint="/repos/$GITHUB_REPOSITORY/git/refs/heads/website-production"
+          if [[ ! "$VERIFIED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Website promotion has no verified stable release tag"
             exit 1
           fi
           if [[ ! "$VERIFIED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -228,32 +338,67 @@ jobs:
             exit 1
           fi
 
-          if current_sha="$(gh api "$branch_endpoint" --jq '.object.sha' 2>/dev/null)"; then
-            if [[ "$current_sha" != "$VERIFIED_SHA" ]]; then
-              comparison="$(gh api \
-                "/repos/$GITHUB_REPOSITORY/compare/$current_sha...$VERIFIED_SHA" \
-                --jq '[.status, .base_commit.sha, .merge_base_commit.sha] | @tsv')"
-              expected_comparison="ahead"$'\t'"$current_sha"$'\t'"$current_sha"
-              if [[ "$comparison" != "$expected_comparison" ]]; then
-                echo "::error::$production_ref does not fast-forward from $current_sha to $VERIFIED_SHA"
-                exit 1
-              fi
-              gh api \
-                --method PATCH \
-                "$branch_endpoint" \
-                -f sha="$VERIFIED_SHA" \
-                -F force=false >/dev/null
+          ref_state="$(gh api "$branch_read_endpoint" \
+            --jq '[.ref, .object.type, .object.sha] | @tsv')"
+          if [[ "$ref_state" == *$'\n'* ]]; then
+            echo "::error::$production_ref lookup returned more than one result"
+            exit 1
+          fi
+          IFS=$'\t' read -r ref_name ref_type current_sha ref_end \
+            <<< "$ref_state"$'\t''__END__'
+          if [[ \
+            "$ref_name" != "$production_ref" || \
+            "$ref_type" != "commit" || \
+            ! "$current_sha" =~ ^[0-9a-f]{40}$ || \
+            "$ref_end" != "__END__" \
+          ]]; then
+            echo "::error::$production_ref did not resolve to one exact commit"
+            exit 1
+          fi
+          if [[ "$current_sha" != "$VERIFIED_SHA" ]]; then
+            comparison="$(gh api \
+              "/repos/$GITHUB_REPOSITORY/compare/$current_sha...$VERIFIED_SHA" \
+              --jq '[.status, (.ahead_by | tostring), (.behind_by | tostring), .base_commit.sha, .merge_base_commit.sha] | @tsv')"
+            IFS=$'\t' read -r \
+              comparison_status \
+              comparison_ahead_by \
+              comparison_behind_by \
+              comparison_base \
+              comparison_merge_base \
+              comparison_end <<< "$comparison"$'\t''__END__'
+            if [[ \
+              "$comparison_status" != "ahead" || \
+              ! "$comparison_ahead_by" =~ ^[1-9][0-9]*$ || \
+              "$comparison_behind_by" != "0" || \
+              "$comparison_base" != "$current_sha" || \
+              "$comparison_merge_base" != "$current_sha" || \
+              "$comparison_end" != "__END__" \
+            ]]; then
+              echo "::error::$production_ref does not fast-forward from $current_sha to $VERIFIED_SHA"
+              exit 1
             fi
-          else
             gh api \
-              --method POST \
-              "/repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="$production_ref" \
-              -f sha="$VERIFIED_SHA" >/dev/null
+              --method PATCH \
+              "$branch_update_endpoint" \
+              -f sha="$VERIFIED_SHA" \
+              -F force=false >/dev/null
           fi
 
-          promoted_sha="$(gh api "$branch_endpoint" --jq '.object.sha')"
-          if [[ "$promoted_sha" != "$VERIFIED_SHA" ]]; then
+          promoted_state="$(gh api "$branch_read_endpoint" \
+            --jq '[.ref, .object.type, .object.sha] | @tsv')"
+          if [[ "$promoted_state" == *$'\n'* ]]; then
+            echo "::error::$production_ref post-promotion lookup returned more than one result"
+            exit 1
+          fi
+          IFS=$'\t' read -r promoted_ref promoted_type promoted_sha promoted_end \
+            <<< "$promoted_state"$'\t''__END__'
+          if [[ \
+            "$promoted_ref" != "$production_ref" || \
+            "$promoted_type" != "commit" || \
+            ! "$promoted_sha" =~ ^[0-9a-f]{40}$ || \
+            "$promoted_end" != "__END__" || \
+            "$promoted_sha" != "$VERIFIED_SHA" \
+          ]]; then
             echo "::error::$production_ref resolved to $promoted_sha after promotion"
             exit 1
           fi
