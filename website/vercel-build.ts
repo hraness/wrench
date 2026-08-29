@@ -12,27 +12,51 @@ export type VercelDeploymentEnvironment =
   | "production";
 
 export const VERCEL_PRODUCTION_BRANCH = "website-production" as const;
+export const WRENCH_VERCEL_BUILD_MARKER = "release-bound-v1" as const;
 
 export function parseVercelDeploymentEnvironment(
-  value: string | undefined,
-  vercelMarker: string | undefined = undefined,
+  environment: Readonly<Record<string, string | undefined>>,
 ): VercelDeploymentEnvironment {
-  const inVercel = vercelMarker === "1";
+  const hasVercelSignal = Object.keys(environment).some((key) => (
+    key === "WRENCH_VERCEL_BUILD" || key === "VERCEL" || key.startsWith("VERCEL_")
+  ));
+  if (!hasVercelSignal) return "local";
+
+  if (environment.WRENCH_VERCEL_BUILD !== WRENCH_VERCEL_BUILD_MARKER) {
+    throw new Error(
+      `WRENCH_VERCEL_BUILD must equal ${WRENCH_VERCEL_BUILD_MARKER} whenever Vercel state is present.`,
+    );
+  }
+  if (environment.VERCEL !== "1") {
+    throw new Error("VERCEL must equal 1 during a release-bound Vercel build.");
+  }
+  const deployment = environment.VERCEL_ENV;
   if (
-    vercelMarker !== undefined
-    && vercelMarker.trim() !== ""
-    && !inVercel
+    deployment !== "development"
+    && deployment !== "preview"
+    && deployment !== "production"
   ) {
-    throw new Error(`Unsupported VERCEL marker: ${vercelMarker}`);
+    throw new Error(`Unsupported VERCEL_ENV: ${deployment ?? "missing"}`);
   }
-  if (value === undefined || value.trim() === "") {
-    if (inVercel) throw new Error("VERCEL_ENV is required during a Vercel build.");
-    return "local";
+  const sourceRef = environment.VERCEL_GIT_COMMIT_REF;
+  if (
+    sourceRef === undefined
+    || sourceRef === ""
+    || sourceRef.trim() !== sourceRef
+  ) {
+    throw new Error("VERCEL_GIT_COMMIT_REF must be an exact nonempty Git ref.");
   }
-  if (value === "development" || value === "preview" || value === "production") {
-    return value;
+  if (deployment === "production" && sourceRef !== VERCEL_PRODUCTION_BRANCH) {
+    throw new Error(
+      `Vercel production must build ${VERCEL_PRODUCTION_BRANCH}, not ${sourceRef}.`,
+    );
   }
-  throw new Error(`Unsupported VERCEL_ENV: ${value}`);
+  if (deployment !== "production" && sourceRef === VERCEL_PRODUCTION_BRANCH) {
+    throw new Error(
+      `${VERCEL_PRODUCTION_BRANCH} must be classified as a production deployment.`,
+    );
+  }
+  return deployment;
 }
 
 async function buildCurrentWebsite(
@@ -49,17 +73,8 @@ export async function runVercelWebsiteBuild(
     verifyProduction: verifyCurrentProductionRelease,
   },
 ): Promise<void> {
-  const deployment = parseVercelDeploymentEnvironment(
-    environment.VERCEL_ENV,
-    environment.VERCEL,
-  );
+  const deployment = parseVercelDeploymentEnvironment(environment);
   if (deployment === "production") {
-    if (environment.VERCEL_GIT_COMMIT_REF !== VERCEL_PRODUCTION_BRANCH) {
-      const sourceRef = environment.VERCEL_GIT_COMMIT_REF ?? "an unknown ref";
-      throw new Error(
-        `Vercel production must build ${VERCEL_PRODUCTION_BRANCH}, not ${sourceRef}.`,
-      );
-    }
     await dependencies.verifyProduction();
   }
   await dependencies.build(environment);

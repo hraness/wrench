@@ -955,13 +955,15 @@ fi
       "--environment npm-stage",
       "--allow-stage-publish",
       "npm access set mfa=publish @hraness/wrench",
-      "require reviewer `0thernet`",
-      "`prevent_self_review: false`",
+      "The `npm-stage` environment has no",
+      "required deployment reviewers",
+      "**Stage exact package** to start automatically",
+      "human inspection and two-factor approval",
       "starts **Stage npm package** automatically",
       "manifest edit with an unchanged version succeeds without running the verify or",
       "OIDC jobs.",
       "Manual recovery",
-      "runs the same verification and protected-environment path",
+      "runs the same verification and main-only environment path",
       "scripts/npm-package-identity.ts",
       "--source-archive \"$wrench_npm_archive\"",
       "--registry-archive \"$wrench_registry_archive\"",
@@ -982,7 +984,11 @@ fi
       "fast-forwards the existing branch",
       "sends `force=false`",
       "website:vercel-build",
-      "Response bodies and Git child output are streamed",
+      "WRENCH_VERCEL_BUILD=release-bound-v1",
+      "marker and every Vercel signal are absent",
+      "missing, malformed, or inconsistent platform",
+      "GitHub's bounded public commit API",
+      "fixed local `git rev-parse HEAD` child output",
       "checkout keeps\na resolvable Git `HEAD`",
       "exact tarball with canonical npm",
     ] as const) {
@@ -1002,10 +1008,13 @@ fi
 
     expect(agents).toContain("Follow `docs/publishing.md`");
     expect(agents).toContain("automatically enter the exact staging pipeline");
-    expect(agents).toContain("protected `npm-stage` environment");
-    expect(agents).toContain("required reviewer `0thernet`");
-    expect(agents).toContain("`prevent_self_review: false`");
-    expect(agents).toContain("verify that exact public artifact before creating its tag");
+    expect(agents).toContain("main-only `npm-stage` environment");
+    expect(agents).toContain("no required GitHub deployment reviewers");
+    expect(agents).toContain("CI must stage automatically after verification");
+    expect(agents).toContain("two-factor approval of the npm stage remain mandatory");
+    expect(agents).toContain("Verify that exact public artifact before creating its tag");
+    expect(`${guide}\n${agents}`).not.toContain("required reviewer `0thernet`");
+    expect(`${guide}\n${agents}`).not.toContain("prevent_self_review");
     expect(agents).toContain("fast-forwards `website-production`");
     expect(agents).toContain("Vercel's Production Branch on `website-production`");
     expect(agents).toContain("documented one-time Vercel bootstrap");

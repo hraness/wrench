@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
   collectBoundedChildOutput,
+  fetchPublicJson,
+  loadProductionReleaseEvidence,
+  parseGithubTagCommit,
   parseProductionReleaseIdentity,
   readBoundedJsonResponse,
   readBoundedStream,
@@ -44,6 +47,7 @@ function validEvidence(): ProductionReleaseEvidence {
   };
   return {
     githubRelease,
+    githubTagCommit: { sha: headSha },
     headSha,
     latestGithubRelease: { ...githubRelease },
     npmManifest: {
@@ -51,7 +55,6 @@ function validEvidence(): ProductionReleaseEvidence {
       name: "@hraness/wrench",
       version: "0.16.2",
     },
-    remoteTagRefs: `${headSha}\trefs/tags/v0.16.2\n`,
   };
 }
 
@@ -124,6 +127,25 @@ describe("production website release verification", () => {
     expect(contentLengthCancelled).toBe(true);
   });
 
+  test("aborts a public JSON read at its fixed deadline", async () => {
+    await expect(fetchPublicJson(
+      "https://api.github.com/example",
+      "timeout fixture",
+      async (_url, init) => {
+        const signal = init.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("timeout fixture has no AbortSignal");
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          const rejectFromAbort = () => { reject(signal.reason); };
+          if (signal.aborted) rejectFromAbort();
+          else signal.addEventListener("abort", rejectFromAbort, { once: true });
+        });
+      },
+      1,
+    )).rejects.toHaveProperty("name", "TimeoutError");
+  });
+
   test("kills a child when streamed command output crosses its bound", async () => {
     const encoder = new TextEncoder();
     let killed = false;
@@ -160,15 +182,7 @@ describe("production website release verification", () => {
       tag: "v0.16.2",
       version: "0.16.2",
     });
-    const evidence = validEvidence();
-    expect(verifyProductionReleaseEvidence(packageValue, {
-      ...evidence,
-      remoteTagRefs: [
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v0.16.2",
-        `${headSha}\trefs/tags/v0.16.2^{}`,
-        "",
-      ].join("\n"),
-    })).toEqual(parseProductionReleaseIdentity(packageValue));
+    expect(parseGithubTagCommit({ sha: headSha, verification: {} })).toBe(headSha);
 
     let requestedIdentity: unknown;
     await expect(verifyProductionRelease(packageValue, async (identity) => {
@@ -176,6 +190,43 @@ describe("production website release verification", () => {
       return validEvidence();
     })).resolves.toEqual(parseProductionReleaseIdentity(packageValue));
     expect(requestedIdentity).toEqual(parseProductionReleaseIdentity(packageValue));
+  });
+
+  test("loads the tag commit through bounded GitHub JSON and never invokes remote Git", async () => {
+    const identity = parseProductionReleaseIdentity(packageValue);
+    const requested: string[] = [];
+    const expected = validEvidence();
+    await expect(loadProductionReleaseEvidence(identity, {
+      fetchJson: async (url) => {
+        requested.push(url);
+        if (url.includes("/commits/tags/")) return expected.githubTagCommit;
+        if (url.includes("registry.npmjs.org")) return expected.npmManifest;
+        if (url.endsWith("/releases/latest")) return expected.latestGithubRelease;
+        return expected.githubRelease;
+      },
+      readHeadSha: async () => headSha,
+    })).resolves.toEqual(expected);
+    expect(requested).toEqual([
+      "https://api.github.com/repos/hraness/wrench/commits/tags/v0.16.2",
+      "https://registry.npmjs.org/%40hraness%2Fwrench/0.16.2",
+      "https://api.github.com/repos/hraness/wrench/releases/tags/v0.16.2",
+      "https://api.github.com/repos/hraness/wrench/releases/latest",
+    ]);
+    const source = await Bun.file(new URL("./production-release-verifier.ts", import.meta.url)).text();
+    expect(source).not.toContain("ls-remote");
+    expect(source).toContain('["git", "rev-parse", "--verify", "HEAD^{commit}"]');
+  });
+
+  test("rejects hostile GitHub tag commit evidence", () => {
+    for (const value of [
+      null,
+      {},
+      { sha: headSha.toUpperCase() },
+      { sha: headSha.slice(1) },
+      { sha: `${headSha}\n` },
+    ]) {
+      expect(() => parseGithubTagCommit(value)).toThrow();
+    }
   });
 
   test("rejects missing evidence and every release-coordinate mismatch", () => {
@@ -187,15 +238,19 @@ describe("production website release verification", () => {
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,
       headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    })).toThrow("is not exact remote v0.16.2 commit");
+    })).toThrow("is not exact GitHub tag v0.16.2 commit");
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,
       headSha: "",
     })).toThrow("lowercase 40-character commit SHA");
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,
-      remoteTagRefs: "",
-    })).toThrow("does not publish refs/tags/v0.16.2");
+      githubTagCommit: {},
+    })).toThrow("must expose one lowercase 40-character commit SHA");
+    expect(() => verifyProductionReleaseEvidence(packageValue, {
+      ...evidence,
+      githubTagCommit: { sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    })).toThrow("is not exact GitHub tag v0.16.2 commit");
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,
       npmManifest: { ...(evidence.npmManifest as object), version: "0.16.1" },
@@ -231,7 +286,7 @@ describe("production website release verification", () => {
       .toThrow("must contain exactly");
     expect(() => verifyProductionReleaseEvidence(
       { ...packageValue, version: "0.16.3" },
-      { ...evidence, remoteTagRefs: "" },
-    )).toThrow("does not publish refs/tags/v0.16.3");
+      evidence,
+    )).toThrow("does not contain exact @hraness/wrench@0.16.3");
   });
 });
