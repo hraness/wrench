@@ -25,6 +25,11 @@ The plan is the source of truth during the run. The orchestrator updates phase
 status and appends log entries as it goes, so the document must be written to
 absorb that.
 
+When restructuring an existing plan, preserve completed work, current phase
+statuses, and implementation-log evidence unless the user explicitly asks to
+reset them. Normalize the remaining work around that history instead of
+rewriting the plan as a fresh run.
+
 ## Where The Plan Lives
 
 Follow the repo's convention for design docs (for example `plans/<author>/` in
@@ -49,6 +54,8 @@ A short table or list: phase ID, name, depends-on, parallelizable-with.
 ## Phase 1: <name>
 - **Status:** Not started
 - **Depends on:** none | Phase N
+- **Topology:** default | a named non-default topology with disjoint parallel
+  worker scopes and/or a loop stop condition, as applicable.
 - **Objective:** one sentence, the outcome not the activity.
 - **Scope:** the files/modules this phase owns (its write scope).
 - **Out of scope:** adjacent work this phase must not touch.
@@ -61,15 +68,18 @@ A short table or list: phase ID, name, depends-on, parallelizable-with.
 ...
 
 ## Implementation log
-(Empty at authoring time. The orchestrator appends one entry per phase:
-date, phase, summary, validation results, review outcome, commit SHAs,
-deviations, remaining risks.)
+(Empty when authoring a new plan. Preserve existing entries when restructuring
+a plan. The orchestrator appends one entry per phase: date, phase, summary,
+validation results, review outcome, commit SHAs, deviations, remaining risks.)
 ```
 
 ## Sizing And Ordering Phases
 
-- One phase = one implementer worker session. If a phase's Approach section
-  needs subheadings to stay coherent, split it.
+- The default topology is one implementer worker session per phase. A phase
+  may name a non-default topology such as disjoint batch workers, an audit
+  fan-out, a bounded fix loop, or competing drafts. Define each worker's
+  disjoint scope or the loop's stop condition; split the phase when that
+  cannot stay concise.
 - Order by dependency, foundations first. A schema/migration phase is always
   its own phase (and in many repos its own PR — record that in Constraints).
 - Phases that can run in parallel must have disjoint write scopes. Declare
@@ -107,9 +117,10 @@ contracts, performance characteristics) when regression there is a real risk.
 
 - Phase status vocabulary: Not started, In progress, Done, Partial, Blocked.
 - The orchestrator owns status transitions and log entries during the run;
-  the author sets everything to Not started.
-- Keep the Implementation log section present even when empty, so run updates
-  have a stable place to land.
+  the author sets new phases to Not started and preserves existing phase state
+  when restructuring an active or completed plan.
+- Keep the Implementation log section present, preserving existing entries,
+  so run updates have a stable place to land.
 
 ## Anti-Patterns
 

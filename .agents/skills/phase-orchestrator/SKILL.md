@@ -100,7 +100,10 @@ Optional inputs:
 
 - PRD, design doc, ticket, issue, or acceptance criteria.
 - Branch, commit style, validation commands, release constraints, or PR target.
-- A stopping point such as "phase 2 only", "implementation only", or "no commits".
+- A stopping point such as "phase 2 only" or "implementation only", plus a
+  separate commit constraint such as "no commits". Treat "implementation only"
+  as stopping after implementation and affected validation, not as opting out
+  of commits.
 
 If the plan does not name phases, derive a conservative dependency-ordered phase
 list and record that grouping in the plan or in the in-chat todos before
@@ -179,8 +182,9 @@ Run this loop for each phase in dependency order.
 
 Spawn a worker under the `phase-implementer` contract to implement only the
 active phase. The worker edits files directly. The parent orchestrator owns
-commits by default unless the user opted out or explicitly delegated commits
-to a worker.
+implementation commits by default. If the user opted out, neither parent nor
+worker commits. Otherwise, delegate commit authority to the worker only
+through an explicit prompt.
 
 After the worker returns:
 
@@ -200,6 +204,17 @@ browser checks when relevant.
 If validation cannot run, record the exact command, blocker, and risk in the
 phase notes or plan log.
 
+When commits are permitted and the validated implementation is complete,
+ensure an exact implementation commit exists before dispatching the reviewer.
+The parent creates it unless the implementer already did so under explicitly
+delegated authority; inspect and record the exact commit either way. This
+preserves a pre-review snapshot so later review fixes can remain distinct. If
+the user opted out of commits, leave the implementation uncommitted and carry
+that constraint through review and finalization.
+
+If the user requested "implementation only", skip the review-and-fix and final
+whole-feature passes after this step, then finalize the plan state and summary.
+
 ### 4. Review And Fix Worker
 
 Spawn a worker under the `phase-reviewer` contract after implementation and
@@ -217,17 +232,23 @@ The reviewer/fixer should:
 - Review the phase against the plan, PRD/spec, repo rules, security, tenancy/data
   ownership, migrations, tests, and likely regressions.
 - Patch concrete issues directly when bounded and low-risk.
-- Leave review fixes uncommitted for the parent orchestrator to commit unless
-  the user opted out or explicitly delegated commits to the reviewer/fixer.
+- Leave review fixes uncommitted for the parent orchestrator. Delegate commit
+  authority to the reviewer/fixer only when the user has not opted out of
+  commits and the prompt explicitly says so.
 - Report no-op clearly if no changes are needed.
 - Report larger design issues with the exact plan changes needed.
 
-### 5. Default Commit
+### 5. Review-Fix Commit
 
-Commit each completed phase by default unless the user requested "no commits",
-"implementation only", or another no-commit constraint. Prefer the parent
-agent's normal commit workflow unless a dedicated shell subagent is clearly
-useful.
+When the reviewer changed files and commits are permitted, ensure only those
+validated review fixes form a second phase commit. The parent creates it unless
+the reviewer already did so under explicitly delegated authority; inspect and
+record the exact commit either way. Do not reconstruct a pre-review split from
+a mixed working-tree diff; step 3 owns the implementation checkpoint. If the
+reviewer made no changes, create no review-fix commit. If the user requested
+"no commits" or another no-commit constraint, leave every phase change
+uncommitted. Prefer the parent agent's normal commit workflow unless a
+dedicated shell subagent is clearly useful.
 
 When committing:
 
@@ -279,8 +300,14 @@ evidence.
 For a plan with sequenced phases plus parallel tracks — especially when the
 user's checkout is on their own branch, is behind the default branch, or
 carries dirty user-owned work — run the orchestration in dedicated git
-worktrees and land each phase as a PR in a stack, instead of committing to the
-user's checkout.
+worktrees. When the user's request and the target repository's rules authorize
+remote delivery, land each phase as a PR in a stack; otherwise keep the stack
+local and report the branches and commits without pushing or opening PRs.
+
+Plan complexity and an unsafe checkout authorize local isolation, not remote
+mutation. Before any push, PR creation or update, merge, or other external
+change, confirm that the user's request or standing repository policy grants
+that authority and follow the target repository's required gates.
 
 When to choose this mode:
 
@@ -316,7 +343,8 @@ Branching and stacking:
 - One branch per phase, cut from the previous phase's branch when the phase
   depends on it: foundations first, then tracks stacked on the last foundation
   they need. Parallel tracks branch from the same base, not from each other.
-- Commit each phase on its branch (orchestrator owns commits), push with
+- Commit each phase on its branch when the commit policy permits it
+  (orchestrator owns commits). When remote delivery is authorized, push with
   `git push -u origin <branch>`, then open the PR with the `gh` CLI, setting
   `--base` to the parent branch for stacked phases and to the default branch
   for the stack root:
@@ -419,7 +447,10 @@ Context:
 - PRD/spec: {prd_path_or_summary_or_none}
 - Change under review: {commit_range_or_diff_scope}
 - Validation evidence: {phase_validation_results}
+- Validation requirements: {validation_commands}
 - Repo rules: {repo_rules_summary}
+- Ownership scope: {owned_files_or_modules}
+- Dirty-worktree notes: {dirty_worktree_summary}
 - Commit policy: {commit_policy}
 - Supplemental implementer notes: {phase_result}
 
@@ -450,6 +481,11 @@ Context:
 - PRD/spec: {prd_path_or_none}
 - Complete change: {commit_range_or_diff_scope}
 - Final validation results so far: {validation_summary}
+- Validation requirements: {validation_commands}
+- Repo rules: {repo_rules_summary}
+- Ownership scope: {owned_files_or_modules}
+- Dirty-worktree notes: {dirty_worktree_summary}
+- Commit policy: {commit_policy}
 - Supplemental phase results: {all_phase_results}
 
 Task:
