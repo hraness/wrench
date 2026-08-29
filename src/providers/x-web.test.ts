@@ -17,6 +17,7 @@ import {
   parseXWebBookmarkExportRecord,
   projectXWebBookmarkExportPage,
   projectXWebBookmarkExportRecord,
+  projectXWebFeedPage,
   projectXWebFeedPost,
   projectXWebProfileStats,
   normalizeXWebUrtTimeline,
@@ -127,6 +128,38 @@ describe("X query descriptor revision evidence", () => {
     expect(bookmarks.queryId).not.toBe("LoLaMO4GuHLEPJWrenchH9kjAw");
     expect(JSON.stringify(xWebQueryDescriptorEvidenceSnapshot))
       .not.toContain("LoLaMO4GuHLEPJWrenchH9kjAw");
+  });
+
+  test("records the current reviewed UserTweets and SearchTimeline observations", () => {
+    expect(evidence("UserTweets")).toMatchObject({
+      queryId: "SXVCYB8XHSS25nzIljNtZA",
+      sourceChunk: "main.868c69e3a403a8bda.js",
+      observedOn: "2026-08-29",
+    });
+    expect(evidence("SearchTimeline")).toMatchObject({
+      queryId: "hyPfJYJ_XAtDYoslQc-Rgg",
+      sourceChunk: "main.868c69e3a403a8bda.js",
+      observedOn: "2026-08-29",
+    });
+    expect(xWebSemanticOperationRegistry["feeds.user"]).toEqual({
+      semanticOperation: "feeds.read",
+      risk: "R1",
+      transport: "graphql-query",
+      operationName: "UserTweets",
+      operationType: "query",
+      responseRoot: ["user", "result", "timeline", "timeline"],
+    });
+    expect(xWebSemanticOperationRegistry["feeds.search"]).toEqual({
+      semanticOperation: "feeds.read",
+      risk: "R1",
+      transport: "graphql-query",
+      operationName: "SearchTimeline",
+      operationType: "query",
+      responseRoot: ["search_by_raw_query", "search_timeline", "timeline"],
+    });
+    const serialized = JSON.stringify(xWebQueryDescriptorEvidenceSnapshot);
+    expect(serialized).not.toContain("6r5OLCC_wFH4CpRyXKuAmQ");
+    expect(serialized).not.toContain("hz_94eVAtrtQo_vO3my7Rw");
   });
 
   test("records the current reviewed HomeLatestTimeline observation", () => {
@@ -1511,6 +1544,104 @@ describe("X bookmark export projection", () => {
       timelineItemEntry("tweet-1", tweetResult("21")),
       timelineItemEntry("tweet-2", tweetResult("22")),
     ), 1)).toThrow("no continuation cursor was exposed");
+  });
+
+  test("keeps user and search feed pages on public-text and over-limit cursor contracts", () => {
+    const userResponse = {
+      data: {
+        user: {
+          result: {
+            rest_id: "1401049881070997506",
+            timeline: {
+              timeline: timeline(
+                timelineItemEntry("tweet-1", tweetResult("51", {
+                  text: "user post\nwith newline",
+                  author: { id: "1401049881070997506", username: "CathPoaster", name: "Cath" },
+                })),
+                timelineItemEntry("tweet-2", tweetResult("52", { text: "second" })),
+                cursorEntry("cursor-bottom", "Bottom", "next-user-page"),
+              ),
+            },
+          },
+        },
+      },
+    };
+    const searchResponse = {
+      data: {
+        search_by_raw_query: {
+          search_timeline: {
+            timeline: timeline(
+              timelineItemEntry("tweet-1", tweetResult("61", { text: "search hit" })),
+              timelineItemEntry("tweet-2", tweetResult("62", { text: "second hit" })),
+              cursorEntry("cursor-bottom", "Bottom", "next-search-page"),
+            ),
+          },
+        },
+      },
+    };
+    expect(extractXWebGraphQlReadResponseRoot("feeds.user", userResponse)).toEqual(
+      userResponse.data.user.result.timeline.timeline,
+    );
+    expect(extractXWebGraphQlReadResponseRoot("feeds.search", searchResponse)).toEqual(
+      searchResponse.data.search_by_raw_query.search_timeline.timeline,
+    );
+    const completeUser = projectXWebFeedPage("feeds.user", userResponse, 2);
+    expect(completeUser.posts[0]).toMatchObject({
+      id: "51",
+      text: "user post\nwith newline",
+      authorId: "1401049881070997506",
+    });
+    expect(completeUser.cursor).toBe("next-user-page");
+    const truncatedUser = projectXWebFeedPage("feeds.user", userResponse, 1);
+    expect(truncatedUser.posts.map((post) => post.id)).toEqual(["51"]);
+    expect(truncatedUser.cursor).toBeNull();
+    expect(JSON.stringify(truncatedUser)).not.toContain("next-user-page");
+    expect(() => projectXWebFeedPage("feeds.user", {
+      data: {
+        user: {
+          result: {
+            rest_id: "1401049881070997506",
+            timeline: {
+              timeline: timeline(
+                timelineItemEntry("tweet-1", tweetResult("51")),
+                timelineItemEntry("tweet-2", tweetResult("52")),
+              ),
+            },
+          },
+        },
+      },
+    }, 1)).toThrow("no continuation cursor was exposed");
+    const completeSearch = projectXWebFeedPage("feeds.search", searchResponse, 2);
+    expect(completeSearch.cursor).toBe("next-search-page");
+    const truncatedSearch = projectXWebFeedPage("feeds.search", searchResponse, 1);
+    expect(truncatedSearch.cursor).toBeNull();
+    expect(JSON.stringify(truncatedSearch)).not.toContain("next-search-page");
+    expect(() => projectXWebFeedPage("feeds.search", {
+      data: {
+        search_by_raw_query: {
+          search_timeline: {
+            timeline: timeline(
+              timelineItemEntry("tweet-1", tweetResult("61")),
+              timelineItemEntry("tweet-2", tweetResult("62")),
+            ),
+          },
+        },
+      },
+    }, 1)).toThrow("no continuation cursor was exposed");
+    expect(() => projectXWebFeedPage("feeds.user", {
+      data: {
+        user: {
+          result: {
+            rest_id: "1401049881070997506",
+            timeline: {
+              timeline: timeline(
+                timelineItemEntry("tweet-bad", tweetResult("71", { text: "bad\u0001text" })),
+              ),
+            },
+          },
+        },
+      },
+    }, 10)).toThrow("X post text must be bounded public text");
   });
 
   test("rejects extra fields, duplicate post ids, and a mismatched feed on the export page", () => {
