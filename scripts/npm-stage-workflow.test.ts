@@ -723,6 +723,189 @@ esac
     }
   });
 
+  test("accepts only exact tag pushes or current-default-branch release recovery", async () => {
+    const workflow = await readFile(releaseWorkflowUrl, "utf8");
+    const script = workflowStepScript(workflow, "Resolve release request");
+    const directory = await mkdtemp(join(tmpdir(), "wrench-release-request-"));
+    const output = join(directory, "github-output.txt");
+
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain("release_tag:");
+    expect(workflow).toContain("required: true");
+    expect(workflow).toContain("ref: refs/tags/${{ steps.request.outputs.tag }}");
+
+    try {
+      const runCase = async (
+        overrides: Readonly<Record<string, string>>,
+      ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> => {
+        await rm(output, { force: true });
+        return runWorkflowScript(script, {
+          DEFAULT_BRANCH: "main",
+          EVENT_NAME: "push",
+          EVENT_REF: "refs/tags/v0.16.2",
+          EVENT_REF_NAME: "v0.16.2",
+          EVENT_REF_TYPE: "tag",
+          GITHUB_OUTPUT: output,
+          INPUT_RELEASE_TAG: "",
+          ...overrides,
+        });
+      };
+
+      const pushed = await runCase({});
+      expect(pushed.exitCode).toBe(0);
+      expect(await readFile(output, "utf8")).toBe("tag=v0.16.2\n");
+
+      const recovered = await runCase({
+        EVENT_NAME: "workflow_dispatch",
+        EVENT_REF: "refs/heads/main",
+        EVENT_REF_NAME: "main",
+        EVENT_REF_TYPE: "branch",
+        INPUT_RELEASE_TAG: "v0.16.2",
+      });
+      expect(recovered.exitCode).toBe(0);
+      expect(await readFile(output, "utf8")).toBe("tag=v0.16.2\n");
+
+      for (const rejectedEnvironment of [
+        {
+          EVENT_NAME: "workflow_dispatch",
+          EVENT_REF: "refs/heads/recovery",
+          EVENT_REF_NAME: "recovery",
+          EVENT_REF_TYPE: "branch",
+          INPUT_RELEASE_TAG: "v0.16.2",
+        },
+        { EVENT_REF: "refs/heads/main", EVENT_REF_NAME: "main", EVENT_REF_TYPE: "branch" },
+        { INPUT_RELEASE_TAG: "v0.16.2\npoison", EVENT_NAME: "workflow_dispatch", EVENT_REF: "refs/heads/main" },
+        { EVENT_NAME: "schedule" },
+      ] as const) {
+        const rejected = await runCase(rejectedEnvironment);
+        expect(rejected.exitCode).not.toBe(0);
+        expect(await Bun.file(output).exists()).toBe(false);
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("binds and revalidates only the current default-branch recovery workflow source", async () => {
+    const workflow = await readFile(releaseWorkflowUrl, "utf8");
+    const bindScript = workflowStepScript(workflow, "Bind recovery workflow source");
+    const revalidateScript = workflowStepScript(workflow, "Revalidate recovery workflow source");
+    const directory = await mkdtemp(join(tmpdir(), "wrench-release-workflow-source-"));
+    const binaryDirectory = join(directory, "bin");
+    const ghStub = join(binaryDirectory, "gh");
+    const commandLog = join(directory, "commands.log");
+    const output = join(directory, "github-output.txt");
+    const workflowSha = "1".repeat(40);
+
+    expect(workflow).toContain(
+      "recovery_workflow_sha: ${{ steps.recovery_source.outputs.sha }}",
+    );
+    expect(workflow).toContain(
+      "RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.recovery_workflow_sha }}",
+    );
+
+    try {
+      await mkdir(binaryDirectory, { recursive: true });
+      await writeFile(ghStub, `#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$COMMAND_LOG"
+[[ "$*" == *"/git/ref/heads/$DEFAULT_BRANCH"* ]]
+if [[ "$DEFAULT_HEAD" == "api-failure" ]]; then
+  exit 1
+fi
+printf '%s\n' "$DEFAULT_HEAD"
+`, "utf8");
+      await chmod(ghStub, 0o755);
+
+      const baseEnvironment = Object.freeze({
+        COMMAND_LOG: commandLog,
+        DEFAULT_BRANCH: "main",
+        DEFAULT_HEAD: workflowSha,
+        EVENT_NAME: "workflow_dispatch",
+        EVENT_SHA: workflowSha,
+        GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: "hraness/wrench",
+        PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
+        RECOVERY_WORKFLOW_SHA: workflowSha,
+      });
+      const runBind = async (
+        overrides: Readonly<Record<string, string>>,
+      ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> => {
+        await Promise.all([
+          rm(commandLog, { force: true }),
+          rm(output, { force: true }),
+        ]);
+        return runWorkflowScript(bindScript, { ...baseEnvironment, ...overrides });
+      };
+      const runRevalidation = async (
+        overrides: Readonly<Record<string, string>>,
+      ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> => {
+        await rm(commandLog, { force: true });
+        return runWorkflowScript(revalidateScript, { ...baseEnvironment, ...overrides });
+      };
+
+      const bound = await runBind({});
+      expect(bound.exitCode).toBe(0);
+      expect(await readFile(output, "utf8")).toBe(`sha=${workflowSha}\n`);
+      expect(await readFile(commandLog, "utf8")).toContain(
+        "/git/ref/heads/main",
+      );
+
+      const revalidated = await runRevalidation({});
+      expect(revalidated.exitCode).toBe(0);
+      expect(await readFile(commandLog, "utf8")).toContain(
+        "/git/ref/heads/main",
+      );
+
+      for (const overrides of [
+        { DEFAULT_HEAD: "2".repeat(40) },
+        { DEFAULT_HEAD: "api-failure" },
+        { EVENT_SHA: "not-a-commit" },
+        { EVENT_NAME: "schedule" },
+      ] as const) {
+        const rejected = await runBind(overrides);
+        expect(rejected.exitCode).not.toBe(0);
+        expect(await Bun.file(output).exists()).toBe(false);
+      }
+
+      for (const overrides of [
+        { DEFAULT_HEAD: "2".repeat(40) },
+        { DEFAULT_HEAD: "api-failure" },
+        { RECOVERY_WORKFLOW_SHA: "not-a-commit" },
+        { EVENT_NAME: "schedule" },
+      ] as const) {
+        const rejected = await runRevalidation(overrides);
+        expect(rejected.exitCode).not.toBe(0);
+      }
+
+      const tagBind = await runBind({
+        DEFAULT_HEAD: "2".repeat(40),
+        EVENT_NAME: "push",
+        EVENT_SHA: "3".repeat(40),
+      });
+      expect(tagBind.exitCode).toBe(0);
+      expect(await readFile(output, "utf8")).toBe("sha=\n");
+      expect(await Bun.file(commandLog).exists()).toBe(false);
+
+      const tagRevalidation = await runRevalidation({
+        DEFAULT_HEAD: "2".repeat(40),
+        EVENT_NAME: "push",
+        RECOVERY_WORKFLOW_SHA: "",
+      });
+      expect(tagRevalidation.exitCode).toBe(0);
+      expect(await Bun.file(commandLog).exists()).toBe(false);
+
+      const crossWiredTag = await runRevalidation({
+        EVENT_NAME: "push",
+        RECOVERY_WORKFLOW_SHA: workflowSha,
+      });
+      expect(crossWiredTag.exitCode).not.toBe(0);
+      expect(await Bun.file(commandLog).exists()).toBe(false);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   test("gates the immutable GitHub Release on canonical public npm content", async () => {
     const [workflow, ciWorkflow, artifact, identity] = await Promise.all([
       readFile(releaseWorkflowUrl, "utf8"),
@@ -767,6 +950,9 @@ esac
     expect(publishScript.indexOf("remote_tag_sha="))
       .toBeLessThan(publishScript.indexOf("gh release create"));
     expect(publishScript).toContain('if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]');
+    expect(publishScript).not.toContain("GITHUB_REF_NAME");
+    expect(publishScript).toContain('gh release view "$VERIFIED_TAG"');
+    expect(publishScript).toContain('gh release create "$VERIFIED_TAG"');
     for (const checkedSurface of [
       "dist/index.js",
       "dist/client.js",
@@ -808,6 +994,76 @@ esac
     }
   });
 
+  test("idempotently revalidates an existing immutable Latest release during recovery", async () => {
+    const workflow = await readFile(releaseWorkflowUrl, "utf8");
+    const script = workflowStepScript(workflow, "Publish verified GitHub Release");
+    const directory = await mkdtemp(join(tmpdir(), "wrench-release-recovery-publish-"));
+    const binaryDirectory = join(directory, "bin");
+    const ghStub = join(binaryDirectory, "gh");
+    const commandLog = join(directory, "commands.log");
+    const verifiedSha = "2".repeat(40);
+
+    try {
+      await mkdir(binaryDirectory, { recursive: true });
+      await writeFile(ghStub, `#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$COMMAND_LOG"
+args="$*"
+if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
+  printf '%s\n' "$TAG_SHA"
+elif [[ "$args" == "release view $VERIFIED_TAG" ]]; then
+  exit 0
+elif [[ "$args" == *"release view $VERIFIED_TAG --json"* ]]; then
+  printf '%s\tfalse\tfalse\t%s\t0\n' "$VERIFIED_TAG" "$RELEASE_IMMUTABLE"
+elif [[ "$args" == *"/releases/latest"* ]]; then
+  printf '%s\n' "$LATEST_TAG"
+elif [[ "$args" == *"release create"* ]]; then
+  echo "recovery attempted to recreate an existing release" >&2
+  exit 91
+else
+  echo "unexpected gh command: $args" >&2
+  exit 1
+fi
+`, "utf8");
+      await chmod(ghStub, 0o755);
+
+      const baseEnvironment = Object.freeze({
+        COMMAND_LOG: commandLog,
+        GITHUB_REF_NAME: "main",
+        GITHUB_REPOSITORY: "hraness/wrench",
+        LATEST_TAG: "v0.16.2",
+        PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
+        RELEASE_IMMUTABLE: "true",
+        TAG_SHA: verifiedSha,
+        VERIFIED_SHA: verifiedSha,
+        VERIFIED_TAG: "v0.16.2",
+      });
+      const runCase = async (
+        overrides: Readonly<Record<string, string>>,
+      ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> => {
+        await rm(commandLog, { force: true });
+        return runWorkflowScript(script, { ...baseEnvironment, ...overrides });
+      };
+
+      const recovered = await runCase({});
+      expect(recovered.exitCode).toBe(0);
+      expect(await readFile(commandLog, "utf8")).not.toContain("release create");
+
+      for (const [overrides, message] of [
+        [{ TAG_SHA: "3".repeat(40) }, "Remote v0.16.2 resolves to"],
+        [{ RELEASE_IMMUTABLE: "false" }, "is not published and immutable"],
+        [{ LATEST_TAG: "v0.16.1" }, "Latest release is v0.16.1"],
+        [{ VERIFIED_TAG: "v0.16.2\npoison" }, "no verified stable release tag"],
+      ] as const) {
+        const rejected = await runCase(overrides);
+        expect(rejected.exitCode).not.toBe(0);
+        expect(`${rejected.stdout}${rejected.stderr}`).toContain(message);
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   test("promotes only the verified Latest release commit to website production", async () => {
     const workflow = await readFile(releaseWorkflowUrl, "utf8");
     const script = workflowStepScript(workflow, "Promote verified website production source");
@@ -824,10 +1080,16 @@ esac
     expect(workflow.indexOf("Latest release is $latest_tag"))
       .toBeLessThan(workflow.indexOf("Promote verified website production source"));
     expect(workflow).toContain('production_ref="refs/heads/website-production"');
+    expect(workflow).toContain("/git/matching-refs/heads/website-production");
     expect(workflow.match(/\/commits\/tags\/\$VERIFIED_TAG/gu)).toHaveLength(2);
     expect(workflow).toContain("-F force=false");
     expect(workflow).not.toContain("-F force=true");
     expect(workflow).not.toContain("git push --force");
+    expect(script).toContain(".ahead_by");
+    expect(script).toContain(".behind_by");
+    expect(script).toContain(".commits[-1].sha");
+    expect(script).not.toContain(".head_commit.sha");
+    expect(script).not.toContain("GITHUB_REF_NAME");
 
     try {
       await mkdir(binaryDirectory, { recursive: true });
@@ -838,11 +1100,17 @@ args="$*"
 if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
   printf '%s\n' "$TAG_SHA"
 elif [[ "$args" == *"/compare/$CURRENT_SHA...$VERIFIED_SHA"* ]]; then
-  if [[ "$PROMOTION_SCENARIO" == "ahead" ]]; then
-    printf 'ahead\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA"
-  else
-    printf 'diverged\t%s\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" "$VERIFIED_SHA"
-  fi
+  case "$PROMOTION_SCENARIO" in
+    ahead) printf 'ahead\t1\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
+    api-failure) exit 1 ;;
+    behind-count) printf 'ahead\t1\t1\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
+    malformed-ahead) printf 'ahead\t01\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
+    missing-final) printf 'ahead\t1\t0\t%s\t%s\t\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
+    wrong-base) printf 'ahead\t1\t0\t%s\t%s\t%s\n' "$(printf '3%.0s' {1..40})" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
+    wrong-final) printf 'ahead\t1\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" ;;
+    zero-ahead) printf 'ahead\t0\t0\t%s\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" "$VERIFIED_SHA" ;;
+    *) printf 'diverged\t1\t1\t%s\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" "$VERIFIED_SHA" ;;
+  esac
 elif [[ "$args" == *"--method PATCH"* ]]; then
   [[ "$args" == *"/git/ref/heads/website-production"* ]]
   [[ "$args" == *"-f sha=$VERIFIED_SHA"* ]]
@@ -853,11 +1121,21 @@ elif [[ "$args" == *"--method POST"* ]]; then
   [[ "$args" == *"-f ref=refs/heads/website-production"* ]]
   [[ "$args" == *"-f sha=$VERIFIED_SHA"* ]]
   printf 'create\n' > "$PROMOTED_MARKER"
+elif [[ "$args" == *"/git/matching-refs/heads/website-production"* ]]; then
+  if [[ "$PROMOTION_SCENARIO" == "ref-read-failure" ]]; then
+    exit 1
+  elif [[ "$PROMOTION_SCENARIO" == "absent" ]]; then
+    printf '\n'
+  elif [[ "$PROMOTION_SCENARIO" == "identical" ]]; then
+    printf '%s\n' "$VERIFIED_SHA"
+  elif [[ "$PROMOTION_SCENARIO" == "malformed-current" ]]; then
+    printf 'not-a-commit\n'
+  else
+    printf '%s\n' "$CURRENT_SHA"
+  fi
 elif [[ "$args" == *"/git/ref/heads/website-production"* ]]; then
   if [[ -f "$PROMOTED_MARKER" || "$PROMOTION_SCENARIO" == "identical" ]]; then
     printf '%s\n' "$VERIFIED_SHA"
-  elif [[ "$PROMOTION_SCENARIO" == "absent" ]]; then
-    exit 1
   else
     printf '%s\n' "$CURRENT_SHA"
   fi
@@ -871,7 +1149,7 @@ fi
       const baseEnvironment = Object.freeze({
         COMMAND_LOG: commandLog,
         CURRENT_SHA: currentSha,
-        GITHUB_REF_NAME: "v0.16.2",
+        GITHUB_REF_NAME: "main",
         GITHUB_REPOSITORY: "hraness/wrench",
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
         PROMOTED_MARKER: promotedMarker,
@@ -912,6 +1190,22 @@ fi
       expect(diverged.exitCode).not.toBe(0);
       expect(`${diverged.stdout}${diverged.stderr}`).toContain("does not fast-forward");
       expect(await Bun.file(promotedMarker).exists()).toBe(false);
+
+      for (const scenario of [
+        "api-failure",
+        "behind-count",
+        "malformed-ahead",
+        "malformed-current",
+        "missing-final",
+        "ref-read-failure",
+        "wrong-base",
+        "wrong-final",
+        "zero-ahead",
+      ] as const) {
+        const rejected = await runCase({ PROMOTION_SCENARIO: scenario });
+        expect(rejected.exitCode).not.toBe(0);
+        expect(await Bun.file(promotedMarker).exists()).toBe(false);
+      }
 
       const retagged = await runCase({
         PROMOTION_SCENARIO: "ahead",
@@ -983,6 +1277,12 @@ fi
       "exception must never be repeated",
       "fast-forwards the existing branch",
       "sends `force=false`",
+      "dispatch **Release** from the current `main` ref",
+      "required exact stable\n`release_tag`",
+      "revalidates the existing immutable Latest\nRelease",
+      "dispatch workflow source commit must\nequal the current default-branch head",
+      "ordinary tag-push releases do not depend on `main`\nremaining unchanged",
+      "Never rerun a stale tag workflow or write the production\nbranch manually",
       "website:vercel-build",
       "WRENCH_VERCEL_BUILD=release-bound-v1",
       "marker and every Vercel signal are absent",
