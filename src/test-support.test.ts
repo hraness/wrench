@@ -77,6 +77,9 @@ describe("property replay coordinates", () => {
       { seed: -17 },
       { path: "3:0" },
       { seed: -17, path: "3:0" },
+      { seed: undefined },
+      { path: undefined },
+      { seed: undefined, path: undefined },
     ]) {
       expect(() => assertProperty(property, overrides as never)).toThrow(
         "dedicated property replay coordinate",
@@ -90,6 +93,9 @@ describe("property replay coordinates", () => {
       { seed: -17 },
       { path: "3:0" },
       { seed: -17, path: "3:0" },
+      { seed: undefined },
+      { path: undefined },
+      { seed: undefined, path: undefined },
     ]) {
       await expect(assertAsyncProperty(property, overrides as never)).rejects.toThrow(
         "dedicated property replay coordinate",
