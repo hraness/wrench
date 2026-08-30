@@ -3477,6 +3477,111 @@ describe("CLI previews and exit semantics", () => {
     }
   });
 
+  test("prints a cleanup-blocked LinkedIn read as JSON with exit 3", async () => {
+    const testState = state();
+    try {
+      const selectedManifest = bundledWebManifest("linkedin");
+      const selectedAuth = createAuth("linkedin-social", {
+        source: "chrome",
+        profile: "Default",
+        subject: "linkedin-member-123",
+      });
+      installManifest(selectedManifest, {
+        force: false,
+        environment: testState.environment,
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const runId = "00000000-0000-4000-8000-000000000105";
+      const wrench = capture();
+
+      const exitCode = await main([
+        "invoke",
+        "linkedin-web",
+        "profiles.read",
+        "--input",
+        '{"profile_url":"https://www.linkedin.com/in/0thernet/","include_connections":true}',
+        "--auth",
+        selectedAuth.id,
+        "--json",
+      ], testState.environment, wrench.output, {
+        revalidatePreparedCapability: (invocation) => {
+          const live: InvocationResult = {
+            receipt: {
+              schemaVersion: 4,
+              transport: "web-session-api",
+              webSessionContractHash: "d".repeat(64),
+              runId,
+              planDigest: null,
+              adapter: {
+                id: invocation.manifest.id,
+                version: invocation.manifest.version,
+                hash: sha256(canonicalJson(invocation.manifest)),
+              },
+              operation: invocation.operationId,
+              risk: "R1",
+              inputHash: sha256(canonicalJson(invocation.input)),
+              auth: {
+                id: invocation.auth.id,
+                hash: sha256(canonicalJson(invocation.auth)),
+                kind: invocation.auth.kind,
+              },
+              status: "failed",
+              dispatchStarted: false,
+              dispatch: { planned: 0, started: 0, verified: 0 },
+              startedAt: "2026-08-30T12:00:00.000Z",
+              finishedAt: "2026-08-30T12:00:00.000Z",
+              finalOrigin: null,
+              error:
+                "authenticated web API operation failed before the dispatch boundary; reason: durable cleanup admission blocks retry",
+            },
+            output: null,
+            replayed: false,
+            readFailure: {
+              category: "cleanup-required",
+              retryDisposition: "do-not-retry",
+            },
+            privateArtifactsPreserved: false,
+          };
+          return Promise.resolve({
+            cachedBefore: { status: "miss", key: "e".repeat(64) },
+            live,
+            cache: {
+              status: "miss",
+              reason: "no-cached-snapshot",
+            },
+          });
+        },
+      });
+
+      expect(exitCode).toBe(3);
+      expect(wrench.stderr()).toBe("");
+      expect(JSON.parse(wrench.stdout())).toMatchObject({
+        ok: false,
+        status: "failed",
+        source: "live",
+        runId,
+        output: null,
+        readFailure: {
+          category: "cleanup-required",
+          retryDisposition: "do-not-retry",
+        },
+        receipt: {
+          adapter: { id: selectedManifest.id },
+          operation: "profiles.read",
+          auth: { id: selectedAuth.id },
+          dispatchStarted: false,
+          dispatch: { planned: 0, started: 0, verified: 0 },
+        },
+        cache: {
+          status: "miss",
+          reason: "no-cached-snapshot",
+        },
+      });
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("invokes the reviewed Bluesky public profile read without --auth and rejects an explicit locator", async () => {
     const testState = state();
     try {
