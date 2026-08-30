@@ -1686,7 +1686,12 @@ elif [[ "$args" == "api --include /repos/$GITHUB_REPOSITORY/releases/tags/$VERIF
 elif [[ "$args" == "api /repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG" ]]; then
   release_json
 elif [[ "$args" == *"/releases?per_page=100&page="* ]]; then
-  printf '[]\n'
+  page="\${args##*page=}"
+  if [[ "$RELEASE_SCAN_MODE" == "max" && "$page" -le 5 ]]; then
+    node -e 'const page = Number(process.argv[1]); process.stdout.write(JSON.stringify(Array.from({ length: 100 }, (_, index) => { const id = (page - 1) * 100 + index + 1; return { draft: true, id, prerelease: false, tag_name: "draft-" + String(id) }; })))' "$page"
+  else
+    printf '[]\n'
+  fi
 elif [[ "$args" == "api /repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH --jq .object.sha" ]]; then
   printf '%s\n' "$SOURCE_SHA"
 elif [[ "$args" == *"/releases/latest"* ]]; then
@@ -1713,6 +1718,7 @@ fi
         ALLOW_CREATE: "false",
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
         RELEASE_IMMUTABLE: "true",
+        RELEASE_SCAN_MODE: "empty",
         SOURCE_SHA: peeledCommitSha,
         PEELED_COMMIT_SHA: peeledCommitSha,
         TAG_OBJECT_SHA: tagObjectSha,
@@ -1743,6 +1749,21 @@ fi
       expect(createCommands).toContain("--method POST");
       expect(createCommands).toContain("generate_release_notes=true");
       expect(createCommands).toContain("target_commitish=2222222222222222222222222222222222222222");
+      const createdAtAuditCap = await runCase({
+        ALLOW_CREATE: "true",
+        LOOKUP_MODE: "missing",
+        RELEASE_SCAN_MODE: "max",
+      });
+      expect(createdAtAuditCap.exitCode).toBe(0);
+      const maxCreateCommands = (await readFile(commandLog, "utf8")).trim().split("\n");
+      expect(maxCreateCommands).toHaveLength(16);
+      for (let page = 1; page <= 6; page += 1) {
+        expect(maxCreateCommands.filter((command) =>
+          command === `api /repos/${providerRepository}/releases?per_page=100&page=${String(page)}`
+        )).toHaveLength(1);
+      }
+      expect(maxCreateCommands.filter((command) => command.includes("--method POST")))
+        .toHaveLength(1);
       const movedMain = await runCase({
         ALLOW_CREATE: "true",
         LOOKUP_MODE: "missing",
@@ -1959,7 +1980,8 @@ fi
     ]);
     expect(releaseRestRequestBudget).toEqual({
       githubTokenLimit: 1_000,
-      headroom: 723,
+      headroom: 722,
+      immutableRelease: 16,
       maxPolls: 20,
       observationDeadlineMilliseconds: 1_200_000,
       perCallTimeoutMilliseconds: 60_000,
@@ -1967,8 +1989,9 @@ fi
       providerBaseline: 2,
       providerOutcome: 197,
       providerPromotion: 13,
-      surroundingRelease: 65,
-      total: 277,
+      surroundingRelease: 66,
+      total: 278,
+      websiteAuthority: 50,
     });
     expect(releaseGraphqlRequestBudget).toEqual({
       githubPointLimit: 1_000,
@@ -2064,6 +2087,17 @@ fi
       response,
       "Sun, 30 Aug 2026 01:00:00 GMT",
     )).toEqual({
+      expiresAt: "2026-08-30T02:00:00Z",
+      permissions: { contents: "write", metadata: "read" },
+      repositoryId: WRENCH_REPOSITORY_ID,
+      token,
+    });
+    expect(parseReleaseAppTokenResponse({
+      ...response,
+      has_multiple_single_files: false,
+      single_file: null,
+      single_file_paths: [],
+    }, "Sun, 30 Aug 2026 01:00:00 GMT")).toEqual({
       expiresAt: "2026-08-30T02:00:00Z",
       permissions: { contents: "write", metadata: "read" },
       repositoryId: WRENCH_REPOSITORY_ID,
@@ -2182,6 +2216,8 @@ fi
       { ...response, permissions: { contents: "write", metadata: "read", workflows: "write" } },
       { ...response, repository_selection: "all" },
       { ...response, repositories: [] },
+      { ...response, repositories: [{ ...response.repositories[0], id: 1 }] },
+      { ...response, repositories: [{ ...response.repositories[0], owner: { login: "other" } }] },
       { ...response, expires_at: "2026-08-30T03:00:00Z" },
     ] as const) {
       expect(() => parseReleaseAppTokenResponse(
@@ -2189,6 +2225,12 @@ fi
         "Sun, 30 Aug 2026 01:00:00 GMT",
       )).toThrow();
     }
+    const missingTokenResponse: Record<string, unknown> = { ...response };
+    delete missingTokenResponse.token;
+    expect(() => parseReleaseAppTokenResponse(
+      missingTokenResponse,
+      "Sun, 30 Aug 2026 01:00:00 GMT",
+    )).toThrow("release App token response is missing token");
   });
 
   test("writes exactly one production ref with an explicit lease and bounded askpass", () => {
@@ -4347,10 +4389,14 @@ fi
       "dedicated App installation, `production-ref-writer-key` environment",
       "App-only update rule, creation rule, persistent canary",
       "GitHub Actions App Integration 15368 is not the production writer",
-      "Live Protect-main ruleset `20921911` still carries an\nOrganizationAdmin `always` bypass",
-      "requires no approving review, and does not\nrequire code-owner review",
-      "Repository\nActions default to read",
-      "only the\nRelease `publish` job with a `contents: write` `GITHUB_TOKEN`",
+      "Live Protect-main ruleset `20921911` still\ncarries an OrganizationAdmin `always` bypass",
+      "assigns source ownership and notification",
+      "does not claim live or\nindependent review enforcement",
+      "remove that\nbypass while retaining the pull-request path and exact Required integration\ncheck",
+      "`require_code_owner_review` must remain `false`",
+      "until a second eligible independent code owner exists",
+      "Repository Actions\ndefault to read",
+      "leaves only the Release\n`publish` job with a `contents: write` `GITHUB_TOKEN`",
       "does not read or update `website-production`, wait for Vercel, or\nreceive the dedicated App key",
       "The Release lookup accepts only an exact REST 200",
       "Only an authenticated exact 404 permits one REST create request",
@@ -4362,8 +4408,15 @@ fi
       "no environment admission, App variable, private key, token mint, or Git\npush",
       "`production-ref-writer-key`, configured with\n`deployment: false`",
       "require reviewer `0thernet`, disable\nadmin bypass",
-      "exactly `metadata:read` and `contents:write`",
-      "Administration and\nWorkflows permissions are forbidden",
+      "provisional source and initial App registration close to exactly\n`metadata:read` and `contents:write`",
+      "with no Administration permission",
+      "runtime token proof does not prove\nthe installation-wide selected-repository set",
+      "exhaustively read every repository selected for the\ninstallation",
+      "contents-only permission set is provisional",
+      "`P` to `C` canary",
+      "`C` contains the real\nworkflow-file changes",
+      "add exactly `workflows:write`",
+      "complete canary must run\nagain",
       "`--force-with-lease=refs/heads/website-production:<expected-old>`",
       "App token is revoked before the exact production-ref post-read",
       "every\n`WRENCH_RELEASE_APP_*` value removed",
@@ -4379,8 +4432,10 @@ fi
       "final external read\nthat completes exactly at the deadline remains eligible",
       "no redundant clock sample or later API read follows it",
       "separate 30-minute timeout",
-      "at most 197 REST calls in the provider outcome job and 277",
-      "leaving 723 calls",
+      "worst missing-Release path uses 16 calls",
+      "five bounded release\npages plus the empty sentinel page",
+      "use at most 278 REST calls",
+      "leaving 722 calls",
       "promotion helper itself uses at most 13 read-only REST\ncalls",
       "four App-authentication requests",
       "240-point ceiling and 760 points of headroom",
@@ -4438,7 +4493,12 @@ fi
     expect(agents).toContain("already-exact ref must take a separate read-only path");
     expect(agents).toContain("enter `production-ref-writer-key` with `deployment: false`");
     expect(agents).toContain("explicit `--force-with-lease=refs/heads/website-production:<expected-old>`");
-    expect(agents).toContain("Never grant that App Administration or Workflows permission");
+    expect(agents).toContain("provisional source and initial App registration must close to exactly `metadata:read` and `contents:write`");
+    expect(agents).toContain("with no Administration permission");
+    expect(agents).toContain("privileged setup must separately enumerate the installation-wide selected-repository set");
+    expect(agents).toContain("exact disposable `P` to `C` canary");
+    expect(agents).toContain("add exactly `workflows:write` before repeating the complete canary");
+    expect(agents).not.toContain("Never grant that App Administration or Workflows permission");
     expect(agents).toContain("Require bounded read-only jobs");
     expect(agents).toContain("complete current state and `latestStatus` of at most 500");
     expect(agents).toContain("exhaustively audit only the pinned candidate's REST status history");
@@ -4455,6 +4515,9 @@ fi
     expect(agents).toContain("documented one-time Vercel bootstrap");
     expect(agents).toContain("Live ruleset `21832074` currently supplies no-bypass deletion and non-fast-forward protection only");
     expect(agents).toContain("do not claim the dedicated App environment, creation rule, App-only update rule, or persistent canary is active");
+    expect(agents).toContain("Checked-in `CODEOWNERS` supplies ownership and notification only");
+    expect(agents).toContain("remove the Protect-main OrganizationAdmin bypass while retaining pull-request admission and the exact Required CI check");
+    expect(agents).toContain("`require_code_owner_review=false` until a second eligible independent code owner exists");
     expect(agents).toContain("`main` and pull requests are preview sources");
     expect(websiteAgents).toContain("tag Release workflow may only create or verify the immutable Latest Release");
     expect(websiteAgents).toContain("A separate workflow loaded from exact current `main` owns production promotion");
@@ -4466,6 +4529,12 @@ fi
     expect(websiteAgents).toContain("absolute observation slots at minute offsets zero through 19");
     expect(websiteAgents).toContain("`[start, deadline)` provider window");
     expect(websiteAgents).toContain("charge API latency without sliding those slots");
+    expect(websiteAgents).toContain("App's initial provisional permission configuration must have exactly `metadata:read` and `contents:write`");
+    expect(websiteAgents).not.toContain("the App must have exactly `metadata:read` and `contents:write`");
+    expect(websiteAgents).toContain("initial `metadata:read` and `contents:write` App permission set as provisional");
+    expect(websiteAgents).toContain("privileged setup separately proves that the installation-wide selected-repository set contains only Wrench");
+    expect(websiteAgents).toContain("exact disposable `P` to `C` canary");
+    expect(websiteAgents).toContain("separate reviewed source and App-registration amendment to exactly `workflows:write`");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
     expect(websiteAgents).toContain("token revocation and exact ref readback");
@@ -4478,6 +4547,9 @@ fi
     expect(websiteReadme).toContain("one repository-only\nrelease App token and an explicit expected-old Git lease");
     expect(websiteReadme).toContain("live no-bypass ruleset currently\nprotects deletion and non-fast-forward movement");
     expect(websiteReadme).toContain("App-only update rule,\ncreation rule, writer environment, and canary proof remain pending live\nreconciliation");
+    expect(websiteReadme).toContain("provisional contents-only App remains inactive");
+    expect(websiteReadme).toContain("privileged setup proves its installation selects only Wrench");
+    expect(websiteReadme).toContain("workflow-changing `P` to `C` canary");
     expect(websiteReadme).toContain("A missing branch is a hard\nfailure");
     expect(websiteReadme).toContain("neither workflow recreates it");
     expect(websiteReadme).not.toContain("creates or fast-forwards");

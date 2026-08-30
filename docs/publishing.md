@@ -281,16 +281,20 @@ until their out-of-band setup and positive and negative canary proofs are
 complete. GitHub Actions App Integration 15368 is not the production writer and
 must not be configured as the update-rule bypass.
 
-Checked-in `CODEOWNERS` assigns the workflow, Release helper, and publishing
-policy paths to `0thernet`, but that source declaration does not claim live
-review enforcement. Live Protect-main ruleset `20921911` still carries an
-OrganizationAdmin `always` bypass, requires no approving review, and does not
-require code-owner review. The privileged reconciliation must remove that
-bypass and enable code-owner review before the App key is admitted. Repository
-Actions default to read, and the checked workflow census leaves only the
-Release `publish` job with a `contents: write` `GITHUB_TOKEN`; the separate
-promotion job keeps that token read-only and uses the short-lived App token only
-inside the leased Git push.
+Checked-in `CODEOWNERS` assigns source ownership and notification for the
+workflow, Release helper, and publishing policy paths. It does not claim live or
+independent review enforcement. Live Protect-main ruleset `20921911` still
+carries an OrganizationAdmin `always` bypass, requires no approving review, and
+does not require code-owner review. Privileged reconciliation must remove that
+bypass while retaining the pull-request path and exact Required integration
+check. Wrench currently has one eligible maintainer, so
+`require_code_owner_review` must remain `false` and the approval minimum must
+remain zero until a second eligible independent code owner exists. Enabling it
+now would make the repository unreviewable rather than safer. Repository Actions
+default to read, and the checked workflow census leaves only the Release
+`publish` job with a `contents: write` `GITHUB_TOKEN`; the separate promotion job
+keeps that token read-only and uses the short-lived App token only inside the
+leased Git push.
 
 After the one-time bootstrap has established `website-production`, the tag
 workflow rebuilds and compares the exact public npm package, creates or verifies
@@ -344,12 +348,29 @@ App ID, client ID, slug, and selected installation ID variables. The job repeats
 the full current-main, peeled-tag, immutable Release, and Latest authority check
 after environment approval and before mutation.
 
-The writer authenticates one private Hraness-owned GitHub App installed only on
-repository ID `1316443113`. Its App, installation, and minted token must all
-close to exactly `metadata:read` and `contents:write`; Administration and
-Workflows permissions are forbidden. The minted token response must name that
-sole selected repository, carry a bounded one-hour expiry, and fit the streamed
-response parser. The helper masks the token, passes it only through a private
+The writer authenticates one private Hraness-owned GitHub App. The checked
+provisional source and initial App registration close to exactly
+`metadata:read` and `contents:write`, with no Administration permission. Runtime
+checks bind the configured App and selected installation identities, request a
+token narrowed to repository ID `1316443113`, and require the minted token
+response to name only that repository. That runtime token proof does not prove
+the installation-wide selected-repository set. Before admitting the key,
+privileged setup must exhaustively read every repository selected for the
+installation with the administrator identity, prove that the unique result is
+`hraness/wrench` at ID `1316443113`, and retain the exact readback with the
+canary evidence.
+
+The contents-only permission set is provisional until an exact disposable
+`P` to `C` canary proves a leased fast-forward where `C` contains the real
+workflow-file changes. The release remains unready for production activation or
+final product merge until that canary passes. If GitHub rejects the push because
+the App also needs Workflows permission, preserve the exact failure evidence and
+keep production frozen. A separate reviewed source and App-registration change
+may then add exactly `workflows:write`, after which the complete canary must run
+again. Never broaden the App silently or during a failed canary.
+
+The minted token must carry a bounded one-hour expiry and fit the streamed
+response parser. The helper masks it, passes it only through a private
 `GIT_ASKPASS` environment, and runs one fixed HTTPS push with the explicit
 compare-and-swap lease
 `--force-with-lease=refs/heads/website-production:<expected-old>`. The push has
@@ -416,10 +437,12 @@ a separate 30-minute timeout, leaving ten minutes for checkout, Node setup, and
 runner teardown around the product deadline.
 
 The bounded request contract is separate for REST and GraphQL. The current
-control flow can make at most 197 REST calls in the provider outcome job and 277
-REST calls across the immutable Release and downstream promotion workflows,
-leaving 723 calls under the repository `GITHUB_TOKEN` limit of 1,000 REST
-requests per hour. The promotion helper itself uses at most 13 read-only REST
+control flow can make at most 197 REST calls in the provider outcome job. The
+worst missing-Release path uses 16 calls, including all five bounded release
+pages plus the empty sentinel page. The immutable Release and downstream
+promotion workflows together use at most 278 REST calls, leaving 722 calls
+under the repository `GITHUB_TOKEN` limit of 1,000 REST requests per hour. The
+promotion helper itself uses at most 13 read-only REST
 calls; its leased Git push and four App-authentication requests do not consume
 that `GITHUB_TOKEN` budget. Five
 bounded GraphQL pages across two baseline reads, 20 observations, and two

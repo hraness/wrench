@@ -44,6 +44,12 @@ function expectExactKeys(value, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(keys)) fail(`${label} has an unexpected shape`);
 }
 
+function expectRequiredKeys(value, required, label) {
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) fail(`${label} is missing ${key}`);
+  }
+}
+
 function exactEnvironmentString(environment, key) {
   const value = environment[key];
   if (typeof value !== "string" || value.length === 0) fail(`${key} is missing`);
@@ -227,7 +233,7 @@ function tokenFromResponse(value) {
 
 export function parseReleaseAppTokenResponse(value, serverDate) {
   const response = expectRecord(value, "release App token response");
-  expectExactKeys(
+  expectRequiredKeys(
     response,
     ["expires_at", "permissions", "repositories", "repository_selection", "token"],
     "release App token response",

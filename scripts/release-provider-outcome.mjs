@@ -146,14 +146,11 @@ const OUTCOME_REST_REQUESTS =
   PAGINATED_READ_REQUESTS +
   7;
 const IMMUTABLE_RELEASE_REST_REQUESTS =
-  1 +
-  1 +
-  1 +
-  1 +
-  PAGINATED_READ_REQUESTS +
-  1 +
-  3 +
-  1;
+  3 + // initial tag, main, and exact Release lookup
+  PAGINATED_READ_REQUESTS + // five bounded Release pages plus the empty sentinel
+  2 + // pre-create main and tag revalidation
+  1 + // conditional Release creation
+  4; // Release, Latest, terminal tag, and terminal main readbacks
 const WEBSITE_AUTHORITY_REST_REQUESTS = 2 + 4 * (2 * (3 + 1 + 1 + 1));
 const SURROUNDING_RELEASE_REST_REQUESTS =
   IMMUTABLE_RELEASE_REST_REQUESTS + WEBSITE_AUTHORITY_REST_REQUESTS;
@@ -173,6 +170,7 @@ export const releaseRestRequestBudget = Object.freeze({
   observationDeadlineMilliseconds: PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS,
   perCallTimeoutMilliseconds: PROVIDER_API_CALL_TIMEOUT_MILLISECONDS,
   pollIntervalMilliseconds: PROVIDER_POLL_INTERVAL_MILLISECONDS,
+  immutableRelease: IMMUTABLE_RELEASE_REST_REQUESTS,
   providerBaseline: BASELINE_REST_REQUESTS,
   providerOutcome: OUTCOME_REST_REQUESTS,
   providerPromotion: PROMOTION_REST_REQUESTS,
@@ -182,6 +180,7 @@ export const releaseRestRequestBudget = Object.freeze({
     PROMOTION_REST_REQUESTS +
     OUTCOME_REST_REQUESTS +
     SURROUNDING_RELEASE_REST_REQUESTS,
+  websiteAuthority: WEBSITE_AUTHORITY_REST_REQUESTS,
 });
 
 export const releaseGraphqlRequestBudget = Object.freeze({

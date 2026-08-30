@@ -36,7 +36,11 @@ and the immutable Latest GitHub Release must agree. A missing branch is a hard
 failure; neither workflow recreates it. The live no-bypass ruleset currently
 protects deletion and non-fast-forward movement. The App-only update rule,
 creation rule, writer environment, and canary proof remain pending live
-reconciliation. On a production deployment,
+reconciliation. The provisional contents-only App remains inactive until
+privileged setup proves its installation selects only Wrench and an exact
+workflow-changing `P` to `C` canary proves the leased push. Any proven need for
+Workflows permission requires a separate reviewed amendment and repeated
+canary. On a production deployment,
 `website:vercel-build` independently verifies checked-out HEAD, the matching
 GitHub tag commit, canonical npm, and the immutable Latest Release before building.
 Preview and local builds perform no external release verification.
