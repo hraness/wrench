@@ -44,17 +44,21 @@ const APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u;
 const CLIENT_ID = /^[A-Za-z0-9._-]{6,128}$/u;
 export const CANARY_EVIDENCE_LOG_MARKER = "WRENCH_RELEASE_APP_CANARY_EVIDENCE_V1=";
 
-// Replace only these two sentinels after #105 and the control PR are merged.
-// P must be the #105 Vercel-exclusion merge. C must be its direct-child control merge.
-export const CANARY_START_PLACEHOLDER = "1111111111111111111111111111111111111111";
-export const CANARY_TARGET_PLACEHOLDER = "2222222222222222222222222222222222222222";
+// The sentinels remain fixtures for fail-closed parser coverage. The immutable
+// coordinate is separate so replacing P/C can never redefine what counts as a
+// placeholder. P is the #105 Vercel-exclusion merge; C is its direct-child
+// control merge.
+export const CANARY_START_SENTINEL = "1111111111111111111111111111111111111111";
+export const CANARY_TARGET_SENTINEL = "2222222222222222222222222222222222222222";
+export const CANARY_START_SHA = "f09a6106b9992e7121dfed5299528967c00a31eb";
+export const CANARY_TARGET_SHA = "4aed45b65a0cf7e2c4b6b1443f0be61a9222eb6d";
 
 export const fixedCanaryCoordinate = Object.freeze({
-  startSha: CANARY_START_PLACEHOLDER,
-  targetSha: CANARY_TARGET_PLACEHOLDER,
+  startSha: CANARY_START_SHA,
+  targetSha: CANARY_TARGET_SHA,
 });
 
-const PLACEHOLDERS = new Set([CANARY_START_PLACEHOLDER, CANARY_TARGET_PLACEHOLDER]);
+const PLACEHOLDERS = new Set([CANARY_START_SENTINEL, CANARY_TARGET_SENTINEL]);
 
 const CONTROL_DIFF = Object.freeze([
   "A\t.github/CODEOWNERS",

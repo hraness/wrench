@@ -54,14 +54,15 @@ import {
   assertCanaryGitTopology,
   assertRevokedTokenCannotBeReused,
   CANARY_EVIDENCE_LOG_MARKER,
-  CANARY_START_PLACEHOLDER,
-  CANARY_TARGET_PLACEHOLDER,
+  CANARY_START_SENTINEL,
+  CANARY_TARGET_SENTINEL,
   canaryEvidenceLogLine,
   canaryPushArguments,
   decodeCanaryEvidence,
   decodeCanaryReceipt,
   encodeCanaryEvidence,
   encodeCanaryReceipt,
+  fixedCanaryCoordinate,
   parseApplicableRules,
   parseCanaryCoordinate,
   parseCanaryEvidenceLog,
@@ -5210,13 +5211,18 @@ describe("single-use release App canary", () => {
 
   test("keeps unresolved P/C sentinels unpublishable and binds one exact dispatch", () => {
     expect(() => parseCanaryCoordinate({
-      startSha: CANARY_START_PLACEHOLDER,
+      startSha: CANARY_START_SENTINEL,
       targetSha,
     })).toThrow("placeholders have not been replaced");
     expect(() => parseCanaryCoordinate({
       startSha,
-      targetSha: CANARY_TARGET_PLACEHOLDER,
+      targetSha: CANARY_TARGET_SENTINEL,
     })).toThrow("placeholders have not been replaced");
+    expect(fixedCanaryCoordinate).toEqual({
+      startSha: "f09a6106b9992e7121dfed5299528967c00a31eb",
+      targetSha: "4aed45b65a0cf7e2c4b6b1443f0be61a9222eb6d",
+    });
+    expect(parseCanaryCoordinate(fixedCanaryCoordinate)).toEqual(fixedCanaryCoordinate);
     expect(parseCanaryCoordinate({ startSha, targetSha })).toEqual({ startSha, targetSha });
 
     const environment = canaryEnvironment();

@@ -398,9 +398,10 @@ Vercel deployments for `website-production-canary`; `C` is the direct-child
 control merge whose exact 11-file delta contains the real Release and promotion
 workflow changes; and `D` is the direct-child four-file temporary canary source.
 The helper requires the same byte-identical Vercel exclusion at `P`, `C`, and
-`D`. The two checked 40-hex `P` and `C` sentinels must be replaced with those
-immutable merge SHAs before this source can be dispatched. An unresolved
-sentinel always fails before any GitHub read or mutation. The repository workflow
+`D`. The checked source binds `P` and `C` to those immutable merge SHAs
+separately from two retained 40-hex sentinel fixtures. The parser proves the
+exact fixed coordinate is accepted while either unresolved sentinel always
+fails before any GitHub read or mutation. The repository workflow
 history must contain exactly this one active first-attempt dispatch and no prior
 or concurrent run of the temporary workflow. That durable one-shot admission is
 rechecked immediately before and after the write; a fresh dispatch is not a
