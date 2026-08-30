@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { withReleaseAppTokenFromEnvironment } from "./release-app-token.mjs";
@@ -30,6 +30,7 @@ const GH_EXECUTABLE = "/usr/bin/gh";
 const FIXED_PATH = "/usr/bin:/bin";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_RECEIPT_BYTES = 16 * 1024;
+const MAX_EVIDENCE_LOG_BYTES = 4 * 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 4096;
 const COMMAND_TIMEOUT_MILLISECONDS = 60_000;
 const API_TIMEOUT_MILLISECONDS = 10_000;
@@ -38,6 +39,10 @@ const SHA = /^[0-9a-f]{40}$/u;
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/u;
 const SECOND_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/u;
 const NODE_ID = /^RRS_[A-Za-z0-9_-]+$/u;
+const DIGEST = /^[0-9a-f]{64}$/u;
+const APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u;
+const CLIENT_ID = /^[A-Za-z0-9._-]{6,128}$/u;
+export const CANARY_EVIDENCE_LOG_MARKER = "WRENCH_RELEASE_APP_CANARY_EVIDENCE_V1=";
 
 // Replace only these two sentinels after #105 and the control PR are merged.
 // P must be the #105 Vercel-exclusion merge. C must be its direct-child control merge.
@@ -146,6 +151,21 @@ function exactSecondTimestamp(value, label) {
 
 function exactNodeId(value, label) {
   if (typeof value !== "string" || !NODE_ID.test(value)) fail(`${label} is not one ruleset node ID`);
+  return value;
+}
+
+function exactDigest(value, label) {
+  if (typeof value !== "string" || !DIGEST.test(value)) fail(`${label} is not one SHA-256 digest`);
+  return value;
+}
+
+function exactAppSlug(value, label) {
+  if (typeof value !== "string" || !APP_SLUG.test(value)) fail(`${label} is not a GitHub App slug`);
+  return value;
+}
+
+function exactClientId(value, label) {
+  if (typeof value !== "string" || !CLIENT_ID.test(value)) fail(`${label} is not a GitHub App client ID`);
   return value;
 }
 
@@ -897,9 +917,215 @@ function assertRulesetConfiguration(snapshot, configuration) {
   }
 }
 
-function parseEvidence(value) {
+function parseEvidenceRuleset(value, input) {
+  const ruleset = expectRecord(value, `${input.label} evidence`);
+  expectExactKeys(
+    ruleset,
+    ["createdAt", "id", "name", "nodeId", "updatedAt"],
+    `${input.label} evidence`,
+  );
+  const createdAt = exactSecondTimestamp(ruleset.createdAt, `${input.label} createdAt`);
+  const updatedAt = exactSecondTimestamp(ruleset.updatedAt, `${input.label} updatedAt`);
+  if (Date.parse(updatedAt) < Date.parse(createdAt)) {
+    fail(`${input.label} evidence update predates creation`);
+  }
+  if (ruleset.name !== input.name) fail(`${input.label} evidence name is not exact`);
+  return Object.freeze({
+    createdAt,
+    id: exactPositiveNumber(ruleset.id, `${input.label} ID`),
+    name: ruleset.name,
+    nodeId: exactNodeId(ruleset.nodeId, `${input.label} node ID`),
+    updatedAt,
+  });
+}
+
+function parseEvidenceApp(value) {
+  const app = expectRecord(value, "canary evidence App");
+  expectExactKeys(
+    app,
+    ["appId", "appSlug", "clientId", "expiresAt", "installationId", "repositoryId"],
+    "canary evidence App",
+  );
+  const repositoryId = exactPositiveNumber(app.repositoryId, "canary evidence App repository ID");
+  if (repositoryId !== EXPECTED_REPOSITORY_ID) {
+    fail("canary evidence App is not scoped to exact Wrench");
+  }
+  return Object.freeze({
+    appId: exactPositiveNumber(app.appId, "canary evidence App ID"),
+    appSlug: exactAppSlug(app.appSlug, "canary evidence App slug"),
+    clientId: exactClientId(app.clientId, "canary evidence App client ID"),
+    expiresAt: exactSecondTimestamp(app.expiresAt, "canary evidence App expiry"),
+    installationId: exactPositiveNumber(
+      app.installationId,
+      "canary evidence App installation ID",
+    ),
+    repositoryId,
+  });
+}
+
+export function parseCanaryEvidence(value) {
   const evidence = expectRecord(value, "canary evidence");
+  expectExactKeys(
+    evidence,
+    [
+      "actorId",
+      "afterServerDate",
+      "app",
+      "beforeServerDate",
+      "canaryAfter",
+      "canaryBefore",
+      "lifecycleRuleset",
+      "productionSha",
+      "pushOutputSha256",
+      "repositoryId",
+      "runId",
+      "schema",
+      "staleLeaseOutputSha256",
+      "updateRuleset",
+      "workflowId",
+      "workflowSha",
+      "writeBoundServerDate",
+    ],
+    "canary evidence",
+  );
+  if (evidence.schema !== "wrench-release-app-canary-evidence/v1") {
+    fail("canary evidence schema is unsupported");
+  }
+  const actorId = exactPositiveNumber(evidence.actorId, "canary evidence actor ID");
+  const repositoryId = exactPositiveNumber(
+    evidence.repositoryId,
+    "canary evidence repository ID",
+  );
+  if (actorId !== EXPECTED_ACTOR_ID || repositoryId !== EXPECTED_REPOSITORY_ID) {
+    fail("canary evidence actor or repository is not exact");
+  }
+  const beforeServerDate = exactSecondTimestamp(
+    evidence.beforeServerDate,
+    "canary evidence before server Date",
+  );
+  const writeBoundServerDate = exactSecondTimestamp(
+    evidence.writeBoundServerDate,
+    "canary evidence write-bound server Date",
+  );
+  const afterServerDate = exactSecondTimestamp(
+    evidence.afterServerDate,
+    "canary evidence after server Date",
+  );
+  if (
+    Date.parse(writeBoundServerDate) < Date.parse(beforeServerDate) ||
+    Date.parse(afterServerDate) < Date.parse(writeBoundServerDate)
+  ) {
+    fail("canary evidence server dates regress");
+  }
+  const canaryBefore = exactSha(evidence.canaryBefore, "canary evidence P");
+  const canaryAfter = exactSha(evidence.canaryAfter, "canary evidence C");
+  const workflowSha = exactSha(evidence.workflowSha, "canary evidence D");
+  if (
+    canaryBefore === canaryAfter ||
+    canaryBefore === workflowSha ||
+    canaryAfter === workflowSha
+  ) {
+    fail("canary evidence P, C, and D are not distinct");
+  }
+  const app = parseEvidenceApp(evidence.app);
+  if (app.repositoryId !== repositoryId || Date.parse(app.expiresAt) < Date.parse(afterServerDate)) {
+    fail("canary evidence App scope or expiry does not cover the proof");
+  }
+  const lifecycleRuleset = parseEvidenceRuleset(evidence.lifecycleRuleset, {
+    label: "canary evidence lifecycle ruleset",
+    name: "Immutable website-production lifecycle",
+  });
+  const updateRuleset = parseEvidenceRuleset(evidence.updateRuleset, {
+    label: "canary evidence update ruleset",
+    name: "Wrench release App update exception",
+  });
+  if (lifecycleRuleset.id === updateRuleset.id || lifecycleRuleset.nodeId === updateRuleset.nodeId) {
+    fail("canary evidence rulesets are not distinct");
+  }
+  return Object.freeze({
+    actorId,
+    afterServerDate,
+    app,
+    beforeServerDate,
+    canaryAfter,
+    canaryBefore,
+    lifecycleRuleset,
+    productionSha: exactSha(evidence.productionSha, "canary evidence production SHA"),
+    pushOutputSha256: exactDigest(
+      evidence.pushOutputSha256,
+      "canary evidence successful-push output",
+    ),
+    repositoryId,
+    runId: exactPositiveNumber(evidence.runId, "canary evidence run ID"),
+    schema: evidence.schema,
+    staleLeaseOutputSha256: exactDigest(
+      evidence.staleLeaseOutputSha256,
+      "canary evidence stale-lease output",
+    ),
+    updateRuleset,
+    workflowId: exactPositiveNumber(evidence.workflowId, "canary evidence workflow ID"),
+    workflowSha,
+    writeBoundServerDate,
+  });
+}
+
+export function encodeCanaryEvidence(value) {
+  const text = canonicalJson(parseCanaryEvidence(value));
+  if (Buffer.byteLength(text, "utf8") > MAX_RECEIPT_BYTES) {
+    fail("canary evidence exceeds its bound");
+  }
+  return Buffer.from(text, "utf8").toString("base64url");
+}
+
+export function decodeCanaryEvidence(value) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > Math.ceil(MAX_RECEIPT_BYTES * 4 / 3) ||
+    !/^[A-Za-z0-9_-]+$/u.test(value)
+  ) {
+    fail("canary evidence is not one bounded canonical base64url value");
+  }
+  let bytes;
+  try {
+    bytes = Buffer.from(value, "base64url");
+  } catch {
+    fail("canary evidence is not decodable");
+  }
+  if (bytes.toString("base64url") !== value || bytes.byteLength > MAX_RECEIPT_BYTES) {
+    fail("canary evidence is not canonical or exceeds its bound");
+  }
+  let text;
+  let parsed;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    parsed = JSON.parse(text);
+  } catch {
+    fail("canary evidence is not bounded UTF-8 JSON");
+  }
+  const evidence = parseCanaryEvidence(parsed);
+  if (canonicalJson(evidence) !== text) fail("canary evidence JSON is not canonical");
   return evidence;
+}
+
+export function canaryEvidenceLogLine(value) {
+  return `${CANARY_EVIDENCE_LOG_MARKER}${encodeCanaryEvidence(value)}`;
+}
+
+export function parseCanaryEvidenceLog(value) {
+  if (
+    typeof value !== "string" ||
+    Buffer.byteLength(value, "utf8") > MAX_EVIDENCE_LOG_BYTES ||
+    /\0/u.test(value)
+  ) {
+    fail("canary evidence log is not bounded text");
+  }
+  const lines = value.split("\n").filter((line) => line.includes(CANARY_EVIDENCE_LOG_MARKER));
+  if (lines.length !== 1) fail("canary evidence log does not contain one unique proof marker");
+  const match = /^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z )?WRENCH_RELEASE_APP_CANARY_EVIDENCE_V1=([A-Za-z0-9_-]+)\r?$/u
+    .exec(lines[0]);
+  if (match === null) fail("canary evidence log marker is malformed");
+  return decodeCanaryEvidence(match[1]);
 }
 
 export async function proveCanary(options) {
@@ -980,7 +1206,7 @@ export async function proveCanary(options) {
   ) {
     fail("terminal main, production, canary, ruleset, or server-time readback drifted");
   }
-  return parseEvidence(Object.freeze({
+  return parseCanaryEvidence(Object.freeze({
     actorId: invocation.actorId,
     afterServerDate: after.serverDate,
     app: operation.app,
@@ -1050,8 +1276,81 @@ function writeOutput(name, value) {
   appendFileSync(output, `${name}=${value}\n`, { encoding: "utf8" });
 }
 
+function exactSummaryPath(value) {
+  if (
+    typeof value !== "string" ||
+    !isAbsolute(value) ||
+    Buffer.byteLength(value, "utf8") > 4096 ||
+    /[\0\r\n]/u.test(value)
+  ) {
+    fail("GITHUB_STEP_SUMMARY is not one bounded absolute path");
+  }
+  return value;
+}
+
+export function publishCanaryEvidence(options) {
+  const invocation = parseCanaryInvocation(options.environment);
+  const coordinate = parseCanaryCoordinate(options.coordinate ?? fixedCanaryCoordinate);
+  const evidence = decodeCanaryEvidence(options.encodedEvidence);
+  if (
+    evidence.actorId !== invocation.actorId ||
+    evidence.repositoryId !== invocation.repositoryId ||
+    evidence.runId !== invocation.runId ||
+    evidence.workflowSha !== invocation.workflowSha ||
+    evidence.canaryBefore !== coordinate.startSha ||
+    evidence.canaryAfter !== coordinate.targetSha
+  ) {
+    fail("canary evidence does not belong to this exact run and P/C/D coordinate");
+  }
+  const line = canaryEvidenceLogLine(evidence);
+  const summary = [
+    "## Wrench release App canary proof",
+    "",
+    "Validated bounded evidence (also retained in this job's downloadable log):",
+    "",
+    `\`${line}\``,
+    "",
+  ].join("\n");
+  (options.writeImplementation ?? ((text) => process.stdout.write(text)))(`${line}\n`);
+  (options.appendImplementation ?? appendFileSync)(
+    exactSummaryPath(options.summaryPath),
+    summary,
+    { encoding: "utf8" },
+  );
+  return evidence;
+}
+
+async function readBoundedStandardInput(input = process.stdin) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of input) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += bytes.byteLength;
+    if (total > MAX_EVIDENCE_LOG_BYTES) fail("canary evidence log is not bounded text");
+    chunks.push(bytes);
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, total));
+  } catch {
+    fail("canary evidence log is not bounded UTF-8 text");
+  }
+}
+
 async function main() {
   const command = process.argv[2];
+  if (command === "publish-evidence") {
+    publishCanaryEvidence({
+      encodedEvidence: process.env.CANARY_EVIDENCE,
+      environment: process.env,
+      summaryPath: process.env.GITHUB_STEP_SUMMARY,
+    });
+    return;
+  }
+  if (command === "parse-evidence-log") {
+    const evidence = parseCanaryEvidenceLog(await readBoundedStandardInput());
+    process.stdout.write(`${canonicalJson(evidence)}\n`);
+    return;
+  }
   const api = new ReadOnlyGitHubApi(process.env);
   if (command === "preflight") {
     const receipt = await preflightCanary({
@@ -1075,12 +1374,11 @@ async function main() {
       spawnImplementation: spawnSync,
       withToken: withReleaseAppTokenFromEnvironment,
     });
-    const encoded = encodeCanaryReceipt(evidence);
+    const encoded = encodeCanaryEvidence(evidence);
     writeOutput("evidence", encoded);
-    process.stdout.write(`CANARY_EVIDENCE=${encoded}\n`);
     return;
   }
-  fail("expected preflight or prove command");
+  fail("expected preflight, prove, publish-evidence, or parse-evidence-log command");
 }
 
 const invokedPath = process.argv[1];

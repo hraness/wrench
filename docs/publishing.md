@@ -437,8 +437,31 @@ both rulesets unchanged, and non-regressing authenticated GitHub server dates.
 The workflow emits one secret-free bounded evidence record containing the run,
 actor, repository, `P`, `C`, `D`, production ref, App identity, ruleset IDs,
 node IDs and timestamps, authenticated before/write-bound/after times, and
-digests of the successful and stale-lease Git results. An administrator must
-bind that record to the unique repository Rule Suite for the `P` to `C`
+digests of the successful and stale-lease Git results. The secret-bearing proof
+step passes that record only as a canonical base64url step output. A following
+step receives no App key, token, preflight receipt, or App configuration. It
+decodes and revalidates the exact schema, run, repository, actor, and `P`/`C`/`D`
+coordinate, then writes the single
+`WRENCH_RELEASE_APP_CANARY_EVIDENCE_V1=` marker to the job summary and the
+downloadable Actions job log. The output alone is not retained evidence because
+the Actions API does not expose step or job outputs after the run.
+
+Before cleanup, capture the `prove` job ID and retrieve its downloaded Actions
+job log. Feed that one bounded log to the checked parser:
+
+```sh
+gh api /repos/hraness/wrench/actions/jobs/<prove-job-id>/logs \
+  | node scripts/release-app-canary.mjs parse-evidence-log
+```
+
+The parser accepts at most 4 MiB, requires exactly one marker (with only an
+optional GitHub timestamp prefix), decodes at most 16 KiB, rejects noncanonical
+JSON or any extra field, and prints one canonical JSON record. Retain that JSON,
+its SHA-256, the original downloaded log, and the run/job IDs outside the
+temporary branch before merging cleanup. A missing, duplicate, malformed, or
+unparseable marker invalidates the proof and must never be reconstructed from a
+human transcription or from the inaccessible workflow output. An administrator
+must bind that record to the unique repository Rule Suite for the `P` to `C`
 transition, exact
 github-actions workflow run, release App actor, update-rule bypass, passing
 destructive rules, and pushed-at interval. Any error, transport ambiguity,

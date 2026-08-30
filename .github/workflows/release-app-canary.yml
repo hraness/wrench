@@ -103,3 +103,21 @@ jobs:
           WRENCH_RELEASE_UPDATE_RULESET_ID: ${{ vars.WRENCH_RELEASE_UPDATE_RULESET_ID }}
           WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT: ${{ vars.WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT }}
         run: node ./scripts/release-app-canary.mjs prove
+      - name: Publish retrievable bounded canary evidence
+        env:
+          CANARY_EVIDENCE: ${{ steps.canary.outputs.evidence }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_ACTOR_ID: ${{ github.actor_id }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REF_PROTECTED: ${{ github.ref_protected }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          GITHUB_WORKFLOW: ${{ github.workflow }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: node ./scripts/release-app-canary.mjs publish-evidence

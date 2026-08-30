@@ -53,17 +53,23 @@ import {
   advanceCanaryRef,
   assertCanaryGitTopology,
   assertRevokedTokenCannotBeReused,
+  CANARY_EVIDENCE_LOG_MARKER,
   CANARY_START_PLACEHOLDER,
   CANARY_TARGET_PLACEHOLDER,
+  canaryEvidenceLogLine,
   canaryPushArguments,
+  decodeCanaryEvidence,
   decodeCanaryReceipt,
+  encodeCanaryEvidence,
   encodeCanaryReceipt,
   parseApplicableRules,
   parseCanaryCoordinate,
+  parseCanaryEvidenceLog,
   parseCanaryInvocation,
   parseSingleCanaryRun,
   preflightCanary,
   proveCanary,
+  publishCanaryEvidence,
 } from "./release-app-canary.mjs";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
@@ -5500,6 +5506,70 @@ describe("single-use release App canary", () => {
         writeBoundServerDate: "2026-08-30T05:06:01Z",
         workflowSha: fixture.workflowSha,
       });
+      const encodedEvidence = encodeCanaryEvidence(evidence);
+      expect(decodeCanaryEvidence(encodedEvidence)).toEqual(evidence);
+      const evidenceLine = canaryEvidenceLogLine(evidence);
+      expect(evidenceLine).toBe(`${CANARY_EVIDENCE_LOG_MARKER}${encodedEvidence}`);
+      expect(parseCanaryEvidenceLog(
+        `2026-08-30T05:07:01.1234567Z ${evidenceLine}\n`,
+      )).toEqual(evidence);
+
+      const summaryPath = join(fixture.directory, "canary-summary.md");
+      let publishedLog = "";
+      expect(publishCanaryEvidence({
+        coordinate,
+        encodedEvidence,
+        environment,
+        summaryPath,
+        writeImplementation(value: string) {
+          publishedLog += value;
+        },
+      })).toEqual(evidence);
+      expect(publishedLog).toBe(`${evidenceLine}\n`);
+      expect(await readFile(summaryPath, "utf8")).toBe(
+        "## Wrench release App canary proof\n\n" +
+          "Validated bounded evidence (also retained in this job's downloadable log):\n\n" +
+          `\`${evidenceLine}\`\n`,
+      );
+      expect(publishedLog).not.toContain("fixture-token");
+      let reconciliationLog = "";
+      expect(() => publishCanaryEvidence({
+        appendImplementation() {
+          throw new Error("summary unavailable");
+        },
+        coordinate,
+        encodedEvidence,
+        environment,
+        summaryPath,
+        writeImplementation(value: string) {
+          reconciliationLog += value;
+        },
+      })).toThrow("summary unavailable");
+      expect(reconciliationLog).toBe(`${evidenceLine}\n`);
+
+      expect(() => parseCanaryEvidenceLog("no proof here\n"))
+        .toThrow("one unique proof marker");
+      expect(() => parseCanaryEvidenceLog(`${evidenceLine}\n${evidenceLine}\n`))
+        .toThrow("one unique proof marker");
+      expect(() => parseCanaryEvidenceLog(`prefix ${evidenceLine}\n`))
+        .toThrow("marker is malformed");
+      expect(() => parseCanaryEvidenceLog("x".repeat(4 * 1024 * 1024 + 1)))
+        .toThrow("not bounded text");
+      expect(() => decodeCanaryEvidence("A".repeat(Math.ceil(16 * 1024 * 4 / 3) + 1)))
+        .toThrow("not one bounded canonical base64url value");
+      const noncanonicalEvidence = Buffer.from(JSON.stringify(Object.fromEntries(
+        Object.entries(evidence).reverse(),
+      )), "utf8").toString("base64url");
+      expect(() => decodeCanaryEvidence(noncanonicalEvidence)).toThrow("JSON is not canonical");
+      const expandedEvidence = Buffer.from(JSON.stringify({ ...evidence, token: "must-not-leak" }), "utf8")
+        .toString("base64url");
+      expect(() => decodeCanaryEvidence(expandedEvidence)).toThrow("unexpected shape");
+      expect(() => publishCanaryEvidence({
+        coordinate: { ...coordinate, targetSha: fixture.workflowSha },
+        encodedEvidence,
+        environment,
+        summaryPath,
+      })).toThrow("does not belong to this exact run and P/C/D coordinate");
       expect(proveApi.calls).toEqual([
         ...preflightApi.calls,
         ...preflightApi.calls,
@@ -5590,6 +5660,17 @@ describe("single-use release App canary", () => {
       .toHaveLength(1);
     expect(workflow.match(/node \.\/scripts\/release-app-canary\.mjs prove/gmu) ?? [])
       .toHaveLength(1);
+    expect(workflow.match(/node \.\/scripts\/release-app-canary\.mjs publish-evidence/gmu) ?? [])
+      .toHaveLength(1);
+    const publishStep = workflow.slice(
+      workflow.indexOf("      - name: Publish retrievable bounded canary evidence"),
+    );
+    expect(publishStep).toContain("CANARY_EVIDENCE: ${{ steps.canary.outputs.evidence }}");
+    expect(publishStep).toContain("GITHUB_RUN_ID: ${{ github.run_id }}");
+    expect(publishStep).toContain("GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}");
+    expect(publishStep).not.toContain("WRENCH_RELEASE_APP_PRIVATE_KEY");
+    expect(publishStep).not.toContain("WRENCH_RELEASE_APP_CLIENT_ID");
+    expect(publishStep).not.toContain("PREFLIGHT_RECEIPT");
     expect(workflow).toContain("GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}");
     expect(workflow).toContain("GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}");
     expect(workflow).toContain("WRENCH_RELEASE_APP_PRIVATE_KEY: ${{ secrets.WRENCH_RELEASE_APP_PRIVATE_KEY }}");
@@ -5604,12 +5685,17 @@ describe("single-use release App canary", () => {
     expect(helper).toContain("canary lease failed without an exact stale-lease rejection");
     expect(helper).toContain("https://api.github.com/installation/repositories");
     expect(helper).toContain("revoked release App token reuse returned HTTP");
+    expect(helper).toContain("WRENCH_RELEASE_APP_CANARY_EVIDENCE_V1=");
+    expect(helper).toContain("canary evidence log does not contain one unique proof marker");
     expect(guide).toContain("single-use exception");
     expect(guide).toContain("production writer boundary");
     expect(guide).toContain("`P` is the merged #105 commit");
     expect(guide).toContain("Never rerun that workflow or reset the persistent canary");
     expect(guide).toContain("must reverse all four temporary path changes");
     expect(guide).toContain("remove the temporary canary tests\nand imports");
+    expect(guide).toContain("downloaded Actions\njob log");
+    expect(guide).toContain("/repos/hraness/wrench/actions/jobs/<prove-job-id>/logs");
+    expect(guide).toContain("parse-evidence-log");
   });
 });
 
