@@ -11,6 +11,10 @@ describe("HTML main-to-markdown conversion", () => {
           <h1>Install Wrench</h1>
           <a class="button" href="#start">Get started</a>
           <p>Use <code>wrench doctor</code> and the <a href="/security/">security guide</a>.</p>
+          <figure>
+            <img alt="A bounded path [with proof]" src="/images/editorial/example.webp">
+            <figcaption><span>One named operation.</span><small>Generated for Wrench.</small></figcaption>
+          </figure>
           <pre><code>wrench read https://example.com/article</code></pre>
           <ul><li>One <strong>exact</strong> account</li><li>Second</li></ul>
           <table>
@@ -28,6 +32,10 @@ describe("HTML main-to-markdown conversion", () => {
       "[Get started](https://wrench.rip/getting-started/#start)",
       "",
       "Use `wrench doctor` and the [security guide](https://wrench.rip/security/).",
+      "",
+      "![A bounded path \\[with proof\\]](https://wrench.rip/images/editorial/example.webp)",
+      "",
+      "One named operation. Generated for Wrench.",
       "",
       "```",
       "wrench read https://example.com/article",
@@ -54,5 +62,33 @@ describe("HTML main-to-markdown conversion", () => {
       .toThrow("main landmark");
     expect(() => htmlMainToMarkdown("<main><div aria-hidden=\"true\">x</div></main>", "https://wrench.rip/"))
       .toThrow("empty document");
+  });
+
+  test("omits decorative images and keeps images with meaningful alternatives", () => {
+    const markdown = htmlMainToMarkdown(`
+      <main>
+        <h1>Image boundaries</h1>
+        <p>
+          <img alt="" src="/images/editorial/decorative.webp">
+          <img src="/images/editorial/missing-alt.webp">
+          <img alt="   " src="/images/editorial/blank-alt.webp">
+          Read the argument.
+        </p>
+        <figure>
+          <img alt="A meaningful diagram" src="/images/editorial/diagram.webp">
+          <figcaption>The diagram has a textual alternative.</figcaption>
+        </figure>
+      </main>
+    `, "https://wrench.rip/arguments/");
+
+    expect(markdown).toContain("Read the argument.");
+    expect(markdown).toContain(
+      "![A meaningful diagram](https://wrench.rip/images/editorial/diagram.webp)",
+    );
+    expect(markdown).toContain("The diagram has a textual alternative.");
+    expect(markdown).not.toContain("decorative.webp");
+    expect(markdown).not.toContain("missing-alt.webp");
+    expect(markdown).not.toContain("blank-alt.webp");
+    expect(markdown).not.toContain("![](");
   });
 });

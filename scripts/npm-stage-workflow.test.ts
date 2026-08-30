@@ -43,6 +43,7 @@ const packageIdentityUrl = new URL("./npm-package-identity.ts", import.meta.url)
 const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
 const websiteAgentGuideUrl = new URL("../website/AGENTS.md", import.meta.url);
+const websiteReadmeUrl = new URL("../website/README.md", import.meta.url);
 const readmeUrl = new URL("../README.md", import.meta.url);
 const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
 const skillInstallGuideUrl = new URL("../skills/wrench/references/install.md", import.meta.url);
@@ -3857,11 +3858,20 @@ fi
   });
 
   test("documents bootstrap, verification, stage-only trust, MFA, and tag ordering", async () => {
-    const [guide, agents, websiteAgents, readme, changelog, skillInstallGuide, manifestText] =
-      await Promise.all([
+    const [
+      guide,
+      agents,
+      websiteAgents,
+      websiteReadme,
+      readme,
+      changelog,
+      skillInstallGuide,
+      manifestText,
+    ] = await Promise.all([
         readFile(publishingGuideUrl, "utf8"),
         readFile(agentGuideUrl, "utf8"),
         readFile(websiteAgentGuideUrl, "utf8"),
+        readFile(websiteReadmeUrl, "utf8"),
         readFile(readmeUrl, "utf8"),
         readFile(changelogUrl, "utf8"),
         readFile(skillInstallGuideUrl, "utf8"),
@@ -4018,6 +4028,15 @@ fi
     expect(websiteAgents).not.toContain("audit every retained Production deployment status");
     expect(websiteAgents).not.toContain("every baseline deployment's REST status history");
     expect(websiteAgents).not.toContain("may create or fast-forward");
+    expect(websiteReadme).toContain(
+      "release workflow leaves the established production branch already exact or\n" +
+        "non-force fast-forwards it to the exact verified release tag commit only after\n" +
+        "canonical npm and the immutable Latest GitHub Release agree",
+    );
+    expect(websiteReadme).toContain("A missing branch is\na hard failure");
+    expect(websiteReadme).toContain("workflow never recreates it");
+    expect(websiteReadme).not.toContain("creates or fast-forwards");
+    expect(websiteReadme).not.toContain("only non-force fast-forwards");
     expect(readme).toContain(exactPackage);
     expect(readme).toContain(`npx skills add hraness/wrench#v${manifest.version}`);
     expect(readme).toContain("can become individually reachable while a\nrelease is being staged");

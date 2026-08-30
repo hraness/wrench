@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -28,6 +29,13 @@ import {
 } from "./build";
 import { handleDocumentNegotiation } from "../edge/negotiation";
 import {
+  EDITORIAL_ARTICLE_IMAGE_SIZES,
+  EDITORIAL_CARD_IMAGE_SIZES,
+  editorialImageSrcSet,
+  editorialImageUrl,
+  editorialImages,
+} from "./editorial-images";
+import {
   loadProviderCapabilityAttestation,
 } from "./provider-capability-attestation";
 import {
@@ -51,6 +59,27 @@ function cssPropertyValues(css: string, selector: string, property: string): str
     if (value !== undefined) values.push(value);
   }
   return values;
+}
+
+function lossyWebpDimensions(bytes: Uint8Array): Readonly<{ height: number; width: number }> {
+  const ascii = (start: number, end: number): string =>
+    String.fromCharCode(...bytes.subarray(start, end));
+  if (
+    bytes.byteLength < 30
+    || ascii(0, 4) !== "RIFF"
+    || ascii(8, 12) !== "WEBP"
+    || ascii(12, 16) !== "VP8 "
+    || bytes[23] !== 0x9d
+    || bytes[24] !== 0x01
+    || bytes[25] !== 0x2a
+  ) {
+    throw new Error("Editorial image must be a canonical lossy WebP frame.");
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return {
+    height: view.getUint16(28, true) & 0x3fff,
+    width: view.getUint16(26, true) & 0x3fff,
+  };
 }
 
 describe("wrench.rip static site", () => {
@@ -139,6 +168,18 @@ describe("wrench.rip static site", () => {
     expect(cssPropertyValues(sourceCss, ".version-table table", "min-width")).toEqual([
       "58rem",
     ]);
+    expect(cssPropertyValues(sourceCss, ".guide-article", "max-width").at(-1)).toBe("58rem");
+    expect(cssPropertyValues(sourceCss, ".content", "max-width").at(-1)).toBe("80rem");
+    expect(cssPropertyValues(sourceCss, ".card-grid", "grid-template-columns")).toEqual([
+      "repeat(2, minmax(0, 1fr))",
+      "1fr",
+    ]);
+    expect(EDITORIAL_ARTICLE_IMAGE_SIZES).toBe(
+      "(max-width: 31.25rem) calc(100vw - 2.5rem), (max-width: 63rem) 92vw, 58rem",
+    );
+    expect(EDITORIAL_CARD_IMAGE_SIZES).toBe(
+      "(max-width: 31.25rem) calc(100vw - 2.5rem), (max-width: 45rem) 92vw, (max-width: 80rem) 46vw, (max-width: 100rem) calc(40rem - 4vw), 36rem",
+    );
     expect(cssPropertyValues(
       sourceCss,
       ".artifact-table td:nth-child(4)",
@@ -212,6 +253,24 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/vms-cannot-contain-agents/"');
     expect(html).toContain('href="/paypal-grapheneos-attestation/"');
     expect(html).toContain('href="/providers/beeper/"');
+    const argumentsSection = /<section aria-labelledby="arguments-title" class="section editorial-cluster">[\s\S]*?<\/section>/u
+      .exec(html)?.[0];
+    const guidesSection = /<section aria-labelledby="guides-title" class="section guide-cluster">[\s\S]*?<\/section>/u
+      .exec(html)?.[0];
+    expect(argumentsSection).toBeDefined();
+    expect(guidesSection).toBeDefined();
+    expect(argumentsSection).toContain('<h2 id="arguments-title">Arguments and comparisons</h2>');
+    expect(argumentsSection).toContain('<div class="card-grid editorial-card-grid">');
+    expect(argumentsSection?.match(/<article class="card(?: editorial-card)?">/gu)).toHaveLength(4);
+    expect(guidesSection?.match(/<article class="card">/gu)).toHaveLength(5);
+    expect(argumentsSection).toContain('href="/paypal-grapheneos-attestation/"');
+    expect(guidesSection).not.toContain('href="/paypal-grapheneos-attestation/"');
+    for (const image of editorialImages) {
+      expect(argumentsSection).toContain(`href="${image.canonicalPath}"`);
+      expect(guidesSection).not.toContain(`href="${image.canonicalPath}"`);
+    }
+    expect(guidesSection).not.toContain('class="card editorial-card"');
+    expect(html.indexOf(argumentsSection ?? "")).toBeLessThan(html.indexOf(guidesSection ?? ""));
     expect(html).toContain("Give your coding agent bounded access to the web.");
     expect(html).toContain("Work with the services you already use.");
     expect(html).toContain('class="wordmark" href="/">Wrench</a>');
@@ -273,9 +332,17 @@ describe("wrench.rip static site", () => {
     expect(llms).not.toContain("{{");
     expect(robots).toBe(`User-agent: *\nAllow: /\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`);
     expect(sitemap.match(/<url>/gu)).toHaveLength(PUBLIC_PAGES.length);
+    expect(sitemap).toContain('xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"');
+    expect(sitemap.match(/<image:image>/gu)).toHaveLength(editorialImages.length);
     for (const page of PUBLIC_PAGES) {
       expect(sitemap).toContain(`<loc>${SITE_ORIGIN}${page.canonicalPath}</loc>`);
     }
+    for (const image of editorialImages) {
+      expect(sitemap).toContain(`<image:loc>${editorialImageUrl(image)}</image:loc>`);
+      expect(sitemap).toContain(`<image:title>${image.title}</image:title>`);
+      expect(sitemap).toContain(`<image:caption>${image.caption}</image:caption>`);
+    }
+    expect(sitemap).not.toContain("paypal-grapheneos-attestation.webp");
     expect(sitemap).not.toContain("<lastmod>");
     expect(sitemap).not.toContain("<changefreq>");
     expect(sitemap).not.toContain("<priority>");
@@ -546,6 +613,139 @@ describe("wrench.rip static site", () => {
     }
     expect(descriptions.size).toBe(PUBLIC_PAGES.length);
 
+    const homepageMarkdown = await readFile(
+      join(websiteRoot, "dist", markdownSiblingPath("/").slice(1)),
+      "utf8",
+    );
+    expect(homepageMarkdown).not.toContain("![](");
+    for (const image of editorialImages) {
+      expect(homepageMarkdown).toContain(image.cardTitle);
+      expect(homepageMarkdown).not.toContain(editorialImageUrl(image));
+    }
+
+    const editorialCards = html.match(
+      /<article class="card editorial-card">[\s\S]*?<\/article>/gu,
+    ) ?? [];
+    expect(editorialCards).toHaveLength(editorialImages.length);
+    for (const [index, image] of editorialImages.entries()) {
+      const card = editorialCards[index] ?? "";
+      expect(card).toMatch(
+        /^<article class="card editorial-card">\s*<a href="[^"]+">[\s\S]*<\/a>\s*<\/article>$/u,
+      );
+      expect(card.match(/<a\b/gu)).toHaveLength(1);
+      expect(card).toContain(`<a href="${image.canonicalPath}">`);
+      expect(card.match(/<h[1-6]\b/gu)).toHaveLength(1);
+      expect(card.match(/<h3\b/gu)).toHaveLength(1);
+      expect(card.match(/<\/h3>/gu)).toHaveLength(1);
+      expect(card).toContain(`<h3>${image.cardTitle}</h3>`);
+      expect(card).toContain(
+        `<p class="editorial-card-description">${image.cardDescription}</p>`,
+      );
+      expect(card).toMatch(/<\/h3>\s*<p class="editorial-card-description">/u);
+      expect(card).not.toContain(`</strong>${image.cardDescription}`);
+      expect(card).not.toMatch(/<\/h3>[^<\s]/u);
+      const linkEnd = card.lastIndexOf("</a>");
+      expect(card.indexOf("<img ")).toBeLessThan(linkEnd);
+      expect(card).toContain(`sizes="${EDITORIAL_CARD_IMAGE_SIZES}"`);
+      expect(card.indexOf("<h3>")).toBeLessThan(linkEnd);
+      expect(card.indexOf('<p class="editorial-card-description">')).toBeLessThan(linkEnd);
+
+      const page = pages.find(({ definition }) =>
+        definition.canonicalPath === image.canonicalPath);
+      expect(page).toBeDefined();
+      const imageUrl = editorialImageUrl(image);
+      expect(page?.html).toContain(`<meta property="og:image" content="${imageUrl}">`);
+      expect(page?.html).toContain(`<meta property="og:image:width" content="${image.width}">`);
+      expect(page?.html).toContain(`<meta property="og:image:height" content="${image.height}">`);
+      expect(page?.html).toContain(`<meta property="og:image:alt" content="${image.alt}">`);
+      expect(page?.html).toContain(`<meta name="twitter:image" content="${imageUrl}">`);
+      expect(page?.html).toContain(`<meta name="twitter:image:alt" content="${image.alt}">`);
+      expect(page?.html).toContain(`class="editorial-figure"`);
+      expect(page?.html).toContain(`src="${image.src}"`);
+      expect(page?.html).toContain(`srcset="${editorialImageSrcSet(image)}"`);
+      expect(page?.html).toContain(`sizes="${EDITORIAL_ARTICLE_IMAGE_SIZES}"`);
+      expect(page?.html).not.toContain('fetchpriority="high"');
+      expect(page?.html).toContain(`alt="${image.alt}"`);
+      expect(page?.html).toContain(image.caption);
+      expect(page?.html).toContain(image.credit);
+      expect(image.credit).toBe("Editorial illustration generated for Wrench with Atet.");
+      expect(page?.html).not.toContain("editorial-provenance/");
+      expect(page?.html).not.toContain("gateway_");
+      const answerLedeIndex = page?.html.indexOf('class="answer-lede"') ?? -1;
+      const figureIndex = page?.html.indexOf('class="editorial-figure"') ?? -1;
+      const reviewNoteIndex = page?.html.indexOf('class="review-note"') ?? -1;
+      expect(answerLedeIndex).toBeGreaterThan(-1);
+      expect(figureIndex).toBeGreaterThan(answerLedeIndex);
+      expect(reviewNoteIndex).toBeGreaterThan(figureIndex);
+
+      const editorialMarkdown = await readFile(
+        join(websiteRoot, "dist", markdownSiblingPath(image.canonicalPath).slice(1)),
+        "utf8",
+      );
+      expect(editorialMarkdown).toContain(`![${image.alt}](${imageUrl})`);
+      expect(editorialMarkdown).toContain(`${image.caption} ${image.credit}`);
+
+      const structuredMatch = /<script type="application\/ld\+json">([^<]+)<\/script>/u
+        .exec(page?.html ?? "");
+      const structured = JSON.parse(structuredMatch?.[1] ?? "null") as {
+        "@graph"?: Array<{ "@type"?: string; image?: unknown }>;
+      };
+      const article = structured["@graph"]?.find((entry) => entry["@type"] === "TechArticle");
+      expect(article?.image).toEqual({
+        "@type": "ImageObject",
+        caption: image.caption,
+        contentUrl: imageUrl,
+        creditText: image.credit,
+        height: image.height,
+        url: imageUrl,
+        width: image.width,
+      });
+
+      const fileBytes = new Uint8Array(await Bun.file(join(websiteRoot, "public", image.src)).arrayBuffer());
+      expect(createHash("sha256").update(fileBytes).digest("hex")).toBe(image.imageSha256);
+      expect(lossyWebpDimensions(fileBytes)).toEqual({ height: image.height, width: image.width });
+      const derivativeByteLengths: number[] = [];
+      for (const derivative of image.derivatives) {
+        const derivativeBytes = new Uint8Array(
+          await Bun.file(join(websiteRoot, "public", derivative.src)).arrayBuffer(),
+        );
+        expect(createHash("sha256").update(derivativeBytes).digest("hex"))
+          .toBe(derivative.sha256);
+        expect(lossyWebpDimensions(derivativeBytes)).toEqual({
+          height: derivative.height,
+          width: derivative.width,
+        });
+        derivativeByteLengths.push(derivativeBytes.byteLength);
+      }
+      expect(derivativeByteLengths[0]).toBeLessThan(derivativeByteLengths[1] ?? 0);
+      expect(derivativeByteLengths[1]).toBeLessThan(fileBytes.byteLength);
+      const receipt = await Bun.file(join(websiteRoot, image.provenance.receipt)).json() as {
+        localValidation?: { status?: string };
+        outputs?: Array<{ sha256?: string }>;
+        request?: { promptSha256?: string };
+      };
+      const job = await Bun.file(join(websiteRoot, image.provenance.job)).json() as {
+        clientMaxRetries?: number;
+        noAtetRetry?: boolean;
+        request?: { promptSha256?: string };
+        state?: string;
+      };
+      const prompt = await Bun.file(join(websiteRoot, image.provenance.prompt)).text();
+      expect(receipt.outputs?.[0]?.sha256).toBe(image.imageSha256);
+      expect(receipt.localValidation?.status).toBe("decode-passed");
+      expect(job).toMatchObject({
+        clientMaxRetries: 0,
+        noAtetRetry: true,
+        state: "completed",
+      });
+      const promptSha256 = createHash("sha256").update(prompt.trim()).digest("hex");
+      expect(promptSha256).toBe(image.provenance.promptSha256);
+      expect(job.request?.promptSha256).toBe(image.provenance.promptSha256);
+      expect(receipt.request?.promptSha256).toBe(image.provenance.promptSha256);
+    }
+    expect(editorialImages.some(({ canonicalPath }) =>
+      canonicalPath === ("/paypal-grapheneos-attestation/" as never))).toBe(false);
+
     expect(html).toContain('href="https://pipedream.com/docs/connect">Pipedream Connect</a>');
     expect(html).toContain("Hosted integration breadth and managed end-user authentication");
     expect(html).toContain('href="https://docs.apify.com/integrations/mcp">Apify MCP</a>');
@@ -572,6 +772,7 @@ describe("wrench.rip static site", () => {
     expect(gettingStarted?.html).toContain('src="/wrench-first-capture.mp4"');
     expect(gettingStarted?.html).toContain('src="/wrench-first-capture.vtt"');
     expect(gettingStarted?.html).toContain('href="/wrench-first-capture.gif"');
+    expect(gettingStarted?.html).not.toContain('class="editorial-figure"');
     expect(gettingStarted?.html).toContain("successful Wrench 0.13.5 run on August 25, 2026");
     expect(gettingStarted?.html).toContain("The terminal text is actual CLI output");
 
