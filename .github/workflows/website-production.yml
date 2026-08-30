@@ -204,7 +204,7 @@ jobs:
         run: node ./scripts/release-provider-outcome.mjs baseline
 
   advance_production_ref:
-    name: Advance website-production with the dedicated release App
+    name: Advance website-production with the repository-only release App
     needs: [verify, provider_baseline]
     if: needs.provider_baseline.outputs.advance_required == 'true'
     permissions:
