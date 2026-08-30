@@ -24,6 +24,10 @@ export type LocalCliSurfaceDecisionV1 = Readonly<{
   fixedValue: string | number | boolean | null;
 }>;
 
+export type LocalCliSurfacePathSemanticInputsV1 = Readonly<
+  Record<string, string | number | boolean | null>
+>;
+
 export type LocalCliSurfaceDefaultV1 =
   | Readonly<{ kind: "none" }>
   | Readonly<{
@@ -114,6 +118,8 @@ export type LocalCliSurfaceCommandDefinitionV1 = Readonly<{
   arguments: readonly LocalCliSurfaceArgumentV1[];
   flags: readonly LocalCliSurfaceFlagV1[];
   decision: LocalCliSurfaceDecisionV1;
+  /** Semantic inputs fixed by the exact command path before caller input is applied. */
+  pathSemanticInputs: LocalCliSurfacePathSemanticInputsV1;
   output: LocalCliSurfaceOutputV1;
   conditionalInputs: readonly LocalCliSurfaceInputRuleV1[];
   reconciliation: LocalCliSurfaceReconciliationV1;
@@ -497,6 +503,26 @@ function parseDecision(value: unknown, label: string): LocalCliSurfaceDecisionV1
   });
 }
 
+function parsePathSemanticInputs(
+  value: unknown,
+  label: string,
+): LocalCliSurfacePathSemanticInputsV1 {
+  const source = record(value, label);
+  const entries = Object.entries(source);
+  if (entries.length > 128) {
+    throw new Error(`${label} exceeds its semantic input bound`);
+  }
+  const parsed: Record<string, string | number | boolean | null> =
+    Object.create(null) as Record<string, string | number | boolean | null>;
+  for (const [field, fieldValue] of entries) {
+    if (!/^[a-z][a-z0-9_]{0,127}$/u.test(field)) {
+      throw new Error(`${label} contains an invalid semantic input field ${field}`);
+    }
+    parsed[field] = scalar(fieldValue, `${label}.${field}`);
+  }
+  return Object.freeze(parsed);
+}
+
 type PredicateTraversal = {
   readonly seen: WeakSet<object>;
   nodes: number;
@@ -745,7 +771,7 @@ function parseCommand(
     "path", "provenance", "profileAuthority", "package", "version", "versionKind",
     "registered", "publicManual", "generatedCanonical",
     "upstreamReportedMutates", "reviewedEffect", "arguments", "flags",
-    "decision", "output", "conditionalInputs", "reconciliation",
+    "decision", "pathSemanticInputs", "output", "conditionalInputs", "reconciliation",
   ], ["semanticProfileSha256"], label);
   const path = commandPath(source.path, `${label}.path`);
   const args = array(source.arguments, `${label}.arguments`, 32)
@@ -794,6 +820,10 @@ function parseCommand(
     arguments: Object.freeze(args),
     flags: Object.freeze(flags),
     decision: parseDecision(source.decision, `${label}.decision`),
+    pathSemanticInputs: parsePathSemanticInputs(
+      source.pathSemanticInputs,
+      `${label}.pathSemanticInputs`,
+    ),
     output: parseOutput(source.output, `${label}.output`),
     conditionalInputs: Object.freeze(conditionalInputs),
     reconciliation: parseReconciliation(source.reconciliation, `${label}.reconciliation`, predicateTraversal),
@@ -1167,6 +1197,24 @@ function parseDefinition(value: unknown): LocalCliSurfaceContractDefinitionV1 {
     }
   }
   for (const command of commands) {
+    if (
+      (command.decision.disposition === "supported")
+        !== (command.decision.operation !== null)
+    ) {
+      throw new Error(
+        `local CLI surface command ${command.path.join(" ")} must bind an operation exactly when supported`,
+      );
+    }
+    for (const item of [...command.arguments, ...command.flags]) {
+      if (
+        item.decision.operation !== null
+        && item.decision.operation !== command.decision.operation
+      ) {
+        throw new Error(
+          `local CLI surface command ${command.path.join(" ")} item operation differs from its command`,
+        );
+      }
+    }
     const upstreamFieldTypes = Object.freeze(Object.fromEntries([
       ...command.arguments.map((argument) => [
         argument.name.replaceAll("-", "_"),
@@ -1180,6 +1228,26 @@ function parseDefinition(value: unknown): LocalCliSurfaceContractDefinitionV1 {
     const semanticFieldTypes = command.decision.operation === null
       ? null
       : operationInputTypes[command.decision.operation] ?? null;
+    for (const [field, value] of Object.entries(command.pathSemanticInputs)) {
+      if (semanticFieldTypes === null || !Object.hasOwn(semanticFieldTypes, field)) {
+        throw new Error(
+          `local CLI surface command ${command.path.join(" ")} path semantic input references unknown field ${field}`,
+        );
+      }
+      const expected = semanticFieldTypes[field];
+      if (
+        value !== null
+        && (
+          expected === "file"
+          || expected === "array"
+          || typeof value !== expected
+        )
+      ) {
+        throw new Error(
+          `local CLI surface command ${command.path.join(" ")} path semantic input ${field} has the wrong type`,
+        );
+      }
+    }
     for (const [index, rule] of command.conditionalInputs.entries()) {
       const allowed = rule.namespace === "semantic-operation"
         ? semanticFieldTypes
@@ -1351,6 +1419,7 @@ function classificationProjection(definition: LocalCliSurfaceContractDefinitionV
       provenance: command.provenance,
       reviewedEffect: command.reviewedEffect,
       decision: command.decision,
+      pathSemanticInputs: command.pathSemanticInputs,
       arguments: command.arguments.map((argument) => ({ name: argument.name, decision: argument.decision })),
       flags: command.flags.map((flag) => ({ name: flag.name, source: flag.source, decision: flag.decision })),
     })),
@@ -1376,6 +1445,7 @@ function semanticProfile(command: LocalCliSurfaceCommandDefinitionV1): unknown {
     arguments: command.arguments,
     flags: command.flags,
     decision: command.decision,
+    pathSemanticInputs: command.pathSemanticInputs,
     output: command.output,
     conditionalInputs: command.conditionalInputs,
     reconciliation: command.reconciliation,

@@ -38,6 +38,11 @@ import {
   MAX_PROVIDER_PLUGIN_REGISTRY_ROUTES,
   createProviderPluginRegistry,
 } from "./provider-plugin-registry";
+import {
+  isReviewedBuiltInContractBindingRouteCoordinate,
+  isReviewedBuiltInContractRouteCoordinate,
+  reviewedBuiltInContractIdentity,
+} from "./provider-plugin-contract-identity";
 import { providerPluginRegistry } from "./provider-plugins";
 import {
   isLocalCliOperation,
@@ -292,6 +297,148 @@ describe("provider plugin definition and registry", () => {
       "listings.search",
       1,
     )).toEqual([]);
+  });
+
+  test("retains Beeper reader identities only on the exact routes each distribution owned", () => {
+    const plugin = providerPluginRegistry.get("beeper-linked-device");
+    const binding = providerPluginRegistry.requireRoute("local-cli", "beeper");
+    const distribution22 =
+      "e6d49d29ece94d3c9eb1817ea194699bbe56ecb1170e3691e0242e16ef2c26eb";
+    const distribution21 =
+      "89a51cc1e082b15ff89dd4e85e48e218653ca4bf7e49b5bbc824e5381bad86e1";
+    const distribution20Intermediate =
+      "1f5ed0abd4eaaef92e0d035452273e8a081f564da827897547b6e65939974a60";
+    const distribution20 =
+      "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92";
+    expect(plugin?.version).toBe("2.3.0");
+    expect(binding.operations).toHaveLength(40);
+
+    const v1 = binding.operations.filter((operation) => operation.contractVersion === 1);
+    const historicalDirectV2 = new Set([
+      "accounts.list",
+      "messaging.search",
+      "conversations.read",
+      "messaging.read",
+      "messaging.content.search",
+    ]);
+    const newlyOwned = [
+      ["bridges.list", 2],
+      ["contacts.list", 2],
+      ["messaging.read", 3],
+    ] as const;
+    expect(v1).toHaveLength(32);
+    const reviewedIdentity = reviewedBuiltInContractIdentity(
+      "beeper-linked-device",
+      "2.3.0",
+    );
+    expect(reviewedIdentity.legacyCurrentReadImplementationSha256).toEqual([]);
+    const v1Coordinates = v1.map((operation) => `${operation.name}@1`).sort();
+    const predecessorChangedV1 = new Set([
+      "bridges.list@1",
+      "contacts.list@1",
+      "messaging.read@1",
+    ]);
+    const predecessorV1Coordinates = v1Coordinates.filter((coordinate) =>
+      !predecessorChangedV1.has(coordinate));
+    expect(predecessorV1Coordinates).toHaveLength(29);
+    const directV2Coordinates = [...historicalDirectV2]
+      .map((operation) => `local-cli:beeper/${operation}@2`)
+      .sort();
+    const bindingV1Coordinates = v1Coordinates
+      .map((coordinate) => `local-cli:beeper/${coordinate}`)
+      .sort();
+    expect(reviewedIdentity.legacyDistributionReadImplementationSha256?.map(
+      (distribution) => ({
+        implementationSha256: distribution.implementationSha256,
+        routes: [...distribution.routes].sort(),
+      }),
+    )).toEqual([
+      {
+        implementationSha256: distribution22,
+        routes: [...bindingV1Coordinates, ...directV2Coordinates].sort(),
+      },
+      { implementationSha256: distribution21, routes: bindingV1Coordinates },
+      { implementationSha256: distribution20Intermediate, routes: bindingV1Coordinates },
+    ]);
+    expect(Object.keys(
+      reviewedIdentity.legacyRouteReadImplementationSha256 ?? {},
+    ).sort()).toEqual(predecessorV1Coordinates);
+    for (const operation of v1) {
+      const predecessorOwned = predecessorV1Coordinates.includes(`${operation.name}@1`);
+      expect(providerPluginRegistry.legacyContractImplementationHashes(
+        binding,
+        operation.name,
+        1,
+      ).map((hash) => hash.toString("hex"))).toEqual([
+        distribution22,
+        distribution21,
+        distribution20Intermediate,
+        ...(predecessorOwned ? [distribution20] : []),
+      ]);
+    }
+    const historicalDirectOperations = binding.operations.filter((candidate) =>
+      candidate.contractVersion === 2 && historicalDirectV2.has(candidate.name));
+    expect(historicalDirectOperations).toHaveLength(5);
+    for (const operation of historicalDirectOperations) {
+      expect(providerPluginRegistry.legacyContractImplementationHashes(
+        binding,
+        operation.name,
+        2,
+      ).map((hash) => hash.toString("hex"))).toEqual([distribution22]);
+    }
+    for (const [operation, contractVersion] of newlyOwned) {
+      expect(providerPluginRegistry.legacyContractImplementationHashes(
+        binding,
+        operation,
+        contractVersion,
+      )).toEqual([]);
+      expect(providerPluginRegistry.resolveOperation(
+        "local-cli",
+        "beeper",
+        operation,
+        contractVersion,
+      )).toBeDefined();
+    }
+  });
+
+  test("bounds reviewed built-in route coordinates with the provider operation grammar", () => {
+    for (const value of [
+      "accounts.list@1",
+      "conversations.read-state.set@1000000",
+    ]) expect(isReviewedBuiltInContractRouteCoordinate(value), value).toBeTrue();
+
+    for (const value of [
+      "accounts@1",
+      "foo-.bar@1",
+      "foo--bar.baz@1",
+      `${"a".repeat(41)}.read@1`,
+      "accounts.list@0",
+      "accounts.list@01",
+      "accounts.list@1000001",
+      "accounts.list@999999999999999999999999999999",
+      "accounts.list@1@2",
+      1,
+      null,
+    ]) expect(isReviewedBuiltInContractRouteCoordinate(value), String(value)).toBeFalse();
+
+    for (const value of [
+      "local-cli:beeper/accounts.list@1",
+      "provider-api:github/profiles.read@1000000",
+    ]) expect(isReviewedBuiltInContractBindingRouteCoordinate(value), value).toBeTrue();
+    for (const value of [
+      "beeper/accounts.list@1",
+      "raw-http:beeper/accounts.list@1",
+      "local-cli:Beeper/accounts.list@1",
+      "local-cli:beeper/accounts.list@0",
+      "local-cli:beeper/accounts.list@1/extra",
+      "local-cli/beeper/accounts.list@1",
+      "local-cli:beeper:extra/accounts.list@1",
+      1,
+      null,
+    ]) expect(
+      isReviewedBuiltInContractBindingRouteCoordinate(value),
+      String(value),
+    ).toBeFalse();
   });
 
   test("registers Gmail as a current-only durable provider identity", () => {
@@ -3935,6 +4082,9 @@ describe("provider plugin definition and registry", () => {
 
   test("resolves every installed bundled code-owned operation at its durable route version", () => {
     const root = join(import.meta.dir, "assets", "adapters");
+    const historicalRuntimeManifests = new Set([
+      join(root, "beeper", "wrench-web-adapter.v2.0.0.json"),
+    ]);
     const retiredDiagnosticOnlyManifests = new Map<string, readonly string[]>([
       [
         join(root, "beeper", "wrench-web-adapter.v1.0.0.json"),
@@ -4128,6 +4278,7 @@ describe("provider plugin definition and registry", () => {
       ],
     ] as const);
     const checkedRetiredManifests = new Set<string>();
+    const checkedHistoricalRuntimeManifests = new Set<string>();
     let checked = 0;
     for (const path of manifestFiles(root)) {
       const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
@@ -4154,6 +4305,10 @@ describe("provider plugin definition and registry", () => {
         });
         checkedRetiredManifests.add(path);
         continue;
+      }
+      if (historicalRuntimeManifests.has(path)) {
+        expect(parseRuntimeManifest(raw, providerPluginRegistry), path).toEqual(parsed);
+        checkedHistoricalRuntimeManifests.add(path);
       }
       for (const candidate of Object.values(manifest.operations)) {
         if (isProviderOperation(candidate)) {
@@ -4189,6 +4344,7 @@ describe("provider plugin definition and registry", () => {
     expect(checkedRetiredManifests).toEqual(
       new Set(retiredDiagnosticOnlyManifests.keys()),
     );
+    expect(checkedHistoricalRuntimeManifests).toEqual(historicalRuntimeManifests);
     expect(checked).toBeGreaterThan(100);
   });
 });

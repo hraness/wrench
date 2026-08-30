@@ -1,7 +1,7 @@
 {
   "schemaVersion": 6,
   "id": "beeper-local",
-  "version": "2.3.0",
+  "version": "2.2.0",
   "displayName": "Beeper (Pinned Local CLI)",
   "surfaceId": "beeper",
   "origins": [
@@ -72,8 +72,7 @@
             "enum": [
               "local",
               "cloud",
-              "self-hosted",
-              "platform-sdk"
+              "self-hosted"
             ]
           },
           "available": {
@@ -92,7 +91,7 @@
       "localCli": {
         "surface": "beeper",
         "action": "bridges.list",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }
@@ -138,12 +137,6 @@
             "minLength": 1,
             "maxLength": 512
           },
-          "query": {
-            "type": "string",
-            "description": "Optional normalized provider-blended candidate query of at most 256 UTF-8 bytes",
-            "minLength": 1,
-            "maxLength": 256
-          },
           "limit": {
             "type": "number",
             "description": "Maximum projected contacts",
@@ -156,7 +149,7 @@
       "localCli": {
         "surface": "beeper",
         "action": "contacts.list",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }
@@ -386,19 +379,13 @@
           },
           "before_cursor": {
             "type": "string",
-            "description": "Exact opaque provider cursor returned by a prior page",
+            "description": "Exact provider cursor returned by a prior page",
             "minLength": 1,
             "maxLength": 2048
           },
           "after_cursor": {
             "type": "string",
-            "description": "Exact opaque provider cursor returned by a prior page",
-            "minLength": 1,
-            "maxLength": 2048
-          },
-          "sender": {
-            "type": "string",
-            "description": "Exact sender filter: me, others, or one bounded opaque provider user ID",
+            "description": "Exact provider cursor returned by a prior page",
             "minLength": 1,
             "maxLength": 2048
           },
@@ -417,7 +404,7 @@
       "localCli": {
         "surface": "beeper",
         "action": "messaging.read",
-        "contractVersion": 3,
+        "contractVersion": 2,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }

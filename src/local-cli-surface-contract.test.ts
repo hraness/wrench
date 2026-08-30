@@ -117,6 +117,7 @@ function definition(): LocalCliSurfaceContractDefinitionV1 {
         decision: supported,
       }],
       decision: supported,
+      pathSemanticInputs: {},
       output: {
         shape: "A bounded normalized item page.",
         completeness: "bounded",
@@ -301,6 +302,64 @@ describe("provider-neutral local CLI surface contract", () => {
       .not.toBe(baseline.digests.semanticProfilesSha256);
     expect(classified.digests.wholeSurfaceSha256)
       .not.toBe(baseline.digests.wholeSurfaceSha256);
+  });
+
+  test("binds path-derived semantic inputs without changing upstream identity", () => {
+    const source = definition();
+    firstCommand(source).pathSemanticInputs = { limit: 50 };
+    const baseline = defineLocalCliSurfaceContractV1(source);
+    const changed = definition();
+    firstCommand(changed).pathSemanticInputs = { limit: 51 };
+    const classified = defineLocalCliSurfaceContractV1(changed);
+
+    expect(classified.digests.upstreamSurfaceSha256)
+      .toBe(baseline.digests.upstreamSurfaceSha256);
+    expect(classified.digests.classificationSha256)
+      .not.toBe(baseline.digests.classificationSha256);
+    expect(classified.commands[0]?.semanticProfileSha256)
+      .not.toBe(baseline.commands[0]?.semanticProfileSha256);
+    expect(classified.digests.semanticProfilesSha256)
+      .not.toBe(baseline.digests.semanticProfilesSha256);
+    expect(classified.digests.wholeSurfaceSha256)
+      .not.toBe(baseline.digests.wholeSurfaceSha256);
+  });
+
+  test("rejects unknown and mistyped path-derived semantic inputs", () => {
+    const unknown = definition();
+    firstCommand(unknown).pathSemanticInputs = { typo: 50 };
+    expect(() => defineLocalCliSurfaceContractV1(unknown))
+      .toThrow("path semantic input references unknown field typo");
+
+    const wrongType = definition();
+    firstCommand(wrongType).pathSemanticInputs = { limit: "50" };
+    expect(() => defineLocalCliSurfaceContractV1(wrongType))
+      .toThrow("path semantic input limit has the wrong type");
+  });
+
+  test("requires exact command and item operation coherence", () => {
+    const unsupportedCommand = definition();
+    firstCommand(unsupportedCommand).decision = {
+      ...unsupported,
+      operation: "items.list",
+    };
+    expect(() => defineLocalCliSurfaceContractV1(unsupportedCommand))
+      .toThrow("must bind an operation exactly when supported");
+
+    const mismatchedItem = definition();
+    mutableRecord(mismatchedItem.runtime).operationContractVersions = {
+      "items.list": 1,
+      "items.read": 1,
+    };
+    mutableRecord(mismatchedItem.runtime).operationInputTypes = {
+      "items.list": { limit: "number" },
+      "items.read": {},
+    };
+    firstCommandFlag(mismatchedItem).decision = {
+      ...supported,
+      operation: "items.read",
+    };
+    expect(() => defineLocalCliSurfaceContractV1(mismatchedItem))
+      .toThrow("item operation differs from its command");
   });
 
   test("keeps Wrench rationale and source discrepancy prose out of the upstream digest", () => {
