@@ -389,6 +389,68 @@ and App-registration change may then add exactly `workflows:write`, after which
 the complete canary must run again. Never broaden the App silently or during a
 failed canary.
 
+The temporary **Prove release App canary** workflow is the single-use exception
+to the production writer boundary. It has no inputs and accepts only a first
+attempt `workflow_dispatch` by `0thernet` (`actor_id=894119`) from exact protected
+current `main` in Wrench repository ID `1316443113`. Its fixed coordinate has
+three consecutive commits. `P` is the merged #105 commit that first suppresses
+Vercel deployments for `website-production-canary`; `C` is the direct-child
+control merge whose exact 11-file delta contains the real Release and promotion
+workflow changes; and `D` is the direct-child four-file temporary canary source.
+The helper requires the same byte-identical Vercel exclusion at `P`, `C`, and
+`D`. The two checked 40-hex `P` and `C` sentinels must be replaced with those
+immutable merge SHAs before this source can be dispatched. An unresolved
+sentinel always fails before any GitHub read or mutation. The repository workflow
+history must contain exactly this one active first-attempt dispatch and no prior
+or concurrent run of the temporary workflow. That durable one-shot admission is
+rechecked immediately before and after the write; a fresh dispatch is not a
+second permissible attempt merely because GitHub numbers it attempt 1.
+
+A read-only preflight binds `D` to the workflow context, checkout, current
+default-branch ref, protected ref, maintainer identity, run ID, repository, exact
+`P` canary ref, unchanged production ref, and the same four applicable rules on
+production and canary. Those four rules must resolve to one repository-owned
+lifecycle ruleset containing only creation, deletion, and non-fast-forward, and
+one repository-owned update ruleset containing only an update restriction with
+fetch-and-merge disabled. The environment job repeats the complete readback and
+requires the ruleset IDs and `updated_at` values to equal the privileged
+fingerprints stored in `production-ref-writer-key`. Read-only GitHub responses
+cannot prove bypass actors; the separately captured administrator JSON must bind
+the lifecycle ruleset to no bypass and the update ruleset to the one exact
+release App Integration with `always`, never `exempt`.
+
+Only the second job enters
+`environment: { name: production-ref-writer-key, deployment: false }`. It reuses
+the production App identity, selected-installation, one-repository token,
+masking, and revocation helper, but uses a separate temporary writer that is
+hard-bound to `refs/heads/website-production-canary`. The writer performs one
+complete main, production, canary, and ruleset readback after minting the token,
+then performs one successful explicit
+`--force-with-lease=refs/heads/website-production-canary:P` fast-forward from
+`P` to `C`, then proves that a distinct `P` to `D` write is rejected by the stale
+`P` lease. It never has a
+mutation endpoint or refspec for `main` or `website-production`. After the token
+is revoked, one bounded token-authenticated repository read must return 401.
+Read-only terminal checks require `main=D`, production unchanged, canary `C`,
+both rulesets unchanged, and non-regressing authenticated GitHub server dates.
+
+The workflow emits one secret-free bounded evidence record containing the run,
+actor, repository, `P`, `C`, `D`, production ref, App identity, ruleset IDs,
+node IDs and timestamps, authenticated before/write-bound/after times, and
+digests of the successful and stale-lease Git results. An administrator must
+bind that record to the unique repository Rule Suite for the `P` to `C`
+transition, exact
+github-actions workflow run, release App actor, update-rule bypass, passing
+destructive rules, and pushed-at interval. Any error, transport ambiguity,
+unexpected ref state, missing Rule Suite, or post-read mismatch makes the proof
+unusable. Never rerun that workflow or reset the persistent canary. A failed
+attempt can continue only through a newly reviewed consecutive coordinate and
+new probe ref. After successful evidence capture, a separate checked cleanup PR
+must reverse all four temporary path changes: delete this workflow and helper,
+remove this temporary documentation block, and remove the temporary canary tests
+and imports from the shared workflow test. Retain the `C` canary ref, its mirrored
+rulesets, the Vercel exclusion, and the external evidence permanently.
+
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private
 `GIT_ASKPASS` environment. Because the writer checks out only exact current-main
