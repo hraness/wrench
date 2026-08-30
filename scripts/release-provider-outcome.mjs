@@ -6,6 +6,9 @@ import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
+import { withReleaseAppTokenFromEnvironment } from "./release-app-token.mjs";
+import { advanceWebsiteProductionRefFromEnvironment } from "./release-ref-writer.mjs";
+
 const BASELINE_SCHEMA = "wrench-provider-baseline-v2";
 const PROMOTION_SCHEMA = "wrench-provider-promotion-v1";
 const PRODUCTION_REF = "refs/heads/website-production";
@@ -132,7 +135,7 @@ const PRODUCTION_DEPLOYMENTS_QUERY = `query WrenchProductionDeployments(
 }`;
 
 const BASELINE_REST_REQUESTS = 2;
-const PROMOTION_REST_REQUESTS = 14;
+const PROMOTION_REST_REQUESTS = 13;
 const OUTCOME_REST_REQUESTS =
   6 +
   MAX_PROVIDER_POLLS * (2 + PAGINATED_READ_REQUESTS) +
@@ -142,15 +145,15 @@ const OUTCOME_REST_REQUESTS =
   7 +
   PAGINATED_READ_REQUESTS +
   7;
+const IMMUTABLE_RELEASE_REST_REQUESTS =
+  3 + // initial tag, main, and exact Release lookup
+  PAGINATED_READ_REQUESTS + // five bounded Release pages plus the empty sentinel
+  2 + // pre-create main and tag revalidation
+  1 + // conditional Release creation
+  4; // Release, Latest, terminal tag, and terminal main readbacks
+const WEBSITE_AUTHORITY_REST_REQUESTS = 2 + 4 * (2 * (3 + 1 + 1 + 1));
 const SURROUNDING_RELEASE_REST_REQUESTS =
-  1 +
-  1 +
-  1 +
-  1 +
-  PAGINATED_READ_REQUESTS +
-  1 +
-  3 +
-  1;
+  IMMUTABLE_RELEASE_REST_REQUESTS + WEBSITE_AUTHORITY_REST_REQUESTS;
 const BASELINE_GRAPHQL_REQUESTS = 2 * MAX_GRAPHQL_DEPLOYMENT_PAGES;
 const OUTCOME_GRAPHQL_REQUESTS =
   (MAX_PROVIDER_POLLS + 2) * MAX_GRAPHQL_DEPLOYMENT_PAGES;
@@ -167,6 +170,7 @@ export const releaseRestRequestBudget = Object.freeze({
   observationDeadlineMilliseconds: PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS,
   perCallTimeoutMilliseconds: PROVIDER_API_CALL_TIMEOUT_MILLISECONDS,
   pollIntervalMilliseconds: PROVIDER_POLL_INTERVAL_MILLISECONDS,
+  immutableRelease: IMMUTABLE_RELEASE_REST_REQUESTS,
   providerBaseline: BASELINE_REST_REQUESTS,
   providerOutcome: OUTCOME_REST_REQUESTS,
   providerPromotion: PROMOTION_REST_REQUESTS,
@@ -176,6 +180,7 @@ export const releaseRestRequestBudget = Object.freeze({
     PROMOTION_REST_REQUESTS +
     OUTCOME_REST_REQUESTS +
     SURROUNDING_RELEASE_REST_REQUESTS,
+  websiteAuthority: WEBSITE_AUTHORITY_REST_REQUESTS,
 });
 
 export const releaseGraphqlRequestBudget = Object.freeze({
@@ -1054,7 +1059,9 @@ async function revalidateWorkflowSource(
     if (recovery !== "") fail("tag release unexpectedly carried a recovery workflow source");
     return;
   }
-  if (event !== "workflow_dispatch") fail("provider wait received an unsupported release event");
+  if (event !== "workflow_dispatch" && event !== "workflow_run") {
+    fail("provider wait received an unsupported release event");
+  }
   const sha = expectSha(recovery, "recovery workflow SHA");
   const repositoryState = expectRecord(
     await api.get(`/repos/${repository}`),
@@ -1172,20 +1179,17 @@ function assertNoTerminalRestFailure(statuses, candidateId) {
 }
 
 async function readImmutableRelease(api, repository, tag) {
-  const value = expectRecord(
+  const value = exactPublishedRelease(
     await api.get(`/repos/${repository}/releases/tags/${tag}`),
+    tag,
     `Release ${tag}`,
   );
-  if (
-    value.tag_name !== tag ||
-    value.draft !== false ||
-    value.prerelease !== false ||
-    value.immutable !== true
-  ) {
-    fail(`Release ${tag} is not exact, published, and immutable`);
-  }
   const published = parseSecondTimestamp(value.published_at, `Release ${tag}.published_at`);
-  return Object.freeze({ publishedAt: published.timestamp, publishedMilliseconds: published.milliseconds });
+  return Object.freeze({
+    id: value.id,
+    publishedAt: published.timestamp,
+    publishedMilliseconds: published.milliseconds,
+  });
 }
 
 async function readLatestRelease(api, repository, tag) {
@@ -1206,10 +1210,53 @@ async function readVerifiedTagCommit(api, repository, tag, verifiedSha) {
   if (tagSha !== verifiedSha) fail(`tag ${tag} moved from the verified release commit`);
 }
 
+export async function revalidateReleaseAuthority({
+  api,
+  defaultBranch,
+  eventName,
+  recoveryWorkflowSha,
+  repository,
+  verifiedSha,
+  verifiedTag,
+}) {
+  const coordinate = expectRepository(repository);
+  const sha = expectSha(verifiedSha, "verified SHA");
+  const tag = expectStableTag(verifiedTag, "verified tag");
+  const workflowSource = Object.freeze({ defaultBranch, eventName, recoveryWorkflowSha });
+  if (eventName !== "workflow_dispatch" && eventName !== "workflow_run") {
+    fail("website promotion authority must use the current-main promotion workflow");
+  }
+
+  await revalidateWorkflowSource(api, coordinate, workflowSource);
+  await readVerifiedTagCommit(api, coordinate, tag, sha);
+  const firstRelease = exactPublishedRelease(
+    await api.get(`/repos/${coordinate}/releases/tags/${tag}`),
+    tag,
+    `Release ${tag}`,
+  );
+  await readLatestRelease(api, coordinate, tag);
+
+  await revalidateWorkflowSource(api, coordinate, workflowSource);
+  await readVerifiedTagCommit(api, coordinate, tag, sha);
+  const secondRelease = exactPublishedRelease(
+    await api.get(`/repos/${coordinate}/releases/tags/${tag}`),
+    tag,
+    `terminal Release ${tag}`,
+  );
+  await readLatestRelease(api, coordinate, tag);
+  if (
+    firstRelease.id !== secondRelease.id ||
+    firstRelease.published_at !== secondRelease.published_at
+  ) {
+    fail(`Release ${tag} changed during authority verification`);
+  }
+}
+
 export function exactPublishedRelease(value, tag, label = "published Release") {
   const stableTag = expectStableTag(tag, "published Release tag");
   const release = expectRecord(value, label);
   const assets = expectArray(release.assets, `${label}.assets`);
+  expectSafeId(release.id, `${label}.id`);
   if (
     release.tag_name !== stableTag ||
     release.draft !== false ||
@@ -1230,13 +1277,18 @@ async function readFastForwardComparison(api, repository, currentSha, verifiedSh
   );
   const base = expectRecord(value.base_commit, "comparison.base_commit");
   const mergeBase = expectRecord(value.merge_base_commit, "comparison.merge_base_commit");
+  const commits = expectArray(value.commits, "comparison.commits");
+  if (commits.length === 0) fail("production fast-forward comparison has no commits");
+  const terminalCommit = expectRecord(commits.at(-1), "comparison terminal commit");
+  const terminalSha = expectSha(terminalCommit.sha, "comparison terminal commit SHA");
   if (
     value.status !== "ahead" ||
     !Number.isSafeInteger(value.ahead_by) ||
     value.ahead_by <= 0 ||
     value.behind_by !== 0 ||
     base.sha !== currentSha ||
-    mergeBase.sha !== currentSha
+    mergeBase.sha !== currentSha ||
+    terminalSha !== verifiedSha
   ) {
     fail(`website-production does not fast-forward from ${currentSha} to ${verifiedSha}`);
   }
@@ -1326,6 +1378,7 @@ function parsePromotionReceipt(value) {
     "mode",
     "previousSha",
     "productionRef",
+    "releaseId",
     "releasePublishedAt",
     "repository",
     "schema",
@@ -1348,6 +1401,7 @@ function parsePromotionReceipt(value) {
     mode,
     previousSha: expectSha(receipt.previousSha, "promotion receipt previousSha"),
     productionRef: PRODUCTION_REF,
+    releaseId: expectSafeId(receipt.releaseId, "promotion receipt releaseId"),
     releasePublishedAt: published.timestamp,
     releasePublishedMilliseconds: published.milliseconds,
     repository: expectRepository(receipt.repository),
@@ -1364,6 +1418,7 @@ function promotionReceiptValue(receipt) {
     mode: receipt.mode,
     previousSha: receipt.previousSha,
     productionRef: receipt.productionRef,
+    releaseId: receipt.releaseId,
     releasePublishedAt: receipt.releasePublishedAt,
     repository: receipt.repository,
     schema: receipt.schema,
@@ -1452,10 +1507,7 @@ export async function promoteWebsiteProduction({
     mode = "advanced";
     await readFastForwardComparison(api, coordinate, prePatchRef.sha, sha);
     await revalidateWorkflowSource(api, coordinate, workflowSource);
-    await api.patch(
-      `/repos/${coordinate}/git/refs/heads/website-production`,
-      Object.freeze({ force: false, sha }),
-    );
+    await api.advanceRef(coordinate, prePatchRef.sha, sha, tag);
   }
 
   const promotedSha = await readProductionRef(api, coordinate);
@@ -1467,6 +1519,7 @@ export async function promoteWebsiteProduction({
     mode,
     previousSha: prePatchRef.sha,
     productionRef: PRODUCTION_REF,
+    releaseId: release.id,
     releasePublishedAt: release.publishedAt,
     repository: coordinate,
     schema: PROMOTION_SCHEMA,
@@ -1673,8 +1726,11 @@ async function revalidateTerminalAuthority(api, promotion, workflowSource) {
     promotion.repository,
     promotion.verifiedTag,
   );
-  if (release.publishedAt !== promotion.releasePublishedAt) {
-    fail("immutable Release publication time changed");
+  if (
+    release.id !== promotion.releaseId ||
+    release.publishedAt !== promotion.releasePublishedAt
+  ) {
+    fail("immutable Release identity changed");
   }
   await readLatestRelease(api, promotion.repository, promotion.verifiedTag);
   await revalidateWorkflowSource(api, promotion.repository, workflowSource);
@@ -1717,7 +1773,12 @@ async function confirmSuccess(
     promotion.verifiedSha,
   );
   const release = await readImmutableRelease(api, promotion.repository, promotion.verifiedTag);
-  if (release.publishedAt !== promotion.releasePublishedAt) fail("immutable Release publication time changed");
+  if (
+    release.id !== promotion.releaseId ||
+    release.publishedAt !== promotion.releasePublishedAt
+  ) {
+    fail("immutable Release identity changed");
+  }
   await readLatestRelease(api, promotion.repository, promotion.verifiedTag);
   const observed = await observeCandidate(api, baseline, promotion, successSnapshot.candidate.id);
   if (observed.candidate === undefined) fail("candidate Production deployment disappeared after success");
@@ -1841,7 +1902,12 @@ export async function waitForProviderOutcome({
     promotion.repository,
     promotion.verifiedTag,
   );
-  if (release.publishedAt !== promotion.releasePublishedAt) fail("immutable Release publication time changed");
+  if (
+    release.id !== promotion.releaseId ||
+    release.publishedAt !== promotion.releasePublishedAt
+  ) {
+    fail("immutable Release identity changed");
+  }
   await readLatestRelease(api, promotion.repository, promotion.verifiedTag);
   await revalidateWorkflowSource(api, promotion.repository, workflowSource);
 
@@ -1994,9 +2060,10 @@ class GitHubApi {
         `${label} timeout must be between 1 and ${String(PROVIDER_API_CALL_TIMEOUT_MILLISECONDS)} milliseconds`,
       );
     }
+    const readOnlyEnvironment = scrubReadOnlyGithubEnvironment(this.#environment);
     const result = spawnSync("gh", ["api", ...args], {
       encoding: "utf8",
-      env: this.#environment,
+      env: readOnlyEnvironment,
       maxBuffer: MAX_RESPONSE_BYTES,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: timeoutMilliseconds,
@@ -2040,22 +2107,40 @@ class GitHubApi {
     return this.#run(args, "GraphQL Production deployments", options);
   }
 
-  async patch(endpoint, body, options) {
-    if (!isRecord(body) || body.force !== false || typeof body.sha !== "string") {
-      fail("PATCH body is not the exact non-force ref update");
-    }
-    return this.#run(
-      ["--method", "PATCH", endpoint, "-f", `sha=${body.sha}`, "-F", "force=false"],
-      `PATCH ${endpoint}`,
-      options,
-    );
+  async advanceRef(repository, expectedOldSha, verifiedSha, verifiedTag) {
+    await withReleaseAppTokenFromEnvironment(this.#environment, async (token) => {
+      advanceWebsiteProductionRefFromEnvironment({
+        environment: Object.freeze({ WRENCH_RELEASE_APP_TOKEN: token }),
+        expectedOldSha,
+        repository,
+        verifiedSha,
+        verifiedTag,
+      });
+    });
   }
+}
+
+export function scrubReadOnlyGithubEnvironment(environment) {
+  const readOnlyEnvironment = { ...environment };
+  for (const key of Object.keys(readOnlyEnvironment)) {
+    if (key.startsWith("WRENCH_RELEASE_APP_")) delete readOnlyEnvironment[key];
+  }
+  return readOnlyEnvironment;
 }
 
 function writeReceiptOutput(receipt) {
   const output = process.env.GITHUB_OUTPUT;
   if (typeof output !== "string" || output.length === 0) fail("GITHUB_OUTPUT is unavailable");
   appendFileSync(output, `receipt=${encodeProviderReceipt(receipt)}\n`, { encoding: "utf8" });
+}
+
+function writeNamedOutput(name, value) {
+  const output = process.env.GITHUB_OUTPUT;
+  if (typeof output !== "string" || output.length === 0) fail("GITHUB_OUTPUT is unavailable");
+  if (!/^[a-z][a-z0-9_]*$/u.test(name) || !/^[A-Za-z0-9_-]+$/u.test(value)) {
+    fail("workflow output name or value is malformed");
+  }
+  appendFileSync(output, `${name}=${value}\n`, { encoding: "utf8" });
 }
 
 async function main() {
@@ -2068,6 +2153,8 @@ async function main() {
       verifiedSha: process.env.VERIFIED_SHA,
     });
     writeReceiptOutput(receipt);
+    const parsed = parseBaselineReceipt(receipt);
+    writeNamedOutput("advance_required", parsed.refSha === parsed.verifiedSha ? "false" : "true");
     return;
   }
   if (command === "release-order") {
@@ -2107,9 +2194,25 @@ async function main() {
     });
     return;
   }
-  if (command === "promote") {
-    const receipt = await promoteWebsiteProduction({
+  if (command === "revalidate-authority") {
+    await revalidateReleaseAuthority({
       api,
+      defaultBranch: process.env.DEFAULT_BRANCH,
+      eventName: process.env.EVENT_NAME,
+      recoveryWorkflowSha: process.env.RECOVERY_WORKFLOW_SHA,
+      repository: process.env.GITHUB_REPOSITORY,
+      verifiedSha: process.env.VERIFIED_SHA,
+      verifiedTag: process.env.VERIFIED_TAG,
+    });
+    return;
+  }
+  if (command === "promote") {
+    const expectedMode = process.env.PROMOTION_EXPECTED_MODE;
+    if (expectedMode !== "advanced" && expectedMode !== "already-exact") {
+      fail("PROMOTION_EXPECTED_MODE is not exact");
+    }
+    const promote = (promotionApi) => promoteWebsiteProduction({
+      api: promotionApi,
       baselineReceipt: decodeProviderReceipt(process.env.BASELINE_RECEIPT, "BASELINE_RECEIPT"),
       defaultBranch: process.env.DEFAULT_BRANCH,
       eventName: process.env.EVENT_NAME,
@@ -2118,6 +2221,10 @@ async function main() {
       verifiedSha: process.env.VERIFIED_SHA,
       verifiedTag: process.env.VERIFIED_TAG,
     });
+    const receipt = await promote(api);
+    if (receipt.mode !== expectedMode) {
+      fail(`promotion mode ${String(receipt.mode)} did not match ${expectedMode}`);
+    }
     writeReceiptOutput(receipt);
     return;
   }
@@ -2147,7 +2254,7 @@ async function main() {
     );
     return;
   }
-  fail("expected baseline, release-order, release validation, promote, or wait command");
+  fail("expected baseline, release-order, release validation, authority, promote, or wait command");
 }
 
 const invokedPath = process.argv[1];

@@ -1,0 +1,399 @@
+name: Promote website production
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact immutable Latest release tag to promote
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-production-promotion
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify immutable release and workflow source
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      verified_sha: ${{ steps.identity.outputs.sha }}
+      verified_tag: ${{ steps.identity.outputs.tag }}
+      workflow_sha: ${{ steps.request.outputs.sha }}
+    steps:
+      - name: Bind dispatch to exact current main
+        id: request
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
+          EVENT_REPOSITORY_ID: ${{ github.repository_id }}
+          EVENT_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          UPSTREAM_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          UPSTREAM_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          UPSTREAM_PATH: ${{ github.event.workflow_run.path }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          UPSTREAM_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          UPSTREAM_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          if [[ "$DEFAULT_BRANCH" != "main" || "$EVENT_REF" != "refs/heads/main" || "$EVENT_REPOSITORY" != "hraness/wrench" || "$EVENT_REPOSITORY_ID" != "1316443113" ]]; then
+            echo "::error::Website production promotion must run from exact Wrench main"
+            exit 1
+          fi
+          if [[ ! "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Promotion workflow has no exact source commit"
+            exit 1
+          fi
+          case "$EVENT_NAME" in
+            workflow_run)
+              if [[ "$UPSTREAM_WORKFLOW_ID" != "323493609" ]]; then
+                echo "::error::Upstream workflow ID is not the checked Release workflow ID"
+                exit 1
+              fi
+              if [[ "$UPSTREAM_WORKFLOW_NAME" != "Release" || "$UPSTREAM_PATH" != ".github/workflows/release.yml" || "$UPSTREAM_EVENT" != "push" ]]; then
+                echo "::error::Upstream run is not the exact tag Release workflow"
+                exit 1
+              fi
+              if [[ "$UPSTREAM_RUN_ATTEMPT" != "1" || "$UPSTREAM_CONCLUSION" != "success" ]]; then
+                echo "::error::Upstream Release must succeed on its first attempt"
+                exit 1
+              fi
+              if [[ "$UPSTREAM_HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" || ! "$UPSTREAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "::error::Upstream Release source is not this exact repository"
+                exit 1
+              fi
+              requested_tag="$UPSTREAM_HEAD_BRANCH"
+              release_sha="$UPSTREAM_HEAD_SHA"
+              ;;
+            workflow_dispatch)
+              requested_tag="$INPUT_RELEASE_TAG"
+              release_sha=""
+              ;;
+            *)
+              echo "::error::Unsupported website production trigger $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          if [[ ! "$requested_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Promotion input is not one stable semantic-version tag"
+            exit 1
+          fi
+          repository_default="$(gh api "/repos/$GITHUB_REPOSITORY" --jq '.default_branch')"
+          current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$repository_default" != "main" || "$current_main_sha" != "$EVENT_SHA" ]]; then
+            echo "::error::Promotion workflow source $EVENT_SHA is not exact current main $current_main_sha"
+            exit 1
+          fi
+          printf 'sha=%s\n' "$EVENT_SHA" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$requested_tag" >> "$GITHUB_OUTPUT"
+          printf 'release_sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ steps.request.outputs.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Verify exact immutable release coordinate
+        id: identity
+        env:
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_WORKFLOW_SHA: ${{ steps.request.outputs.sha }}
+          REQUESTED_RELEASE_SHA: ${{ steps.request.outputs.release_sha }}
+          REQUESTED_TAG: ${{ steps.request.outputs.tag }}
+        run: |
+          set -euo pipefail
+          head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          tag_commit="$(git rev-parse --verify "refs/tags/$REQUESTED_TAG^{commit}")"
+          package_version="$(git show "${tag_commit}:package.json" | node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(0, "utf8")); if (typeof value.version !== "string") process.exit(1); process.stdout.write(value.version)')"
+          if [[ "$REQUESTED_TAG" != "v$package_version" ]]; then
+            echo "::error::Promotion tag and package version do not agree"
+            exit 1
+          fi
+          if [[ "$head_commit" != "$RECOVERY_WORKFLOW_SHA" ]]; then
+            echo "::error::Promotion workflow does not resolve to exact current main"
+            exit 1
+          fi
+          case "$EVENT_NAME" in
+            workflow_run)
+              if [[ ! "$REQUESTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ || "$REQUESTED_RELEASE_SHA" != "$tag_commit" ]]; then
+                echo "::error::Upstream Release SHA does not resolve to the immutable tag commit"
+                exit 1
+              fi
+              ;;
+            workflow_dispatch)
+              if [[ -n "$REQUESTED_RELEASE_SHA" ]]; then
+                echo "::error::Manual recovery unexpectedly carried an upstream Release SHA"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported website production trigger $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          if ! git merge-base --is-ancestor "$tag_commit" "$head_commit"; then
+            echo "::error::Immutable release tag is not an ancestor of the current-main workflow"
+            exit 1
+          fi
+          newest_stable_tag="$(git tag --list 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | LC_ALL=C sort -V | tail -n 1)"
+          if [[ "$newest_stable_tag" != "$REQUESTED_TAG" ]]; then
+            echo "::error::Promotion tag is not the newest stable tag ($newest_stable_tag)"
+            exit 1
+          fi
+          printf 'sha=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+          VERIFIED_SHA="$tag_commit" VERIFIED_TAG="$REQUESTED_TAG" \
+            node ./scripts/release-provider-outcome.mjs revalidate-authority
+
+  provider_baseline:
+    name: Snapshot provider baseline
+    needs: verify
+    permissions:
+      contents: read
+      deployments: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      advance_required: ${{ steps.baseline.outputs.advance_required }}
+      receipt: ${{ steps.baseline.outputs.receipt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.workflow_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Revalidate authority before provider baseline
+        env:
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs revalidate-authority
+      - name: Snapshot Production deployments before promotion
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+        run: node ./scripts/release-provider-outcome.mjs baseline
+
+  advance_production_ref:
+    name: Advance website-production with the dedicated release App
+    needs: [verify, provider_baseline]
+    if: needs.provider_baseline.outputs.advance_required == 'true'
+    permissions:
+      contents: read
+    environment: { name: production-ref-writer-key, deployment: false }
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      receipt: ${{ steps.promotion.outputs.receipt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.workflow_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Revalidate authority before production-ref mutation
+        env:
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs revalidate-authority
+      - name: Promote verified website production source
+        id: promotion
+        env:
+          BASELINE_RECEIPT: ${{ needs.provider_baseline.outputs.receipt }}
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_EXPECTED_MODE: advanced
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+          WRENCH_RELEASE_APP_CLIENT_ID: ${{ vars.WRENCH_RELEASE_APP_CLIENT_ID }}
+          WRENCH_RELEASE_APP_ID: ${{ vars.WRENCH_RELEASE_APP_ID }}
+          WRENCH_RELEASE_APP_INSTALLATION_ID: ${{ vars.WRENCH_RELEASE_APP_INSTALLATION_ID }}
+          WRENCH_RELEASE_APP_PRIVATE_KEY: ${{ secrets.WRENCH_RELEASE_APP_PRIVATE_KEY }}
+          WRENCH_RELEASE_APP_SLUG: ${{ vars.WRENCH_RELEASE_APP_SLUG }}
+        run: node ./scripts/release-provider-outcome.mjs promote
+      - name: Revalidate authority after production-ref mutation
+        env:
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs revalidate-authority
+
+  confirm_existing_production_ref:
+    name: Confirm already-exact website production
+    needs: [verify, provider_baseline]
+    if: needs.provider_baseline.outputs.advance_required == 'false'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      receipt: ${{ steps.promotion.outputs.receipt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.workflow_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Revalidate authority before no-write recovery
+        env:
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs revalidate-authority
+      - name: Confirm verified website production source
+        id: promotion
+        env:
+          BASELINE_RECEIPT: ${{ needs.provider_baseline.outputs.receipt }}
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_EXPECTED_MODE: already-exact
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs promote
+      - name: Revalidate authority after no-write recovery
+        env:
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs revalidate-authority
+
+  select_promotion:
+    name: Select the exact promotion receipt
+    needs:
+      - verify
+      - provider_baseline
+      - advance_production_ref
+      - confirm_existing_production_ref
+    if: >-
+      ${{ always() &&
+          needs.verify.result == 'success' &&
+          needs.provider_baseline.result == 'success' }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      receipt: ${{ steps.receipt.outputs.receipt }}
+    steps:
+      - name: Bind exactly one promotion path
+        id: receipt
+        env:
+          ADVANCE_REQUIRED: ${{ needs.provider_baseline.outputs.advance_required }}
+          ADVANCE_RESULT: ${{ needs.advance_production_ref.result }}
+          ADVANCED_RECEIPT: ${{ needs.advance_production_ref.outputs.receipt }}
+          EXISTING_RESULT: ${{ needs.confirm_existing_production_ref.result }}
+          EXISTING_RECEIPT: ${{ needs.confirm_existing_production_ref.outputs.receipt }}
+        run: |
+          set -euo pipefail
+          case "$ADVANCE_REQUIRED" in
+            true)
+              if [[ "$ADVANCE_RESULT" != "success" || "$EXISTING_RESULT" != "skipped" || -n "$EXISTING_RECEIPT" ]]; then
+                echo "::error::Advanced promotion did not take exactly one path"
+                exit 1
+              fi
+              receipt="$ADVANCED_RECEIPT"
+              ;;
+            false)
+              if [[ "$EXISTING_RESULT" != "success" || "$ADVANCE_RESULT" != "skipped" || -n "$ADVANCED_RECEIPT" ]]; then
+                echo "::error::Already-exact recovery did not take exactly one path"
+                exit 1
+              fi
+              receipt="$EXISTING_RECEIPT"
+              ;;
+            *)
+              echo "::error::Provider baseline did not select a promotion path"
+              exit 1
+              ;;
+          esac
+          if [[ -z "$receipt" || "${#receipt}" -gt 65536 || ! "$receipt" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "::error::Promotion receipt is missing or malformed"
+            exit 1
+          fi
+          printf 'receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
+
+  provider_outcome:
+    name: Verify provider outcome
+    needs: [verify, provider_baseline, select_promotion]
+    permissions:
+      contents: read
+      deployments: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.workflow_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Verify exact Vercel Production outcome
+        env:
+          BASELINE_RECEIPT: ${{ needs.provider_baseline.outputs.receipt }}
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_RECEIPT: ${{ needs.select_promotion.outputs.receipt }}
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs wait

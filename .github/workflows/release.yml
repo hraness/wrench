@@ -4,12 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Exact stable release tag to verify and recover
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -26,79 +20,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     outputs:
-      recovery_workflow_sha: ${{ steps.recovery_source.outputs.sha }}
       verified_sha: ${{ steps.identity.outputs.sha }}
       verified_tag: ${{ steps.identity.outputs.tag }}
     steps:
       - name: Resolve release request
         id: request
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
           EVENT_REF_NAME: ${{ github.ref_name }}
           EVENT_REF_TYPE: ${{ github.ref_type }}
-          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          case "$EVENT_NAME" in
-            push)
-              if [[ "$EVENT_REF_TYPE" != "tag" || "$EVENT_REF" != "refs/tags/$EVENT_REF_NAME" ]]; then
-                echo "::error::Release push is not one exact tag ref"
-                exit 1
-              fi
-              requested_tag="$EVENT_REF_NAME"
-              ;;
-            workflow_dispatch)
-              expected_ref="refs/heads/$DEFAULT_BRANCH"
-              if [[ "$EVENT_REF" != "$expected_ref" ]]; then
-                echo "::error::Release recovery must run from $expected_ref, not $EVENT_REF"
-                exit 1
-              fi
-              requested_tag="$INPUT_RELEASE_TAG"
-              ;;
-            *)
-              echo "::error::Unsupported release event $EVENT_NAME"
-              exit 1
-              ;;
-          esac
-          if [[ ! "$requested_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          if [[ "$EVENT_NAME" != "push" || "$EVENT_REF_TYPE" != "tag" || "$EVENT_REF" != "refs/tags/$EVENT_REF_NAME" ]]; then
+            echo "::error::Release request is not one exact tag push"
+            exit 1
+          fi
+          if [[ ! "$EVENT_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::Release request is not one stable semantic-version tag"
             exit 1
           fi
-          printf 'tag=%s\n' "$requested_tag" >> "$GITHUB_OUTPUT"
-      - name: Bind recovery workflow source
-        id: recovery_source
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_SHA: ${{ github.sha }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          case "$EVENT_NAME" in
-            push)
-              printf 'sha=\n' >> "$GITHUB_OUTPUT"
-              ;;
-            workflow_dispatch)
-              if [[ ! "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "::error::Release recovery has no exact workflow source commit"
-                exit 1
-              fi
-              current_default_sha="$(gh api \
-                "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" \
-                --jq '.object.sha')"
-              if [[ "$current_default_sha" != "$EVENT_SHA" ]]; then
-                echo "::error::Release recovery workflow source $EVENT_SHA is not current $DEFAULT_BRANCH head $current_default_sha"
-                exit 1
-              fi
-              printf 'sha=%s\n' "$EVENT_SHA" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "::error::Unsupported release event $EVENT_NAME"
-              exit 1
-              ;;
-          esac
+          printf 'tag=%s\n' "$EVENT_REF_NAME" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
@@ -142,8 +84,9 @@ jobs:
             echo "::error::Checked-out source $head_commit does not match tag commit $tag_commit"
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$tag_commit" "origin/$DEFAULT_BRANCH"; then
-            echo "::error::Tag $REQUESTED_TAG is not reachable from $DEFAULT_BRANCH"
+          default_head="$(git rev-parse --verify "origin/$DEFAULT_BRANCH^{commit}")"
+          if [[ "$default_head" != "$tag_commit" ]]; then
+            echo "::error::Tag release commit $tag_commit is not current $DEFAULT_BRANCH head $default_head"
             exit 1
           fi
           newest_stable_tag="$(git tag --list 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | LC_ALL=C sort -V | tail -n 1)"
@@ -210,50 +153,17 @@ jobs:
             --archive "$registry_archive" \
             --pack-json "$registry_json"
 
-  provider_baseline:
-    name: Snapshot provider baseline
-    needs: verify
-    permissions:
-      contents: read
-      deployments: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      receipt: ${{ steps.baseline.outputs.receipt }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-          ref: ${{ needs.verify.outputs.recovery_workflow_sha || needs.verify.outputs.verified_sha }}
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - name: Snapshot Production deployments before promotion
-        id: baseline
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
-        run: node ./scripts/release-provider-outcome.mjs baseline
-
   publish:
-    name: Publish
-    needs:
-      - verify
-      - provider_baseline
+    name: Publish immutable GitHub Release
+    needs: verify
     permissions:
       contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    outputs:
-      promotion_receipt: ${{ steps.promotion.outputs.receipt }}
     env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-      EVENT_NAME: ${{ github.event_name }}
-      RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.recovery_workflow_sha }}
       VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
       VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
     steps:
@@ -261,7 +171,7 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
-          ref: ${{ needs.verify.outputs.recovery_workflow_sha || needs.verify.outputs.verified_sha }}
+          ref: ${{ needs.verify.outputs.verified_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
@@ -278,8 +188,9 @@ jobs:
             exit 1
           fi
           remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
-          if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
-            echo "::error::Remote $VERIFIED_TAG resolves to $remote_tag_sha, expected $VERIFIED_SHA"
+          current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
+          if [[ "$remote_tag_sha" != "$VERIFIED_SHA" || "$current_main_sha" != "$VERIFIED_SHA" ]]; then
+            echo "::error::Remote tag or current main moved from $VERIFIED_SHA"
             exit 1
           fi
           release_endpoint="/repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG"
@@ -311,7 +222,12 @@ jobs:
           esac
           if [[ "$release_lookup_state" == "missing" ]]; then
             node ./scripts/release-provider-outcome.mjs release-order
-            node ./scripts/release-provider-outcome.mjs revalidate-source
+            current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
+            remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
+            if [[ "$current_main_sha" != "$VERIFIED_SHA" || "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
+              echo "::error::Release authority moved before publication"
+              exit 1
+            fi
             created_release="$(gh api \
               --method POST \
               "/repos/$GITHUB_REPOSITORY/releases" \
@@ -329,45 +245,9 @@ jobs:
           printf '%s' "$release_readback" | \
             node ./scripts/release-provider-outcome.mjs validate-release
           latest_tag="$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
-          if [[ "$latest_tag" != "$VERIFIED_TAG" ]]; then
-            echo "::error::Latest release is $latest_tag, expected $VERIFIED_TAG"
+          terminal_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
+          terminal_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
+          if [[ "$latest_tag" != "$VERIFIED_TAG" || "$terminal_tag_sha" != "$VERIFIED_SHA" || "$terminal_main_sha" != "$VERIFIED_SHA" ]]; then
+            echo "::error::Release authority changed during publication"
             exit 1
           fi
-      - name: Promote verified website production source
-        id: promotion
-        env:
-          BASELINE_RECEIPT: ${{ needs.provider_baseline.outputs.receipt }}
-        run: node ./scripts/release-provider-outcome.mjs promote
-
-  provider_outcome:
-    name: Verify provider outcome
-    needs:
-      - verify
-      - provider_baseline
-      - publish
-    permissions:
-      contents: read
-      deployments: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-          ref: ${{ needs.verify.outputs.recovery_workflow_sha || needs.verify.outputs.verified_sha }}
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - name: Verify exact Vercel Production outcome
-        env:
-          BASELINE_RECEIPT: ${{ needs.provider_baseline.outputs.receipt }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EVENT_NAME: ${{ github.event_name }}
-          GH_TOKEN: ${{ github.token }}
-          PROMOTION_RECEIPT: ${{ needs.publish.outputs.promotion_receipt }}
-          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.recovery_workflow_sha }}
-          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
-          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
-        run: node ./scripts/release-provider-outcome.mjs wait

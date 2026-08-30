@@ -1,0 +1,4 @@
+/.github/workflows/** @0thernet
+/.github/CODEOWNERS @0thernet
+/scripts/release-* @0thernet
+/docs/publishing.md @0thernet
