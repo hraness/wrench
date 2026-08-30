@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "WRENCH_VERCEL_BUILD=release-bound-v1 bunx bun@1.3.14 run website:vercel-build",
   "framework": null,
+  "git": {
+    "deploymentEnabled": {
+      "website-production-canary": false
+    }
+  },
   "headers": [
     {
       "source": "/(.*)",
