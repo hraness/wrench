@@ -7,6 +7,9 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+- Return a bound `cleanup-required` result when durable realm admission blocks
+  an R1 read before dispatch. JSON callers retain the no-retry category while
+  the cleanup-unsafe claim remains fail-closed.
 - Fail closed before every Vercel build unless a true local invocation has no
   Vercel signal or the checked-in release marker and exact platform state agree.
 - Resolve the production release tag through a separately byte-bounded GitHub

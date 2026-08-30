@@ -22,6 +22,7 @@ import {
 } from "./browser";
 import {
   WEB_SESSION_CLEANUP_ADMISSION_STATE_DIRECTORY,
+  WebSessionCleanupAdmissionBlockedError,
   acquireWebSessionCleanupAdmission,
   listWebSessionCleanupAdmissions,
   parseWebSessionCleanupAdmissionClaim,
@@ -345,6 +346,29 @@ describe("web-session cleanup admission", () => {
           identity({ runId: randomUUID() }),
           environment,
         )).toThrow("active or cleanup-unsafe state");
+
+      let operationCalls = 0;
+      let blockedCalls = 0;
+      const blocked = await withWebSessionCleanupAdmission(
+        identity({ runId: randomUUID() }),
+        environment,
+        () => {
+          operationCalls += 1;
+          return Promise.resolve("must-not-run");
+        },
+        new Date(),
+        (error) => {
+          blockedCalls += 1;
+          expect(error).toBeInstanceOf(
+            WebSessionCleanupAdmissionBlockedError,
+          );
+          expect(error.message).toContain("active or cleanup-unsafe state");
+          return Promise.resolve("cleanup-required");
+        },
+      );
+      expect(blocked).toBe("cleanup-required");
+      expect(operationCalls).toBe(0);
+      expect(blockedCalls).toBe(1);
 
       const unrelated = acquireWebSessionCleanupAdmission(
         identity({
@@ -924,11 +948,26 @@ describe("web-session cleanup admission", () => {
         "{}\n",
         { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
-      expect(() =>
+      let blocked: unknown;
+      try {
         acquireWebSessionCleanupAdmission(
           selectedIdentity,
           environment,
-        )).toThrow("requested web-session cleanup admission is invalid");
+        );
+      } catch (error) {
+        blocked = error;
+      }
+      expect(blocked).toBeInstanceOf(
+        WebSessionCleanupAdmissionBlockedError,
+      );
+      expect(blocked).toBeInstanceOf(Error);
+      if (!(blocked instanceof Error)) {
+        throw new Error("invalid admission did not return a typed error");
+      }
+      expect(blocked.message).toContain(
+        "requested web-session cleanup admission is invalid",
+      );
+      expect(blocked.cause).toBeInstanceOf(Error);
     });
   });
 });
