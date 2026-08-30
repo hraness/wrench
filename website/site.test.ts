@@ -154,6 +154,12 @@ describe("wrench.rip static site", () => {
     expect(cssAsset).toMatch(/^\/assets\/styles-[a-f0-9]{12}\.css$/u);
     const builtCss = await readFile(join(websiteRoot, "dist", cssAsset!.slice(1)), "utf8");
 
+    expect(vercel.git).toEqual({
+      deploymentEnabled: {
+        "website-production-canary": false,
+      },
+    });
+
     expect(sourceCss).toContain('--font-sans: "Nebula Sans", ui-sans-serif, system-ui');
     expect(sourceCss).toContain('--font-serif: ui-serif, "Iowan Old Style", Baskerville');
     expect(sourceCss).toMatch(/body\s*\{[^}]*font-family:\s*var\(--font-sans\)/su);
