@@ -27,10 +27,16 @@ when that marker and every Vercel signal are absent; otherwise the exact marker,
 all required. Missing, malformed, or inconsistent platform state fails closed.
 Production admission requires the production branch ref, while `main` and pull
 requests produce previews only. After the documented one-time bootstrap, the
-release workflow leaves the established production branch already exact or
-non-force fast-forwards it to the exact verified release tag commit only after
-canonical npm and the immutable Latest GitHub Release agree. A missing branch is
-a hard failure; the workflow never recreates it. On a production deployment,
+tag Release workflow publishes only the immutable GitHub Release. A separate
+current-main promotion workflow either proves the established production branch
+already exact without entering its key environment, or uses one repository-only
+release App token and an explicit expected-old Git lease to fast-forward it to
+the exact verified release commit. Canonical npm, the peeled tag, current main,
+and the immutable Latest GitHub Release must agree. A missing branch is a hard
+failure; neither workflow recreates it. The live no-bypass ruleset currently
+protects deletion and non-fast-forward movement. The App-only update rule,
+creation rule, writer environment, and canary proof remain pending live
+reconciliation. On a production deployment,
 `website:vercel-build` independently verifies checked-out HEAD, the matching
 GitHub tag commit, canonical npm, and the immutable Latest Release before building.
 Preview and local builds perform no external release verification.
