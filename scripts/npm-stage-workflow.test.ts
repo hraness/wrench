@@ -4407,16 +4407,21 @@ fi
       "already-exact branch takes a separate read-only job",
       "no environment admission, App variable, private key, token mint, or Git\npush",
       "`production-ref-writer-key`, configured with\n`deployment: false`",
-      "require reviewer `0thernet`, disable\nadmin bypass",
+      "require reviewer `0thernet`, disable\nadmin bypass, set `prevent_self_review=false`",
       "provisional source and initial App registration close to exactly\n`metadata:read` and `contents:write`",
       "with no Administration permission",
       "runtime token proof does not prove\nthe installation-wide selected-repository set",
       "exhaustively read every repository selected for the\ninstallation",
       "contents-only permission set is provisional",
-      "`P` to `C` canary",
-      "`C` contains the real\nworkflow-file changes",
+      "`P` to `C`\ntransition on persistent ref `refs/heads/website-production-canary`",
+      "Create\nthat canary ref once at `P` before its creation rule becomes active",
+      "transition is single-use",
+      "must never be reset,\ndeleted, or repurposed",
+      "separately reviewed temporary workflow loaded from exact current `main`",
+      "production helper remains hard-bound to `website-production`",
+      "`C` contains the real workflow-file changes",
       "add exactly `workflows:write`",
-      "complete canary must run\nagain",
+      "complete canary must run again",
       "`--force-with-lease=refs/heads/website-production:<expected-old>`",
       "App token is revoked before the exact production-ref post-read",
       "every\n`WRENCH_RELEASE_APP_*` value removed",
@@ -4496,7 +4501,11 @@ fi
     expect(agents).toContain("provisional source and initial App registration must close to exactly `metadata:read` and `contents:write`");
     expect(agents).toContain("with no Administration permission");
     expect(agents).toContain("privileged setup must separately enumerate the installation-wide selected-repository set");
-    expect(agents).toContain("exact disposable `P` to `C` canary");
+    expect(agents).toContain("`prevent_self_review=false`");
+    expect(agents).toContain("one exact `P` to `C` transition on persistent ref `refs/heads/website-production-canary`");
+    expect(agents).toContain("never reset, delete, or repurpose it");
+    expect(agents).toContain("separately reviewed temporary current-main source");
+    expect(agents).toContain("Keep the production helper hard-bound to `website-production`");
     expect(agents).toContain("add exactly `workflows:write` before repeating the complete canary");
     expect(agents).not.toContain("Never grant that App Administration or Workflows permission");
     expect(agents).toContain("Require bounded read-only jobs");
@@ -4533,7 +4542,11 @@ fi
     expect(websiteAgents).not.toContain("the App must have exactly `metadata:read` and `contents:write`");
     expect(websiteAgents).toContain("initial `metadata:read` and `contents:write` App permission set as provisional");
     expect(websiteAgents).toContain("privileged setup separately proves that the installation-wide selected-repository set contains only Wrench");
-    expect(websiteAgents).toContain("exact disposable `P` to `C` canary");
+    expect(websiteAgents).toContain("`prevent_self_review=false`");
+    expect(websiteAgents).toContain("one single-use `P` to `C` transition on persistent ref `refs/heads/website-production-canary`");
+    expect(websiteAgents).toContain("never reset/delete/repurpose it");
+    expect(websiteAgents).toContain("remove the separately reviewed temporary canary workflow after the proof");
+    expect(websiteAgents).toContain("keep the production helper hard-bound to `website-production`");
     expect(websiteAgents).toContain("separate reviewed source and App-registration amendment to exactly `workflows:write`");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");

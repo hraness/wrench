@@ -343,10 +343,11 @@ Only an actual fast-forward enters `production-ref-writer-key`, configured with
 `deployment: false` so the secret-bearing job does not create a GitHub
 Deployment record that could collide with the Vercel-only Production inventory.
 The environment must permit only `main`, require reviewer `0thernet`, disable
-admin bypass, and store only `WRENCH_RELEASE_APP_PRIVATE_KEY` plus the reviewed
-App ID, client ID, slug, and selected installation ID variables. The job repeats
-the full current-main, peeled-tag, immutable Release, and Latest authority check
-after environment approval and before mutation.
+admin bypass, set `prevent_self_review=false` because that reviewer is currently
+the sole eligible maintainer, and store only `WRENCH_RELEASE_APP_PRIVATE_KEY`
+plus the reviewed App ID, client ID, slug, and selected installation ID
+variables. The job repeats the full current-main, peeled-tag, immutable Release,
+and Latest authority check after environment approval and before mutation.
 
 The writer authenticates one private Hraness-owned GitHub App. The checked
 provisional source and initial App registration close to exactly
@@ -360,14 +361,24 @@ installation with the administrator identity, prove that the unique result is
 `hraness/wrench` at ID `1316443113`, and retain the exact readback with the
 canary evidence.
 
-The contents-only permission set is provisional until an exact disposable
-`P` to `C` canary proves a leased fast-forward where `C` contains the real
-workflow-file changes. The release remains unready for production activation or
-final product merge until that canary passes. If GitHub rejects the push because
-the App also needs Workflows permission, preserve the exact failure evidence and
-keep production frozen. A separate reviewed source and App-registration change
-may then add exactly `workflows:write`, after which the complete canary must run
-again. Never broaden the App silently or during a failed canary.
+The contents-only permission set is provisional until one exact `P` to `C`
+transition on persistent ref `refs/heads/website-production-canary` proves a
+leased fast-forward where `C` contains the real workflow-file changes. Create
+that canary ref once at `P` before its creation rule becomes active, then retain
+it at `C`; the transition is single-use, and the ref must never be reset,
+deleted, or repurposed. Its no-bypass creation, deletion, and non-fast-forward
+rules and its App-only update rule must exactly mirror the production layers. A
+separately reviewed temporary workflow loaded from exact current `main` may run
+the bounded proof, but it must be removed after its exact run, ref, ruleset,
+rule-suite, token-revocation, and ordinary-actor denial evidence is retained.
+The production helper remains hard-bound to `website-production` and must not be
+made caller-selectable for the canary. The release remains unready for
+production activation or final product merge until that proof passes. If GitHub
+rejects the push because the App also needs Workflows permission, preserve the
+exact failure evidence and keep production frozen. A separate reviewed source
+and App-registration change may then add exactly `workflows:write`, after which
+the complete canary must run again. Never broaden the App silently or during a
+failed canary.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it, passes it only through a private
