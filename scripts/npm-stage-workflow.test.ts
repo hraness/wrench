@@ -17,10 +17,24 @@ import {
   packageArtifactBudget,
 } from "./package-budget.js";
 import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
+import {
+  assertReleaseTagNewerThanPublished,
+  collectDeploymentStatuses,
+  collectProductionDeployments,
+  createProviderBaseline,
+  decodeProviderReceipt,
+  encodeProviderReceipt,
+  parseIncludedGitHubResponse,
+  promoteWebsiteProduction,
+  releaseGraphqlRequestBudget,
+  releaseRestRequestBudget,
+  waitForProviderOutcome as waitForProviderOutcomeRaw,
+} from "./release-provider-outcome.mjs";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
 const ciWorkflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
+const providerOutcomeHelperUrl = new URL("./release-provider-outcome.mjs", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packageArtifactUrl = new URL("./package-artifact.ts", import.meta.url);
@@ -177,7 +191,596 @@ function npmCommands(markdown: string): readonly string[] {
   return commands;
 }
 
+const providerRepository = "hraness/wrench";
+const providerPreviousSha = "1".repeat(40);
+const providerVerifiedSha = "2".repeat(40);
+const providerTag = "v0.16.2";
+const providerReleasePublishedAt = "2026-08-29T14:00:00Z";
+const providerBaselineServerDate = "2026-08-29T15:00:00.000Z";
+const providerPromotionServerDate = "2026-08-29T15:01:00.000Z";
+const providerAuthority = Object.freeze({
+  repository: providerRepository,
+  verifiedSha: providerVerifiedSha,
+  verifiedTag: providerTag,
+});
+
+const waitForProviderOutcome = (
+  options: Parameters<typeof waitForProviderOutcomeRaw>[0],
+): ReturnType<typeof waitForProviderOutcomeRaw> => waitForProviderOutcomeRaw({
+  defaultBranch: "main",
+  eventName: "push",
+  recoveryWorkflowSha: "",
+  ...providerAuthority,
+  ...options,
+});
+
+type ProviderJson = null | boolean | number | string | readonly ProviderJson[] | {
+  readonly [key: string]: ProviderJson;
+};
+
+function providerDeployment(
+  id: number,
+  createdAt: string,
+  overrides: Readonly<Record<string, ProviderJson>> = {},
+): ProviderJson {
+  const sha = typeof overrides.sha === "string" ? overrides.sha : providerVerifiedSha;
+  return {
+    created_at: createdAt,
+    creator: { id: 35613825, login: "vercel[bot]", type: "Bot" },
+    environment: "Production",
+    id,
+    original_environment: "Production",
+    ref: sha,
+    sha,
+    statuses_url: `https://api.github.com/repos/${providerRepository}/deployments/${String(id)}/statuses`,
+    task: "deploy",
+    ...overrides,
+  };
+}
+
+function providerGraphqlDeployment(
+  id: number,
+  createdAt: string,
+  overrides: Readonly<Record<string, ProviderJson>> = {},
+): ProviderJson {
+  const vercelUrl = `https://wrench-${String(id)}-hraness.vercel.app`;
+  const defaultLatestStatus: ProviderJson = {
+    createdAt,
+    creator: { __typename: "Bot", databaseId: 35613825, login: "vercel" },
+    environment: "Production",
+    environmentUrl: vercelUrl,
+    id: `status-${String(id)}`,
+    logUrl: vercelUrl,
+    state: "SUCCESS",
+    updatedAt: createdAt,
+  };
+  const latestStatus = Object.hasOwn(overrides, "latestStatus")
+    ? overrides.latestStatus
+    : defaultLatestStatus;
+  const { latestStatus: _latestStatus, ...restOverrides } = overrides;
+  return {
+    commitOid: providerVerifiedSha,
+    createdAt,
+    creator: { __typename: "Bot", databaseId: 35613825, login: "vercel" },
+    databaseId: id,
+    environment: "Production",
+    latestStatus,
+    originalEnvironment: "Production",
+    ref: null,
+    state: "ACTIVE",
+    task: "deploy",
+    updatedAt: createdAt,
+    ...restOverrides,
+  };
+}
+
+function graphqlDeploymentFromRest(
+  value: ProviderJson,
+  restStatuses: readonly ProviderJson[] = [],
+): ProviderJson {
+  const deployment = value as Readonly<Record<string, ProviderJson>>;
+  const creator = deployment.creator as Readonly<Record<string, ProviderJson>>;
+  const derivedStatuses = restStatuses.map((value) => {
+    const status = value as Readonly<Record<string, ProviderJson>>;
+    const statusCreator = status.creator as Readonly<Record<string, ProviderJson>>;
+    return {
+      createdAt: status.created_at,
+      creator: {
+        __typename: statusCreator.type,
+        databaseId: statusCreator.id,
+        login: statusCreator.login === "vercel[bot]" ? "vercel" : statusCreator.login,
+      },
+      environment: status.environment,
+      environmentUrl: status.environment_url,
+      id: status.node_id,
+      logUrl: status.log_url,
+      state: typeof status.state === "string" ? status.state.toUpperCase() : status.state,
+      updatedAt: status.updated_at,
+    } satisfies ProviderJson;
+  });
+  const derivedLatestStatus = derivedStatuses[0];
+  const statusState = (derivedLatestStatus as Readonly<Record<string, ProviderJson>> | undefined)
+    ?.state;
+  const derivedState = statusState === "SUCCESS" ? "ACTIVE" : statusState;
+  const latestStatus = deployment.graphql_latest_status ?? derivedLatestStatus ??
+    (providerGraphqlDeployment(
+      deployment.id as number,
+      deployment.created_at as string,
+    ) as Readonly<Record<string, ProviderJson>>).latestStatus;
+  return providerGraphqlDeployment(
+    deployment.id as number,
+    deployment.created_at as string,
+    {
+      commitOid: deployment.sha,
+      creator: {
+        __typename: creator.type,
+        databaseId: creator.id,
+        login: creator.login === "vercel[bot]" ? "vercel" : creator.login,
+      },
+      environment: deployment.environment,
+      latestStatus,
+      originalEnvironment: deployment.original_environment,
+      state: deployment.graphql_state ?? derivedState ?? "ACTIVE",
+      task: deployment.task,
+      updatedAt:
+        deployment.graphql_updated_at ??
+        (derivedLatestStatus as Readonly<Record<string, ProviderJson>> | undefined)?.updatedAt ??
+        deployment.created_at,
+    },
+  );
+}
+
+function providerGraphqlResponse(
+  nodes: readonly ProviderJson[],
+  {
+    cost = 1,
+    endCursor = null,
+    hasNextPage = false,
+    remaining = 999,
+    resetAt = "2026-08-29T16:00:00Z",
+    totalCount = nodes.length,
+  }: Readonly<{
+    cost?: number;
+    endCursor?: ProviderJson;
+    hasNextPage?: boolean;
+    remaining?: number;
+    resetAt?: string;
+    totalCount?: number;
+  }> = {},
+): ProviderJson {
+  return {
+    data: {
+      rateLimit: { cost, remaining, resetAt },
+      repository: {
+        deployments: {
+          nodes,
+          pageInfo: { endCursor, hasNextPage },
+          totalCount,
+        },
+      },
+    },
+  };
+}
+
+function providerStatus(
+  id: number,
+  state: string,
+  createdAt: string,
+  overrides: Readonly<Record<string, ProviderJson>> = {},
+  deploymentId = 10,
+): ProviderJson {
+  const vercelUrl = `https://wrench-${String(deploymentId)}-hraness.vercel.app`;
+  return {
+    created_at: createdAt,
+    creator: { id: 35613825, login: "vercel[bot]", type: "Bot" },
+    deployment_url: `https://api.github.com/repos/${providerRepository}/deployments/${String(deploymentId)}`,
+    environment: "Production",
+    environment_url: vercelUrl,
+    id,
+    log_url: vercelUrl,
+    node_id: `status-${String(id)}`,
+    state,
+    target_url: vercelUrl,
+    updated_at: createdAt,
+    ...overrides,
+  };
+}
+
+function providerRef(sha: string, branch = "website-production"): ProviderJson {
+  return { object: { sha, type: "commit" }, ref: `refs/heads/${branch}` };
+}
+
+function providerRelease(overrides: Readonly<Record<string, ProviderJson>> = {}): ProviderJson {
+  return {
+    draft: false,
+    immutable: true,
+    prerelease: false,
+    published_at: providerReleasePublishedAt,
+    tag_name: providerTag,
+    ...overrides,
+  };
+}
+
+function providerLatest(overrides: Readonly<Record<string, ProviderJson>> = {}): ProviderJson {
+  return { tag_name: providerTag, ...overrides };
+}
+
+function providerCompare(overrides: Readonly<Record<string, ProviderJson>> = {}): ProviderJson {
+  return {
+    ahead_by: 1,
+    base_commit: { sha: providerPreviousSha },
+    behind_by: 0,
+    merge_base_commit: { sha: providerPreviousSha },
+    status: "ahead",
+    ...overrides,
+  };
+}
+
+class ProviderApiFixture {
+  readonly calls: string[] = [];
+  readonly graphqlCalls: string[] = [];
+  readonly includedCalls: string[] = [];
+  readonly timeoutMilliseconds: number[] = [];
+  readonly deploymentDetailSnapshots: readonly ProviderJson[];
+  readonly defaultBranchSnapshots: readonly string[];
+  readonly defaultBranchShaSnapshots: readonly string[];
+  readonly deploymentSnapshots: ProviderJson[][];
+  readonly graphqlResponses: readonly ProviderJson[];
+  readonly graphqlSnapshots: ProviderJson[][] | undefined;
+  readonly latestSnapshots: readonly ProviderJson[];
+  readonly serverDates: readonly string[];
+  readonly statusSnapshots: Map<number, ProviderJson[][]>;
+  compare: ProviderJson = providerCompare();
+  compareHook: (() => void) | undefined;
+  deploymentDetailError: Error | undefined;
+  patchError: Error | undefined;
+  refSha: string;
+  readonly refSnapshots: readonly string[];
+  readonly refValues: readonly ProviderJson[];
+  readonly releaseSnapshots: readonly ProviderJson[];
+  readonly tagSnapshots: readonly string[];
+  latest: ProviderJson = providerLatest();
+  release: ProviderJson = providerRelease();
+  readonly readHook: ((timeoutMilliseconds: number | undefined) => void) | undefined;
+
+  #deploymentDetailRead = 0;
+  #defaultBranchRead = 0;
+  #defaultBranchShaRead = 0;
+  #deploymentRead = -1;
+  #deploymentSnapshot: ProviderJson[] = [];
+  #graphqlRead = -1;
+  #graphqlResponseRead = 0;
+  #graphqlSnapshot: ProviderJson[] = [];
+  #refRead = 0;
+  #releaseRead = 0;
+  #latestRead = 0;
+  #serverDateRead = 0;
+  #statusReads = new Map<number, number>();
+  #statusCurrent = new Map<number, ProviderJson[]>();
+  #tagRead = 0;
+
+  constructor({
+    deploymentDetails = [],
+    defaultBranchSnapshots = [],
+    defaultBranchShaSnapshots = [],
+    deployments = [[]],
+    graphqlDeployments,
+    graphqlResponses = [],
+    latestSnapshots = [],
+    refSnapshots = [],
+    refSha = providerPreviousSha,
+    refValues = [],
+    readHook,
+    releaseSnapshots = [],
+    serverDates = [providerPromotionServerDate],
+    statuses = new Map<number, ProviderJson[][]>(),
+    tagSnapshots = [],
+  }: Readonly<{
+    deploymentDetails?: readonly ProviderJson[];
+    defaultBranchSnapshots?: readonly string[];
+    defaultBranchShaSnapshots?: readonly string[];
+    deployments?: ProviderJson[][];
+    graphqlDeployments?: ProviderJson[][];
+    graphqlResponses?: readonly ProviderJson[];
+    latestSnapshots?: readonly ProviderJson[];
+    refSnapshots?: readonly string[];
+    refSha?: string;
+    refValues?: readonly ProviderJson[];
+    readHook?: (timeoutMilliseconds: number | undefined) => void;
+    releaseSnapshots?: readonly ProviderJson[];
+    serverDates?: readonly string[];
+    statuses?: Map<number, ProviderJson[][]>;
+    tagSnapshots?: readonly string[];
+  }> = {}) {
+    this.deploymentDetailSnapshots = deploymentDetails;
+    this.defaultBranchSnapshots = defaultBranchSnapshots;
+    this.defaultBranchShaSnapshots = defaultBranchShaSnapshots;
+    this.deploymentSnapshots = deployments;
+    this.graphqlResponses = graphqlResponses;
+    this.graphqlSnapshots = graphqlDeployments;
+    this.latestSnapshots = latestSnapshots;
+    this.refSha = refSha;
+    this.refSnapshots = refSnapshots;
+    this.refValues = refValues;
+    this.readHook = readHook;
+    this.releaseSnapshots = releaseSnapshots;
+    this.serverDates = serverDates;
+    this.statusSnapshots = statuses;
+    this.tagSnapshots = tagSnapshots;
+  }
+
+  async graphql(input: Readonly<{
+    after?: string;
+    name: string;
+    owner: string;
+    query: string;
+  }>, options?: Readonly<{ timeoutMilliseconds?: number }>): Promise<ProviderJson> {
+    if (options?.timeoutMilliseconds !== undefined) {
+      this.timeoutMilliseconds.push(options.timeoutMilliseconds);
+    }
+    this.readHook?.(options?.timeoutMilliseconds);
+    expect(input.owner).toBe("hraness");
+    expect(input.name).toBe("wrench");
+    expect(input.query).toContain("query WrenchProductionDeployments");
+    this.graphqlCalls.push(`after=${input.after ?? ""}`);
+    const response = this.graphqlResponses[
+      Math.min(this.#graphqlResponseRead, this.graphqlResponses.length - 1)
+    ];
+    if (response !== undefined) {
+      this.#graphqlResponseRead += 1;
+      return response;
+    }
+    const page = input.after === undefined
+      ? 1
+      : Number(/^cursor-([1-4])$/u.exec(input.after)?.[1] ?? "0") + 1;
+    if (!Number.isSafeInteger(page) || page < 1 || page > 5) {
+      throw new Error(`Unexpected GraphQL cursor ${input.after ?? ""}`);
+    }
+    if (page === 1) {
+      this.#graphqlRead += 1;
+      const read = Math.min(this.#graphqlRead, this.deploymentSnapshots.length - 1);
+      this.#deploymentSnapshot = this.deploymentSnapshots[read] ?? [];
+      this.#graphqlSnapshot = this.graphqlSnapshots?.[
+        Math.min(this.#graphqlRead, this.graphqlSnapshots.length - 1)
+      ] ?? this.#deploymentSnapshot.map((deployment) => {
+        const raw = deployment as Readonly<Record<string, ProviderJson>>;
+        const id = raw.id as number;
+        const statusRead = this.#statusReads.get(id) ?? 0;
+        const snapshots = this.statusSnapshots.get(id) ?? [];
+        const currentStatuses = snapshots[Math.min(statusRead, snapshots.length - 1)] ?? [];
+        return graphqlDeploymentFromRest(deployment, currentStatuses);
+      });
+    }
+    const start = (page - 1) * 100;
+    const nodes = this.#graphqlSnapshot.slice(start, page * 100);
+    const hasNextPage = this.#graphqlSnapshot.length > page * 100;
+    return providerGraphqlResponse(nodes, {
+      endCursor: hasNextPage ? `cursor-${String(page)}` : `end-${String(page)}`,
+      hasNextPage,
+      remaining: 999 - this.graphqlCalls.length,
+      totalCount: this.#graphqlSnapshot.length,
+    });
+  }
+
+  async get(
+    endpoint: string,
+    options?: Readonly<{ timeoutMilliseconds?: number }>,
+  ): Promise<ProviderJson> {
+    if (options?.timeoutMilliseconds !== undefined) {
+      this.timeoutMilliseconds.push(options.timeoutMilliseconds);
+    }
+    this.readHook?.(options?.timeoutMilliseconds);
+    this.calls.push(`GET ${endpoint}`);
+    if (endpoint === `/repos/${providerRepository}`) {
+      const branch = this.defaultBranchSnapshots[
+        Math.min(this.#defaultBranchRead, this.defaultBranchSnapshots.length - 1)
+      ];
+      this.#defaultBranchRead += 1;
+      return { default_branch: branch ?? "main" };
+    }
+    if (endpoint === `/repos/${providerRepository}/git/ref/heads/main`) {
+      const sha = this.defaultBranchShaSnapshots[
+        Math.min(this.#defaultBranchShaRead, this.defaultBranchShaSnapshots.length - 1)
+      ];
+      this.#defaultBranchShaRead += 1;
+      return providerRef(sha ?? providerVerifiedSha, "main");
+    }
+    if (endpoint === `/repos/${providerRepository}/git/ref/heads/website-production`) {
+      const value = this.refValues[Math.min(this.#refRead, this.refValues.length - 1)];
+      const snapshot = this.refSnapshots[Math.min(this.#refRead, this.refSnapshots.length - 1)];
+      this.#refRead += 1;
+      if (value !== undefined) return value;
+      return providerRef(snapshot ?? this.refSha);
+    }
+    if (endpoint === `/repos/${providerRepository}/releases/tags/${providerTag}`) {
+      const snapshot = this.releaseSnapshots[
+        Math.min(this.#releaseRead, this.releaseSnapshots.length - 1)
+      ];
+      this.#releaseRead += 1;
+      if (snapshot !== undefined) return snapshot;
+      return this.release;
+    }
+    if (endpoint === `/repos/${providerRepository}/releases/latest`) {
+      const snapshot = this.latestSnapshots[
+        Math.min(this.#latestRead, this.latestSnapshots.length - 1)
+      ];
+      this.#latestRead += 1;
+      return snapshot ?? this.latest;
+    }
+    if (endpoint === `/repos/${providerRepository}/commits/tags/${providerTag}`) {
+      const snapshot = this.tagSnapshots[Math.min(this.#tagRead, this.tagSnapshots.length - 1)];
+      this.#tagRead += 1;
+      return { sha: snapshot ?? providerVerifiedSha };
+    }
+    if (
+      endpoint ===
+      `/repos/${providerRepository}/compare/${providerPreviousSha}...${providerVerifiedSha}`
+    ) {
+      this.compareHook?.();
+      return this.compare;
+    }
+    const deploymentPage = new RegExp(
+      `^/repos/${providerRepository}/deployments\\?environment=Production&task=deploy&per_page=100&page=([1-6])$`,
+      "u",
+    ).exec(endpoint);
+    if (deploymentPage !== null) {
+      const page = Number(deploymentPage[1]);
+      if (page === 1) {
+        this.#deploymentRead += 1;
+        this.#deploymentSnapshot =
+          this.deploymentSnapshots[Math.min(this.#deploymentRead, this.deploymentSnapshots.length - 1)] ?? [];
+      }
+      return this.#deploymentSnapshot.slice((page - 1) * 100, page * 100);
+    }
+    const deploymentDetail = new RegExp(
+      `^/repos/${providerRepository}/deployments/([1-9][0-9]*)$`,
+      "u",
+    ).exec(endpoint);
+    if (deploymentDetail !== null) {
+      if (this.deploymentDetailError !== undefined) throw this.deploymentDetailError;
+      const deploymentId = Number(deploymentDetail[1]);
+      const snapshot = this.deploymentDetailSnapshots[
+        Math.min(this.#deploymentDetailRead, this.deploymentDetailSnapshots.length - 1)
+      ];
+      this.#deploymentDetailRead += 1;
+      if (snapshot !== undefined) return snapshot;
+      const found = this.#deploymentSnapshot.find((deployment) =>
+        (deployment as Readonly<Record<string, ProviderJson>>).id === deploymentId);
+      if (found !== undefined) return found;
+      throw new Error(`Deployment ${String(deploymentId)} disappeared`);
+    }
+    const statusPage = new RegExp(
+      `^/repos/${providerRepository}/deployments/([1-9][0-9]*)/statuses\\?per_page=100&page=([1-6])$`,
+      "u",
+    ).exec(endpoint);
+    if (statusPage !== null) {
+      const deploymentId = Number(statusPage[1]);
+      const page = Number(statusPage[2]);
+      if (page === 1) {
+        const read = (this.#statusReads.get(deploymentId) ?? -1) + 1;
+        this.#statusReads.set(deploymentId, read);
+        const snapshots = this.statusSnapshots.get(deploymentId) ?? [[]];
+        this.#statusCurrent.set(
+          deploymentId,
+          snapshots[Math.min(read, snapshots.length - 1)] ?? [],
+        );
+      }
+      const statuses = this.#statusCurrent.get(deploymentId) ?? [];
+      return statuses.slice((page - 1) * 100, page * 100);
+    }
+    throw new Error(`Unexpected provider GET ${endpoint}`);
+  }
+
+  async getWithServerDate(endpoint: string): Promise<ProviderJson> {
+    this.includedCalls.push(endpoint);
+    const body = await this.get(endpoint);
+    const serverDate = this.serverDates[
+      Math.min(this.#serverDateRead, this.serverDates.length - 1)
+    ];
+    this.#serverDateRead += 1;
+    return { body, serverDate: serverDate ?? providerPromotionServerDate };
+  }
+
+  async patch(endpoint: string, body: Readonly<{ force: boolean; sha: string }>): Promise<ProviderJson> {
+    this.calls.push(`PATCH ${endpoint} ${JSON.stringify(body)}`);
+    expect(endpoint).toBe(`/repos/${providerRepository}/git/refs/heads/website-production`);
+    expect(body).toEqual({ force: false, sha: providerVerifiedSha });
+    if (this.patchError !== undefined) throw this.patchError;
+    this.refSha = providerVerifiedSha;
+    return providerRef(providerVerifiedSha);
+  }
+}
+
+function terminalBaselineStatus(
+  deploymentId = 10,
+  createdAt = "2026-08-29T13:01:00Z",
+): Map<number, ProviderJson[][]> {
+  return new Map([
+    [deploymentId, [[providerStatus(100, "success", createdAt, {}, deploymentId)]]],
+  ]);
+}
+
+async function providerReceipts(mode: "advanced" | "already-exact"): Promise<Readonly<{
+  baseline: ProviderJson;
+  baselineDeployment: ProviderJson;
+  promotion: ProviderJson;
+  promotionCalls: readonly string[];
+}>> {
+  const baselineDeployment = providerDeployment(
+    10,
+    mode === "already-exact" ? "2026-08-29T14:05:00Z" : "2026-08-29T13:00:00Z",
+    mode === "already-exact" ? {} : { sha: providerPreviousSha },
+  );
+  const baselineApi = new ProviderApiFixture({
+    deployments: [[baselineDeployment]],
+    refSha: mode === "already-exact" ? providerVerifiedSha : providerPreviousSha,
+    serverDates: [providerBaselineServerDate, providerBaselineServerDate],
+    statuses: terminalBaselineStatus(
+      10,
+      mode === "already-exact" ? "2026-08-29T14:06:00Z" : "2026-08-29T13:01:00Z",
+    ),
+  });
+  const baseline = await createProviderBaseline({
+    api: baselineApi,
+    repository: providerRepository,
+    verifiedSha: providerVerifiedSha,
+  }) as ProviderJson;
+  const promotionApi = new ProviderApiFixture({
+    deployments: [[baselineDeployment]],
+    refSha: mode === "already-exact" ? providerVerifiedSha : providerPreviousSha,
+    serverDates: [providerPromotionServerDate],
+    statuses: terminalBaselineStatus(
+      10,
+      mode === "already-exact" ? "2026-08-29T14:06:00Z" : "2026-08-29T13:01:00Z",
+    ),
+  });
+  const promotion = await promoteWebsiteProduction({
+    api: promotionApi,
+    baselineReceipt: baseline,
+    repository: providerRepository,
+    verifiedSha: providerVerifiedSha,
+    verifiedTag: providerTag,
+  }) as ProviderJson;
+  return Object.freeze({
+    baseline,
+    baselineDeployment,
+    promotion,
+    promotionCalls: Object.freeze([...promotionApi.calls]),
+  });
+}
+
 describe("npm publication contract", () => {
+  test("keeps both complete CI checks within the reviewed wall-time budget", async () => {
+    const workflow = await readFile(ciWorkflowUrl, "utf8");
+    const checkStart = workflow.indexOf("\n  check:\n");
+    const macosStart = workflow.indexOf("\n  macos:\n");
+    const requiredStart = workflow.indexOf("\n  required:\n");
+
+    expect(workflow.match(/^  check:$/gmu)).toHaveLength(1);
+    expect(workflow.match(/^  macos:$/gmu)).toHaveLength(1);
+    expect(workflow.match(/^  required:$/gmu)).toHaveLength(1);
+    expect(workflow.match(/^    timeout-minutes: [0-9]+$/gmu)).toHaveLength(3);
+    expect(checkStart).toBeGreaterThan(-1);
+    expect(macosStart).toBeGreaterThan(checkStart);
+    expect(requiredStart).toBeGreaterThan(macosStart);
+
+    const checkJob = workflow.slice(checkStart, macosStart);
+    const macosJob = workflow.slice(macosStart, requiredStart);
+    const requiredJob = workflow.slice(requiredStart);
+
+    const timeoutValues = (job: string): readonly number[] =>
+      [...job.matchAll(/^    timeout-minutes: ([0-9]+)$/gmu)]
+        .map((match) => Number(match[1]));
+
+    expect(timeoutValues(checkJob)).toEqual([75]);
+    expect(timeoutValues(macosJob)).toEqual([75]);
+    expect(timeoutValues(requiredJob)).toEqual([5]);
+    expect(checkJob.match(/^      - run: bun run check$/gmu) ?? []).toHaveLength(1);
+    expect(macosJob.match(/^      - run: bun run check$/gmu) ?? []).toHaveLength(1);
+    expect(requiredJob.match(/^      - run: bun run check$/gmu) ?? []).toHaveLength(0);
+    expect(requiredJob.match(/^    needs: \[check, macos\]$/gmu) ?? []).toHaveLength(1);
+  });
+
   test("keeps one narrow release-authoritative package budget", async () => {
     const [artifact, budget, smoke] = await Promise.all([
       readFile(packageArtifactUrl, "utf8"),
@@ -787,10 +1390,10 @@ esac
     }
   });
 
-  test("binds and revalidates only the current default-branch recovery workflow source", async () => {
+  test("binds the recovery source and routes strong revalidation at Release creation", async () => {
     const workflow = await readFile(releaseWorkflowUrl, "utf8");
     const bindScript = workflowStepScript(workflow, "Bind recovery workflow source");
-    const revalidateScript = workflowStepScript(workflow, "Revalidate recovery workflow source");
+    const publishScript = workflowStepScript(workflow, "Publish verified GitHub Release");
     const directory = await mkdtemp(join(tmpdir(), "wrench-release-workflow-source-"));
     const binaryDirectory = join(directory, "bin");
     const ghStub = join(binaryDirectory, "gh");
@@ -804,6 +1407,11 @@ esac
     expect(workflow).toContain(
       "RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.recovery_workflow_sha }}",
     );
+    expect(publishScript.match(/release-provider-outcome\.mjs revalidate-source/gu)).toHaveLength(1);
+    expect(publishScript.indexOf("release-provider-outcome.mjs release-order"))
+      .toBeLessThan(publishScript.indexOf("release-provider-outcome.mjs revalidate-source"));
+    expect(publishScript.indexOf("release-provider-outcome.mjs revalidate-source"))
+      .toBeLessThan(publishScript.indexOf("--method POST"));
 
     try {
       await mkdir(binaryDirectory, { recursive: true });
@@ -838,22 +1446,9 @@ printf '%s\n' "$DEFAULT_HEAD"
         ]);
         return runWorkflowScript(bindScript, { ...baseEnvironment, ...overrides });
       };
-      const runRevalidation = async (
-        overrides: Readonly<Record<string, string>>,
-      ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> => {
-        await rm(commandLog, { force: true });
-        return runWorkflowScript(revalidateScript, { ...baseEnvironment, ...overrides });
-      };
-
       const bound = await runBind({});
       expect(bound.exitCode).toBe(0);
       expect(await readFile(output, "utf8")).toBe(`sha=${workflowSha}\n`);
-      expect(await readFile(commandLog, "utf8")).toContain(
-        "/git/ref/heads/main",
-      );
-
-      const revalidated = await runRevalidation({});
-      expect(revalidated.exitCode).toBe(0);
       expect(await readFile(commandLog, "utf8")).toContain(
         "/git/ref/heads/main",
       );
@@ -869,16 +1464,6 @@ printf '%s\n' "$DEFAULT_HEAD"
         expect(await Bun.file(output).exists()).toBe(false);
       }
 
-      for (const overrides of [
-        { DEFAULT_HEAD: "2".repeat(40) },
-        { DEFAULT_HEAD: "api-failure" },
-        { RECOVERY_WORKFLOW_SHA: "not-a-commit" },
-        { EVENT_NAME: "schedule" },
-      ] as const) {
-        const rejected = await runRevalidation(overrides);
-        expect(rejected.exitCode).not.toBe(0);
-      }
-
       const tagBind = await runBind({
         DEFAULT_HEAD: "2".repeat(40),
         EVENT_NAME: "push",
@@ -888,20 +1473,6 @@ printf '%s\n' "$DEFAULT_HEAD"
       expect(await readFile(output, "utf8")).toBe("sha=\n");
       expect(await Bun.file(commandLog).exists()).toBe(false);
 
-      const tagRevalidation = await runRevalidation({
-        DEFAULT_HEAD: "2".repeat(40),
-        EVENT_NAME: "push",
-        RECOVERY_WORKFLOW_SHA: "",
-      });
-      expect(tagRevalidation.exitCode).toBe(0);
-      expect(await Bun.file(commandLog).exists()).toBe(false);
-
-      const crossWiredTag = await runRevalidation({
-        EVENT_NAME: "push",
-        RECOVERY_WORKFLOW_SHA: workflowSha,
-      });
-      expect(crossWiredTag.exitCode).not.toBe(0);
-      expect(await Bun.file(commandLog).exists()).toBe(false);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -949,11 +1520,16 @@ printf '%s\n' "$DEFAULT_HEAD"
     expect(publishScript).toContain('remote_tag_sha="$(gh api');
     expect(publishScript).toContain("/commits/tags/$VERIFIED_TAG");
     expect(publishScript.indexOf("remote_tag_sha="))
-      .toBeLessThan(publishScript.indexOf("gh release create"));
+      .toBeLessThan(publishScript.indexOf("--method POST"));
     expect(publishScript).toContain('if [[ "$remote_tag_sha" != "$VERIFIED_SHA" ]]');
     expect(publishScript).not.toContain("GITHUB_REF_NAME");
-    expect(publishScript).toContain('gh release view "$VERIFIED_TAG"');
-    expect(publishScript).toContain('gh release create "$VERIFIED_TAG"');
+    expect(publishScript).toContain('gh api --include "$release_endpoint"');
+    expect(publishScript).toContain("inspect-release-response");
+    expect(publishScript).toContain("validate-release");
+    expect(publishScript).toContain("--method POST");
+    expect(publishScript).toContain("-F generate_release_notes=true");
+    expect(publishScript).not.toContain("gh release view");
+    expect(publishScript).not.toContain("gh release create");
     for (const checkedSurface of [
       "dist/index.js",
       "dist/client.js",
@@ -1003,6 +1579,7 @@ printf '%s\n' "$DEFAULT_HEAD"
     const ghStub = join(binaryDirectory, "gh");
     const commandLog = join(directory, "commands.log");
     const verifiedSha = "2".repeat(40);
+    const workflowSha = "1".repeat(40);
 
     try {
       await mkdir(binaryDirectory, { recursive: true });
@@ -1010,17 +1587,64 @@ printf '%s\n' "$DEFAULT_HEAD"
 set -euo pipefail
 printf '%s\n' "$*" >> "$COMMAND_LOG"
 args="$*"
+release_json() {
+  printf '{"assets":[],"draft":false,"immutable":%s,"prerelease":false,"published_at":"2026-08-29T14:00:00Z","tag_name":"%s"}' "$RELEASE_IMMUTABLE" "$VERIFIED_TAG"
+}
 if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
   printf '%s\n' "$TAG_SHA"
-elif [[ "$args" == "release view $VERIFIED_TAG" ]]; then
-  exit 0
-elif [[ "$args" == *"release view $VERIFIED_TAG --json"* ]]; then
-  printf '%s\tfalse\tfalse\t%s\t0\n' "$VERIFIED_TAG" "$RELEASE_IMMUTABLE"
+elif [[ "$args" == "api --include /repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG" ]]; then
+  case "$LOOKUP_MODE" in
+    existing)
+      printf 'HTTP/2.0 200 OK\r\ndate: Sat, 29 Aug 2026 14:01:00 GMT\r\ncontent-type: application/json\r\n\r\n'
+      release_json
+      ;;
+    missing)
+      printf 'HTTP/2.0 404 Not Found\r\ndate: Sat, 29 Aug 2026 14:01:00 GMT\r\ncontent-type: application/json\r\n\r\n{"message":"Not Found"}\n'
+      exit 1
+      ;;
+    api-failure)
+      printf 'HTTP/2.0 500 Internal Server Error\r\ndate: Sat, 29 Aug 2026 14:01:00 GMT\r\ncontent-type: application/json\r\n\r\n{"message":"failure"}\n'
+      exit 1
+      ;;
+    malformed-404)
+      printf 'HTTP/2.0 404 Not Found\r\ndate: Sat, 29 Aug 2026 14:01:00 GMT\r\ncontent-type: application/json\r\n\r\n{"message":"Forbidden"}\n'
+      exit 1
+      ;;
+  esac
+elif [[ "$args" == "api /repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG" ]]; then
+  release_json
+elif [[ "$args" == *"/releases?per_page=100&page="* ]]; then
+  printf '[]\n'
+elif [[ "$args" == "api /repos/$GITHUB_REPOSITORY" ]]; then
+  case "$SOURCE_MODE" in
+    valid)
+      printf '{"default_branch":"%s"}\n' "$DEFAULT_BRANCH_STATE"
+      ;;
+    move-default)
+      if [[ "$(grep -Fxc "api /repos/$GITHUB_REPOSITORY" "$COMMAND_LOG")" -eq 1 ]]; then
+        printf '{"default_branch":"%s"}\n' "$DEFAULT_BRANCH"
+      else
+        printf '{"default_branch":"trunk"}\n'
+      fi
+      ;;
+    malformed)
+      printf '{"default_branch":null}\n'
+      ;;
+    api-failure)
+      exit 1
+      ;;
+  esac
+elif [[ "$args" == "api /repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" ]]; then
+  printf '{"object":{"sha":"%s","type":"commit"},"ref":"refs/heads/%s"}\n' \
+    "$SOURCE_SHA" "$DEFAULT_BRANCH"
 elif [[ "$args" == *"/releases/latest"* ]]; then
   printf '%s\n' "$LATEST_TAG"
-elif [[ "$args" == *"release create"* ]]; then
-  echo "recovery attempted to recreate an existing release" >&2
-  exit 91
+elif [[ "$args" == *"api --method POST /repos/$GITHUB_REPOSITORY/releases"* ]]; then
+  if [[ "$ALLOW_CREATE" != "true" ]]; then
+    echo "recovery attempted to recreate an existing release" >&2
+    exit 91
+  fi
+  release_json
 else
   echo "unexpected gh command: $args" >&2
   exit 1
@@ -1030,11 +1654,19 @@ fi
 
       const baseEnvironment = Object.freeze({
         COMMAND_LOG: commandLog,
+        DEFAULT_BRANCH: "main",
+        DEFAULT_BRANCH_STATE: "main",
+        EVENT_NAME: "workflow_dispatch",
         GITHUB_REF_NAME: "main",
         GITHUB_REPOSITORY: "hraness/wrench",
         LATEST_TAG: "v0.16.2",
+        LOOKUP_MODE: "existing",
+        ALLOW_CREATE: "false",
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
         RELEASE_IMMUTABLE: "true",
+        RECOVERY_WORKFLOW_SHA: workflowSha,
+        SOURCE_MODE: "valid",
+        SOURCE_SHA: workflowSha,
         TAG_SHA: verifiedSha,
         VERIFIED_SHA: verifiedSha,
         VERIFIED_TAG: "v0.16.2",
@@ -1048,11 +1680,79 @@ fi
 
       const recovered = await runCase({});
       expect(recovered.exitCode).toBe(0);
-      expect(await readFile(commandLog, "utf8")).not.toContain("release create");
+      expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
+
+      const created = await runCase({ ALLOW_CREATE: "true", LOOKUP_MODE: "missing" });
+      expect(created.exitCode).toBe(0);
+      const createCommands = await readFile(commandLog, "utf8");
+      expect(createCommands).toContain("--method POST");
+      expect(createCommands).toContain("generate_release_notes=true");
+      expect(createCommands).toContain("target_commitish=2222222222222222222222222222222222222222");
+      const createCommandLines = createCommands.trim().split("\n");
+      expect(createCommandLines.filter(
+        (line) => line === `api /repos/${providerRepository}`,
+      )).toHaveLength(2);
+      expect(createCommandLines.filter(
+        (line) => line === `api /repos/${providerRepository}/git/ref/heads/main`,
+      )).toHaveLength(1);
+      const createIndex = createCommandLines.findIndex((line) => line.includes("--method POST"));
+      expect(createCommandLines.slice(createIndex - 3, createIndex)).toEqual([
+        `api /repos/${providerRepository}`,
+        `api /repos/${providerRepository}/git/ref/heads/main`,
+        `api /repos/${providerRepository}`,
+      ]);
+
+      for (const overrides of [
+        { SOURCE_SHA: "3".repeat(40) },
+        { DEFAULT_BRANCH_STATE: "trunk" },
+        { SOURCE_MODE: "move-default" },
+        { SOURCE_MODE: "malformed" },
+        { SOURCE_MODE: "api-failure" },
+      ] as const) {
+        const rejectedCreate = await runCase({
+          ALLOW_CREATE: "true",
+          LOOKUP_MODE: "missing",
+          ...overrides,
+        });
+        expect(rejectedCreate.exitCode).not.toBe(0);
+        expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
+      }
+
+      const tagCreated = await runCase({
+        ALLOW_CREATE: "true",
+        EVENT_NAME: "push",
+        LOOKUP_MODE: "missing",
+        RECOVERY_WORKFLOW_SHA: "",
+      });
+      expect(tagCreated.exitCode).toBe(0);
+      const tagCreateCommands = await readFile(commandLog, "utf8");
+      expect(tagCreateCommands).toContain("--method POST");
+      expect(tagCreateCommands).not.toContain(`api /repos/${providerRepository}\n`);
+      expect(tagCreateCommands).not.toContain("/git/ref/heads/main");
+
+      const crossWiredTag = await runCase({
+        ALLOW_CREATE: "true",
+        EVENT_NAME: "push",
+        LOOKUP_MODE: "missing",
+        RECOVERY_WORKFLOW_SHA: workflowSha,
+      });
+      expect(crossWiredTag.exitCode).not.toBe(0);
+      const crossWiredCommands = await readFile(commandLog, "utf8");
+      expect(crossWiredCommands).not.toContain("--method POST");
+      expect(crossWiredCommands).not.toContain(`api /repos/${providerRepository}\n`);
+      expect(crossWiredCommands).not.toContain("/git/ref/heads/main");
+
+      const lookupFailure = await runCase({ LOOKUP_MODE: "api-failure" });
+      expect(lookupFailure.exitCode).not.toBe(0);
+      expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
+
+      const falseAbsence = await runCase({ LOOKUP_MODE: "malformed-404" });
+      expect(falseAbsence.exitCode).not.toBe(0);
+      expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
 
       for (const [overrides, message] of [
         [{ TAG_SHA: "3".repeat(40) }, "Remote v0.16.2 resolves to"],
-        [{ RELEASE_IMMUTABLE: "false" }, "is not published and immutable"],
+        [{ RELEASE_IMMUTABLE: "false" }, "is not exact, published, immutable, and asset-free"],
         [{ LATEST_TAG: "v0.16.1" }, "Latest release is v0.16.1"],
         [{ VERIFIED_TAG: "v0.16.2\npoison" }, "no verified stable release tag"],
       ] as const) {
@@ -1065,274 +1765,2026 @@ fi
     }
   });
 
-  test("promotes only the verified Latest release commit to website production", async () => {
-    const workflow = await readFile(releaseWorkflowUrl, "utf8");
-    const script = workflowStepScript(workflow, "Promote verified website production source");
-    const directory = await mkdtemp(join(tmpdir(), "wrench-website-production-"));
-    const binaryDirectory = join(directory, "bin");
-    const ghStub = join(binaryDirectory, "gh");
-    const commandLog = join(directory, "commands.log");
-    const promotedMarker = join(directory, "promoted.txt");
-    const currentSha = "1".repeat(40);
-    const verifiedSha = "2".repeat(40);
+  test("keeps provider verification read-only, terminal, and release-authoritative", async () => {
+    const [workflow, helper] = await Promise.all([
+      readFile(releaseWorkflowUrl, "utf8"),
+      readFile(providerOutcomeHelperUrl, "utf8"),
+    ]);
+    const job = (name: string): string => {
+      const start = workflow.indexOf(`\n  ${name}:\n`);
+      if (start < 0) throw new Error(`Workflow job not found: ${name}`);
+      const nextJob = /\n  [a-z][a-z_]*:\n/gu;
+      nextJob.lastIndex = start + `\n  ${name}:\n`.length;
+      const next = nextJob.exec(workflow)?.index ?? -1;
+      return workflow.slice(start, next < 0 ? undefined : next);
+    };
+    const baselineJob = job("provider_baseline");
+    const publishJob = job("publish");
+    const providerJob = job("provider_outcome");
+    const permissions = (jobText: string): readonly string[] => {
+      const match = /\n    permissions:\n((?:      [a-z-]+: (?:read|write)\n)+)/u.exec(jobText);
+      if (match?.[1] === undefined) throw new Error("Workflow job has no exact permission block");
+      return match[1].trim().split("\n").map((line) => line.trim()).sort();
+    };
 
-    expect(workflow).toContain("verified_sha: ${{ steps.identity.outputs.sha }}");
-    expect(workflow).toContain("VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}");
-    expect(workflow.indexOf("Latest release is $latest_tag"))
-      .toBeLessThan(workflow.indexOf("Promote verified website production source"));
-    expect(workflow).toContain('production_ref="refs/heads/website-production"');
-    expect(workflow).not.toContain("/git/matching-refs/heads/website-production");
-    expect(script).toContain(
-      'branch_read_endpoint="/repos/$GITHUB_REPOSITORY/git/ref/heads/website-production"',
-    );
-    expect(script).toContain(
-      'branch_update_endpoint="/repos/$GITHUB_REPOSITORY/git/refs/heads/website-production"',
-    );
-    expect(script).toContain("[.ref, .object.type, .object.sha] | @tsv");
-    expect(script).not.toContain("--include");
-    expect(script).not.toContain("--method POST");
-    expect(script).not.toContain('"/repos/$GITHUB_REPOSITORY/git/refs"');
-    expect(workflow.match(/\/commits\/tags\/\$VERIFIED_TAG/gu)).toHaveLength(2);
-    expect(script).toContain(
-      "--jq '[.status, (.ahead_by | tostring), (.behind_by | tostring), .base_commit.sha, .merge_base_commit.sha] | @tsv'",
-    );
-    expect(script).not.toContain(".head_commit.sha");
-    expect(script).not.toContain(".commits[-1].sha");
-    expect(workflow).toContain("-F force=false");
-    expect(workflow).not.toContain("-F force=true");
-    expect(workflow).not.toContain("git push --force");
-    expect(script).toContain(".ahead_by");
-    expect(script).toContain(".behind_by");
-    expect(script).not.toContain("GITHUB_REF_NAME");
-
-    try {
-      await mkdir(binaryDirectory, { recursive: true });
-      await writeFile(ghStub, `#!/bin/bash
-set -euo pipefail
-printf '%s\n' "$*" >> "$COMMAND_LOG"
-args="$*"
-if [[ "$args" == *"/commits/tags/$VERIFIED_TAG"* ]]; then
-  printf '%s\n' "$TAG_SHA"
-elif [[ "$args" == *"/compare/$CURRENT_SHA...$VERIFIED_SHA"* ]]; then
-  [[ "$args" == *"[.status, (.ahead_by | tostring), (.behind_by | tostring), .base_commit.sha, .merge_base_commit.sha] | @tsv"* ]]
-  [[ "$args" != *".head_commit.sha"* ]]
-  [[ "$args" != *".commits[-1].sha"* ]]
-  case "$PROMOTION_SCENARIO" in
-    ahead|patch-failure|patch-race|post-read-api-failure|post-read-mismatch)
-      printf 'ahead\t1\t0\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA"
-      ;;
-    api-failure) exit 1 ;;
-    behind-count) printf 'ahead\t1\t1\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
-    compare-extra-field) printf 'ahead\t1\t0\t%s\t%s\textra\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
-    malformed-ahead) printf 'ahead\t01\t0\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
-    missing-merge-base) printf 'ahead\t1\t0\t%s\t\n' "$CURRENT_SHA" ;;
-    wrong-base) printf 'ahead\t1\t0\t%s\t%s\n' "$(printf '3%.0s' {1..40})" "$CURRENT_SHA" ;;
-    wrong-merge-base) printf 'ahead\t1\t0\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" ;;
-    zero-ahead) printf 'ahead\t0\t0\t%s\t%s\n' "$CURRENT_SHA" "$CURRENT_SHA" ;;
-    *) printf 'diverged\t1\t1\t%s\t%s\n' "$CURRENT_SHA" "$(printf '3%.0s' {1..40})" ;;
-  esac
-elif [[ "$args" == *"--method PATCH"* ]]; then
-  [[ "$args" == *"/git/refs/heads/website-production"* ]]
-  [[ "$args" == *"-f sha=$VERIFIED_SHA"* ]]
-  [[ "$args" == *"-F force=false"* ]]
-  if [[ "$PROMOTION_SCENARIO" == "patch-failure" ]]; then
-    echo 'gh: simulated update failure' >&2
-    exit 1
-  elif [[ "$PROMOTION_SCENARIO" == "patch-race" ]]; then
-    echo 'gh: Reference update failed (HTTP 422)' >&2
-    exit 1
-  fi
-  printf 'patch\n' > "$PROMOTED_MARKER"
-elif [[ "$args" == *"/git/ref/heads/website-production"* && "$args" == *"@tsv"* ]]; then
-  if [[ -f "$PROMOTED_MARKER" ]]; then
-    case "$PROMOTION_SCENARIO" in
-      post-read-api-failure)
-        echo 'gh: simulated post-update read failure' >&2
-        exit 1
-        ;;
-      post-read-mismatch)
-        printf 'refs/heads/website-production\tcommit\t%s\n' "$CURRENT_SHA"
-        exit 0
-        ;;
-    esac
-    printf 'refs/heads/website-production\tcommit\t%s\n' "$VERIFIED_SHA"
-    exit 0
-  fi
-  case "$PROMOTION_SCENARIO" in
-    ref-404)
-      echo 'gh: Not Found (HTTP 404)' >&2
-      exit 1
-      ;;
-    ref-api-failure)
-      echo 'gh: simulated API failure' >&2
-      exit 1
-      ;;
-    ref-empty)
-      printf '\n'
-      ;;
-    ref-extra-field)
-      printf 'refs/heads/website-production\tcommit\t%s\textra\n' "$CURRENT_SHA"
-      ;;
-    ref-multiline)
-      printf 'refs/heads/website-production\tcommit\t%s\n' "$CURRENT_SHA"
-      printf 'refs/heads/website-production\tcommit\t%s\n' "$VERIFIED_SHA"
-      ;;
-    ref-uppercase-sha)
-      printf 'refs/heads/website-production\tcommit\t'
-      printf 'A%.0s' {1..40}
-      printf '\n'
-      ;;
-    ref-wrong-ref)
-      printf 'refs/heads/other\tcommit\t%s\n' "$CURRENT_SHA"
-      ;;
-    ref-wrong-type)
-      printf 'refs/heads/website-production\ttag\t%s\n' "$CURRENT_SHA"
-      ;;
-    *)
-      if [[ "$PROMOTION_SCENARIO" == "identical" ]]; then
-        response_sha="$VERIFIED_SHA"
-      elif [[ "$PROMOTION_SCENARIO" == "malformed-current" ]]; then
-        response_sha="not-a-commit"
-      else
-        response_sha="$CURRENT_SHA"
-      fi
-      printf 'refs/heads/website-production\tcommit\t%s\n' "$response_sha"
-      ;;
-  esac
-else
-  echo "unexpected gh command: $args" >&2
-  exit 1
-fi
-`, "utf8");
-      await chmod(ghStub, 0o755);
-
-      const baseEnvironment = Object.freeze({
-        COMMAND_LOG: commandLog,
-        CURRENT_SHA: currentSha,
-        GITHUB_REF_NAME: "main",
-        GITHUB_REPOSITORY: "hraness/wrench",
-        PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
-        PROMOTED_MARKER: promotedMarker,
-        TAG_SHA: verifiedSha,
-        VERIFIED_SHA: verifiedSha,
-        VERIFIED_TAG: "v0.16.2",
-      });
-      const runCase = async (
-        overrides: Readonly<Record<string, string>>,
-      ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> => {
-        await Promise.all([
-          rm(commandLog, { force: true }),
-          rm(promotedMarker, { force: true }),
-        ]);
-        return runWorkflowScript(script, { ...baseEnvironment, ...overrides });
-      };
-
-      const missing = await runCase({ PROMOTION_SCENARIO: "ref-404" });
-      expect(missing.exitCode).not.toBe(0);
-      expect(`${missing.stdout}${missing.stderr}`).toContain("HTTP 404");
-      expect(await Bun.file(promotedMarker).exists()).toBe(false);
-      expect(await readFile(commandLog, "utf8")).not.toMatch(/--method (?:PATCH|POST)/u);
-
-      const advanced = await runCase({ PROMOTION_SCENARIO: "ahead" });
-      expect(advanced.exitCode).toBe(0);
-      expect(await readFile(promotedMarker, "utf8")).toBe("patch\n");
-      const advancedCommands = await readFile(commandLog, "utf8");
-      expect(advancedCommands).toContain(`/compare/${currentSha}...${verifiedSha}`);
-      expect(advancedCommands).toContain(
-        "--method PATCH /repos/hraness/wrench/git/refs/heads/website-production",
-      );
-      expect(advancedCommands).toContain("-F force=false");
-      expect(advancedCommands.match(
-        /\/repos\/hraness\/wrench\/git\/ref\/heads\/website-production/gu,
-      )).toHaveLength(2);
-      expect(advancedCommands).not.toContain("--method POST");
-      const initialReadIndex = advancedCommands.indexOf(
-        "/git/ref/heads/website-production",
-      );
-      const compareIndex = advancedCommands.indexOf(`/compare/${currentSha}...${verifiedSha}`);
-      const patchIndex = advancedCommands.indexOf(
-        "--method PATCH /repos/hraness/wrench/git/refs/heads/website-production",
-      );
-      const finalReadIndex = advancedCommands.lastIndexOf(
-        "/git/ref/heads/website-production",
-      );
-      expect(initialReadIndex).toBeGreaterThan(-1);
-      expect(compareIndex).toBeGreaterThan(initialReadIndex);
-      expect(patchIndex).toBeGreaterThan(compareIndex);
-      expect(finalReadIndex).toBeGreaterThan(patchIndex);
-
-      const identical = await runCase({ PROMOTION_SCENARIO: "identical" });
-      expect(identical.exitCode).toBe(0);
-      expect(await Bun.file(promotedMarker).exists()).toBe(false);
-      const identicalCommands = await readFile(commandLog, "utf8");
-      expect(identicalCommands).not.toMatch(/--method (?:PATCH|POST)/u);
-      expect(identicalCommands.match(
-        /\/repos\/hraness\/wrench\/git\/ref\/heads\/website-production/gu,
-      )).toHaveLength(2);
-
-      const diverged = await runCase({ PROMOTION_SCENARIO: "diverged" });
-      expect(diverged.exitCode).not.toBe(0);
-      expect(`${diverged.stdout}${diverged.stderr}`).toContain("does not fast-forward");
-      expect(await Bun.file(promotedMarker).exists()).toBe(false);
-
-      for (const scenario of [
-        "api-failure",
-        "behind-count",
-        "compare-extra-field",
-        "malformed-ahead",
-        "malformed-current",
-        "missing-merge-base",
-        "ref-api-failure",
-        "ref-empty",
-        "ref-extra-field",
-        "ref-multiline",
-        "ref-uppercase-sha",
-        "ref-wrong-ref",
-        "ref-wrong-type",
-        "wrong-base",
-        "wrong-merge-base",
-        "zero-ahead",
-      ] as const) {
-        const rejected = await runCase({ PROMOTION_SCENARIO: scenario });
-        expect(rejected.exitCode).not.toBe(0);
-        expect(await Bun.file(promotedMarker).exists()).toBe(false);
-        expect(await readFile(commandLog, "utf8")).not.toMatch(/--method (?:PATCH|POST)/u);
-      }
-
-      for (const scenario of ["patch-failure", "patch-race"] as const) {
-        const rejected = await runCase({ PROMOTION_SCENARIO: scenario });
-        expect(rejected.exitCode).not.toBe(0);
-        expect(await Bun.file(promotedMarker).exists()).toBe(false);
-        const rejectedCommands = await readFile(commandLog, "utf8");
-        expect(rejectedCommands).toContain(
-          "--method PATCH /repos/hraness/wrench/git/refs/heads/website-production",
-        );
-        expect(rejectedCommands).not.toContain("--method POST");
-      }
-
-      for (const scenario of ["post-read-api-failure", "post-read-mismatch"] as const) {
-        const rejected = await runCase({ PROMOTION_SCENARIO: scenario });
-        expect(rejected.exitCode).not.toBe(0);
-        expect(await readFile(promotedMarker, "utf8")).toBe("patch\n");
-        const rejectedCommands = await readFile(commandLog, "utf8");
-        expect(rejectedCommands).toContain(
-          "--method PATCH /repos/hraness/wrench/git/refs/heads/website-production",
-        );
-        expect(rejectedCommands).not.toContain("--method POST");
-      }
-
-      const retagged = await runCase({
-        PROMOTION_SCENARIO: "ahead",
-        TAG_SHA: "4".repeat(40),
-      });
-      expect(retagged.exitCode).not.toBe(0);
-      expect(`${retagged.stdout}${retagged.stderr}`).toContain(
-        "Remote v0.16.2 resolves to",
-      );
-      expect(await Bun.file(promotedMarker).exists()).toBe(false);
-    } finally {
-      await rm(directory, { force: true, recursive: true });
+    for (const exactNodeJob of [baselineJob, publishJob, providerJob]) {
+      expect(exactNodeJob).toContain("node-version: \"24\"");
+      expect(exactNodeJob).toContain("package-manager-cache: false");
     }
+
+    expect(workflow.indexOf("\n  provider_baseline:\n"))
+      .toBeLessThan(workflow.indexOf("\n  publish:\n"));
+    expect(workflow.indexOf("\n  publish:\n"))
+      .toBeLessThan(workflow.indexOf("\n  provider_outcome:\n"));
+    expect(baselineJob).toContain("needs: verify");
+    expect(permissions(baselineJob)).toEqual(["contents: read", "deployments: read"]);
+    expect(baselineJob).not.toContain("contents: write");
+    expect(baselineJob).toContain("release-provider-outcome.mjs baseline");
+    expect(publishJob).toContain("- provider_baseline");
+    expect(permissions(publishJob)).toEqual(["contents: write"]);
+    expect(publishJob).toContain("promotion_receipt:");
+    expect(publishJob).toContain("release-provider-outcome.mjs promote");
+    expect(publishJob).not.toContain("release-provider-outcome.mjs wait");
+    expect(publishJob).not.toContain("/statuses?");
+    expect(providerJob).toContain("- publish");
+    expect(providerJob).toContain("timeout-minutes: 30");
+    expect(permissions(providerJob)).toEqual(["contents: read", "deployments: read"]);
+    expect(providerJob).not.toContain("contents: write");
+    expect(providerJob).not.toContain("continue-on-error");
+    expect(providerJob).toContain("release-provider-outcome.mjs wait");
+    expect(providerJob).toContain("needs.publish.outputs.promotion_receipt");
+    expect(providerJob).toContain("VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}");
+    expect(providerJob).toContain("VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}");
+    expect(providerJob).toContain("DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
+    expect(providerJob).toContain("EVENT_NAME: ${{ github.event_name }}");
+    expect(providerJob).toContain(
+      "RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.recovery_workflow_sha }}",
+    );
+    expect(helper).toContain("defaultBranch: process.env.DEFAULT_BRANCH");
+    expect(helper).toContain("eventName: process.env.EVENT_NAME");
+    expect(helper).toContain("recoveryWorkflowSha: process.env.RECOVERY_WORKFLOW_SHA");
+    expect(workflow.match(
+      /ref: \$\{\{ needs\.verify\.outputs\.recovery_workflow_sha \|\| needs\.verify\.outputs\.verified_sha \}\}/gu,
+    )).toHaveLength(3);
+    expect(workflow).not.toContain("VERCEL_TOKEN");
+    expect(workflow).not.toContain("projectSettings");
+    expect(workflow).not.toContain("redeploy");
+    expect(helper).not.toContain("--jq");
+    expect(helper).not.toContain("@tsv");
+    expect(helper).toContain("MAX_ITEMS = 500");
+    expect(helper).toContain("MAX_GRAPHQL_DEPLOYMENT_PAGES = 5");
+    expect(helper).toContain("MAX_GRAPHQL_COST_PER_REQUEST = 2");
+    expect(helper).toContain("rateLimit { cost remaining resetAt }");
+    expect(helper).toContain("totalCount");
+    expect(helper).toContain("MAX_PROVIDER_POLLS = 20");
+    expect(helper).toContain("PROVIDER_POLL_INTERVAL_MILLISECONDS = 60_000");
+    expect(helper).toContain("PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS = 20 * 60_000");
+    expect(helper).toContain("PROVIDER_API_CALL_TIMEOUT_MILLISECONDS = 60_000");
+    expect(helper).toContain("MAX_SLEEP_ATTEMPTS_PER_INTERVAL = 16");
+    expect(helper).toContain("timeout: timeoutMilliseconds");
+    expect(helper).toContain("state.remainingMilliseconds < 1");
+    expect(helper).toContain("after.now <= before.now");
+    expect(helper).toContain('deadline.begin("begin provider success confirmation")');
+    expect(helper).toContain("deadline.startedAt + nextObservationIndex * pollIntervalMilliseconds");
+    expect(helper).toContain("if (poll < maxPolls)");
+    expect(helper).toContain("{ allowDeadlineTarget: true }");
+    expect(helper).not.toContain('deadline.complete("complete provider success confirmation")');
+    expect(helper).not.toContain("Date.now");
+    expect(helper).toContain("performance.now()");
+    expect(helper).toContain('this.#runRaw(["--include", endpoint]');
+    expect(workflow).toContain("release-provider-outcome.mjs release-order");
+    expect(workflow).not.toContain("gh api --paginate");
+    expect(helper).toContain('mode = "already-exact"');
+    expect(helper).toContain('mode = "advanced"');
+    expect(helper).toContain("35613825");
+    expect(helper).toContain("force: false");
+    expect(helper).toContain("/git/ref/heads/website-production");
+    expect(helper).toContain("/git/refs/heads/website-production");
+    expect(helper).not.toContain("matching-refs");
+    expect(helper).not.toContain("api.post");
+    expect(helper).not.toContain('["--method", "POST"');
+    expect(releaseRestRequestBudget).toEqual({
+      githubTokenLimit: 1_000,
+      headroom: 772,
+      maxPolls: 20,
+      observationDeadlineMilliseconds: 1_200_000,
+      perCallTimeoutMilliseconds: 60_000,
+      pollIntervalMilliseconds: 60_000,
+      providerBaseline: 2,
+      providerOutcome: 197,
+      providerPromotion: 14,
+      surroundingRelease: 15,
+      total: 228,
+    });
+    expect(releaseGraphqlRequestBudget).toEqual({
+      githubPointLimit: 1_000,
+      headroom: 760,
+      maxCostPerRequest: 2,
+      maxPoints: 240,
+      providerBaseline: 10,
+      providerOutcome: 110,
+      totalRequests: 120,
+    });
+    expect(releaseRestRequestBudget.total).toBeLessThan(250);
+    expect(releaseGraphqlRequestBudget.maxPoints).toBeLessThanOrEqual(250);
+  });
+
+  test("parses one authenticated GitHub server Date response", () => {
+    const body = JSON.stringify(providerRef(providerPreviousSha));
+    expect(parseIncludedGitHubResponse(
+      `HTTP/2.0 200 OK\r\ndate: Sat, 29 Aug 2026 15:01:00 GMT\r\ncontent-type: application/json\r\n\r\n${body}\n`,
+    )).toEqual({
+      body: providerRef(providerPreviousSha),
+      serverDate: providerPromotionServerDate,
+    });
+
+    for (const response of [
+      `HTTP/2.0 200 OK\ncontent-type: application/json\n\n${body}`,
+      `HTTP/2.0 200 OK\ndate: Sat, 29 Aug 2026 15:01:00 GMT\ndate: Sat, 29 Aug 2026 15:01:01 GMT\n\n${body}`,
+      `HTTP/2.0 404 Not Found\ndate: Sat, 29 Aug 2026 15:01:00 GMT\n\n${body}`,
+      `HTTP/2.0 200 OK\ndate: Fri, 29 Aug 2026 15:01:00 GMT\n\n${body}`,
+      "HTTP/2.0 200 OK\ndate: Sat, 29 Aug 2026 15:01:00 GMT\n\nnot-json",
+      body,
+    ] as const) {
+      expect(() => parseIncludedGitHubResponse(response)).toThrow();
+    }
+
+    const oversizedBody = `"${"x".repeat(8 * 1024 * 1024)}"`;
+    expect(() => parseIncludedGitHubResponse(
+      `HTTP/2.0 200 OK\r\ndate: Sat, 29 Aug 2026 15:01:00 GMT\r\n\r\n${oversizedBody}`,
+    )).toThrow("exceeds the bounded response size");
+
+    const canonicalReceipt = encodeProviderReceipt({ a: 1 });
+    expect(decodeProviderReceipt(canonicalReceipt)).toEqual({ a: 1 });
+    expect(() => decodeProviderReceipt(
+      Buffer.from('{ "a": 1 }', "utf8").toString("base64url"),
+    )).toThrow("does not contain canonical JSON");
+    expect(() => decodeProviderReceipt("A".repeat(64 * 1024 + 1)))
+      .toThrow("is not bounded canonical base64url");
+  });
+
+  test("bounds the published stable-release ordering scan", async () => {
+    const publishedRelease = (
+      id: number,
+      tagName: string,
+      overrides: Readonly<Record<string, ProviderJson>> = {},
+    ): ProviderJson => ({
+      draft: false,
+      id,
+      prerelease: false,
+      tag_name: tagName,
+      ...overrides,
+    });
+    const releaseApi = (releases: readonly ProviderJson[]) => {
+      const calls: string[] = [];
+      return {
+        calls,
+        async get(endpoint: string): Promise<ProviderJson> {
+          calls.push(endpoint);
+          const match = new RegExp(
+            `^/repos/${providerRepository}/releases\\?per_page=100&page=([1-6])$`,
+            "u",
+          ).exec(endpoint);
+          if (match === null) throw new Error(`Unexpected release GET ${endpoint}`);
+          const page = Number(match[1]);
+          return releases.slice((page - 1) * 100, page * 100);
+        },
+      };
+    };
+
+    const accepted = releaseApi([
+      publishedRelease(1, "v0.16.1"),
+      publishedRelease(2, "v9.0.0", { draft: true }),
+      publishedRelease(3, "v9.0.0", { prerelease: true }),
+      publishedRelease(4, "nightly"),
+    ]);
+    await expect(assertReleaseTagNewerThanPublished({
+      api: accepted,
+      repository: providerRepository,
+      verifiedTag: providerTag,
+    })).resolves.toBeUndefined();
+    expect(accepted.calls).toHaveLength(6);
+
+    for (const current of ["v0.16.2", "v0.17.0"] as const) {
+      await expect(assertReleaseTagNewerThanPublished({
+        api: releaseApi([publishedRelease(1, current)]),
+        repository: providerRepository,
+        verifiedTag: providerTag,
+      })).rejects.toThrow(`is not newer than ${current}`);
+    }
+
+    const overCap = Array.from(
+      { length: 501 },
+      (_, index) => publishedRelease(index + 1, "nightly"),
+    );
+    await expect(assertReleaseTagNewerThanPublished({
+      api: releaseApi(overCap),
+      repository: providerRepository,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("exceed the 500-item audit cap");
+    await expect(assertReleaseTagNewerThanPublished({
+      api: releaseApi([null]),
+      repository: providerRepository,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("is not an object");
+  });
+
+  test("exhausts bounded deployment and status pages without trusting API order", async () => {
+    const at = (index: number): string =>
+      new Date(Date.parse("2026-08-29T13:59:59Z") - index * 1_000)
+        .toISOString()
+        .replace(".000Z", "Z");
+    for (const count of [0, 100, 101, 500] as const) {
+      const deployments = Array.from(
+        { length: count },
+        (_, index) => providerDeployment(10_000 - index, at(index)),
+      );
+      if (count === 101) {
+        deployments[99] = providerDeployment(1, "2026-08-29T12:00:00Z");
+        deployments[100] = providerDeployment(20_000, "2026-08-29T12:00:00Z");
+      }
+      const api = new ProviderApiFixture({ deployments: [deployments] });
+      const parsed = await collectProductionDeployments(api, providerRepository);
+      expect(parsed).toHaveLength(count);
+      expect(api.graphqlCalls).toHaveLength(Math.max(1, Math.ceil(count / 100)));
+      if (count === 101) expect(parsed.findIndex((item: { id: number }) => item.id === 20_000))
+        .toBeLessThan(parsed.findIndex((item: { id: number }) => item.id === 1));
+    }
+
+    const overCap = Array.from(
+      { length: 501 },
+      (_, index) => providerDeployment(20_000 - index, at(index)),
+    );
+    await expect(
+      collectProductionDeployments(
+        new ProviderApiFixture({ deployments: [overCap] }),
+        providerRepository,
+      ),
+    ).rejects.toThrow("exceed the 500-item GraphQL audit cap");
+
+    const duplicate = [
+      providerDeployment(20, "2026-08-29T13:00:00Z"),
+      providerDeployment(20, "2026-08-29T12:00:00Z"),
+    ];
+    await expect(
+      collectProductionDeployments(
+        new ProviderApiFixture({ deployments: [duplicate] }),
+        providerRepository,
+      ),
+    ).rejects.toThrow("duplicate id");
+    await expect(
+      collectProductionDeployments(
+        new ProviderApiFixture({ deployments: [[null]] }),
+        providerRepository,
+      ),
+    ).rejects.toThrow("is not an object");
+    await expect(
+      collectProductionDeployments(
+        new ProviderApiFixture({
+          deployments: [[providerDeployment(21, "2026-08-29T13:00:00Z", { sha: null })]],
+        }),
+        providerRepository,
+      ),
+    ).rejects.toThrow("is not a string");
+
+    for (const count of [0, 100, 101, 500] as const) {
+      const statuses = Array.from(
+        { length: count },
+        (_, index) => providerStatus(30_000 - index, "pending", at(index)),
+      );
+      if (count === 101) {
+        statuses[99] = providerStatus(2, "pending", "2026-08-29T12:00:00Z");
+        statuses[100] = providerStatus(40_000, "pending", "2026-08-29T12:00:00Z");
+      }
+      const api = new ProviderApiFixture({ statuses: new Map([[10, [statuses]]]) });
+      const parsed = await collectDeploymentStatuses(api, providerRepository, 10);
+      expect(parsed).toHaveLength(count);
+      expect(api.calls.filter((call) => call.includes("/statuses?"))).toHaveLength(6);
+      if (count === 101) expect(parsed.findIndex((item: { id: number }) => item.id === 40_000))
+        .toBeLessThan(parsed.findIndex((item: { id: number }) => item.id === 2));
+    }
+
+    const statusOverCap = Array.from(
+      { length: 501 },
+      (_, index) => providerStatus(50_000 - index, "pending", at(index)),
+    );
+    await expect(
+      collectDeploymentStatuses(
+        new ProviderApiFixture({ statuses: new Map([[10, [statusOverCap]]]) }),
+        providerRepository,
+        10,
+      ),
+    ).rejects.toThrow("exceeds the 500-item audit cap");
+
+    await expect(collectDeploymentStatuses(
+      new ProviderApiFixture({
+        statuses: new Map([[10, [[
+          providerStatus(9, "pending", "2026-08-29T13:00:00Z"),
+          providerStatus(9, "success", "2026-08-29T12:00:00Z"),
+        ]]]]),
+      }),
+      providerRepository,
+      10,
+    )).rejects.toThrow("duplicate id");
+    await expect(collectDeploymentStatuses(
+      new ProviderApiFixture({ statuses: new Map([[10, [[null]]]]) }),
+      providerRepository,
+      10,
+    )).rejects.toThrow("is not an object");
+
+    const oneGraphNode = providerGraphqlDeployment(80_000, "2026-08-29T12:00:00Z");
+    for (const response of [
+      providerGraphqlResponse([oneGraphNode], { endCursor: null, totalCount: 1 }),
+      providerGraphqlResponse([oneGraphNode], { totalCount: 2 }),
+      providerGraphqlResponse([], { endCursor: "cursor-1", hasNextPage: true, totalCount: 1 }),
+      providerGraphqlResponse([oneGraphNode], { cost: 3, totalCount: 1 }),
+      providerGraphqlResponse([oneGraphNode], { remaining: -1, totalCount: 1 }),
+      providerGraphqlResponse([oneGraphNode], { totalCount: 501 }),
+    ] as const) {
+      await expect(collectProductionDeployments(
+        new ProviderApiFixture({ graphqlResponses: [response] }),
+        providerRepository,
+      )).rejects.toThrow();
+    }
+    for (const deployment of [
+      providerGraphqlDeployment(80_000, "2026-08-29T12:00:00Z", {
+        ref: { name: "website-production" },
+      }),
+      providerGraphqlDeployment(80_000, "2026-08-29T12:00:00Z", {
+        commitOid: providerVerifiedSha.toUpperCase(),
+      }),
+    ] as const) {
+      await expect(collectProductionDeployments(
+        new ProviderApiFixture({
+          graphqlResponses: [providerGraphqlResponse([deployment])],
+        }),
+        providerRepository,
+      )).rejects.toThrow();
+    }
+    await expect(collectProductionDeployments(
+      new ProviderApiFixture({
+        graphqlResponses: [providerGraphqlResponse([oneGraphNode], {
+          endCursor: "opaque+/=cursor",
+          hasNextPage: true,
+          remaining: 8,
+          totalCount: 2,
+        }), providerGraphqlResponse([
+          providerGraphqlDeployment(80_001, "2026-08-29T12:00:01Z"),
+        ], {
+          endCursor: "done+/=cursor",
+          remaining: 7,
+          totalCount: 3,
+        })],
+      }),
+      providerRepository,
+    )).rejects.toThrow("totalCount changed");
+
+    const graphPageOne = providerGraphqlResponse(
+      [providerGraphqlDeployment(80_010, "2026-08-29T12:00:00Z")],
+      {
+        endCursor: "cursor-repeat",
+        hasNextPage: true,
+        remaining: 10,
+        totalCount: 2,
+      },
+    );
+    const graphPageTwo = providerGraphqlResponse(
+      [providerGraphqlDeployment(80_011, "2026-08-29T12:00:01Z")],
+      {
+        endCursor: "cursor-repeat",
+        hasNextPage: true,
+        remaining: 9,
+        totalCount: 2,
+      },
+    );
+    await expect(collectProductionDeployments(
+      new ProviderApiFixture({ graphqlResponses: [graphPageOne, graphPageTwo] }),
+      providerRepository,
+    )).rejects.toThrow("cursor repeated");
+    await expect(collectProductionDeployments(
+      new ProviderApiFixture({
+        graphqlResponses: [graphPageOne, providerGraphqlResponse([
+          providerGraphqlDeployment(80_011, "2026-08-29T12:00:01Z"),
+        ], {
+          endCursor: "cursor-finished",
+          remaining: 9,
+          resetAt: "2026-08-29T17:00:00Z",
+          totalCount: 2,
+        })],
+      }),
+      providerRepository,
+    )).rejects.toThrow("crossed a GraphQL rate-limit reset");
+    await expect(collectProductionDeployments(
+      new ProviderApiFixture({
+        graphqlResponses: [graphPageOne, providerGraphqlResponse([
+          providerGraphqlDeployment(80_011, "2026-08-29T12:00:01Z"),
+        ], {
+          endCursor: "cursor-finished",
+          remaining: 10,
+          totalCount: 2,
+        })],
+      }),
+      providerRepository,
+    )).rejects.toThrow("remaining points did not decrease monotonically");
+    await expect(collectProductionDeployments(
+      new ProviderApiFixture({
+        graphqlResponses: [providerGraphqlResponse([
+          providerGraphqlDeployment(80_012, "2026-08-29T12:00:02Z"),
+        ], {
+          endCursor: "cursor-1",
+          hasNextPage: true,
+          remaining: 7,
+          totalCount: 2,
+        })],
+      }),
+      providerRepository,
+    )).rejects.toThrow("insufficient GraphQL points");
+    await expect(collectProductionDeployments({
+      async graphql(): Promise<ProviderJson> {
+        throw new Error("simulated provider API failure");
+      },
+    }, providerRepository)).rejects.toThrow("simulated provider API failure");
+  });
+
+  test("stabilizes the baseline and records the actual promotion mode", async () => {
+    const baselineDeployment = providerDeployment(
+      10,
+      "2026-08-29T13:00:00Z",
+      { sha: providerPreviousSha },
+    );
+    const baselineApi = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      statuses: terminalBaselineStatus(),
+    });
+    const baseline = await createProviderBaseline({
+      api: baselineApi,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    }) as Readonly<Record<string, unknown>>;
+    expect(baseline.schema).toBe("wrench-provider-baseline-v2");
+    expect(baseline.refSha).toBe(providerPreviousSha);
+    expect(baseline.deploymentIds).toEqual([10]);
+    expect(baseline.deploymentFingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    expect(baselineApi.calls).toHaveLength(2);
+    expect(baselineApi.graphqlCalls).toHaveLength(2);
+    expect(baselineApi.includedCalls).toEqual([
+      `/repos/${providerRepository}/git/ref/heads/website-production`,
+      `/repos/${providerRepository}/git/ref/heads/website-production`,
+    ]);
+
+    for (const refValue of [
+      null,
+      { object: { sha: providerPreviousSha, type: "commit" }, ref: "refs/heads/other" },
+      { object: { sha: providerPreviousSha, type: "tag" }, ref: "refs/heads/website-production" },
+      { object: { sha: "A".repeat(40), type: "commit" }, ref: "refs/heads/website-production" },
+    ] as const) {
+      await expect(createProviderBaseline({
+        api: new ProviderApiFixture({ refValues: [refValue] }),
+        repository: providerRepository,
+        verifiedSha: providerVerifiedSha,
+      })).rejects.toThrow();
+    }
+
+    const advanced = await providerReceipts("advanced");
+    expect((advanced.promotion as Readonly<Record<string, unknown>>).mode).toBe("advanced");
+    expect(advanced.promotionCalls.filter((call) => call.startsWith("PATCH "))).toEqual([
+      `PATCH /repos/${providerRepository}/git/refs/heads/website-production ${JSON.stringify({
+        force: false,
+        sha: providerVerifiedSha,
+      })}`,
+    ]);
+    expect(advanced.promotionCalls.some((call) => call.includes("/deployments"))).toBe(false);
+    const recovered = await providerReceipts("already-exact");
+    expect((recovered.promotion as Readonly<Record<string, unknown>>).mode).toBe("already-exact");
+    expect(recovered.promotionCalls.some((call) => call.startsWith("PATCH "))).toBe(false);
+
+    const concurrent = providerDeployment(11, "2026-08-29T15:01:00Z");
+    await expect(createProviderBaseline({
+      api: new ProviderApiFixture({
+        deployments: [[concurrent]],
+        statuses: terminalBaselineStatus(11, "2026-08-29T15:01:01Z"),
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    })).rejects.toThrow("overlaps the baseline lower bound");
+
+    await expect(createProviderBaseline({
+      api: new ProviderApiFixture({
+        deployments: [[baselineDeployment], [providerDeployment(11, "2026-08-29T14:59:00Z"), baselineDeployment]],
+        statuses: terminalBaselineStatus(),
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    })).rejects.toThrow("inventory changed during the baseline");
+
+    await expect(createProviderBaseline({
+      api: new ProviderApiFixture({
+        deployments: [[
+          baselineDeployment,
+        ], [
+          providerDeployment(10, "2026-08-29T13:00:00Z"),
+        ]],
+        statuses: terminalBaselineStatus(),
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    })).rejects.toThrow("inventory changed during the baseline");
+
+    const relevantBaselineDeployment = providerDeployment(10, "2026-08-29T13:00:00Z");
+    const baselineGraph = providerGraphqlDeployment(10, "2026-08-29T13:00:00Z");
+    for (const malformedGraph of [
+      providerGraphqlDeployment(10, "2026-08-29T13:00:00Z", {
+        latestStatus: null,
+        state: "ACTIVE",
+      }),
+      providerGraphqlDeployment(10, "2026-08-29T13:00:00Z", {
+        latestStatus: {
+          ...(baselineGraph as Readonly<Record<string, ProviderJson>>).latestStatus as object,
+          state: "PENDING",
+        },
+        state: "PENDING",
+      }),
+      providerGraphqlDeployment(10, "2026-08-29T13:00:00Z", {
+        latestStatus: {
+          ...(baselineGraph as Readonly<Record<string, ProviderJson>>).latestStatus as object,
+          state: "FAILURE",
+        },
+        state: "ACTIVE",
+      }),
+      providerGraphqlDeployment(10, "2026-08-29T13:00:00Z", {
+        creator: { __typename: "Bot", databaseId: 35613825, login: "vercel[bot]" },
+      }),
+      providerGraphqlDeployment(10, "2026-08-29T13:00:00Z", {
+        latestStatus: {
+          ...(baselineGraph as Readonly<Record<string, ProviderJson>>).latestStatus as object,
+          environmentUrl: "https://other-10-hraness.vercel.app",
+          logUrl: "https://other-10-hraness.vercel.app",
+        },
+      }),
+    ] as const) {
+      await expect(createProviderBaseline({
+        api: new ProviderApiFixture({ graphqlDeployments: [[malformedGraph]] }),
+        repository: providerRepository,
+        verifiedSha: providerVerifiedSha,
+      })).rejects.toThrow();
+    }
+    const duplicateGraphStatus = providerGraphqlDeployment(11, "2026-08-29T12:59:00Z", {
+      latestStatus: (baselineGraph as Readonly<Record<string, ProviderJson>>).latestStatus,
+      updatedAt: "2026-08-29T13:00:00Z",
+    });
+    await expect(createProviderBaseline({
+      api: new ProviderApiFixture({
+        graphqlDeployments: [[baselineGraph, duplicateGraphStatus]],
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    })).rejects.toThrow("duplicate latest status id");
+    await expect(createProviderBaseline({
+      api: new ProviderApiFixture({
+        deployments: [[relevantBaselineDeployment]],
+        serverDates: [providerBaselineServerDate, "2026-08-29T14:59:59.000Z"],
+        statuses: terminalBaselineStatus(),
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    })).rejects.toThrow("GitHub server Date regressed");
+
+    const auditedDeployments = Array.from(
+      { length: 500 },
+      (_, index) => providerDeployment(
+        1_000 + index,
+        new Date(Date.parse("2026-08-28T13:00:00Z") + index * 1_000)
+          .toISOString()
+          .replace(".000Z", "Z"),
+        { sha: index % 2 === 0 ? providerVerifiedSha : providerPreviousSha },
+      ),
+    );
+    const maxBaselineApi = new ProviderApiFixture({
+      deployments: [auditedDeployments],
+      serverDates: [providerBaselineServerDate, providerBaselineServerDate],
+    });
+    const maxBaseline = await createProviderBaseline({
+      api: maxBaselineApi,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    }) as ProviderJson;
+    expect((maxBaseline as Readonly<{ deploymentIds: readonly unknown[] }>).deploymentIds)
+      .toHaveLength(500);
+    const encodedMaxBaseline = encodeProviderReceipt(maxBaseline);
+    expect(Buffer.byteLength(encodedMaxBaseline, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    expect(maxBaselineApi.calls).toHaveLength(releaseRestRequestBudget.providerBaseline);
+    expect(maxBaselineApi.graphqlCalls).toHaveLength(releaseGraphqlRequestBudget.providerBaseline);
+    const maxPromotionApi = new ProviderApiFixture({
+      refSha: providerPreviousSha,
+      serverDates: [providerPromotionServerDate],
+    });
+    const maxPromotion = await promoteWebsiteProduction({
+      api: maxPromotionApi,
+      baselineReceipt: maxBaseline,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      recoveryWorkflowSha: providerVerifiedSha,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    }) as ProviderJson;
+    expect(maxPromotion).toMatchObject({ mode: "advanced" });
+    expect(maxPromotionApi.calls).toHaveLength(releaseRestRequestBudget.providerPromotion);
+
+    const budgetBaseline = await createProviderBaseline({
+      api: new ProviderApiFixture({
+        deployments: [auditedDeployments.slice(0, 499)],
+        serverDates: [providerBaselineServerDate, providerBaselineServerDate],
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    }) as ProviderJson;
+    const budgetPromotion = await promoteWebsiteProduction({
+      api: new ProviderApiFixture({
+        refSha: providerPreviousSha,
+        serverDates: [providerPromotionServerDate],
+      }),
+      baselineReceipt: budgetBaseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    }) as ProviderJson;
+
+    const budgetCandidate = providerDeployment(20_000, "2026-08-29T15:02:00Z");
+    const budgetPending = providerStatus(
+      200_000,
+      "pending",
+      "2026-08-29T15:02:30Z",
+      {},
+      20_000,
+    );
+    const budgetSuccess = providerStatus(
+      200_001,
+      "success",
+      "2026-08-29T15:03:00Z",
+      {},
+      20_000,
+    );
+    const candidateSnapshots = [
+      ...Array.from({ length: releaseRestRequestBudget.maxPolls - 2 }, () => [budgetPending]),
+      [budgetSuccess, budgetPending],
+      [budgetSuccess, budgetPending],
+      [budgetSuccess, budgetPending],
+      [budgetSuccess, budgetPending],
+    ];
+    const budgetApi = new ProviderApiFixture({
+      deployments: [[budgetCandidate, ...auditedDeployments.slice(0, 499)]],
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [20_000, candidateSnapshots],
+      ]),
+    });
+    await expect(waitForProviderOutcome({
+      api: budgetApi,
+      baselineReceipt: budgetBaseline,
+      maxPolls: releaseRestRequestBudget.maxPolls,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: budgetPromotion,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      recoveryWorkflowSha: providerVerifiedSha,
+      sleep: async () => {},
+    })).resolves.toEqual({ deploymentId: 20_000, statusId: 200_001 });
+    expect(budgetApi.calls).toHaveLength(releaseRestRequestBudget.providerOutcome);
+    expect(budgetApi.graphqlCalls).toHaveLength(releaseGraphqlRequestBudget.providerOutcome);
+
+    const auditedBaseline = auditedDeployments.slice(0, 499);
+    const lateCandidateInventory = [budgetCandidate, ...auditedBaseline];
+    const lateCandidateApi = new ProviderApiFixture({
+      deployments: [
+        ...Array.from(
+          { length: releaseRestRequestBudget.maxPolls - 1 },
+          () => auditedBaseline,
+        ),
+        lateCandidateInventory,
+        lateCandidateInventory,
+        lateCandidateInventory,
+      ],
+      refSha: providerVerifiedSha,
+      statuses: new Map([[20_000, [
+        [budgetSuccess],
+        [budgetSuccess],
+        [budgetSuccess],
+      ]]]),
+    });
+    await expect(waitForProviderOutcome({
+      api: lateCandidateApi,
+      baselineReceipt: budgetBaseline,
+      maxPolls: releaseRestRequestBudget.maxPolls,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: budgetPromotion,
+      sleep: async () => {},
+    })).resolves.toEqual({ deploymentId: 20_000, statusId: 200_001 });
+    expect(lateCandidateApi.graphqlCalls).toHaveLength(
+      releaseGraphqlRequestBudget.providerOutcome,
+    );
+  });
+
+  test("fails promotion closed on comparison, ref, and PATCH races", async () => {
+    const { baseline, baselineDeployment } = await providerReceipts("advanced");
+    const staleLatest = new ProviderApiFixture({
+      latestSnapshots: [providerLatest({ tag_name: "v0.16.1" })],
+      refSha: providerPreviousSha,
+    });
+    await expect(promoteWebsiteProduction({
+      api: staleLatest,
+      baselineReceipt: baseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("Latest Release is not v0.16.2");
+    expect(staleLatest.calls.some((call) => call.startsWith("PATCH "))).toBe(false);
+
+    for (const compare of [
+      providerCompare({ ahead_by: 0 }),
+      providerCompare({ ahead_by: 1.5 }),
+      providerCompare({ behind_by: 1 }),
+      providerCompare({ status: "diverged" }),
+      providerCompare({ base_commit: { sha: "3".repeat(40) } }),
+      providerCompare({ merge_base_commit: { sha: "3".repeat(40) } }),
+      null,
+    ] as const) {
+      const api = new ProviderApiFixture({
+        deployments: [[baselineDeployment]],
+        statuses: terminalBaselineStatus(),
+      });
+      api.compare = compare;
+      await expect(promoteWebsiteProduction({
+        api,
+        baselineReceipt: baseline,
+        repository: providerRepository,
+        verifiedSha: providerVerifiedSha,
+        verifiedTag: providerTag,
+      })).rejects.toThrow();
+      expect(api.calls.some((call) => call.startsWith("PATCH "))).toBe(false);
+    }
+
+    const refRace = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      refSnapshots: [providerPreviousSha, "3".repeat(40)],
+      statuses: terminalBaselineStatus(),
+    });
+    await expect(promoteWebsiteProduction({
+      api: refRace,
+      baselineReceipt: baseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("moved before promotion");
+    expect(refRace.calls.some((call) => call.startsWith("PATCH "))).toBe(false);
+
+    const patchFailure = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      statuses: terminalBaselineStatus(),
+    });
+    patchFailure.patchError = new Error("simulated PATCH race");
+    await expect(promoteWebsiteProduction({
+      api: patchFailure,
+      baselineReceipt: baseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("simulated PATCH race");
+
+    const movedBeforePatch = new ProviderApiFixture({
+      defaultBranchShaSnapshots: ["3".repeat(40)],
+      deployments: [[baselineDeployment]],
+      statuses: terminalBaselineStatus(),
+    });
+    await expect(promoteWebsiteProduction({
+      api: movedBeforePatch,
+      baselineReceipt: baseline,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      recoveryWorkflowSha: providerVerifiedSha,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("workflow source is no longer current main");
+    expect(movedBeforePatch.calls.some((call) => call.startsWith("PATCH "))).toBe(false);
+
+    const movedAfterPatch = new ProviderApiFixture({
+      defaultBranchShaSnapshots: [providerVerifiedSha, "3".repeat(40)],
+      deployments: [[baselineDeployment]],
+      statuses: terminalBaselineStatus(),
+    });
+    await expect(promoteWebsiteProduction({
+      api: movedAfterPatch,
+      baselineReceipt: baseline,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      recoveryWorkflowSha: providerVerifiedSha,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("workflow source is no longer current main");
+    expect(movedAfterPatch.calls.filter((call) => call.startsWith("PATCH "))).toHaveLength(1);
+
+    const alreadyExact = await providerReceipts("already-exact");
+    const alreadyExactSourceDrift = new ProviderApiFixture({
+      defaultBranchShaSnapshots: ["3".repeat(40)],
+      refSha: providerVerifiedSha,
+      serverDates: [providerPromotionServerDate],
+    });
+    await expect(promoteWebsiteProduction({
+      api: alreadyExactSourceDrift,
+      baselineReceipt: alreadyExact.baseline,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      recoveryWorkflowSha: providerVerifiedSha,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("workflow source is no longer current main");
+    const alreadyExactTerminalRefRead = alreadyExactSourceDrift.calls.lastIndexOf(
+      `GET /repos/${providerRepository}/git/ref/heads/website-production`,
+    );
+    const alreadyExactSourceRead = alreadyExactSourceDrift.calls.indexOf(
+      `GET /repos/${providerRepository}`,
+    );
+    expect(alreadyExactTerminalRefRead).toBeGreaterThanOrEqual(0);
+    expect(alreadyExactSourceRead).toBeGreaterThan(alreadyExactTerminalRefRead);
+    expect(alreadyExactSourceDrift.calls.some((call) => call.startsWith("PATCH "))).toBe(false);
+
+    const postPatchMismatch = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      refSnapshots: [providerPreviousSha, providerPreviousSha, providerPreviousSha],
+      statuses: terminalBaselineStatus(),
+    });
+    await expect(promoteWebsiteProduction({
+      api: postPatchMismatch,
+      baselineReceipt: baseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("after promotion");
+    expect(postPatchMismatch.calls.filter((call) => call.startsWith("PATCH "))).toHaveLength(1);
+
+    const missingRef = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      refValues: [null],
+      statuses: terminalBaselineStatus(),
+    });
+    await expect(promoteWebsiteProduction({
+      api: missingRef,
+      baselineReceipt: baseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("is not an object");
+    expect(missingRef.calls.some((call) => call.startsWith("PATCH "))).toBe(false);
+
+    await expect(promoteWebsiteProduction({
+      api: new ProviderApiFixture({
+        deployments: [[baselineDeployment]],
+        serverDates: [providerReleasePublishedAt.replace("Z", ".000Z")],
+        statuses: terminalBaselineStatus(),
+      }),
+      baselineReceipt: baseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("promotion boundary");
+
+    const readToWriteRace = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      serverDates: ["2026-08-29T15:02:00.000Z"],
+      statuses: terminalBaselineStatus(),
+    });
+    const racePromotion = await promoteWebsiteProduction({
+      api: readToWriteRace,
+      baselineReceipt: baseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    }) as ProviderJson;
+    expect((racePromotion as Readonly<Record<string, ProviderJson>>).boundaryAt)
+      .toBe("2026-08-29T15:02:00.000Z");
+    const prePatchDeployment = providerDeployment(20, "2026-08-29T15:02:00Z");
+    await expect(waitForProviderOutcome({
+      api: new ProviderApiFixture({
+        deployments: [[prePatchDeployment, baselineDeployment]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([
+          [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+          [20, [[providerStatus(201, "success", "2026-08-29T15:03:00Z", {}, 20)]]],
+        ]),
+      }),
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: racePromotion,
+      sleep: async () => {},
+    })).rejects.toThrow("concurrent promotion gap");
+
+  });
+
+  test("waits from pending to one twice-confirmed exact Vercel Production success", async () => {
+    const { baseline, baselineDeployment, promotion } = await providerReceipts("advanced");
+    const candidate = providerDeployment(20, "2026-08-29T15:02:00Z");
+    const candidateAt = "2026-08-29T15:02:00Z";
+    const successAt = "2026-08-29T15:03:00Z";
+    const pending = providerStatus(200, "pending", "2026-08-29T15:02:30Z", {}, 20);
+    const success = providerStatus(201, "success", successAt, {}, 20);
+    const api = new ProviderApiFixture({
+      deployments: [
+        [candidate, baselineDeployment],
+        [candidate, baselineDeployment],
+        [candidate, baselineDeployment],
+      ],
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [
+          [providerStatus(100, "success", "2026-08-29T13:01:00Z")],
+          [providerStatus(100, "success", "2026-08-29T13:01:00Z")],
+        ]],
+        [20, [[pending], [success, pending], [success, pending]]],
+      ]),
+    });
+    const result = await waitForProviderOutcome({
+      api,
+      baselineReceipt: baseline,
+      maxPolls: 4,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      sleep: async () => {},
+    });
+    expect(result).toEqual({ deploymentId: 20, statusId: 201 });
+    expect(api.graphqlCalls).toHaveLength(5);
+    expect(api.calls.filter((call) => call.includes("/deployments/20/statuses?"))).toHaveLength(30);
+    expect(api.calls.filter((call) => call === `GET /repos/${providerRepository}/deployments/20`))
+      .toHaveLength(4);
+
+    const baselineStatus = providerStatus(100, "success", "2026-08-29T13:01:00Z");
+    const baselineGraph = graphqlDeploymentFromRest(baselineDeployment, [baselineStatus]);
+    const pendingGraph = graphqlDeploymentFromRest(candidate, [pending]);
+    const successGraph = graphqlDeploymentFromRest(candidate, [success, pending]);
+    const graphLagApi = new ProviderApiFixture({
+      deployments: [[candidate, baselineDeployment]],
+      graphqlDeployments: [
+        [pendingGraph, baselineGraph],
+        [successGraph, baselineGraph],
+        [successGraph, baselineGraph],
+        [successGraph, baselineGraph],
+      ],
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[baselineStatus]]],
+        [20, [
+          [success, pending],
+          [success, pending],
+          [success, pending],
+          [success, pending],
+        ]],
+      ]),
+    });
+    await expect(waitForProviderOutcome({
+      api: graphLagApi,
+      baselineReceipt: baseline,
+      maxPolls: 2,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      sleep: async () => {},
+    })).resolves.toEqual({ deploymentId: 20, statusId: 201 });
+    expect(graphLagApi.graphqlCalls).toHaveLength(4);
+    expect(graphLagApi.calls.filter(
+      (call) => call === `GET /repos/${providerRepository}/releases/latest`,
+    )).toHaveLength(4);
+
+    const staleGraphApi = new ProviderApiFixture({
+      deployments: [[candidate, baselineDeployment]],
+      graphqlDeployments: [[successGraph, baselineGraph]],
+      refSha: providerVerifiedSha,
+      statuses: new Map([[20, [[
+        providerStatus(202, "pending", "2026-08-29T15:03:01Z", {}, 20),
+        success,
+      ]]]]),
+    });
+    await expect(waitForProviderOutcome({
+      api: staleGraphApi,
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("poll budget exhausted");
+
+    const staleGraphFailureApi = new ProviderApiFixture({
+      deployments: [[candidate, baselineDeployment]],
+      graphqlDeployments: [[successGraph, baselineGraph]],
+      refSha: providerVerifiedSha,
+      statuses: new Map([[20, [[
+        providerStatus(202, "failure", "2026-08-29T15:03:01Z", {}, 20),
+        success,
+      ]]]]),
+    });
+    await expect(waitForProviderOutcome({
+      api: staleGraphFailureApi,
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("ended in failure");
+
+    const confirmationRegressionApi = new ProviderApiFixture({
+      deployments: [[candidate, baselineDeployment]],
+      graphqlDeployments: [
+        [successGraph, baselineGraph],
+        [pendingGraph, baselineGraph],
+      ],
+      refSha: providerVerifiedSha,
+      statuses: new Map([[20, [[success], [success]]]]),
+    });
+    await expect(waitForProviderOutcome({
+      api: confirmationRegressionApi,
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("regressed during success confirmation");
+
+    for (const state of ["error", "failure", "inactive"] as const) {
+      const failed = providerStatus(300, state, successAt, {}, 20);
+      const graphFailureApi = new ProviderApiFixture({
+        deployments: [[candidate, baselineDeployment]],
+        graphqlDeployments: [[
+          graphqlDeploymentFromRest(candidate, [failed]),
+          baselineGraph,
+        ]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([[20, [[success]]]]),
+      });
+      await expect(waitForProviderOutcome({
+        api: graphFailureApi,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      })).rejects.toThrow(`ended in ${state}`);
+    }
+
+    for (const state of ["error", "failure", "inactive"] as const) {
+      const historicalFailure = providerStatus(
+        199,
+        state,
+        "2026-08-29T15:02:45Z",
+        {},
+        20,
+      );
+      const pollHistoryApi = new ProviderApiFixture({
+        deployments: [[candidate, baselineDeployment]],
+        graphqlDeployments: [[successGraph, baselineGraph]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([[20, [[success, historicalFailure]]]]),
+      });
+      await expect(waitForProviderOutcome({
+        api: pollHistoryApi,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      })).rejects.toThrow(`ended in ${state}`);
+
+      const firstConfirmationHistoryApi = new ProviderApiFixture({
+        deployments: [[candidate, baselineDeployment]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([
+          [10, [[baselineStatus]]],
+          [20, [[success], [success, historicalFailure]]],
+        ]),
+      });
+      await expect(waitForProviderOutcome({
+        api: firstConfirmationHistoryApi,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      })).rejects.toThrow(`ended in ${state}`);
+
+      const finalConfirmationHistoryApi = new ProviderApiFixture({
+        deployments: [[candidate, baselineDeployment]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([
+          [10, [[baselineStatus]]],
+          [20, [
+            [success],
+            [success],
+            [success, historicalFailure],
+          ]],
+        ]),
+      });
+      await expect(waitForProviderOutcome({
+        api: finalConfirmationHistoryApi,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      })).rejects.toThrow(`ended in ${state}`);
+    }
+
+    const successGraphRecord = successGraph as Readonly<Record<string, ProviderJson>>;
+    const successGraphStatus = successGraphRecord.latestStatus as Readonly<
+      Record<string, ProviderJson>
+    >;
+    for (const latestStatus of [
+      { ...successGraphStatus, id: "different-status-node" },
+      {
+        ...successGraphStatus,
+        createdAt: "2026-08-29T15:02:59Z",
+        updatedAt: "2026-08-29T15:02:59Z",
+      },
+      {
+        ...successGraphStatus,
+        creator: { __typename: "Bot", databaseId: 1, login: "vercel" },
+      },
+      {
+        ...successGraphStatus,
+        environmentUrl: "https://wrench-other-hraness.vercel.app",
+        logUrl: "https://wrench-other-hraness.vercel.app",
+      },
+    ] as const) {
+      const disagreementApi = new ProviderApiFixture({
+        deployments: [[candidate, baselineDeployment]],
+        graphqlDeployments: [[
+          providerGraphqlDeployment(20, candidateAt, {
+            latestStatus,
+            updatedAt: successAt,
+          }),
+          baselineGraph,
+        ]],
+        refSha: providerVerifiedSha,
+        statuses: new Map([[20, [[success]]]]),
+      });
+      await expect(waitForProviderOutcome({
+        api: disagreementApi,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      })).rejects.toThrow();
+    }
+
+    const recovery = await providerReceipts("already-exact");
+    const recoveryApi = new ProviderApiFixture({
+      deployments: [[recovery.baselineDeployment]],
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[
+          providerStatus(100, "success", "2026-08-29T14:06:00Z"),
+        ]]],
+      ]),
+    });
+    await expect(waitForProviderOutcome({
+      api: recoveryApi,
+      baselineReceipt: recovery.baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: recovery.promotion,
+      sleep: async () => {},
+    })).resolves.toEqual({ deploymentId: 10, statusId: 100 });
+  });
+
+  test("rejects provider identity, concurrency, timeout, and final-readback failures", async () => {
+    const { baseline, baselineDeployment, promotion } = await providerReceipts("advanced");
+    const candidateAt = "2026-08-29T15:02:00Z";
+    const successAt = "2026-08-29T15:03:00Z";
+    const candidateStatus = (
+      id: number,
+      state: string,
+      createdAt: string,
+      overrides: Readonly<Record<string, ProviderJson>> = {},
+    ): ProviderJson => providerStatus(id, state, createdAt, overrides, 20);
+    const waitCase = (
+      candidate: ProviderJson,
+      statusSnapshots: ProviderJson[][],
+      deployments: ProviderJson[][] = [[candidate, baselineDeployment], [candidate, baselineDeployment]],
+      refSnapshots: readonly string[] = [],
+      tagSnapshots: readonly string[] = [],
+      releaseSnapshots: readonly ProviderJson[] = [],
+      latestSnapshots: readonly ProviderJson[] = [],
+    ): ProviderApiFixture => new ProviderApiFixture({
+      deployments,
+      latestSnapshots,
+      refSha: providerVerifiedSha,
+      refSnapshots,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, statusSnapshots],
+      ]),
+      tagSnapshots,
+      releaseSnapshots,
+    });
+    const run = (api: ProviderApiFixture, maxPolls = 2): Promise<unknown> =>
+      waitForProviderOutcome({
+        api,
+        baselineReceipt: baseline,
+        maxPolls,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+      });
+
+    for (const candidate of [
+      providerDeployment(20, candidateAt, { sha: "3".repeat(40) }),
+      providerDeployment(20, candidateAt, { ref: "website-production" }),
+      providerDeployment(20, candidateAt, { ref: providerTag }),
+      providerDeployment(20, candidateAt, { ref: "A".repeat(40) }),
+      providerDeployment(20, candidateAt, { ref: null }),
+      providerDeployment(20, candidateAt, { ref: providerPreviousSha }),
+      providerDeployment(20, candidateAt, { task: "other" }),
+      providerDeployment(20, candidateAt, { environment: "Preview" }),
+      providerDeployment(20, candidateAt, { original_environment: null }),
+      providerDeployment(20, candidateAt, {
+        creator: { id: 1, login: "vercel[bot]", type: "Bot" },
+      }),
+      providerDeployment(20, candidateAt, {
+        creator: { id: 35613825, login: "other[bot]", type: "Bot" },
+      }),
+      providerDeployment(20, candidateAt, {
+        creator: { id: 35613825, login: "vercel[bot]", type: "User" },
+      }),
+    ] as const) {
+      await expect(run(waitCase(candidate, [[candidateStatus(201, "success", successAt)]])))
+        .rejects.toThrow("deployment");
+    }
+
+    const gapCandidate = providerDeployment(20, "2026-08-29T15:01:00Z");
+    await expect(run(waitCase(gapCandidate, [[candidateStatus(201, "success", successAt)]])))
+      .rejects.toThrow("concurrent promotion gap");
+
+    const competing = [
+      providerDeployment(21, "2026-08-29T15:02:01Z"),
+      providerDeployment(20, candidateAt),
+      baselineDeployment,
+    ];
+    await expect(run(waitCase(
+      providerDeployment(20, candidateAt),
+      [[candidateStatus(201, "success", successAt)]],
+      [competing],
+    ))).rejects.toThrow("more than one new Production deployment");
+
+    const noCandidate = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      refSha: providerVerifiedSha,
+      statuses: terminalBaselineStatus(),
+    });
+    await expect(run(noCandidate, 2)).rejects.toThrow("poll budget exhausted");
+
+    const emptyStatuses = waitCase(providerDeployment(20, candidateAt), [[], []]);
+    await expect(run(emptyStatuses, 2)).rejects.toThrow("poll budget exhausted");
+
+    const disappearingStatus = waitCase(providerDeployment(20, candidateAt), [
+      [candidateStatus(200, "pending", "2026-08-29T15:02:30Z")],
+      [],
+    ]);
+    await expect(run(disappearingStatus, 2)).rejects.toThrow("statuses disappeared");
+
+    const mutatedStatus = waitCase(providerDeployment(20, candidateAt), [
+      [candidateStatus(200, "pending", "2026-08-29T15:02:30Z")],
+      [candidateStatus(200, "success", "2026-08-29T15:02:30Z")],
+    ]);
+    await expect(run(mutatedStatus, 2)).rejects.toThrow("status 200 changed");
+    const mutatedStatusUrl = waitCase(providerDeployment(20, candidateAt), [
+      [candidateStatus(200, "pending", "2026-08-29T15:02:30Z")],
+      [candidateStatus(200, "pending", "2026-08-29T15:02:30Z", {
+        environment_url: "https://wrench-alt-hraness.vercel.app",
+        log_url: "https://wrench-alt-hraness.vercel.app",
+        target_url: "https://wrench-alt-hraness.vercel.app",
+      })],
+    ]);
+    await expect(run(mutatedStatusUrl, 2)).rejects.toThrow("status 200 changed");
+
+    for (const state of ["error", "failure", "inactive"] as const) {
+      await expect(run(waitCase(
+        providerDeployment(20, candidateAt),
+        [[candidateStatus(201, state, successAt)]],
+      ))).rejects.toThrow(`ended in ${state}`);
+    }
+
+    const switched = waitCase(
+      providerDeployment(20, candidateAt),
+      [[candidateStatus(200, "pending", "2026-08-29T15:02:30Z")]],
+      [
+        [providerDeployment(20, candidateAt), baselineDeployment],
+        [providerDeployment(21, "2026-08-29T15:02:01Z"), baselineDeployment],
+      ],
+    );
+    await expect(run(switched)).rejects.toThrow();
+
+    const disappeared = waitCase(
+      providerDeployment(20, candidateAt),
+      [[candidateStatus(200, "pending", "2026-08-29T15:02:30Z")]],
+    );
+    disappeared.deploymentDetailError = new Error("simulated deployment disappearance");
+    await expect(run(disappeared)).rejects.toThrow("simulated deployment disappearance");
+
+    const successRegression = waitCase(
+      providerDeployment(20, candidateAt),
+      [
+        [candidateStatus(201, "success", successAt)],
+        [
+          candidateStatus(202, "pending", "2026-08-29T15:03:01Z"),
+          candidateStatus(201, "success", successAt),
+        ],
+      ],
+    );
+    await expect(run(successRegression)).rejects.toThrow("success changed");
+
+    const finalStatusInventoryRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [
+        [
+          candidateStatus(201, "success", successAt),
+          candidateStatus(200, "pending", "2026-08-29T15:02:30Z"),
+        ],
+        [
+          candidateStatus(201, "success", successAt),
+          candidateStatus(200, "pending", "2026-08-29T15:02:30Z"),
+        ],
+        [
+          candidateStatus(201, "success", successAt),
+          candidateStatus(200, "pending", "2026-08-29T15:02:30Z"),
+          candidateStatus(199, "queued", "2026-08-29T15:02:10Z"),
+        ],
+      ],
+    );
+    await expect(run(finalStatusInventoryRace)).rejects.toThrow("success changed");
+
+    const finalInventoryRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [
+        [candidateStatus(201, "success", successAt)],
+        [candidateStatus(201, "success", successAt)],
+      ],
+      [
+        [providerDeployment(20, candidateAt), baselineDeployment],
+        [providerDeployment(20, candidateAt), baselineDeployment],
+        [
+          providerDeployment(21, "2026-08-29T15:03:01Z"),
+          providerDeployment(20, candidateAt),
+          baselineDeployment,
+        ],
+      ],
+    );
+    await expect(run(finalInventoryRace)).rejects.toThrow();
+
+    const finalRefRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [
+        [candidateStatus(201, "success", successAt)],
+        [candidateStatus(201, "success", successAt)],
+      ],
+      undefined,
+      [providerVerifiedSha, providerVerifiedSha, providerVerifiedSha, "3".repeat(40)],
+    );
+    await expect(run(finalRefRace)).rejects.toThrow("website-production moved");
+
+    const finalTagRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [
+        [candidateStatus(201, "success", successAt)],
+        [candidateStatus(201, "success", successAt)],
+      ],
+      undefined,
+      [],
+      [providerVerifiedSha, providerVerifiedSha, providerVerifiedSha, "3".repeat(40)],
+    );
+    await expect(run(finalTagRace)).rejects.toThrow("tag v0.16.2 moved");
+
+    const finalReleaseRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [
+        [candidateStatus(201, "success", successAt)],
+        [candidateStatus(201, "success", successAt)],
+      ],
+      undefined,
+      [],
+      [],
+      [
+        providerRelease(),
+        providerRelease(),
+        providerRelease(),
+        providerRelease({ published_at: "2026-08-29T14:00:01Z" }),
+      ],
+    );
+    await expect(run(finalReleaseRace)).rejects.toThrow("publication time changed");
+
+    const wrongStatusBot = waitCase(
+      providerDeployment(20, candidateAt),
+      [[candidateStatus(201, "success", successAt, {
+        creator: { id: 2, login: "vercel[bot]", type: "Bot" },
+      })]],
+    );
+    await expect(run(wrongStatusBot)).rejects.toThrow("pinned Vercel bot");
+
+    const wrongDeploymentStatusesUrl = waitCase(
+      providerDeployment(20, candidateAt, {
+        statuses_url: `https://api.github.com/repos/${providerRepository}/deployments/21/statuses`,
+      }),
+      [[candidateStatus(201, "success", successAt)]],
+    );
+    await expect(run(wrongDeploymentStatusesUrl)).rejects.toThrow("statuses_url");
+
+    const refBoundCandidate = providerDeployment(20, candidateAt);
+    const refDrift = new ProviderApiFixture({
+      deploymentDetails: [
+        refBoundCandidate,
+        providerDeployment(20, candidateAt, { ref: providerPreviousSha }),
+      ],
+      deployments: [[refBoundCandidate, baselineDeployment]],
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, [[candidateStatus(201, "success", successAt)]]],
+      ]),
+    });
+    await expect(run(refDrift, 1)).rejects.toThrow(".ref does not bind its exact SHA");
+
+    const duplicateStatusNodeId = waitCase(
+      providerDeployment(20, candidateAt),
+      [[
+        candidateStatus(201, "success", successAt),
+        candidateStatus(200, "pending", "2026-08-29T15:02:30Z", {
+          node_id: "status-201",
+        }),
+      ]],
+    );
+    await expect(run(duplicateStatusNodeId)).rejects.toThrow("duplicate node id status-201");
+
+    for (const overrides of [
+      { deployment_url: `https://api.github.com/repos/${providerRepository}/deployments/21` },
+      { environment: "Preview" },
+      { environment_url: "http://wrench-20-hraness.vercel.app" },
+      { environment_url: "https://wrench-20-hraness.vercel.app/" },
+      { log_url: "https://wrench-other-hraness.vercel.app" },
+      { target_url: "https://wrench-other-hraness.vercel.app" },
+    ] as const) {
+      await expect(run(waitCase(
+        providerDeployment(20, candidateAt),
+        [[candidateStatus(201, "success", successAt, overrides)]],
+      ))).rejects.toThrow();
+    }
+
+    const tiedStatusSecond = waitCase(providerDeployment(20, candidateAt), [[
+      candidateStatus(202, "success", successAt),
+      candidateStatus(201, "pending", successAt),
+    ]]);
+    await expect(run(tiedStatusSecond)).resolves.toEqual({ deploymentId: 20, statusId: 202 });
+
+    const initialLatestRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [[candidateStatus(201, "success", successAt)]],
+      undefined,
+      [],
+      [],
+      [],
+      [providerLatest({ tag_name: "v0.16.1" })],
+    );
+    await expect(run(initialLatestRace)).rejects.toThrow("Latest Release is not v0.16.2");
+
+    const decisiveLatestRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [[candidateStatus(201, "success", successAt)]],
+      undefined,
+      [],
+      [],
+      [],
+      [providerLatest(), providerLatest({ tag_name: "v0.16.1" })],
+    );
+    await expect(run(decisiveLatestRace)).rejects.toThrow("Latest Release is not v0.16.2");
+
+    const terminalLatestRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [
+        [candidateStatus(201, "success", successAt)],
+        [candidateStatus(201, "success", successAt)],
+        [candidateStatus(201, "success", successAt)],
+      ],
+      undefined,
+      [],
+      [],
+      [],
+      [
+        providerLatest(),
+        providerLatest(),
+        providerLatest(),
+        providerLatest({ tag_name: "v0.16.1" }),
+      ],
+    );
+    await expect(run(terminalLatestRace)).rejects.toThrow("Latest Release is not v0.16.2");
+
+    await expect(waitForProviderOutcomeRaw({
+      api: new ProviderApiFixture({ defaultBranchSnapshots: ["main", "release"] }),
+      baselineReceipt: baseline,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      recoveryWorkflowSha: providerVerifiedSha,
+      sleep: async () => {},
+      ...providerAuthority,
+    })).rejects.toThrow("default branch moved during source verification");
+
+    const recoverySourceShaRace = new ProviderApiFixture({
+      defaultBranchShaSnapshots: [providerVerifiedSha, "3".repeat(40)],
+      deployments: [[providerDeployment(20, candidateAt), baselineDeployment]],
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, [
+          [candidateStatus(201, "success", successAt)],
+          [candidateStatus(201, "success", successAt)],
+          [candidateStatus(201, "success", successAt)],
+        ]],
+      ]),
+    });
+    await expect(waitForProviderOutcomeRaw({
+      api: recoverySourceShaRace,
+      baselineReceipt: baseline,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      recoveryWorkflowSha: providerVerifiedSha,
+      sleep: async () => {},
+      ...providerAuthority,
+    })).rejects.toThrow("workflow source is no longer current main");
+
+    const wrongMode = {
+      ...(promotion as Readonly<Record<string, ProviderJson>>),
+      mode: "already-exact",
+    };
+    await expect(waitForProviderOutcome({
+      api: new ProviderApiFixture(),
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: wrongMode,
+      sleep: async () => {},
+    })).rejects.toThrow("mode contradicts");
+    const tamperedBaseline = {
+      ...(baseline as Readonly<Record<string, ProviderJson>>),
+      completedAt: "2026-08-29T15:00:00.600Z",
+    };
+    await expect(waitForProviderOutcome({
+      api: new ProviderApiFixture(),
+      baselineReceipt: tamperedBaseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("does not bind the baseline receipt");
+
+    for (const authority of [
+      { repository: "hraness/other", verifiedSha: providerVerifiedSha, verifiedTag: providerTag },
+      { repository: providerRepository, verifiedSha: "3".repeat(40), verifiedTag: providerTag },
+      { repository: providerRepository, verifiedSha: providerVerifiedSha, verifiedTag: "v9.9.9" },
+    ] as const) {
+      const api = new ProviderApiFixture();
+      await expect(waitForProviderOutcomeRaw({
+        api,
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: promotion,
+        sleep: async () => {},
+        ...authority,
+      })).rejects.toThrow("authoritative release inputs");
+      expect(api.calls).toHaveLength(0);
+    }
+  });
+
+  test("enforces one half-open monotonic 20-minute provider observation deadline", async () => {
+    const { baseline, baselineDeployment, promotion } = await providerReceipts("advanced");
+    const candidateAt = "2026-08-29T15:02:00Z";
+    const successAt = "2026-08-29T15:03:00Z";
+    const candidate = providerDeployment(20, candidateAt);
+    const success = providerStatus(201, "success", successAt, {}, 20);
+    const noCandidate = (
+      readHook?: (timeoutMilliseconds: number | undefined) => void,
+    ): ProviderApiFixture => new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      readHook,
+      refSha: providerVerifiedSha,
+      statuses: terminalBaselineStatus(),
+    });
+    const successCase = (
+      readHook?: (timeoutMilliseconds: number | undefined) => void,
+    ): ProviderApiFixture => new ProviderApiFixture({
+      deployments: [[candidate, baselineDeployment]],
+      readHook,
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, [[success], [success], [success]]],
+      ]),
+    });
+    const run = (
+      api: ProviderApiFixture,
+      monotonicNow: () => number,
+      sleep: (milliseconds: number) => Promise<void>,
+      maxPolls = 20,
+      pollIntervalMilliseconds = 60_000,
+    ): Promise<unknown> => waitForProviderOutcome({
+      api,
+      baselineReceipt: baseline,
+      maxPolls,
+      monotonicNow,
+      pollIntervalMilliseconds,
+      promotionReceipt: promotion,
+      sleep,
+    });
+
+    let now = 0;
+    const expectedPartialSleepRequests = [59_998, 29_999, 15_000];
+    expect(expectedPartialSleepRequests).toHaveLength(3);
+    const sleepThroughThreePartialWakeups = (
+      requests: number[],
+    ): ((milliseconds: number) => Promise<void>) => async (milliseconds) => {
+      requests.push(milliseconds);
+      const phase = (requests.length - 1) % 3;
+      now += phase === 2 ? milliseconds : Math.floor(milliseconds / 2);
+    };
+    const partialSleeps: number[] = [];
+    const fullWindowApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 1;
+    });
+    await expect(run(
+      fullWindowApi,
+      () => now,
+      sleepThroughThreePartialWakeups(partialSleeps),
+    )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
+    expect(partialSleeps).toEqual(
+      Array.from({ length: 20 }, () => expectedPartialSleepRequests).flat(),
+    );
+    expect(now).toBe(1_200_000);
+    expect(fullWindowApi.graphqlCalls).toHaveLength(20);
+    expect(fullWindowApi.timeoutMilliseconds).toHaveLength(40);
+    expect(fullWindowApi.timeoutMilliseconds.slice(-2)).toEqual([60_000, 59_999]);
+
+    now = 0;
+    const tailSleeps: number[] = [];
+    const latencyApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 11_000;
+    });
+    await expect(run(
+      latencyApi,
+      () => now,
+      async (milliseconds) => {
+        tailSleeps.push(milliseconds);
+        now += milliseconds;
+      },
+    )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
+    expect(tailSleeps).toEqual(Array.from({ length: 20 }, () => 38_000));
+    expect(latencyApi.graphqlCalls).toHaveLength(20);
+    expect(now).toBe(1_200_000);
+
+    now = 0;
+    let boundaryRead = 0;
+    let boundarySamples = 0;
+    const successExternalReads = 36;
+    const exactBoundaryApi = successCase((timeoutMilliseconds) => {
+      if (timeoutMilliseconds === undefined) return;
+      boundaryRead += 1;
+      now = boundaryRead === successExternalReads
+        ? 1_200_000
+        : Math.floor(1_199_999 * boundaryRead / (successExternalReads - 1));
+    });
+    await expect(run(exactBoundaryApi, () => {
+      if (now !== 1_200_000) return now;
+      boundarySamples += 1;
+      return boundarySamples === 1 ? now : now + 0.001;
+    }, async () => {}))
+      .resolves.toEqual({ deploymentId: 20, statusId: 201 });
+    expect(now).toBe(1_200_000);
+    expect(boundaryRead).toBe(successExternalReads);
+    expect(boundarySamples).toBe(1);
+    expect(exactBoundaryApi.timeoutMilliseconds).toHaveLength(successExternalReads);
+    expect(exactBoundaryApi.timeoutMilliseconds.at(-1)).toBe(1);
+
+    now = 0;
+    const lateSleeps: number[] = [];
+    const lateCandidateApi = new ProviderApiFixture({
+      deployments: [
+        ...Array.from({ length: 19 }, () => [baselineDeployment]),
+        [candidate, baselineDeployment],
+      ],
+      readHook: (timeoutMilliseconds) => {
+        if (timeoutMilliseconds !== undefined) now += 1;
+      },
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, [[success], [success], [success]]],
+      ]),
+    });
+    await expect(run(
+      lateCandidateApi,
+      () => now,
+      sleepThroughThreePartialWakeups(lateSleeps),
+    )).resolves.toEqual({ deploymentId: 20, statusId: 201 });
+    expect(lateSleeps).toEqual(
+      Array.from({ length: 19 }, () => expectedPartialSleepRequests).flat(),
+    );
+    expect(now).toBe(1_140_036);
+    expect(lateCandidateApi.graphqlCalls).toHaveLength(22);
+
+    now = 0;
+    const frozenSuccessApi = successCase();
+    await expect(run(frozenSuccessApi, () => now, async () => {}))
+      .rejects.toThrow("did not advance the provider monotonic clock");
+    expect(frozenSuccessApi.timeoutMilliseconds).toHaveLength(1);
+
+    now = 0;
+    const afterBoundaryApi = successCase((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now = 1_200_001;
+    });
+    await expect(run(afterBoundaryApi, () => now, async () => {}))
+      .rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
+    expect(afterBoundaryApi.timeoutMilliseconds).toHaveLength(1);
+
+    let subMillisecondRead = 0;
+    const subMillisecondApi = noCandidate();
+    await expect(run(
+      subMillisecondApi,
+      () => subMillisecondRead++ === 0 ? 0 : 1_199_999.5,
+      async () => {},
+    )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
+    expect(subMillisecondApi.timeoutMilliseconds).toHaveLength(0);
+    expect(subMillisecondApi.graphqlCalls).toHaveLength(0);
+
+    for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, -1] as const) {
+      await expect(run(noCandidate(), () => invalid, async () => {}))
+        .rejects.toThrow("finite nonnegative monotonic timestamp");
+    }
+    await expect(run(noCandidate(), () => Number.MAX_SAFE_INTEGER, async () => {}))
+      .rejects.toThrow("deadline overflows");
+
+    let read = 0;
+    await expect(run(
+      noCandidate(),
+      () => read++ === 0 ? 100 : 99,
+      async () => {},
+    )).rejects.toThrow("monotonic clock regressed");
+
+    now = 0;
+    const stuckSleeps: number[] = [];
+    const stuckApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 1;
+    });
+    await expect(run(
+      stuckApi,
+      () => now,
+      async (milliseconds) => {
+        stuckSleeps.push(milliseconds);
+        if (stuckSleeps.length === 1) now += 1;
+      },
+    )).rejects.toThrow("poll sleep did not reach its monotonic schedule");
+    expect(stuckSleeps).toHaveLength(16);
+    expect(stuckApi.graphqlCalls).toHaveLength(1);
+
+    now = 0;
+    const reducedSleeps: number[] = [];
+    const reducedApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 1;
+    });
+    await expect(run(
+      reducedApi,
+      () => now,
+      async (milliseconds) => {
+        reducedSleeps.push(milliseconds);
+      },
+      1,
+    ))
+      .rejects.toThrow("poll budget exhausted before its monotonic deadline");
+    expect(reducedSleeps).toHaveLength(0);
+    expect(reducedApi.graphqlCalls).toHaveLength(1);
+
+    now = 0;
+    const immediateSleeps: number[] = [];
+    const immediateApi = noCandidate((timeoutMilliseconds) => {
+      if (timeoutMilliseconds !== undefined) now += 1;
+    });
+    await expect(run(
+      immediateApi,
+      () => now,
+      async (milliseconds) => {
+        immediateSleeps.push(milliseconds);
+      },
+      20,
+      0,
+    )).rejects.toThrow("test cadence exhausted before its monotonic deadline");
+    expect(immediateSleeps).toHaveLength(0);
+    expect(immediateApi.graphqlCalls).toHaveLength(20);
+    expect(immediateApi.timeoutMilliseconds).toHaveLength(40);
+    expect(now).toBe(40);
+  });
+
+  test("fails recovery closed on stale success, latest ties, or newer deployments", async () => {
+    const recovery = await providerReceipts("already-exact");
+    const baselineDeployment = recovery.baselineDeployment;
+
+    const baselineStatusDriftGraph = providerGraphqlDeployment(
+      10,
+      "2026-08-29T14:05:00Z",
+      {
+        latestStatus: {
+          createdAt: "2026-08-29T14:06:00Z",
+          creator: { __typename: "Bot", databaseId: 35613825, login: "vercel" },
+          environment: "Production",
+          environmentUrl: "https://wrench-10-hraness.vercel.app",
+          id: "status-99",
+          logUrl: "https://wrench-10-hraness.vercel.app",
+          state: "SUCCESS",
+          updatedAt: "2026-08-29T14:06:00Z",
+        },
+        updatedAt: "2026-08-29T14:06:00Z",
+      },
+    );
+    const baselineStatusDrift = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      graphqlDeployments: [[baselineStatusDriftGraph]],
+      refSha: providerVerifiedSha,
+      statuses: new Map([[10, [[
+        providerStatus(100, "success", "2026-08-29T14:06:00Z"),
+        providerStatus(99, "pending", "2026-08-29T14:05:30Z"),
+      ]]]]),
+    });
+    await expect(waitForProviderOutcome({
+      api: baselineStatusDrift,
+      baselineReceipt: recovery.baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: recovery.promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("baseline Production deployment disappeared or changed");
+
+    const recoveryReceiptsFor = async (
+      deployments: ProviderJson[],
+      statuses: Map<number, ProviderJson[][]>,
+    ): Promise<Readonly<{ baseline: ProviderJson; promotion: ProviderJson }>> => {
+      const baseline = await createProviderBaseline({
+        api: new ProviderApiFixture({
+          deployments: [deployments],
+          refSha: providerVerifiedSha,
+          serverDates: [providerBaselineServerDate, providerBaselineServerDate],
+          statuses,
+        }),
+        repository: providerRepository,
+        verifiedSha: providerVerifiedSha,
+      }) as ProviderJson;
+      const promotion = await promoteWebsiteProduction({
+        api: new ProviderApiFixture({
+          deployments: [deployments],
+          refSha: providerVerifiedSha,
+          serverDates: [providerPromotionServerDate],
+          statuses,
+        }),
+        baselineReceipt: baseline,
+        repository: providerRepository,
+        verifiedSha: providerVerifiedSha,
+        verifiedTag: providerTag,
+      }) as ProviderJson;
+      return Object.freeze({ baseline, promotion });
+    };
+
+    const staleDeployment = providerDeployment(10, "2026-08-29T13:59:59Z");
+    const staleStatuses = terminalBaselineStatus(10, "2026-08-29T14:00:01Z");
+    const stale = await recoveryReceiptsFor([staleDeployment], staleStatuses);
+    const staleApi = new ProviderApiFixture({
+      deployments: [[staleDeployment]],
+      refSha: providerVerifiedSha,
+      statuses: staleStatuses,
+    });
+    await expect(waitForProviderOutcome({
+      api: staleApi,
+      baselineReceipt: stale.baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: stale.promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("does not postdate the immutable Release");
+
+    const tiedOlderId = providerDeployment(10, "2026-08-29T14:05:00Z");
+    const tiedNewerId = providerDeployment(11, "2026-08-29T14:05:00Z");
+    const tiedStatuses = new Map<number, ProviderJson[][]>([
+      [10, [[providerStatus(100, "success", "2026-08-29T14:06:00Z")]]],
+      [11, [[providerStatus(101, "success", "2026-08-29T14:06:00Z", {}, 11)]]],
+    ]);
+    const tiedReceipts = await recoveryReceiptsFor(
+      [tiedOlderId, tiedNewerId],
+      tiedStatuses,
+    );
+    const tiedApi = new ProviderApiFixture({
+      deployments: [[tiedOlderId, tiedNewerId]],
+      refSha: providerVerifiedSha,
+      statuses: tiedStatuses,
+    });
+    await expect(waitForProviderOutcome({
+      api: tiedApi,
+      baselineReceipt: tiedReceipts.baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: tiedReceipts.promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("ambiguous at second precision");
+
+    const olderVerified = providerDeployment(10, "2026-08-29T14:05:00Z");
+    const newerWrongSha = providerDeployment(11, "2026-08-29T14:07:00Z", {
+      sha: providerPreviousSha,
+    });
+    const wrongNewestStatuses = new Map<number, ProviderJson[][]>([
+      [10, [[providerStatus(100, "success", "2026-08-29T14:06:00Z")]]],
+      [11, [[providerStatus(101, "success", "2026-08-29T14:08:00Z", {}, 11)]]],
+    ]);
+    const wrongNewestReceipts = await recoveryReceiptsFor(
+      [olderVerified, newerWrongSha],
+      wrongNewestStatuses,
+    );
+    await expect(waitForProviderOutcome({
+      api: new ProviderApiFixture({
+        deployments: [[olderVerified, newerWrongSha]],
+        refSha: providerVerifiedSha,
+        statuses: wrongNewestStatuses,
+      }),
+      baselineReceipt: wrongNewestReceipts.baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: wrongNewestReceipts.promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("successfully binds another SHA");
+
+    for (const terminalState of ["failure", "error", "inactive"] as const) {
+      const newerWrongTerminal = providerDeployment(11, "2026-08-29T14:07:00Z", {
+        sha: providerPreviousSha,
+      });
+      const wrongTerminalStatuses = new Map<number, ProviderJson[][]>([
+        [10, [[providerStatus(100, "success", "2026-08-29T14:06:00Z")]]],
+        [11, [[providerStatus(101, terminalState, "2026-08-29T14:08:00Z", {}, 11)]]],
+      ]);
+      const wrongTerminalReceipts = await recoveryReceiptsFor(
+        [olderVerified, newerWrongTerminal],
+        wrongTerminalStatuses,
+      );
+      await expect(waitForProviderOutcome({
+        api: new ProviderApiFixture({
+          deployments: [[olderVerified, newerWrongTerminal]],
+          refSha: providerVerifiedSha,
+          statuses: wrongTerminalStatuses,
+        }),
+        baselineReceipt: wrongTerminalReceipts.baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: wrongTerminalReceipts.promotion,
+        sleep: async () => {},
+      })).resolves.toEqual({ deploymentId: 10, statusId: 100 });
+    }
+
+    const concurrentApi = new ProviderApiFixture({
+      deployments: [[
+        providerDeployment(11, "2026-08-29T14:07:00Z"),
+        baselineDeployment,
+      ]],
+      refSha: providerVerifiedSha,
+      statuses: terminalBaselineStatus(10, "2026-08-29T14:06:00Z"),
+    });
+    await expect(waitForProviderOutcome({
+      api: concurrentApi,
+      baselineReceipt: recovery.baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: recovery.promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("concurrent Production deployment");
+
+    const malformedApi = new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      refSha: providerVerifiedSha,
+      statuses: terminalBaselineStatus(10, "2026-08-29T14:06:00Z"),
+    });
+    malformedApi.release = { ...providerRelease(), published_at: null };
+    await expect(waitForProviderOutcome({
+      api: malformedApi,
+      baselineReceipt: recovery.baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: recovery.promotion,
+      sleep: async () => {},
+    })).rejects.toThrow("published_at");
   });
 
   test("documents bootstrap, verification, stage-only trust, MFA, and tag ordering", async () => {
@@ -1391,12 +3843,45 @@ fi
       "For the one-time\nmigration only",
       "never bootstrap it from `main`",
       "exception must never be repeated",
-      "requires the production branch to resolve to one exact",
+      "Checked-in policy requires the Release\nworkflow to remain the sole routine writer",
+      "separate\ncanary-and-ruleset control change",
+      "does not claim\nthat enforcement is already active",
+      "GitHub\nActions App Integration 15368 and is app-wide",
+      "Destructive branch\ncontrols must remain no-bypass",
+      "requires the\nproduction branch and Latest Release to remain exact",
+      "Release lookup accepts only an exact REST 200 or 404 response",
+      "authenticated exact 404 permits one REST create request",
+      "does not use opaque `gh release view` or\n`gh release create` commands",
+      "manual recovery guards the conditional\ncreate request immediately beforehand with current default-branch\nrepository/ref/repository source reads",
       "workflow never recreates the branch",
       "sends `force=false`",
+      "reads the exact branch back, and,\nfor manual recovery, repeats the current default-branch repository/ref/repository\nsource sandwich before writing the receipt",
+      "exactly 20 observation slots anchored to that start at offsets zero through\n19 minutes",
+      "half-open monotonic `[start, deadline)` window",
+      "API latency\nreduces the sleep before the next absolute slot instead of sliding the schedule",
+      "default cadence performs only a final bounded\nsleep to the 20-minute deadline",
+      "reduced poll count or test cadence rejects immediately",
+      "makes no visibility claim for a\ndeployment that changes after the slot-20 query completes",
+      "No provider API\nprocess starts with less than one millisecond remaining",
+      "every completed\nprocess must strictly advance the injected monotonic clock",
+      "final external read\nthat completes exactly at the deadline remains eligible",
+      "no redundant clock sample or later API read follows it",
+      "separate 30-minute timeout",
+      "at most 197 REST calls in the provider outcome job and 228",
+      "240-point ceiling and 760 points of headroom",
+      "Each API response is capped at 8 MiB",
+      "cross-job receipt is capped at 64 KiB",
+      "Authenticated GitHub\n`Date` headers bracket that snapshot",
+      "complete current inventory of at most 500",
+      "removes previous deployment\nstatuses after 90 days while preserving",
+      "preserving the current status on the deployment",
+      "pinned\ncandidate also gets an exhaustive, order-independent REST status-history read",
+      "initial success observation plus two complete consistent\nreadbacks",
+      "repeats the complete deployment inventory after the final status\nread",
+      "Latest Release or\nworkflow-source drift",
       "dispatch **Release** from the current `main` ref",
       "required exact stable\n`release_tag`",
-      "revalidates the existing immutable Latest\nRelease",
+      "revalidates the existing immutable\nLatest Release",
       "dispatch workflow source commit must\nequal the current default-branch head",
       "ordinary tag-push releases do not depend on `main`\nremaining unchanged",
       "Never rerun a stale tag workflow or write the production\nbranch manually",
@@ -1433,13 +3918,36 @@ fi
     expect(`${guide}\n${agents}`).not.toContain("required reviewer `0thernet`");
     expect(`${guide}\n${agents}`).not.toContain("prevent_self_review");
     expect(agents).toContain("fast-forwards the established `website-production` branch");
+    expect(agents).toContain("Require bounded read-only jobs");
+    expect(agents).toContain("complete current state and `latestStatus` of at most 500");
+    expect(agents).toContain("exhaustively audit only the pinned candidate's REST status history");
+    expect(agents).toContain("Reject any retained failure, error, or inactive candidate status");
+    expect(agents).toContain("REST deployment's lowercase commit `.ref` and `.sha`");
+    expect(agents).toContain("20 observation slots at absolute minute offsets zero through 19");
+    expect(agents).toContain("without sliding later slots");
+    expect(agents).toContain("previous deployment statuses that GitHub deletes after 90 days");
+    expect(agents).toContain("GitHub preserves the current status on the deployment");
+    expect(agents).not.toContain("audit every retained Production deployment status");
+    expect(agents).not.toContain("every baseline deployment's REST status history");
     expect(agents).toContain("a missing production branch is a hard failure");
     expect(agents).toContain("Vercel's Production Branch on `website-production`");
     expect(agents).toContain("documented one-time Vercel bootstrap");
+    expect(agents).toContain("checked-in policy must keep the Release workflow as the sole routine writer");
+    expect(agents).toContain("live branch enforcement remains a separately reviewed canary-and-ruleset control");
     expect(agents).toContain("`main` and pull requests are preview sources");
     expect(websiteAgents).toContain("only the release workflow may fast-forward the established branch");
     expect(websiteAgents).toContain("a missing branch is a hard failure");
     expect(websiteAgents).toContain("must never recreate, force, or accept divergence");
+    expect(websiteAgents).toContain("A separate 30-minute read-only job");
+    expect(websiteAgents).toContain("absolute observation slots at minute offsets zero through 19");
+    expect(websiteAgents).toContain("`[start, deadline)` provider window");
+    expect(websiteAgents).toContain("charge API latency without sliding those slots");
+    expect(websiteAgents).not.toContain("provider window orchestration headroom");
+    expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
+    expect(websiteAgents).toContain("exact ref readback and event-appropriate terminal workflow-source revalidation");
+    expect(websiteAgents).toContain("initial success observation plus two stable");
+    expect(websiteAgents).not.toContain("audit every retained Production deployment status");
+    expect(websiteAgents).not.toContain("every baseline deployment's REST status history");
     expect(websiteAgents).not.toContain("may create or fast-forward");
     expect(readme).toContain(exactPackage);
     expect(readme).toContain(`npx skills add hraness/wrench#v${manifest.version}`);
