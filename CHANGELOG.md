@@ -7,6 +7,8 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+## 0.16.3 - 2026-08-30
+
 - Return a bound `cleanup-required` result when durable realm admission blocks
   an R1 read before dispatch. JSON callers retain the no-retry category while
   the cleanup-unsafe claim remains fail-closed.
@@ -18,6 +20,9 @@ coordinate that completed both checks.
 - Move automatic main-only npm staging out of GitHub deployment review. npm
   still requires separate human inspection and two-factor approval before the
   staged version becomes public.
+- Add a product-specific Wrench mailing signup to the public footer. The static
+  site submits directly to Accounts, carries the Wrench audience identifier,
+  and admits Turnstile only on the exact Accounts submission path.
 
 ## 0.16.2 - 2026-08-28
 
