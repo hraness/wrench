@@ -309,6 +309,13 @@ checking Latest. It does not use opaque `gh release view` or
 `gh release create` commands, so hidden requests cannot escape the bounded
 control path. The tag and its peeled commit must remain exact current `main`
 before creation and at the terminal readback.
+The create request supplies the verified SHA as `target_commitish`, but GitHub
+does not use that field when the tag already exists, and live readback may report
+the default branch. Promotion therefore treats `target_commitish` as
+non-authoritative. It binds the stable Release ID and publication time across
+the authority sandwich and every promotion/outcome receipt readback while the
+exact tag name, encoded peeled-tag commit, immutable state, Latest Release, and
+current-main ancestry provide release authority.
 
 The separate **Promote website production** workflow is loaded from current
 default-branch `main`. GitHub starts it after **Release** completes, and manual
@@ -316,11 +323,13 @@ recovery dispatches this workflow directly from current `main` with an untrusted
 stable-tag input. The automatic path treats the entire `workflow_run` payload as
 foreign data. It requires repository `hraness/wrench` with numeric ID
 `1316443113`, Release workflow ID `323493609`, exact workflow name and path, a
-tag `push`, first attempt, successful conclusion, this repository as the head
-repository, and one head SHA and tag that both equal current `main`. Both paths
-check out that exact current-main source, bind its package version and newest
-stable tag, and verify the immutable asset-free Latest Release before any
-provider or ref work.
+tag `push`, first attempt, successful conclusion, and this repository as the head
+repository. The workflow source must equal current `main`; the automatic head
+SHA must instead equal the peeled immutable tag commit, and that release commit
+must be an ancestor of the current-main workflow source. Manual recovery carries
+no upstream SHA. Both paths check out the exact current-main source, bind the
+package version from the peeled tag commit and the newest stable tag, and verify
+the immutable asset-free Latest Release before any provider or ref work.
 
 Before any key-gated job starts, a read-only job records a bounded, complete
 snapshot of GitHub's Production deployments. Authenticated GitHub
@@ -381,13 +390,17 @@ the complete canary must run again. Never broaden the App silently or during a
 failed canary.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
-response parser. The helper masks it, passes it only through a private
-`GIT_ASKPASS` environment, and runs one fixed HTTPS push with the explicit
-compare-and-swap lease
+response parser. The helper masks it and passes it only through a private
+`GIT_ASKPASS` environment. Because the writer checks out only exact current-main
+workflow source, it first fetches only the verified tag through the fixed HTTPS
+repository URL, peels that fetched object locally, and requires the result to
+equal the independently verified release SHA. It does not check out or execute
+tagged code. The same ephemeral credential boundary then runs one fixed push
+with the explicit compare-and-swap lease
 `--force-with-lease=refs/heads/website-production:<expected-old>`. The push has
-one exact source-to-destination refspec, no tags, no hooks, no persisted Git
-configuration or checkout credential, no interactive prompt, and a 60-second
-process cap. The App token is revoked before the exact production-ref post-read;
+one exact source-to-destination refspec, no followed tags, no hooks, no persisted
+Git configuration or checkout credential, no interactive prompt, and a
+60-second cap on each Git process. The App token is revoked before the exact production-ref post-read;
 operation and revocation failures are both retained when they coincide. Every
 read-only `gh api` child receives `GH_TOKEN` but has every
 `WRENCH_RELEASE_APP_*` value removed from its environment. A missing branch,
@@ -471,7 +484,9 @@ needs no Vercel token, PAT, or redeploy.
 If promotion fails after the immutable Release exists, merge the reviewed fix to
 `main` first. Then dispatch **Promote website production** from exact current
 `main` with the immutable Latest stable tag. Recovery never reruns or changes
-the tag Release, and it cannot promote an older workflow source. An
+the tag Release. It resolves the peeled tag as the verified release SHA, keeps
+that coordinate distinct from the exact current-main workflow SHA, and requires
+the release commit to remain an ancestor of the workflow source. An
 already-exact recovery remains entirely outside the key environment. A required
 fast-forward repeats every authority check after reviewer admission before it
 mints the one-repository App token. Never rerun an ambiguous App push, bypass the

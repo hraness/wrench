@@ -83,7 +83,7 @@ jobs:
               ;;
             workflow_dispatch)
               requested_tag="$INPUT_RELEASE_TAG"
-              release_sha="$EVENT_SHA"
+              release_sha=""
               ;;
             *)
               echo "::error::Unsupported website production trigger $EVENT_NAME"
@@ -96,12 +96,13 @@ jobs:
           fi
           repository_default="$(gh api "/repos/$GITHUB_REPOSITORY" --jq '.default_branch')"
           current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          if [[ "$repository_default" != "main" || "$current_main_sha" != "$EVENT_SHA" || "$release_sha" != "$EVENT_SHA" ]]; then
+          if [[ "$repository_default" != "main" || "$current_main_sha" != "$EVENT_SHA" ]]; then
             echo "::error::Promotion workflow source $EVENT_SHA is not exact current main $current_main_sha"
             exit 1
           fi
           printf 'sha=%s\n' "$EVENT_SHA" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$requested_tag" >> "$GITHUB_OUTPUT"
+          printf 'release_sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
@@ -118,18 +119,41 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           RECOVERY_WORKFLOW_SHA: ${{ steps.request.outputs.sha }}
+          REQUESTED_RELEASE_SHA: ${{ steps.request.outputs.release_sha }}
           REQUESTED_TAG: ${{ steps.request.outputs.tag }}
         run: |
           set -euo pipefail
-          package_version="$(node -e 'const value = require("./package.json"); if (typeof value.version !== "string") process.exit(1); process.stdout.write(value.version)')"
+          head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          tag_commit="$(git rev-parse --verify "refs/tags/$REQUESTED_TAG^{commit}")"
+          package_version="$(git show "${tag_commit}:package.json" | node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(0, "utf8")); if (typeof value.version !== "string") process.exit(1); process.stdout.write(value.version)')"
           if [[ "$REQUESTED_TAG" != "v$package_version" ]]; then
             echo "::error::Promotion tag and package version do not agree"
             exit 1
           fi
-          head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
-          tag_commit="$(git rev-parse --verify "refs/tags/$REQUESTED_TAG^{commit}")"
-          if [[ "$head_commit" != "$RECOVERY_WORKFLOW_SHA" || "$tag_commit" != "$head_commit" ]]; then
-            echo "::error::Promotion workflow, main, and tag do not resolve to one commit"
+          if [[ "$head_commit" != "$RECOVERY_WORKFLOW_SHA" ]]; then
+            echo "::error::Promotion workflow does not resolve to exact current main"
+            exit 1
+          fi
+          case "$EVENT_NAME" in
+            workflow_run)
+              if [[ ! "$REQUESTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ || "$REQUESTED_RELEASE_SHA" != "$tag_commit" ]]; then
+                echo "::error::Upstream Release SHA does not resolve to the immutable tag commit"
+                exit 1
+              fi
+              ;;
+            workflow_dispatch)
+              if [[ -n "$REQUESTED_RELEASE_SHA" ]]; then
+                echo "::error::Manual recovery unexpectedly carried an upstream Release SHA"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported website production trigger $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          if ! git merge-base --is-ancestor "$tag_commit" "$head_commit"; then
+            echo "::error::Immutable release tag is not an ancestor of the current-main workflow"
             exit 1
           fi
           newest_stable_tag="$(git tag --list 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | LC_ALL=C sort -V | tail -n 1)"
@@ -137,9 +161,9 @@ jobs:
             echo "::error::Promotion tag is not the newest stable tag ($newest_stable_tag)"
             exit 1
           fi
-          printf 'sha=%s\n' "$head_commit" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
-          VERIFIED_SHA="$head_commit" VERIFIED_TAG="$REQUESTED_TAG" \
+          VERIFIED_SHA="$tag_commit" VERIFIED_TAG="$REQUESTED_TAG" \
             node ./scripts/release-provider-outcome.mjs revalidate-authority
 
   provider_baseline:

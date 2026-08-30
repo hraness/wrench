@@ -37,6 +37,7 @@ import {
   encodeProviderReceipt,
   parseIncludedGitHubResponse,
   promoteWebsiteProduction,
+  revalidateReleaseAuthority,
   releaseGraphqlRequestBudget,
   releaseRestRequestBudget,
   scrubReadOnlyGithubEnvironment,
@@ -44,6 +45,7 @@ import {
 } from "./release-provider-outcome.mjs";
 import {
   advanceWebsiteProductionRef,
+  verifiedReleaseFetchArguments,
   websiteProductionPushArguments,
 } from "./release-ref-writer.mjs";
 
@@ -97,9 +99,10 @@ function workflowStepScript(workflow: string, name: string): string {
 async function runWorkflowScript(
   script: string,
   environment: Readonly<Record<string, string>>,
+  cwd = repository,
 ): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> {
   const child = Bun.spawn(["/bin/bash", "-c", script], {
-    cwd: repository,
+    cwd,
     env: { ...process.env, ...environment },
     stderr: "pipe",
     stdout: "pipe",
@@ -220,6 +223,7 @@ const providerRepository = "hraness/wrench";
 const providerPreviousSha = "1".repeat(40);
 const providerVerifiedSha = "2".repeat(40);
 const providerTagObjectSha = "3".repeat(40);
+const providerWorkflowSha = "4".repeat(40);
 const providerTag = "v0.16.2";
 const providerTagCommitEndpoint =
   `/repos/${providerRepository}/commits/refs%2Ftags%2F${providerTag}`;
@@ -425,11 +429,14 @@ function providerRef(sha: string, branch = "website-production"): ProviderJson {
 
 function providerRelease(overrides: Readonly<Record<string, ProviderJson>> = {}): ProviderJson {
   return {
+    assets: [],
     draft: false,
+    id: 10,
     immutable: true,
     prerelease: false,
     published_at: providerReleasePublishedAt,
     tag_name: providerTag,
+    target_commitish: "main",
     ...overrides,
   };
 }
@@ -443,6 +450,7 @@ function providerCompare(overrides: Readonly<Record<string, ProviderJson>> = {})
     ahead_by: 1,
     base_commit: { sha: providerPreviousSha },
     behind_by: 0,
+    commits: [{ sha: providerVerifiedSha }],
     merge_base_commit: { sha: providerPreviousSha },
     status: "ahead",
     ...overrides,
@@ -728,11 +736,17 @@ class ProviderApiFixture {
     return { body, serverDate: serverDate ?? providerPromotionServerDate };
   }
 
-  async advanceRef(repository: string, expectedOldSha: string, verifiedSha: string): Promise<void> {
-    this.calls.push(`GIT CAS ${repository} ${expectedOldSha} ${verifiedSha}`);
+  async advanceRef(
+    repository: string,
+    expectedOldSha: string,
+    verifiedSha: string,
+    verifiedTag: string,
+  ): Promise<void> {
+    this.calls.push(`GIT CAS ${repository} ${expectedOldSha} ${verifiedSha} ${verifiedTag}`);
     expect(repository).toBe(providerRepository);
     expect(expectedOldSha).toBe(providerPreviousSha);
     expect(verifiedSha).toBe(providerVerifiedSha);
+    expect(verifiedTag).toBe(providerTag);
     if (this.patchError !== undefined) throw this.patchError;
     this.refSha = providerVerifiedSha;
   }
@@ -1461,7 +1475,7 @@ esac
     const binaryDirectory = join(directory, "bin");
     const ghStub = join(binaryDirectory, "gh");
     const output = join(directory, "github-output.txt");
-    const sourceSha = "2".repeat(40);
+    const sourceSha = providerWorkflowSha;
     try {
       await mkdir(binaryDirectory, { recursive: true });
       await writeFile(ghStub, `#!/bin/bash
@@ -1489,7 +1503,7 @@ esac
         UPSTREAM_EVENT: "push",
         UPSTREAM_HEAD_BRANCH: "v0.16.2",
         UPSTREAM_HEAD_REPOSITORY: providerRepository,
-        UPSTREAM_HEAD_SHA: sourceSha,
+        UPSTREAM_HEAD_SHA: providerVerifiedSha,
         UPSTREAM_PATH: ".github/workflows/release.yml",
         UPSTREAM_RUN_ATTEMPT: "1",
         UPSTREAM_WORKFLOW_ID: "323493609",
@@ -1502,7 +1516,9 @@ esac
 
       const automatic = await runCase({});
       expect(automatic.exitCode).toBe(0);
-      expect(await readFile(output, "utf8")).toBe(`sha=${sourceSha}\ntag=v0.16.2\n`);
+      expect(await readFile(output, "utf8")).toBe(
+        `sha=${sourceSha}\ntag=v0.16.2\nrelease_sha=${providerVerifiedSha}\n`,
+      );
       const manual = await runCase({
         EVENT_NAME: "workflow_dispatch",
         INPUT_RELEASE_TAG: "v0.16.2",
@@ -1517,7 +1533,9 @@ esac
         UPSTREAM_WORKFLOW_NAME: "",
       });
       expect(manual.exitCode).toBe(0);
-      expect(await readFile(output, "utf8")).toBe(`sha=${sourceSha}\ntag=v0.16.2\n`);
+      expect(await readFile(output, "utf8")).toBe(
+        `sha=${sourceSha}\ntag=v0.16.2\nrelease_sha=\n`,
+      );
 
       for (const rejected of [
         { UPSTREAM_WORKFLOW_ID: "1" },
@@ -1527,7 +1545,7 @@ esac
         { UPSTREAM_RUN_ATTEMPT: "2" },
         { UPSTREAM_CONCLUSION: "failure" },
         { UPSTREAM_HEAD_REPOSITORY: "hraness/copied" },
-        { UPSTREAM_HEAD_SHA: "3".repeat(40) },
+        { UPSTREAM_HEAD_SHA: "not-a-sha" },
         { UPSTREAM_HEAD_BRANCH: "main" },
         { EVENT_REF: "refs/tags/v0.16.2" },
         { EVENT_REPOSITORY_ID: "1" },
@@ -1537,6 +1555,174 @@ esac
         expect(result.exitCode).not.toBe(0);
         expect(await Bun.file(output).exists()).toBe(false);
       }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("separates current-main workflow authority from the immutable release commit", async () => {
+    const workflow = await readFile(websiteProductionWorkflowUrl, "utf8");
+    const identityScript = workflowStepScript(
+      workflow,
+      "Verify exact immutable release coordinate",
+    );
+
+    expect(identityScript).toContain('"$head_commit" != "$RECOVERY_WORKFLOW_SHA"');
+    expect(identityScript).toContain('"$REQUESTED_RELEASE_SHA" != "$tag_commit"');
+    expect(identityScript).toContain(
+      'git merge-base --is-ancestor "$tag_commit" "$head_commit"',
+    );
+    expect(identityScript).toContain('git show "${tag_commit}:package.json"');
+    expect(identityScript).toContain("printf 'sha=%s\\n' \"$tag_commit\"");
+    expect(identityScript).toContain(
+      'VERIFIED_SHA="$tag_commit" VERIFIED_TAG="$REQUESTED_TAG"',
+    );
+    expect(identityScript).not.toContain('"$tag_commit" != "$head_commit"');
+
+    const api = new ProviderApiFixture({
+      defaultBranchShaSnapshots: [
+        providerWorkflowSha,
+        providerWorkflowSha,
+        providerWorkflowSha,
+        providerWorkflowSha,
+      ],
+      releaseSnapshots: [
+        providerRelease({ target_commitish: "main" }),
+        providerRelease({ target_commitish: providerVerifiedSha }),
+      ],
+    });
+    await expect(revalidateReleaseAuthority({
+      api,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      recoveryWorkflowSha: providerWorkflowSha,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).resolves.toBeUndefined();
+    expect(api.calls.filter((call) => call === `GET ${providerTagCommitEndpoint}`))
+      .toHaveLength(2);
+
+    const releaseIdentityDrift = new ProviderApiFixture({
+      defaultBranchShaSnapshots: [
+        providerWorkflowSha,
+        providerWorkflowSha,
+        providerWorkflowSha,
+        providerWorkflowSha,
+      ],
+      releaseSnapshots: [
+        providerRelease({ id: 10, target_commitish: "main" }),
+        providerRelease({ id: 11, target_commitish: providerVerifiedSha }),
+      ],
+    });
+    await expect(revalidateReleaseAuthority({
+      api: releaseIdentityDrift,
+      defaultBranch: "main",
+      eventName: "workflow_dispatch",
+      recoveryWorkflowSha: providerWorkflowSha,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("changed during authority verification");
+
+    const directory = await mkdtemp(join(tmpdir(), "wrench-promotion-identity-"));
+    const output = join(directory, "github-output.txt");
+    const helperDirectory = join(directory, "scripts");
+    const checkedGit = (arguments_: readonly string[]): string => {
+      const result = Bun.spawnSync(["git", ...arguments_], {
+        cwd: directory,
+        stderr: "pipe",
+        stdout: "pipe",
+      });
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+      return result.stdout.toString().trim();
+    };
+    try {
+      checkedGit(["init", "--initial-branch=main"]);
+      checkedGit(["config", "user.name", "Wrench promotion test"]);
+      checkedGit(["config", "user.email", "test@example.invalid"]);
+      await mkdir(helperDirectory, { recursive: true });
+      await writeFile(
+        join(directory, "package.json"),
+        '{"name":"@hraness/wrench","version":"0.16.2"}\n',
+        "utf8",
+      );
+      await writeFile(
+        join(helperDirectory, "release-provider-outcome.mjs"),
+        "process.exit(0);\n",
+        "utf8",
+      );
+      checkedGit(["add", "package.json", "scripts/release-provider-outcome.mjs"]);
+      checkedGit(["commit", "-m", "immutable release"]);
+      const releaseSha = checkedGit(["rev-parse", "HEAD"]);
+      checkedGit(["tag", providerTag]);
+      await writeFile(
+        join(directory, "package.json"),
+        '{"name":"@hraness/wrench","version":"9.9.9"}\n',
+        "utf8",
+      );
+      await writeFile(join(directory, "control.txt"), "current-main workflow\n", "utf8");
+      checkedGit(["add", "package.json", "control.txt"]);
+      checkedGit(["commit", "-m", "post-release control fix"]);
+      const workflowSha = checkedGit(["rev-parse", "HEAD"]);
+
+      const runIdentity = async (
+        eventName: "workflow_dispatch" | "workflow_run",
+        requestedReleaseSha: string,
+        recoveryWorkflowSha = workflowSha,
+      ) => {
+        await rm(output, { force: true });
+        return runWorkflowScript(identityScript, {
+          DEFAULT_BRANCH: "main",
+          EVENT_NAME: eventName,
+          GITHUB_OUTPUT: output,
+          RECOVERY_WORKFLOW_SHA: recoveryWorkflowSha,
+          REQUESTED_RELEASE_SHA: requestedReleaseSha,
+          REQUESTED_TAG: providerTag,
+        }, directory);
+      };
+
+      for (const [eventName, requestedReleaseSha] of [
+        ["workflow_dispatch", ""],
+        ["workflow_run", releaseSha],
+      ] as const) {
+        const result = await runIdentity(eventName, requestedReleaseSha);
+        expect(result.exitCode).toBe(0);
+        expect(await readFile(output, "utf8")).toBe(
+          `sha=${releaseSha}\ntag=${providerTag}\n`,
+        );
+      }
+
+      checkedGit(["checkout", "--detach", releaseSha]);
+      const immediate = await runIdentity("workflow_dispatch", "", releaseSha);
+      expect(immediate.exitCode).toBe(0);
+      expect(await readFile(output, "utf8")).toBe(
+        `sha=${releaseSha}\ntag=${providerTag}\n`,
+      );
+      checkedGit(["switch", "main"]);
+
+      for (const [eventName, requestedReleaseSha] of [
+        ["workflow_dispatch", releaseSha],
+        ["workflow_run", "5".repeat(40)],
+      ] as const) {
+        const result = await runIdentity(eventName, requestedReleaseSha);
+        expect(result.exitCode).not.toBe(0);
+        expect(await Bun.file(output).exists()).toBe(false);
+      }
+
+      checkedGit(["switch", "--orphan", "unrelated"]);
+      await writeFile(
+        join(directory, "package.json"),
+        '{"name":"@hraness/wrench","version":"0.16.2"}\n',
+        "utf8",
+      );
+      checkedGit(["add", "package.json"]);
+      checkedGit(["commit", "-m", "unrelated release"]);
+      checkedGit(["tag", "--force", providerTag]);
+      checkedGit(["switch", "main"]);
+      const unrelated = await runIdentity("workflow_dispatch", "");
+      expect(unrelated.exitCode).not.toBe(0);
+      expect(await Bun.file(output).exists()).toBe(false);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -1656,7 +1842,7 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$COMMAND_LOG"
 args="$*"
 release_json() {
-  printf '{"assets":[],"draft":false,"immutable":%s,"prerelease":false,"published_at":"2026-08-29T14:00:00Z","tag_name":"%s"}' "$RELEASE_IMMUTABLE" "$VERIFIED_TAG"
+  printf '{"assets":[],"draft":false,"id":10,"immutable":%s,"prerelease":false,"published_at":"2026-08-29T14:00:00Z","tag_name":"%s","target_commitish":"main"}' "$RELEASE_IMMUTABLE" "$VERIFIED_TAG"
 }
 if [[ "$args" == "api /repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG --jq .sha" ]]; then
   printf '%s\n' "$PEELED_COMMIT_SHA"
@@ -1939,6 +2125,8 @@ fi
     expect(helper).toContain("35613825");
     expect(helper).toContain("encodeURIComponent(`refs/tags/${tag}`)");
     expect(helper).not.toContain("/commits/tags/");
+    expect(helper).not.toContain("head_commit");
+    expect(helper).not.toContain("target_commitish");
     expect(helper).toContain("advanceWebsiteProductionRefFromEnvironment");
     expect(helper).toContain('key.startsWith("WRENCH_RELEASE_APP_")');
     expect(scrubReadOnlyGithubEnvironment({
@@ -1969,6 +2157,11 @@ fi
     expect(writerHelper).toContain(
       '`--force-with-lease=${PRODUCTION_REF}:${expectedOld}`',
     );
+    expect(writerHelper).toContain("verifiedReleaseFetchArguments");
+    expect(writerHelper).toContain('`refs/tags/${tag}`');
+    expect(writerHelper).toContain('"FETCH_HEAD^{commit}"');
+    expect(writerHelper).toContain('resolved.stdout !== `${verifiedSha}\\n`');
+    expect(writerHelper).toContain("does not peel to the verified release SHA");
     expect(writerHelper).toContain('const FIXED_REMOTE = "https://github.com/hraness/wrench.git"');
     expect(writerHelper).toContain('GIT_ASKPASS_REQUIRE: "force"');
     expect(writerHelper).not.toContain("--force\"");
@@ -2233,9 +2426,24 @@ fi
     )).toThrow("release App token response is missing token");
   });
 
-  test("writes exactly one production ref with an explicit lease and bounded askpass", () => {
-    const arguments_ = websiteProductionPushArguments(providerPreviousSha, providerVerifiedSha);
-    expect(arguments_).toEqual([
+  test("fetches the exact release object before one leased production ref write", () => {
+    const fetchArguments = verifiedReleaseFetchArguments(providerTag);
+    expect(fetchArguments).toEqual([
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "credential.helper=",
+      "-c",
+      "http.extraHeader=",
+      "fetch",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "--depth=1",
+      "https://github.com/hraness/wrench.git",
+      `refs/tags/${providerTag}`,
+    ]);
+    const pushArguments = websiteProductionPushArguments(providerPreviousSha, providerVerifiedSha);
+    expect(pushArguments).toEqual([
       "-c",
       "core.hooksPath=/dev/null",
       "-c",
@@ -2257,23 +2465,25 @@ fi
       "https://github.com/hraness/wrench.git",
       `${providerVerifiedSha}:refs/heads/website-production`,
     ]);
-    expect(arguments_).toContain(
+    expect(pushArguments).toContain(
       `--force-with-lease=refs/heads/website-production:${providerPreviousSha}`,
     );
-    expect(arguments_).toContain(
+    expect(pushArguments).toContain(
       `${providerVerifiedSha}:refs/heads/website-production`,
     );
-    expect(arguments_).toContain("https://github.com/hraness/wrench.git");
-    expect(arguments_.filter((value) => value === "push")).toHaveLength(1);
-    expect(arguments_).not.toContain("--force");
-    expect(arguments_).not.toContain("--mirror");
-    expect(arguments_).not.toContain("--all");
-    expect(arguments_.join(" ")).not.toContain("*");
+    expect(pushArguments).toContain("https://github.com/hraness/wrench.git");
+    expect(pushArguments.filter((value) => value === "push")).toHaveLength(1);
+    expect(pushArguments).not.toContain("--force");
+    expect(pushArguments).not.toContain("--mirror");
+    expect(pushArguments).not.toContain("--all");
+    expect(pushArguments.join(" ")).not.toContain("*");
+    expect(() => verifiedReleaseFetchArguments("main")).toThrow("stable semantic-version tag");
     expect(() => websiteProductionPushArguments(providerPreviousSha, providerPreviousSha))
       .toThrow("already exact");
 
     const token = "ghs_secret-wrench-release-token";
     let askpassPath = "";
+    const calls: string[][] = [];
     advanceWebsiteProductionRef({
       environment: { WRENCH_RELEASE_APP_TOKEN: token },
       expectedOldSha: providerPreviousSha,
@@ -2283,32 +2493,62 @@ fi
         readonly timeout: number;
       }) {
         expect(executable).toBe("/usr/bin/git");
-        expect(args).toEqual(arguments_);
+        calls.push([...args]);
         expect(options.timeout).toBe(60_000);
         expect(options.env.GIT_TERMINAL_PROMPT).toBe("0");
         expect(options.env.GIT_CONFIG_NOSYSTEM).toBe("1");
-        expect(options.env.WRENCH_RELEASE_APP_TOKEN).toBe(token);
-        expect(Object.keys(options.env).sort()).toEqual([
+        const authenticated = args.includes("fetch") || args.includes("push");
+        expect(options.env.WRENCH_RELEASE_APP_TOKEN).toBe(authenticated ? token : undefined);
+        expect(Object.keys(options.env).sort()).toEqual((authenticated ? [
           "GIT_ASKPASS",
           "GIT_ASKPASS_REQUIRE",
           "GIT_CONFIG_GLOBAL",
           "GIT_CONFIG_NOSYSTEM",
           "GIT_CONFIG_SYSTEM",
+          "GIT_LFS_SKIP_SMUDGE",
           "GIT_TERMINAL_PROMPT",
           "LC_ALL",
           "PATH",
           "WRENCH_RELEASE_APP_TOKEN",
-        ]);
-        askpassPath = options.env.GIT_ASKPASS ?? "";
-        expect(statSync(askpassPath).mode & 0o777).toBe(0o700);
-        const askpass = readFileSync(askpassPath, "utf8");
-        expect(askpass).toContain("x-access-token");
-        expect(askpass).toContain("$WRENCH_RELEASE_APP_TOKEN");
-        expect(askpass).not.toContain(token);
-        return { status: 0, stderr: "", stdout: "ok" };
+        ] : [
+          "GIT_CONFIG_GLOBAL",
+          "GIT_CONFIG_NOSYSTEM",
+          "GIT_CONFIG_SYSTEM",
+          "GIT_LFS_SKIP_SMUDGE",
+          "GIT_TERMINAL_PROMPT",
+          "LC_ALL",
+          "PATH",
+        ]).sort());
+        if (authenticated) {
+          askpassPath = options.env.GIT_ASKPASS ?? "";
+          expect(statSync(askpassPath).mode & 0o777).toBe(0o700);
+          const askpass = readFileSync(askpassPath, "utf8");
+          expect(askpass).toContain("x-access-token");
+          expect(askpass).toContain("$WRENCH_RELEASE_APP_TOKEN");
+          expect(askpass).not.toContain(token);
+        } else {
+          expect(options.env.GIT_ASKPASS).toBeUndefined();
+        }
+        return {
+          status: 0,
+          stderr: "",
+          stdout: args.includes("rev-parse") ? `${providerVerifiedSha}\n` : "ok",
+        };
       },
       verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
     });
+    expect(calls).toEqual([
+      fetchArguments,
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "rev-parse",
+        "--verify",
+        "FETCH_HEAD^{commit}",
+      ],
+      pushArguments,
+    ]);
     expect(existsSync(askpassPath)).toBe(false);
 
     let failureAskpass = "";
@@ -2323,8 +2563,27 @@ fi
         return { status: 1, stderr: `remote rejected ${token}`, stdout: "" };
       },
       verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
     })).toThrow("remote rejected [redacted]");
     expect(existsSync(failureAskpass)).toBe(false);
+
+    let mismatchCalls = 0;
+    expect(() => advanceWebsiteProductionRef({
+      environment: { WRENCH_RELEASE_APP_TOKEN: token },
+      expectedOldSha: providerPreviousSha,
+      repository: providerRepository,
+      spawnImplementation(_executable: string, args: readonly string[]) {
+        mismatchCalls += 1;
+        return {
+          status: 0,
+          stderr: "",
+          stdout: args.includes("rev-parse") ? `${providerPreviousSha}\n` : "ok",
+        };
+      },
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).toThrow("does not peel to the verified release SHA");
+    expect(mismatchCalls).toBe(2);
   });
 
   test("rejects a stale explicit lease without moving the production ref", async () => {
@@ -2761,7 +3020,7 @@ fi
       expect(advanced.promotionCalls).not.toContain(`GET ${ambiguousEndpoint}`);
     }
     expect(advanced.promotionCalls.filter((call) => call.startsWith("GIT CAS "))).toEqual([
-      `GIT CAS ${providerRepository} ${providerPreviousSha} ${providerVerifiedSha}`,
+      `GIT CAS ${providerRepository} ${providerPreviousSha} ${providerVerifiedSha} ${providerTag}`,
     ]);
     expect(advanced.promotionCalls.some((call) => call.includes("/deployments"))).toBe(false);
     const recovered = await providerReceipts("already-exact");
@@ -3030,6 +3289,9 @@ fi
     })).rejects.toThrow("Latest Release is not v0.16.2");
     expect(staleLatest.calls.some((call) => call.startsWith("GIT CAS "))).toBe(false);
 
+    const { commits: _omittedCommits, ...missingCommits } = providerCompare() as Readonly<
+      Record<string, ProviderJson>
+    >;
     for (const compare of [
       providerCompare({ ahead_by: 0 }),
       providerCompare({ ahead_by: 1.5 }),
@@ -3037,6 +3299,12 @@ fi
       providerCompare({ status: "diverged" }),
       providerCompare({ base_commit: { sha: "3".repeat(40) } }),
       providerCompare({ merge_base_commit: { sha: "3".repeat(40) } }),
+      missingCommits,
+      providerCompare({ commits: null }),
+      providerCompare({ commits: [] }),
+      providerCompare({ commits: [null] }),
+      providerCompare({ commits: [{ sha: "A".repeat(40) }] }),
+      providerCompare({ commits: [{ sha: "3".repeat(40) }] }),
       null,
     ] as const) {
       const api = new ProviderApiFixture({
@@ -3709,7 +3977,25 @@ fi
         providerRelease({ published_at: "2026-08-29T14:00:01Z" }),
       ],
     );
-    await expect(run(finalReleaseRace)).rejects.toThrow("publication time changed");
+    await expect(run(finalReleaseRace)).rejects.toThrow("Release identity changed");
+
+    const finalReleaseIdRace = waitCase(
+      providerDeployment(20, candidateAt),
+      [
+        [candidateStatus(201, "success", successAt)],
+        [candidateStatus(201, "success", successAt)],
+      ],
+      undefined,
+      [],
+      [],
+      [
+        providerRelease(),
+        providerRelease(),
+        providerRelease(),
+        providerRelease({ id: 11 }),
+      ],
+    );
+    await expect(run(finalReleaseIdRace)).rejects.toThrow("Release identity changed");
 
     const wrongStatusBot = waitCase(
       providerDeployment(20, candidateAt),
@@ -3866,6 +4152,18 @@ fi
       promotionReceipt: wrongMode,
       sleep: async () => {},
     })).rejects.toThrow("mode contradicts");
+    const invalidReleaseId = {
+      ...(promotion as Readonly<Record<string, ProviderJson>>),
+      releaseId: 0,
+    };
+    await expect(waitForProviderOutcome({
+      api: new ProviderApiFixture(),
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: invalidReleaseId,
+      sleep: async () => {},
+    })).rejects.toThrow("promotion receipt releaseId");
     const tamperedBaseline = {
       ...(baseline as Readonly<Record<string, ProviderJson>>),
       completedAt: "2026-08-29T15:00:00.600Z",
@@ -4401,8 +4699,14 @@ fi
       "The Release lookup accepts only an exact REST 200",
       "Only an authenticated exact 404 permits one REST create request",
       "does not use opaque `gh release view` or\n`gh release create` commands",
+      "treats `target_commitish` as\nnon-authoritative",
+      "stable Release ID and publication time across\nthe authority sandwich and every promotion/outcome receipt readback",
       "Release workflow ID `323493609`",
       "entire `workflow_run` payload as\nforeign data",
+      "workflow source must equal current `main`",
+      "head\nSHA must instead equal the peeled immutable tag commit",
+      "must be an ancestor of the current-main workflow source",
+      "Manual recovery carries\nno upstream SHA",
       "Before any key-gated job starts",
       "already-exact branch takes a separate read-only job",
       "no environment admission, App variable, private key, token mint, or Git\npush",
@@ -4417,12 +4721,17 @@ fi
       "Create\nthat canary ref once at `P` before its creation rule becomes active",
       "transition is single-use",
       "must never be reset,\ndeleted, or repurposed",
+      "exactly mirror the production layers",
       "separately reviewed temporary workflow loaded from exact current `main`",
+      "must be removed after its exact run, ref, ruleset,",
       "production helper remains hard-bound to `website-production`",
       "`C` contains the real workflow-file changes",
       "add exactly `workflows:write`",
       "complete canary must run again",
       "`--force-with-lease=refs/heads/website-production:<expected-old>`",
+      "first fetches only the verified tag through the fixed HTTPS",
+      "peels that fetched object locally",
+      "does not check out or execute\ntagged code",
       "App token is revoked before the exact production-ref post-read",
       "every\n`WRENCH_RELEASE_APP_*` value removed",
       "workflow never creates, deletes, force-moves, or\nrecreates the branch",
@@ -4456,6 +4765,7 @@ fi
       "repeats the complete deployment inventory after the final status\nread",
       "Latest Release or\nworkflow-source drift",
       "dispatch **Promote website production** from exact current\n`main`",
+      "keeps\nthat coordinate distinct from the exact current-main workflow SHA",
       "already-exact recovery remains entirely outside the key environment",
       "Never rerun an ambiguous App push",
       "website:vercel-build",
@@ -4493,17 +4803,24 @@ fi
     expect(agents).toContain("sole `contents: write` job creates or verifies the immutable Latest GitHub Release");
     expect(agents).toContain("Release workflow must never read, create, or update `website-production`");
     expect(agents).toContain("separate production-promotion workflow from exact current `main`");
+    expect(agents).toContain("bind its workflow source to exact current `main`");
+    expect(agents).toContain("peeled immutable release SHA");
+    expect(agents).toContain("require that release commit to be an ancestor of the current-main workflow source");
+    expect(agents).toContain("untrusted stable-tag input and no upstream SHA");
     expect(agents).toContain("Wrench repository ID `1316443113` and Release workflow ID `323493609`");
     expect(agents).toContain("complete bounded Vercel Production baseline before any key-environment wait");
     expect(agents).toContain("already-exact ref must take a separate read-only path");
     expect(agents).toContain("enter `production-ref-writer-key` with `deployment: false`");
     expect(agents).toContain("explicit `--force-with-lease=refs/heads/website-production:<expected-old>`");
+    expect(agents).toContain("Fetch only the exact verified tag through the private askpass token");
+    expect(agents).toContain("without executing tagged code");
     expect(agents).toContain("provisional source and initial App registration must close to exactly `metadata:read` and `contents:write`");
     expect(agents).toContain("with no Administration permission");
     expect(agents).toContain("privileged setup must separately enumerate the installation-wide selected-repository set");
     expect(agents).toContain("`prevent_self_review=false`");
     expect(agents).toContain("one exact `P` to `C` transition on persistent ref `refs/heads/website-production-canary`");
     expect(agents).toContain("never reset, delete, or repurpose it");
+    expect(agents).toContain("Mirror the production lifecycle and App-only update rules exactly");
     expect(agents).toContain("separately reviewed temporary current-main source");
     expect(agents).toContain("Keep the production helper hard-bound to `website-production`");
     expect(agents).toContain("add exactly `workflows:write` before repeating the complete canary");
@@ -4530,8 +4847,12 @@ fi
     expect(agents).toContain("`main` and pull requests are preview sources");
     expect(websiteAgents).toContain("tag Release workflow may only create or verify the immutable Latest Release");
     expect(websiteAgents).toContain("A separate workflow loaded from exact current `main` owns production promotion");
+    expect(websiteAgents).toContain("exact current-main workflow SHA distinct from the peeled immutable release SHA");
+    expect(websiteAgents).toContain("require that release commit to be an ancestor of the workflow source");
     expect(websiteAgents).toContain("dedicated one-repository release App only for a required fast-forward");
     expect(websiteAgents).toContain("explicit expected-old `--force-with-lease`");
+    expect(websiteAgents).toContain("fetch only the verified tag");
+    expect(websiteAgents).toContain("without executing tagged code");
     expect(websiteAgents).toContain("A missing branch is a hard failure");
     expect(websiteAgents).toContain("neither workflow may create, delete, force-move, or accept divergence");
     expect(websiteAgents).toContain("A separate 30-minute read-only job");
@@ -4545,6 +4866,7 @@ fi
     expect(websiteAgents).toContain("`prevent_self_review=false`");
     expect(websiteAgents).toContain("one single-use `P` to `C` transition on persistent ref `refs/heads/website-production-canary`");
     expect(websiteAgents).toContain("never reset/delete/repurpose it");
+    expect(websiteAgents).toContain("rules that exactly mirror production");
     expect(websiteAgents).toContain("remove the separately reviewed temporary canary workflow after the proof");
     expect(websiteAgents).toContain("keep the production helper hard-bound to `website-production`");
     expect(websiteAgents).toContain("separate reviewed source and App-registration amendment to exactly `workflows:write`");
@@ -4558,6 +4880,9 @@ fi
     expect(websiteReadme).toContain("tag Release workflow publishes only the immutable GitHub Release");
     expect(websiteReadme).toContain("separate\ncurrent-main promotion workflow");
     expect(websiteReadme).toContain("one repository-only\nrelease App token and an explicit expected-old Git lease");
+    expect(websiteReadme).toContain("fetches only the verified\ntag into its depth-one current-main checkout");
+    expect(websiteReadme).toContain("without executing tagged code");
+    expect(websiteReadme).toContain("current-main workflow source must descend\nfrom that release commit");
     expect(websiteReadme).toContain("live no-bypass ruleset currently\nprotects deletion and non-fast-forward movement");
     expect(websiteReadme).toContain("App-only update rule,\ncreation rule, writer environment, and canary proof remain pending live\nreconciliation");
     expect(websiteReadme).toContain("provisional contents-only App remains inactive");

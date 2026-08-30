@@ -11,9 +11,10 @@ const FIXED_REMOTE = "https://github.com/hraness/wrench.git";
 const GIT_EXECUTABLE = "/usr/bin/git";
 const FIXED_PATH = "/usr/bin:/bin";
 const SHA = /^[0-9a-f]{40}$/u;
+const STABLE_TAG = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
 const MAX_TOKEN_BYTES = 4096;
 const MAX_DIAGNOSTIC_BYTES = 4096;
-const PUSH_TIMEOUT_MILLISECONDS = 60_000;
+const GIT_TIMEOUT_MILLISECONDS = 60_000;
 const ASKPASS = `#!/bin/sh
 case "$1" in
   *Username*) printf '%s\\n' 'x-access-token' ;;
@@ -39,6 +40,13 @@ function exactToken(value) {
     /[\0\r\n]/u.test(value)
   ) {
     fail("WRENCH_RELEASE_APP_TOKEN is missing or malformed");
+  }
+  return value;
+}
+
+function exactStableTag(value) {
+  if (typeof value !== "string" || !STABLE_TAG.test(value)) {
+    fail("verified release tag is not one stable semantic-version tag");
   }
   return value;
 }
@@ -79,41 +87,105 @@ export function websiteProductionPushArguments(expectedOldSha, verifiedSha) {
   ]);
 }
 
+export function verifiedReleaseFetchArguments(verifiedTag) {
+  const tag = exactStableTag(verifiedTag);
+  return Object.freeze([
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "http.extraHeader=",
+    "fetch",
+    "--no-tags",
+    "--no-recurse-submodules",
+    "--depth=1",
+    FIXED_REMOTE,
+    `refs/tags/${tag}`,
+  ]);
+}
+
+function fetchedReleaseVerificationArguments() {
+  return Object.freeze([
+    "-c",
+    "core.hooksPath=/dev/null",
+    "rev-parse",
+    "--verify",
+    "FETCH_HEAD^{commit}",
+  ]);
+}
+
+function runGit(spawnImplementation, arguments_, environment, label, token) {
+  const result = spawnImplementation(GIT_EXECUTABLE, arguments_, {
+    encoding: "utf8",
+    env: environment,
+    maxBuffer: MAX_DIAGNOSTIC_BYTES,
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: GIT_TIMEOUT_MILLISECONDS,
+  });
+  if (result.error !== undefined) {
+    const detail = boundedDiagnostic(result.error.message, token);
+    fail(`${label} could not start${detail.length === 0 ? "" : `: ${detail}`}`);
+  }
+  if (result.status !== 0) {
+    const detail = boundedDiagnostic(result.stderr, token);
+    fail(`${label} failed${detail.length === 0 ? "" : `: ${detail}`}`);
+  }
+  return result;
+}
+
 export function advanceWebsiteProductionRef(options) {
   if (options.repository !== EXPECTED_REPOSITORY) {
     fail(`release ref writer is bound to ${EXPECTED_REPOSITORY}`);
   }
   const token = exactToken(options.environment.WRENCH_RELEASE_APP_TOKEN);
-  const arguments_ = websiteProductionPushArguments(options.expectedOldSha, options.verifiedSha);
+  const verifiedSha = exactSha(options.verifiedSha, "verified release SHA");
+  const fetchArguments = verifiedReleaseFetchArguments(options.verifiedTag);
+  const pushArguments = websiteProductionPushArguments(options.expectedOldSha, verifiedSha);
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "wrench-release-askpass-"));
   const askpassPath = join(temporaryDirectory, "askpass.sh");
   try {
     writeFileSync(askpassPath, ASKPASS, { encoding: "utf8", flag: "wx", mode: 0o700 });
-    const result = options.spawnImplementation(GIT_EXECUTABLE, arguments_, {
-      encoding: "utf8",
-      env: {
-        GIT_ASKPASS: askpassPath,
-        GIT_ASKPASS_REQUIRE: "force",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_SYSTEM: "/dev/null",
-        GIT_TERMINAL_PROMPT: "0",
-        LC_ALL: "C",
-        PATH: FIXED_PATH,
-        WRENCH_RELEASE_APP_TOKEN: token,
-      },
-      maxBuffer: MAX_DIAGNOSTIC_BYTES,
-      killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: PUSH_TIMEOUT_MILLISECONDS,
+    const commonGitEnvironment = Object.freeze({
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_LFS_SKIP_SMUDGE: "1",
+      GIT_TERMINAL_PROMPT: "0",
+      LC_ALL: "C",
+      PATH: FIXED_PATH,
     });
-    if (result.error !== undefined) {
-      fail(`website-production Git push could not start: ${result.error.message}`);
+    const authenticatedGitEnvironment = Object.freeze({
+      ...commonGitEnvironment,
+      GIT_ASKPASS: askpassPath,
+      GIT_ASKPASS_REQUIRE: "force",
+      WRENCH_RELEASE_APP_TOKEN: token,
+    });
+    runGit(
+      options.spawnImplementation,
+      fetchArguments,
+      authenticatedGitEnvironment,
+      "verified release tag fetch",
+      token,
+    );
+    const resolved = runGit(
+      options.spawnImplementation,
+      fetchedReleaseVerificationArguments(),
+      commonGitEnvironment,
+      "fetched release commit verification",
+      token,
+    );
+    if (resolved.stdout !== `${verifiedSha}\n`) {
+      fail("fetched release tag does not peel to the verified release SHA");
     }
-    if (result.status !== 0) {
-      const detail = boundedDiagnostic(result.stderr, token);
-      fail(`website-production Git push failed${detail.length === 0 ? "" : `: ${detail}`}`);
-    }
+    runGit(
+      options.spawnImplementation,
+      pushArguments,
+      authenticatedGitEnvironment,
+      "website-production Git push",
+      token,
+    );
   } finally {
     rmSync(temporaryDirectory, { force: true, recursive: true });
   }
@@ -126,5 +198,6 @@ export function advanceWebsiteProductionRefFromEnvironment(input) {
     repository: input.repository,
     spawnImplementation: spawnSync,
     verifiedSha: input.verifiedSha,
+    verifiedTag: input.verifiedTag,
   });
 }
