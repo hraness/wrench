@@ -266,29 +266,231 @@ exact remote tag commit and canonical npm version, then create
 `website-production` once at that release commit with the GitHub create-ref API.
 Fail if the branch already exists, and never bootstrap it from `main` or an
 unreleased candidate. Configure Vercel only after that exact ref exists. This
-exception must never be repeated: after initial setup, the release workflow is
-the sole writer and every change is a checked, non-force fast-forward.
+exception must never be repeated.
+
+The live repository currently applies active ruleset `21832074` only to
+`refs/heads/website-production`. It has no bypass actors,
+`current_user_can_bypass=never`, and exact `deletion` and `non_fast_forward`
+rules. That narrow layer makes the established ref protected against deletion
+and non-fast-forward movement. It does not restrict ordinary fast-forward
+updates, protect creation, prove a dedicated writer, or provide canary evidence.
+The dedicated App installation, `production-ref-writer-key` environment,
+App-only update rule, creation rule, persistent canary, and their live readbacks
+remain mandatory reconciliation work. Do not describe those controls as active
+until their out-of-band setup and positive and negative canary proofs are
+complete. GitHub Actions App Integration 15368 is not the production writer and
+must not be configured as the update-rule bypass.
+
+Checked-in `CODEOWNERS` assigns source ownership and notification for the
+workflow, Release helper, and publishing policy paths. It does not claim live or
+independent review enforcement. Live Protect-main ruleset `20921911` still
+carries an OrganizationAdmin `always` bypass, requires no approving review, and
+does not require code-owner review. Privileged reconciliation must remove that
+bypass while retaining the pull-request path and exact Required integration
+check. Wrench currently has one eligible maintainer, so
+`require_code_owner_review` must remain `false` and the approval minimum must
+remain zero until a second eligible independent code owner exists. Enabling it
+now would make the repository unreviewable rather than safer. Repository Actions
+default to read, and the checked workflow census leaves only the Release
+`publish` job with a `contents: write` `GITHUB_TOKEN`; the separate promotion job
+keeps that token read-only and uses the short-lived App token only inside the
+leased Git push.
 
 After the one-time bootstrap has established `website-production`, the tag
 workflow rebuilds and compares the exact public npm package, creates or verifies
 the non-draft, non-prerelease immutable GitHub Release, and proves that Release
-is Latest. Its final step requires the production branch to resolve to one exact
-commit, then fast-forwards it to the verified tag commit. It sends `force=false`
-and fails closed on a missing or malformed branch, moved tag, divergence,
-rollback, or post-update mismatch. The workflow never recreates the branch.
+is Latest. It does not read or update `website-production`, wait for Vercel, or
+receive the dedicated App key. The Release lookup accepts only an exact REST 200
+or 404 response.
+Only an authenticated exact 404 permits one REST create request with
+server-generated notes; authentication, transport, other API, or malformed
+response failures abort. The workflow validates an exact REST readback before
+checking Latest. It does not use opaque `gh release view` or
+`gh release create` commands, so hidden requests cannot escape the bounded
+control path. The tag and its peeled commit must remain exact current `main`
+before creation and at the terminal readback.
+The create request supplies the verified SHA as `target_commitish`, but GitHub
+does not use that field when the tag already exists, and live readback may report
+the default branch. Promotion therefore treats `target_commitish` as
+non-authoritative. It binds the stable Release ID and publication time across
+the authority sandwich and every promotion/outcome receipt readback while the
+exact tag name, encoded peeled-tag commit, immutable state, Latest Release, and
+current-main ancestry provide release authority.
 
-If that workflow fails after publishing the immutable Release but before the
-website source advances, merge the reviewed workflow fix to `main` first. Then
-dispatch **Release** from the current `main` ref with the required exact stable
-`release_tag`. The recovery path checks out that tag, repeats the complete
-source and public npm verification, requires the tag to remain the newest
-stable tag reachable from `main`, and revalidates the existing immutable Latest
-Release before it can advance `website-production`. It does not recreate or
-modify a conforming existing Release. The dispatch workflow source commit must
-equal the current default-branch head both before the tag checkout and again
-before the write-scoped job; ordinary tag-push releases do not depend on `main`
-remaining unchanged. Never rerun a stale tag workflow or write the production
-branch manually.
+The separate **Promote website production** workflow is loaded from current
+default-branch `main`. GitHub starts it after **Release** completes, and manual
+recovery dispatches this workflow directly from current `main` with an untrusted
+stable-tag input. The automatic path treats the entire `workflow_run` payload as
+foreign data. It requires repository `hraness/wrench` with numeric ID
+`1316443113`, Release workflow ID `323493609`, exact workflow name and path, a
+tag `push`, first attempt, successful conclusion, and this repository as the head
+repository. The workflow source must equal current `main`; the automatic head
+SHA must instead equal the peeled immutable tag commit, and that release commit
+must be an ancestor of the current-main workflow source. Manual recovery carries
+no upstream SHA. Both paths check out the exact current-main source, bind the
+package version from the peeled tag commit and the newest stable tag, and verify
+the immutable asset-free Latest Release before any provider or ref work.
+
+Before any key-gated job starts, a read-only job records a bounded, complete
+snapshot of GitHub's Production deployments. Authenticated GitHub
+`Date` headers bracket that snapshot without trusting the runner clock. The job
+uses bounded GraphQL pages to read the complete current inventory of at most 500
+Production deployments. It validates each deployment's exact SHA, task,
+Production environment and original environment, pinned Vercel bot, state, and
+current `latestStatus`. Two stable, order-independent reads bind the branch and
+the complete current-state fingerprint. The global receipt does not depend on
+older deployment-status rows because GitHub removes previous deployment
+statuses after 90 days while preserving the current status on the deployment.
+The baseline outputs whether the established production ref already equals the
+verified release. The already-exact branch takes a separate read-only job. That
+job has no environment admission, App variable, private key, token mint, or Git
+push. It still revalidates current-main workflow source, the peeled tag,
+immutable Release, Latest, the baseline, authenticated server time, and the
+terminal ref before emitting a receipt.
+
+Only an actual fast-forward enters `production-ref-writer-key`, configured with
+`deployment: false` so the secret-bearing job does not create a GitHub
+Deployment record that could collide with the Vercel-only Production inventory.
+The environment must permit only `main`, require reviewer `0thernet`, disable
+admin bypass, set `prevent_self_review=false` because that reviewer is currently
+the sole eligible maintainer, and store only `WRENCH_RELEASE_APP_PRIVATE_KEY`
+plus the reviewed App ID, client ID, slug, and selected installation ID
+variables. The job repeats the full current-main, peeled-tag, immutable Release,
+and Latest authority check after environment approval and before mutation.
+
+The writer authenticates one private Hraness-owned GitHub App. The checked
+provisional source and initial App registration close to exactly
+`metadata:read` and `contents:write`, with no Administration permission. Runtime
+checks bind the configured App and selected installation identities, request a
+token narrowed to repository ID `1316443113`, and require the minted token
+response to name only that repository. That runtime token proof does not prove
+the installation-wide selected-repository set. Before admitting the key,
+privileged setup must exhaustively read every repository selected for the
+installation with the administrator identity, prove that the unique result is
+`hraness/wrench` at ID `1316443113`, and retain the exact readback with the
+canary evidence.
+
+The contents-only permission set is provisional until one exact `P` to `C`
+transition on persistent ref `refs/heads/website-production-canary` proves a
+leased fast-forward where `C` contains the real workflow-file changes. Create
+that canary ref once at `P` before its creation rule becomes active, then retain
+it at `C`; the transition is single-use, and the ref must never be reset,
+deleted, or repurposed. Its no-bypass creation, deletion, and non-fast-forward
+rules and its App-only update rule must exactly mirror the production layers. A
+separately reviewed temporary workflow loaded from exact current `main` may run
+the bounded proof, but it must be removed after its exact run, ref, ruleset,
+rule-suite, token-revocation, and ordinary-actor denial evidence is retained.
+The production helper remains hard-bound to `website-production` and must not be
+made caller-selectable for the canary. The release remains unready for
+production activation or final product merge until that proof passes. If GitHub
+rejects the push because the App also needs Workflows permission, preserve the
+exact failure evidence and keep production frozen. A separate reviewed source
+and App-registration change may then add exactly `workflows:write`, after which
+the complete canary must run again. Never broaden the App silently or during a
+failed canary.
+
+The minted token must carry a bounded one-hour expiry and fit the streamed
+response parser. The helper masks it and passes it only through a private
+`GIT_ASKPASS` environment. Because the writer checks out only exact current-main
+workflow source, it first fetches only the verified tag through the fixed HTTPS
+repository URL, peels that fetched object locally, and requires the result to
+equal the independently verified release SHA. It does not check out or execute
+tagged code. The same ephemeral credential boundary then runs one fixed push
+with the explicit compare-and-swap lease
+`--force-with-lease=refs/heads/website-production:<expected-old>`. The push has
+one exact source-to-destination refspec, no followed tags, no hooks, no persisted
+Git configuration or checkout credential, no interactive prompt, and a
+60-second cap on each Git process. The App token is revoked before the exact production-ref post-read;
+operation and revocation failures are both retained when they coincide. Every
+read-only `gh api` child receives `GH_TOKEN` but has every
+`WRENCH_RELEASE_APP_*` value removed from its environment. A missing branch,
+moved tag, concurrent ref update, divergence, rollback, server-time regression,
+source drift, token-scope drift, push rejection, revocation failure, or post-read
+mismatch fails closed. The workflow never creates, deletes, force-moves, or
+recreates the branch.
+
+A dependent job with only `contents: read` and `deployments: read` owns the
+bounded provider wait. After a new fast-forward, it accepts exactly one new
+GitHub Production deployment whose SHA is the verified release commit, whose
+task is `deploy`, whose environment and original environment are `Production`,
+and whose creator is the pinned Vercel bot. Recovery from an already-exact
+branch instead selects the unique newest deployment for the verified SHA and
+requires it to postdate the immutable Release. A newer or same-second deployment
+for another SHA blocks recovery when its current Vercel status is successful.
+A newer terminal failure, error, or inactive deployment does not displace the
+exact successful candidate. Both paths require the REST deployment's lowercase
+40-hex `.ref` to equal its `.sha` and the verified release commit. The matching
+GraphQL deployment must expose `ref: null` while `commitOid` equals that same
+commit. These source fields remain in the pinned candidate fingerprint. Both
+paths recheck the exact tag, immutable Release, Latest Release, production ref,
+and current-main workflow source, and pin one deployment. The automatic
+`workflow_run` and manual recovery coordinates both remain bound to the current
+default-branch head throughout the read-only outcome proof.
+Every poll rereads the complete GraphQL current-state inventory. The pinned
+candidate also gets an exhaustive, order-independent REST status-history read
+with a 500-row cap and empty sentinel page. Any retained failure, error, or
+inactive row rejects the candidate even when a newer row says success. GraphQL
+`latestStatus.id` must equal the REST status `node_id`; that current status must
+keep its exact GitHub
+deployment URL, Production environment, pinned Vercel creator, and one shared
+canonical `https://wrench-<id>-hraness.vercel.app` target, environment, and log
+URL. Same-second status rows are resolved only by that cross-API node identity.
+The job requires the initial success observation plus two complete consistent
+readbacks, repeats the complete deployment inventory after the final status
+read, and sandwiches terminal state with exact tag, Release, Latest, ref, and
+workflow-source authority reads. The observation window starts immediately
+before the first provider read, after the initial authority checks. Production
+uses exactly 20 observation slots anchored to that start at offsets zero through
+19 minutes inside the half-open monotonic `[start, deadline)` window. API latency
+reduces the sleep before the next absolute slot instead of sliding the schedule,
+and both success confirmations consume the same 20-minute window. Each `gh api`
+process has a 60-second cap reduced to the remaining window. No provider API
+process starts with less than one millisecond remaining, and every completed
+process must strictly advance the injected monotonic clock.
+After an unsuccessful slot 20, the default cadence performs only a final bounded
+sleep to the 20-minute deadline and rejects without starting another API read.
+A reduced poll count or test cadence rejects immediately after its configured
+final observation. An early sleep resolution cannot trigger another provider
+read before its absolute slot. The contract makes no visibility claim for a
+deployment that changes after the slot-20 query completes. A final external read
+that completes exactly at the deadline remains eligible from its captured
+completion; no redundant clock sample or later API read follows it. A later
+completion, a frozen or regressing clock, poll-budget exhaustion before the
+deadline, or an empty or nonterminal result fails closed. The workflow job has
+a separate 30-minute timeout, leaving ten minutes for checkout, Node setup, and
+runner teardown around the product deadline.
+
+The bounded request contract is separate for REST and GraphQL. The current
+control flow can make at most 197 REST calls in the provider outcome job. The
+worst missing-Release path uses 16 calls, including all five bounded release
+pages plus the empty sentinel page. The immutable Release and downstream
+promotion workflows together use at most 278 REST calls, leaving 722 calls
+under the repository `GITHUB_TOKEN` limit of 1,000 REST requests per hour. The
+promotion helper itself uses at most 13 read-only REST
+calls; its leased Git push and four App-authentication requests do not consume
+that `GITHUB_TOKEN` budget. Five
+bounded GraphQL pages across two baseline reads, 20 observations, and two
+confirmations make at most 120 requests. Each response must cost no more than
+two points, for a 240-point ceiling and 760 points of headroom under the
+separate 1,000-point GraphQL limit. API errors, malformed or incomplete
+pagination, rate-limit drift,
+timestamp ambiguity, competing deployments, identity drift, Latest Release or
+workflow-source drift, terminal failure, timeout, or final readback drift fail
+the promotion workflow. Read-only GitHub responses are capped at 8 MiB; App
+identity, installation, token, and revocation responses are streamed under a
+1 MiB cap; and each encoded cross-job receipt is capped at 64 KiB. This check
+needs no Vercel token, PAT, or redeploy.
+
+If promotion fails after the immutable Release exists, merge the reviewed fix to
+`main` first. Then dispatch **Promote website production** from exact current
+`main` with the immutable Latest stable tag. Recovery never reruns or changes
+the tag Release. It resolves the peeled tag as the verified release SHA, keeps
+that coordinate distinct from the exact current-main workflow SHA, and requires
+the release commit to remain an ancestor of the workflow source. An
+already-exact recovery remains entirely outside the key environment. A required
+fast-forward repeats every authority check after reviewer admission before it
+mints the one-repository App token. Never rerun an ambiguous App push, bypass the
+explicit lease, or write the production branch manually.
 
 Vercel runs the checked-in marked `website:vercel-build` command. Valid preview
 and development builds, plus true local builds with no Vercel signal, generate
@@ -306,12 +508,12 @@ a resolvable Git `HEAD`; missing repository metadata is a hard failure, not a
 reason to trust deployment environment variables. Keep `.git` out of
 `.vercelignore` so the Git-connected shallow clone retains the metadata needed
 for this independent check. Canonical npm name, version, and SHA-512 integrity
-are sufficient at this layer because the only workflow allowed to advance
-`website-production` after that one-time bootstrap first
-rebuilds the tag and compares its
-exact tarball with canonical npm before creating the immutable Release. The
-production verifier then independently rechecks the promoted commit, tag,
-registry coordinate, and immutable Latest Release.
+are sufficient at this layer because the tag Release workflow first rebuilds
+and compares the exact tarball with canonical npm before creating the immutable
+Release, and the separate current-main workflow advances `website-production`
+only after it revalidates that release authority. The production verifier then
+independently rechecks the promoted commit, tag, registry coordinate, and
+immutable Latest Release.
 
 See npm's documentation for [trusted
 publishing](https://docs.npmjs.com/trusted-publishers/), [staged

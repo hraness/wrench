@@ -20,7 +20,16 @@ const packageValue = Object.freeze({
   name: "@hraness/wrench",
   version: "0.16.2",
 });
-const headSha = "1234567890abcdef1234567890abcdef12345678";
+const peeledCommitSha = "1234567890abcdef1234567890abcdef12345678";
+const headSha = peeledCommitSha;
+const tagObjectSha = "abcdef1234567890abcdef1234567890abcdef12";
+const tagCommitUrl =
+  "https://api.github.com/repos/hraness/wrench/commits/refs%2Ftags%2Fv0.16.2";
+const ambiguousTagCommitUrls = Object.freeze([
+  "https://api.github.com/repos/hraness/wrench/commits/v0.16.2",
+  "https://api.github.com/repos/hraness/wrench/commits/tags/v0.16.2",
+  "https://api.github.com/repos/hraness/wrench/commits/refs/tags/v0.16.2",
+]);
 const packageIntegrity = `sha512-${"A".repeat(86)}==`;
 
 function streamFrom(
@@ -152,7 +161,7 @@ describe("production website release verification", () => {
     let requestedUrl: string | undefined;
     let requestedInit: RequestInit | undefined;
     await expect(fetchGithubCommitSha(
-      "https://api.github.com/repos/hraness/wrench/commits/tags/v0.16.2",
+      tagCommitUrl,
       "GitHub SHA fixture",
       async (url, init) => {
         requestedUrl = url;
@@ -163,9 +172,7 @@ describe("production website release verification", () => {
       },
       100,
     )).resolves.toBe(headSha);
-    expect(requestedUrl).toBe(
-      "https://api.github.com/repos/hraness/wrench/commits/tags/v0.16.2",
-    );
+    expect(requestedUrl).toBe(tagCommitUrl);
     expect(new Headers(requestedInit?.headers).get("accept"))
       .toBe("application/vnd.github.sha");
     expect(requestedInit?.redirect).toBe("error");
@@ -293,10 +300,17 @@ describe("production website release verification", () => {
     const identity = parseProductionReleaseIdentity(packageValue);
     const requested: string[] = [];
     const expected = validEvidence();
+    expect(tagObjectSha).not.toBe(peeledCommitSha);
+    const annotatedTagResponses = new Map<string, string>([
+      [tagCommitUrl, peeledCommitSha],
+      ...ambiguousTagCommitUrls.map((url) => [url, tagObjectSha] as const),
+    ]);
     await expect(loadProductionReleaseEvidence(identity, {
       fetchGithubCommitSha: async (url) => {
         requested.push(url);
-        return expected.githubTagCommitSha;
+        const sha = annotatedTagResponses.get(url);
+        if (sha === undefined) throw new Error(`Unexpected tag commit URL ${url}`);
+        return sha;
       },
       fetchJson: async (url) => {
         requested.push(url);
@@ -307,12 +321,17 @@ describe("production website release verification", () => {
       readHeadSha: async () => headSha,
     })).resolves.toEqual(expected);
     expect(requested).toEqual([
-      "https://api.github.com/repos/hraness/wrench/commits/tags/v0.16.2",
+      tagCommitUrl,
       "https://registry.npmjs.org/%40hraness%2Fwrench/0.16.2",
       "https://api.github.com/repos/hraness/wrench/releases/tags/v0.16.2",
       "https://api.github.com/repos/hraness/wrench/releases/latest",
     ]);
+    for (const ambiguousUrl of ambiguousTagCommitUrls) {
+      expect(requested).not.toContain(ambiguousUrl);
+    }
     const source = await Bun.file(new URL("./production-release-verifier.ts", import.meta.url)).text();
+    expect(source).toContain("encodeURIComponent(`refs/tags/${identity.tag}`)");
+    expect(source).not.toContain("/commits/tags/");
     expect(source).not.toContain("ls-remote");
   });
 
@@ -365,7 +384,7 @@ describe("production website release verification", () => {
     })).toThrow("must be exactly one lowercase 40-character commit SHA");
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,
-      githubTagCommitSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      githubTagCommitSha: tagObjectSha,
     })).toThrow("is not exact GitHub tag v0.16.2 commit");
     expect(() => verifyProductionReleaseEvidence(packageValue, {
       ...evidence,

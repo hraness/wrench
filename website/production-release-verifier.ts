@@ -444,11 +444,12 @@ export async function loadProductionReleaseEvidence(
 ): Promise<ProductionReleaseEvidence> {
   const packagePath = encodeURIComponent(identity.name);
   const tagPath = encodeURIComponent(identity.tag);
+  const tagRefPath = encodeURIComponent(`refs/tags/${identity.tag}`);
   const [headSha, githubTagCommitSha, npmManifest, githubRelease, latestGithubRelease] =
     await Promise.all([
       dependencies.readHeadSha(),
       dependencies.fetchGithubCommitSha(
-        `${GITHUB_API_ORIGIN}/repos/${REPOSITORY}/commits/tags/${tagPath}`,
+        `${GITHUB_API_ORIGIN}/repos/${REPOSITORY}/commits/${tagRefPath}`,
         `GitHub tag ${identity.tag} commit SHA`,
       ),
       dependencies.fetchJson(

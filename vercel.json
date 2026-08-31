@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "WRENCH_VERCEL_BUILD=release-bound-v1 bunx bun@1.3.14 run website:vercel-build",
   "framework": null,
+  "git": {
+    "deploymentEnabled": {
+      "website-production-canary": false
+    }
+  },
   "headers": [
     {
       "source": "/(.*)",
@@ -239,6 +244,16 @@
     {
       "source": "/paypal-grapheneos-attestation/index.html",
       "destination": "/paypal-grapheneos-attestation/",
+      "permanent": true
+    },
+    {
+      "source": "/rumour-is-the-exploit",
+      "destination": "/rumour-is-the-exploit/",
+      "permanent": true
+    },
+    {
+      "source": "/rumour-is-the-exploit/index.html",
+      "destination": "/rumour-is-the-exploit/",
       "permanent": true
     }
   ]

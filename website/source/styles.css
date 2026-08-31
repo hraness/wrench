@@ -1193,10 +1193,12 @@ code:not(pre code) {
   max-width: 52rem;
 }
 
+.editorial-cluster .card,
 .guide-cluster .card {
   min-height: 0;
 }
 
+.editorial-cluster .card h3 a,
 .guide-cluster .card h3 a {
   text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
@@ -1506,6 +1508,82 @@ code:not(pre code) {
   list-style: none;
   margin: 0;
   padding: 1rem 0 0;
+}
+
+.editorial-figure {
+  margin: clamp(2rem, 4vw, 3rem) 0 0;
+}
+
+.editorial-figure img {
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: block;
+  height: auto;
+  object-fit: cover;
+  width: 100%;
+}
+
+.editorial-figure figcaption {
+  align-items: baseline;
+  color: var(--muted);
+  display: flex;
+  font-size: 0.76rem;
+  gap: 0.5rem 1.25rem;
+  justify-content: space-between;
+  line-height: 1.45;
+  margin-top: 0.65rem;
+}
+
+.editorial-figure figcaption small {
+  color: inherit;
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+}
+
+.editorial-cluster .editorial-card {
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.editorial-card > a {
+  display: block;
+  height: 100%;
+  text-decoration: none;
+}
+
+.editorial-card img {
+  aspect-ratio: 16 / 9;
+  border-bottom: 1px solid var(--line);
+  display: block;
+  height: auto;
+  object-fit: cover;
+  width: 100%;
+}
+
+.editorial-card-copy {
+  color: var(--muted);
+  display: block;
+  line-height: 1.55;
+  padding: 1.15rem 1.25rem 1.35rem;
+}
+
+.editorial-card h3 {
+  color: var(--foreground);
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+  font-weight: 400;
+  line-height: 1.08;
+  margin: 0 0 0.65rem;
+}
+
+.editorial-card-description {
+  margin: 0;
+}
+
+.editorial-card a:hover h3 {
+  color: var(--accent);
 }
 
 .preview-flow li {
@@ -2368,6 +2446,15 @@ body {
 
   .provider-operation-list li > span:last-child {
     text-align: left;
+  }
+
+  .editorial-figure figcaption {
+    display: block;
+  }
+
+  .editorial-figure figcaption small {
+    display: block;
+    margin-top: 0.25rem;
   }
 }
 /* Server-rendered public discovery links from @hraness/ui. */

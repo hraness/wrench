@@ -177,6 +177,29 @@ function resolveHref(href: string, pageUrl: string): string {
   return new URL(href, pageUrl).href;
 }
 
+function markdownImage(
+  node: Extract<HtmlNode, { type: "element" }>,
+  pageUrl: string,
+): string {
+  const src = node.attrs.src;
+  const alt = node.attrs.alt?.trim();
+  if (src === undefined || src === "" || alt === undefined || alt === "") return "";
+  return `![${escapeMarkdown(alt)}](${resolveHref(src, pageUrl)})`;
+}
+
+function firstElement(
+  nodes: readonly HtmlNode[],
+  name: string,
+): Extract<HtmlNode, { type: "element" }> | undefined {
+  for (const node of nodes) {
+    if (node.type !== "element") continue;
+    if (node.name === name) return node;
+    const nested = firstElement(node.children, name);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
 function inlineNodes(nodes: readonly HtmlNode[], pageUrl: string): string {
   let text = "";
   for (const node of nodes) {
@@ -189,6 +212,10 @@ function inlineNodes(nodes: readonly HtmlNode[], pageUrl: string): string {
     }
     if (node.name === "br") {
       text += " ";
+      continue;
+    }
+    if (node.name === "img") {
+      text += markdownImage(node, pageUrl);
       continue;
     }
     if (node.name === "code") {
@@ -305,6 +332,23 @@ function renderBlocks(nodes: readonly HtmlNode[], pageUrl: string): string {
     }
     if (node.name === "pre") {
       markdown += `\`\`\`\n${preformattedText(node)}\n\`\`\`\n\n`;
+      continue;
+    }
+    if (node.name === "figure") {
+      const image = firstElement(node.children, "img");
+      const renderedImage = image === undefined ? "" : markdownImage(image, pageUrl);
+      if (renderedImage !== "") markdown += `${renderedImage}\n\n`;
+      const figcaption = firstElement(node.children, "figcaption");
+      const caption = figcaption?.children
+        .map((child) => inlineNodes([child], pageUrl))
+        .filter((part) => part !== "")
+        .join(" ") ?? "";
+      if (caption !== "") markdown += `${caption}\n\n`;
+      continue;
+    }
+    if (node.name === "img") {
+      const renderedImage = markdownImage(node, pageUrl);
+      if (renderedImage !== "") markdown += `${renderedImage}\n\n`;
       continue;
     }
     if (node.name === "ul" || node.name === "ol") {

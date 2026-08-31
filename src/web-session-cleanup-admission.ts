@@ -1323,12 +1323,27 @@ function blockedAdmissionGuidance(
   return `${transport} auth realm ${realm} has active or cleanup-unsafe state; wait for the active run, or run wrench doctor before retrying`;
 }
 
-export function acquireWebSessionCleanupAdmission(
-  identity: WebSessionCleanupAdmissionIdentity,
-  environment: Environment = process.env,
-  acquiredAt = new Date(),
+export class WebSessionCleanupAdmissionBlockedError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "WebSessionCleanupAdmissionBlockedError";
+  }
+}
+
+function cleanupAdmissionBlocked(error: unknown): WebSessionCleanupAdmissionBlockedError {
+  if (error instanceof WebSessionCleanupAdmissionBlockedError) return error;
+  return new WebSessionCleanupAdmissionBlockedError(
+    error instanceof Error
+      ? error.message
+      : "web-session cleanup admission could not be acquired",
+    error,
+  );
+}
+
+function acquireWebSessionCleanupAdmissionCore(
+  claim: WebSessionCleanupAdmissionClaim,
+  environment: Environment,
 ): WebSessionCleanupAdmissionController {
-  const claim = createClaim(identity, acquiredAt);
   const admissionDirectory = directory(environment);
   ensurePrivateStateDirectory(admissionDirectory, environment);
   for (
@@ -1387,7 +1402,7 @@ export function acquireWebSessionCleanupAdmission(
           rebootQuiescent
           && !removeRebootQuiescentLocalCliRoots(existing.claim)
         ) {
-          throw new Error(
+          throw new WebSessionCleanupAdmissionBlockedError(
             blockedAdmissionGuidance(existing.claim, "artifact-conflict"),
           );
         }
@@ -1398,7 +1413,7 @@ export function acquireWebSessionCleanupAdmission(
         );
         continue;
       }
-      throw new Error(
+      throw new WebSessionCleanupAdmissionBlockedError(
         blockedAdmissionGuidance(
           existing.claim,
           sameBootUnsafeRecovery,
@@ -1423,9 +1438,22 @@ export function acquireWebSessionCleanupAdmission(
     }
     if (created.created) return controller(claimSnapshot(claim), environment);
   }
-  throw new Error(
+  throw new WebSessionCleanupAdmissionBlockedError(
     `${claim.transport === "local-cli" ? "local CLI" : "authenticated web"} auth realm ${claim.surfaceId}/${claim.authId} cleanup admission could not be acquired`,
   );
+}
+
+export function acquireWebSessionCleanupAdmission(
+  identity: WebSessionCleanupAdmissionIdentity,
+  environment: Environment = process.env,
+  acquiredAt = new Date(),
+): WebSessionCleanupAdmissionController {
+  const claim = createClaim(identity, acquiredAt);
+  try {
+    return acquireWebSessionCleanupAdmissionCore(claim, environment);
+  } catch (error) {
+    throw cleanupAdmissionBlocked(error);
+  }
 }
 
 /**
@@ -1441,12 +1469,26 @@ export async function withWebSessionCleanupAdmission<T>(
     registerCleanupBarrier: WebSessionCleanupBarrierRegistrar,
   ) => Promise<T>,
   acquiredAt = new Date(),
+  onAdmissionBlocked?: (
+    error: WebSessionCleanupAdmissionBlockedError,
+  ) => Promise<T>,
 ): Promise<T> {
-  const admission = acquireWebSessionCleanupAdmission(
-    identity,
-    environment,
-    acquiredAt,
-  );
+  let admission: WebSessionCleanupAdmissionController;
+  try {
+    admission = acquireWebSessionCleanupAdmission(
+      identity,
+      environment,
+      acquiredAt,
+    );
+  } catch (error) {
+    if (
+      error instanceof WebSessionCleanupAdmissionBlockedError
+      && onAdmissionBlocked !== undefined
+    ) {
+      return onAdmissionBlocked(error);
+    }
+    throw error;
+  }
   let outcome:
     | { readonly status: "fulfilled"; readonly value: T }
     | { readonly status: "rejected"; readonly reason: unknown };

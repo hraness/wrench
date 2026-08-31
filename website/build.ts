@@ -15,6 +15,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AskAiAboutThis } from "./ask-ai-runtime.js";
+import {
+  EDITORIAL_ARTICLE_IMAGE_SIZES,
+  EDITORIAL_CARD_IMAGE_SIZES,
+  editorialImage,
+  editorialImages,
+  editorialImageSrcSet,
+  editorialImageUrl,
+  type EditorialImage,
+} from "./editorial-images";
 import { htmlMainToMarkdown } from "./html-to-markdown";
 import {
   loadProviderCapabilityAttestation,
@@ -160,6 +169,14 @@ export const PUBLIC_PAGES = [
     sourceFile: "paypal-grapheneos-attestation.html",
     title: "PayPal attested a hardened phone as rooted, and why named web operations still matter",
   },
+  {
+    canonicalPath: "/rumour-is-the-exploit/",
+    description:
+      "This Monday 31 August 2026 sourced take starts from Anil Madhavapeddy’s essay that a rumour of a bug is enough for agentic search. A search direction is not a named Wrench operation.",
+    outputFile: "rumour-is-the-exploit/index.html",
+    sourceFile: "rumour-is-the-exploit.html",
+    title: "A rumour is enough for agentic search, and why named web operations still matter",
+  },
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];
@@ -275,6 +292,45 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
+function escapeXml(value: string): string {
+  return escapeHtml(value).replaceAll("'", "&apos;");
+}
+
+function imageObject(image: EditorialImage): Readonly<Record<string, unknown>> {
+  return {
+    "@type": "ImageObject",
+    caption: image.caption,
+    contentUrl: editorialImageUrl(image),
+    creditText: image.credit,
+    height: image.height,
+    url: editorialImageUrl(image),
+    width: image.width,
+  };
+}
+
+function renderEditorialFigure(image: EditorialImage): string {
+  return `<figure class="editorial-figure">
+            <img alt="${escapeHtml(image.alt)}" decoding="async"
+              height="${image.height}" sizes="${EDITORIAL_ARTICLE_IMAGE_SIZES}"
+              src="${image.src}" srcset="${editorialImageSrcSet(image)}" width="${image.width}">
+            <figcaption><span>${escapeHtml(image.caption)}</span><small>${escapeHtml(image.credit)}</small></figcaption>
+          </figure>`;
+}
+
+function renderEditorialCards(): string {
+  return editorialImages.map((image) => `<article class="card editorial-card">
+              <a href="${image.canonicalPath}">
+                <img alt="" decoding="async" height="${image.height}" loading="lazy"
+                  sizes="${EDITORIAL_CARD_IMAGE_SIZES}" src="${image.src}"
+                  srcset="${editorialImageSrcSet(image)}" width="${image.width}">
+                <div class="editorial-card-copy">
+                  <h3>${escapeHtml(image.cardTitle)}</h3>
+                  <p class="editorial-card-description">${escapeHtml(image.cardDescription)}</p>
+                </div>
+              </a>
+            </article>`).join("\n");
+}
+
 function replaceRequired(template: string, placeholder: string, value: string): string {
   if (!template.includes(placeholder)) {
     throw new Error(`Template is missing ${placeholder}.`);
@@ -378,6 +434,7 @@ function jsonLd(identity: PackageIdentity, page: PublicPage): Readonly<Record<st
   ];
 
   if (!isHome) {
+    const image = editorialImage(page.canonicalPath);
     pageGraph.push(
       {
         "@id": `${url}#article`,
@@ -386,6 +443,7 @@ function jsonLd(identity: PackageIdentity, page: PublicPage): Readonly<Record<st
         author: { "@id": `${SITE_ORIGIN}/#organization` },
         description: page.description,
         headline: page.title,
+        image: image === undefined ? undefined : imageObject(image),
         inLanguage: "en",
         isPartOf: { "@id": `${SITE_ORIGIN}/#website` },
         mainEntityOfPage: { "@id": pageId },
@@ -446,6 +504,28 @@ function renderTemplate(
       "{{MARKDOWN_ALTERNATE}}",
       `<link rel="alternate" type="text/markdown" title="Markdown" href="${SITE_ORIGIN}${markdownSiblingPath(page.canonicalPath)}">`,
     );
+    const image = editorialImage(page.canonicalPath);
+    if (image === undefined) {
+      if (/\{\{EDITORIAL_(?:FIGURE|IMAGE_)/u.test(rendered)) {
+        throw new Error(`Only registered editorial pages may use editorial image placeholders: ${page.canonicalPath}`);
+      }
+    } else {
+      const editorialValues = new Map([
+        ["{{EDITORIAL_FIGURE}}", renderEditorialFigure(image)],
+        ["{{EDITORIAL_IMAGE_ALT}}", escapeHtml(image.alt)],
+        ["{{EDITORIAL_IMAGE_HEIGHT}}", String(image.height)],
+        ["{{EDITORIAL_IMAGE_URL}}", editorialImageUrl(image)],
+        ["{{EDITORIAL_IMAGE_WIDTH}}", String(image.width)],
+      ]);
+      for (const [placeholder, value] of editorialValues) {
+        rendered = replaceRequired(rendered, placeholder, value);
+      }
+    }
+    if (page.canonicalPath === "/") {
+      rendered = replaceRequired(rendered, "{{EDITORIAL_CARDS}}", renderEditorialCards());
+    } else if (rendered.includes("{{EDITORIAL_CARDS}}")) {
+      throw new Error("Editorial cards belong only on the homepage.");
+    }
   } else if (rendered.includes("{{JSON_LD}}")) {
     throw new Error("A non-indexable page must not include structured data.");
   } else if (rendered.includes("{{MARKDOWN_ALTERNATE}}")) {
@@ -539,6 +619,26 @@ export function renderPreview(template: string, cssAsset: string): string {
     throw new Error("The rendered preview contains an unresolved template value.");
   }
   return rendered;
+}
+
+export function renderSitemapXml(): string {
+  const urls = PUBLIC_PAGES.map((page) => {
+    const image = editorialImage(page.canonicalPath);
+    const imageMarkup = image === undefined ? "" : `
+    <image:image>
+      <image:loc>${escapeXml(editorialImageUrl(image))}</image:loc>
+      <image:title>${escapeXml(image.title)}</image:title>
+      <image:caption>${escapeXml(image.caption)}</image:caption>
+    </image:image>`;
+    return `  <url>
+    <loc>${SITE_ORIGIN}${page.canonicalPath}</loc>${imageMarkup}
+  </url>`;
+  }).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+${urls}
+</urlset>
+`;
 }
 
 export function renderIndex(template: string, options: RenderOptions): string {
@@ -680,8 +780,12 @@ export async function buildWebsite(
     ),
     writeFile(
       join(outputRoot, "sitemap.xml"),
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${PUBLIC_PAGES.map((page) => `  <url>\n    <loc>${SITE_ORIGIN}${page.canonicalPath}</loc>\n  </url>`).join("\n")}\n</urlset>\n`,
+      renderSitemapXml(),
     ),
+    cp(join(publicRoot, "images"), join(outputRoot, "images"), {
+      dereference: true,
+      recursive: true,
+    }),
     copyFile(join(publicRoot, "favicon.svg"), join(outputRoot, "favicon.svg")),
     copyFile(join(publicRoot, "og.png"), join(outputRoot, "og.png")),
     ...DEMO_PUBLIC_FILES.map((file) => copyFile(

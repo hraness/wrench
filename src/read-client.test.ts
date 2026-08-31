@@ -31,7 +31,11 @@ import {
   type RunReceipt,
 } from "./runtime";
 import { installManifest } from "./storage";
-import { persistedAuthAuthority } from "./web-session-authentication-policy";
+import {
+  persistedAuthAuthority,
+  publicWebSessionAuthorityIdentityHash,
+  publicWebSessionInvocationAuthority,
+} from "./web-session-authentication-policy";
 
 type TestState = {
   readonly directory: string;
@@ -558,6 +562,108 @@ describe("persistent read client", () => {
       expect(after.status === "hit" ? after.output : null).toEqual(output);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("retains the last good snapshot for a cleanup-blocked live read", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wrench-read-client-public-test-"));
+    chmodSync(directory, 0o700);
+    const environment = { WRENCH_STATE_HOME: directory };
+    try {
+      const manifest = JSON.parse(readFileSync(join(
+        import.meta.dir,
+        "assets",
+        "adapters",
+        "bluesky",
+        "wrench-web-adapter.json",
+      ), "utf8")) as WrenchManifest;
+      const authority = publicWebSessionInvocationAuthority(
+        manifest.id,
+        "profiles.read",
+      );
+      const invocation: PreparedInvocation = {
+        manifest,
+        operationId: "profiles.read",
+        input: { handle: "hraness.bsky.social" },
+        auth: authority,
+        readProjectionAuthIdentityHash:
+          publicWebSessionAuthorityIdentityHash(authority),
+      };
+      const output = {
+        metrics: { followers: { value: 54 } },
+      };
+      const cachedBefore = {
+        status: "hit" as const,
+        source: "cache" as const,
+        key: "e".repeat(64),
+        output,
+        dataRevision: "a".repeat(64),
+        createdAt: FIRST_STARTED_AT,
+        dataChangedAt: FIRST_FINISHED_AT,
+        validatedAt: FIRST_FINISHED_AT,
+        runId: "00000000-0000-4000-8000-000000000014",
+        ageMs: 0,
+        freshness: { state: "fresh" as const, freshForMs: 60_000 },
+      };
+
+      const cleanupBlocked = {
+        receipt: {
+          schemaVersion: 4 as const,
+          transport: "web-session-api" as const,
+          webSessionContractHash: "d".repeat(64),
+          runId: "00000000-0000-4000-8000-000000000015",
+          planDigest: null,
+          adapter: {
+            id: manifest.id,
+            version: manifest.version,
+            hash: manifestHash(manifest),
+          },
+          operation: invocation.operationId,
+          risk: "R1" as const,
+          inputHash: sha256(canonicalJson(invocation.input)),
+          auth: {
+            id: authority.id,
+            hash: sha256(canonicalJson(authority)),
+            kind: authority.kind,
+          },
+          status: "failed" as const,
+          dispatchStarted: false,
+          dispatch: { planned: 0, started: 0, verified: 0 },
+          startedAt: UNCHANGED_STARTED_AT,
+          finishedAt: UNCHANGED_FINISHED_AT,
+          finalOrigin: null,
+          error:
+            "authenticated web API operation failed before the dispatch boundary",
+        },
+        output: null,
+        replayed: false,
+        readFailure: {
+          category: "cleanup-required" as const,
+          retryDisposition: "do-not-retry" as const,
+        },
+        privateArtifactsPreserved: false,
+      } satisfies InvocationResult;
+      const failed = await revalidatePreparedCapability(invocation, {
+        environment,
+        registry: providerPluginRegistry,
+        executeRead: execute(cleanupBlocked),
+      }, cachedBefore);
+
+      expect(failed.live).toEqual(cleanupBlocked);
+      expect(failed.live.readFailure).toEqual({
+        category: "cleanup-required",
+        retryDisposition: "do-not-retry",
+      });
+      expect(failed.cache).toEqual({
+        status: "retained",
+        reason: "live-read-failed",
+      });
+      expect(failed.cachedBefore).toMatchObject({
+        status: "hit",
+        output,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 

@@ -10,6 +10,7 @@ import {
   existsSync,
   lstatSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -73,6 +74,7 @@ import {
   type StoredPlan,
 } from "./runtime";
 import {
+  WEB_SESSION_CLEANUP_ADMISSION_STATE_DIRECTORY,
   acquireWebSessionCleanupAdmission,
   listWebSessionCleanupAdmissions,
 } from "./web-session-cleanup-admission";
@@ -4464,11 +4466,49 @@ describe("receipts", () => {
       expect(readRunReceipt(result.receipt.runId, testState.environment))
         .toEqual(result.receipt);
 
-      expect(await rejectionMessage(executeReadInvocation(invocation, {
+      const blocked = await executeReadInvocation(invocation, {
         headed: false,
         environment: testState.environment,
         executeWebSession: unsafeWebExecution,
-      }))).toContain("active or cleanup-unsafe state");
+      });
+      expect(blocked).toMatchObject({
+        output: null,
+        replayed: false,
+        privateArtifactsPreserved: false,
+        readFailure: {
+          category: "cleanup-required",
+          retryDisposition: "do-not-retry",
+        },
+        receipt: {
+          schemaVersion: 4,
+          transport: "web-session-api",
+          adapter: {
+            id: selectedManifest.id,
+            version: selectedManifest.version,
+          },
+          operation: invocation.operationId,
+          auth: {
+            id: selectedAuth.id,
+            kind: selectedAuth.kind,
+          },
+          status: "failed",
+          dispatchStarted: false,
+          dispatch: { planned: 0, started: 0, verified: 0 },
+        },
+      });
+      expect(blocked.receipt.adapter.hash)
+        .toBe(sha256(canonicalJson(selectedManifest)));
+      expect(blocked.receipt.auth.hash)
+        .toBe(sha256(canonicalJson(selectedAuth)));
+      expect(blocked.receipt.inputHash)
+        .toBe(sha256(canonicalJson(invocation.input)));
+      expect(blocked.receipt.error).toContain(
+        "durable cleanup admission blocks retry",
+      );
+      expect(blocked.receipt.error).not.toContain(recoveryHandle);
+      expect(blocked.receipt.error).not.toContain("private provider cleanup detail");
+      expect(readRunReceipt(blocked.receipt.runId, testState.environment))
+        .toEqual(blocked.receipt);
       expect(executorCalls).toBe(1);
       const [unsafeAdmission] =
         listWebSessionCleanupAdmissions(testState.environment);
@@ -4524,6 +4564,77 @@ describe("receipts", () => {
       expect(persistenceFailure.receipt.error).toContain(
         `recovery handle: ${recoveryHandle}`,
       );
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("returns a bounded R1 failure when cleanup admission storage is unsafe", async () => {
+    const testState = state();
+    try {
+      const selectedManifest = xWebManifest();
+      const selectedAuth = createAuth("x-web-test", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "123",
+      });
+      installManifest(selectedManifest, {
+        force: false,
+        environment: testState.environment,
+      });
+      saveAuth(selectedAuth, testState.environment);
+      mkdirSync(join(testState.directory, "provider-plugin-state"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      const unsafeAdmissionPath = join(
+        testState.directory,
+        WEB_SESSION_CLEANUP_ADMISSION_STATE_DIRECTORY,
+      );
+      writeFileSync(unsafeAdmissionPath, "retained unsafe state\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      let executorCalls = 0;
+
+      const blocked = await executeReadInvocation({
+        manifest: selectedManifest,
+        operationId: "posts.read",
+        input: { post_id: "2078889282404569267" },
+        auth: selectedAuth,
+      }, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: () => {
+          executorCalls += 1;
+          throw new Error("unsafe admission storage must block dispatch");
+        },
+      });
+
+      expect(blocked).toMatchObject({
+        output: null,
+        replayed: false,
+        privateArtifactsPreserved: false,
+        readFailure: {
+          category: "cleanup-required",
+          retryDisposition: "do-not-retry",
+        },
+        receipt: {
+          status: "failed",
+          dispatchStarted: false,
+          dispatch: { planned: 0, started: 0, verified: 0 },
+        },
+      });
+      expect(executorCalls).toBe(0);
+      expect(blocked.receipt.error).toContain(
+        "durable cleanup admission blocks retry",
+      );
+      expect(blocked.receipt.error).not.toContain(unsafeAdmissionPath);
+      expect(blocked.receipt.error).not.toContain("retained unsafe state");
+      expect(readFileSync(unsafeAdmissionPath, "utf8"))
+        .toBe("retained unsafe state\n");
+      expect(readRunReceipt(blocked.receipt.runId, testState.environment))
+        .toEqual(blocked.receipt);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

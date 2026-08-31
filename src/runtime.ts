@@ -116,6 +116,7 @@ import {
   type WebSessionProviderBoundMutationTargetEvent,
 } from "./web-session-execution";
 import {
+  WebSessionCleanupAdmissionBlockedError,
   withWebSessionCleanupAdmission,
   type WebSessionCleanupAdmissionIdentity,
 } from "./web-session-cleanup-admission";
@@ -4288,6 +4289,7 @@ type RunPreparedOptions = {
   readonly duplicateRisk?: InvocationDuplicateRiskV1;
   readonly signal?: AbortSignal;
   readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
+  readonly preflightFailure?: WebSessionCleanupAdmissionBlockedError;
   readonly persistReceipt?: (
     receipt: RunReceipt,
     environment: Readonly<Record<string, string | undefined>>,
@@ -4944,6 +4946,9 @@ async function runPreparedCore(
     && isPublicWebSessionInvocationAuthority(invocation.auth);
   let execution: BoundedExecution;
   try {
+    if (options.preflightFailure !== undefined) {
+      throw options.preflightFailure;
+    }
     const rawExecution: unknown = providerOperation
       ? await (options.executeProvider ?? executeProviderOperation)(
           invocation.manifest,
@@ -5133,6 +5138,8 @@ async function runPreparedCore(
           && error.cause instanceof PreservedBrowserArtifactsError
           ? error.cause
           : null;
+    const cleanupRequired = error instanceof WebSessionCleanupUnverifiedError
+      || error instanceof WebSessionCleanupAdmissionBlockedError;
     execution = {
       status: started > 0 ? "indeterminate" : "failed",
       output: null,
@@ -5141,13 +5148,13 @@ async function runPreparedCore(
       dispatch: durableReceipt.dispatch,
       error: preservedArtifactsError !== null
         ? "provider browser cleanup could not be verified; private artifacts were preserved and durable cleanup admission requires wrench doctor before retry"
-        : error instanceof WebSessionCleanupUnverifiedError
+        : cleanupRequired
           ? localCliOperation
             ? "local CLI child/private-root cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves every pinned process group quiescent and removes the exact private root, or reboot recovery proves quiescence"
             : "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves exact browser-closed evidence, or reboot recovery proves quiescence"
           : boundedThrownExecutorReason(error),
       ...(operation.risk === "R1"
-        && error instanceof WebSessionCleanupUnverifiedError
+        && cleanupRequired
         ? { readFailure: readFailureProjection("cleanup-required") }
         : operation.risk === "R1"
           && started === 0
@@ -5412,6 +5419,17 @@ async function runPrepared(
           },
         ),
         options.now,
+        checked.operation.risk === "R1"
+          ? (preflightFailure) => runPreparedCore(
+              checked.invocation,
+              planDigest,
+              {
+                ...options,
+                runId,
+                preflightFailure,
+              },
+            )
+          : undefined,
       );
     }
     return runPreparedCore(
