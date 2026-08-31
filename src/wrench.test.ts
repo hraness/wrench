@@ -322,6 +322,7 @@ function mediaRuntime(overrides: Partial<MediaRuntime> = {}): MediaRuntime {
 async function runDoctor(
   testState: TestState,
   json = true,
+  dependencyOverrides: Partial<WrenchDependencies> = {},
 ): Promise<{ readonly code: number; readonly stdout: string }> {
   const wrench = capture();
   const code = await main(
@@ -329,6 +330,7 @@ async function runDoctor(
     testState.environment,
     wrench.output,
     {
+      ...dependencyOverrides,
       inspectClipEnvironment: () => Promise.resolve(clipEnvironmentInspection()),
       loadMediaRuntime: () => Promise.resolve(mediaRuntime()),
     },
@@ -1951,15 +1953,37 @@ describe("doctor authenticated API readiness", () => {
   test("reports observed LinkedIn private Article readiness independently from X", async () => {
     const testState = state();
     try {
-      installManifest(bundledWebManifest("linkedin"), { force: false, environment: testState.environment });
-      installManifest(bundledWebManifest("x"), { force: false, environment: testState.environment });
+      const linkedinPlugin = providerPluginRegistry.get("linkedin-web");
+      const xPlugin = providerPluginRegistry.get("x-web");
+      if (
+        linkedinPlugin?.sourceKind !== "built-in"
+        || xPlugin?.sourceKind !== "built-in"
+      ) {
+        throw new Error("LinkedIn/X doctor readiness source plugins are unavailable");
+      }
+      const readinessRegistry = createProviderPluginRegistry([
+        linkedinPlugin,
+        xPlugin,
+      ]);
+      installManifest(bundledWebManifest("linkedin"), {
+        force: false,
+        environment: testState.environment,
+        registry: readinessRegistry,
+      });
+      installManifest(bundledWebManifest("x"), {
+        force: false,
+        environment: testState.environment,
+        registry: readinessRegistry,
+      });
       saveAuth(createAuth("linkedin-bound", {
         source: "arc",
         subject: "urn:li:fsd_profile:12345",
       }), testState.environment);
       saveAuth(createAuth("x-unbound", { source: "arc", profile: "Profile 1" }), testState.environment);
 
-      const linkedinReady = await runDoctor(testState);
+      const linkedinReady = await runDoctor(testState, true, {
+        providerPluginRegistry: readinessRegistry,
+      });
       expect(linkedinReady.code).toBe(0);
       const linkedinReport = JSON.parse(linkedinReady.stdout) as {
         readonly wrench: {
@@ -2033,7 +2057,9 @@ describe("doctor authenticated API readiness", () => {
       });
 
       saveAuth(createAuth("x-bound", { source: "arc", subject: "2244994945" }), testState.environment);
-      const ready = await runDoctor(testState);
+      const ready = await runDoctor(testState, true, {
+        providerPluginRegistry: readinessRegistry,
+      });
       expect(ready.code).toBe(0);
       const readyReport = JSON.parse(ready.stdout) as {
         readonly wrench: {
@@ -2078,6 +2104,8 @@ describe("doctor authenticated API readiness", () => {
 
   test("reports same-boot authenticated-web cleanup uncertainty as unresolved recovery state", async () => {
     const testState = state();
+    const socketDirectory = mkdtempSync("/tmp/io-ab-");
+    const artifactsDirectory = mkdtempSync(join(tmpdir(), "io-browser-"));
     try {
       const selectedManifest = bundledWebManifest("x");
       installManifest(selectedManifest, {
@@ -2103,20 +2131,21 @@ describe("doctor authenticated API readiness", () => {
         },
         testState.environment,
       );
-      const socketDirectory = join(testState.directory, "private-doctor-socket-sentinel");
-      const artifactsDirectory = join(testState.directory, "private-doctor-artifacts-sentinel");
-      mkdirSync(socketDirectory, { mode: 0o700 });
-      mkdirSync(artifactsDirectory, { mode: 0o700 });
+      chmodSync(socketDirectory, 0o700);
+      chmodSync(artifactsDirectory, 0o700);
       const privateSession = `io-${process.pid}-abcdef12-abc`;
       const privateRecoveryHandle = browserRecoveryHandle({
         session: privateSession,
-        configPath: join(artifactsDirectory, "private-config-sentinel.json"),
+        configPath: join(artifactsDirectory, "agent-browser.json"),
         socketDirectory,
         artifactsDirectory,
       });
       const publishCleanupResource = admission.registerCleanupBarrier(
         Promise.reject(new Error("synthetic cleanup uncertainty")),
       );
+      if (typeof publishCleanupResource !== "function") {
+        throw new Error("cleanup admission omitted its resource publisher");
+      }
       const privateIdentity = (path: string) => {
         const stats = lstatSync(path, { bigint: true });
         return {
@@ -2160,20 +2189,29 @@ describe("doctor authenticated API readiness", () => {
         expect(diagnosed.stdout).not.toContain(privateSentinel);
       }
     } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(artifactsDirectory, { recursive: true, force: true });
       rmSync(testState.directory, { recursive: true, force: true });
     }
   });
 
   test("reports schema-v5 generic templates as inert derivation reservations", async () => {
     const testState = state();
+    const reservationRegistry = createProviderPluginRegistry([]);
     try {
-      installManifest(reviewedTemplateReservationManifest(), { force: false, environment: testState.environment });
+      installManifest(reviewedTemplateReservationManifest(), {
+        force: false,
+        environment: testState.environment,
+        registry: reservationRegistry,
+      });
       saveAuth(createAuth("profile-only", {
         browserProfile: "Default",
         trustUnfilteredEgress: true,
       }), testState.environment);
 
-      const incompatible = await runDoctor(testState);
+      const incompatible = await runDoctor(testState, true, {
+        providerPluginRegistry: reservationRegistry,
+      });
       expect(incompatible.code).toBe(3);
       expect(JSON.parse(incompatible.stdout)).toMatchObject({
         ok: false,
@@ -2191,7 +2229,9 @@ describe("doctor authenticated API readiness", () => {
       });
 
       saveAuth(createAuth("arc-cookie", { source: "arc" }), testState.environment);
-      const stillInert = await runDoctor(testState);
+      const stillInert = await runDoctor(testState, true, {
+        providerPluginRegistry: reservationRegistry,
+      });
       expect(stillInert.code).toBe(3);
       expect(JSON.parse(stillInert.stdout)).toMatchObject({
         ok: false,
@@ -2208,7 +2248,9 @@ describe("doctor authenticated API readiness", () => {
         },
       });
 
-      const text = await runDoctor(testState, false);
+      const text = await runDoctor(testState, false, {
+        providerPluginRegistry: reservationRegistry,
+      });
       expect(text.code).toBe(3);
       expect(text.stdout).toContain("Generic internal-API derivation: reservation-only");
       expect(text.stdout).toContain("Generic internal-API execution: not available (reviewed-template v2 account preflight required)");

@@ -272,6 +272,13 @@ export class PreservedBrowserArtifactsError extends Error {
   }
 }
 
+export class AgentBrowserLiveControlUnavailableError extends Error {
+  constructor() {
+    super("agent-browser live control identity is unavailable");
+    this.name = "AgentBrowserLiveControlUnavailableError";
+  }
+}
+
 class BrowserCommandCleanupError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message, cause === undefined ? undefined : { cause });
@@ -2077,7 +2084,7 @@ export async function bindLiveAgentBrowserCleanupResource(
     resource,
   );
   if (first.state !== "active" || !first.browserLaunched) {
-    throw new Error("agent-browser live control identity is unavailable");
+    throw new AgentBrowserLiveControlUnavailableError();
   }
   const captureOwner = dependencies.captureOwner
     ?? captureProcessOwnerIdentity;
@@ -3142,11 +3149,14 @@ export async function createBrowserSession(
       close,
       cleanup,
       recoveryHandle: recoveryHandle(),
-      get cleanupResourceIdentity() {
-        return options.publishCleanupResource === undefined
-          ? undefined
-          : cleanupResourceIdentity ?? undefined;
-      },
+      ...(options.publishCleanupResource === undefined
+        ? {}
+        : {
+            cleanupResourceIdentity: cleanupResourceIdentity
+              ?? failInitialization(
+                new Error("browser cleanup resource identity is unavailable"),
+              ),
+          }),
     };
   } catch (error) {
     const cleanupFailures: unknown[] = [];

@@ -4,6 +4,7 @@ import { types as nodeTypes } from "node:util";
 
 import { canonicalJson, sha256 } from "./canonical-json";
 import {
+  AgentBrowserLiveControlUnavailableError,
   adoptLiveLegacyBrowserCleanupResource,
   browserCleanupResourceExtends,
   browserCleanupResourceRootStatus,
@@ -1724,18 +1725,30 @@ async function recoverBrowserCleanupUnsafe(
       if (exactCurrentClaim(current, environment) === null) {
         return "claim-conflict";
       }
-      const pinned = selected.identity.kind === "agent-browser-session-v1"
-        ? await adoptLiveLegacyBrowserCleanupResource(
+      let pinned: BrowserCleanupResourceIdentityV2;
+      if (selected.identity.kind === "agent-browser-session-v1") {
+        try {
+          pinned = await adoptLiveLegacyBrowserCleanupResource(
             selected.identity,
             lifecycle,
-          )
-        : selected.identity.phase === "launch-intent"
-            && selected.identity.control === null
+          );
+        } catch (error) {
+          if (!releaseCleanupRecoveryLease(current, environment)) {
+            return "claim-conflict";
+          }
+          return error instanceof AgentBrowserLiveControlUnavailableError
+            ? "proof-unavailable"
+            : "artifact-conflict";
+        }
+      } else {
+        pinned = selected.identity.phase === "launch-intent"
+          && selected.identity.control === null
           ? await bindLiveAgentBrowserCleanupResource(
               selected.identity,
               lifecycle,
             )
           : selected.identity;
+      }
       if (
         selected.identity.kind !== "agent-browser-session-v2"
         || canonicalJson(selected.identity) !== canonicalJson(pinned)
@@ -1770,8 +1783,9 @@ async function recoverBrowserCleanupUnsafe(
         environment,
       );
     } catch {
-      releaseCleanupRecoveryLease(current, environment);
-      return "artifact-conflict";
+      return releaseCleanupRecoveryLease(current, environment)
+        ? "artifact-conflict"
+        : "claim-conflict";
     }
     const finalization = await finalizeRecoveredBrowserResource(
       current,

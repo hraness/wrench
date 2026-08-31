@@ -18,6 +18,7 @@ import { describe, expect, test } from "bun:test";
 import {
   PreservedBrowserArtifactsError,
   browserRecoveryHandle,
+  parseBrowserCleanupResourceIdentity,
   type BrowserCleanupResourceIdentity,
   type BrowserCleanupResourceIdentityV2,
 } from "./browser";
@@ -203,6 +204,16 @@ function browserCleanupResourceFixture(): {
   );
   chmodSync(socketDirectory, 0o700);
   chmodSync(artifactsDirectory, 0o700);
+  writeFileSync(
+    join(artifactsDirectory, "agent-browser.json"),
+    "{}\n",
+    { mode: 0o600, flag: "wx" },
+  );
+  writeFileSync(
+    join(artifactsDirectory, "action-policy.json"),
+    "{}\n",
+    { mode: 0o600, flag: "wx" },
+  );
   const session = `io-${process.pid}-abcdef12-abc`;
   const recoveryHandle = browserRecoveryHandle({
     session,
@@ -277,7 +288,7 @@ function pinnedBrowserCleanupResourceFixture(): {
 }
 
 function inactiveAgentBrowserSessionResult(
-  resource: BrowserCleanupResourceIdentityV2,
+  resource: BrowserCleanupResourceIdentity,
 ): {
   readonly stdout: string;
   readonly stderr: "";
@@ -879,24 +890,36 @@ describe("web-session cleanup admission", () => {
           rejectCleanup = reject;
         });
         const publish = admission.registerCleanupBarrier(cleanup);
+        if (typeof publish !== "function") {
+          throw new Error("cleanup admission omitted its resource publisher");
+        }
+        const controlled = parseBrowserCleanupResourceIdentity(
+          fixture.resource,
+        );
+        if (
+          controlled.kind !== "agent-browser-session-v2"
+          || controlled.phase !== "controlled"
+        ) {
+          throw new Error("expected a controlled v2 cleanup resource");
+        }
         const prepared: BrowserCleanupResourceIdentityV2 = Object.freeze({
-          ...fixture.resource,
+          ...controlled,
           phase: "prepared",
           control: null,
         });
         const launchIntent: BrowserCleanupResourceIdentityV2 = Object.freeze({
-          ...fixture.resource,
+          ...controlled,
           phase: "launch-intent",
           control: null,
         });
         publish(prepared);
         publish(launchIntent);
-        publish(fixture.resource);
+        publish(controlled);
         expect(() => publish(prepared)).toThrow("changed after publication");
         expect(() => publish({
-          ...fixture.resource,
+          ...controlled,
           control: {
-            ...fixture.resource.control!,
+            ...controlled.control,
             launchHash: "43",
           },
         })).toThrow("changed after publication");
@@ -930,6 +953,7 @@ describe("web-session cleanup admission", () => {
   test("retains dead legacy browser claims that lack root-generation evidence", async () => {
     await withState(async (environment) => {
       const fixture = browserCleanupResourceFixture();
+      let sessionReads = 0;
       try {
         const current = currentProcessStartIdentity();
         writeAdmissionFixture(
@@ -943,13 +967,35 @@ describe("web-session cleanup admission", () => {
           }],
         );
 
-        expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+        const report = await recoverWebSessionCleanupAdmissionsCore(
+          environment,
+          {
+            currentBootId: current.bootId,
+            inspectOwner: () => "different-or-dead",
+            browserLifecycle: {
+              runCommand: (command) => {
+                sessionReads += 1;
+                expect(command.slice(-3)).toEqual([
+                  "session",
+                  "info",
+                  "--json",
+                ]);
+                return Promise.resolve(
+                  inactiveAgentBrowserSessionResult(fixture.resource),
+                );
+              },
+            },
+          },
+        );
+
+        expect(report).toMatchObject({
           scanned: 1,
           repaired: 0,
           retained: 1,
           invalid: 0,
           issues: [{ kind: "cleanup-unsafe" }],
         });
+        expect(sessionReads).toBe(1);
         expect(existsSync(fixture.socketDirectory)).toBeTrue();
         expect(existsSync(fixture.artifactsDirectory)).toBeTrue();
         expect(listWebSessionCleanupAdmissions(environment)).toHaveLength(1);

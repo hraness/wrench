@@ -893,7 +893,9 @@ describe("browser process isolation helpers", () => {
       tmpdir(),
       `wrench-missing-profile-${crypto.randomUUID()}`,
     );
-    let published: BrowserCleanupResourceIdentityV2 | null = null;
+    const publication: {
+      resource: BrowserCleanupResourceIdentityV2 | null;
+    } = { resource: null };
     const error = await rejectionValue(createBrowserSession(manifest, {
       schemaVersion: 1,
       id: "missing-profile",
@@ -908,11 +910,11 @@ describe("browser process isolation helpers", () => {
         if (resource.kind !== "agent-browser-session-v2") {
           throw new Error("expected a v2 cleanup resource");
         }
-        published = resource;
+        publication.resource = resource;
       },
     }));
     expect(error).toBeInstanceOf(PreservedBrowserArtifactsError);
-    const prepared = published;
+    const prepared = publication.resource;
     if (prepared === null) throw new Error("prepared roots were not published");
     try {
       expect(prepared).toMatchObject({ phase: "prepared", control: null });
@@ -925,7 +927,9 @@ describe("browser process isolation helpers", () => {
   });
 
   test("preserves exact roots when cleanup publication may have committed before throwing", async () => {
-    let attempted: BrowserCleanupResourceIdentityV2 | null = null;
+    const publication: {
+      resource: BrowserCleanupResourceIdentityV2 | null;
+    } = { resource: null };
     const removalAttempts: string[] = [];
     const error = await rejectionValue(createBrowserSession(manifest, auth, {
       headed: false,
@@ -935,7 +939,7 @@ describe("browser process isolation helpers", () => {
         if (resource.kind !== "agent-browser-session-v2") {
           throw new Error("expected a v2 cleanup resource");
         }
-        attempted = resource;
+        publication.resource = resource;
         throw new Error("simulated failure after durable publication");
       },
       dependencies: {
@@ -948,7 +952,7 @@ describe("browser process isolation helpers", () => {
 
     expect(error).toBeInstanceOf(PreservedBrowserArtifactsError);
     expect(removalAttempts).toEqual([]);
-    const resource = attempted;
+    const resource = publication.resource;
     if (resource === null) throw new Error("cleanup publication was not attempted");
     try {
       expect(browserCleanupResourceRootStatus(resource, "artifacts")).toBe("match");
@@ -1077,7 +1081,13 @@ describe("browser process isolation helpers", () => {
           launchHash: "18446744073709551615",
           cdpUrl: "ws://127.0.0.1:43125/devtools/browser/exact-test",
         },
-      }) as BrowserCleanupResourceIdentityV2;
+      });
+      if (
+        pinned.kind !== "agent-browser-session-v2"
+        || pinned.phase !== "controlled"
+      ) {
+        throw new Error("expected a controlled v2 cleanup resource");
+      }
       const legacy: BrowserCleanupResourceIdentityV1 = {
         kind: "agent-browser-session-v1",
         recoveryHandle: base.recoveryHandle,
@@ -1106,7 +1116,7 @@ describe("browser process isolation helpers", () => {
       expect(browserCleanupResourceExtends(pinned, {
         ...pinned,
         control: {
-          ...pinned.control!,
+          ...pinned.control,
           launchHash: "1",
         },
       })).toBeFalse();
@@ -1343,7 +1353,7 @@ describe("browser process isolation helpers", () => {
           });
         },
       }))).toContain("changed while it was bound");
-      expect(sessionReads).toBe(2);
+      expect(sessionReads).toBe(3);
 
       sessionReads = 0;
       let cdpReads = 0;
