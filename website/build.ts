@@ -169,6 +169,14 @@ export const PUBLIC_PAGES = [
     sourceFile: "paypal-grapheneos-attestation.html",
     title: "PayPal attested a hardened phone as rooted, and why named web operations still matter",
   },
+  {
+    canonicalPath: "/rumour-is-the-exploit/",
+    description:
+      "This Monday 31 August 2026 sourced take starts from Anil Madhavapeddy’s essay that a rumour of a bug is enough for agentic search. A search direction is not a named Wrench operation.",
+    outputFile: "rumour-is-the-exploit/index.html",
+    sourceFile: "rumour-is-the-exploit.html",
+    title: "A rumour is enough for agentic search, and why named web operations still matter",
+  },
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];
