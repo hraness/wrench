@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "x-web",
-  "version": "1.14.0",
+  "version": "1.13.0",
   "displayName": "X (Authenticated Web API)",
   "surfaceId": "x",
   "origins": [
@@ -336,7 +336,7 @@
       }
     },
     "posts.publish": {
-      "description": "Observed contract: publish one confirmed X post of up to 25000 UTF-16 units through pixels-only optional PNG or MP4 upload scrub, CreateTweet response, exact text bind including note_tweet long-form, and fail-closed TweetResultByRestId Made with AI readback.",
+      "description": "Observed contract: publish one confirmed X post with optional reviewed PNG or MP4 through pixels-only upload scrub, CreateTweet response, and fail-closed TweetResultByRestId Made with AI readback.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible X post with the exact confirmed content and reply audience.",
       "idempotency": "local-at-most-once",
@@ -345,9 +345,9 @@
         "properties": {
           "body": {
             "type": "string",
-            "description": "Exact post content; accepts current X long posts up to the reviewed CreateTweet 25000-unit bound and never truncates",
+            "description": "Exact post content",
             "minLength": 1,
-            "maxLength": 25000
+            "maxLength": 280
           },
           "media": {
             "type": "file",
@@ -374,13 +374,13 @@
       "webSession": {
         "site": "x",
         "action": "posts.publish",
-        "contractVersion": 5,
+        "contractVersion": 4,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }
     },
     "threads.publish": {
-      "description": "Capture-required contract reservation: publish one confirmed text-only X thread only after an authorized live fixture proves each current CreateTweet dispatch. Per-item maxLength stays 280 because reply composition and thread-split still use the short-item bound; prefer one long posts.publish for a single long post.",
+      "description": "Capture-required contract reservation: publish one confirmed text-only X thread only after an authorized live fixture proves each current CreateTweet dispatch.",
       "risk": "R3",
       "sideEffect": "Publishes one externally visible ordered X thread containing every exact confirmed item.",
       "idempotency": "local-at-most-once",
@@ -494,9 +494,9 @@
           },
           "body": {
             "type": "string",
-            "description": "Exact text-only quote content; same reviewed CreateTweet 25000-unit bound as posts.publish",
+            "description": "Exact text-only quote content",
             "minLength": 1,
-            "maxLength": 25000
+            "maxLength": 280
           }
         },
         "required": [
@@ -507,7 +507,7 @@
       "webSession": {
         "site": "x",
         "action": "posts.quote",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 600000,
         "maxOutputBytes": 2097152
       }
@@ -592,9 +592,9 @@
           },
           "expected_text": {
             "type": "string",
-            "description": "Exact current post text used for pre-delete confirmation; same reviewed CreateTweet 25000-unit bound as posts.publish",
+            "description": "Exact current post text used for pre-delete confirmation",
             "minLength": 1,
-            "maxLength": 25000
+            "maxLength": 280
           }
         },
         "required": [
@@ -605,7 +605,7 @@
       "webSession": {
         "site": "x",
         "action": "content.delete",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 2097152
       }

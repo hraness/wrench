@@ -543,6 +543,12 @@ describe("social platform catalog", () => {
     }
     expect(socialPlatformCatalog.linkedin.compositions.post?.attachments).toMatchObject({ state: "allowed", maxItems: 20 });
     expect(socialPlatformCatalog.x.compositions.post?.attachments).toMatchObject({ state: "allowed", maxItems: 4 });
+    expect(socialPlatformCatalog.x.compositions.post?.text).toEqual([
+      expect.objectContaining({ name: "body", safeMaxUnits: 25_000, measurement: "x-conservative-weighted" }),
+    ]);
+    expect(socialPlatformCatalog.x.compositions.reply?.text).toEqual([
+      expect.objectContaining({ name: "body", safeMaxUnits: 280, measurement: "x-conservative-weighted" }),
+    ]);
   });
 
   test("requires a conservative provider-neutral Marketplace listing shape", () => {
@@ -646,6 +652,9 @@ describe("weighted Unicode helpers", () => {
     expect(weightedTextLength("A🙂", textWeightPolicies["x-conservative-weighted"])).toBe(3);
     expect(weightedTextLength("https://x.co", textWeightPolicies["x-conservative-weighted"])).toBe(23);
     expect(weightedTextLength("https://x.co.", textWeightPolicies["x-conservative-weighted"])).toBe(24);
+    expect(weightedTextLength("A".repeat(1158), textWeightPolicies["x-conservative-weighted"])).toBe(1158);
+    expect(weightedTextLength("漢", textWeightPolicies["x-conservative-weighted"])).toBe(2);
+    expect(weightedTextLength("漢".repeat(12_500), textWeightPolicies["x-conservative-weighted"])).toBe(25_000);
   });
 
   test("never splits a grapheme cluster", () => {

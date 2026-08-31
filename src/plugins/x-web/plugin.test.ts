@@ -9,7 +9,7 @@ if (binding?.transport !== "web-session-api") {
 
 describe("X web provider plugin", () => {
   test("versions the profile-read source closure independently", () => {
-    expect(xWebPlugin.version).toBe("1.3.0");
+    expect(xWebPlugin.version).toBe("1.4.0");
   });
 
   test("keeps the generic Article reservation inert beside the exact private-draft read", () => {
@@ -58,10 +58,10 @@ describe("X web provider plugin", () => {
   test("declares exact accepted-target reconciliation for current post publishing", () => {
     const publish = binding.operations.filter((operation) =>
       operation.name === "posts.publish");
-    expect(publish.map((operation) => operation.contractVersion)).toEqual([2, 3, 4]);
-    const current = publish.find((operation) => operation.contractVersion === 4);
+    expect(publish.map((operation) => operation.contractVersion)).toEqual([2, 3, 4, 5]);
+    const current = publish.find((operation) => operation.contractVersion === 5);
     expect(current).toMatchObject({
-      contractVersion: 4,
+      contractVersion: 5,
       risk: "R3",
       state: "observed",
       dispatch: "single",
@@ -73,6 +73,10 @@ describe("X web provider plugin", () => {
     expect(current?.input.properties.media).toMatchObject({
       mediaTypes: ["image/png", "video/mp4"],
     });
+    expect(current?.input.properties.body).toMatchObject({
+      minLength: 1,
+      maxLength: 25_000,
+    });
     expect(binding.reconcile).toBeFunction();
   });
 
@@ -81,6 +85,7 @@ describe("X web provider plugin", () => {
       operation.name === "posts.publish");
     const archivedV2 = publish.find((operation) => operation.contractVersion === 2);
     const archivedV3 = publish.find((operation) => operation.contractVersion === 3);
+    const archivedV4 = publish.find((operation) => operation.contractVersion === 4);
     expect(archivedV2).toMatchObject({
       contractVersion: 2,
       risk: "R3",
@@ -105,7 +110,46 @@ describe("X web provider plugin", () => {
     expect(archivedV3?.input.properties.media).toMatchObject({
       mediaTypes: ["image/png"],
     });
+    expect(archivedV4).toMatchObject({
+      contractVersion: 4,
+      risk: "R3",
+      state: "observed",
+      dispatch: "single",
+      reconciliation: {
+        kind: "provider-accepted-target-presence",
+      },
+    });
+    expect(archivedV4?.input.properties.body).toMatchObject({
+      minLength: 1,
+      maxLength: 280,
+    });
+    expect(archivedV4?.input.properties.media).toMatchObject({
+      mediaTypes: ["image/png", "video/mp4"],
+    });
     expect(archivedV2?.historicalContractVersions).toBeUndefined();
     expect(archivedV3?.historicalContractVersions).toBeUndefined();
+    expect(archivedV4?.historicalContractVersions).toBeUndefined();
+  });
+
+  test("keeps thread items and replies on the short-item 280 bound", () => {
+    const threads = binding.operations.find((operation) =>
+      operation.name === "threads.publish");
+    const replies = binding.operations.find((operation) =>
+      operation.name === "replies.create");
+    expect(threads).toMatchObject({
+      contractVersion: 1,
+      state: "capture-required",
+    });
+    expect(threads?.input.properties.items).toMatchObject({
+      items: { minLength: 1, maxLength: 280 },
+    });
+    expect(replies).toMatchObject({
+      contractVersion: 1,
+      state: "capture-required",
+    });
+    expect(replies?.input.properties.body).toMatchObject({
+      minLength: 1,
+      maxLength: 280,
+    });
   });
 });

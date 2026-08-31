@@ -639,14 +639,14 @@ const x = {
   "articles.read": contract("x", "articles.read", "R1", "observed", "current-viewer-owned private Draft read through the exact ArticleEntityResultByRestId query with bounded title and rich-content projection; published Articles remain outside this contract", 2),
   "articles.draft.save": contract("x", "articles.draft.save", "R2", "observed", "current bounded media INIT/APPEND/FINALIZE plus Article entity create/title/content mutations save one response-bound private rich-text-and-image draft and never call ArticleEntityPublish", 2),
   "messaging.send": contract("x", "messaging.send", "R3", "capture-required", "DM send requires exact current mutation and target binding"),
-  "posts.publish": contract("x", "posts.publish", "R3", "observed", "current optional single-PNG or MP4 upload with pixels-only provenance scrub, strict CreateTweet response, durable accepted-target evidence, and fail-closed TweetResultByRestId readback for Made with AI labels", 4),
+  "posts.publish": contract("x", "posts.publish", "R3", "observed", "current optional single-PNG or MP4 upload with pixels-only provenance scrub, CreateTweet tweet_text up to the reviewed 25000-unit long-post bound, strict CreateTweet response including note_tweet, durable accepted-target evidence, and fail-closed TweetResultByRestId readback for Made with AI labels", 5),
   "threads.publish": contract("x", "threads.publish", "R3", "capture-required", "ordered CreateTweet root/self-reply dispatch needs an authorized live fixture and reviewed transaction-header behavior"),
   "replies.create": contract("x", "replies.create", "R3", "capture-required", "CreateTweet reply needs an authorized live fixture and reviewed transaction-header behavior"),
   "posts.repost": contract("x", "posts.repost", "R3", "capture-required", "repost desired-state mutation needs an authorized live fixture and reviewed transaction-header behavior"),
-  "posts.quote": contract("x", "posts.quote", "R3", "capture-required", "CreateTweet quote needs an authorized live fixture and reviewed transaction-header behavior"),
+  "posts.quote": contract("x", "posts.quote", "R3", "capture-required", "CreateTweet quote needs an authorized live fixture and reviewed transaction-header behavior; quote text uses the same reviewed 25000-unit CreateTweet bound as posts.publish", 2),
   "likes.set": contract("x", "likes.set", "R2", "observed", "current FavoriteTweet/UnfavoriteTweet desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback", 2),
   "content.save": contract("x", "content.save", "R2", "observed", "current CreateBookmark/DeleteBookmark desired-state mutations with ephemeral transaction header and independent TweetResultByRestId readback"),
-  "content.delete": contract("x", "content.delete", "R3", "capture-required", "current DeleteTweet request, accepted response, author binding, and exact not-found readback require an authorized live fixture"),
+  "content.delete": contract("x", "content.delete", "R3", "capture-required", "current DeleteTweet request, accepted response, author binding, and exact not-found readback require an authorized live fixture; expected_text uses the same reviewed 25000-unit CreateTweet bound as posts.publish", 2),
   "articles.publish": contract("x", "articles.publish", "R3", "capture-required", "ArticleEntityPublish and public readback remain outside the private draft contract", 4),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 

@@ -652,7 +652,9 @@ export const socialPlatformCatalog = {
         attachments: attachments(4, ["image", "video", "gif", "link"], "Up to four images, or one GIF/video; adapters must enforce the media-kind union"),
       },
       post: {
-        text: [field("body", 280, "x-conservative-weighted", false)],
+        // Reviewed CreateTweet tweet_text bound. Do not keep a leftover 280 here;
+        // thread-split still uses min(post, reply) so reply stays the short-item bound.
+        text: [field("body", 25_000, "x-conservative-weighted", false)],
         attachments: attachments(4, ["image", "video", "gif", "link"], "Up to four images, or one GIF/video; adapters must enforce the media-kind union"),
       },
       article: {
