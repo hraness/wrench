@@ -379,7 +379,8 @@ deleted, or repurposed. Its no-bypass creation, deletion, and non-fast-forward
 rules and its App-only update rule must exactly mirror the production layers. A
 separately reviewed temporary workflow loaded from exact current `main` may run
 the bounded proof, but it must be removed after its exact run, ref, ruleset,
-rule-suite, token-revocation, and ordinary-actor denial evidence is retained.
+rule-suite, token-revocation, and administrator configuration evidence is
+retained.
 The production helper remains hard-bound to `website-production` and must not be
 made caller-selectable for the canary. The release remains unready for
 production activation or final product merge until that proof passes. If GitHub
@@ -388,6 +389,113 @@ exact failure evidence and keep production frozen. A separate reviewed source
 and App-registration change may then add exactly `workflows:write`, after which
 the complete canary must run again. Never broaden the App silently or during a
 failed canary.
+
+The temporary **Prove release App canary** workflow is the single-use exception
+to the production writer boundary. It has no inputs and accepts only a first
+attempt `workflow_dispatch` by `0thernet` (`actor_id=894119`) from exact protected
+current `main` in Wrench repository ID `1316443113`. Its fixed coordinate has
+three consecutive commits. `P` is exact merged commit
+`6d9096b0fabbc03ede0741ec4931fbe19127440c`, which retires the expired canary
+source while retaining the Vercel exclusion for `website-production-canary`.
+`C` is exact merged commit
+`0bf88a064233635e0c5485c61f9c533974a7dca4`, the direct child of `P` whose
+exact one-file delta changes only `.github/workflows/website-production.yml`;
+and `D` is the direct-child four-file temporary canary source. The topology
+check rejects any nonconsecutive edge rather than accepting a candidate source
+commit or an intervening merge.
+The helper requires the same byte-identical Vercel exclusion at `P`, `C`, and
+`D`. The checked source binds `P` and `C` to those immutable merge SHAs
+separately from two retained 40-hex sentinel fixtures. The parser proves the
+exact fixed coordinate is accepted while either unresolved sentinel always
+fails before any GitHub read or mutation. The repository workflow
+history must contain exactly this one active first-attempt dispatch and no prior
+or concurrent run of the temporary workflow. That durable one-shot admission is
+rechecked immediately before and after the write; a fresh dispatch is not a
+second permissible attempt merely because GitHub numbers it attempt 1.
+
+A read-only preflight binds `D` to the workflow context, checkout, current
+default-branch ref, protected ref, maintainer identity, run ID, repository, exact
+`P` canary ref, unchanged production ref, and the same four applicable rules on
+production and canary. Those four rules must resolve to one repository-owned
+lifecycle ruleset containing only creation, deletion, and non-fast-forward, and
+one repository-owned update ruleset containing only an update restriction with
+fetch-and-merge disabled. GitHub may return the three lifecycle rules in any
+order; the parser requires their exact unordered set, exact count, exact types,
+and exact rule shapes. GitHub may omit `parameters` from the update rule when
+`update_allows_fetch_and_merge` has its false default. The parser treats only
+that omission or the exact explicit false object as the disabled state; true,
+extra keys, and malformed parameter values fail. The environment job repeats
+the complete readback and requires the ruleset IDs and canonical UTC ruleset
+timestamp fingerprints to
+equal the privileged values stored in `production-ref-writer-key`. Ruleset
+`created_at` and `updated_at` values may use `Z` or an RFC3339 numeric offset and
+zero to three fractional digits. The dedicated ruleset parser validates the real
+local date and offset, converts the instant to UTC, emits whole seconds as
+`YYYY-MM-DDTHH:mm:ssZ`, and otherwise emits exactly three millisecond digits.
+Store that exact canonical `updated_at` output in each environment variable,
+not the raw offset spelling returned by one API version. The shared authenticated
+HTTP Date parser emits exact zero-millisecond UTC (`.000Z`); the canary boundary
+removes only that zero-millisecond spelling before applying its existing
+whole-second parser. Receipt, App-token-expiry, and other timestamp parsers
+remain unchanged and stricter.
+Read-only GitHub responses cannot prove bypass actors; the separately captured
+administrator JSON must bind the lifecycle ruleset to no bypass and the update
+ruleset to the one exact release App Integration with `always`, never `exempt`.
+
+Only the second job enters
+`environment: { name: production-ref-writer-key, deployment: false }`. It reuses
+the production App identity, selected-installation, one-repository token,
+masking, and revocation helper, but uses a separate temporary writer that is
+hard-bound to `refs/heads/website-production-canary`. The writer performs one
+complete main, production, canary, and ruleset readback after minting the token,
+then performs one successful explicit
+`--force-with-lease=refs/heads/website-production-canary:P` fast-forward from
+`P` to `C`, then proves that a distinct `P` to `D` write is rejected by the stale
+`P` lease. It never has a
+mutation endpoint or refspec for `main` or `website-production`. After the token
+is revoked, one bounded token-authenticated repository read must return 401.
+Read-only terminal checks require `main=D`, production unchanged, canary `C`,
+both rulesets unchanged, and non-regressing authenticated GitHub server dates.
+
+The workflow emits one secret-free bounded evidence record containing the run,
+actor, repository, `P`, `C`, `D`, production ref, App identity, ruleset IDs,
+node IDs and timestamps, authenticated before/write-bound/after times, and
+digests of the successful and stale-lease Git results. The secret-bearing proof
+step passes that record only as a canonical base64url step output. A following
+step receives no App key, token, preflight receipt, or App configuration. It
+decodes and revalidates the exact schema, run, repository, actor, and `P`/`C`/`D`
+coordinate, then writes the single
+`WRENCH_RELEASE_APP_CANARY_EVIDENCE_V1=` marker to the job summary and the
+downloadable Actions job log. The output alone is not retained evidence because
+the Actions API does not expose step or job outputs after the run.
+
+Before cleanup, capture the `prove` job ID and retrieve its downloaded Actions
+job log. Feed that one bounded log to the checked parser:
+
+```sh
+gh api /repos/hraness/wrench/actions/jobs/<prove-job-id>/logs \
+  | node scripts/release-app-canary.mjs parse-evidence-log
+```
+
+The parser accepts at most 4 MiB, requires exactly one marker (with only an
+optional GitHub timestamp prefix), decodes at most 16 KiB, rejects noncanonical
+JSON or any extra field, and prints one canonical JSON record. Retain that JSON,
+its SHA-256, the original downloaded log, and the run/job IDs outside the
+temporary branch before merging cleanup. A missing, duplicate, malformed, or
+unparseable marker invalidates the proof and must never be reconstructed from a
+human transcription or from the inaccessible workflow output. An administrator
+must bind that record to the unique repository Rule Suite for the `P` to `C`
+transition, exact
+github-actions workflow run, release App actor, update-rule bypass, passing
+destructive rules, and pushed-at interval. Any error, transport ambiguity,
+unexpected ref state, missing Rule Suite, or post-read mismatch makes the proof
+unusable. Never rerun that workflow or reset the persistent canary. A failed
+attempt can continue only through a newly reviewed consecutive coordinate and
+new probe ref. After successful evidence capture, a separate checked cleanup PR
+must reverse all four temporary path changes: delete this workflow and helper,
+remove this temporary documentation block, and remove the temporary canary tests
+and imports from the shared workflow test. Retain the `C` canary ref, its mirrored
+rulesets, the Vercel exclusion, and the external evidence permanently.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private
