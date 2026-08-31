@@ -702,6 +702,170 @@ describe("web-session cleanup admission", () => {
     });
   });
 
+  test("binds preserved prepared roots when initial publication cannot be reconciled", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      const prepared: BrowserCleanupResourceIdentityV2 = Object.freeze({
+        ...fixture.resource,
+        phase: "prepared",
+        control: null,
+      });
+      try {
+        const admission = acquireWebSessionCleanupAdmission(
+          identity(),
+          environment,
+        );
+        let rejectCleanup: ((reason: unknown) => void) | undefined;
+        const cleanup = new Promise<void>((_resolve, reject) => {
+          rejectCleanup = reject;
+        });
+        admission.registerCleanupBarrier(cleanup);
+        admission.closeRegistration();
+        rejectCleanup?.(new PreservedBrowserArtifactsError(
+          "initial publication was ambiguous",
+          prepared.recoveryHandle,
+          new Error("synthetic pre-commit publication failure"),
+          {
+            kind: "agent-browser-closed-artifacts-v1",
+            resource: prepared,
+          },
+        ));
+        await Promise.allSettled(admission.barriers);
+        admission.cleanupUnsafe();
+
+        expect(admission.current.claim.resources).toMatchObject([{
+          status: "browser-closed-artifacts",
+          identity: prepared,
+        }]);
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("adopts an exact cleanup-resource publication after a post-commit throw", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      let injected = 0;
+      try {
+        const admission = acquireWebSessionCleanupAdmission(
+          identity(),
+          environment,
+          new Date(),
+          {
+            afterResourceStateCommitForTest: () => {
+              if (injected > 0) return;
+              injected += 1;
+              throw new Error("simulated post-commit publication failure");
+            },
+          },
+        );
+        let resolveCleanup: (() => void) | undefined;
+        const cleanup = new Promise<void>((resolve) => {
+          resolveCleanup = resolve;
+        });
+        const publish = admission.registerCleanupBarrier(cleanup);
+        if (typeof publish !== "function") {
+          throw new Error("cleanup admission omitted its resource publisher");
+        }
+
+        expect(() => publish(fixture.resource)).not.toThrow();
+        expect(injected).toBe(1);
+        expect(admission.current.claim.resources).toMatchObject([{
+          status: "active",
+          identity: fixture.resource,
+        }]);
+
+        admission.closeRegistration();
+        resolveCleanup?.();
+        await Promise.allSettled(admission.barriers);
+        admission.cleanupComplete();
+        admission.release();
+        expect(listWebSessionCleanupAdmissions(environment)).toEqual([]);
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("durably journals ordinary browser cleanup in exact root order", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      try {
+        const admission = acquireWebSessionCleanupAdmission(
+          identity(),
+          environment,
+        );
+        let resolveCleanup: (() => void) | undefined;
+        const cleanup = new Promise<void>((resolve) => {
+          resolveCleanup = resolve;
+        });
+        const publish = admission.registerCleanupBarrier(cleanup);
+        if (typeof publish !== "function") {
+          throw new Error("cleanup admission omitted its resource publisher");
+        }
+        const journal = publish as typeof publish & {
+          readonly markBrowserCleanupQuiescent: (
+            resource: BrowserCleanupResourceIdentityV2,
+          ) => void;
+          readonly markBrowserCleanupRootRemoved: (
+            resource: BrowserCleanupResourceIdentityV2,
+            root: "artifacts" | "socket",
+          ) => void;
+        };
+
+        publish(fixture.resource);
+        expect(() => journal.markBrowserCleanupQuiescent(Object.freeze({
+          ...fixture.resource,
+          phase: "prepared",
+          control: null,
+        }))).toThrow("changed resource identity");
+        journal.markBrowserCleanupQuiescent(fixture.resource);
+        expect(admission.current.claim.resources).toMatchObject([{
+          status: "browser-quiescent-artifacts",
+          removedRoots: [],
+        }]);
+        expect(() => journal.markBrowserCleanupRootRemoved(
+          fixture.resource,
+          "artifacts",
+        )).toThrow("not exact");
+
+        rmSync(fixture.artifactsDirectory, { recursive: true });
+        journal.markBrowserCleanupRootRemoved(
+          fixture.resource,
+          "artifacts",
+        );
+        expect(admission.current.claim.resources).toMatchObject([{
+          status: "browser-quiescent-artifacts",
+          removedRoots: ["artifacts"],
+        }]);
+        expect(() => journal.markBrowserCleanupRootRemoved(
+          fixture.resource,
+          "socket",
+        )).toThrow("not exact");
+
+        rmSync(fixture.socketDirectory, { recursive: true });
+        journal.markBrowserCleanupRootRemoved(fixture.resource, "socket");
+        expect(admission.current.claim.resources).toMatchObject([{
+          status: "browser-quiescent-artifacts",
+          removedRoots: ["artifacts", "socket"],
+        }]);
+
+        admission.closeRegistration();
+        resolveCleanup?.();
+        await Promise.allSettled(admission.barriers);
+        admission.cleanupComplete();
+        admission.release();
+        expect(listWebSessionCleanupAdmissions(environment)).toEqual([]);
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("persists only monotonic browser pins and finalizes against the latest pin", async () => {
     await withState(async (environment) => {
       const fixture = pinnedBrowserCleanupResourceFixture();
@@ -1136,6 +1300,54 @@ describe("web-session cleanup admission", () => {
         expect(existsSync(fixture.artifactsDirectory)).toBeFalse();
         expect(sessionReads).toBe(2);
         expect(endpointRefusals).toBe(6);
+        expect(listWebSessionCleanupAdmissions(environment)).toEqual([]);
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("resumes after socket deletion precedes its final journal CAS", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      try {
+        const current = currentProcessStartIdentity();
+        writeAdmissionFixture(
+          environment,
+          { status: "cleanup-unsafe" },
+          { processStartId: differentDigest(current.processStartId) },
+          [{
+            resourceId: randomUUID(),
+            status: "browser-quiescent-artifacts",
+            identity: fixture.resource,
+            removedRoots: ["artifacts"],
+          }],
+          {},
+          2,
+        );
+        rmSync(fixture.artifactsDirectory, { recursive: true });
+        rmSync(fixture.socketDirectory, { recursive: true });
+
+        const report = await recoverWebSessionCleanupAdmissionsCore(
+          environment,
+          {
+            currentBootId: current.bootId,
+            inspectOwner: () => "different-or-dead",
+            browserLifecycle: {
+              runCommand: () => {
+                throw new Error("final journal recovery repeated browser effects");
+              },
+            },
+          },
+        );
+
+        expect(report).toMatchObject({
+          scanned: 1,
+          repaired: 1,
+          retained: 0,
+          issues: [],
+        });
         expect(listWebSessionCleanupAdmissions(environment)).toEqual([]);
       } finally {
         rmSync(fixture.socketDirectory, { recursive: true, force: true });

@@ -555,11 +555,15 @@ describe("browser process isolation helpers", () => {
 
   test("publishes a birth-bound root before launch and monotonically pins its live browser", async () => {
     const events: string[] = [];
-    const published: Parameters<
+    type PublishedCleanupResource = Parameters<
       NonNullable<
         Parameters<typeof createBrowserSession>[2]["publishCleanupResource"]
       >
-    >[0][] = [];
+    >[0];
+    const published: PublishedCleanupResource[] = [];
+    const cleanupEvents: string[] = [];
+    let browserClosed = false;
+    let daemonLive = true;
     const launchHash = "18446744073709551615";
     const exactLaunchHashJson = (value: unknown): string =>
       JSON.stringify(value).replaceAll(
@@ -582,6 +586,31 @@ describe("browser process isolation helpers", () => {
     const activeSessionInfo = () => {
       const resource = published[0];
       if (resource === undefined) throw new Error("missing published root identity");
+      if (browserClosed && !daemonLive) {
+        return {
+          success: true,
+          data: {
+            active: false,
+            namespace: null,
+            pid: null,
+            runtime: null,
+            runtimeError: null,
+            session: resource.session,
+            socketDir: resource.socketDirectory,
+            version: null,
+          },
+        };
+      }
+      const currentLifecycle = browserClosed
+        ? {
+            ...lifecycle,
+            effectiveLaunch: {
+              browserLaunched: false,
+              engine: "chrome",
+              launchHash: null,
+            },
+          } as const
+        : lifecycle;
       return {
         success: true,
         data: {
@@ -590,14 +619,15 @@ describe("browser process isolation helpers", () => {
           pid: process.pid,
           runtime: {
             backgroundPid: process.pid,
-            browserLaunched: true,
+            browserLaunched:
+              currentLifecycle.effectiveLaunch.browserLaunched,
             compatibilityStatus: "current",
-            effectiveLaunch: lifecycle.effectiveLaunch,
+            effectiveLaunch: currentLifecycle.effectiveLaunch,
             engine: "chrome",
-            launchHash,
-            lifecycle,
+            launchHash: currentLifecycle.effectiveLaunch.launchHash,
+            lifecycle: currentLifecycle,
             namespace: null,
-            pageCount: 1,
+            pageCount: browserClosed ? 0 : 1,
             restoreCheckFn: null,
             restoreCheckText: null,
             restoreCheckUrl: null,
@@ -623,42 +653,69 @@ describe("browser process isolation helpers", () => {
       headed: false,
       timeoutMs: 1_000,
       maxOutputBytes: 64 * 1024,
-      publishCleanupResource: (resource) => {
-        if (published.length === 0) {
-          expect(events).toEqual([]);
-          expect(resource).toMatchObject({ phase: "prepared", control: null });
-          events.push("published-prepared");
-        } else {
-          expect(browserCleanupResourceExtends(
-            published[published.length - 1]!,
-            resource,
-          )).toBeTrue();
-          events.push(`published-${resource.kind === "agent-browser-session-v2"
-            ? resource.phase
-            : "legacy"}`);
-        }
-        published.push(resource);
-        const socket = lstatSync(resource.socketDirectory, {
-          bigint: true,
-        });
-        const artifacts = lstatSync(resource.artifactsDirectory, {
-          bigint: true,
-        });
-        expect(resource.socketDirectoryIdentity).toEqual({
-          device: socket.dev.toString(),
-          inode: socket.ino.toString(),
-          birthtimeNs: socket.birthtimeNs.toString(),
-          mode: "448",
-          uid: socket.uid.toString(),
-        });
-        expect(resource.artifactsDirectoryIdentity).toEqual({
-          device: artifacts.dev.toString(),
-          inode: artifacts.ino.toString(),
-          birthtimeNs: artifacts.birthtimeNs.toString(),
-          mode: "448",
-          uid: artifacts.uid.toString(),
-        });
-      },
+      publishCleanupResource: Object.assign(
+        (resource: PublishedCleanupResource) => {
+          if (published.length === 0) {
+            expect(events).toEqual([]);
+            expect(resource).toMatchObject({ phase: "prepared", control: null });
+            events.push("published-prepared");
+          } else {
+            expect(browserCleanupResourceExtends(
+              published[published.length - 1]!,
+              resource,
+            )).toBeTrue();
+            events.push(`published-${resource.kind === "agent-browser-session-v2"
+              ? resource.phase
+              : "legacy"}`);
+          }
+          published.push(resource);
+          const socket = lstatSync(resource.socketDirectory, {
+            bigint: true,
+          });
+          const artifacts = lstatSync(resource.artifactsDirectory, {
+            bigint: true,
+          });
+          expect(resource.socketDirectoryIdentity).toEqual({
+            device: socket.dev.toString(),
+            inode: socket.ino.toString(),
+            birthtimeNs: socket.birthtimeNs.toString(),
+            mode: "448",
+            uid: socket.uid.toString(),
+          });
+          expect(resource.artifactsDirectoryIdentity).toEqual({
+            device: artifacts.dev.toString(),
+            inode: artifacts.ino.toString(),
+            birthtimeNs: artifacts.birthtimeNs.toString(),
+            mode: "448",
+            uid: artifacts.uid.toString(),
+          });
+        },
+        {
+          markBrowserCleanupQuiescent: (
+            resource: PublishedCleanupResource,
+          ): void => {
+            if (resource.kind !== "agent-browser-session-v2") {
+              throw new Error("expected a v2 cleanup journal resource");
+            }
+            expect(browserCleanupResourceRootStatus(resource, "artifacts"))
+              .toBe("match");
+            expect(browserCleanupResourceRootStatus(resource, "socket"))
+              .toBe("match");
+            cleanupEvents.push("journal-quiescent");
+          },
+          markBrowserCleanupRootRemoved: (
+            resource: PublishedCleanupResource,
+            root: "artifacts" | "socket",
+          ): void => {
+            if (resource.kind !== "agent-browser-session-v2") {
+              throw new Error("expected a v2 cleanup journal resource");
+            }
+            expect(browserCleanupResourceRootStatus(resource, root))
+              .toBe("absent");
+            cleanupEvents.push(`journal-${root}`);
+          },
+        },
+      ),
       dependencies: {
         startNetworkProxy: () => {
           expect(events).toEqual(["published-prepared"]);
@@ -708,11 +765,45 @@ describe("browser process isolation helpers", () => {
               exitCode: 0,
             });
           }
+          if (command.includes("close")) browserClosed = true;
           return Promise.resolve({
             stdout: "{\"success\":true}\n",
             stderr: "",
             exitCode: 0,
           });
+        },
+        cleanupLifecycle: {
+          ownerStatus: () => daemonLive
+            ? "exact-live-owner"
+            : "different-or-dead",
+          terminateOwner: () => {
+            cleanupEvents.push("terminate-daemon");
+            daemonLive = false;
+          },
+          cdpEndpointStatus: () => {
+            const latest = published[published.length - 1];
+            if (
+              latest?.kind === "agent-browser-session-v2"
+              && browserCleanupResourceRootStatus(latest, "artifacts")
+                === "absent"
+            ) cleanupEvents.push("deletion-reproof");
+            return Promise.resolve("unavailable");
+          },
+          sleep: () => Promise.resolve(),
+        },
+        removePrivateArtifact: (path) => {
+          const latest = published[published.length - 1];
+          if (latest === undefined) throw new Error("missing cleanup identity");
+          if (path === latest.artifactsDirectory) {
+            cleanupEvents.push("remove-artifacts");
+            rmSync(path, { recursive: true });
+            return;
+          }
+          if (path === latest.socketDirectory) {
+            cleanupEvents.push("remove-socket");
+            throw new Error("simulated socket removal failure");
+          }
+          throw new Error("unexpected cleanup root");
         },
         acquireCookieRecords: () =>
           Promise.resolve({ cookies: [], warnings: [] }),
@@ -728,6 +819,9 @@ describe("browser process isolation helpers", () => {
         || latest === undefined
       ) {
         throw new Error("browser cleanup resource extensions were not published");
+      }
+      if (latest.kind !== "agent-browser-session-v2") {
+        throw new Error("latest browser cleanup resource is not v2");
       }
       expect(parseBrowserRecoveryHandle(
         latest.recoveryHandle,
@@ -764,7 +858,22 @@ describe("browser process isolation helpers", () => {
       expect(browserCleanupResourceExtends(latest, initial)).toBeFalse();
       expect(session.cleanupResourceIdentity).toEqual(latest);
       await session.close();
-      await session.cleanup();
+      expect(await rejectionMessage(session.cleanup())).toContain(
+        "did not remove every private resource",
+      );
+      const quiescentIndex = cleanupEvents.indexOf("journal-quiescent");
+      const artifactRemovalIndex = cleanupEvents.indexOf("remove-artifacts");
+      const artifactJournalIndex = cleanupEvents.indexOf("journal-artifacts");
+      const reproofIndex = cleanupEvents.indexOf("deletion-reproof");
+      const socketRemovalIndex = cleanupEvents.indexOf("remove-socket");
+      expect(quiescentIndex).toBeGreaterThanOrEqual(0);
+      expect(artifactRemovalIndex).toBeGreaterThan(quiescentIndex);
+      expect(artifactJournalIndex).toBeGreaterThan(artifactRemovalIndex);
+      expect(reproofIndex).toBeGreaterThan(artifactJournalIndex);
+      expect(socketRemovalIndex).toBeGreaterThan(reproofIndex);
+      expect(cleanupEvents).not.toContain("journal-socket");
+      expect(browserCleanupResourceRootStatus(latest, "artifacts")).toBe("absent");
+      expect(browserCleanupResourceRootStatus(latest, "socket")).toBe("match");
     } finally {
       if (session.cleanupResourceIdentity !== undefined) {
         rmSync(session.cleanupResourceIdentity.socketDirectory, {
@@ -812,6 +921,41 @@ describe("browser process isolation helpers", () => {
     } finally {
       rmSync(prepared.socketDirectory, { recursive: true, force: true });
       rmSync(prepared.artifactsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves exact roots when cleanup publication may have committed before throwing", async () => {
+    let attempted: BrowserCleanupResourceIdentityV2 | null = null;
+    const removalAttempts: string[] = [];
+    const error = await rejectionValue(createBrowserSession(manifest, auth, {
+      headed: false,
+      timeoutMs: 1_000,
+      maxOutputBytes: 64 * 1024,
+      publishCleanupResource: (resource) => {
+        if (resource.kind !== "agent-browser-session-v2") {
+          throw new Error("expected a v2 cleanup resource");
+        }
+        attempted = resource;
+        throw new Error("simulated failure after durable publication");
+      },
+      dependencies: {
+        removePrivateArtifact: (path) => {
+          removalAttempts.push(path);
+          rmSync(path, { recursive: true, force: true });
+        },
+      },
+    }));
+
+    expect(error).toBeInstanceOf(PreservedBrowserArtifactsError);
+    expect(removalAttempts).toEqual([]);
+    const resource = attempted;
+    if (resource === null) throw new Error("cleanup publication was not attempted");
+    try {
+      expect(browserCleanupResourceRootStatus(resource, "artifacts")).toBe("match");
+      expect(browserCleanupResourceRootStatus(resource, "socket")).toBe("match");
+    } finally {
+      rmSync(resource.artifactsDirectory, { recursive: true, force: true });
+      rmSync(resource.socketDirectory, { recursive: true, force: true });
     }
   });
 

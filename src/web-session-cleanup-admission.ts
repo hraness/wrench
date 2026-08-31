@@ -883,6 +883,42 @@ function replaceClaim(
   return next;
 }
 
+/**
+ * A state-file CAS may commit and then report failure. Re-read the exact
+ * desired snapshot before propagating the error so callers never mistake a
+ * durable publication for an unpublished resource.
+ */
+function replaceClaimOrAdoptCommitted(
+  current: WebSessionCleanupAdmissionSnapshot,
+  claim: WebSessionCleanupAdmissionClaim,
+  environment: Environment,
+  afterCommitForTest?: () => void,
+): WebSessionCleanupAdmissionSnapshot {
+  const desired = claimSnapshot(claim);
+  try {
+    const committed = replaceClaim(current, desired.claim, environment);
+    afterCommitForTest?.();
+    return committed;
+  } catch (error) {
+    let observed: WebSessionCleanupAdmissionSnapshot | null;
+    try {
+      observed = readWebSessionCleanupAdmission(
+        desired.claim.realmKey,
+        environment,
+      );
+    } catch (reconciliationError) {
+      throw new AggregateError(
+        [error, reconciliationError],
+        "web-session cleanup publication could not be reconciled",
+      );
+    }
+    if (observed?.contentSha256 === desired.contentSha256) {
+      return observed;
+    }
+    throw error;
+  }
+}
+
 function replaceContainment(
   current: WebSessionCleanupAdmissionSnapshot,
   containment: WebSessionCleanupAdmissionContainment,
@@ -915,31 +951,49 @@ type TrackedCleanupBarrier = {
   reason?: unknown;
 };
 
+type WebSessionCleanupAdmissionControllerDependencies = {
+  /** Test-only seam that throws after one resource-state CAS commits. */
+  readonly afterResourceStateCommitForTest?: () => void;
+};
+
 function recoverableBrowserResource(
   reason: unknown,
   resource: WebSessionCleanupAdmissionResource,
 ): WebSessionCleanupAdmissionResource | null {
   if (
-    resource.status !== "active"
-    || resource.identity.kind === "local-cli-private-root-v1"
-    || !(reason instanceof PreservedBrowserArtifactsError)
+    !(reason instanceof PreservedBrowserArtifactsError)
     || reason.cleanupEvidence?.kind
       !== "agent-browser-closed-artifacts-v1"
-    || canonicalJson(reason.cleanupEvidence.resource)
-      !== canonicalJson(resource.identity)
   ) {
     return null;
   }
+  let identity: BrowserCleanupResourceIdentity;
+  try {
+    identity = parseBrowserCleanupResourceIdentity(
+      reason.cleanupEvidence.resource,
+    );
+  } catch {
+    return null;
+  }
+  if (
+    resource.status !== "unpublished"
+    && (
+      resource.status !== "active"
+      || resource.identity.kind === "local-cli-private-root-v1"
+      || canonicalJson(identity) !== canonicalJson(resource.identity)
+    )
+  ) return null;
   return Object.freeze({
     resourceId: resource.resourceId,
     status: "browser-closed-artifacts",
-    identity: resource.identity,
+    identity,
   });
 }
 
 function controller(
   initial: WebSessionCleanupAdmissionSnapshot,
   environment: Environment,
+  dependencies: WebSessionCleanupAdmissionControllerDependencies = {},
 ): WebSessionCleanupAdmissionController {
   let current = claimSnapshot(initial.claim);
   if (current.contentSha256 !== initial.contentSha256) {
@@ -1009,7 +1063,9 @@ function controller(
       );
       void tracked.promise.catch(() => undefined);
       barriers.push(tracked);
-      return (resourceValue) => {
+      const publishResource = (
+        resourceValue: ProviderPluginCleanupResourceIdentity,
+      ): void => {
         const resourceIdentity =
           parseCleanupResourceIdentity(resourceValue);
         const resources = current.claim.resources.map((resource) => {
@@ -1062,15 +1118,95 @@ function controller(
             "web-session cleanup resource identity changed after publication",
           );
         });
-        current = replaceClaim(
+        current = replaceClaimOrAdoptCommitted(
           current,
           Object.freeze({
             ...current.claim,
             resources: Object.freeze(resources),
           }),
           environment,
+          dependencies.afterResourceStateCommitForTest,
         );
       };
+      const exactPublishedBrowserIdentity = (
+        resourceValue: BrowserCleanupResourceIdentity,
+        status: "active" | "browser-quiescent-artifacts",
+      ): BrowserCleanupResourceIdentityV2 => {
+        const identity = parseBrowserCleanupResourceIdentity(resourceValue);
+        const selected = current.claim.resources.find((resource) =>
+          resource.resourceId === resourceId
+        );
+        if (
+          identity.kind !== "agent-browser-session-v2"
+          || selected?.status !== status
+          || canonicalJson(selected.identity) !== canonicalJson(identity)
+        ) {
+          throw new Error(
+            "web-session cleanup browser journal changed resource identity",
+          );
+        }
+        return identity;
+      };
+      return Object.assign(publishResource, {
+        markBrowserCleanupQuiescent: (
+          resourceValue: BrowserCleanupResourceIdentity,
+        ): void => {
+          const identity = exactPublishedBrowserIdentity(
+            resourceValue,
+            "active",
+          );
+          if (
+            browserCleanupResourceRootStatus(identity, "artifacts") !== "match"
+            || browserCleanupResourceRootStatus(identity, "socket") !== "match"
+          ) {
+            throw new Error(
+              "web-session cleanup browser roots changed before quiescence",
+            );
+          }
+          current = replaceBrowserResource(
+            current,
+            resourceId,
+            identity,
+            "browser-quiescent-artifacts",
+            environment,
+            dependencies.afterResourceStateCommitForTest,
+          );
+        },
+        markBrowserCleanupRootRemoved: (
+          resourceValue: BrowserCleanupResourceIdentity,
+          root: BrowserCleanupRootName,
+        ): void => {
+          const identity = exactPublishedBrowserIdentity(
+            resourceValue,
+            "browser-quiescent-artifacts",
+          );
+          const selected = current.claim.resources.find((resource) =>
+            resource.resourceId === resourceId
+          );
+          const expectedRoot = selected?.status === "browser-quiescent-artifacts"
+            ? (["artifacts", "socket"] as const)[selected.removedRoots.length]
+            : undefined;
+          const companionRoot = root === "artifacts" ? "socket" : "artifacts";
+          const companionStatus = root === "artifacts" ? "match" : "absent";
+          if (
+            expectedRoot !== root
+            || browserCleanupResourceRootStatus(identity, root) !== "absent"
+            || browserCleanupResourceRootStatus(identity, companionRoot)
+              !== companionStatus
+          ) {
+            throw new Error(
+              "web-session cleanup browser root removal is not exact",
+            );
+          }
+          current = journalBrowserRootRemoved(
+            current,
+            resourceId,
+            root,
+            environment,
+            dependencies.afterResourceStateCommitForTest,
+          );
+        },
+      });
     },
     closeRegistration: () => {
       accepting = false;
@@ -1319,6 +1455,7 @@ function replaceBrowserResource(
     | "browser-closed-artifacts"
     | "browser-quiescent-artifacts",
   environment: Environment,
+  afterCommitForTest?: () => void,
 ): WebSessionCleanupAdmissionSnapshot {
   let found = false;
   const resources = current.claim.resources.map((resource) => {
@@ -1346,13 +1483,14 @@ function replaceBrowserResource(
   if (!found) {
     throw new Error("web-session cleanup browser recovery resource is absent");
   }
-  return replaceClaim(
+  return replaceClaimOrAdoptCommitted(
     current,
     parseWebSessionCleanupAdmissionClaim({
       ...current.claim,
       resources,
     }),
     environment,
+    afterCommitForTest,
   );
 }
 
@@ -1361,6 +1499,7 @@ function journalBrowserRootRemoved(
   resourceId: string,
   root: BrowserCleanupRootName,
   environment: Environment,
+  afterCommitForTest?: () => void,
 ): WebSessionCleanupAdmissionSnapshot {
   let found = false;
   const resources = current.claim.resources.map((resource) => {
@@ -1390,13 +1529,14 @@ function journalBrowserRootRemoved(
   if (!found) {
     throw new Error("web-session cleanup browser recovery resource is absent");
   }
-  return replaceClaim(
+  return replaceClaimOrAdoptCommitted(
     current,
     parseWebSessionCleanupAdmissionClaim({
       ...current.claim,
       resources,
     }),
     environment,
+    afterCommitForTest,
   );
 }
 
@@ -1827,6 +1967,7 @@ function cleanupAdmissionBlocked(error: unknown): WebSessionCleanupAdmissionBloc
 function acquireWebSessionCleanupAdmissionCore(
   claim: WebSessionCleanupAdmissionClaim,
   environment: Environment,
+  dependencies: WebSessionCleanupAdmissionControllerDependencies = {},
 ): WebSessionCleanupAdmissionController {
   const admissionDirectory = directory(environment);
   ensurePrivateStateDirectory(admissionDirectory, environment);
@@ -1927,7 +2068,9 @@ function acquireWebSessionCleanupAdmissionCore(
       }
       throw error;
     }
-    if (created.created) return controller(claimSnapshot(claim), environment);
+    if (created.created) {
+      return controller(claimSnapshot(claim), environment, dependencies);
+    }
   }
   throw new WebSessionCleanupAdmissionBlockedError(
     `${claim.transport === "local-cli" ? "local CLI" : "authenticated web"} auth realm ${claim.surfaceId}/${claim.authId} cleanup admission could not be acquired`,
@@ -1938,10 +2081,15 @@ export function acquireWebSessionCleanupAdmission(
   identity: WebSessionCleanupAdmissionIdentity,
   environment: Environment = process.env,
   acquiredAt = new Date(),
+  dependencies: WebSessionCleanupAdmissionControllerDependencies = {},
 ): WebSessionCleanupAdmissionController {
   const claim = createClaim(identity, acquiredAt);
   try {
-    return acquireWebSessionCleanupAdmissionCore(claim, environment);
+    return acquireWebSessionCleanupAdmissionCore(
+      claim,
+      environment,
+      dependencies,
+    );
   } catch (error) {
     throw cleanupAdmissionBlocked(error);
   }

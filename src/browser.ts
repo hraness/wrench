@@ -126,6 +126,8 @@ export type BrowserSessionDependencies = {
   readonly acquireCookieRecords: CookieRecordReader;
   /** Internal deterministic seam for independently removing owned private roots. */
   readonly removePrivateArtifact: BrowserPrivateArtifactRemover;
+  /** Internal seam for deterministic cleanup quiescence and deletion reproof. */
+  readonly cleanupLifecycle: AgentBrowserLifecycleDependencies;
 };
 
 /** Provider-neutral borrowed operation budget used by browser bootstraps. */
@@ -153,12 +155,23 @@ export type CreateBrowserSessionOptions = {
   readonly allowCodeOwnedNetworkObservation?: true;
   /**
    * Persists the exact private roots before a proxy or browser can launch.
-   * Throwing prevents resource activation and rolls the unpublished roots
-   * back.
+   * The durable registrar reconciles an ambiguous commit before returning.
+   * Any other throw is still treated as potentially committed, so Wrench
+   * preserves the roots instead of destroying recovery evidence.
    */
-  readonly publishCleanupResource?: (
+  readonly publishCleanupResource?: ((
     resource: BrowserCleanupResourceIdentity,
-  ) => void;
+  ) => void) & {
+    /** Durably records that the closed browser and its private roots are idle. */
+    readonly markBrowserCleanupQuiescent?: (
+      resource: BrowserCleanupResourceIdentity,
+    ) => void;
+    /** Journals one exact root only after its identity-bound removal succeeds. */
+    readonly markBrowserCleanupRootRemoved?: (
+      resource: BrowserCleanupResourceIdentity,
+      root: BrowserCleanupResourceRoot,
+    ) => void;
+  };
   readonly dependencies?: Partial<BrowserSessionDependencies>;
 };
 
@@ -2684,19 +2697,32 @@ export async function createBrowserSession(
   let selectedProfileDirectory: "Default" | null = null;
   let socketDirectory: string | null = null;
   let cleanupResourceIdentity: BrowserCleanupResourceIdentityV2 | null = null;
-  let cleanupResourcePublished = false;
+  let cleanupResourcePublication:
+    | "unpublished"
+    | "uncertain"
+    | "published" = "unpublished";
   const recoveryHandle = (): string => browserRecoveryHandle({
     session,
     configPath,
     socketDirectory,
     artifactsDirectory: directory,
   });
-  const failInitialization = (error: unknown): never => {
-    if (cleanupResourcePublished) {
+  const failInitialization = (
+    error: unknown,
+    cleanupEvidenceResource: BrowserCleanupResourceIdentity | null =
+      cleanupResourceIdentity,
+  ): never => {
+    if (cleanupResourcePublication !== "unpublished") {
       throw new PreservedBrowserArtifactsError(
-        "browser session initialization failed after its cleanup roots were durably published",
+        "browser session initialization failed after its cleanup roots may have been durably published",
         recoveryHandle(),
         error,
+        cleanupEvidenceResource === null
+          ? undefined
+          : Object.freeze({
+              kind: "agent-browser-closed-artifacts-v1" as const,
+              resource: cleanupEvidenceResource,
+            }),
       );
     }
     const cleanupFailures = removePrivateArtifacts(
@@ -2756,18 +2782,27 @@ export async function createBrowserSession(
   const initializedSocketDirectory = socketDirectory
     ?? failInitialization(new Error("browser socket directory was not initialized"));
   cleanupResourceIdentity = (() => {
+    let identity: BrowserCleanupResourceIdentityV2 | null = null;
     try {
-      const identity = browserCleanupResourceIdentity({
+      identity = browserCleanupResourceIdentity({
         recoveryHandle: recoveryHandle(),
         session,
         socketDirectory: initializedSocketDirectory,
         artifactsDirectory: directory,
       });
+      // A throwing publisher may have committed before reporting failure. The
+      // durable registrar normally reconciles that exact commit, but custom or
+      // interrupted publishers cannot disprove it. Preserve both roots.
+      cleanupResourcePublication = options.publishCleanupResource === undefined
+        ? "unpublished"
+        : "uncertain";
       options.publishCleanupResource?.(identity);
-      cleanupResourcePublished = options.publishCleanupResource !== undefined;
+      cleanupResourcePublication = options.publishCleanupResource === undefined
+        ? "unpublished"
+        : "published";
       return identity;
     } catch (error) {
-      return failInitialization(error);
+      return failInitialization(error, identity);
     }
   })();
   try {
@@ -2798,7 +2833,11 @@ export async function createBrowserSession(
     if (current === null || !browserCleanupResourceExtends(current, next)) {
       throw new Error("browser cleanup resource extension is not monotonic");
     }
-    options.publishCleanupResource?.(next);
+    if (options.publishCleanupResource !== undefined) {
+      cleanupResourcePublication = "uncertain";
+      options.publishCleanupResource(next);
+      cleanupResourcePublication = "published";
+    }
     cleanupResourceIdentity = next;
   };
   let environment: Readonly<Record<string, string>>;
@@ -2916,10 +2955,78 @@ export async function createBrowserSession(
       );
     }
     if (resourcesQuiescent && rootsAreUnused) {
-      failures.push(...removePrivateArtifacts(
-        [initializedSocketDirectory, directory],
-        removePrivateArtifact,
-      ));
+      const resource = cleanupResourceIdentity;
+      const publisher = options.publishCleanupResource;
+      const markQuiescent = publisher?.markBrowserCleanupQuiescent;
+      const markRootRemoved = publisher?.markBrowserCleanupRootRemoved;
+      if (resource === null) {
+        failures.push(new Error("browser cleanup resource identity is unavailable"));
+      } else if (publisher !== undefined) {
+        if (
+          markQuiescent === undefined
+          || markRootRemoved === undefined
+        ) {
+          failures.push(new Error(
+            "durable browser cleanup journaling is unavailable",
+          ));
+        } else {
+          try {
+            // This transition must commit while both roots still match. Once
+            // durable, recovery may accept an absent root as a crash between
+            // its removal and the following journal CAS.
+            await refreshBrowserCleanupResourceQuiescence(
+              resource,
+              {
+                ...options.dependencies?.cleanupLifecycle,
+                runCommand: runBrowserCommand,
+              },
+            );
+            markQuiescent(resource);
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+      }
+      if (failures.length === 0 && resource !== null) {
+        for (const [rootName, path] of [
+          ["artifacts", directory],
+          ["socket", initializedSocketDirectory],
+        ] as const) {
+          try {
+            removePrivateArtifact(path);
+            if (browserCleanupResourceRootStatus(resource, rootName) !== "absent") {
+              throw new Error(
+                "browser cleanup root removal could not be verified",
+              );
+            }
+          } catch (error) {
+            failures.push(error);
+            break;
+          }
+          if (publisher !== undefined && markRootRemoved !== undefined) {
+            try {
+              markRootRemoved(resource, rootName);
+            } catch (error) {
+              failures.push(error);
+              break;
+            }
+          }
+          if (rootName === "artifacts" && publisher !== undefined) {
+            try {
+              await reproveBrowserCleanupAfterArtifactsRemoval(
+                resource,
+                {
+                  ...options.dependencies?.cleanupLifecycle,
+                  runCommand: runBrowserCommand,
+                },
+              );
+            } catch (error) {
+              failures.push(error);
+              break;
+            }
+          }
+        }
+      }
     }
     if (failures.length > 0) {
       throw new AggregateError(
@@ -3096,7 +3203,7 @@ export async function createBrowserSession(
         );
       }
     }
-    if (cleanupResourcePublished) {
+    if (cleanupResourcePublication !== "unpublished") {
       cleanupFailures.push(
         new Error("durably published browser roots require exact recovery"),
       );
