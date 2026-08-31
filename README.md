@@ -27,7 +27,7 @@ wrench capabilities
 wrench plugin list
 ```
 
-[Install](#install) · [npm package](https://www.npmjs.com/package/@hraness/wrench) · [Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md) · [Local CLI transport guide](docs/local-cli-providers.md)
+[Install](#install) · [npm package](https://www.npmjs.com/package/@hraness/wrench) · [Project site](https://wrench.rip) · [Privacy and data custody](https://wrench.rip/privacy/) · [Security policy](SECURITY.md) · [Plugin guide](docs/plugins.md) · [Local CLI transport guide](docs/local-cli-providers.md) · [Telegram TDLib guide](docs/telegram-tdlib-provider.md)
 
 ## What Wrench does
 
@@ -44,10 +44,10 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-This v0.16.2 source tree defines actions for 19 services: Beeper, Bluesky, Facebook,
+This v0.17.0 source tree defines actions for 20 services: Beeper, Bluesky, Facebook,
 Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker News, Instagram,
-iMessage, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and
-YouTube.
+iMessage, LinkedIn, Reddit, Substack, Telegram, Threads, TikTok, Twitch, WhatsApp,
+X, and YouTube.
 LinkedIn and X each have separate official and authenticated-web adapters. The
 [release-bound provider directory](https://wrench.rip/provider-capabilities/)
 lists only executable actions, grouped by the tasks each service supports and
@@ -114,9 +114,9 @@ the latest release that completed every gate.
 Install the single Wrench Agent Skill with either runner:
 
 ```sh
-npx skills add hraness/wrench#v0.16.2
+npx skills add hraness/wrench#v0.17.0
 # or
-bunx skills add hraness/wrench#v0.16.2
+bunx skills add hraness/wrench#v0.17.0
 ```
 
 The skill teaches Codex, Claude Code, Cursor, and other compatible coding
@@ -127,7 +127,7 @@ After the matching immutable Release exists, install this exact version from
 npm:
 
 ```sh
-bun add --global @hraness/wrench@0.16.2
+bun add --global @hraness/wrench@0.17.0
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -151,7 +151,7 @@ For that same released coordinate, install Wrench in an agent or application
 that owns its own model, planning, tool loop, approvals, and interface:
 
 ```sh
-bun add @hraness/wrench@0.16.2
+bun add @hraness/wrench@0.17.0
 ```
 
 ```ts
@@ -405,7 +405,7 @@ not turn missing message history into zero activity.
 | Instagram authenticated web | Unique non-viewer participants from the reviewed first Direct inbox summary page, with explicit first-page and pagination incompleteness | Unavailable until acknowledgement-free message-history paging is reviewed |
 | WhatsApp linked device | One page of the authenticated account owner's private, quiescent Whatsmeow contact store | Unavailable; Wrench does not treat a linked-device message cache as account-owned history |
 | Facebook authenticated web | Capture-required reservation for friends or Messenger participants | Capture-required |
-| Telegram | Not installed | Requires a reviewed TDLib user-session lifecycle; Wrench does not substitute the Bot API or claim contact access |
+| Telegram linked device | One bounded page from the authenticated account's private contact projection, refreshed only by explicit TDLib user-session pairing or sync | Unavailable; TDLib `getContacts` does not include message history |
 
 LinkedIn requires approved access to both the restricted
 `r_1st_connections` and `r_liteprofile` scopes. Before listing connections,
@@ -432,11 +432,23 @@ wrench whatsapp-web contacts.list --auth whatsapp-main \
   --input '{"limit":50}' --json
 ```
 
-Telegram's official `getContacts` method belongs to
-[TDLib's user-client API](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1get_contacts.html).
-Wrench will not install or expose this surface until it can bind the TDLib
-authorization lifecycle, account identity, local database, paging behavior,
-and message-history completeness without weakening the linked-device boundary.
+Telegram uses the official [TDLib user-client
+API](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1get_contacts.html),
+never the Bot API. Pairing or an explicit one-shot sync connects long enough to
+bind the current Telegram user and replace the private contact projection.
+`contacts.list` then reads that account-bound projection offline, in stable
+numeric user-ID order. Counts and last-interaction timestamps remain `null`
+with basis `tdlib-contacts-do-not-include-message-history` instead of treating
+missing history as no activity.
+
+```sh
+wrench telegram contacts.list --auth telegram-main \
+  --input '{"limit":50}' --json
+```
+
+See the [Telegram TDLib provider guide](docs/telegram-tdlib-provider.md) for the
+pinned helper build, API ID and API hash configuration, pairing, sync, and local
+custody boundaries.
 
 ### Beeper through an exact local CLI contract
 

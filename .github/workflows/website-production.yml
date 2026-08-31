@@ -397,3 +397,32 @@ jobs:
           VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
           VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
         run: node ./scripts/release-provider-outcome.mjs wait
+
+  notify_indexnow:
+    name: Notify search engines of the verified release
+    needs: [verify, provider_outcome]
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.workflow_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Revalidate authority before search notification
+        env:
+          DEFAULT_BRANCH: main
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
+        run: node ./scripts/release-provider-outcome.mjs revalidate-authority
+      - name: Submit the verified canonical sitemap to IndexNow
+        run: node ./scripts/indexnow-submit.mjs

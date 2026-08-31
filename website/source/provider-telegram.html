@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+    <title>Telegram contacts with Wrench: private TDLib user-session sync</title>
+    <meta name="description" content="Sync Telegram contacts through the official TDLib user-client API into a private local Wrench projection, without using the Bot API or scanning message history.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/providers/telegram/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Telegram contacts with Wrench: private TDLib user-session sync">
+    <meta property="og:description" content="Sync Telegram contacts through the official TDLib user-client API into a private local Wrench projection, without using the Bot API or scanning message history.">
+    <meta property="og:url" content="https://wrench.rip/providers/telegram/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Telegram contacts with Wrench: private TDLib user-session sync">
+    <meta name="twitter:description" content="Sync Telegram contacts through the official TDLib user-client API into a private local Wrench projection, without using the Bot API or scanning message history.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Install</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="https://github.com/hraness/wrench">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li><a href="/provider-capabilities/">Providers</a></li><li aria-current="page">Telegram contacts</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">Telegram contacts · Wrench {{WRENCH_VERSION}}</p>
+          <h1>Sync Telegram contacts through a private TDLib user session.</h1>
+          <p class="answer-lede">Wrench can read the current contact list of one Telegram user after explicit pairing. It uses Telegram’s official TDLib user-client API, stores an account-bound projection locally, and serves bounded pages without reconnecting during the read.</p>
+          <p class="review-note">The provider does not use the Telegram Bot API, scan message history, or turn missing activity into zero.</p>
+        </header>
+
+        <section aria-labelledby="boundary">
+          <h2 id="boundary">What the Telegram provider reads</h2>
+          <p>The <code>telegram-linked-device</code> provider calls TDLib <a href="https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1get_me.html"><code>getMe</code></a> to bind the local store to one numeric Telegram user ID, then calls <a href="https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1get_contacts.html"><code>getContacts</code></a> to refresh that account’s current contacts. The offline <code>contacts.list</code> operation returns numeric user ID, names, display name, active username, phone number, and mutual-contact, Premium, and verification flags when TDLib provides them.</p>
+          <p>TDLib <code>getContacts</code> does not return message history. Sent count, received count, last sent, and last received therefore remain <code>null</code> with the explicit reason <code>tdlib-contacts-do-not-include-message-history</code>. Wrench does not silently broaden a contact read into a conversation scan.</p>
+          <p><a href="/provider-capabilities/#provider-telegram">Inspect the release-bound operation, contract version, risk, and access method</a>.</p>
+        </section>
+
+        <section aria-labelledby="bot-api">
+          <h2 id="bot-api">Why a Telegram bot token is not enough</h2>
+          <p>A Telegram bot is a separate account with bot-scoped updates. It cannot authorize access to a human user’s contact list. Wrench therefore accepts only an explicitly paired TDLib user session for this operation and never substitutes the Bot API when that session is missing or invalid.</p>
+        </section>
+
+        <section aria-labelledby="install-helper">
+          <h2 id="install-helper">1. Install the pinned TDLib helper</h2>
+          <p>The package ships a small native helper source and build recipe pinned to TDLib 1.8.67 at commit <code>d1085f9cebc5a62379991ae1652673954f229c1f</code>. The runtime executes only the installed helper whose manifest, bytes, embedded identity, owner, mode, links, size, and file identity pass verification.</p>
+          <div class="command-panel"><pre><code>wrench doctor --json
+# Run the reported Telegram setupCommand, then verify:
+wrench doctor</code></pre></div>
+          <p>A packaged installation reports the exact checked installer path in <code>setupCommand</code>. From an exact Wrench source checkout, run <code>bun run telegram:tdlib:install</code>. The source build supports macOS and Linux on arm64 and x64 and requires Git, CMake, Make, gperf, a C++17 compiler, OpenSSL, zlib, and system threads. Wrench does not load TDLib into Bun or search <code>PATH</code> for an alternate runtime helper.</p>
+        </section>
+
+        <section aria-labelledby="pair-account">
+          <h2 id="pair-account">2. Pair one Telegram user</h2>
+          <p>Create a dedicated mode-0700 store and a mode-0600 <code>client.conf</code> containing the <code>api_id</code> and lowercase <code>api_hash</code> for an application registered at <a href="https://my.telegram.org/">my.telegram.org</a>. Keep the API hash, login codes, two-step-verification password, and TDLib state out of Git and agent transcripts.</p>
+          <div class="command-panel"><pre><code>wrench adapter sync-bundled --json
+wrench auth add telegram-main --linked-device telegram \
+  --device-store /absolute/private/telegram-main
+wrench auth pair telegram-main --phone +15551234567</code></pre></div>
+          <p>The helper handles the reviewed existing-user authorization states through its controlling terminal. Registration, bot-token authorization, and unknown states fail closed. A successful pair publishes <code>contacts.v1.json</code> and binds the auth realm to <code>telegram:user:&lt;numeric-user-id&gt;</code>.</p>
+        </section>
+
+        <section aria-labelledby="sync-read">
+          <h2 id="sync-read">3. Refresh deliberately, then read offline</h2>
+          <p>Pairing and one-shot sync are the only Telegram-network steps. The contact read uses the last validated local projection.</p>
+          <div class="command-panel"><pre><code>wrench auth sync telegram-main --once --json
+wrench telegram contacts.list --auth telegram-main \
+  --input '{"limit":50}' --json</code></pre></div>
+          <p>Results are ordered by numeric Telegram user ID. Pass the returned <code>nextCursor</code> back as <code>cursor</code> to continue, with a page limit from 1 through 200. Sync refuses to replace the projection if TDLib returns a different user from the bound account.</p>
+        </section>
+
+        <section aria-labelledby="custody">
+          <h2 id="custody">Local custody and revocation</h2>
+          <p>The private store contains the client configuration, TDLib database and files, and Wrench’s contact projection. Removing a Wrench auth locator does not revoke Telegram’s provider-side session. Revoke the linked device separately in Telegram when access should end.</p>
+          <p>Interrupted pair or sync work remains durably fenced because those operations can emit protocol acknowledgements. Inspect recovery state with <code>wrench operator doctor --json</code>; do not retry an uncertain lifecycle by deleting its journal.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="telegram-next">
+          <h2 id="telegram-next">Review the complete provider contract</h2>
+          <p>Install <a href="/getting-started/">Wrench {{WRENCH_RELEASE}}</a>, inspect <a href="/provider-capabilities/#provider-telegram">the Telegram contact contract</a>, and read the <a href="/security/">security and local-custody guide</a>. The source repository includes the complete TDLib build, pairing, storage, and recovery reference.</p>
+        </aside>
+      </article>
+    </main>
+    <aside aria-label="Wrench project information" class="site-disclosure">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </aside>
+    {{HRANESS_SITE_FOOTER}}
+  </body>
+</html>

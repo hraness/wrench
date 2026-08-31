@@ -1,11 +1,10 @@
-// npm 11.19.0 packed this v0.16.2 package-budget candidate twice on macOS:
-// 2,021,302 packed bytes, 11,088,754 unpacked bytes, and 434 files. Prior CI
-// for the same v0.16.2 payload measured a
-// 3,543-byte Linux/macOS gzip spread. Keep bounded room for that observed
-// transport variance and small reviewed payload drift.
+// Bun 1.3.14 packed this v0.17.0 package-budget candidate twice on macOS to
+// identical 1,923,565-byte archives with 11,224,464 unpacked bytes. Prior CI
+// for v0.16.2 measured a 3,543-byte Linux/macOS gzip spread. Keep bounded room
+// for that observed transport variance and small reviewed payload drift.
 export const MAX_PACKED_BYTES = 2_050_000;
 export const MAX_PACKED_FILES = 450;
-export const MAX_UNPACKED_BYTES = 11_200_000;
+export const MAX_UNPACKED_BYTES = 11_300_000;
 
 export const packageArtifactBudget = Object.freeze({
   entryCount: Object.freeze({ min: 350, max: MAX_PACKED_FILES }),

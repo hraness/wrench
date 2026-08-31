@@ -48,5 +48,10 @@ canary. On a production deployment,
 `website:vercel-build` independently verifies checked-out HEAD, the matching
 GitHub tag commit, canonical npm, and the immutable Latest Release before building.
 Preview and local builds perform no external release verification.
+After the exact production outcome, the release-bound workflow rechecks release
+authority, validates the live sitemap and public IndexNow key, and sends one
+bounded URL notification to the official IndexNow endpoint. Every canonical
+page embeds the exact release identity in structured data, so the release
+changes every submitted URL.
 Root `middleware.ts` imports only `edge/negotiation.ts` for Accept q-values,
 `406`, and markdown 404 bodies.

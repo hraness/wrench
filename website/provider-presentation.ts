@@ -44,6 +44,7 @@ export const PROVIDER_PRESENTATIONS = Object.freeze([
   { accent: "blue", icon: "network", name: "LinkedIn", surfaceId: "linkedin" },
   { accent: "coral", icon: "community", name: "Reddit", surfaceId: "reddit" },
   { accent: "coral", icon: "publish", name: "Substack", surfaceId: "substack" },
+  { accent: "blue", icon: "chat", name: "Telegram", surfaceId: "telegram" },
   { accent: "ink", icon: "community", name: "Threads", surfaceId: "threads" },
   { accent: "violet", icon: "video", name: "TikTok", surfaceId: "tiktok" },
   { accent: "violet", icon: "broadcast", name: "Twitch", surfaceId: "twitch" },
@@ -99,6 +100,12 @@ export const BEEPER_PAGE_METADATA = Object.freeze({
     `Use ${BEEPER_LOCAL_OPERATION_NAMES.length} supported Wrench actions to read and act through the official Beeper CLI ${BEEPER_CLI_PIN.version} and one connected Beeper Desktop account.`,
   title:
     `Beeper support in Wrench: ${BEEPER_LOCAL_OPERATION_NAMES.length} supported actions`,
+} as const);
+
+export const TELEGRAM_PAGE_METADATA = Object.freeze({
+  description:
+    "Sync Telegram contacts through the official TDLib user-client API into a private local Wrench projection, without using the Bot API or scanning message history.",
+  title: "Telegram contacts with Wrench: private TDLib user-session sync",
 } as const);
 
 function capabilityLabel(operation: string): string {
@@ -183,9 +190,10 @@ export function createProviderDirectory(
     const validTransport =
       (row.kind === "official-api" && row.transport === "provider-api")
       || (row.kind === "local-cli" && row.transport === "local-cli")
+      || (row.kind === "linked-device" && row.transport === "linked-device")
       || (
         row.kind === "authenticated-web"
-        && (row.transport === "web-session-api" || row.transport === "linked-device")
+        && row.transport === "web-session-api"
       );
     if (!validTransport) {
       throw new Error(`provider adapter ${row.adapterId} has an invalid ${row.kind}/${row.transport} channel`);
@@ -269,7 +277,9 @@ export function createProviderDirectory(
       contractVersions: Object.freeze(contractVersions),
       href: definition.surfaceId === "beeper"
         ? "/providers/beeper/"
-        : `/provider-capabilities/#provider-${definition.surfaceId}`,
+        : definition.surfaceId === "telegram"
+          ? "/providers/telegram/"
+          : `/provider-capabilities/#provider-${definition.surfaceId}`,
       icon: definition.icon,
       name: definition.name,
       observedCount,

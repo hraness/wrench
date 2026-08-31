@@ -218,6 +218,14 @@ const identities = Object.freeze({
       development: "58c2b588db7154883a154d05194cde62ff19b8e14045d10f854aacc9a4433e73",
     },
   },
+  "telegram-linked-device": {
+    schemaVersion: 1,
+    pluginVersion: "1.0.0",
+    implementationSha256: "ba1173f1e76de6b29b533fdec30c2271e2d35b4f41be9bdcf3928134db4fb108",
+    legacyCurrentReadImplementationSha256: [],
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
+  },
   "tiktok-web": {
     schemaVersion: 1,
     pluginVersion: "1.3.0",

@@ -10,9 +10,9 @@ The exact npm keyword list is checked by `scripts/package-smoke.ts` in source
 and in the packed artifact. Repository topics are maintainer-managed discovery
 metadata, not release identity. Keep this checked topic set aligned through the
 GitHub repository settings: `agent-skills`, `agent-tools`, `ai-agents`, `beeper`,
-`browser-automation`, `bun`, `cli`, `coding-agents`, `cross-provider`,
+`browser-automation`, `bun`, `cli`, `coding-agents`,
 `developer-tools`, `knowledge-base`, `local-first`, `media-archive`, `messaging`,
-`provider-plugins`, `tool-calling`, `typescript`, `typescript-sdk`,
+`provider-plugins`, `telegram`, `tool-calling`, `typescript`, `typescript-sdk`,
 `web-automation`, and `web-capture`. Do not grant a release workflow repository
 administration permission only to synchronize topics.
 
@@ -219,16 +219,16 @@ npm stage approve <stage-id> \
 ```
 
 To complete this source version's release, download and smoke
-`@hraness/wrench@0.16.2` after approving its stage. Keep the public coordinate
-and tag literal through the final registry checks, then create `v0.16.2` on the
+`@hraness/wrench@0.17.0` after approving its stage. Keep the public coordinate
+and tag literal through the final registry checks, then create `v0.17.0` on the
 exact staged source commit:
 
 ```sh
-npm view @hraness/wrench@0.16.2 name version dist \
+npm view @hraness/wrench@0.17.0 name version dist \
   --json \
   --registry=https://registry.npmjs.org
-git tag v0.16.2
-git push origin refs/tags/v0.16.2
+git tag v0.17.0
+git push origin refs/tags/v0.17.0
 ```
 
 The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
@@ -514,6 +514,16 @@ Release, and the separate current-main workflow advances `website-production`
 only after it revalidates that release authority. The production verifier then
 independently rechecks the promoted commit, tag, registry coordinate, and
 immutable Latest Release.
+
+After the production provider outcome is exact, the same current-main workflow
+revalidates release authority once more, reads the live canonical sitemap and
+public IndexNow key under fixed byte and request deadlines, and submits that
+bounded URL set to the official IndexNow endpoint. Every canonical page embeds
+the exact release version and versioned npm coordinate in its structured data,
+so every page has changed at this boundary. The notification has no secret and
+no GitHub write permission. It accepts only the documented HTTP 200 or 202
+result and never runs before the immutable release and exact Vercel Production
+deployment are terminal.
 
 See npm's documentation for [trusted
 publishing](https://docs.npmjs.com/trusted-publishers/), [staged

@@ -10,6 +10,7 @@ import instagramWebManifest from "./assets/adapters/instagram/wrench-web-adapter
 import linkedinWebManifest from "./assets/adapters/linkedin/wrench-web-adapter.json";
 import redditWebManifest from "./assets/adapters/reddit/wrench-web-adapter.json";
 import substackWebManifest from "./assets/adapters/substack/wrench-web-adapter.json";
+import telegramWebManifest from "./assets/adapters/telegram/wrench-web-adapter.json";
 import tiktokWebManifest from "./assets/adapters/tiktok/wrench-web-adapter.json";
 import threadsWebManifest from "./assets/adapters/threads/wrench-web-adapter.json";
 import twitchWebManifest from "./assets/adapters/twitch/wrench-web-adapter.json";
@@ -57,6 +58,7 @@ const bundledManifests: Readonly<Partial<Record<WebSessionSiteId, unknown>>> = {
   linkedin: linkedinWebManifest,
   reddit: redditWebManifest,
   substack: substackWebManifest,
+  telegram: telegramWebManifest,
   tiktok: tiktokWebManifest,
   threads: threadsWebManifest,
   twitch: twitchWebManifest,
@@ -425,6 +427,9 @@ const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
 ], {
   "posts.publish": 3,
 });
+const TELEGRAM_TDLIB_OPERATIONS = operationPolicies("telegram", [
+  "contacts.list",
+]);
 const TIKTOK_WEB_OPERATIONS = operationPolicies("tiktok", [
   "comments.read",
   "feeds.read",
@@ -684,6 +689,16 @@ const whatsapp = {
   "reactions.set": contract("whatsapp", "reactions.set", WHATSAPP_WEB_OPERATIONS["reactions.set"].risk, WHATSAPP_WEB_OPERATIONS["reactions.set"].state, WHATSAPP_WEB_OPERATIONS["reactions.set"].reason),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
+const telegram = {
+  "contacts.list": contract(
+    "telegram",
+    "contacts.list",
+    TELEGRAM_TDLIB_OPERATIONS["contacts.list"].risk,
+    TELEGRAM_TDLIB_OPERATIONS["contacts.list"].state,
+    TELEGRAM_TDLIB_OPERATIONS["contacts.list"].reason,
+  ),
+} as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
+
 const beeper = {
   "contacts.list": contract("beeper", "contacts.list", BEEPER_LOCAL_OPERATIONS["contacts.list"].risk, BEEPER_LOCAL_OPERATIONS["contacts.list"].state, BEEPER_LOCAL_OPERATIONS["contacts.list"].reason),
   "contacts.search": contract("beeper", "contacts.search", BEEPER_LOCAL_OPERATIONS["contacts.search"].risk, BEEPER_LOCAL_OPERATIONS["contacts.search"].state, BEEPER_LOCAL_OPERATIONS["contacts.search"].reason),
@@ -782,6 +797,7 @@ export const webSessionContractDefinitions = {
   linkedin,
   reddit,
   substack,
+  telegram,
   tiktok,
   threads,
   twitch,

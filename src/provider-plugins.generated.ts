@@ -13,12 +13,13 @@ import sourceProviderPlugin7 from "./plugins/linkedin-web/plugin";
 import sourceProviderPlugin8 from "./plugins/meta-web/plugin";
 import sourceProviderPlugin9 from "./plugins/reddit-web/plugin";
 import sourceProviderPlugin10 from "./plugins/substack-web/plugin";
-import sourceProviderPlugin11 from "./plugins/tiktok-web/plugin";
-import sourceProviderPlugin12 from "./plugins/twitch-web/plugin";
-import sourceProviderPlugin13 from "./plugins/whatsapp-linked-device/plugin";
-import sourceProviderPlugin14 from "./plugins/x-official/plugin";
-import sourceProviderPlugin15 from "./plugins/x-web/plugin";
-import sourceProviderPlugin16 from "./plugins/youtube-web/plugin";
+import sourceProviderPlugin11 from "./plugins/telegram-linked-device/plugin";
+import sourceProviderPlugin12 from "./plugins/tiktok-web/plugin";
+import sourceProviderPlugin13 from "./plugins/twitch-web/plugin";
+import sourceProviderPlugin14 from "./plugins/whatsapp-linked-device/plugin";
+import sourceProviderPlugin15 from "./plugins/x-official/plugin";
+import sourceProviderPlugin16 from "./plugins/x-web/plugin";
+import sourceProviderPlugin17 from "./plugins/youtube-web/plugin";
 
 export const generatedProviderPlugins = Object.freeze([
   sourceProviderPlugin0,
@@ -38,4 +39,5 @@ export const generatedProviderPlugins = Object.freeze([
   sourceProviderPlugin14,
   sourceProviderPlugin15,
   sourceProviderPlugin16,
+  sourceProviderPlugin17,
 ] as const satisfies readonly ProviderPluginV1[]);

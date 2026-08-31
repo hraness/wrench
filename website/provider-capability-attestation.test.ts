@@ -58,8 +58,17 @@ describe("provider capability attestation", () => {
       completeness: "observed",
       contractVersion: 9,
     });
-    expect(attestation.rows.some((row) => row.adapterId.includes("telegram") || row.displayName.includes("Telegram")))
-      .toBe(false);
+    const telegramContacts = attestation.rows.find((row) =>
+      row.adapterId === "telegram" && row.operation === "contacts.list");
+    expect(telegramContacts).toMatchObject({
+      completeness: "observed",
+      contractVersion: 1,
+      displayName: "Telegram (TDLib User Session)",
+      kind: "linked-device",
+      pluginId: "telegram-linked-device",
+      risk: "R1",
+      transport: "linked-device",
+    });
     expect(attestation.rows.every((row) => isProviderCapabilityCompleteness(row.completeness))).toBe(true);
   });
 

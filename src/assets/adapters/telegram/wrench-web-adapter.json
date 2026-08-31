@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 4,
+  "id": "telegram",
+  "version": "1.0.0",
+  "displayName": "Telegram (TDLib User Session)",
+  "surfaceId": "telegram",
+  "origins": [
+    "https://telegram.org"
+  ],
+  "browserDomains": [
+    "telegram.org"
+  ],
+  "operations": {
+    "contacts.list": {
+      "description": "List one bounded page from the private account-bound contact projection created by an explicit TDLib user-session pair or one-shot sync, without opening a Telegram connection during the read.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Exact canonical Telegram numeric user ID returned as the preceding page cursor",
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected contacts",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": []
+      },
+      "webSession": {
+        "site": "telegram",
+        "action": "contacts.list",
+        "contractVersion": 1,
+        "timeoutMs": 30000,
+        "maxOutputBytes": 8388608
+      }
+    }
+  }
+}

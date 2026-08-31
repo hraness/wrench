@@ -18,6 +18,7 @@ Do not use Wrench as an AI agent, hosted HTTP API, OpenAPI surface, OAuth develo
 - [First-capture demo](https://wrench.rip/getting-started/#demo): a 12-second successful public-page read with reusable video, GIF, PNG, and a text transcript
 - [Provider support](https://wrench.rip/provider-capabilities/): every action supported by the current release, grouped by service and access method
 - [Beeper support](https://wrench.rip/providers/beeper/): 32 supported actions through the official local CLI, including previewed and confirmed message actions
+- [Telegram contacts](https://wrench.rip/providers/telegram/): private contact sync through the official TDLib user-client API, with exact metadata and explicit message-history exclusions
 - [Personal agents and attested operations](https://wrench.rip/compare/personal-agents-browser-use/): persistent browser-using agents versus Wrench's named, attested operation set
 - [PayPal and GrapheneOS device policy](https://wrench.rip/paypal-grapheneos-attestation/): a payment app's rooted-phone check is not a named Wrench operation
 - [Rumour and named web operations](https://wrench.rip/rumour-is-the-exploit/): when a rumour is enough for agentic search, named operations still matter

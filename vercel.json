@@ -65,6 +65,150 @@
       ]
     },
     {
+      "source": "/index.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/getting-started.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/getting-started/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/capture-and-archives.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/capture-and-archives/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/provider-capabilities.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/provider-capabilities/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/providers/beeper.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/providers/beeper/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/providers/telegram.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/providers/telegram/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/security.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/security/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/plugins.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/plugins/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/about.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/about/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/contact.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/contact/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/privacy.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/privacy/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/compare/personal-agents-browser-use.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/compare/personal-agents-browser-use/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/agentic-web-spoofing.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/agentic-web-spoofing/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/vms-cannot-contain-agents.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/vms-cannot-contain-agents/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/paypal-grapheneos-attestation.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/paypal-grapheneos-attestation/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
+      "source": "/rumour-is-the-exploit.md",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "<https://wrench.rip/rumour-is-the-exploit/>; rel=\"canonical\""
+        }
+      ]
+    },
+    {
       "source": "/assets/(.*)",
       "headers": [
         {
@@ -154,6 +298,16 @@
     {
       "source": "/providers/beeper/index.html",
       "destination": "/providers/beeper/",
+      "permanent": true
+    },
+    {
+      "source": "/providers/telegram",
+      "destination": "/providers/telegram/",
+      "permanent": true
+    },
+    {
+      "source": "/providers/telegram/index.html",
+      "destination": "/providers/telegram/",
       "permanent": true
     },
     {

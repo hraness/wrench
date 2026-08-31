@@ -260,6 +260,7 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/paypal-grapheneos-attestation/"');
     expect(html).toContain('href="/rumour-is-the-exploit/"');
     expect(html).toContain('href="/providers/beeper/"');
+    expect(html).toContain('href="/providers/telegram/"');
     const argumentsSection = /<section aria-labelledby="arguments-title" class="section editorial-cluster">[\s\S]*?<\/section>/u
       .exec(html)?.[0];
     const guidesSection = /<section aria-labelledby="guides-title" class="section guide-cluster">[\s\S]*?<\/section>/u
@@ -331,6 +332,7 @@ describe("wrench.rip static site", () => {
     expect(llms).not.toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).not.toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/providers/telegram/`);
     expect(llms).toContain("submission is not a delivery claim");
     expect(llms.replaceAll(/https:\/\/wrench\.rip\/[a-z0-9-/]+/gu, "")).not.toMatch(
       /observed|capture-required|reservation|attestation/iu,
@@ -433,7 +435,12 @@ describe("wrench.rip static site", () => {
     expect(markdownRewrite?.destination).toBe("/:path.md");
     const markdownRewritePattern = /^\/((?!preview\/).*)\/$/u;
     expect(markdownRewritePattern.test("/preview/")).toBe(false);
-    for (const path of ["/getting-started/", "/providers/beeper/", "/missing/"]) {
+    for (const path of [
+      "/getting-started/",
+      "/providers/beeper/",
+      "/providers/telegram/",
+      "/missing/",
+    ]) {
       expect(markdownRewritePattern.test(path)).toBe(true);
     }
     const commonHeaders = vercel.headers.find((rule: { source: string }) =>
@@ -495,6 +502,16 @@ describe("wrench.rip static site", () => {
         source: "/(.*).md",
       }),
     ]));
+    expect(vercel.headers.filter((rule: { headers: Array<{ key: string }> }) =>
+      rule.headers.some((header) => header.key === "Link"))).toEqual(
+      PUBLIC_PAGES.map((page) => ({
+        headers: [{
+          key: "Link",
+          value: `<${SITE_ORIGIN}${page.canonicalPath}>; rel="canonical"`,
+        }],
+        source: markdownSiblingPath(page.canonicalPath),
+      })),
+    );
     expect(middleware).toContain("handleDocumentNegotiation");
     expect(middleware).toContain("./edge/negotiation");
     expect(middleware).not.toContain("website/");
@@ -832,7 +849,7 @@ describe("wrench.rip static site", () => {
     expect(providerCapabilities?.html).toContain("Official API");
     expect(providerCapabilities?.html).toContain(`<code>contacts.list</code>`);
     expect(providerCapabilities?.html).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
-    expect(providerCapabilities?.html).not.toContain("Telegram");
+    expect(providerCapabilities?.html).toContain("Telegram");
     expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(providerMarkdown).toContain("### Beeper");
     expect(providerMarkdown).toContain("32 supported actions");
@@ -850,6 +867,25 @@ describe("wrench.rip static site", () => {
     expect(providerActionLines.every((line) =>
       /^- \*\*[^*]+\*\* — `[^`]+` · [^\s].+$/u.test(line))).toBe(true);
     expect(providerMarkdown).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
+
+    const telegram = pages.find((page) =>
+      page.definition.canonicalPath === "/providers/telegram/");
+    expect(telegram?.html).toContain(
+      "<title>Telegram contacts with Wrench: private TDLib user-session sync</title>",
+    );
+    expect(telegram?.html).toContain(
+      "Wrench can read the current contact list of one Telegram user after explicit pairing.",
+    );
+    expect(telegram?.html).toContain("official TDLib user-client API");
+    expect(telegram?.html).toContain("tdlib-contacts-do-not-include-message-history");
+    expect(telegram?.html).toContain("does not use the Telegram Bot API");
+    expect(telegram?.html).toContain("wrench doctor --json");
+    expect(telegram?.html).toContain("reported Telegram setupCommand");
+    expect(telegram?.html).toContain("bun run telegram:tdlib:install");
+    expect(telegram?.html).toContain("Make, gperf, a C++17 compiler");
+    expect(telegram?.html).toContain("wrench auth sync telegram-main --once --json");
+    expect(telegram?.html).toContain('href="/provider-capabilities/#provider-telegram"');
+    expect(telegram?.html).not.toMatch(/unlimited|all messages|seamless/iu);
 
     const beeper = pages.find((page) => page.definition.canonicalPath === "/providers/beeper/");
     const beeperFacts = createBeeperPresentationFacts(providerDirectory);
@@ -931,7 +967,6 @@ describe("wrench.rip static site", () => {
     expect(personalAgents?.html).toContain(
       `The current release offers ${attestation.observedCount} supported provider actions.`,
     );
-    expect(personalAgents?.html).toContain("Telegram is not supported in this release");
     expect(personalAgents?.html).toContain("Instinct");
     expect(personalAgents?.html).toContain("Grok Bots");
     expect(personalAgents?.html).toContain("ChatGPT Work");
@@ -978,7 +1013,6 @@ describe("wrench.rip static site", () => {
     expect(agenticWebSpoofing?.html).toContain(
       `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
     );
-    expect(agenticWebSpoofing?.html).toContain("Telegram is absent from those manifests");
     expect(agenticWebSpoofing?.html).toContain("this page does not invent those names");
     expect(agenticWebSpoofing?.html).toContain("The pages do not reprint one another.");
     expect(agenticWebSpoofing?.html).toContain("https://wrench.rip/vms-cannot-contain-agents/");
@@ -1010,7 +1044,6 @@ describe("wrench.rip static site", () => {
     expect(vmsCannotContainAgents?.html).toContain(
       `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
     );
-    expect(vmsCannotContainAgents?.html).toContain("Telegram is absent from those manifests");
     expect(vmsCannotContainAgents?.html).toContain("does not sell a hypervisor, a microVM, or a hostile-code sandbox");
     expect(vmsCannotContainAgents?.html).toContain("The pages do not reprint one another.");
     expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/paypal-grapheneos-attestation/");
@@ -1048,7 +1081,6 @@ describe("wrench.rip static site", () => {
     expect(paypalGrapheneOsAttestation?.html).toContain(
       `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
     );
-    expect(paypalGrapheneOsAttestation?.html).toContain("Telegram is absent from those manifests");
     expect(paypalGrapheneOsAttestation?.html).toContain("does not invent a PayPal API");
     expect(paypalGrapheneOsAttestation?.html).toContain("The pages do not reprint one another.");
     expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/rumour-is-the-exploit/");
@@ -1084,7 +1116,6 @@ describe("wrench.rip static site", () => {
     expect(rumourIsTheExploit?.html).toContain(
       `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
     );
-    expect(rumourIsTheExploit?.html).toContain("Telegram is absent from those manifests");
     expect(rumourIsTheExploit?.html).toContain("does not reconstruct exploits");
     expect(rumourIsTheExploit?.html).toContain("does not reprint the essay");
     expect(rumourIsTheExploit?.html).toContain("The pages do not reprint one another.");

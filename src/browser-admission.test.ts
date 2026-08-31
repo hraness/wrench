@@ -447,6 +447,84 @@ describe("local browser admission", () => {
     }
   });
 
+  test("retries nested read drift during the initial slot read", async () => {
+    const testState = state();
+    const initialReads: Array<0 | 1> = [];
+    let waits = 0;
+    try {
+      const initialized = await acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies(),
+      });
+      initialized.release();
+      const directory = join(
+        testState.directory,
+        ...BROWSER_ADMISSION_STATE_DIRECTORY.split("/"),
+      );
+      writeFileSync(join(directory, "slot-1.json"), "{}\n", { mode: 0o600 });
+
+      const admission = await acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies({
+          beforeInitialClaimReadForTest: (slot) => {
+            initialReads.push(slot);
+            if (slot === 0 && initialReads.length === 1) {
+              throw new Error("initial browser admission read failed", {
+                cause: new Error("nested browser admission read failed", {
+                  cause: new Error(
+                    "state helper: state file changed while it was read",
+                  ),
+                }),
+              });
+            }
+          },
+          random: () => 0,
+          sleep: async () => {
+            waits += 1;
+          },
+        }),
+      });
+
+      expect(admission.slot).toBe(0);
+      expect(initialReads).toEqual([0, 1, 0]);
+      expect(waits).toBe(1);
+      admission.release();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps unrelated initial-read storage failures fatal", async () => {
+    const testState = state();
+    let waits = 0;
+    try {
+      const initialized = await acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies(),
+      });
+      initialized.release();
+
+      await expect(acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies({
+          beforeInitialClaimReadForTest: () => {
+            throw new Error("unrelated initial-read storage failure");
+          },
+          sleep: async () => {
+            waits += 1;
+          },
+        }),
+      })).rejects.toThrow("unrelated initial-read storage failure");
+      expect(waits).toBe(0);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("retries exact release after transient state-mutation contention", async () => {
     const testState = state();
     let mutationClaimPath: string | null = null;

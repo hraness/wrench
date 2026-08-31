@@ -35,6 +35,7 @@ import {
   createProviderDirectory,
   renderProviderAttestationGroups,
   renderProviderOverviewCards,
+  TELEGRAM_PAGE_METADATA,
   type BeeperPresentationFacts,
   type ProviderDirectory,
 } from "./provider-presentation";
@@ -48,7 +49,7 @@ export const NPM_PACKAGE_URL = "https://www.npmjs.com/package/@hraness/wrench" a
 export const SKILLS_URL = "https://skills.sh/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_REPOSITORY = "hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.16.2" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.17.0" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const DEMO_PUBLIC_FILES = [
   "wrench-first-capture.gif",
@@ -96,6 +97,13 @@ export const PUBLIC_PAGES = [
     outputFile: "providers/beeper/index.html",
     sourceFile: "provider-beeper.html",
     title: BEEPER_PAGE_METADATA.title,
+  },
+  {
+    canonicalPath: "/providers/telegram/",
+    description: TELEGRAM_PAGE_METADATA.description,
+    outputFile: "providers/telegram/index.html",
+    sourceFile: "provider-telegram.html",
+    title: TELEGRAM_PAGE_METADATA.title,
   },
   {
     canonicalPath: "/security/",

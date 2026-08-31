@@ -61,6 +61,7 @@ const workflowsUrl = new URL("../.github/workflows/", import.meta.url);
 const releaseAppTokenHelperUrl = new URL("./release-app-token.mjs", import.meta.url);
 const releaseRefWriterHelperUrl = new URL("./release-ref-writer.mjs", import.meta.url);
 const providerOutcomeHelperUrl = new URL("./release-provider-outcome.mjs", import.meta.url);
+const indexNowHelperUrl = new URL("./indexnow-submit.mjs", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packageArtifactUrl = new URL("./package-artifact.ts", import.meta.url);
@@ -1987,12 +1988,13 @@ fi
   });
 
   test("keeps provider verification read-only, terminal, and release-authoritative", async () => {
-    const [releaseWorkflow, workflow, helper, appHelper, writerHelper, codeowners] = await Promise.all([
+    const [releaseWorkflow, workflow, helper, appHelper, writerHelper, indexNowHelper, codeowners] = await Promise.all([
       readFile(releaseWorkflowUrl, "utf8"),
       readFile(websiteProductionWorkflowUrl, "utf8"),
       readFile(providerOutcomeHelperUrl, "utf8"),
       readFile(releaseAppTokenHelperUrl, "utf8"),
       readFile(releaseRefWriterHelperUrl, "utf8"),
+      readFile(indexNowHelperUrl, "utf8"),
       readFile(codeownersUrl, "utf8"),
     ]);
     const job = (name: string): string => {
@@ -2008,13 +2010,14 @@ fi
     const existingJob = job("confirm_existing_production_ref");
     const selectionJob = job("select_promotion");
     const providerJob = job("provider_outcome");
+    const indexNowJob = job("notify_indexnow");
     const permissions = (jobText: string): readonly string[] => {
       const match = /\n    permissions:\n((?:      [a-z-]+: (?:read|write)\n)+)/u.exec(jobText);
       if (match?.[1] === undefined) throw new Error("Workflow job has no exact permission block");
       return match[1].trim().split("\n").map((line) => line.trim()).sort();
     };
 
-    for (const exactNodeJob of [baselineJob, advanceJob, existingJob, providerJob]) {
+    for (const exactNodeJob of [baselineJob, advanceJob, existingJob, providerJob, indexNowJob]) {
       expect(exactNodeJob).toContain("node-version: \"24\"");
       expect(exactNodeJob).toContain("package-manager-cache: false");
     }
@@ -2055,10 +2058,22 @@ fi
     expect(providerJob).toContain(
       "RECOVERY_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}",
     );
+    expect(workflow.indexOf("\n  provider_outcome:\n"))
+      .toBeLessThan(workflow.indexOf("\n  notify_indexnow:\n"));
+    expect(indexNowJob).toContain("needs: [verify, provider_outcome]");
+    expect(permissions(indexNowJob)).toEqual(["contents: read"]);
+    expect(indexNowJob).toContain("release-provider-outcome.mjs revalidate-authority");
+    expect(indexNowJob).toContain("node ./scripts/indexnow-submit.mjs");
+    expect(indexNowJob).not.toContain("continue-on-error");
+    expect(indexNowJob).not.toContain("WRENCH_RELEASE_APP_");
+    expect(indexNowHelper).toContain('INDEXNOW_ENDPOINT = "https://api.indexnow.org/indexnow"');
+    expect(indexNowHelper).toContain('SITE_ORIGIN = "https://wrench.rip"');
+    expect(indexNowHelper).toContain("readBoundedText");
+    expect(indexNowHelper).toContain("redirect: \"error\"");
     expect(helper).toContain("defaultBranch: process.env.DEFAULT_BRANCH");
     expect(helper).toContain("eventName: process.env.EVENT_NAME");
     expect(helper).toContain("recoveryWorkflowSha: process.env.RECOVERY_WORKFLOW_SHA");
-    expect(workflow.match(/ref: \$\{\{ needs\.verify\.outputs\.workflow_sha \}\}/gu)).toHaveLength(4);
+    expect(workflow.match(/ref: \$\{\{ needs\.verify\.outputs\.workflow_sha \}\}/gu)).toHaveLength(5);
     expect(releaseWorkflow).not.toContain("provider_baseline:");
     expect(releaseWorkflow).not.toContain("provider_outcome:");
     expect(releaseWorkflow).not.toContain("release-provider-outcome.mjs promote");
@@ -4672,6 +4687,7 @@ fi
       "Repository topics are maintainer-managed discovery",
       "`beeper`",
       "`messaging`",
+      "`telegram`",
       "Do not grant a release workflow repository",
       "Production Branch as `website-production`",
       "Vercel System Environment Variables enabled",
@@ -4776,6 +4792,8 @@ fi
       "fixed local `git rev-parse HEAD` child output",
       "checkout keeps\na resolvable Git `HEAD`",
       "exact tarball with canonical npm",
+      "public IndexNow key under fixed byte and request deadlines",
+      "accepts only the documented HTTP 200 or 202\nresult",
     ] as const) {
       expect(guide).toContain(required);
     }
@@ -4874,6 +4892,7 @@ fi
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
     expect(websiteAgents).toContain("token revocation and exact ref readback");
     expect(websiteAgents).toContain("initial success observation plus two stable");
+    expect(websiteAgents).toContain("submit only the bounded live canonical sitemap through the checked public IndexNow key");
     expect(websiteAgents).not.toContain("audit every retained Production deployment status");
     expect(websiteAgents).not.toContain("every baseline deployment's REST status history");
     expect(websiteAgents).not.toContain("may create or fast-forward");
@@ -4883,6 +4902,7 @@ fi
     expect(websiteReadme).toContain("fetches only the verified\ntag into its depth-one current-main checkout");
     expect(websiteReadme).toContain("without executing tagged code");
     expect(websiteReadme).toContain("current-main workflow source must descend\nfrom that release commit");
+    expect(websiteReadme).toContain("sends one\nbounded URL notification to the official IndexNow endpoint");
     expect(websiteReadme).toContain("live no-bypass ruleset currently\nprotects deletion and non-fast-forward movement");
     expect(websiteReadme).toContain("App-only update rule,\ncreation rule, writer environment, and canary proof remain pending live\nreconciliation");
     expect(websiteReadme).toContain("provisional contents-only App remains inactive");

@@ -601,6 +601,7 @@ const reviewedKbDynamicInstalledPluginIds = new Set([
   "meta-web",
   "reddit-web",
   "substack-web",
+  "telegram-linked-device",
   "tiktok-web",
   "twitch-web",
   "whatsapp-linked-device",

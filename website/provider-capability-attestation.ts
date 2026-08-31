@@ -25,7 +25,7 @@ export type ProviderCapabilityAttestationRow = Readonly<{
   completeness: ProviderCapabilityCompleteness;
   contractVersion: number;
   displayName: string;
-  kind: "official-api" | "authenticated-web" | "local-cli";
+  kind: "official-api" | "authenticated-web" | "linked-device" | "local-cli";
   limit: string;
   operation: string;
   pluginId: string;
@@ -76,6 +76,7 @@ function adapterKind(
   transport: ProviderPluginTransport,
 ): ProviderCapabilityAttestationRow["kind"] {
   if (transport === "local-cli") return "local-cli";
+  if (transport === "linked-device") return "linked-device";
   return fileName === OFFICIAL_ADAPTER_FILE ? "official-api" : "authenticated-web";
 }
 

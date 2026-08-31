@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "name": "TDLib",
+    "repository": "https://github.com/tdlib/td",
+    "version": "1.8.67",
+    "commit": "d1085f9cebc5a62379991ae1652673954f229c1f",
+    "license": "BSL-1.0",
+    "licenseFile": "LICENSE_1_0.txt"
+  },
+  "helper": {
+    "implementation": "wrench-telegram-tdlib",
+    "protocolVersion": 1,
+    "source": "wrench_telegram_tdlib.cpp",
+    "build": "CMakeLists.txt",
+    "transport": "TDLib C++ user-client API",
+    "botApiAccepted": false
+  },
+  "installer": "src/scripts/install-telegram-tdlib.sh",
+  "supportedArtifacts": [
+    { "platform": "darwin", "arch": "arm64" },
+    { "platform": "darwin", "arch": "x64" },
+    { "platform": "linux", "arch": "arm64" },
+    { "platform": "linux", "arch": "x64" }
+  ]
+}

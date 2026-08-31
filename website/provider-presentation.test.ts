@@ -12,6 +12,7 @@ import {
   PROVIDER_PRESENTATIONS,
   renderProviderAttestationGroups,
   renderProviderOverviewCards,
+  TELEGRAM_PAGE_METADATA,
 } from "./provider-presentation";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -48,6 +49,22 @@ describe("provider presentation", () => {
       supportedActionCount: 32,
       surfaceId: "beeper",
       transports: ["local-cli"],
+    });
+    expect(directory.entries.find((entry) => entry.surfaceId === "telegram")).toMatchObject({
+      adapterCount: 1,
+      adapterIdentities: [{ id: "telegram", version: "1.0.0" }],
+      capabilities: ["Contacts"],
+      href: "/providers/telegram/",
+      name: "Telegram",
+      observedCount: 1,
+      operationCount: 1,
+      supportedActionCount: 1,
+      transports: ["linked-device"],
+    });
+    expect(TELEGRAM_PAGE_METADATA).toEqual({
+      description:
+        "Sync Telegram contacts through the official TDLib user-client API into a private local Wrench projection, without using the Bot API or scanning message history.",
+      title: "Telegram contacts with Wrench: private TDLib user-session sync",
     });
     for (const entry of directory.entries) {
       const supportedRows = attestation.rows.filter((row) =>
@@ -149,6 +166,8 @@ describe("provider presentation", () => {
     expect(cards).not.toMatch(/observed|capture-required|adapter/iu);
     expect(groups.match(/class="provider-attestation-group"/gu)).toHaveLength(directory.providerCount);
     expect(groups).toContain('id="provider-linkedin"');
+    expect(groups).toContain('id="provider-telegram"');
+    expect(groups).toContain("Linked device");
     expect(groups).toContain("List accounts");
     expect(groups).toContain("Save article draft");
     expect(groups).toContain("Update conversation read state");

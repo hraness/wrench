@@ -7,6 +7,8 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+## 0.17.0 - 2026-08-31
+
 - Return a bound `cleanup-required` result when durable realm admission blocks
   an R1 read before dispatch. JSON callers retain the no-retry category while
   the cleanup-unsafe claim remains fail-closed.
@@ -18,6 +20,15 @@ coordinate that completed both checks.
 - Move automatic main-only npm staging out of GitHub deployment review. npm
   still requires separate human inspection and two-factor approval before the
   staged version becomes public.
+- Add a Telegram user-session contact provider backed by a source-pinned TDLib
+  helper. Pair and one-shot sync bind a private local projection to `getMe` and
+  `getContacts`; offline reads expose exact contact metadata without inventing
+  message-history counts or using the Bot API.
+- Bind hosted Vercel previews to their exact checked-out commit, preserve Git
+  metadata through release builds, and notify IndexNow only after the immutable
+  npm, GitHub Release, and exact Production deployment have all been verified.
+- Retry legitimate browser-admission read drift under concurrent Linux workers
+  while keeping malformed state and unrelated storage failures fail-closed.
 
 ## 0.16.2 - 2026-08-28
 

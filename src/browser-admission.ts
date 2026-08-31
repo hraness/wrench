@@ -88,6 +88,10 @@ export type BrowserAdmissionDependencies = {
   ) => Promise<void>;
   /** Test-only seam invoked after a durable create and before it is returned. */
   readonly afterCreateCommitForTest?: () => void;
+  /** Test-only seam invoked before the initial read of each slot. */
+  readonly beforeInitialClaimReadForTest?: (
+    slot: BrowserAdmissionSlot,
+  ) => void;
   /** Test-only seam invoked before rereading a slot after create contention. */
   readonly beforeContendedClaimReadForTest?: (
     slot: BrowserAdmissionSlot,
@@ -678,10 +682,15 @@ export async function acquireBrowserAdmission(
       throwIfUnavailable(options, now, expiresAt);
       let existing: BrowserAdmissionClaimSnapshot | null;
       try {
+        dependencies.beforeInitialClaimReadForTest?.(slot);
         existing = readClaim(slot, environment);
       } catch (error) {
         if (error instanceof BrowserAdmissionClaimError) {
           // Malformed claims occupy their slot until a human repairs them.
+          continue;
+        }
+        if (isStateFileReadDrift(error)) {
+          storageContention = true;
           continue;
         }
         throw error;

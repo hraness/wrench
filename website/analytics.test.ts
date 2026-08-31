@@ -128,6 +128,7 @@ describe("Wrench browser analytics", () => {
       ["/capture-and-archives/", "capture_and_archives"],
       ["/provider-capabilities/", "provider_capabilities"],
       ["/providers/beeper/", "provider_beeper"],
+      ["/providers/telegram/", "provider_telegram"],
       ["/security/", "security"],
       ["/plugins/", "plugin_authoring"],
       ["/about/", "about"],

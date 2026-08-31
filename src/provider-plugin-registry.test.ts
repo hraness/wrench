@@ -288,6 +288,39 @@ describe("provider plugin definition and registry", () => {
       .toEqual([]);
   });
 
+  test("registers Telegram contacts as a current-only TDLib user-session identity", () => {
+    const plugin = providerPluginRegistry.get("telegram-linked-device");
+    const binding = providerPluginRegistry.requireRoute("linked-device", "telegram");
+    expect(plugin?.version).toBe("1.0.0");
+    expect(binding.transport).toBe("linked-device");
+    if (binding.transport !== "linked-device") {
+      throw new Error("Telegram provider binding is not a linked device");
+    }
+    expect(binding.origin).toBe("https://telegram.org");
+    expect(binding.subject.format).toBe("telegram:user:<numeric-user-id>");
+    expect(binding.subject.matches("telegram:user:9007199254740991")).toBeTrue();
+    expect(binding.subject.matches("telegram:user:9007199254740992")).toBeFalse();
+    expect(binding.subject.matches("telegram:user:01")).toBeFalse();
+    expect(binding.linkedDeviceLifecycle).toMatchObject({
+      inspect: expect.any(Function),
+      pair: expect.any(Function),
+      syncOnce: expect.any(Function),
+    });
+    const contacts = binding.operations.find(({ name }) => name === "contacts.list");
+    expect(contacts).toMatchObject({
+      contractVersions: [1],
+      risk: "R1",
+      state: "observed",
+    });
+    expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
+      .toBe("ba1173f1e76de6b29b533fdec30c2271e2d35b4f41be9bdcf3928134db4fb108");
+    expect(providerPluginRegistry.legacyContractImplementationHashes(
+      binding,
+      "contacts.list",
+      1,
+    )).toEqual([]);
+  });
+
   test("retains each shipped web reader under its new reviewed identity", () => {
     for (const expected of [
       {
@@ -3886,6 +3919,7 @@ describe("provider plugin definition and registry", () => {
       "gmail-official",
       "linkedin-official",
       "meta-web",
+      "telegram-linked-device",
       "whatsapp-linked-device",
     ]);
     expect(sharedProjectionProviderIds).toEqual(
@@ -3911,6 +3945,25 @@ describe("provider plugin definition and registry", () => {
       "providers/whatsapp-interaction-projection-protocol.ts",
     ]) {
       expect(whatsappSourceLabels.has(expected)).toBeTrue();
+    }
+
+    const telegram = providerPluginRegistry.get("telegram-linked-device");
+    expect(telegram).toBeDefined();
+    const telegramSourceLabels = new Set(
+      telegram?.implementationSources.map((source) => source.label) ?? [],
+    );
+    for (const expected of [
+      "providers/contact-projection.ts",
+      "providers/telegram-tdlib.ts",
+      "providers/telegram-tdlib-runtime.ts",
+      "scripts/install-telegram-tdlib.sh",
+      "vendor/telegram-tdlib/CMakeLists.txt",
+      "vendor/telegram-tdlib/LICENSE_1_0.txt",
+      "vendor/telegram-tdlib/README.md",
+      "vendor/telegram-tdlib/manifest.json",
+      "vendor/telegram-tdlib/wrench_telegram_tdlib.cpp",
+    ]) {
+      expect(telegramSourceLabels.has(expected)).toBeTrue();
     }
   });
 
