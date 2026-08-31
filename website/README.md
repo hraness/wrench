@@ -15,9 +15,10 @@ project's public `phc_` token; `NEXT_PUBLIC_POSTHOG_HOST` defaults to
 `https://us.i.posthog.com`. Set
 `NEXT_PUBLIC_HRANESS_MAILING_TURNSTILE_SITEKEY` to the public Cloudflare
 Turnstile sitekey registered for `wrench.rip` to enable the product-specific
-Wrench mailing-list form. When it is absent, the shared footer stays visible
-without rendering a signup form. The private Turnstile secret remains in the
-central Accounts service.
+Wrench mailing-list form. Production builds require a valid key and fail closed
+when it is absent or malformed. Local and Preview builds may omit it; in those
+environments the shared footer stays visible without rendering a signup form.
+The private Turnstile secret remains in the central Accounts service.
 No personal API key is used by the runtime build.
 
 ```sh

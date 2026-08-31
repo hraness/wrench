@@ -667,6 +667,11 @@ export function wrenchMailingListConfig(
   const turnstileSitekey =
     environment[WRENCH_MAILING_TURNSTILE_SITEKEY_ENV];
   if (turnstileSitekey === undefined || turnstileSitekey === "") {
+    if (environment.VERCEL_ENV === "production") {
+      throw new Error(
+        `${WRENCH_MAILING_TURNSTILE_SITEKEY_ENV} must be configured for Vercel Production.`,
+      );
+    }
     return { kind: "none" };
   }
   if (!/^[A-Za-z0-9_-]{20,100}$/u.test(turnstileSitekey)) {

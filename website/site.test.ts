@@ -120,7 +120,7 @@ describe("wrench.rip static site", () => {
       .toThrow("descriptions must stay identical");
   });
 
-  test("binds signup to the Wrench audience and fails closed without a key", () => {
+  test("binds signup to Wrench and fails production closed without a key", () => {
     const turnstileSitekey = "1x00000000000000000000AA";
     expect(wrenchMailingListConfig({
       [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: turnstileSitekey,
@@ -133,6 +133,14 @@ describe("wrench.rip static site", () => {
     expect(wrenchMailingListConfig({
       [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: "",
     })).toEqual({ kind: "none" });
+    expect(wrenchMailingListConfig({ VERCEL_ENV: "preview" }))
+      .toEqual({ kind: "none" });
+    for (const turnstileSitekey of [undefined, ""]) {
+      expect(() => wrenchMailingListConfig({
+        [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: turnstileSitekey,
+        VERCEL_ENV: "production",
+      })).toThrow(WRENCH_MAILING_TURNSTILE_SITEKEY_ENV);
+    }
     expect(() => wrenchMailingListConfig({
       [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: "not a public key",
     })).toThrow(WRENCH_MAILING_TURNSTILE_SITEKEY_ENV);
