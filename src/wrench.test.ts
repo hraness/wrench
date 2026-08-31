@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { parseCaptureArguments } from "@hraness/kb/capture";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { createAuth, loadAuth, removeAuth, saveAuth } from "./auth";
-import { PreservedBrowserArtifactsError } from "./browser";
+import {
+  PreservedBrowserArtifactsError,
+  browserRecoveryHandle,
+} from "./browser";
 import type * as MediaRuntimeModule from "./media";
 import type { DoctorReport as MediaDoctorReport } from "./media/doctor";
 import { canonicalJson, isWebSessionOperation, sha256, type WrenchManifest } from "./model";
@@ -2100,9 +2103,36 @@ describe("doctor authenticated API readiness", () => {
         },
         testState.environment,
       );
-      admission.registerCleanupBarrier(
+      const socketDirectory = join(testState.directory, "private-doctor-socket-sentinel");
+      const artifactsDirectory = join(testState.directory, "private-doctor-artifacts-sentinel");
+      mkdirSync(socketDirectory, { mode: 0o700 });
+      mkdirSync(artifactsDirectory, { mode: 0o700 });
+      const privateSession = `io-${process.pid}-abcdef12-abc`;
+      const privateRecoveryHandle = browserRecoveryHandle({
+        session: privateSession,
+        configPath: join(artifactsDirectory, "private-config-sentinel.json"),
+        socketDirectory,
+        artifactsDirectory,
+      });
+      const publishCleanupResource = admission.registerCleanupBarrier(
         Promise.reject(new Error("synthetic cleanup uncertainty")),
       );
+      const privateIdentity = (path: string) => {
+        const stats = lstatSync(path, { bigint: true });
+        return {
+          device: stats.dev.toString(),
+          inode: stats.ino.toString(),
+        };
+      };
+      publishCleanupResource({
+        kind: "agent-browser-session-v1",
+        recoveryHandle: privateRecoveryHandle,
+        session: privateSession,
+        socketDirectory,
+        socketDirectoryIdentity: privateIdentity(socketDirectory),
+        artifactsDirectory,
+        artifactsDirectoryIdentity: privateIdentity(artifactsDirectory),
+      });
       admission.closeRegistration();
       admission.cleanupUnsafe();
 
@@ -2121,6 +2151,14 @@ describe("doctor authenticated API readiness", () => {
           },
         },
       });
+      for (const privateSentinel of [
+        socketDirectory,
+        artifactsDirectory,
+        privateSession,
+        privateRecoveryHandle,
+      ]) {
+        expect(diagnosed.stdout).not.toContain(privateSentinel);
+      }
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
     }

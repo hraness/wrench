@@ -1258,7 +1258,7 @@ describe("encrypted confirmation plans", () => {
       });
       expect("readFailure" in result).toBeFalse();
       expect(result.receipt.error).toContain(
-        "private browser artifacts were preserved; manual recovery is required",
+        "private browser artifacts were preserved; wrench doctor must prove and complete exact browser-session recovery before retry",
       );
       expect(result.receipt.error).toContain(`recovery handle: ${recoveryHandle}`);
       expect(result.receipt.error).not.toContain("invalid dispatch progress");
@@ -4460,7 +4460,7 @@ describe("receipts", () => {
         },
       });
       expect(result.receipt.error).toContain(
-        "private browser artifacts were preserved; manual recovery is required",
+        "private browser artifacts were preserved; wrench doctor must prove and complete exact browser-session recovery before retry",
       );
       expect(result.receipt.error).toContain(`recovery handle: ${recoveryHandle}`);
       expect(readRunReceipt(result.receipt.runId, testState.environment))

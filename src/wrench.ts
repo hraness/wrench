@@ -1470,7 +1470,7 @@ async function doctor(
     repairInterruptedConfirmationClaims(environment);
   const runJournalRecovery = repairInterruptedRunJournals(environment);
   const webSessionCleanupAdmissionRecovery =
-    recoverWebSessionCleanupAdmissions(environment);
+    await recoverWebSessionCleanupAdmissions(environment);
   const linkedDeviceLifecycleAdmissionRecovery =
     recoverLinkedDeviceLifecycleAdmissions(environment);
   const linkedDeviceLifecycleRecovery =

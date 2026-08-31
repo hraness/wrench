@@ -19,6 +19,7 @@ import {
   PreservedBrowserArtifactsError,
   browserRecoveryHandle,
   type BrowserCleanupResourceIdentity,
+  type BrowserCleanupResourceIdentityV2,
 } from "./browser";
 import {
   WEB_SESSION_CLEANUP_ADMISSION_STATE_DIRECTORY,
@@ -27,6 +28,7 @@ import {
   listWebSessionCleanupAdmissions,
   parseWebSessionCleanupAdmissionClaim,
   recoverWebSessionCleanupAdmissions,
+  recoverWebSessionCleanupAdmissionsCore,
   webSessionCleanupRealmKey,
   withWebSessionCleanupAdmission,
   type WebSessionCleanupAdmissionContainment,
@@ -104,6 +106,17 @@ function writeAdmissionFixture(
   } = {},
   resources?: readonly WebSessionCleanupAdmissionResource[],
   identityOverrides: Partial<WebSessionCleanupAdmissionIdentity> = {},
+  claimVersion: 1 | 2 = 1,
+  recovery?: {
+    readonly status: "active";
+    readonly owner: {
+      readonly pid: number;
+      readonly token: string;
+      readonly bootId: string;
+      readonly processStartId: string;
+    };
+    readonly acquiredAt: string;
+  },
 ): void {
   const selectedIdentity = identity(identityOverrides);
   const processIdentity = currentProcessStartIdentity();
@@ -112,7 +125,7 @@ function writeAdmissionFixture(
     selectedIdentity.authId,
   );
   const claim = parseWebSessionCleanupAdmissionClaim({
-    schemaVersion: 1,
+    schemaVersion: claimVersion,
     realmKey,
     ...selectedIdentity,
     owner: {
@@ -133,6 +146,9 @@ function writeAdmissionFixture(
           }]
         : []
     ),
+    ...(claimVersion === 2
+      ? { recovery: recovery ?? { status: "idle" } }
+      : {}),
   });
   const admissionDirectory = join(
     wrenchStateHome(environment),
@@ -156,6 +172,23 @@ function privateDirectoryIdentity(path: string): {
   return Object.freeze({
     device: stats.dev.toString(),
     inode: stats.ino.toString(),
+  });
+}
+
+function privateDirectoryIdentityV2(path: string): {
+  readonly device: string;
+  readonly inode: string;
+  readonly birthtimeNs: string;
+  readonly mode: "448";
+  readonly uid: string;
+} {
+  const stats = lstatSync(path, { bigint: true });
+  return Object.freeze({
+    device: stats.dev.toString(),
+    inode: stats.ino.toString(),
+    birthtimeNs: stats.birthtimeNs.toString(),
+    mode: "448",
+    uid: stats.uid.toString(),
   });
 }
 
@@ -191,6 +224,81 @@ function browserCleanupResourceFixture(): {
       artifactsDirectoryIdentity:
         privateDirectoryIdentity(artifactsDirectory),
     }),
+  });
+}
+
+function pinnedBrowserCleanupResourceFixture(): {
+  readonly resource: BrowserCleanupResourceIdentityV2;
+  readonly socketDirectory: string;
+  readonly artifactsDirectory: string;
+} {
+  const socketDirectory = mkdtempSync("/tmp/io-ab-");
+  const artifactsDirectory = mkdtempSync(
+    join(tmpdir(), "io-browser-"),
+  );
+  chmodSync(socketDirectory, 0o700);
+  chmodSync(artifactsDirectory, 0o700);
+  const session = `io-${process.pid}-abcdef12-abc`;
+  return Object.freeze({
+    socketDirectory,
+    artifactsDirectory,
+    resource: Object.freeze({
+      kind: "agent-browser-session-v2",
+      recoveryHandle: browserRecoveryHandle({
+        session,
+        configPath: join(artifactsDirectory, "agent-browser.json"),
+        socketDirectory,
+        artifactsDirectory,
+      }),
+      session,
+      socketDirectory,
+      socketDirectoryIdentity:
+        privateDirectoryIdentityV2(socketDirectory),
+      artifactsDirectory,
+      artifactsDirectoryIdentity:
+        privateDirectoryIdentityV2(artifactsDirectory),
+      phase: "controlled",
+      control: Object.freeze({
+        kind: "agent-browser-control-v1",
+        version: "0.32.3",
+        session,
+        socketDirectory,
+        daemonOwner: Object.freeze({
+          pid: 424_242,
+          bootId: "a".repeat(64),
+          processStartId: "b".repeat(64),
+        }),
+        engine: "chrome",
+        launchHash: "42",
+        cdpUrl: "ws://127.0.0.1:43125/devtools/browser/exact-test",
+      }),
+    }),
+  });
+}
+
+function inactiveAgentBrowserSessionResult(
+  resource: BrowserCleanupResourceIdentityV2,
+): {
+  readonly stdout: string;
+  readonly stderr: "";
+  readonly exitCode: 0;
+} {
+  return Object.freeze({
+    stdout: `${JSON.stringify({
+      success: true,
+      data: {
+        active: false,
+        namespace: null,
+        pid: null,
+        runtime: null,
+        runtimeError: null,
+        session: resource.session,
+        socketDir: resource.socketDirectory,
+        version: null,
+      },
+    })}\n`,
+    stderr: "",
+    exitCode: 0,
   });
 }
 
@@ -292,7 +400,7 @@ describe("web-session cleanup admission", () => {
   });
 
   test("does not fail a completed owner when a safe reclaimer publishes its successor", async () => {
-    await withState((environment) => {
+    await withState(async (environment) => {
       const originalIdentity = identity();
       const original = acquireWebSessionCleanupAdmission(
         originalIdentity,
@@ -300,7 +408,7 @@ describe("web-session cleanup admission", () => {
       );
       original.closeRegistration();
       original.cleanupComplete();
-      expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+      expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
         scanned: 1,
         repaired: 1,
         issues: [],
@@ -488,7 +596,7 @@ describe("web-session cleanup admission", () => {
   });
 
   test("retains a same-boot local private root with no published process group", async () => {
-    await withState((environment) => {
+    await withState(async (environment) => {
       const root = join(
         realpathSync(tmpdir()),
         `wrench-local-recovery-${randomUUID()}`,
@@ -511,7 +619,7 @@ describe("web-session cleanup admission", () => {
           },
         );
 
-        expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+        expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
           scanned: 1,
           repaired: 0,
           retained: 1,
@@ -594,8 +702,69 @@ describe("web-session cleanup admission", () => {
     });
   });
 
-  test("repairs same-boot cleanup-unsafe state only from browser-closed inode-bound evidence", async () => {
-    await withState((environment) => {
+  test("persists only monotonic browser pins and finalizes against the latest pin", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      try {
+        const admission = acquireWebSessionCleanupAdmission(
+          identity(),
+          environment,
+        );
+        let rejectCleanup: ((reason: unknown) => void) | undefined;
+        const cleanup = new Promise<void>((_resolve, reject) => {
+          rejectCleanup = reject;
+        });
+        const publish = admission.registerCleanupBarrier(cleanup);
+        const prepared: BrowserCleanupResourceIdentityV2 = Object.freeze({
+          ...fixture.resource,
+          phase: "prepared",
+          control: null,
+        });
+        const launchIntent: BrowserCleanupResourceIdentityV2 = Object.freeze({
+          ...fixture.resource,
+          phase: "launch-intent",
+          control: null,
+        });
+        publish(prepared);
+        publish(launchIntent);
+        publish(fixture.resource);
+        expect(() => publish(prepared)).toThrow("changed after publication");
+        expect(() => publish({
+          ...fixture.resource,
+          control: {
+            ...fixture.resource.control!,
+            launchHash: "43",
+          },
+        })).toThrow("changed after publication");
+        admission.closeRegistration();
+        rejectCleanup?.(new PreservedBrowserArtifactsError(
+          "browser close was verified but private roots remain",
+          fixture.resource.recoveryHandle,
+          new Error("synthetic artifact cleanup failure"),
+          {
+            kind: "agent-browser-closed-artifacts-v1",
+            resource: fixture.resource,
+          },
+        ));
+        await Promise.allSettled(admission.barriers);
+        admission.cleanupUnsafe();
+        expect(listWebSessionCleanupAdmissions(environment)).toMatchObject([{
+          claim: {
+            resources: [{
+              status: "browser-closed-artifacts",
+              identity: fixture.resource,
+            }],
+          },
+        }]);
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("retains dead legacy browser claims that lack root-generation evidence", async () => {
+    await withState(async (environment) => {
       const fixture = browserCleanupResourceFixture();
       try {
         const current = currentProcessStartIdentity();
@@ -610,16 +779,16 @@ describe("web-session cleanup admission", () => {
           }],
         );
 
-        expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+        expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
           scanned: 1,
-          repaired: 1,
-          retained: 0,
+          repaired: 0,
+          retained: 1,
           invalid: 0,
-          issues: [],
+          issues: [{ kind: "cleanup-unsafe" }],
         });
-        expect(existsSync(fixture.socketDirectory)).toBeFalse();
-        expect(existsSync(fixture.artifactsDirectory)).toBeFalse();
-        expect(listWebSessionCleanupAdmissions(environment)).toEqual([]);
+        expect(existsSync(fixture.socketDirectory)).toBeTrue();
+        expect(existsSync(fixture.artifactsDirectory)).toBeTrue();
+        expect(listWebSessionCleanupAdmissions(environment)).toHaveLength(1);
       } finally {
         rmSync(fixture.socketDirectory, {
           recursive: true,
@@ -646,20 +815,12 @@ describe("web-session cleanup admission", () => {
           }],
         );
 
-        const successorIdentity = identity({ runId: randomUUID() });
-        const successor = acquireWebSessionCleanupAdmission(
-          successorIdentity,
+        expect(() => acquireWebSessionCleanupAdmission(
+          identity({ runId: randomUUID() }),
           environment,
-        );
-
-        expect(successor.current.claim.runId).toBe(
-          successorIdentity.runId,
-        );
-        expect(existsSync(fixture.socketDirectory)).toBeFalse();
-        expect(existsSync(fixture.artifactsDirectory)).toBeFalse();
-        successor.closeRegistration();
-        successor.cleanupComplete();
-        successor.release();
+        )).toThrow(WebSessionCleanupAdmissionBlockedError);
+        expect(existsSync(fixture.socketDirectory)).toBeTrue();
+        expect(existsSync(fixture.artifactsDirectory)).toBeTrue();
       } finally {
         rmSync(fixture.socketDirectory, {
           recursive: true,
@@ -673,22 +834,392 @@ describe("web-session cleanup admission", () => {
     });
   });
 
+  test("retains browser resources from a different boot without probing them", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      try {
+        const current = currentProcessStartIdentity();
+        writeAdmissionFixture(
+          environment,
+          { status: "cleanup-unsafe" },
+          {
+            bootId: differentDigest(current.bootId),
+            processStartId: differentDigest(current.processStartId),
+          },
+          [{
+            resourceId: randomUUID(),
+            status: "active",
+            identity: fixture.resource,
+          }],
+          {},
+          2,
+        );
+
+        const report = await recoverWebSessionCleanupAdmissionsCore(
+          environment,
+          {
+            currentBootId: current.bootId,
+            inspectOwner: () => "different-or-dead",
+            browserLifecycle: {
+              runCommand: () => {
+                throw new Error("cross-boot browser recovery was attempted");
+              },
+            },
+          },
+        );
+
+        expect(report).toMatchObject({
+          scanned: 1,
+          repaired: 0,
+          retained: 1,
+          issues: [{ kind: "cleanup-unsafe" }],
+        });
+        expect(existsSync(fixture.socketDirectory)).toBeTrue();
+        expect(existsSync(fixture.artifactsDirectory)).toBeTrue();
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("leases and removes only an exact pinned inactive browser generation", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      let observedLease = false;
+      let endpointRefusals = 0;
+      try {
+        const current = currentProcessStartIdentity();
+        writeAdmissionFixture(
+          environment,
+          { status: "cleanup-unsafe" },
+          { processStartId: differentDigest(current.processStartId) },
+          [{
+            resourceId: randomUUID(),
+            status: "active",
+            identity: fixture.resource,
+          }],
+          {},
+          2,
+          {
+            status: "active",
+            owner: {
+              pid: 424_243,
+              token: randomUUID(),
+              bootId: "c".repeat(64),
+              processStartId: "d".repeat(64),
+            },
+            acquiredAt: "2026-08-30T11:59:00.000Z",
+          },
+        );
+        const report = await recoverWebSessionCleanupAdmissionsCore(
+          environment,
+          {
+            currentBootId: current.bootId,
+            inspectOwner: () => "different-or-dead",
+            browserLifecycle: {
+              ownerStatus: () => "different-or-dead",
+              runCommand: () => {
+                const [entry] = listWebSessionCleanupAdmissions(environment);
+                if (
+                  entry !== undefined
+                  && !("invalid" in entry)
+                  && entry.claim.schemaVersion === 2
+                  && entry.claim.recovery.status === "active"
+                ) observedLease = true;
+                return Promise.resolve({
+                  stdout: `${JSON.stringify({
+                    success: true,
+                    data: {
+                      active: false,
+                      namespace: null,
+                      pid: null,
+                      runtime: null,
+                      runtimeError: null,
+                      session: fixture.resource.session,
+                      socketDir: fixture.resource.socketDirectory,
+                      version: null,
+                    },
+                  })}\n`,
+                  stderr: "",
+                  exitCode: 0,
+                });
+              },
+              cdpEndpointStatus: () => {
+                endpointRefusals += 1;
+                return Promise.resolve("unavailable");
+              },
+              sleep: () => Promise.resolve(),
+            },
+          },
+        );
+        expect(report).toMatchObject({
+          scanned: 1,
+          repaired: 1,
+          retained: 0,
+          issues: [],
+        });
+        expect(observedLease).toBeTrue();
+        expect(endpointRefusals).toBe(12);
+        expect(existsSync(fixture.socketDirectory)).toBeFalse();
+        expect(existsSync(fixture.artifactsDirectory)).toBeFalse();
+        expect(listWebSessionCleanupAdmissions(environment)).toEqual([]);
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("recovers exact prepared roots without inventing a launch", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      const prepared: BrowserCleanupResourceIdentityV2 = Object.freeze({
+        ...fixture.resource,
+        phase: "prepared",
+        control: null,
+      });
+      let sessionReads = 0;
+      try {
+        const current = currentProcessStartIdentity();
+        writeAdmissionFixture(
+          environment,
+          { status: "cleanup-unsafe" },
+          { processStartId: differentDigest(current.processStartId) },
+          [{
+            resourceId: randomUUID(),
+            status: "active",
+            identity: prepared,
+          }],
+          {},
+          2,
+        );
+
+        const report = await recoverWebSessionCleanupAdmissionsCore(
+          environment,
+          {
+            currentBootId: current.bootId,
+            inspectOwner: () => "different-or-dead",
+            browserLifecycle: {
+              runCommand: () => {
+                sessionReads += 1;
+                return Promise.resolve(
+                  inactiveAgentBrowserSessionResult(prepared),
+                );
+              },
+              cdpEndpointStatus: () => {
+                throw new Error("prepared recovery probed an unbound endpoint");
+              },
+            },
+          },
+        );
+
+        expect(report).toMatchObject({
+          scanned: 1,
+          repaired: 1,
+          retained: 0,
+          issues: [],
+        });
+        expect(sessionReads).toBe(6);
+        expect(existsSync(fixture.socketDirectory)).toBeFalse();
+        expect(existsSync(fixture.artifactsDirectory)).toBeFalse();
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("retains an unpinned launch-intent crash when the live control is absent", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      const launchIntent: BrowserCleanupResourceIdentityV2 = Object.freeze({
+        ...fixture.resource,
+        phase: "launch-intent",
+        control: null,
+      });
+      try {
+        const current = currentProcessStartIdentity();
+        writeAdmissionFixture(
+          environment,
+          { status: "cleanup-unsafe" },
+          { processStartId: differentDigest(current.processStartId) },
+          [{
+            resourceId: randomUUID(),
+            status: "active",
+            identity: launchIntent,
+          }],
+          {},
+          2,
+        );
+
+        const report = await recoverWebSessionCleanupAdmissionsCore(
+          environment,
+          {
+            currentBootId: current.bootId,
+            inspectOwner: () => "different-or-dead",
+            browserLifecycle: {
+              runCommand: () => Promise.resolve(
+                inactiveAgentBrowserSessionResult(launchIntent),
+              ),
+            },
+          },
+        );
+
+        expect(report).toMatchObject({
+          scanned: 1,
+          repaired: 0,
+          retained: 1,
+          issues: [{ kind: "recovery-conflict" }],
+        });
+        expect(existsSync(fixture.socketDirectory)).toBeTrue();
+        expect(existsSync(fixture.artifactsDirectory)).toBeTrue();
+        expect(listWebSessionCleanupAdmissions(environment)).toHaveLength(1);
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("resumes a quiescent root journal after deletion precedes its CAS", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      let endpointRefusals = 0;
+      let sessionReads = 0;
+      try {
+        const current = currentProcessStartIdentity();
+        writeAdmissionFixture(
+          environment,
+          { status: "cleanup-unsafe" },
+          { processStartId: differentDigest(current.processStartId) },
+          [{
+            resourceId: randomUUID(),
+            status: "browser-quiescent-artifacts",
+            identity: fixture.resource,
+            removedRoots: [],
+          }],
+          {},
+          2,
+        );
+        rmSync(fixture.artifactsDirectory, { recursive: true });
+
+        const report = await recoverWebSessionCleanupAdmissionsCore(
+          environment,
+          {
+            currentBootId: current.bootId,
+            inspectOwner: () => "different-or-dead",
+            browserLifecycle: {
+              ownerStatus: () => "different-or-dead",
+              runCommand: () => {
+                sessionReads += 1;
+                return Promise.resolve(
+                  inactiveAgentBrowserSessionResult(fixture.resource),
+                );
+              },
+              cdpEndpointStatus: () => {
+                endpointRefusals += 1;
+                return Promise.resolve("unavailable");
+              },
+              sleep: () => Promise.resolve(),
+            },
+          },
+        );
+
+        expect(report).toMatchObject({
+          scanned: 1,
+          repaired: 1,
+          retained: 0,
+          issues: [],
+        });
+        expect(existsSync(fixture.socketDirectory)).toBeFalse();
+        expect(existsSync(fixture.artifactsDirectory)).toBeFalse();
+        expect(sessionReads).toBe(2);
+        expect(endpointRefusals).toBe(6);
+        expect(listWebSessionCleanupAdmissions(environment)).toEqual([]);
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("retains a replacement encountered while resuming root deletion", async () => {
+    await withState(async (environment) => {
+      const fixture = pinnedBrowserCleanupResourceFixture();
+      const displacedSocket = `${fixture.socketDirectory}.displaced`;
+      try {
+        const current = currentProcessStartIdentity();
+        writeAdmissionFixture(
+          environment,
+          { status: "cleanup-unsafe" },
+          { processStartId: differentDigest(current.processStartId) },
+          [{
+            resourceId: randomUUID(),
+            status: "browser-quiescent-artifacts",
+            identity: fixture.resource,
+            removedRoots: [],
+          }],
+          {},
+          2,
+        );
+        rmSync(fixture.artifactsDirectory, { recursive: true });
+        renameSync(fixture.socketDirectory, displacedSocket);
+        mkdirSync(fixture.socketDirectory, { mode: 0o700 });
+
+        const report = await recoverWebSessionCleanupAdmissionsCore(
+          environment,
+          {
+            currentBootId: current.bootId,
+            inspectOwner: () => "different-or-dead",
+            browserLifecycle: {
+              runCommand: () => {
+                throw new Error("quiescent journal reran browser effects");
+              },
+            },
+          },
+        );
+
+        expect(report).toMatchObject({
+          scanned: 1,
+          repaired: 0,
+          retained: 1,
+          issues: [{ kind: "recovery-conflict" }],
+        });
+        expect(listWebSessionCleanupAdmissions(environment)).toMatchObject([{
+          claim: {
+            resources: [{
+              status: "browser-quiescent-artifacts",
+              removedRoots: ["artifacts"],
+            }],
+          },
+        }]);
+        expect(existsSync(fixture.socketDirectory)).toBeTrue();
+        expect(existsSync(displacedSocket)).toBeTrue();
+      } finally {
+        rmSync(fixture.socketDirectory, { recursive: true, force: true });
+        rmSync(displacedSocket, { recursive: true, force: true });
+        rmSync(fixture.artifactsDirectory, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("retains same-boot cleanup uncertainty when browser-closed proof is absent or identity-changed", async () => {
-    await withState((environment) => {
+    await withState(async (environment) => {
       const current = currentProcessStartIdentity();
       writeAdmissionFixture(
         environment,
         { status: "cleanup-unsafe" },
         { processStartId: differentDigest(current.processStartId) },
       );
-      expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+      expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
         scanned: 1,
         repaired: 0,
         retained: 1,
         issues: [{ kind: "cleanup-unsafe" }],
       });
     });
-    await withState((environment) => {
+    await withState(async (environment) => {
       const fixture = browserCleanupResourceFixture();
       const displacedArtifactsDirectory =
         `${fixture.artifactsDirectory}.displaced`;
@@ -713,7 +1244,7 @@ describe("web-session cleanup admission", () => {
         );
         mkdirSync(fixture.artifactsDirectory, { mode: 0o700 });
 
-        expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+        expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
           scanned: 1,
           repaired: 0,
           retained: 1,
@@ -737,27 +1268,27 @@ describe("web-session cleanup admission", () => {
     });
   });
 
-  test("repairs pre-resource owner death but requires a reboot after resource admission", async () => {
-    await withState((environment) => {
+  test("repairs pre-resource owner death and retains unproved resource state", async () => {
+    await withState(async (environment) => {
       const current = currentProcessStartIdentity();
       writeAdmissionFixture(
         environment,
         { status: "parent-owned" },
         { processStartId: differentDigest(current.processStartId) },
       );
-      expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+      expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
         scanned: 1,
         repaired: 1,
         retained: 0,
         invalid: 0,
       });
     });
-    await withState((environment) => {
+    await withState(async (environment) => {
       writeAdmissionFixture(
         environment,
         { status: "resource-active" },
       );
-      expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+      expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
         scanned: 1,
         repaired: 0,
         retained: 1,
@@ -766,24 +1297,73 @@ describe("web-session cleanup admission", () => {
         }],
       });
     });
-    await withState((environment) => {
+    await withState(async (environment) => {
+      const current = currentProcessStartIdentity();
+      writeAdmissionFixture(
+        environment,
+        { status: "resource-active" },
+        { processStartId: differentDigest(current.processStartId) },
+      );
+      expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+        scanned: 1,
+        repaired: 0,
+        retained: 1,
+        issues: [{ kind: "cleanup-unsafe" }],
+      });
+      expect(listWebSessionCleanupAdmissions(environment)).toHaveLength(1);
+    });
+    await withState(async (environment) => {
       const current = currentProcessStartIdentity();
       writeAdmissionFixture(
         environment,
         { status: "resource-active" },
         { bootId: differentDigest(current.bootId) },
       );
-      expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+      expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
         scanned: 1,
-        repaired: 1,
+        repaired: 0,
+        retained: 1,
+        issues: [{ kind: "cleanup-unsafe" }],
+      });
+    });
+  });
+
+  test("blocks acquisition and a second doctor while an exact recovery owner is live", async () => {
+    await withState(async (environment) => {
+      const current = currentProcessStartIdentity();
+      writeAdmissionFixture(
+        environment,
+        { status: "resource-active" },
+        { processStartId: differentDigest(current.processStartId) },
+        undefined,
+        {},
+        2,
+        {
+          status: "active",
+          owner: {
+            pid: process.pid,
+            token: randomUUID(),
+            ...current,
+          },
+          acquiredAt: "2026-08-30T12:00:00.000Z",
+        },
+      );
+      expect(() => acquireWebSessionCleanupAdmission(
+        identity({ runId: randomUUID() }),
+        environment,
+      )).toThrow("cleanup recovery is active");
+      expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+        scanned: 1,
+        repaired: 0,
+        active: 1,
         retained: 0,
-        issues: [],
+        issues: [{ kind: "recovery-active" }],
       });
     });
   });
 
   test("production recovery ignores caller-forged liveness and boot evidence", async () => {
-    await withState((environment) => {
+    await withState(async (environment) => {
       const unsafe = acquireWebSessionCleanupAdmission(
         identity(),
         environment,
@@ -810,7 +1390,7 @@ describe("web-session cleanup admission", () => {
           },
         ) => ReturnType<typeof recoverWebSessionCleanupAdmissions>;
 
-      expect(attemptForgedRecovery(environment, {
+      expect(await attemptForgedRecovery(environment, {
         inspectOwner: () => "different-or-dead",
         currentBootId: differentBootId,
       })).toMatchObject({
@@ -896,7 +1476,7 @@ describe("web-session cleanup admission", () => {
   });
 
   test("fails closed on malformed requested state and diagnoses unexpected state", async () => {
-    await withState((environment) => {
+    await withState(async (environment) => {
       const directory = join(
         wrenchStateHome(environment),
         WEB_SESSION_CLEANUP_ADMISSION_STATE_DIRECTORY,
@@ -918,7 +1498,7 @@ describe("web-session cleanup admission", () => {
       }
       expect(typeof invalidAdmission.coordinate).toBe("string");
       expect(invalidAdmission.invalid).toBeTrue();
-      expect(recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
+      expect(await recoverWebSessionCleanupAdmissions(environment)).toMatchObject({
         scanned: 1,
         repaired: 0,
         invalid: 1,
