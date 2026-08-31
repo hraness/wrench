@@ -274,12 +274,16 @@ Current `x-client-transaction-id` generation is code-owned: wrench resolves the 
 
 `likes.set` and `content.save` (`R2`) bind the exact account and post, select only the matching create/delete mutation for the confirmed desired state, validate the operation-specific `Done` response, and independently read the same post through TweetResultByRestId before marking the dispatch verified. Separate reversible live fixtures proved bookmark false → true → false and like false → true → false, including both independent reads and restoration of the original false state. `articles.draft.save` is the separate observed private structured-text-and-inline-image contract above.
 
-`posts.publish@4` is the separate observed R3 post contract. It accepts exact
-text and at most one plan-bound PNG or MP4, binds the account and uploaded media ID,
-admits one CreateTweet dispatch, durably retains the response-bound post/media
-target before readback, and polls only that exact post through
-TweetResultByRestId. Threads, replies, reposts, quotes, DMs, and
-Article publishing remain capture-required.
+`posts.publish@5` is the separate observed R3 post contract. It accepts exact
+text up to the reviewed CreateTweet 25000-unit bound without truncation, and at
+most one plan-bound PNG or MP4, binds the account and uploaded media ID, admits
+one CreateTweet dispatch, binds long-form text from `note_tweet` when present,
+durably retains the response-bound post/media target before readback, and polls
+only that exact post through TweetResultByRestId. A live account that cannot
+accept that length fails closed. Prefer one long `posts.publish` over a
+`threads.publish` split. Threads, replies, reposts, quotes, DMs, and Article
+publishing remain capture-required. Per-item `threads.publish` maxLength stays
+280 because reply composition and thread-split still use the short-item bound.
 
 CreateTweet sends empty `semantic_annotation_ids` and no AI or
 content-disclosure field. The reviewed GraphQL contract has no
