@@ -4,18 +4,18 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "6d7b0f27b2e2eca68148d38edafafe21abb256ec643288b0d3fefd514b7cde9e";
+  "3bcfdeeac4f7878f17a62dfd79fa01ce42f81302372c4f72c87ac8275c1260ee";
 const predecessorLegacyInventorySha256 = [
-  "180d4d780009c6414ff73b3d11c947f200fb5442a0170671579c0d08a2e5b02f",
-  "d2c5908fc43233e29387f6f68a46fe3674fa1162f3b501c3ec2b2e04be25bd30",
-  "4ae96c6bfc7eb11105054ced427704c3ed5c82f5071f04ec92b8b82a9ec1e486",
-  "a8b4b537091e2935742c382be9ba3fe6a2e6456b529468c4889b49eee804366c",
-  "9f311c5dc9f740c4bfc35f68f1dc26e60e0175744f3768bdd438b080bb4e5dfe",
-  "c051ae3209aef463692b7b5d6bcef404e7cff096fdde80b1eb325880b90bec14",
-  "d625a6d6d9337510daf736b006ba59e8adb8e7697cce5297f4a62f50770e6729",
-  "de6b27e947f57b0beb4ec403561d3f1db6af3e9d2b8fa222b2dba721dbfe76ec",
-  "1032f3df027f75f062371cdefc4b814be06e651e1ffb3bb02de4afc923bf903d",
-  "816053f54ce88d4c08f605903f414d096630ed386feca8bb5c87d8c60f0cb1fc",
+  "5be8b3ff9da1e8100f838a44ababc00b77692a65701f8a138d1d83754c232f75",
+  "92cae606544b38bed97795688970386f1ea2bbd7cc2c8cd6e1d159c3b27f4c83",
+  "da65716a2a006be474c9f4a760c058070dc7a5331008d2ccce4e2e8c5c46fc4f",
+  "84c0d4097966ad4d2b6d1e56fe6d0c1cbd393ac77b2194c5b774452b9f9ddbc1",
+  "76f16b52415d7c6d4b6b20b61bcd36240db25c790ceb2b42faa8fd5cdaef1cbb",
+  "3d24e682510065c5212a6548d3da1ee5c1f5b44d35da20abdc3ab5f9c99127c2",
+  "8054163089bf9f02751394f72d8dbd1e53ec11f96f0f4dc3b7013bc26386eee9",
+  "41b510ec6a1c2e19b71b01e6d01d0fbdcd85a8e2358d0a95fc38987faff7285d",
+  "01fc1d11547aa46aaa95966a66df8410956f2ac68c27980562c35af5edc4f3db",
+  "72a2269c3780a6a5171dbc4ee09823e7ddbdd212cb5d4e0f221d47373ab7f3c4",
   "954015a0e5c00dfa8dd51972fec2aa0dd884cf1346d74dcc9abe4b69d8bfd88b",
   "572edee59ca1acae13d68bd545dc14dcf1ee7d5819fa1e5e340f8d35ec1ea0a1",
   "24d0497433ba37860c749b66552e6f02e23a4f2935e84d801875eff20fd544c0",
@@ -261,21 +261,21 @@ describe("durable provider contract inventory", () => {
     ].map((nodeEnv) => inventoryForNodeEnv(nodeEnv)));
     for (const inventory of inventories) {
       expect(inventory).toEqual({
-        rows: 319,
+        rows: 322,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 44,
         currentOnlySha256: "a71c780c3e33713045ab43542a81523c5929d91ce2eaf52514123cd63db8be54",
         legacyRows: [
-          319,
-          319,
-          319,
-          319,
-          319,
-          319,
-          319,
-          287,
-          277,
-          226,
+          322,
+          322,
+          322,
+          322,
+          322,
+          322,
+          322,
+          290,
+          280,
+          252,
           226,
           185,
           164,
