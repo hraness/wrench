@@ -853,13 +853,17 @@ describe("npm publication contract", () => {
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain(
-      "packed this v0.16.2 package-budget candidate twice on macOS",
+      "packed this v0.17.0 package-budget candidate twice on macOS",
     );
-    expect(budget).toContain("Prior CI\n// for the same v0.16.2 payload measured a");
-    expect(budget).toContain("2,021,302 packed bytes");
+    expect(budget).toContain(
+      "identical 1,923,565-byte archives with 11,224,464 unpacked bytes",
+    );
+    expect(budget).toContain(
+      "Prior CI\n// for v0.16.2 measured a 3,543-byte Linux/macOS gzip spread",
+    );
     expect(MAX_PACKED_BYTES).toBe(2_050_000);
     expect(MAX_PACKED_FILES).toBe(450);
-    expect(MAX_UNPACKED_BYTES).toBe(11_200_000);
+    expect(MAX_UNPACKED_BYTES).toBe(11_300_000);
     expect(Object.isFrozen(packageArtifactBudget)).toBe(true);
     for (const range of Object.values(packageArtifactBudget)) {
       expect(Object.isFrozen(range)).toBe(true);
@@ -868,7 +872,7 @@ describe("npm publication contract", () => {
       entryCount: { min: 350, max: 450 },
       fileCount: { min: 350, max: 450 },
       packedBytes: { min: 1_600_000, max: 2_050_000 },
-      unpackedBytes: { min: 9_000_000, max: 11_200_000 },
+      unpackedBytes: { min: 9_000_000, max: 11_300_000 },
     });
   });
 
