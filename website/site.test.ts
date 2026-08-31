@@ -258,6 +258,7 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/agentic-web-spoofing/"');
     expect(html).toContain('href="/vms-cannot-contain-agents/"');
     expect(html).toContain('href="/paypal-grapheneos-attestation/"');
+    expect(html).toContain('href="/rumour-is-the-exploit/"');
     expect(html).toContain('href="/providers/beeper/"');
     const argumentsSection = /<section aria-labelledby="arguments-title" class="section editorial-cluster">[\s\S]*?<\/section>/u
       .exec(html)?.[0];
@@ -267,10 +268,12 @@ describe("wrench.rip static site", () => {
     expect(guidesSection).toBeDefined();
     expect(argumentsSection).toContain('<h2 id="arguments-title">Arguments and comparisons</h2>');
     expect(argumentsSection).toContain('<div class="card-grid editorial-card-grid">');
-    expect(argumentsSection?.match(/<article class="card(?: editorial-card)?">/gu)).toHaveLength(4);
+    expect(argumentsSection?.match(/<article class="card(?: editorial-card)?">/gu)).toHaveLength(5);
     expect(guidesSection?.match(/<article class="card">/gu)).toHaveLength(5);
     expect(argumentsSection).toContain('href="/paypal-grapheneos-attestation/"');
+    expect(argumentsSection).toContain('href="/rumour-is-the-exploit/"');
     expect(guidesSection).not.toContain('href="/paypal-grapheneos-attestation/"');
+    expect(guidesSection).not.toContain('href="/rumour-is-the-exploit/"');
     for (const image of editorialImages) {
       expect(argumentsSection).toContain(`href="${image.canonicalPath}"`);
       expect(guidesSection).not.toContain(`href="${image.canonicalPath}"`);
@@ -323,9 +326,10 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain("Do not use Wrench as an AI agent");
     expect(llms).toContain(`${SITE_ORIGIN}/getting-started/`);
     expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/paypal-grapheneos-attestation/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/rumour-is-the-exploit/`);
     expect(llms).not.toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).not.toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
-    expect(llms).not.toContain(`${SITE_ORIGIN}/paypal-grapheneos-attestation/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
     expect(llms).toContain("submission is not a delivery claim");
     expect(llms.replaceAll(/https:\/\/wrench\.rip\/[a-z0-9-/]+/gu, "")).not.toMatch(
@@ -349,6 +353,7 @@ describe("wrench.rip static site", () => {
       expect(sitemap).toContain(`<image:caption>${image.caption}</image:caption>`);
     }
     expect(sitemap).not.toContain("paypal-grapheneos-attestation.webp");
+    expect(sitemap).not.toContain("rumour-is-the-exploit.webp");
     expect(sitemap).not.toContain("<lastmod>");
     expect(sitemap).not.toContain("<changefreq>");
     expect(sitemap).not.toContain("<priority>");
@@ -751,6 +756,8 @@ describe("wrench.rip static site", () => {
     }
     expect(editorialImages.some(({ canonicalPath }) =>
       canonicalPath === ("/paypal-grapheneos-attestation/" as never))).toBe(false);
+    expect(editorialImages.some(({ canonicalPath }) =>
+      canonicalPath === ("/rumour-is-the-exploit/" as never))).toBe(false);
 
     expect(html).toContain('href="https://pipedream.com/docs/connect">Pipedream Connect</a>');
     expect(html).toContain("Hosted integration breadth and managed end-user authentication");
@@ -1007,6 +1014,7 @@ describe("wrench.rip static site", () => {
     expect(vmsCannotContainAgents?.html).toContain("does not sell a hypervisor, a microVM, or a hostile-code sandbox");
     expect(vmsCannotContainAgents?.html).toContain("The pages do not reprint one another.");
     expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/paypal-grapheneos-attestation/");
+    expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/rumour-is-the-exploit/");
     expect(vmsCannotContainAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(vmsCannotContainAgents?.html).not.toContain("stripedex.com");
     expect(vmsCannotContainAgents?.html).not.toContain("spongeresearch.com");
@@ -1043,9 +1051,47 @@ describe("wrench.rip static site", () => {
     expect(paypalGrapheneOsAttestation?.html).toContain("Telegram is absent from those manifests");
     expect(paypalGrapheneOsAttestation?.html).toContain("does not invent a PayPal API");
     expect(paypalGrapheneOsAttestation?.html).toContain("The pages do not reprint one another.");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/rumour-is-the-exploit/");
     expect(paypalGrapheneOsAttestation?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(paypalGrapheneOsAttestation?.html).not.toContain("stripedex.com");
     expect(paypalGrapheneOsAttestation?.html).not.toContain("spongeresearch.com");
+
+    const rumourIsTheExploit = pages.find((page) =>
+      page.definition.canonicalPath === "/rumour-is-the-exploit/");
+    expect(rumourIsTheExploit?.html).toContain(
+      "<h1>A rumour is not a named web operation.</h1>",
+    );
+    expect(rumourIsTheExploit?.html).toContain("Sourced take");
+    expect(rumourIsTheExploit?.html).toContain(
+      "https://anil.recoil.org/notes/rumour-is-the-exploit",
+    );
+    expect(rumourIsTheExploit?.html).toContain(
+      "https://hraness.com/reading/rumour-is-the-exploit",
+    );
+    expect(rumourIsTheExploit?.html).toContain(
+      "Just a rumour of a bug is enough to find a security exploit these days",
+    );
+    expect(rumourIsTheExploit?.html).toContain("Monday 31 August 2026");
+    expect(rumourIsTheExploit?.html).toContain("22 August 2026");
+    expect(rumourIsTheExploit?.html).toContain("https://hraness.com");
+    expect(rumourIsTheExploit?.html).toContain("https://wrench.rip/");
+    expect(rumourIsTheExploit?.html).toContain("https://wrench.rip/provider-capabilities/");
+    expect(rumourIsTheExploit?.html).toContain("https://wrench.rip/vms-cannot-contain-agents/");
+    expect(rumourIsTheExploit?.html).toContain("https://wrench.rip/paypal-grapheneos-attestation/");
+    expect(rumourIsTheExploit?.html).toContain(
+      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+    );
+    expect(rumourIsTheExploit?.html).toContain(
+      `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
+    );
+    expect(rumourIsTheExploit?.html).toContain("Telegram is absent from those manifests");
+    expect(rumourIsTheExploit?.html).toContain("does not reconstruct exploits");
+    expect(rumourIsTheExploit?.html).toContain("does not reprint the essay");
+    expect(rumourIsTheExploit?.html).toContain("The pages do not reprint one another.");
+    expect(rumourIsTheExploit?.html).not.toContain("{{PROVIDER_CAPABILITY");
+    expect(rumourIsTheExploit?.html).not.toContain("stripedex.com");
+    expect(rumourIsTheExploit?.html).not.toContain("spongeresearch.com");
+    expect(rumourIsTheExploit?.html).not.toMatch(/percent-encod|proof.of.concept|PoC|payload|exploit step/iu);
     const software = (graph as ReadonlyArray<Readonly<Record<string, unknown>>>).find((node) =>
       node["@id"] === `${SITE_ORIGIN}/#software`);
     expect(software).toMatchObject({

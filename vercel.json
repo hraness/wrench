@@ -245,6 +245,16 @@
       "source": "/paypal-grapheneos-attestation/index.html",
       "destination": "/paypal-grapheneos-attestation/",
       "permanent": true
+    },
+    {
+      "source": "/rumour-is-the-exploit",
+      "destination": "/rumour-is-the-exploit/",
+      "permanent": true
+    },
+    {
+      "source": "/rumour-is-the-exploit/index.html",
+      "destination": "/rumour-is-the-exploit/",
+      "permanent": true
     }
   ]
 }

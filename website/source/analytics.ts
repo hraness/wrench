@@ -32,6 +32,10 @@ const CANONICAL_ROUTES = new Map<string, Readonly<{ canonicalPath: string; pageK
     canonicalPath: "/paypal-grapheneos-attestation/",
     pageKind: "paypal_grapheneos_attestation",
   }],
+  ["/rumour-is-the-exploit", {
+    canonicalPath: "/rumour-is-the-exploit/",
+    pageKind: "rumour_is_the_exploit",
+  }],
 ]);
 
 const ALLOWED_EVENTS = new Set([

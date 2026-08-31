@@ -135,6 +135,7 @@ describe("Wrench browser analytics", () => {
       ["/privacy/", "privacy"],
       ["/vms-cannot-contain-agents/", "vms_cannot_contain_agents"],
       ["/paypal-grapheneos-attestation/", "paypal_grapheneos_attestation"],
+      ["/rumour-is-the-exploit/", "rumour_is_the_exploit"],
     ] as const;
 
     for (const [path, pageKind] of routes) {
