@@ -301,11 +301,14 @@ describe("provider plugin definition and registry", () => {
     expect(binding.subject.matches("telegram:user:9007199254740991")).toBeTrue();
     expect(binding.subject.matches("telegram:user:9007199254740992")).toBeFalse();
     expect(binding.subject.matches("telegram:user:01")).toBeFalse();
-    expect(binding.linkedDeviceLifecycle).toMatchObject({
-      inspect: expect.any(Function),
-      pair: expect.any(Function),
-      syncOnce: expect.any(Function),
-    });
+    const lifecycle = binding.linkedDeviceLifecycle;
+    expect(lifecycle).toBeDefined();
+    if (lifecycle === undefined) {
+      throw new Error("Telegram provider binding has no linked-device lifecycle");
+    }
+    expect(lifecycle.inspect).toBeFunction();
+    expect(lifecycle.pair).toBeFunction();
+    expect(lifecycle.syncOnce).toBeFunction();
     const contacts = binding.operations.find(({ name }) => name === "contacts.list");
     expect(contacts).toMatchObject({
       contractVersions: [1],
