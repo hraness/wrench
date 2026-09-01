@@ -444,4 +444,42 @@ describe("WhatsApp Message Like Me source mapping", () => {
       rmSync(path, { recursive: true, force: true });
     }
   });
+
+  test("rejects account subjects and projected JIDs outside the released v2 grammar", async () => {
+    const path = privateStore();
+    try {
+      for (const subject of [
+        "whatsapp:pn:01234",
+        "whatsapp:pn:1234567890123456",
+        "whatsapp:lid:01234",
+        "whatsapp:lid:123456789012345678901",
+      ]) {
+        await expect(collect(path, [], subject)).rejects.toThrow(
+          "a bound WhatsApp linked-device-store auth locator is required",
+        );
+      }
+      for (const chatJid of [
+        "01234@s.whatsapp.net",
+        "1234567890123456@s.whatsapp.net",
+        "01234@lid",
+        "123456789012345678901@lid",
+        "12345-01234@g.us",
+      ]) {
+        await expect(collect(path, [item({ chatJid })])).rejects.toThrow(
+          "WhatsApp message export projection protocol",
+        );
+      }
+      for (const projection of [
+        item({ chatJid: "15557654321:2@s.whatsapp.net" }),
+        item({ chatJid: "120363123456789012@g.us", chatKind: "dm" }),
+        item({ senderJid: "120363123456789012@g.us" }),
+      ]) {
+        await expect(collect(path, [projection])).rejects.toThrow(
+          "WhatsApp message export projection protocol",
+        );
+      }
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
 });

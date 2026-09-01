@@ -13,7 +13,10 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const PN_SUBJECT_PATTERN = /^whatsapp:pn:[1-9][0-9]{4,14}$/u;
 const LID_SUBJECT_PATTERN = /^whatsapp:lid:[1-9][0-9]{4,19}$/u;
 const MESSAGE_ID_PATTERN = /^[A-Za-z0-9._~:-]{1,256}$/u;
-const JID_PATTERN = /^(?:[1-9][0-9]{4,14}(?::[0-9]{1,5})?@s\.whatsapp\.net|[1-9][0-9]{4,19}(?::[0-9]{1,5})?@lid|[1-9][0-9]{4,19}(?:-[1-9][0-9]{0,19})?@g\.us)$/u;
+const USER_JID_PATTERN = /^[1-9][0-9]{4,14}@s\.whatsapp\.net$/u;
+const LID_JID_PATTERN = /^[1-9][0-9]{4,19}@lid$/u;
+const GROUP_JID_PATTERN = /^[1-9][0-9]{4,19}(?:-[1-9][0-9]{0,19})?@g\.us$/u;
+const PARTICIPANT_JID_PATTERN = /^(?:[1-9][0-9]{4,14}(?::[0-9]{1,5})?@s\.whatsapp\.net|[1-9][0-9]{4,19}(?::[0-9]{1,5})?@lid)$/u;
 
 export type WhatsAppMessageExportFileIdentity = Readonly<{
   dev: string;
@@ -189,9 +192,27 @@ function text(value: unknown, label: string, maximum: number, nullable = true): 
   return value;
 }
 
-function jid(value: unknown, label: string, nullable = false): string | null {
+function participantJid(value: unknown, label: string, nullable = false): string | null {
   if (nullable && (value === null || value === "")) return null;
-  if (typeof value !== "string" || value.length > 96 || !JID_PATTERN.test(value)) return fail(label);
+  if (
+    typeof value !== "string"
+    || value.length > 96
+    || !PARTICIPANT_JID_PATTERN.test(value)
+  ) return fail(label);
+  return value;
+}
+
+function conversationJid(
+  value: unknown,
+  kind: "dm" | "group",
+  label: string,
+): string {
+  if (
+    typeof value !== "string"
+    || value.length > 96
+    || (kind === "dm" && !USER_JID_PATTERN.test(value) && !LID_JID_PATTERN.test(value))
+    || (kind === "group" && !GROUP_JID_PATTERN.test(value))
+  ) return fail(label);
   return value;
 }
 
@@ -241,18 +262,18 @@ function item(value: unknown, label: string): WhatsAppMessageExportProjectionIte
   }
   return Object.freeze({
     rowid: unsigned(parsed.rowid, `${label}.rowid`, false),
-    chatJid: jid(parsed.chatJid, `${label}.chatJid`)! as string,
+    chatJid: conversationJid(parsed.chatJid, parsed.chatKind, `${label}.chatJid`),
     chatKind: parsed.chatKind,
     chatName: text(parsed.chatName, `${label}.chatName`, 8 * 1024),
     messageId: messageId(parsed.messageId, `${label}.messageId`)! as string,
-    senderJid: jid(parsed.senderJid, `${label}.senderJid`, true),
+    senderJid: participantJid(parsed.senderJid, `${label}.senderJid`, true),
     senderName: text(parsed.senderName, `${label}.senderName`, 8 * 1024),
     timestamp: sentAt,
     fromMe: parsed.fromMe,
     text: text(parsed.text, `${label}.text`, 1024 * 1024),
     displayText: text(parsed.displayText, `${label}.displayText`, 1024 * 1024),
     quotedMessageId: messageId(parsed.quotedMessageId, `${label}.quotedMessageId`, true),
-    quotedSenderJid: jid(parsed.quotedSenderJid, `${label}.quotedSenderJid`, true),
+    quotedSenderJid: participantJid(parsed.quotedSenderJid, `${label}.quotedSenderJid`, true),
     reactionToMessageId: messageId(parsed.reactionToMessageId, `${label}.reactionToMessageId`, true),
     reactionEmoji: text(parsed.reactionEmoji, `${label}.reactionEmoji`, 8 * 1024),
     mediaType: text(parsed.mediaType, `${label}.mediaType`, 256),
