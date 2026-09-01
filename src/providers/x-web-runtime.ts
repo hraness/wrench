@@ -42,6 +42,7 @@ import {
   type WebSessionOperationDeadline,
   type WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
+import { failedProviderRead, type ProviderReadFailureStage } from "./read-failure";
 import { scrubXUploadImage } from "./x-image-provenance";
 import {
   rejectXTweetMadeWithAiLabel,
@@ -230,6 +231,40 @@ function failedXProfileRead(
     dispatch: { planned: 0, started: 0, verified: 0 },
     error: "X profile read failed before the dispatch boundary",
     readFailure: xProfileReadFailure(error, stage),
+  };
+}
+
+function xFeedReadAccountMismatch(error: Error): boolean {
+  return error.message.includes("viewer no longer matches")
+    || error.message.includes("personalized operations require an auth locator bound");
+}
+
+function xFeedReadAuthRepairRequired(error: Error): boolean {
+  return error.message.includes("ct0 session cookie is invalid or expired");
+}
+
+function feedsReadFinalUrl(input: OperationInput): string | null {
+  try {
+    return stringInput(input, "feed") === "bookmarks" ? `${X_ORIGIN}/i/bookmarks` : `${X_ORIGIN}/home`;
+  } catch {
+    return null;
+  }
+}
+
+function failedXFeedRead(
+  error: unknown,
+  input: OperationInput,
+  stage: ProviderReadFailureStage,
+): WebSessionExecution {
+  const projected = failedProviderRead("X feed", error, feedsReadFinalUrl(input), {
+    stage,
+    authenticated: true,
+    accountMismatch: xFeedReadAccountMismatch,
+    authRepairRequired: xFeedReadAuthRepairRequired,
+  });
+  return {
+    ...projected,
+    error: error instanceof Error ? error.message : projected.error,
   };
 }
 
@@ -447,7 +482,7 @@ function matchesReviewedChunkFamily(currentName: string, reviewedName: string): 
   // shared family (Bookmarks is observed as
   // `shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~…`). Keep the
   // reviewed segments in order, reject arbitrary prefixes, and still require a
-  // unique webpack-map hit.
+  // unique exact or uniquely-tightest webpack-map hit.
   const reviewed = reviewedName.split("~");
   const current = currentName.split("~");
   if (reviewed.length === 0 || current.length < reviewed.length) return false;
@@ -472,6 +507,45 @@ function setUniqueChunkMapValue(
   target.set(id, value);
 }
 
+function extraReviewedChunkSegments(currentName: string, reviewedName: string): number {
+  return currentName.split("~").length - reviewedName.split("~").length;
+}
+
+function uniqueReviewedChunkMatch(
+  names: ReadonlyMap<string, string>,
+  logicalName: string,
+): readonly [string, string] {
+  const exact = [...names].filter(([, name]) => name === logicalName);
+  if (exact.length === 1) return exact[0]!;
+  const family = exact.length === 0
+    ? [...names].filter(([, name]) => matchesReviewedChunkFamily(name, logicalName))
+    : exact;
+  if (family.length === 1) return family[0]!;
+  if (family.length === 0) {
+    throw new Error(
+      "X current build did not bind one unique reviewed logical chunk; reviewed evidence is stale",
+    );
+  }
+  let minimumExtras = Number.POSITIVE_INFINITY;
+  const tightest: Array<readonly [string, string]> = [];
+  for (const candidate of family) {
+    const extras = extraReviewedChunkSegments(candidate[1], logicalName);
+    if (extras < minimumExtras) {
+      minimumExtras = extras;
+      tightest.length = 0;
+      tightest.push(candidate);
+      continue;
+    }
+    if (extras === minimumExtras) tightest.push(candidate);
+  }
+  if (tightest.length !== 1) {
+    throw new Error(
+      "X current build did not bind one unique reviewed logical chunk; reviewed evidence is stale",
+    );
+  }
+  return tightest[0]!;
+}
+
 /** Resolve a reviewed logical chunk through the current page's webpack map. */
 export function resolveCurrentXWebChunkUrl(html: string, sourceChunk: string): URL {
   if (html.length > MAX_HOME_BYTES) throw new Error("X bootstrap exceeded its byte limit");
@@ -491,17 +565,10 @@ export function resolveCurrentXWebChunkUrl(html: string, sourceChunk: string): U
   }
   // X may append or remove a `~bundle.*` member when it rebalances a shared
   // chunk while retaining the reviewed chunk family and operation descriptor.
-  // Accept only a segment-boundary prefix relationship; a substring or a
-  // merely similar bundle name is not sufficient.
-  const exactChunks = [...names].filter(([, name]) => name === logicalName);
-  const matchingChunks = exactChunks.length === 1
-    ? exactChunks
-    : [...names].filter(([, name]) => matchesReviewedChunkFamily(name, logicalName));
-  if (matchingChunks.length !== 1) {
-    throw new Error(
-      "X current build did not bind one unique reviewed logical chunk; reviewed evidence is stale",
-    );
-  }
+  // Prefer the exact reviewed name. When that dedicated family is absent,
+  // keep only a uniquely tightest family match so overlapping Bookmarks
+  // mega-chunks cannot make a signed-in map fail closed.
+  const [id, currentName] = uniqueReviewedChunkMatch(names, logicalName);
   const hashes = new Map<string, string>();
   const hashStart = middle + separator.length;
   // Historical maps used 7 hex chars. Current (2026-08) maps use 16. Accept
@@ -511,7 +578,6 @@ export function resolveCurrentXWebChunkUrl(html: string, sourceChunk: string): U
       setUniqueChunkMapValue(hashes, match[1], match[2], "hash");
     }
   }
-  const [id, currentName] = matchingChunks[0]!;
   const hash = hashes.get(id);
   if (hash === undefined) throw new Error("X current build omitted the reviewed logical chunk hash");
   return new URL(`/responsive-web/client-web/${currentName}.${hash}a.js`, X_ASSET_ORIGIN);
@@ -3347,18 +3413,29 @@ export async function executeXWebOperation(
     if (recipe.action === "profiles.read") {
       return failedXProfileRead(error, profileUrl, "bootstrap");
     }
+    if (recipe.action === "feeds.read") {
+      return failedXFeedRead(error, input, "bootstrap");
+    }
     throw error;
   }
   if (recipe.action === "feeds.read") {
-    await requireBoundViewer(bootstrap, auth);
-    const output = await readFeed(bootstrap, input);
-    return {
-      status: "succeeded",
-      output,
-      finalUrl: stringInput(input, "feed") === "bookmarks" ? `${X_ORIGIN}/i/bookmarks` : `${X_ORIGIN}/home`,
-      dispatchStarted: false,
-      dispatch: { planned: 0, started: 0, verified: 0 },
-    };
+    try {
+      await requireBoundViewer(bootstrap, auth);
+    } catch (error) {
+      return failedXFeedRead(error, input, "identity");
+    }
+    try {
+      const output = await readFeed(bootstrap, input);
+      return {
+        status: "succeeded",
+        output,
+        finalUrl: stringInput(input, "feed") === "bookmarks" ? `${X_ORIGIN}/i/bookmarks` : `${X_ORIGIN}/home`,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      };
+    } catch (error) {
+      return failedXFeedRead(error, input, "target");
+    }
   }
   if (recipe.action === "profiles.read") {
     try {

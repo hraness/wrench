@@ -3220,6 +3220,62 @@ describe("local at-most-once dispatch ledger", () => {
     }
   });
 
+  test("preserves a returned x-web bookmarks first-party asset transport failure", async () => {
+    const testState = state();
+    try {
+      const selectedManifest = xWebManifest();
+      const selectedAuth = createAuth("x-web-test", {
+        source: "arc",
+        profile: "Profile 1",
+        subject: "123",
+      });
+      installManifest(selectedManifest, {
+        force: false,
+        environment: testState.environment,
+      });
+      saveAuth(selectedAuth, testState.environment);
+      const invocation = prepareInvocation(
+        "x-web",
+        "feeds.read",
+        { feed: "bookmarks", limit: 25 },
+        selectedAuth.id,
+        testState.environment,
+      );
+      const result = await executeReadInvocation(invocation, {
+        headed: false,
+        environment: testState.environment,
+        executeWebSession: () => Promise.resolve({
+          status: "failed",
+          output: null,
+          finalUrl: "https://x.com/i/bookmarks",
+          dispatchStarted: false,
+          dispatch: { planned: 0, started: 0, verified: 0 },
+          error: "public first-party web asset request failed",
+          readFailure: {
+            category: "provider-temporary",
+            retryDisposition: "retry-once-after-60s",
+          },
+        }),
+      });
+      expect(result).toMatchObject({
+        receipt: {
+          status: "failed",
+          dispatchStarted: false,
+        },
+        output: null,
+        readFailure: {
+          category: "provider-temporary",
+          retryDisposition: "retry-once-after-60s",
+        },
+      });
+      expect(result.receipt.error).toBe(
+        "authenticated web API operation failed before the dispatch boundary; reason: public first-party web asset request failed",
+      );
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("rejects executor-reported success that has no durable dispatch callbacks", async () => {
     const testState = state();
     try {
