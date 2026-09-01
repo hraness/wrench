@@ -67,7 +67,7 @@ const identities = Object.freeze({
   "beeper-linked-device": {
     schemaVersion: 1,
     pluginVersion: "2.3.0",
-    implementationSha256: "d45a4f4dd83529f4c992a77b334605ad7cf067f250ce3a938f99bc1e13fa8ffb",
+    implementationSha256: "99039ebe6c5b73e91a0319779133117152b01f641a8dd5fd96cb9a2124f3e309",
     legacyCurrentReadImplementationSha256: [],
     legacyDistributionReadImplementationSha256: [
       {

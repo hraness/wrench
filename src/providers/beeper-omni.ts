@@ -9,6 +9,7 @@ import type {
   ProviderMaterializedPageV1,
   ProviderMessageV1,
 } from "../omni-model";
+import { isCanonicalBeeperConversationId } from "./beeper-local";
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
@@ -144,6 +145,14 @@ function beeperRawIdentifier(
   return value;
 }
 
+function beeperConversationId(value: unknown, label: string): string {
+  const id = beeperRawIdentifier(value, label, 2_048);
+  if (!isCanonicalBeeperConversationId(id)) {
+    return drift(label, "must be one exact full Beeper/Matrix chat ID");
+  }
+  return id;
+}
+
 function beeperProviderId(
   accountIdValue: unknown,
   kind: "chat" | "message",
@@ -191,14 +200,21 @@ export function normalizeBeeperConversationProviderId(
   accountId: unknown,
   conversationId: unknown,
 ): string {
-  return beeperProviderId(accountId, "chat", conversationId);
+  return beeperProviderId(
+    accountId,
+    "chat",
+    beeperConversationId(conversationId, "Beeper conversation ID"),
+  );
 }
 
 export function rawBeeperConversationId(
   accountId: unknown,
   providerId: unknown,
 ): string {
-  return rawBeeperProviderId(accountId, providerId, "chat");
+  return beeperConversationId(
+    rawBeeperProviderId(accountId, providerId, "chat"),
+    "Beeper conversation ID",
+  );
 }
 
 export function normalizeBeeperMessageProviderId(
@@ -265,10 +281,9 @@ function readInputV2(input: OperationInput): Readonly<{
   }
   return Object.freeze({
     accountId: string(source.account_id, "messaging.read input.account_id", 512),
-    conversationId: string(
+    conversationId: beeperConversationId(
       source.conversation_id,
       "messaging.read input.conversation_id",
-      2_048,
     ),
     beforeCursor,
     afterCursor,
@@ -321,10 +336,9 @@ function readInput(input: OperationInput): Readonly<{
   ) drift("messaging.read input.sender", "must be me, others, or one bounded opaque non-flag user ID");
   return Object.freeze({
     accountId: string(source.account_id, "messaging.read input.account_id", 512),
-    conversationId: string(
+    conversationId: beeperConversationId(
       source.conversation_id,
       "messaging.read input.conversation_id",
-      2_048,
     ),
     beforeCursor,
     afterCursor,
@@ -360,10 +374,9 @@ function exactConversationInput(input: OperationInput): Readonly<{
       "conversations.read input.account_id",
       512,
     ),
-    conversationId: string(
+    conversationId: beeperConversationId(
       source.conversation_id,
       "conversations.read input.conversation_id",
-      2_048,
     ),
   });
 }

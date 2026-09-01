@@ -248,21 +248,46 @@ describe("provider messaging coordinate codecs", () => {
   });
 
   test("round-trips raw IDs only inside the exact Beeper account scope", () => {
-    const rawIds = [
+    const rawConversationIds = [
+      "!chat:beeper.local",
+      "!chat:matrix.example:8448",
+      "!chat:matrix.example:99999",
+    ];
+    for (const rawId of rawConversationIds) {
+      const conversation = normalizeBeeperConversationProviderId(accountId, rawId);
+      expect(rawBeeperConversationId(accountId, conversation)).toBe(rawId);
+      expect(() => rawBeeperConversationId("foreign-account", conversation))
+        .toThrow("exact account");
+    }
+
+    const rawMessageIds = [
       "!chat:beeper.local",
       "$event:beeper.local",
       "colon:slash/plus+unicode-🐝",
     ];
-    for (const rawId of rawIds) {
-      const conversation = normalizeBeeperConversationProviderId(accountId, rawId);
+    for (const rawId of rawMessageIds) {
       const event = normalizeBeeperMessageProviderId(accountId, rawId);
-      expect(rawBeeperConversationId(accountId, conversation)).toBe(rawId);
       expect(rawBeeperMessageId(accountId, event)).toBe(rawId);
-      expect(() => rawBeeperConversationId("foreign-account", conversation))
-        .toThrow("exact account");
       expect(() => rawBeeperMessageId("foreign-account", event))
         .toThrow("exact account");
     }
+    for (const rawId of [
+      "$event:beeper.local",
+      "colon:slash/plus+unicode-🐝",
+      "!missing-server",
+      "!chat:beeper.local:123456",
+    ]) {
+      expect(() => normalizeBeeperConversationProviderId(accountId, rawId))
+        .toThrow("exact full Beeper/Matrix chat ID");
+    }
+    const forgedNoncanonicalConversation = [
+      "beeper",
+      Buffer.from(accountId, "utf8").toString("base64url"),
+      "chat",
+      Buffer.from("$event:beeper.local", "utf8").toString("base64url"),
+    ].join(":");
+    expect(() => rawBeeperConversationId(accountId, forgedNoncanonicalConversation))
+      .toThrow("exact full Beeper/Matrix chat ID");
     expect(() => rawBeeperMessageId(accountId, `beeper:YWNjb3VudC1zaWduYWw:message:%%%`))
       .toThrow("malformed encoding");
     expect(() => normalizeBeeperMessageProviderId(accountId, "bad\ud800id"))

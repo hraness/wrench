@@ -577,9 +577,19 @@ function stringArray(value: unknown, label: string, maximumItems: number, itemMa
 function accountId(source: Readonly<Record<string, unknown>>, label: string): string {
   return boundedOpaque(source.account_id, `${label}.account_id`, 512);
 }
+export function isCanonicalBeeperConversationId(value: string): boolean {
+  return Buffer.byteLength(value, "utf8") <= 2_048
+    && hasWellFormedUnicode(value)
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(value)
+    && /^![^:\s]{1,255}:[^:\s]{1,255}(?::[0-9]{1,5})?$/u.test(value);
+}
 function conversationId(source: Readonly<Record<string, unknown>>, label: string): string {
-  const id = boundedOpaque(source.conversation_id, `${label}.conversation_id`, 2_048);
-  if (!/^![^:\s]{1,255}:[^:\s]{1,255}(?::[0-9]{1,5})?$/u.test(id)) {
+  const id = boundedControlFreeOpaque(
+    source.conversation_id,
+    `${label}.conversation_id`,
+    2_048,
+  );
+  if (!isCanonicalBeeperConversationId(id)) {
     throw new Error(`${label}.conversation_id must be one exact full Beeper/Matrix chat ID`);
   }
   return id;

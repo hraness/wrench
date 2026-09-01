@@ -30,6 +30,7 @@ import {
   materializeBeeperMessagingList,
   materializeBeeperMessagingRead,
   materializeBeeperMessagingReadV1,
+  materializeBeeperMessagingReadV2,
 } from "./beeper-omni";
 import {
   BEEPER_LOCAL_MUTATION_ERROR_CODES,
@@ -956,6 +957,43 @@ describe("Beeper exact write runtime matrix", () => {
 });
 
 describe("Beeper local read runtime", () => {
+  test("rejects noncanonical conversation IDs in every Omni read materializer", () => {
+    const materializers = [
+      ["messaging.read@1", materializeBeeperMessagingReadV1],
+      ["messaging.read@2", materializeBeeperMessagingReadV2],
+      ["messaging.read@3", materializeBeeperMessagingRead],
+    ] as const;
+    const malformedConversationIds = [
+      "chat-synthetic",
+      "!chat-synthetic",
+      "!chat-synthetic:",
+      "chat-synthetic:beeper.local",
+      "!chat:beeper.local:123456",
+      "!chat:beeper.local:443:extra",
+      "!chat synthetic:beeper.local",
+      "!chat\u0007:beeper.local",
+    ];
+    for (const malformed of malformedConversationIds) {
+      for (const [coordinate, materialize] of materializers) {
+        expect(() => materialize({
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: malformed,
+          limit: 1,
+        }, {}), `${coordinate} ${JSON.stringify(malformed)}`)
+          .toThrow(malformed.includes("\u0007")
+            ? "must be one bounded Beeper identifier"
+            : "must be one exact full Beeper/Matrix chat ID");
+      }
+      expect(() => materializeBeeperExactConversation({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: malformed,
+      }, {}), `conversations.read ${JSON.stringify(malformed)}`)
+        .toThrow(malformed.includes("\u0007")
+          ? "must be one bounded Beeper identifier"
+          : "must be one exact full Beeper/Matrix chat ID");
+    }
+  });
+
   test("admits every historical and current coordinate and rejects every uninstalled version", async () => {
     const invalidInput = Object.freeze({ __contract_probe: true });
     const fixtureAuth = auth("/fixture/not-opened-for-input-rejection");
@@ -1000,7 +1038,7 @@ describe("Beeper local read runtime", () => {
       });
       expect(() => materializeBeeperExactConversation({
         ...input,
-        conversation_id: "another-chat",
+        conversation_id: "!another-chat:beeper.local",
       }, result.output)).toThrow("must bind the exact requested account and conversation");
     } finally {
       rmSync(path, { recursive: true, force: true });

@@ -547,6 +547,25 @@ describe("Beeper pinned local-CLI provider plugin", () => {
       }
     }
 
+    const publicDispositionCounts = Object.fromEntries(
+      ["supported", "internal", "R4", "absorbed", "unsupported"].map((disposition) => [
+        disposition,
+        [...commands.values()].filter((command) =>
+          command.publicManual && command.decision.disposition === disposition).length,
+      ]),
+    );
+    expect(publicDispositionCounts).toEqual({
+      supported: 41,
+      internal: 3,
+      R4: 3,
+      absorbed: 1,
+      unsupported: 53,
+    });
+    expect(commands.get("targets status")?.decision.disposition).toBe("internal");
+    expect(commands.get("version")?.decision.disposition).toBe("internal");
+    expect(commands.get("export")?.decision.disposition).toBe("internal");
+    expect(commands.get("status")?.decision.disposition).toBe("unsupported");
+
     const messages = commands.get("messages list")!;
     expect(messages.flags.map((flag) => flag.name)).toEqual([
       "--after-cursor", "--asc", "--before-cursor", "--chat", "--ids",
