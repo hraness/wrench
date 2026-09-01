@@ -161,6 +161,16 @@
       "permanent": true
     },
     {
+      "source": "/providers/whatsapp",
+      "destination": "/providers/whatsapp/",
+      "permanent": true
+    },
+    {
+      "source": "/providers/whatsapp/index.html",
+      "destination": "/providers/whatsapp/",
+      "permanent": true
+    },
+    {
       "source": "/security",
       "destination": "/security/",
       "permanent": true

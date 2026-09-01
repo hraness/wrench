@@ -453,6 +453,29 @@ Wrench will not install or expose this surface until it can bind the TDLib
 authorization lifecycle, account identity, local database, paging behavior,
 and message-history completeness without weakening the linked-device boundary.
 
+### Native WhatsApp Message Like Me export
+
+The [WhatsApp provider guide](https://wrench.rip/providers/whatsapp/) documents
+the pinned macOS arm64 Wacli runtime, bounded local reads, and private export.
+Export one existing account-bound local projection without pairing, syncing,
+or sending:
+
+```sh
+wrench whatsapp export-message-like-me --auth whatsapp-main \
+  --output /absolute/private/path/new-whatsapp-bundle --json
+```
+
+Wrench writes six NDJSON artifacts plus `manifest.json` using Message Like Me
+local-message bundle schema 2, source `wacli-local@1.0.0`, provider
+`whatsapp@0.15.0`, and the immutable Message Like Me 0.7.0 consumer. The
+receipt reports bounded local coverage and `remote-history-incomplete` because
+an admitted `wacli.db` cannot prove complete remote WhatsApp history.
+
+The fixed projection excludes message-yourself chats for both proven PN and
+LID self aliases. It also excludes reaction rows and reports
+`reaction-state-unproven`, because Wacli 0.15.0 cannot prove whether a stored
+reaction remains active or was removed. Keep the seven-file bundle private.
+
 ### Apple Photos contact evidence
 
 Apple Photos is a local source export, not an authenticated provider action.

@@ -5,6 +5,7 @@ import {
   BEEPER_DESKTOP_API_PIN,
   BEEPER_LOCAL_OPERATION_NAMES,
 } from "../src/providers/beeper-local";
+import { WHATSAPP_PROTOCOL_PIN } from "../src/providers/whatsapp-web";
 import type {
   ProviderCapabilityAttestation,
   ProviderCapabilityAttestationRow,
@@ -100,11 +101,28 @@ export type BeeperPresentationFacts = Readonly<{
   semanticContractVersions: readonly number[];
 }>;
 
+export type WhatsAppPresentationFacts = Readonly<{
+  adapterVersion: string;
+  archiveSha256: typeof WHATSAPP_PROTOCOL_PIN.darwinArm64ArchiveSha256;
+  binarySha256: typeof WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256;
+  observedOperationCount: 4;
+  pageDescription: string;
+  pageTitle: string;
+  wacliCommit: typeof WHATSAPP_PROTOCOL_PIN.commit;
+  wacliVersion: typeof WHATSAPP_PROTOCOL_PIN.version;
+}>;
+
 export const BEEPER_PAGE_METADATA = Object.freeze({
   description:
     `Use ${BEEPER_LOCAL_OPERATION_NAMES.length} supported Wrench actions with one connected Beeper Desktop account: 27 CLI-backed operations and five fixed Desktop loopback reads.`,
   title:
     `Beeper support in Wrench: ${BEEPER_LOCAL_OPERATION_NAMES.length} supported actions`,
+} as const);
+
+export const WHATSAPP_PAGE_METADATA = Object.freeze({
+  description:
+    `Read four bounded local WhatsApp projections and export an existing Wacli ${WHATSAPP_PROTOCOL_PIN.version} store as a private Message Like Me bundle without pairing, syncing, or sending.`,
+  title: "WhatsApp support in Wrench: bounded local reads and private export",
 } as const);
 
 function capabilityLabel(operation: string): string {
@@ -273,8 +291,8 @@ export function createProviderDirectory(
         capabilityLabel(row.operation)))].sort(compareStrings)),
       captureRequiredCount,
       contractVersions: Object.freeze(contractVersions),
-      href: definition.surfaceId === "beeper"
-        ? "/providers/beeper/"
+      href: definition.surfaceId === "beeper" || definition.surfaceId === "whatsapp"
+        ? `/providers/${definition.surfaceId}/`
         : `/provider-capabilities/#provider-${definition.surfaceId}`,
       icon: definition.icon,
       name: definition.name,
@@ -286,6 +304,45 @@ export function createProviderDirectory(
     })];
   });
   return Object.freeze({ entries: Object.freeze(entries), providerCount: entries.length });
+}
+
+export function createWhatsAppPresentationFacts(
+  directory: ProviderDirectory,
+  attestation: ProviderCapabilityAttestation,
+): WhatsAppPresentationFacts {
+  const entry = directory.entries.find((candidate) => candidate.surfaceId === "whatsapp");
+  const observedRows = attestation.rows.filter((row) =>
+    row.surfaceId === "whatsapp" && row.completeness === "observed");
+  const expectedOperations = [
+    "contacts.list",
+    "media.read",
+    "messaging.list",
+    "messaging.read",
+  ] as const;
+  const observedOperations = observedRows.map((row) => row.operation).sort();
+  if (
+    entry === undefined
+    || entry.supportedActionCount !== 4
+    || entry.observedCount !== 4
+    || entry.adapterIdentities.length !== 1
+    || entry.adapterIdentities[0]?.id !== "whatsapp-web"
+    || !entry.transports.includes("linked-device")
+    || observedRows.some((row) => row.risk !== "R1")
+    || observedOperations.length !== expectedOperations.length
+    || observedOperations.some((operation, index) => operation !== expectedOperations[index])
+  ) {
+    throw new Error("WhatsApp provider page is reviewed for exactly four linked-device R1 reads");
+  }
+  return Object.freeze({
+    adapterVersion: entry.adapterIdentities[0].version,
+    archiveSha256: WHATSAPP_PROTOCOL_PIN.darwinArm64ArchiveSha256,
+    binarySha256: WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256,
+    observedOperationCount: 4,
+    pageDescription: WHATSAPP_PAGE_METADATA.description,
+    pageTitle: WHATSAPP_PAGE_METADATA.title,
+    wacliCommit: WHATSAPP_PROTOCOL_PIN.commit,
+    wacliVersion: WHATSAPP_PROTOCOL_PIN.version,
+  });
 }
 
 function transportLabel(transport: ProviderCapabilityAttestationRow["transport"]): string {

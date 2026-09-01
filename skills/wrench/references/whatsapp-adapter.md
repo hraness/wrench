@@ -1,173 +1,101 @@
-# WhatsApp linked-device protocol adapter
+# WhatsApp local Message Like Me export
 
-Use this reference when adding, pairing, synchronizing, testing, or promoting
-the `whatsapp-web` adapter. Despite the historical adapter ID, its runtime is
-not browser automation and does not reuse a WhatsApp Web cookie/profile.
+Use this reference to turn one existing account-bound Wacli projection into a
+private Message Like Me bundle. The export reads local state. It does not pair
+a device, synchronize WhatsApp, open a network connection, or send a message.
 
-## Transport and pin
+## Runtime identity
 
-wrench uses the linked-device protocol implemented by
-`github.com/openclaw/wacli` v0.13.0 at commit
-`1e15f646d23598ef5db2bdb4659ac39cc5188ad2`. That release uses
-`go.mau.fi/whatsmeow` for the encrypted Noise/Signal WebSocket protocol. It
-does not include Chromium, Puppeteer, Selenium, `whatsapp-web.js`, DOM
-selectors, or HAR replay.
+Wrench pins the official macOS arm64 Wacli v0.15.0 release at commit
+`a020de724180d31eccfa5241d45443402d62fb06`.
 
-The macOS arm64 installer pins both the release archive and extracted binary
-SHA-256, then verifies the OpenClaw Developer ID team and hardened signed
-binary before publishing it:
+- Official archive: `wacli_0.15.0_darwin_arm64.tar.gz`
+- Archive SHA-256:
+  `2b54f33d246e913a5c33525b4fc895a345363c2dcc673c70fa5f19cffb15d17d`
+- Executable SHA-256:
+  `a900af4d0dfd10471bcdf74105b9f256d1a08574242a041df3e5985a548826aa`
+- Code-signature identity: `org.openclaw.wacli`, OpenClaw Foundation Team ID
+  `FWJYW4S8P8`
 
-```sh
-sh ./src/scripts/install-whatsapp-protocol.sh
-```
+Run `wrench operator doctor --json` to locate the release-matched installer.
+The installer checks the official release, both SHA-256 values, the offline
+code signature, hardened runtime, trusted timestamp, designated requirement,
+and online notarization before it publishes the executable. Runtime reads
+repeat the official release, exact executable SHA-256, and offline
+code-signature checks. They do not claim to repeat online notarization.
 
-`wrench operator doctor` reports categorical readiness and this exact setup command.
-Runtime resolution accepts only fixed paths and the exact pinned binary hash.
+## Export one private bundle
 
-## Auth realm and persistence
-
-A WhatsApp linked device is a different authority realm from Arc, Chrome,
-cookies, and OAuth:
-
-```sh
-wrench auth add whatsapp-main --linked-device whatsapp
-wrench auth pair whatsapp-main
-```
-
-Use `--phone +<international-number>` on `auth pair` to request a phone
-pairing code instead of scanning a QR code. Pairing creates a new linked
-device; an existing Arc WhatsApp login cannot be imported into it.
-
-The default store is:
-
-```text
-$WRENCH_STATE_HOME/linked-device-stores/<auth-id>/
-```
-
-It contains:
-
-- `session.db`: device identity, Noise/Signal protocol keys, device mappings,
-  and session state;
-- `wacli.db`: the local message/chat projection and search index;
-- private SQLite sidecars and operational lock/socket files when needed.
-
-wrench requires an owned real mode-`0700` directory and owned files/sockets
-with no group or world access. It rejects symlinks and permission widening
-before trusted reads. The protocol client creates database files mode `0600`.
-wrench never returns, logs, copies into a plan, or projects raw protocol keys,
-media keys, direct media paths, or local media paths.
-
-This is filesystem permission isolation, not application-level encryption of
-SQLite at rest. Use FileVault or equivalent full-disk encryption for protection
-against offline disk access. Removing an auth locator does not delete the
-linked-device store or invalidate the phone-side linked device.
-
-## Sync is explicit and stateful
-
-Local list/read/media metadata operations never connect to WhatsApp. Refresh
-the projection explicitly:
+Use a bound WhatsApp auth ID whose existing local store contains `session.db`
+and `wacli.db`. Choose a new normalized absolute output directory below an
+owner-controlled parent:
 
 ```sh
-wrench auth sync whatsapp-main --once
+wrench whatsapp export-message-like-me --auth whatsapp-main \
+  --output /absolute/private/path/new-whatsapp-bundle --json
 ```
 
-Sync is bounded to 200,000 messages and 2 GiB, uses quiet global presence,
-does not request media downloads, exits after becoming idle, and limits
-reconnection time. A sync connection still emits required transport-level
-protocol acknowledgements. It is therefore an explicit operational action,
-never an implicit prelude to an R1 read.
+The auth ID is lowercase kebab case with at most 48 characters. The output
+path is a non-root absolute path of at most 4,096 UTF-8 bytes with no NUL,
+carriage return, or line feed. The destination must not exist.
 
-The local projection has no provider completeness guarantee. Results describe
-only the currently stored projection. Chat and per-conversation reads remain
-bounded current windows. The v2 `contacts.list` interaction collection instead
-uses the pinned store's monotonic message `rowid`, never a timestamp cursor.
+Wrench holds one durable private-export admission across recovery, helper
+launch, conversion, cleanup, and publication. It validates the bound store's
+owner, mode, physical identity, schema, integrity, sidecars, account identity,
+and immutable generation. One detached helper keeps the databases open across
+bounded row-ID pages and seals its final counts, checkpoint, self aliases, and
+rolling canonical-frame SHA-256. Wrench publishes a result only after the
+complete helper stream and exact child exit settle.
 
-## R1 read design
+## Bundle identity
 
-The fixed read commands always include both the CLI flag and environment
-enforcement:
+The output is Message Like Me local-message bundle schema 2:
 
-```text
---store <bound-store> --read-only --json --full --timeout <bound>
-WACLI_READONLY=1
-```
+- source `wacli-local@1.0.0`;
+- provider `whatsapp@0.15.0`;
+- network `whatsapp`;
+- immutable consumer `@hraness/message-like-me` v0.7.0;
+- six NDJSON artifacts plus `manifest.json`.
 
-`wacli` opens both SQLite databases with `mode=ro&_query_only=1`; it does not
-open a WhatsApp session, run migrations, create WAL files, update badges, mark
-messages read, send delivery/read receipts, or emit transport acknowledgements.
+Wrench imports Message Like Me's public schema-2 constants, parser, and types.
+The standalone release gate runs the real Message Like Me v0.7.0 CLI against a
+Wrench-generated seven-file bundle.
 
-The code-owned semantic mapping is:
+The output directory is mode `0700`; its files are mode `0600`. Wrench writes
+and verifies a complete sibling staging directory, then publishes it with one
+atomic rename. A partial directory never appears at the requested path.
 
-- `contacts.list {"collection":"contacts"}` (or the default collection) → one
-  bounded page from the exact account-owned Whatsmeow contact table;
-- `contacts.list {"collection":"interactions"}` → one content-free page of
-  locally stored message-insert evidence ordered by exact SQLite `rowid`;
-- `messaging.list` → bounded `chats list` with exact all/active/archived/unread
-  filters;
-- `messaging.read` → bounded `messages list --chat <exact-JID>`;
-- `media.read` → metadata-only `messages show --chat <exact-JID> --id
-  <exact-message-ID>`.
+## Included and excluded evidence
 
-Every private read probes `auth status` from `session.db` in read-only mode and
-requires its stable phone/LID subject to equal the auth realm binding. Every
-returned message must equal the exact requested canonical conversation JID.
+The bundle can retain locally stored message bodies, bubble boundaries,
+reply IDs, attachment metadata, and only edit or deletion state proven by the
+fixed projection. It excludes credentials, protocol and media keys, media
+bytes, source paths, local media paths, status chats, broadcasts, newsletters,
+and unsupported non-conversation rows.
 
-The interaction collection is implemented by a fixed read-only helper rather
-than caller-selected SQL. It validates the exact pinned v0.13.0 `messages` and
-`chats` schema, indexes, foreign key, database owner, file identity, private
-mode, integrity, and absence of SQLite sidecars. Each item contains only
-`rowid`, chat JID, message ID, sender JID, UTC timestamp, direction, and chat
-kind. Bodies, names, media, keys, hashes, and paths are never selected.
+The helper derives at most the bound account's exact phone-number (PN) and
+linked-identity (LID) self aliases from the unique device row. It filters a
+message-yourself chat for either alias before message content crosses the
+helper boundary. It does not guess identity from digits.
 
-Start with cursor `0` and no anchor. Every returned `checkpoint` contains the
-last processed rowid and a SHA-256 anchor over that row's exact rowid, chat JID,
-and message ID. A resumed nonzero cursor must supply that anchor as
-`cursor_anchor`; the helper rereads and validates the cursor row before
-advancing. `projectionGeneration` also binds the page to the exact `wacli.db`
-device/inode and pinned schema fingerprint, so consumers must reject generation
-drift or explicitly reset and rescan from zero. Page size is at most 1,000.
+Reaction rows are excluded. Wacli v0.15.0 cannot prove whether a stored
+reaction is still active or was removed, so every applicable bundle reports
+`reaction-state-unproven` instead of publishing retained reaction state.
 
-`localInsertPageComplete` means only that no later rowid existed in the same
-quiescent local database snapshot. `remoteHistoryComplete` is always false.
-The cursor discovers inserts only; deletions are not inferred, and linked-device
-history coverage remains unknown. Consumers should deduplicate durable evidence
-by exact account, rowid, chat JID, and message ID and checkpoint only after their
-own transaction commits.
+## Completeness
 
-All four read operations are `observed`. An authorized paired account passed
-nonempty chat, exact-conversation, and exact-attachment fixtures through the
-public wrench CLI with stable account binding and the pinned read-only local
-projection. They retain the local-store completeness label and fail closed on
-schema, account, conversation, message, or byte-bound drift.
+The receipt reports:
 
-## Mutation boundary
+- completeness kind `bounded-local`;
+- reason `local-store-coverage-unknown`;
+- warning `remote-history-incomplete`;
+- exactly one account, zero reactions, and zero tombstones.
 
-wrench owns fixed planners and strict response/readback parsers for:
+`observedFrom` and `observedThrough` describe the admitted local messages only.
+A successful export does not prove that remote WhatsApp history has finished
+backfilling. Additional warnings report excluded self chats, purged message
+payloads, or excluded non-conversation chats when those conditions occur.
 
-- text or one attachment send;
-- reaction set/clear;
-- recent self-message edit;
-- one-message forward.
-
-It accepts only canonical user, LID, or group JIDs—never recipient names,
-arbitrary flags, URLs, subcommands, or raw protocol payloads. A future
-executable mutation must mark dispatch before the request can leave and verify
-one independently read local message bound to the account, target, response
-ID, and confirmed content.
-
-All registered mutations remain `capture-required` and perform no protocol
-request. Wrench now vendors a reviewed Wacli/Whatsmeow source patch that adds a
-strict stdin-only, no-retry text transport behind an authenticated idle daemon
-barrier. The recipient and body stay out of argv and the environment, and any
-post-spawn uncertainty remains unretriable. This closes the private transport
-mechanism gap but does not qualify a public action.
-
-Promotion still requires an authorized controlled low-stakes fixture, fresh
-live context proof on the generic route, exact accepted-message reconciliation,
-and the remaining daemon, commit-revision, persistence-drain, crash, suspend,
-ownership, key-rotation, and replacement checks recorded in the vendored
-private-transport review. Do not register the action around those requirements.
-
-Star/unstar has a read projection but no reviewed mutation. Community/group
-membership, administration, deletion/revoke, profile changes, calls, polls,
-channels, and presence remain unsupported or R4.
+Keep the bundle private. It contains message bodies and stable account,
+conversation, participant, and message evidence even though credentials,
+paths, and media bytes are excluded.

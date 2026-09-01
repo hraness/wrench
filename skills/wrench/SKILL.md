@@ -42,6 +42,9 @@ automation.
 - Search public Puerto Rico rentals: `wrench clasificados-web listings.search --input '{"location":"San Juan, PR","beds_min":2,"max_price":5500}' --json`. Keep `location` to the reviewed San Juan tokens. Neighborhood comes from street, ZIP, known address, or list-card coordinates, never from broker copy. Zillow-group and Puerto Rico MLS public search are not installed.
 - Operate Beeper: inspect `wrench capabilities beeper-local --json`, then use
   only its typed read or action operation with the bound local Desktop realm.
+- Export an existing WhatsApp local projection for Message Like Me: follow
+  [WhatsApp local Message Like Me export](references/whatsapp-adapter.md).
+  This route does not pair, sync, or send, and its seven-file output is private.
 - Export exact local Apple Photos contact evidence: follow
   [Apple Photos contact evidence](references/apple-photos.md). This source has
   no auth or network authority. Its cluster identifiers and counts are private

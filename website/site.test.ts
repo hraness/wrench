@@ -44,6 +44,7 @@ import {
 import {
   createBeeperPresentationFacts,
   createProviderDirectory,
+  createWhatsAppPresentationFacts,
   renderProviderAttestationGroups,
   renderProviderOverviewCards,
 } from "./provider-presentation";
@@ -291,6 +292,7 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/rumour-is-the-exploit/"');
     expect(html).toContain('href="/omarchy-root-escalation/"');
     expect(html).toContain('href="/providers/beeper/"');
+    expect(html).toContain('href="/providers/whatsapp/"');
     const argumentsSection = /<section aria-labelledby="arguments-title" class="section editorial-cluster">[\s\S]*?<\/section>/u
       .exec(html)?.[0];
     const guidesSection = /<section aria-labelledby="guides-title" class="section guide-cluster">[\s\S]*?<\/section>/u
@@ -377,6 +379,9 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain("pending message ID proves submission to Desktop only, not network delivery");
     expect(llms).toContain("tagged `packages/cli/package.json` declares 0.6.1 and is provenance-only");
     expect(llms).toContain("exact executable runtime identity remains authoritative");
+    expect(llms).toContain(`${SITE_ORIGIN}/providers/whatsapp/`);
+    expect(llms).toContain("does not pair, sync, or send");
+    expect(llms).toContain("submission is not a delivery claim");
     expect(llms.replaceAll(/https:\/\/wrench\.rip\/[a-z0-9-/]+/gu, "")).not.toMatch(
       /observed|capture-required|reservation|attestation/iu,
     );
@@ -1026,6 +1031,34 @@ describe("wrench.rip static site", () => {
         "wrench messaging preview",
       ]) expect(document).toContain(command);
     }
+
+    const whatsapp = pages.find((page) =>
+      page.definition.canonicalPath === "/providers/whatsapp/");
+    const whatsappFacts = createWhatsAppPresentationFacts(providerDirectory, attestation);
+    expect(whatsapp?.html).toContain(`<title>${whatsappFacts.pageTitle}</title>`);
+    expect(whatsapp?.html).toContain(
+      `<meta name="description" content="${whatsappFacts.pageDescription}">`,
+    );
+    expect(whatsapp?.html).toContain(
+      "<h1>Export bounded WhatsApp history for Message Like Me.</h1>",
+    );
+    expect(whatsapp?.html).toContain("six NDJSON files plus <code>manifest.json</code>");
+    expect(whatsapp?.html).toContain("local-message schema <code>2</code>");
+    expect(whatsapp?.html).toContain("<code>wacli-local@1.0.0</code>");
+    expect(whatsapp?.html).toContain("<code>whatsapp@0.15.0</code>");
+    expect(whatsapp?.html).toContain("Message Like Me v0.7.0");
+    expect(whatsapp?.html).toContain("phone-number (PN) and linked-identity (LID)");
+    expect(whatsapp?.html).toContain("Reaction rows are excluded");
+    expect(whatsapp?.html).toContain("<code>reaction-state-unproven</code>");
+    expect(whatsapp?.html).toContain("<code>remote-history-incomplete</code>");
+    expect(whatsapp?.html).toContain(whatsappFacts.wacliCommit);
+    expect(whatsapp?.html).toContain(whatsappFacts.archiveSha256);
+    expect(whatsapp?.html).toContain(whatsappFacts.binarySha256);
+    expect(whatsapp?.html).toContain("Runtime reads do not claim to repeat online notarization");
+    expect(whatsapp?.html).not.toMatch(/retains? reaction/iu);
+    expect(whatsapp?.html).not.toContain("runtime notarization");
+    expect(whatsapp?.html).not.toContain("wrench auth pair");
+    expect(whatsapp?.html).not.toContain("wrench auth sync");
 
     const personalAgents = pages.find((page) =>
       page.definition.canonicalPath === "/compare/personal-agents-browser-use/");

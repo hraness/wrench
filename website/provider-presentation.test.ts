@@ -9,6 +9,7 @@ import {
   BEEPER_PAGE_METADATA,
   createBeeperPresentationFacts,
   createProviderDirectory,
+  createWhatsAppPresentationFacts,
   PROVIDER_PRESENTATIONS,
   renderProviderAttestationGroups,
   renderProviderOverviewCards,
@@ -49,6 +50,13 @@ describe("provider presentation", () => {
       surfaceId: "beeper",
       transports: ["local-cli"],
     });
+    expect(directory.entries.find((entry) => entry.surfaceId === "whatsapp")).toMatchObject({
+      adapterIdentities: [{ id: "whatsapp-web", version: "1.4.0" }],
+      href: "/providers/whatsapp/",
+      observedCount: 4,
+      supportedActionCount: 4,
+      transports: ["linked-device"],
+    });
     for (const entry of directory.entries) {
       const supportedRows = attestation.rows.filter((row) =>
         row.surfaceId === entry.surfaceId && row.completeness === "observed");
@@ -63,6 +71,32 @@ describe("provider presentation", () => {
       const hasSupport = supportedSurfaceIds.includes(surfaceId);
       expect(directory.entries.some((entry) => entry.surfaceId === surfaceId)).toBe(hasSupport);
     }
+  });
+
+  test("binds the WhatsApp page to four R1 reads and exact Wacli provenance", async () => {
+    const attestation = await loadProviderCapabilityAttestation(repositoryRoot);
+    const facts = createWhatsAppPresentationFacts(
+      createProviderDirectory(attestation),
+      attestation,
+    );
+    expect(facts).toMatchObject({
+      adapterVersion: "1.4.0",
+      archiveSha256: "2b54f33d246e913a5c33525b4fc895a345363c2dcc673c70fa5f19cffb15d17d",
+      binarySha256: "a900af4d0dfd10471bcdf74105b9f256d1a08574242a041df3e5985a548826aa",
+      observedOperationCount: 4,
+      wacliCommit: "a020de724180d31eccfa5241d45443402d62fb06",
+      wacliVersion: "0.15.0",
+    });
+
+    const driftedRows = attestation.rows.map((row) =>
+      row.surfaceId === "whatsapp" && row.completeness === "observed"
+        ? Object.freeze({ ...row, risk: "R2" as const })
+        : row);
+    const drifted = Object.freeze({ ...attestation, rows: Object.freeze(driftedRows) });
+    expect(() => createWhatsAppPresentationFacts(
+      createProviderDirectory(drifted),
+      drifted,
+    )).toThrow("exactly four linked-device R1 reads");
   });
 
   test("binds Beeper marketing facts to reviewed code and adapter identity", async () => {

@@ -34,12 +34,15 @@ import {
 } from "./provider-capability-attestation";
 import {
   BEEPER_PAGE_METADATA,
+  WHATSAPP_PAGE_METADATA,
   createBeeperPresentationFacts,
   createProviderDirectory,
+  createWhatsAppPresentationFacts,
   renderProviderAttestationGroups,
   renderProviderOverviewCards,
   type BeeperPresentationFacts,
   type ProviderDirectory,
+  type WhatsAppPresentationFacts,
 } from "./provider-presentation";
 
 export const SITE_ORIGIN = "https://wrench.rip" as const;
@@ -101,6 +104,13 @@ export const PUBLIC_PAGES = [
     outputFile: "providers/beeper/index.html",
     sourceFile: "provider-beeper.html",
     title: BEEPER_PAGE_METADATA.title,
+  },
+  {
+    canonicalPath: "/providers/whatsapp/",
+    description: WHATSAPP_PAGE_METADATA.description,
+    outputFile: "providers/whatsapp/index.html",
+    sourceFile: "provider-whatsapp.html",
+    title: WHATSAPP_PAGE_METADATA.title,
   },
   {
     canonicalPath: "/security/",
@@ -259,6 +269,7 @@ type RenderOptions = Readonly<{
   providerDirectory: ProviderDirectory;
   providerOverviewCards: string;
   skillInstallAsset: string;
+  whatsappFacts: WhatsAppPresentationFacts;
 }>;
 
 function unknownRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -620,6 +631,14 @@ function renderTemplate(
     ["{{BEEPER_PAGE_DESCRIPTION}}", options.beeperFacts.pageDescription],
     ["{{BEEPER_PAGE_TITLE}}", options.beeperFacts.pageTitle],
     ["{{BEEPER_SEMANTIC_CONTRACT_VERSION_LABEL}}", options.beeperFacts.semanticContractVersionLabel],
+    ["{{WHATSAPP_ADAPTER_VERSION}}", options.whatsappFacts.adapterVersion],
+    ["{{WHATSAPP_ARCHIVE_SHA256}}", options.whatsappFacts.archiveSha256],
+    ["{{WHATSAPP_BINARY_SHA256}}", options.whatsappFacts.binarySha256],
+    ["{{WHATSAPP_OBSERVED_OPERATION_COUNT}}", String(options.whatsappFacts.observedOperationCount)],
+    ["{{WHATSAPP_PAGE_DESCRIPTION}}", options.whatsappFacts.pageDescription],
+    ["{{WHATSAPP_PAGE_TITLE}}", options.whatsappFacts.pageTitle],
+    ["{{WHATSAPP_WACLI_COMMIT}}", options.whatsappFacts.wacliCommit],
+    ["{{WHATSAPP_WACLI_VERSION}}", options.whatsappFacts.wacliVersion],
   ]);
   for (const [placeholder, value] of optionalValues) {
     if (rendered.includes(placeholder)) {
@@ -778,6 +797,7 @@ export async function buildWebsite(
   const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
   const providerDirectory = createProviderDirectory(attestation);
   const beeperFacts = createBeeperPresentationFacts(providerDirectory);
+  const whatsappFacts = createWhatsAppPresentationFacts(providerDirectory, attestation);
   const renderOptions = {
     analyticsAsset,
     attestation,
@@ -793,6 +813,7 @@ export async function buildWebsite(
     providerDirectory,
     providerOverviewCards: renderProviderOverviewCards(providerDirectory),
     skillInstallAsset,
+    whatsappFacts,
   } as const;
 
   await rm(outputRoot, { force: true, recursive: true });
