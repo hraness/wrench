@@ -36,6 +36,11 @@ export type WrenchArguments =
   | { readonly command: "read"; readonly arguments: readonly string[] }
   | { readonly command: "media"; readonly arguments: readonly string[] }
   | {
+      readonly command: "apple-photos-export-contact-evidence";
+      readonly library?: string;
+      readonly json: boolean;
+    }
+  | {
       readonly command: "beeper-export-message-like-me";
       readonly authId: string;
       readonly output: string;
@@ -781,6 +786,38 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     || first === "transcriber"
   ) {
     return { ok: true, value: { command: "media", arguments: raw } };
+  }
+  if (first === "apple-photos") {
+    if (raw[1] !== "export-contact-evidence") {
+      return {
+        ok: false,
+        message: "apple-photos requires export-contact-evidence",
+      };
+    }
+    const parsed = optionValues(raw.slice(2), ["--library"], ["--json"]);
+    if (isFailure(parsed)) return parsed;
+    const library = parsed.values["--library"];
+    if (library !== undefined && (
+      !isAbsolute(library)
+      || resolve(library) !== library
+      || !library.endsWith(".photoslibrary")
+      || Buffer.byteLength(library, "utf8") > 4_096
+      || /[\0\r\n]/u.test(library)
+    )) {
+      return {
+        ok: false,
+        message:
+          "apple-photos export-contact-evidence requires one normalized absolute .photoslibrary path",
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        command: "apple-photos-export-contact-evidence",
+        ...(library === undefined ? {} : { library }),
+        json: parsed.booleans.has("--json"),
+      },
+    };
   }
   if (first === "beeper") {
     const subcommand = raw[1];

@@ -29,6 +29,7 @@ import {
 import { parseWrenchArguments, wrenchUsage, type WrenchArguments } from "./args";
 import type * as BeeperMessageLikeMeCliRuntimeModule from "./beeper-message-like-me-cli";
 import type * as BeeperContactInteractionCliRuntimeModule from "./beeper-contact-interactions-cli";
+import type * as ApplePhotosCliRuntimeModule from "./apple-photos-cli";
 import type { BeeperMessageLikeMeProgress } from "./beeper-message-like-me-source";
 import type { BeeperContactInteractionCliProgress } from "./beeper-contact-interactions-cli";
 import type { GmailCaptureRunner } from "./gmail-capture";
@@ -234,6 +235,7 @@ type MediaRuntime = typeof MediaRuntimeModule;
 type BeeperMessageLikeMeCliRuntime = typeof BeeperMessageLikeMeCliRuntimeModule;
 type BeeperContactInteractionCliRuntime =
   typeof BeeperContactInteractionCliRuntimeModule;
+type ApplePhotosCliRuntime = typeof ApplePhotosCliRuntimeModule;
 type ImsgDirectInstallRuntime =
   typeof import("./providers/imessage-direct-install");
 
@@ -260,6 +262,8 @@ const loadBeeperMessageLikeMeCliRuntime = (): Promise<BeeperMessageLikeMeCliRunt
   import("./beeper-message-like-me-cli");
 const loadBeeperContactInteractionCliRuntime = (): Promise<BeeperContactInteractionCliRuntime> =>
   import("./beeper-contact-interactions-cli");
+const loadApplePhotosCliRuntime = (): Promise<ApplePhotosCliRuntime> =>
+  import("./apple-photos-cli");
 const loadImsgDirectInstallRuntime = (): Promise<ImsgDirectInstallRuntime> =>
   import("./providers/imessage-direct-install");
 
@@ -297,6 +301,7 @@ export type WrenchDependencies = {
     () => Promise<BeeperMessageLikeMeCliRuntime>;
   readonly loadBeeperContactInteractionCliRuntime:
     () => Promise<BeeperContactInteractionCliRuntime>;
+  readonly loadApplePhotosCliRuntime: () => Promise<ApplePhotosCliRuntime>;
   readonly loadImsgDirectInstallRuntime:
     () => Promise<ImsgDirectInstallRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
@@ -355,6 +360,7 @@ const defaultDependencies: WrenchDependencies = {
   loadMediaRuntime,
   loadBeeperMessageLikeMeCliRuntime,
   loadBeeperContactInteractionCliRuntime,
+  loadApplePhotosCliRuntime,
   loadImsgDirectInstallRuntime,
   providerPluginRegistry,
   probePluginSubject: async (
@@ -442,6 +448,9 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
     loadBeeperContactInteractionCliRuntime:
       overrides.loadBeeperContactInteractionCliRuntime
       ?? defaultDependencies.loadBeeperContactInteractionCliRuntime,
+    loadApplePhotosCliRuntime:
+      overrides.loadApplePhotosCliRuntime
+      ?? defaultDependencies.loadApplePhotosCliRuntime,
     loadImsgDirectInstallRuntime:
       overrides.loadImsgDirectInstallRuntime
       ?? defaultDependencies.loadImsgDirectInstallRuntime,
@@ -1964,6 +1973,18 @@ async function runCommand(
       environment,
       ...(signal === undefined ? {} : { signal }),
     });
+  }
+  if (arguments_.command === "apple-photos-export-contact-evidence") {
+    const runtime = await dependencies.loadApplePhotosCliRuntime();
+    const result = await runtime.exportApplePhotosContactEvidenceForCli({
+      ...(arguments_.library === undefined
+        ? {}
+        : { library: arguments_.library }),
+      environment,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    output.stdout(runtime.encodeApplePhotosContactEvidenceExportResult(result));
+    return 0;
   }
   if (arguments_.command === "beeper-export-contact-interactions") {
     const runtime = await dependencies.loadBeeperContactInteractionCliRuntime();

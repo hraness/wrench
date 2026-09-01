@@ -18,6 +18,9 @@
       "@hraness/wrench/beeper": [
         "./src/beeper-client.ts"
       ],
+      "@hraness/wrench/apple-photos": [
+        "./src/apple-photos-client.ts"
+      ],
       "@hraness/wrench/omni": [
         "./src/omni-client.ts"
       ]

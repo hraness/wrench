@@ -69,6 +69,12 @@
           </div>
         </section>
 
+        <section aria-labelledby="local-source-exports">
+          <h2 id="local-source-exports">Local source exports</h2>
+          <p><code>wrench apple-photos export-contact-evidence</code> reads stable private copies of the current macOS account's local Photos and Contacts databases. It returns exact person-to-contact identifiers, linked face and asset counts, linked-asset date bounds, snapshot scope, privacy declarations, and integrity evidence. It performs no authentication, network request, synchronization, media read, or mutation. Names, paths, images, locations, raw blobs, faceprints, face crops, and unmatched people are excluded.</p>
+          <p>This workflow stays outside the provider-action table above because it does not connect to a service or enter the action catalog. Its complete claim covers the stable local snapshots read by that run; remote iCloud and Contacts synchronization are not asserted.</p>
+        </section>
+
         <aside class="guide-callout" aria-labelledby="provider-next">
           <h2 id="provider-next">Set up only the service you need</h2>
           <p>Follow the <a href="/getting-started/">installation guide</a>, inspect <code>wrench capabilities PROVIDER --json</code>, then read the <a href="/security/">security and local-custody guide</a> before connecting an account. The <a href="/providers/beeper/">Beeper guide</a> documents its local app integration in detail.</p>

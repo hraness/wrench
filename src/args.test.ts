@@ -245,6 +245,40 @@ describe("wrench CLI grammar", () => {
     ]).ok).toBeFalse();
   });
 
+  test("parses only the bounded Apple Photos contact-evidence export", () => {
+    expect(parseWrenchArguments([
+      "apple-photos",
+      "export-contact-evidence",
+      "--library",
+      "/private/tmp/Family.photoslibrary",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "apple-photos-export-contact-evidence",
+        library: "/private/tmp/Family.photoslibrary",
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "apple-photos",
+      "export-contact-evidence",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "apple-photos-export-contact-evidence",
+        json: false,
+      },
+    });
+    for (const raw of [
+      ["apple-photos", "read"],
+      ["apple-photos", "export-contact-evidence", "--library", "relative.photoslibrary"],
+      ["apple-photos", "export-contact-evidence", "--library", "/private/tmp/Photos.sqlite"],
+      ["apple-photos", "export-contact-evidence", "--output", "/private/output"],
+      ["apple-photos", "export-contact-evidence", "--json", "--json"],
+    ]) expect(parseWrenchArguments(raw).ok).toBeFalse();
+  });
+
   test("parses adapter and capability management", () => {
     expect(parseWrenchArguments(["capabilities", "linkedin", "--json"])).toEqual({
       ok: true,

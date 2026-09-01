@@ -172,8 +172,9 @@ void plugin
 The package root exposes programmatic plugin types and bounded validators.
 `@hraness/wrench/client` exposes persistent-read and strict live-invocation
 helpers, `@hraness/wrench/beeper` exposes the body-free Beeper contact
-interaction export, and `@hraness/wrench/omni` exposes normalized
-cross-provider reads. Importing any SDK entrypoint does not start the CLI.
+interaction export, `@hraness/wrench/apple-photos` exposes exact local Photos
+contact evidence, and `@hraness/wrench/omni` exposes normalized cross-provider
+reads. Importing any SDK entrypoint does not start the CLI.
 Importing the package root also does not inspect local state or load provider
 runtimes.
 
@@ -450,6 +451,52 @@ Telegram's official `getContacts` method belongs to
 Wrench will not install or expose this surface until it can bind the TDLib
 authorization lifecycle, account identity, local database, paging behavior,
 and message-history completeness without weakening the linked-device boundary.
+
+### Apple Photos contact evidence
+
+Apple Photos is a local source export, not an authenticated provider action.
+It performs no authentication, network request, Photos change request, media
+download, or provider synchronization. The default library is the current
+account's `Pictures/Photos Library.photoslibrary`; one alternate library may be
+selected only as a normalized absolute `.photoslibrary` directory:
+
+```sh
+umask 077
+wrench apple-photos export-contact-evidence --json \
+  > /absolute/private/path/apple-photos-contact-evidence.json
+```
+
+Wrench copies the owned Photos SQLite main file and any complete WAL/SHM pair
+into a new private temporary directory only after bounded pre-open and
+post-copy file-identity checks agree. It applies the same snapshot discipline
+to every current Apple Contacts database discovered under the account's fixed
+AddressBook root, queries only the copied databases, and removes the temporary
+snapshot before returning. Symlinks, hardlinks, changed files, incomplete
+sidecars, unexpected owners, size overruns, missing tables, and relevant Core
+Data column drift fail closed.
+
+The only identity join is an exact equality between
+`ZPERSON.ZPERSONURI` and Apple Contacts `ZABCDRECORD.ZUNIQUEID`. Wrench never
+parses `ZCONTACTMATCHINGDICTIONARY`. The schema-1 artifact contains only the
+matched Photos person identifier, Apple contact identifier, linked face and
+distinct-asset counts, first and last linked asset dates, explicit local
+snapshot completeness, privacy exclusions, generation and schema digests, and
+an integrity-bound receipt. Names, paths, images, media, raw database fields,
+locations, faceprints, face crops, and unmatched clusters are excluded.
+
+```ts
+import {
+  exportApplePhotosContactEvidenceSync,
+} from "@hraness/wrench/apple-photos"
+
+const { receipt, output } = exportApplePhotosContactEvidenceSync()
+```
+
+The result is complete only for the stable local Photos and Contacts snapshots
+observed by that run. It makes no claim about pending iCloud or Contacts sync,
+and absence is not deletion evidence. Keep the artifact private because its
+two exact identifiers are personal relationship data. See the focused
+[Apple Photos guide](skills/wrench/references/apple-photos.md).
 
 ### Beeper through an exact local CLI contract
 
