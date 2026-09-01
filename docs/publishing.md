@@ -268,26 +268,25 @@ Fail if the branch already exists, and never bootstrap it from `main` or an
 unreleased candidate. Configure Vercel only after that exact ref exists. This
 exception must never be repeated.
 
-The live repository currently applies active ruleset `21832074` only to
-`refs/heads/website-production`. It has no bypass actors,
-`current_user_can_bypass=never`, and exact `deletion` and `non_fast_forward`
-rules. That narrow layer makes the established ref protected against deletion
-and non-fast-forward movement. It does not restrict ordinary fast-forward
-updates, protect creation, prove a dedicated writer, or provide canary evidence.
-The dedicated App installation, `production-ref-writer-key` environment,
-App-only update rule, creation rule, persistent canary, and their live readbacks
-remain mandatory reconciliation work. Do not describe those controls as active
-until their out-of-band setup and positive and negative canary proofs are
-complete. GitHub Actions App Integration 15368 is not the production writer and
-must not be configured as the update-rule bypass.
+Live ruleset `21832074` targets exactly `refs/heads/website-production` and
+`refs/heads/website-production-canary`. It has no bypass actors,
+`current_user_can_bypass=never`, and exact creation, deletion, and
+non-fast-forward rules. Live ruleset `21887484` targets the same refs with one
+update restriction and no bypass actors. Together they freeze both refs against
+creation, deletion, non-fast-forward movement, and ordinary updates while the
+dedicated writer proof is incomplete. The dedicated App installation and
+`production-ref-writer-key` environment exist, but the App-only update bypass
+and positive and negative canary proofs remain mandatory reconciliation work.
+Do not describe the writer as active until that out-of-band setup and evidence
+are complete. GitHub Actions App Integration 15368 is not the production writer
+and must not be configured as the update-rule bypass.
 
 Checked-in `CODEOWNERS` assigns source ownership and notification for the
 workflow, Release helper, and publishing policy paths. It does not claim live or
-independent review enforcement. Live Protect-main ruleset `20921911` still
-carries an OrganizationAdmin `always` bypass, requires no approving review, and
-does not require code-owner review. Privileged reconciliation must remove that
-bypass while retaining the pull-request path and exact Required integration
-check. Wrench currently has one eligible maintainer, so
+independent review enforcement. Live Protect-main ruleset `20921911` has no
+bypass actors, retains the pull-request path and exact Required integration
+check, requires no approving review, and does not require code-owner review.
+Wrench currently has one eligible maintainer, so
 `require_code_owner_review` must remain `false` and the approval minimum must
 remain zero until a second eligible independent code owner exists. Enabling it
 now would make the repository unreviewable rather than safer. Repository Actions
@@ -358,20 +357,22 @@ plus the reviewed App ID, client ID, slug, and selected installation ID
 variables. The job repeats the full current-main, peeled-tag, immutable Release,
 and Latest authority check after environment approval and before mutation.
 
-The writer authenticates one private Hraness-owned GitHub App. The checked
-provisional source and initial App registration close to exactly
-`metadata:read` and `contents:write`, with no Administration permission. Runtime
-checks bind the configured App and selected installation identities, request a
-token narrowed to repository ID `1316443113`, and require the minted token
-response to name only that repository. That runtime token proof does not prove
-the installation-wide selected-repository set. Before admitting the key,
-privileged setup must exhaustively read every repository selected for the
-installation with the administrator identity, prove that the unique result is
-`hraness/wrench` at ID `1316443113`, and retain the exact readback with the
-canary evidence.
+The writer authenticates one private Hraness-owned GitHub App. The App
+registration and every minted token close to exactly `metadata:read`,
+`contents:write`, and `workflows:write`, with no Administration or other
+permission. Workflows write is required because an admitted fast-forward may
+introduce reviewed `.github/workflows` changes. Runtime checks bind the
+configured App and selected installation identities, request that exact
+permission set on a token narrowed to repository ID `1316443113`, and require
+the minted token response to name only that repository. That runtime token
+proof does not prove the installation-wide selected-repository set. Before
+admitting the key, privileged setup must exhaustively read every repository
+selected for the installation with the administrator identity, prove that the
+unique result is `hraness/wrench` at ID `1316443113`, and retain the exact
+readback with the canary evidence.
 
-The contents-only permission set is provisional until one exact `P` to `C`
-transition on persistent ref `refs/heads/website-production-canary` proves a
+The exact permission set remains unready until one `P` to `C` transition on
+persistent ref `refs/heads/website-production-canary` proves a
 leased fast-forward where `C` contains the real workflow-file changes. Create
 that canary ref once at `P` before its creation rule becomes active, then retain
 it at `C`; the transition is single-use, and the ref must never be reset,
@@ -382,12 +383,8 @@ the bounded proof, but it must be removed after its exact run, ref, ruleset,
 rule-suite, token-revocation, and ordinary-actor denial evidence is retained.
 The production helper remains hard-bound to `website-production` and must not be
 made caller-selectable for the canary. The release remains unready for
-production activation or final product merge until that proof passes. If GitHub
-rejects the push because the App also needs Workflows permission, preserve the
-exact failure evidence and keep production frozen. A separate reviewed source
-and App-registration change may then add exactly `workflows:write`, after which
-the complete canary must run again. Never broaden the App silently or during a
-failed canary.
+production activation or final product merge until that proof passes. Never
+broaden the App silently or during a failed canary.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private

@@ -184,7 +184,11 @@ export function createReleaseAppJwt(input) {
 
 export function releaseAppTokenRequestBody() {
   return Object.freeze({
-    permissions: Object.freeze({ contents: "write", metadata: "read" }),
+    permissions: Object.freeze({
+      contents: "write",
+      metadata: "read",
+      workflows: "write",
+    }),
     repository_ids: Object.freeze([WRENCH_REPOSITORY_ID]),
   });
 }
@@ -193,7 +197,11 @@ export function parseReleaseAppIdentity(value, configuration) {
   const app = expectRecord(value, "release App identity");
   const owner = expectRecord(app.owner, "release App owner");
   const permissions = expectRecord(app.permissions, "release App permissions");
-  expectExactKeys(permissions, ["contents", "metadata"], "release App permissions");
+  expectExactKeys(
+    permissions,
+    ["contents", "metadata", "workflows"],
+    "release App permissions",
+  );
   if (
     app.id !== configuration.appId ||
     app.slug !== configuration.appSlug ||
@@ -201,7 +209,8 @@ export function parseReleaseAppIdentity(value, configuration) {
     owner.login !== EXPECTED_OWNER ||
     owner.type !== "Organization" ||
     permissions.contents !== "write" ||
-    permissions.metadata !== "read"
+    permissions.metadata !== "read" ||
+    permissions.workflows !== "write"
   ) {
     fail("authenticated release App identity or permission closure does not match checked variables");
   }
@@ -211,7 +220,11 @@ export function parseReleaseAppInstallation(value, configuration) {
   const installation = expectRecord(value, "release App installation");
   const account = expectRecord(installation.account, "release App installation account");
   const permissions = expectRecord(installation.permissions, "release App installation permissions");
-  expectExactKeys(permissions, ["contents", "metadata"], "release App installation permissions");
+  expectExactKeys(
+    permissions,
+    ["contents", "metadata", "workflows"],
+    "release App installation permissions",
+  );
   if (
     installation.id !== configuration.installationId ||
     installation.app_id !== configuration.appId ||
@@ -221,7 +234,8 @@ export function parseReleaseAppInstallation(value, configuration) {
     account.login !== EXPECTED_OWNER ||
     account.type !== "Organization" ||
     permissions.contents !== "write" ||
-    permissions.metadata !== "read"
+    permissions.metadata !== "read" ||
+    permissions.workflows !== "write"
   ) {
     fail("release App installation identity or permission closure does not match checked variables");
   }
@@ -246,9 +260,19 @@ export function parseReleaseAppTokenResponse(value, serverDate) {
     fail("release App token expiry is outside the one-hour response window");
   }
   const permissions = expectRecord(response.permissions, "release App token permissions");
-  expectExactKeys(permissions, ["contents", "metadata"], "release App token permissions");
-  if (permissions.contents !== "write" || permissions.metadata !== "read") {
-    fail("release App token permissions are not exactly contents:write and metadata:read");
+  expectExactKeys(
+    permissions,
+    ["contents", "metadata", "workflows"],
+    "release App token permissions",
+  );
+  if (
+    permissions.contents !== "write" ||
+    permissions.metadata !== "read" ||
+    permissions.workflows !== "write"
+  ) {
+    fail(
+      "release App token permissions are not exactly contents:write, metadata:read, and workflows:write",
+    );
   }
   if (response.repository_selection !== "selected") {
     fail("release App token response is not selected-repository scoped");
@@ -267,7 +291,11 @@ export function parseReleaseAppTokenResponse(value, serverDate) {
   }
   return Object.freeze({
     expiresAt: response.expires_at,
-    permissions: Object.freeze({ contents: "write", metadata: "read" }),
+    permissions: Object.freeze({
+      contents: "write",
+      metadata: "read",
+      workflows: "write",
+    }),
     repositoryId: WRENCH_REPOSITORY_ID,
     token,
   });
