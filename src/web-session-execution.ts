@@ -36,7 +36,7 @@ export const WEB_SESSION_CLEANUP_JOIN_TIMEOUT_MS = 30_000;
 export class WebSessionCleanupUnverifiedError extends Error {
   constructor(cause?: unknown) {
     super(
-      "provider resource cleanup could not be verified within its bounded join; retry is unsafe until wrench doctor proves exact quiescence, or a reboot proves the admitted resource cannot still be running",
+      "provider resource cleanup could not be verified within its bounded join; retry is unsafe until wrench doctor proves and completes exact resource recovery",
       cause === undefined ? undefined : { cause },
     );
     this.name = "WebSessionCleanupUnverifiedError";

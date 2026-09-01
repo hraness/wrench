@@ -6,8 +6,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { types as nodeTypes } from "node:util";
 
 import {
   acquireCookieRecords,
@@ -36,7 +38,14 @@ import type {
   OperationInput,
   WrenchManifest,
 } from "./model";
+import { localBrowserCdpUrl } from "./derivation-file-chooser";
 import { DOM_ACTION_TRANSPORT_DISABLED_MESSAGE } from "./transport-policy";
+import {
+  captureProcessOwnerIdentity,
+  processOwnerStatus,
+  type ProcessOwnerIdentity,
+  type ProcessOwnerStatus,
+} from "./process-identity";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -117,6 +126,8 @@ export type BrowserSessionDependencies = {
   readonly acquireCookieRecords: CookieRecordReader;
   /** Internal deterministic seam for independently removing owned private roots. */
   readonly removePrivateArtifact: BrowserPrivateArtifactRemover;
+  /** Internal seam for deterministic cleanup quiescence and deletion reproof. */
+  readonly cleanupLifecycle: AgentBrowserLifecycleDependencies;
 };
 
 /** Provider-neutral borrowed operation budget used by browser bootstraps. */
@@ -144,29 +155,98 @@ export type CreateBrowserSessionOptions = {
   readonly allowCodeOwnedNetworkObservation?: true;
   /**
    * Persists the exact private roots before a proxy or browser can launch.
-   * Throwing prevents resource activation and rolls the unpublished roots
-   * back.
+   * The durable registrar reconciles an ambiguous commit before returning.
+   * Any other throw is still treated as potentially committed, so Wrench
+   * preserves the roots instead of destroying recovery evidence.
    */
-  readonly publishCleanupResource?: (
+  readonly publishCleanupResource?: ((
     resource: BrowserCleanupResourceIdentity,
-  ) => void;
+  ) => void) & {
+    /** Durably records that the closed browser and its private roots are idle. */
+    readonly markBrowserCleanupQuiescent?: (
+      resource: BrowserCleanupResourceIdentity,
+    ) => void;
+    /** Journals one exact root only after its identity-bound removal succeeds. */
+    readonly markBrowserCleanupRootRemoved?: (
+      resource: BrowserCleanupResourceIdentity,
+      root: BrowserCleanupResourceRoot,
+    ) => void;
+  };
   readonly dependencies?: Partial<BrowserSessionDependencies>;
 };
 
-export type BrowserPrivateDirectoryIdentity = {
+export type BrowserPrivateDirectoryIdentityV1 = {
   readonly device: string;
   readonly inode: string;
 };
 
-export type BrowserCleanupResourceIdentity = {
+/** Legacy public name retained for v1 claim parsing compatibility. */
+export type BrowserPrivateDirectoryIdentity =
+  BrowserPrivateDirectoryIdentityV1;
+
+export type BrowserPrivateDirectoryIdentityV2 =
+  BrowserPrivateDirectoryIdentityV1 & {
+    readonly birthtimeNs: string;
+    /** Decimal POSIX permission bits. V2 admits only 0700 (`448`). */
+    readonly mode: "448";
+    readonly uid: string;
+  };
+
+export type AgentBrowserControlWitnessV1 = {
+  readonly kind: "agent-browser-control-v1";
+  readonly version: "0.32.3";
+  readonly session: string;
+  readonly socketDirectory: string;
+  readonly daemonOwner: ProcessOwnerIdentity;
+  readonly engine: "chrome";
+  readonly launchHash: string;
+  readonly cdpUrl: string;
+};
+
+export type BrowserCleanupResourceIdentityV1 = {
   readonly kind: "agent-browser-session-v1";
   readonly recoveryHandle: string;
   readonly session: string;
   readonly socketDirectory: string;
-  readonly socketDirectoryIdentity: BrowserPrivateDirectoryIdentity;
+  readonly socketDirectoryIdentity: BrowserPrivateDirectoryIdentityV1;
   readonly artifactsDirectory: string;
-  readonly artifactsDirectoryIdentity: BrowserPrivateDirectoryIdentity;
+  readonly artifactsDirectoryIdentity: BrowserPrivateDirectoryIdentityV1;
 };
+
+type BrowserCleanupResourceIdentityV2Base = {
+  readonly kind: "agent-browser-session-v2";
+  readonly recoveryHandle: string;
+  readonly session: string;
+  readonly socketDirectory: string;
+  readonly socketDirectoryIdentity: BrowserPrivateDirectoryIdentityV2;
+  readonly artifactsDirectory: string;
+  readonly artifactsDirectoryIdentity: BrowserPrivateDirectoryIdentityV2;
+};
+
+/**
+ * Durable browser cleanup progression. Prepared roots have no launch intent,
+ * launch-intent is persisted immediately before launch, and controlled binds
+ * one immutable daemon/browser/CDP witness. Progression is strictly monotonic.
+ */
+export type BrowserCleanupResourceIdentityV2 =
+  BrowserCleanupResourceIdentityV2Base & (
+    | {
+        readonly phase: "prepared";
+        readonly control: null;
+      }
+    | {
+        readonly phase: "launch-intent";
+        readonly control: null;
+      }
+    | {
+        readonly phase: "controlled";
+        readonly control: AgentBrowserControlWitnessV1;
+      }
+  );
+
+export type BrowserCleanupResourceIdentity =
+  | BrowserCleanupResourceIdentityV1
+  | BrowserCleanupResourceIdentityV2;
 
 export type BrowserClosedCleanupEvidence = {
   readonly kind: "agent-browser-closed-artifacts-v1";
@@ -189,6 +269,13 @@ export class PreservedBrowserArtifactsError extends Error {
     if (cleanupEvidence !== undefined) {
       this.cleanupEvidence = cleanupEvidence;
     }
+  }
+}
+
+export class AgentBrowserLiveControlUnavailableError extends Error {
+  constructor() {
+    super("agent-browser live control identity is unavailable");
+    this.name = "AgentBrowserLiveControlUnavailableError";
   }
 }
 
@@ -332,26 +419,423 @@ export function parseBrowserRecoveryHandle(
   });
 }
 
-function privateBrowserDirectoryIdentity(
+const browserIdentityDecimalPattern = /^(?:0|[1-9][0-9]{0,39})$/u;
+const processIdentityDigestPattern = /^[a-f0-9]{64}$/u;
+const agentBrowserLaunchHashPattern = /^(?:0|[1-9][0-9]{0,19})$/u;
+const maximumAgentBrowserControlLaunchHash = (1n << 64n) - 1n;
+
+function browserIdentityRecord(value: unknown, label: string): JsonRecord {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || nodeTypes.isProxy(value)
+  ) throw new Error(`${label} is malformed`);
+  const prototype: unknown = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error(`${label} is malformed`);
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const output: JsonRecord = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string") throw new Error(`${label} is malformed`);
+    const descriptor = descriptors[key];
+    if (
+      descriptor === undefined
+      || !descriptor.enumerable
+      || !("value" in descriptor)
+      || /[\u0000-\u001f\u007f-\u009f]/u.test(key)
+    ) throw new Error(`${label} is malformed`);
+    output[key] = descriptor.value as unknown;
+  }
+  return output;
+}
+
+function browserIdentityExactKeys(
+  value: JsonRecord,
+  expected: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (
+    actual.length !== wanted.length
+    || actual.some((key, index) => key !== wanted[index])
+  ) throw new Error(`${label} is malformed`);
+}
+
+function browserIdentityDecimal(value: unknown, label: string): string {
+  if (
+    typeof value !== "string"
+    || !browserIdentityDecimalPattern.test(value)
+  ) throw new Error(`${label} is malformed`);
+  return value;
+}
+
+function parseBrowserPrivateDirectoryIdentityV1(
+  value: unknown,
+  label: string,
+): BrowserPrivateDirectoryIdentityV1 {
+  const identity = browserIdentityRecord(value, label);
+  browserIdentityExactKeys(identity, ["device", "inode"], label);
+  return Object.freeze({
+    device: browserIdentityDecimal(identity.device, `${label} device`),
+    inode: browserIdentityDecimal(identity.inode, `${label} inode`),
+  });
+}
+
+function parseBrowserPrivateDirectoryIdentityV2(
+  value: unknown,
+  label: string,
+): BrowserPrivateDirectoryIdentityV2 {
+  const identity = browserIdentityRecord(value, label);
+  browserIdentityExactKeys(
+    identity,
+    ["birthtimeNs", "device", "inode", "mode", "uid"],
+    label,
+  );
+  const birthtimeNs = browserIdentityDecimal(
+    identity.birthtimeNs,
+    `${label} birth time`,
+  );
+  if (birthtimeNs === "0" || identity.mode !== "448") {
+    throw new Error(`${label} is malformed`);
+  }
+  return Object.freeze({
+    device: browserIdentityDecimal(identity.device, `${label} device`),
+    inode: browserIdentityDecimal(identity.inode, `${label} inode`),
+    birthtimeNs,
+    mode: "448",
+    uid: browserIdentityDecimal(identity.uid, `${label} owner`),
+  });
+}
+
+function parseBrowserProcessOwner(value: unknown): ProcessOwnerIdentity {
+  const owner = browserIdentityRecord(value, "browser cleanup daemon owner");
+  browserIdentityExactKeys(
+    owner,
+    ["bootId", "pid", "processStartId"],
+    "browser cleanup daemon owner",
+  );
+  if (
+    typeof owner.pid !== "number"
+    || !Number.isSafeInteger(owner.pid)
+    || owner.pid < 1
+    || typeof owner.bootId !== "string"
+    || !processIdentityDigestPattern.test(owner.bootId)
+    || typeof owner.processStartId !== "string"
+    || !processIdentityDigestPattern.test(owner.processStartId)
+  ) throw new Error("browser cleanup daemon owner is malformed");
+  return Object.freeze({
+    pid: owner.pid,
+    bootId: owner.bootId,
+    processStartId: owner.processStartId,
+  });
+}
+
+function canonicalAgentBrowserLaunchHash(value: unknown): string {
+  if (
+    typeof value !== "string"
+    || !agentBrowserLaunchHashPattern.test(value)
+    || BigInt(value) > maximumAgentBrowserControlLaunchHash
+  ) throw new Error("browser cleanup launch identity is malformed");
+  return value;
+}
+
+function literalLoopbackAgentBrowserCdpUrl(value: unknown): string {
+  let cdpUrl: string;
+  try {
+    cdpUrl = localBrowserCdpUrl(value);
+  } catch {
+    throw new Error("browser cleanup control witness is malformed");
+  }
+  const hostname = new URL(cdpUrl).hostname;
+  if (hostname !== "127.0.0.1" && hostname !== "[::1]") {
+    throw new Error("browser cleanup control witness is malformed");
+  }
+  return cdpUrl;
+}
+
+function parseAgentBrowserControlWitness(
+  value: unknown,
+): AgentBrowserControlWitnessV1 {
+  const control = browserIdentityRecord(
+    value,
+    "browser cleanup control witness",
+  );
+  browserIdentityExactKeys(control, [
+    "cdpUrl",
+    "daemonOwner",
+    "engine",
+    "kind",
+    "launchHash",
+    "session",
+    "socketDirectory",
+    "version",
+  ], "browser cleanup control witness");
+  if (
+    control.kind !== "agent-browser-control-v1"
+    || control.version !== "0.32.3"
+    || typeof control.session !== "string"
+    || !browserSessionPattern.test(control.session)
+    || typeof control.socketDirectory !== "string"
+    || control.engine !== "chrome"
+    || typeof control.cdpUrl !== "string"
+  ) throw new Error("browser cleanup control witness is malformed");
+  const cdpUrl = literalLoopbackAgentBrowserCdpUrl(control.cdpUrl);
+  if (cdpUrl !== control.cdpUrl) {
+    throw new Error("browser cleanup control witness is malformed");
+  }
+  return Object.freeze({
+    kind: "agent-browser-control-v1",
+    version: "0.32.3",
+    session: control.session,
+    socketDirectory: canonicalAbsolutePath(
+      control.socketDirectory,
+      "control socket directory",
+    ),
+    daemonOwner: parseBrowserProcessOwner(control.daemonOwner),
+    engine: "chrome",
+    launchHash: canonicalAgentBrowserLaunchHash(control.launchHash),
+    cdpUrl,
+  });
+}
+
+function browserCleanupResourceBase(value: JsonRecord): {
+  readonly recoveryHandle: string;
+  readonly session: string;
+  readonly socketDirectory: string;
+  readonly artifactsDirectory: string;
+} {
+  if (
+    typeof value.recoveryHandle !== "string"
+    || typeof value.session !== "string"
+    || typeof value.socketDirectory !== "string"
+    || typeof value.artifactsDirectory !== "string"
+  ) throw new Error("browser cleanup resource identity is malformed");
+  const recovery = parseBrowserRecoveryHandle(value.recoveryHandle);
+  if (
+    recovery.session !== value.session
+    || recovery.socketDirectory !== value.socketDirectory
+    || recovery.artifactsDirectory !== value.artifactsDirectory
+  ) throw new Error("browser cleanup resource does not match its recovery handle");
+  return {
+    recoveryHandle: value.recoveryHandle,
+    session: recovery.session,
+    socketDirectory: recovery.socketDirectory,
+    artifactsDirectory: recovery.artifactsDirectory,
+  };
+}
+
+export function parseBrowserCleanupResourceIdentity(
+  value: unknown,
+): BrowserCleanupResourceIdentity {
+  const identity = browserIdentityRecord(
+    value,
+    "browser cleanup resource identity",
+  );
+  const commonKeys = [
+    "artifactsDirectory",
+    "artifactsDirectoryIdentity",
+    "kind",
+    "recoveryHandle",
+    "session",
+    "socketDirectory",
+    "socketDirectoryIdentity",
+  ] as const;
+  if (identity.kind === "agent-browser-session-v1") {
+    browserIdentityExactKeys(identity, commonKeys, "browser cleanup resource identity");
+    const base = browserCleanupResourceBase(identity);
+    return Object.freeze({
+      kind: "agent-browser-session-v1",
+      ...base,
+      socketDirectoryIdentity: parseBrowserPrivateDirectoryIdentityV1(
+        identity.socketDirectoryIdentity,
+        "browser cleanup socket identity",
+      ),
+      artifactsDirectoryIdentity: parseBrowserPrivateDirectoryIdentityV1(
+        identity.artifactsDirectoryIdentity,
+        "browser cleanup artifacts identity",
+      ),
+    });
+  }
+  if (identity.kind !== "agent-browser-session-v2") {
+    throw new Error("browser cleanup resource identity kind is unsupported");
+  }
+  browserIdentityExactKeys(
+    identity,
+    [...commonKeys, "control", "phase"],
+    "browser cleanup resource identity",
+  );
+  const base = browserCleanupResourceBase(identity);
+  const roots = Object.freeze({
+    kind: "agent-browser-session-v2",
+    ...base,
+    socketDirectoryIdentity: parseBrowserPrivateDirectoryIdentityV2(
+      identity.socketDirectoryIdentity,
+      "browser cleanup socket identity",
+    ),
+    artifactsDirectoryIdentity: parseBrowserPrivateDirectoryIdentityV2(
+      identity.artifactsDirectoryIdentity,
+      "browser cleanup artifacts identity",
+    ),
+  });
+  if (identity.phase === "prepared" || identity.phase === "launch-intent") {
+    if (identity.control !== null) {
+      throw new Error("browser cleanup phase and control witness are inconsistent");
+    }
+    return Object.freeze({
+      ...roots,
+      phase: identity.phase,
+      control: null,
+    });
+  }
+  if (identity.phase !== "controlled" || identity.control === null) {
+    throw new Error("browser cleanup phase is malformed");
+  }
+  const control = parseAgentBrowserControlWitness(identity.control);
+  if (
+    control.session !== base.session
+    || control.socketDirectory !== base.socketDirectory
+  ) throw new Error("browser cleanup control witness changed resource identity");
+  return Object.freeze({
+    ...roots,
+    phase: "controlled",
+    control,
+  });
+}
+
+function privateBrowserDirectoryIdentityV2(
   path: string,
-): BrowserPrivateDirectoryIdentity {
+): BrowserPrivateDirectoryIdentityV2 {
   const stats = lstatSync(path, { bigint: true });
   const currentUid = process.getuid?.();
   if (
     stats.isSymbolicLink()
     || !stats.isDirectory()
-    || (stats.mode & 0o077n) !== 0n
-    || (
-      currentUid !== undefined
-      && stats.uid !== BigInt(currentUid)
-    )
+    || currentUid === undefined
+    || stats.uid !== BigInt(currentUid)
+    || (stats.mode & 0o777n) !== 0o700n
+    || stats.birthtimeNs <= 0n
   ) {
-    throw new Error("browser cleanup resource is not a private owned directory");
+    throw new Error("browser cleanup resource is not a recoverable private directory");
   }
   return Object.freeze({
     device: stats.dev.toString(),
     inode: stats.ino.toString(),
+    birthtimeNs: stats.birthtimeNs.toString(),
+    mode: "448",
+    uid: stats.uid.toString(),
   });
+}
+
+function sameBrowserIdentity(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function sameBrowserCleanupResourceBase(
+  left: BrowserCleanupResourceIdentity,
+  right: BrowserCleanupResourceIdentity,
+): boolean {
+  return left.recoveryHandle === right.recoveryHandle
+    && left.session === right.session
+    && left.socketDirectory === right.socketDirectory
+    && left.artifactsDirectory === right.artifactsDirectory;
+}
+
+/** True only for equality or one strictly stronger, immutable browser pin. */
+export function browserCleanupResourceExtends(
+  current: BrowserCleanupResourceIdentity,
+  next: BrowserCleanupResourceIdentity,
+): boolean {
+  const left = parseBrowserCleanupResourceIdentity(current);
+  const right = parseBrowserCleanupResourceIdentity(next);
+  if (!sameBrowserCleanupResourceBase(left, right)) return false;
+  if (left.kind === "agent-browser-session-v1") {
+    if (right.kind === "agent-browser-session-v1") {
+      return sameBrowserIdentity(left, right);
+    }
+    const matchesLegacyRoots = right.control !== null
+      && left.socketDirectoryIdentity.device
+        === right.socketDirectoryIdentity.device
+      && left.socketDirectoryIdentity.inode
+        === right.socketDirectoryIdentity.inode
+      && left.artifactsDirectoryIdentity.device
+        === right.artifactsDirectoryIdentity.device
+      && left.artifactsDirectoryIdentity.inode
+        === right.artifactsDirectoryIdentity.inode;
+    if (!matchesLegacyRoots) return false;
+    try {
+      assertBrowserCleanupResourceRootsMatch(right);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (
+    right.kind !== "agent-browser-session-v2"
+    || !sameBrowserIdentity(
+      left.socketDirectoryIdentity,
+      right.socketDirectoryIdentity,
+    )
+    || !sameBrowserIdentity(
+      left.artifactsDirectoryIdentity,
+      right.artifactsDirectoryIdentity,
+    )
+  ) return false;
+  if (left.phase === "prepared") {
+    return right.phase === "prepared" || right.phase === "launch-intent";
+  }
+  if (left.phase === "launch-intent") {
+    return right.phase === "launch-intent" || right.phase === "controlled";
+  }
+  return right.phase === "controlled"
+    && sameBrowserIdentity(left.control, right.control);
+}
+
+export type BrowserCleanupResourceRoot = "socket" | "artifacts";
+export type BrowserCleanupResourceRootStatus = "match" | "absent" | "conflict";
+
+/** Classify one exact private root without treating a replacement as absent. */
+export function browserCleanupResourceRootStatus(
+  value: BrowserCleanupResourceIdentityV2,
+  root: BrowserCleanupResourceRoot,
+): BrowserCleanupResourceRootStatus {
+  const resource = parseBrowserCleanupResourceIdentity(value);
+  if (resource.kind !== "agent-browser-session-v2") {
+    throw new Error("browser cleanup resource does not have recoverable roots");
+  }
+  const path = root === "socket"
+    ? resource.socketDirectory
+    : resource.artifactsDirectory;
+  const expected = root === "socket"
+    ? resource.socketDirectoryIdentity
+    : resource.artifactsDirectoryIdentity;
+  let actual: BrowserPrivateDirectoryIdentityV2;
+  try {
+    actual = privateBrowserDirectoryIdentityV2(path);
+  } catch (error) {
+    return (
+      typeof error === "object"
+      && error !== null
+      && "code" in error
+      && error.code === "ENOENT"
+    ) ? "absent" : "conflict";
+  }
+  return sameBrowserIdentity(actual, expected) ? "match" : "conflict";
+}
+
+export function assertBrowserCleanupResourceRootsMatch(
+  value: BrowserCleanupResourceIdentityV2,
+): void {
+  const resource = parseBrowserCleanupResourceIdentity(value);
+  if (resource.kind !== "agent-browser-session-v2") {
+    throw new Error("browser cleanup resource does not have recoverable roots");
+  }
+  if (
+    browserCleanupResourceRootStatus(resource, "socket") !== "match"
+    || browserCleanupResourceRootStatus(resource, "artifacts") !== "match"
+  ) throw new Error("browser cleanup private root identity changed");
 }
 
 function browserCleanupResourceIdentity(input: {
@@ -359,7 +843,7 @@ function browserCleanupResourceIdentity(input: {
   readonly session: string;
   readonly socketDirectory: string;
   readonly artifactsDirectory: string;
-}): BrowserCleanupResourceIdentity {
+}): BrowserCleanupResourceIdentityV2 {
   const parsed = parseBrowserRecoveryHandle(input.recoveryHandle);
   if (
     parsed.session !== input.session
@@ -368,19 +852,21 @@ function browserCleanupResourceIdentity(input: {
   ) {
     throw new Error("browser cleanup resource does not match its recovery handle");
   }
-  return Object.freeze({
-    kind: "agent-browser-session-v1",
+  return parseBrowserCleanupResourceIdentity({
+    kind: "agent-browser-session-v2",
     recoveryHandle: input.recoveryHandle,
     session: parsed.session,
     socketDirectory: parsed.socketDirectory,
-    socketDirectoryIdentity: privateBrowserDirectoryIdentity(
+    socketDirectoryIdentity: privateBrowserDirectoryIdentityV2(
       parsed.socketDirectory,
     ),
     artifactsDirectory: parsed.artifactsDirectory,
-    artifactsDirectoryIdentity: privateBrowserDirectoryIdentity(
+    artifactsDirectoryIdentity: privateBrowserDirectoryIdentityV2(
       parsed.artifactsDirectory,
     ),
-  });
+    phase: "prepared",
+    control: null,
+  }) as BrowserCleanupResourceIdentityV2;
 }
 
 /**
@@ -1079,6 +1565,987 @@ export function parseLastJsonWithExactLaunchHashes(output: string): unknown {
   throw new Error("agent-browser did not return JSON");
 }
 
+type AgentBrowserSessionStateBase = {
+  readonly state: "active";
+  readonly pid: number;
+};
+
+type LaunchedAgentBrowserSessionState = AgentBrowserSessionStateBase & {
+  readonly browserLaunched: true;
+  readonly engine: "chrome";
+  readonly launchHash: string;
+};
+
+type ClosedAgentBrowserDaemonState = AgentBrowserSessionStateBase & {
+  readonly browserLaunched: false;
+  readonly engine: "chrome";
+  readonly launchHash: null;
+};
+
+type ActiveAgentBrowserSessionState =
+  | LaunchedAgentBrowserSessionState
+  | ClosedAgentBrowserDaemonState;
+
+type InactiveAgentBrowserSessionState = {
+  readonly state: "inactive";
+};
+
+type AgentBrowserSessionState =
+  | ActiveAgentBrowserSessionState
+  | InactiveAgentBrowserSessionState;
+
+type AgentBrowserLifecycleRunCommand = (
+  command: readonly string[],
+  options: {
+    readonly cwd: string;
+    readonly environment: Readonly<Record<string, string>>;
+    readonly timeoutMs: number;
+    readonly maxOutputBytes: number;
+    readonly signal?: AbortSignal;
+  },
+) => Promise<CommandResult>;
+
+export type AgentBrowserLifecycleDependencies = {
+  readonly runCommand?: AgentBrowserLifecycleRunCommand;
+  readonly captureOwner?: (pid: number) => ProcessOwnerIdentity;
+  readonly ownerStatus?: (owner: ProcessOwnerIdentity) => ProcessOwnerStatus;
+  readonly terminateOwner?: (owner: ProcessOwnerIdentity) => void;
+  readonly cdpEndpointStatus?: (
+    cdpUrl: string,
+  ) => Promise<"available" | "unavailable" | "indeterminate">;
+  readonly sleep?: (milliseconds: number) => Promise<void>;
+  readonly now?: () => number;
+  /** Active-session setup only: borrow the kernel-owned cancellation signal. */
+  readonly commandSignal?: AbortSignal;
+  /** Recomputed before each setup command so no subcommand resets the budget. */
+  readonly commandTimeoutMs?: () => number;
+};
+
+function boundedAgentBrowserText(value: unknown): boolean {
+  return value === null
+    || (
+      typeof value === "string"
+      && value.length <= 64 * 1024
+      && !/[\0\r\n]/u.test(value)
+    );
+}
+
+function parseAgentBrowserEffectiveLaunch(
+  value: unknown,
+  label: string,
+):
+  | {
+      readonly browserLaunched: true;
+      readonly engine: "chrome";
+      readonly launchHash: string;
+    }
+  | {
+      readonly browserLaunched: false;
+      readonly engine: "chrome";
+      readonly launchHash: null;
+    } {
+  const launch = browserIdentityRecord(value, label);
+  browserIdentityExactKeys(
+    launch,
+    ["browserLaunched", "engine", "launchHash"],
+    label,
+  );
+  if (launch.engine !== "chrome") {
+    throw new Error("agent-browser control identity changed");
+  }
+  if (launch.browserLaunched === false) {
+    if (launch.launchHash !== null) {
+      throw new Error("agent-browser control identity changed");
+    }
+    return Object.freeze({
+      browserLaunched: false,
+      engine: "chrome",
+      launchHash: null,
+    });
+  }
+  if (launch.browserLaunched !== true) {
+    throw new Error("agent-browser control identity changed");
+  }
+  return Object.freeze({
+    browserLaunched: true,
+    engine: "chrome",
+    launchHash: canonicalAgentBrowserLaunchHash(launch.launchHash),
+  });
+}
+
+function parseAgentBrowserLifecycle(
+  value: unknown,
+  requireNonMutatingCdpSemantics = false,
+): ReturnType<typeof parseAgentBrowserEffectiveLaunch> {
+  const lifecycle = browserIdentityRecord(
+    value,
+    "agent-browser lifecycle",
+  );
+  browserIdentityExactKeys(lifecycle, [
+    "effectiveLaunch",
+    "launched",
+    "relaunchedBrowser",
+    "restartedBackground",
+    "restoreStatus",
+    "reused",
+    "saveStatus",
+  ], "agent-browser lifecycle");
+  if (
+    typeof lifecycle.launched !== "boolean"
+    || typeof lifecycle.relaunchedBrowser !== "boolean"
+    || typeof lifecycle.restartedBackground !== "boolean"
+    || typeof lifecycle.reused !== "boolean"
+    || typeof lifecycle.restoreStatus !== "string"
+    || lifecycle.restoreStatus.length < 1
+    || lifecycle.restoreStatus.length > 256
+    || typeof lifecycle.saveStatus !== "string"
+    || lifecycle.saveStatus.length < 1
+    || lifecycle.saveStatus.length > 256
+    || (
+      requireNonMutatingCdpSemantics
+      && (
+        lifecycle.launched !== false
+        || lifecycle.relaunchedBrowser !== false
+        || lifecycle.restartedBackground !== false
+        || lifecycle.reused !== true
+        || lifecycle.restoreStatus !== "not_configured"
+        || lifecycle.saveStatus !== "not_attempted"
+      )
+    )
+  ) throw new Error("agent-browser lifecycle changed shape");
+  return parseAgentBrowserEffectiveLaunch(
+    lifecycle.effectiveLaunch,
+    "agent-browser lifecycle launch",
+  );
+}
+
+function parseAgentBrowserSessionState(
+  value: unknown,
+  resource: BrowserCleanupResourceIdentity,
+): AgentBrowserSessionState {
+  const root = browserIdentityRecord(value, "agent-browser session result");
+  browserIdentityExactKeys(root, ["data", "success"], "agent-browser session result");
+  const data = browserIdentityRecord(root.data, "agent-browser session data");
+  browserIdentityExactKeys(data, [
+    "active",
+    "namespace",
+    "pid",
+    "runtime",
+    "runtimeError",
+    "session",
+    "socketDir",
+    "version",
+  ], "agent-browser session data");
+  if (
+    root.success !== true
+    || data.namespace !== null
+    || data.runtimeError !== null
+    || data.session !== resource.session
+    || data.socketDir !== resource.socketDirectory
+  ) throw new Error("agent-browser session identity changed");
+  if (data.active === false) {
+    if (
+      data.pid !== null
+      || data.runtime !== null
+      || data.version !== null
+    ) throw new Error("agent-browser inactive session changed shape");
+    return Object.freeze({ state: "inactive" });
+  }
+  if (
+    data.active !== true
+    || typeof data.pid !== "number"
+    || !Number.isSafeInteger(data.pid)
+    || data.pid < 1
+    || data.version !== "0.32.3"
+  ) throw new Error("agent-browser active session changed shape");
+  const runtime = browserIdentityRecord(
+    data.runtime,
+    "agent-browser session runtime",
+  );
+  browserIdentityExactKeys(runtime, [
+    "backgroundPid",
+    "browserLaunched",
+    "compatibilityStatus",
+    "effectiveLaunch",
+    "engine",
+    "launchHash",
+    "lifecycle",
+    "namespace",
+    "pageCount",
+    "restoreCheckFn",
+    "restoreCheckText",
+    "restoreCheckUrl",
+    "restoreKey",
+    "restoreLoadedPath",
+    "restoreSave",
+    "restoreSavedPath",
+    "restoreStatus",
+    "restoreStatusDetail",
+    "restoreValidationPending",
+    "saveStatus",
+    "session",
+    "socketDir",
+  ], "agent-browser session runtime");
+  const launch = parseAgentBrowserEffectiveLaunch(
+    runtime.effectiveLaunch,
+    "agent-browser session effective launch",
+  );
+  const lifecycle = parseAgentBrowserLifecycle(runtime.lifecycle, true);
+  const browserLaunched = launch.browserLaunched;
+  if (
+    runtime.backgroundPid !== data.pid
+    || runtime.browserLaunched !== browserLaunched
+    || runtime.compatibilityStatus !== "current"
+    || runtime.engine !== "chrome"
+    || runtime.launchHash !== launch.launchHash
+    || runtime.namespace !== null
+    || typeof runtime.pageCount !== "number"
+    || !Number.isSafeInteger(runtime.pageCount)
+    || runtime.pageCount < 0
+    || runtime.pageCount > 100
+    || !boundedAgentBrowserText(runtime.restoreCheckFn)
+    || !boundedAgentBrowserText(runtime.restoreCheckText)
+    || !boundedAgentBrowserText(runtime.restoreCheckUrl)
+    || !boundedAgentBrowserText(runtime.restoreKey)
+    || !boundedAgentBrowserText(runtime.restoreLoadedPath)
+    || !["auto", "always", "never"].includes(
+      typeof runtime.restoreSave === "string" ? runtime.restoreSave : "",
+    )
+    || !boundedAgentBrowserText(runtime.restoreSavedPath)
+    || typeof runtime.restoreStatus !== "string"
+    || runtime.restoreStatus.length < 1
+    || runtime.restoreStatus.length > 256
+    || !boundedAgentBrowserText(runtime.restoreStatusDetail)
+    || typeof runtime.restoreValidationPending !== "boolean"
+    || typeof runtime.saveStatus !== "string"
+    || runtime.saveStatus.length < 1
+    || runtime.saveStatus.length > 256
+    || runtime.session !== resource.session
+    || runtime.socketDir !== resource.socketDirectory
+    || lifecycle.browserLaunched !== browserLaunched
+    || lifecycle.engine !== launch.engine
+    || lifecycle.launchHash !== launch.launchHash
+    || (!browserLaunched && runtime.pageCount !== 0)
+  ) throw new Error("agent-browser active session identity changed");
+  if (launch.browserLaunched) {
+    return Object.freeze({
+      state: "active" as const,
+      pid: data.pid,
+      browserLaunched: true as const,
+      engine: "chrome" as const,
+      launchHash: launch.launchHash,
+    });
+  }
+  return Object.freeze({
+    state: "active" as const,
+    pid: data.pid,
+    browserLaunched: false as const,
+    engine: "chrome" as const,
+    launchHash: null,
+  });
+}
+
+function parseAgentBrowserCdpControl(
+  value: unknown,
+): {
+  readonly cdpUrl: string;
+  readonly engine: "chrome";
+  readonly launchHash: string;
+} {
+  const root = browserIdentityRecord(value, "agent-browser CDP result");
+  browserIdentityExactKeys(root, ["data", "success"], "agent-browser CDP result");
+  const data = browserIdentityRecord(root.data, "agent-browser CDP data");
+  browserIdentityExactKeys(data, ["cdpUrl", "lifecycle"], "agent-browser CDP data");
+  if (root.success !== true || typeof data.cdpUrl !== "string") {
+    throw new Error("agent-browser CDP identity changed");
+  }
+  const lifecycle = parseAgentBrowserLifecycle(data.lifecycle, true);
+  if (!lifecycle.browserLaunched) {
+    throw new Error("agent-browser CDP identity changed");
+  }
+  return Object.freeze({
+    cdpUrl: literalLoopbackAgentBrowserCdpUrl(data.cdpUrl),
+    engine: lifecycle.engine,
+    launchHash: lifecycle.launchHash,
+  });
+}
+
+function browserLifecycleCommandContext(
+  resource: BrowserCleanupResourceIdentity,
+  dependencies: AgentBrowserLifecycleDependencies,
+): {
+  readonly inspectSession: () => Promise<unknown>;
+  readonly inspectCdp: () => Promise<unknown>;
+  readonly close: () => Promise<boolean>;
+} {
+  const recovery = parseBrowserRecoveryHandle(resource.recoveryHandle);
+  const runner = dependencies.runCommand ?? runCommand;
+  const environment = isolatedEnvironment(resource.socketDirectory);
+  const common = [
+    ...agentBrowserCommand(),
+    "--config",
+    recovery.configPath,
+    "--session",
+    resource.session,
+    "--content-boundaries",
+    "--max-output",
+    "1048576",
+  ] as const;
+  const invoke = async (
+    suffix: readonly string[],
+    label: string,
+  ): Promise<CommandResult> => {
+    try {
+      return await runner([...common, ...suffix], {
+        cwd: resource.artifactsDirectory,
+        environment,
+        timeoutMs: dependencies.commandTimeoutMs?.() ?? 10_000,
+        maxOutputBytes: 1024 * 1024,
+        ...(dependencies.commandSignal === undefined
+          ? {}
+          : { signal: dependencies.commandSignal }),
+      });
+    } catch {
+      throw new Error(`agent-browser ${label} could not be verified`);
+    }
+  };
+  return Object.freeze({
+    inspectSession: async () => {
+      const result = await invoke(
+        ["session", "info", "--json"],
+        "session inspection",
+      );
+      if (result.exitCode !== 0) {
+        throw new Error("agent-browser session inspection could not be verified");
+      }
+      try {
+        return parseLastJsonWithExactLaunchHashes(result.stdout);
+      } catch {
+        throw new Error("agent-browser session inspection changed shape");
+      }
+    },
+    inspectCdp: async () => {
+      const result = await invoke(
+        [
+          "--action-policy",
+          join(resource.artifactsDirectory, "action-policy.json"),
+          "--json",
+          "get",
+          "cdp-url",
+        ],
+        "control inspection",
+      );
+      if (result.exitCode !== 0) {
+        throw new Error("agent-browser control inspection could not be verified");
+      }
+      try {
+        return parseLastJsonWithExactLaunchHashes(result.stdout);
+      } catch {
+        throw new Error("agent-browser control inspection changed shape");
+      }
+    },
+    close: async () => {
+      const result = await invoke(["close", "--json"], "graceful close");
+      return result.exitCode === 0;
+    },
+  });
+}
+
+/**
+ * Prove that prepared roots never crossed the durable launch-intent boundary.
+ * Two exact inactive-session reads bracket an unchanged-root observation.
+ */
+export async function provePreparedAgentBrowserCleanupResourceQuiescent(
+  value: BrowserCleanupResourceIdentityV2,
+  dependencies: AgentBrowserLifecycleDependencies = {},
+): Promise<BrowserCleanupResourceIdentityV2> {
+  const resource = parseBrowserCleanupResourceIdentity(value);
+  if (
+    resource.kind !== "agent-browser-session-v2"
+    || resource.phase !== "prepared"
+  ) {
+    throw new Error("browser cleanup resource is not prepared");
+  }
+  const lifecycle = browserLifecycleCommandContext(resource, dependencies);
+  assertBrowserCleanupResourceRootsMatch(resource);
+  const first = parseAgentBrowserSessionState(
+    await lifecycle.inspectSession(),
+    resource,
+  );
+  if (first.state !== "inactive") {
+    throw new Error("prepared browser cleanup session became active");
+  }
+  assertBrowserCleanupResourceRootsMatch(resource);
+  const second = parseAgentBrowserSessionState(
+    await lifecycle.inspectSession(),
+    resource,
+  );
+  if (second.state !== "inactive") {
+    throw new Error("prepared browser cleanup session state changed");
+  }
+  assertBrowserCleanupResourceRootsMatch(resource);
+  return resource;
+}
+
+function exactActiveAgentBrowserControl(
+  state: AgentBrowserSessionState,
+  control: AgentBrowserControlWitnessV1,
+): LaunchedAgentBrowserSessionState {
+  if (
+    state.state !== "active"
+    || !state.browserLaunched
+    || state.pid !== control.daemonOwner.pid
+    || state.engine !== control.engine
+    || state.launchHash !== control.launchHash
+  ) throw new Error("agent-browser control identity changed");
+  return state;
+}
+
+function exactClosedAgentBrowserDaemon(
+  state: AgentBrowserSessionState,
+  control: AgentBrowserControlWitnessV1,
+): ClosedAgentBrowserDaemonState {
+  if (
+    state.state !== "active"
+    || state.browserLaunched
+    || state.pid !== control.daemonOwner.pid
+    || state.engine !== control.engine
+    || state.launchHash !== null
+  ) throw new Error("agent-browser control identity changed");
+  return state;
+}
+
+function exactPinnedAgentBrowserCdpControl(
+  value: unknown,
+  control: AgentBrowserControlWitnessV1,
+): void {
+  const current = parseAgentBrowserCdpControl(value);
+  if (
+    current.cdpUrl !== control.cdpUrl
+    || current.engine !== control.engine
+    || current.launchHash !== control.launchHash
+  ) throw new Error("agent-browser CDP control identity changed");
+}
+
+function promoteLegacyBrowserCleanupResource(
+  value: BrowserCleanupResourceIdentityV1,
+): BrowserCleanupResourceIdentityV2 {
+  const legacy = parseBrowserCleanupResourceIdentity(value);
+  if (legacy.kind !== "agent-browser-session-v1") {
+    throw new Error("legacy browser cleanup resource is malformed");
+  }
+  const promoted = parseBrowserCleanupResourceIdentity({
+    ...legacy,
+    kind: "agent-browser-session-v2",
+    socketDirectoryIdentity: privateBrowserDirectoryIdentityV2(
+      legacy.socketDirectory,
+    ),
+    artifactsDirectoryIdentity: privateBrowserDirectoryIdentityV2(
+      legacy.artifactsDirectory,
+    ),
+    phase: "launch-intent",
+    control: null,
+  });
+  if (
+    promoted.kind !== "agent-browser-session-v2"
+    || legacy.socketDirectoryIdentity.device
+      !== promoted.socketDirectoryIdentity.device
+    || legacy.socketDirectoryIdentity.inode
+      !== promoted.socketDirectoryIdentity.inode
+    || legacy.artifactsDirectoryIdentity.device
+      !== promoted.artifactsDirectoryIdentity.device
+    || legacy.artifactsDirectoryIdentity.inode
+      !== promoted.artifactsDirectoryIdentity.inode
+  ) throw new Error("legacy browser cleanup private root identity changed");
+  return promoted;
+}
+
+/**
+ * Bind one running private agent-browser session to a durable daemon-start,
+ * browser-launch, and CDP witness. Three stable session reads bracket two
+ * identical CDP reads and process-owner capture; any drift leaves the prior
+ * launch-intent identity intact.
+ */
+export async function bindLiveAgentBrowserCleanupResource(
+  value: BrowserCleanupResourceIdentityV2,
+  dependencies: AgentBrowserLifecycleDependencies = {},
+): Promise<BrowserCleanupResourceIdentityV2> {
+  const resource = parseBrowserCleanupResourceIdentity(value);
+  if (
+    resource.kind !== "agent-browser-session-v2"
+    || resource.phase !== "launch-intent"
+  ) {
+    throw new Error("browser cleanup resource cannot accept a control witness");
+  }
+  assertBrowserCleanupResourceRootsMatch(resource);
+  const lifecycle = browserLifecycleCommandContext(resource, dependencies);
+  const first = parseAgentBrowserSessionState(
+    await lifecycle.inspectSession(),
+    resource,
+  );
+  if (first.state !== "active" || !first.browserLaunched) {
+    throw new AgentBrowserLiveControlUnavailableError();
+  }
+  const captureOwner = dependencies.captureOwner
+    ?? captureProcessOwnerIdentity;
+  let owner: ProcessOwnerIdentity;
+  try {
+    owner = captureOwner(first.pid);
+  } catch {
+    throw new Error("agent-browser live control identity is unavailable");
+  }
+  const cdp = parseAgentBrowserCdpControl(await lifecycle.inspectCdp());
+  const second = parseAgentBrowserSessionState(
+    await lifecycle.inspectSession(),
+    resource,
+  );
+  const repeatedCdp = parseAgentBrowserCdpControl(
+    await lifecycle.inspectCdp(),
+  );
+  const third = parseAgentBrowserSessionState(
+    await lifecycle.inspectSession(),
+    resource,
+  );
+  const inspectOwner = dependencies.ownerStatus ?? processOwnerStatus;
+  if (
+    second.state !== "active"
+    || !second.browserLaunched
+    || second.pid !== first.pid
+    || second.engine !== first.engine
+    || second.launchHash !== first.launchHash
+    || cdp.engine !== first.engine
+    || cdp.launchHash !== first.launchHash
+    || repeatedCdp.cdpUrl !== cdp.cdpUrl
+    || repeatedCdp.engine !== cdp.engine
+    || repeatedCdp.launchHash !== cdp.launchHash
+    || third.state !== "active"
+    || !third.browserLaunched
+    || third.pid !== first.pid
+    || third.engine !== first.engine
+    || third.launchHash !== first.launchHash
+    || owner.pid !== first.pid
+    || inspectOwner(owner) !== "exact-live-owner"
+  ) throw new Error("agent-browser control identity changed while it was bound");
+  assertBrowserCleanupResourceRootsMatch(resource);
+  const next = parseBrowserCleanupResourceIdentity({
+    ...resource,
+    phase: "controlled",
+    control: {
+      kind: "agent-browser-control-v1",
+      version: "0.32.3",
+      session: resource.session,
+      socketDirectory: resource.socketDirectory,
+      daemonOwner: owner,
+      engine: "chrome",
+      launchHash: first.launchHash,
+      cdpUrl: cdp.cdpUrl,
+    },
+  });
+  if (
+    next.kind !== "agent-browser-session-v2"
+    || !browserCleanupResourceExtends(resource, next)
+  ) throw new Error("browser cleanup control identity is not monotonic");
+  return next;
+}
+
+/** Existing v1 claims may be upgraded only while their exact daemon is live. */
+export async function adoptLiveLegacyBrowserCleanupResource(
+  value: BrowserCleanupResourceIdentityV1,
+  dependencies: AgentBrowserLifecycleDependencies = {},
+): Promise<BrowserCleanupResourceIdentityV2> {
+  const legacy = parseBrowserCleanupResourceIdentity(value);
+  if (legacy.kind !== "agent-browser-session-v1") {
+    throw new Error("legacy browser cleanup resource is malformed");
+  }
+  const promoted = promoteLegacyBrowserCleanupResource(legacy);
+  const pinned = await bindLiveAgentBrowserCleanupResource(
+    promoted,
+    dependencies,
+  );
+  if (!browserCleanupResourceExtends(legacy, pinned)) {
+    throw new Error("legacy browser cleanup resource could not be adopted");
+  }
+  return pinned;
+}
+
+export async function exactAgentBrowserCdpEndpointStatus(
+  cdpUrl: string,
+): Promise<"available" | "unavailable" | "indeterminate"> {
+  let endpoint: string;
+  try {
+    endpoint = literalLoopbackAgentBrowserCdpUrl(cdpUrl);
+  } catch {
+    return "indeterminate";
+  }
+  const url = new URL(endpoint);
+  const port = Number(url.port);
+  const host = url.hostname === "[::1]" ? "::1" : url.hostname;
+  if (host !== "127.0.0.1" && host !== "::1") {
+    return "indeterminate";
+  }
+  return new Promise((resolveStatus) => {
+    const socket = createConnection({ host, port });
+    let settled = false;
+    const finish = (
+      status: "available" | "unavailable" | "indeterminate",
+    ): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolveStatus(status);
+    };
+    const timer = setTimeout(() => finish("indeterminate"), 250);
+    socket.once("connect", () => finish("available"));
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      finish(error.code === "ECONNREFUSED" ? "unavailable" : "indeterminate");
+    });
+    socket.once("close", () => finish("indeterminate"));
+  });
+}
+
+/**
+ * Prove one pinned daemon and browser endpoint quiescent within fixed bounds.
+ * The only signal permitted for the exact pinned owner is SIGTERM. This
+ * function never deletes roots; its caller must CAS the durable claim and
+ * recheck the same identities immediately before deletion.
+ */
+export async function recoverPinnedAgentBrowserCleanupResource(
+  value: BrowserCleanupResourceIdentityV2,
+  dependencies: AgentBrowserLifecycleDependencies = {},
+): Promise<BrowserCleanupResourceIdentityV2> {
+  const resource = parseBrowserCleanupResourceIdentity(value);
+  if (
+    resource.kind !== "agent-browser-session-v2"
+    || resource.phase !== "controlled"
+  ) {
+    throw new Error("browser cleanup resource does not have an exact control witness");
+  }
+  const control = resource.control;
+  const lifecycle = browserLifecycleCommandContext(resource, dependencies);
+  const inspectOwner = dependencies.ownerStatus ?? processOwnerStatus;
+  const sleep = dependencies.sleep ?? ((milliseconds: number) => Bun.sleep(milliseconds));
+  const now = dependencies.now ?? Date.now;
+  const endpointStatus = dependencies.cdpEndpointStatus
+    ?? exactAgentBrowserCdpEndpointStatus;
+  const terminateOwner = dependencies.terminateOwner
+    ?? ((owner: ProcessOwnerIdentity): void => {
+      process.kill(owner.pid, "SIGTERM");
+    });
+  assertBrowserCleanupResourceRootsMatch(resource);
+  const initialOwnerStatus = inspectOwner(control.daemonOwner);
+  if (initialOwnerStatus === "unknown") {
+    throw new Error("browser cleanup daemon state is indeterminate");
+  }
+  if (initialOwnerStatus === "exact-live-owner") {
+    const initialSession = parseAgentBrowserSessionState(
+      await lifecycle.inspectSession(),
+      resource,
+    );
+    if (initialSession.state !== "active") {
+      throw new Error("browser cleanup daemon and session identity disagree");
+    }
+    if (initialSession.browserLaunched) {
+      exactActiveAgentBrowserControl(initialSession, control);
+      exactPinnedAgentBrowserCdpControl(await lifecycle.inspectCdp(), control);
+      exactActiveAgentBrowserControl(
+        parseAgentBrowserSessionState(
+          await lifecycle.inspectSession(),
+          resource,
+        ),
+        control,
+      );
+      if (inspectOwner(control.daemonOwner) !== "exact-live-owner") {
+        throw new Error("browser cleanup daemon identity changed before close");
+      }
+      assertBrowserCleanupResourceRootsMatch(resource);
+      const closeSucceeded = await lifecycle.close();
+      const afterClose = parseAgentBrowserSessionState(
+        await lifecycle.inspectSession(),
+        resource,
+      );
+      const afterCloseOwnerStatus = inspectOwner(control.daemonOwner);
+      if (afterCloseOwnerStatus === "unknown") {
+        throw new Error("browser cleanup daemon state became indeterminate");
+      }
+      if (afterCloseOwnerStatus === "exact-live-owner") {
+        if (afterClose.state === "active" && afterClose.browserLaunched) {
+          exactActiveAgentBrowserControl(afterClose, control);
+          exactPinnedAgentBrowserCdpControl(await lifecycle.inspectCdp(), control);
+          exactActiveAgentBrowserControl(
+            parseAgentBrowserSessionState(
+              await lifecycle.inspectSession(),
+              resource,
+            ),
+            control,
+          );
+        } else if (afterClose.state === "active") {
+          if (!closeSucceeded) {
+            throw new Error("agent-browser graceful close could not be verified");
+          }
+          exactClosedAgentBrowserDaemon(afterClose, control);
+          exactClosedAgentBrowserDaemon(
+            parseAgentBrowserSessionState(
+              await lifecycle.inspectSession(),
+              resource,
+            ),
+            control,
+          );
+        } else {
+          const repeatedInactive = parseAgentBrowserSessionState(
+            await lifecycle.inspectSession(),
+            resource,
+          );
+          if (repeatedInactive.state !== "inactive") {
+            throw new Error("browser cleanup session state changed before termination");
+          }
+        }
+      }
+    } else {
+      exactClosedAgentBrowserDaemon(initialSession, control);
+      exactClosedAgentBrowserDaemon(
+        parseAgentBrowserSessionState(
+          await lifecycle.inspectSession(),
+          resource,
+        ),
+        control,
+      );
+    }
+    const beforeTermination = inspectOwner(control.daemonOwner);
+    if (beforeTermination === "unknown") {
+      throw new Error("browser cleanup daemon state became indeterminate");
+    }
+    if (beforeTermination === "exact-live-owner") {
+      assertBrowserCleanupResourceRootsMatch(resource);
+      try {
+        terminateOwner(control.daemonOwner);
+      } catch {
+        if (inspectOwner(control.daemonOwner) === "exact-live-owner") {
+          throw new Error("browser cleanup daemon did not accept graceful termination");
+        }
+      }
+      const ownerDeadline = now() + 5_000;
+      for (;;) {
+        const status = inspectOwner(control.daemonOwner);
+        if (status === "unknown") {
+          throw new Error("browser cleanup daemon state became indeterminate");
+        }
+        if (status === "different-or-dead") break;
+        if (now() >= ownerDeadline) {
+          throw new Error("browser cleanup daemon did not stop after SIGTERM");
+        }
+        await sleep(25);
+      }
+    }
+  }
+  const finalOwnerStatus = inspectOwner(control.daemonOwner);
+  if (finalOwnerStatus !== "different-or-dead") {
+    throw new Error("browser cleanup daemon quiescence is unproved");
+  }
+  const inactive = parseAgentBrowserSessionState(
+    await lifecycle.inspectSession(),
+    resource,
+  );
+  if (inactive.state !== "inactive") {
+    throw new Error("browser cleanup session remained active");
+  }
+  const endpointDeadline = now() + 5_000;
+  let consecutiveRefusals = 0;
+  while (consecutiveRefusals < 3) {
+    const status = await endpointStatus(control.cdpUrl);
+    if (status === "indeterminate") {
+      throw new Error("browser cleanup endpoint state is indeterminate");
+    }
+    consecutiveRefusals = status === "unavailable"
+      ? consecutiveRefusals + 1
+      : 0;
+    if (consecutiveRefusals >= 3) break;
+    if (now() >= endpointDeadline) {
+      throw new Error("browser cleanup endpoint remained available");
+    }
+    await sleep(25);
+  }
+  if (inspectOwner(control.daemonOwner) !== "different-or-dead") {
+    throw new Error("browser cleanup daemon quiescence changed");
+  }
+  const finalInactive = parseAgentBrowserSessionState(
+    await lifecycle.inspectSession(),
+    resource,
+  );
+  if (finalInactive.state !== "inactive") {
+    throw new Error("browser cleanup session quiescence changed");
+  }
+  assertBrowserCleanupResourceRootsMatch(resource);
+  return resource;
+}
+
+/**
+ * Refresh full-root quiescence without weakening a launch-intent boundary.
+ * Prepared roots require only their exact inactive proof; controlled roots
+ * use the pinned close/TERM/CDP recovery protocol.
+ */
+export async function refreshBrowserCleanupResourceQuiescence(
+  value: BrowserCleanupResourceIdentityV2,
+  dependencies: AgentBrowserLifecycleDependencies = {},
+): Promise<BrowserCleanupResourceIdentityV2> {
+  const resource = parseBrowserCleanupResourceIdentity(value);
+  if (resource.kind !== "agent-browser-session-v2") {
+    throw new Error("browser cleanup resource is not recoverable");
+  }
+  if (resource.phase === "prepared") {
+    return provePreparedAgentBrowserCleanupResourceQuiescent(
+      resource,
+      dependencies,
+    );
+  }
+  if (resource.phase === "controlled") {
+    return recoverPinnedAgentBrowserCleanupResource(resource, dependencies);
+  }
+  throw new Error("browser cleanup launch intent is not durably controlled");
+}
+
+function assertBrowserDeletionBoundaryRoots(
+  resource: BrowserCleanupResourceIdentityV2,
+): void {
+  if (
+    browserCleanupResourceRootStatus(resource, "socket") !== "match"
+    || browserCleanupResourceRootStatus(resource, "artifacts") !== "absent"
+  ) {
+    throw new Error("browser cleanup deletion-boundary roots changed");
+  }
+}
+
+async function proveControlledDeletionBoundary(
+  resource: BrowserCleanupResourceIdentityV2,
+  dependencies: AgentBrowserLifecycleDependencies,
+): Promise<void> {
+  if (resource.phase !== "controlled") {
+    throw new Error("browser cleanup resource is not durably controlled");
+  }
+  const inspectOwner = dependencies.ownerStatus ?? processOwnerStatus;
+  if (inspectOwner(resource.control.daemonOwner) !== "different-or-dead") {
+    throw new Error("browser cleanup pinned owner is not quiescent");
+  }
+  const endpointStatus = dependencies.cdpEndpointStatus
+    ?? exactAgentBrowserCdpEndpointStatus;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await endpointStatus(resource.control.cdpUrl) !== "unavailable") {
+      throw new Error("browser cleanup endpoint refusal is unproved");
+    }
+  }
+  if (inspectOwner(resource.control.daemonOwner) !== "different-or-dead") {
+    throw new Error("browser cleanup pinned owner quiescence changed");
+  }
+}
+
+/**
+ * Re-prove deletion safety after the artifacts root has already been removed.
+ * This helper performs session-info reads only. It never launches, closes, or
+ * signals a browser process, and its temporary config remains inside the exact
+ * socket root that is already scheduled for deletion.
+ */
+export async function reproveBrowserCleanupAfterArtifactsRemoval(
+  value: BrowserCleanupResourceIdentityV2,
+  dependencies: AgentBrowserLifecycleDependencies = {},
+): Promise<BrowserCleanupResourceIdentityV2> {
+  const resource = parseBrowserCleanupResourceIdentity(value);
+  if (
+    resource.kind !== "agent-browser-session-v2"
+    || resource.phase === "launch-intent"
+  ) {
+    throw new Error("browser cleanup resource is ineligible for deletion reproof");
+  }
+  assertBrowserDeletionBoundaryRoots(resource);
+  if (resource.phase === "controlled") {
+    await proveControlledDeletionBoundary(resource, dependencies);
+  }
+  const temporaryConfig = join(
+    resource.socketDirectory,
+    `.wrench-cleanup-${crypto.randomUUID()}.json`,
+  );
+  try {
+    try {
+      writeFileSync(temporaryConfig, "{}\n", {
+        flag: "wx",
+        mode: 0o600,
+      });
+      const stats = lstatSync(temporaryConfig, { bigint: true });
+      const currentUid = process.getuid?.();
+      if (
+        stats.isSymbolicLink()
+        || !stats.isFile()
+        || currentUid === undefined
+        || stats.uid !== BigInt(currentUid)
+        || (stats.mode & 0o777n) !== 0o600n
+      ) throw new Error("temporary cleanup config identity changed");
+    } catch {
+      throw new Error("browser cleanup session inspection could not be prepared");
+    }
+    assertBrowserDeletionBoundaryRoots(resource);
+    const runner = dependencies.runCommand ?? runCommand;
+    const environment = isolatedEnvironment(resource.socketDirectory);
+    const inspectSession = async (): Promise<AgentBrowserSessionState> => {
+      let result: CommandResult;
+      try {
+        result = await runner([
+          ...agentBrowserCommand(),
+          "--config",
+          temporaryConfig,
+          "--session",
+          resource.session,
+          "--content-boundaries",
+          "--max-output",
+          "1048576",
+          "session",
+          "info",
+          "--json",
+        ], {
+          cwd: resource.socketDirectory,
+          environment,
+          timeoutMs: dependencies.commandTimeoutMs?.() ?? 10_000,
+          maxOutputBytes: 1024 * 1024,
+          ...(dependencies.commandSignal === undefined
+            ? {}
+            : { signal: dependencies.commandSignal }),
+        });
+      } catch {
+        throw new Error("browser cleanup session inspection could not be verified");
+      }
+      if (result.exitCode !== 0) {
+        throw new Error("browser cleanup session inspection could not be verified");
+      }
+      let parsed: unknown;
+      try {
+        parsed = parseLastJsonWithExactLaunchHashes(result.stdout);
+      } catch {
+        throw new Error("browser cleanup session inspection changed shape");
+      }
+      return parseAgentBrowserSessionState(parsed, resource);
+    };
+    const first = await inspectSession();
+    if (first.state !== "inactive") {
+      throw new Error("browser cleanup session remained active");
+    }
+    assertBrowserDeletionBoundaryRoots(resource);
+    const second = await inspectSession();
+    if (second.state !== "inactive") {
+      throw new Error("browser cleanup session quiescence changed");
+    }
+    assertBrowserDeletionBoundaryRoots(resource);
+    if (resource.phase === "controlled") {
+      await proveControlledDeletionBoundary(resource, dependencies);
+    }
+  } finally {
+    try {
+      rmSync(temporaryConfig, { force: true });
+    } catch {
+      // A retained mode-0600 config remains inside the root being deleted.
+    }
+  }
+  assertBrowserDeletionBoundaryRoots(resource);
+  return resource;
+}
+
 export function agentBrowserFailure(result: CommandResult, context: string): Error {
   let detail: string | null = null;
   try {
@@ -1236,13 +2703,35 @@ export async function createBrowserSession(
   const globalArguments: string[] = [];
   let selectedProfileDirectory: "Default" | null = null;
   let socketDirectory: string | null = null;
+  let cleanupResourceIdentity: BrowserCleanupResourceIdentityV2 | null = null;
+  let cleanupResourcePublication:
+    | "unpublished"
+    | "uncertain"
+    | "published" = "unpublished";
   const recoveryHandle = (): string => browserRecoveryHandle({
     session,
     configPath,
     socketDirectory,
     artifactsDirectory: directory,
   });
-  const failInitialization = (error: unknown): never => {
+  const failInitialization = (
+    error: unknown,
+    cleanupEvidenceResource: BrowserCleanupResourceIdentity | null =
+      cleanupResourceIdentity,
+  ): never => {
+    if (cleanupResourcePublication !== "unpublished") {
+      throw new PreservedBrowserArtifactsError(
+        "browser session initialization failed after its cleanup roots may have been durably published",
+        recoveryHandle(),
+        error,
+        cleanupEvidenceResource === null
+          ? undefined
+          : Object.freeze({
+              kind: "agent-browser-closed-artifacts-v1" as const,
+              resource: cleanupEvidenceResource,
+            }),
+      );
+    }
     const cleanupFailures = removePrivateArtifacts(
       [socketDirectory, directory],
       removePrivateArtifact,
@@ -1294,8 +2783,40 @@ export async function createBrowserSession(
         ...(options.allowCodeOwnedNetworkObservation === true ? ["network", "requests", "request"] : []),
       ],
     })}\n`, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    failInitialization(error);
+  }
+  const initializedSocketDirectory = socketDirectory
+    ?? failInitialization(new Error("browser socket directory was not initialized"));
+  cleanupResourceIdentity = (() => {
+    let identity: BrowserCleanupResourceIdentityV2 | null = null;
+    try {
+      identity = browserCleanupResourceIdentity({
+        recoveryHandle: recoveryHandle(),
+        session,
+        socketDirectory: initializedSocketDirectory,
+        artifactsDirectory: directory,
+      });
+      // A throwing publisher may have committed before reporting failure. The
+      // durable registrar normally reconciles that exact commit, but custom or
+      // interrupted publishers cannot disprove it. Preserve both roots.
+      cleanupResourcePublication = options.publishCleanupResource === undefined
+        ? "unpublished"
+        : "uncertain";
+      options.publishCleanupResource?.(identity);
+      cleanupResourcePublication = options.publishCleanupResource === undefined
+        ? "unpublished"
+        : "published";
+      return identity;
+    } catch (error) {
+      return failInitialization(error, identity);
+    }
+  })();
+  try {
     guardBrowserSetup(operationDeadline);
-    const sourceProfile = auth.kind === "browser-profile" ? profilePath(auth.profile) : null;
+    const sourceProfile = auth.kind === "browser-profile"
+      ? profilePath(auth.profile)
+      : null;
     if (sourceProfile !== null) {
       guardBrowserSetup(operationDeadline);
       const clonedProfile = cloneBrowserProfile(sourceProfile, directory);
@@ -1309,22 +2830,23 @@ export async function createBrowserSession(
   } catch (error) {
     failInitialization(error);
   }
-  const initializedSocketDirectory = socketDirectory
-    ?? failInitialization(new Error("browser socket directory was not initialized"));
-  const cleanupResourceIdentity = (() => {
-    try {
-      const identity = browserCleanupResourceIdentity({
-        recoveryHandle: recoveryHandle(),
-        session,
-        socketDirectory: initializedSocketDirectory,
-        artifactsDirectory: directory,
-      });
-      options.publishCleanupResource?.(identity);
-      return identity;
-    } catch (error) {
-      return failInitialization(error);
+  if (cleanupResourceIdentity === null) {
+    failInitialization(new Error("browser cleanup resource was not initialized"));
+  }
+  const publishCleanupResourceExtension = (
+    next: BrowserCleanupResourceIdentityV2,
+  ): void => {
+    const current = cleanupResourceIdentity;
+    if (current === null || !browserCleanupResourceExtends(current, next)) {
+      throw new Error("browser cleanup resource extension is not monotonic");
     }
-  })();
+    if (options.publishCleanupResource !== undefined) {
+      cleanupResourcePublication = "uncertain";
+      options.publishCleanupResource(next);
+      cleanupResourcePublication = "published";
+    }
+    cleanupResourceIdentity = next;
+  };
   let environment: Readonly<Record<string, string>>;
   try {
     environment = isolatedEnvironment(initializedSocketDirectory);
@@ -1440,10 +2962,78 @@ export async function createBrowserSession(
       );
     }
     if (resourcesQuiescent && rootsAreUnused) {
-      failures.push(...removePrivateArtifacts(
-        [initializedSocketDirectory, directory],
-        removePrivateArtifact,
-      ));
+      const resource = cleanupResourceIdentity;
+      const publisher = options.publishCleanupResource;
+      const markQuiescent = publisher?.markBrowserCleanupQuiescent;
+      const markRootRemoved = publisher?.markBrowserCleanupRootRemoved;
+      if (resource === null) {
+        failures.push(new Error("browser cleanup resource identity is unavailable"));
+      } else if (publisher !== undefined) {
+        if (
+          markQuiescent === undefined
+          || markRootRemoved === undefined
+        ) {
+          failures.push(new Error(
+            "durable browser cleanup journaling is unavailable",
+          ));
+        } else {
+          try {
+            // This transition must commit while both roots still match. Once
+            // durable, recovery may accept an absent root as a crash between
+            // its removal and the following journal CAS.
+            await refreshBrowserCleanupResourceQuiescence(
+              resource,
+              {
+                ...options.dependencies?.cleanupLifecycle,
+                runCommand: runBrowserCommand,
+              },
+            );
+            markQuiescent(resource);
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+      }
+      if (failures.length === 0 && resource !== null) {
+        for (const [rootName, path] of [
+          ["artifacts", directory],
+          ["socket", initializedSocketDirectory],
+        ] as const) {
+          try {
+            removePrivateArtifact(path);
+            if (browserCleanupResourceRootStatus(resource, rootName) !== "absent") {
+              throw new Error(
+                "browser cleanup root removal could not be verified",
+              );
+            }
+          } catch (error) {
+            failures.push(error);
+            break;
+          }
+          if (publisher !== undefined && markRootRemoved !== undefined) {
+            try {
+              markRootRemoved(resource, rootName);
+            } catch (error) {
+              failures.push(error);
+              break;
+            }
+          }
+          if (rootName === "artifacts" && publisher !== undefined) {
+            try {
+              await reproveBrowserCleanupAfterArtifactsRemoval(
+                resource,
+                {
+                  ...options.dependencies?.cleanupLifecycle,
+                  runCommand: runBrowserCommand,
+                },
+              );
+            } catch (error) {
+              failures.push(error);
+              break;
+            }
+          }
+        }
+      }
     }
     if (failures.length > 0) {
       throw new AggregateError(
@@ -1475,12 +3065,48 @@ export async function createBrowserSession(
       : manifest.origins[0];
     if (launchUrl === undefined) throw new Error("contained browser session requires one reviewed origin");
     guardBrowserSetup(operationDeadline);
+    const preparedResource = cleanupResourceIdentity;
+    if (preparedResource === null || preparedResource.phase !== "prepared") {
+      throw new Error("browser cleanup resource is not prepared for launch");
+    }
+    const launchIntentResource = parseBrowserCleanupResourceIdentity({
+      ...preparedResource,
+      phase: "launch-intent",
+      control: null,
+    });
+    if (launchIntentResource.kind !== "agent-browser-session-v2") {
+      throw new Error("browser cleanup launch intent is malformed");
+    }
+    publishCleanupResourceExtension(launchIntentResource);
     launchAttempted = true;
     await runBatch(
       [["open", launchUrl]],
       remainingBrowserSetupTime(options.timeoutMs, operationDeadline),
       options.maxOutputBytes,
     );
+    if (options.publishCleanupResource !== undefined) {
+      guardBrowserSetup(operationDeadline);
+      const pinnedCleanupResource = await runBrowserSetupStep(
+        operationDeadline,
+        () => bindLiveAgentBrowserCleanupResource(
+          launchIntentResource,
+          {
+            runCommand: runBrowserCommand,
+            ...(operationDeadline === undefined
+              ? {}
+              : {
+                  commandSignal: operationDeadline.signal,
+                  commandTimeoutMs: () => remainingBrowserSetupTime(
+                    options.timeoutMs,
+                    operationDeadline,
+                  ),
+                }),
+          },
+        ),
+      );
+      guardBrowserSetup(operationDeadline);
+      publishCleanupResourceExtension(pinnedCleanupResource);
+    }
     if (
       auth.kind === "cookie-source"
       || auth.kind === "cookies-file"
@@ -1523,7 +3149,14 @@ export async function createBrowserSession(
       close,
       cleanup,
       recoveryHandle: recoveryHandle(),
-      cleanupResourceIdentity,
+      ...(options.publishCleanupResource === undefined
+        ? {}
+        : {
+            cleanupResourceIdentity: cleanupResourceIdentity
+              ?? failInitialization(
+                new Error("browser cleanup resource identity is unavailable"),
+              ),
+          }),
     };
   } catch (error) {
     const cleanupFailures: unknown[] = [];
@@ -1580,7 +3213,11 @@ export async function createBrowserSession(
         );
       }
     }
-    if (
+    if (cleanupResourcePublication !== "unpublished") {
+      cleanupFailures.push(
+        new Error("durably published browser roots require exact recovery"),
+      );
+    } else if (
       resourcesQuiescent
       && closed
       && activeBatches.size === 0

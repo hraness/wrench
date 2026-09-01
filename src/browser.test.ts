@@ -19,7 +19,12 @@ import { pathToFileURL } from "node:url";
 
 import type { WrenchAuth } from "./auth";
 import {
+  adoptLiveLegacyBrowserCleanupResource,
+  bindLiveAgentBrowserCleanupResource,
   browserCleanupBarrier,
+  browserCleanupResourceExtends,
+  browserCleanupResourceRootStatus,
+  browserRecoveryHandle,
   browserResultData,
   classifyBrowserProcessGroupProbe,
   cloneBrowserProfile,
@@ -30,13 +35,20 @@ import {
   ownedBrowserProxyArguments,
   ownedChromeLaunchArguments,
   ownedDerivationGuardBrowserArguments,
+  parseBrowserCleanupResourceIdentity,
   parseBrowserRecoveryHandle,
   parseLastJson,
   parseLastJsonWithExactLaunchHashes,
   PreservedBrowserArtifactsError,
   profilePath,
+  provePreparedAgentBrowserCleanupResourceQuiescent,
+  refreshBrowserCleanupResourceQuiescence,
+  recoverPinnedAgentBrowserCleanupResource,
+  reproveBrowserCleanupAfterArtifactsRemoval,
   runCommand,
   runtimeBrowserPolicyActions,
+  type BrowserCleanupResourceIdentityV1,
+  type BrowserCleanupResourceIdentityV2,
 } from "./browser";
 import type { BrowserRecipe, WrenchManifest } from "./model";
 import {
@@ -166,6 +178,177 @@ const auth: WrenchAuth = {
   kind: "cookie-source",
   source: "chrome",
 };
+
+type RecoveryFixtureState = "launched" | "closed" | "inactive";
+
+function createPinnedBrowserRecoveryFixture() {
+  const artifactsDirectory = mkdtempSync(join(tmpdir(), "io-browser-"));
+  const socketDirectory = mkdtempSync(join("/tmp", "io-ab-"));
+  chmodSync(artifactsDirectory, 0o700);
+  chmodSync(socketDirectory, 0o700);
+  const session = "io-125-abcdef123456";
+  const configPath = join(artifactsDirectory, "agent-browser.json");
+  const cdpUrl = "ws://127.0.0.1:43125/devtools/browser/exact-recovery";
+  const launchHash = "18446744073709551615";
+  const owner = {
+    pid: 43_125,
+    bootId: "a".repeat(64),
+    processStartId: "b".repeat(64),
+  } as const;
+  writeFileSync(configPath, "{}\n", { mode: 0o600 });
+  writeFileSync(join(artifactsDirectory, "action-policy.json"), "{}\n", {
+    mode: 0o600,
+  });
+  const directoryIdentity = (path: string) => {
+    const stats = lstatSync(path, { bigint: true });
+    return {
+      device: stats.dev.toString(),
+      inode: stats.ino.toString(),
+      birthtimeNs: stats.birthtimeNs.toString(),
+      mode: "448" as const,
+      uid: stats.uid.toString(),
+    };
+  };
+  const resource = parseBrowserCleanupResourceIdentity({
+    kind: "agent-browser-session-v2",
+    recoveryHandle: browserRecoveryHandle({
+      session,
+      configPath,
+      socketDirectory,
+      artifactsDirectory,
+    }),
+    session,
+    socketDirectory,
+    socketDirectoryIdentity: directoryIdentity(socketDirectory),
+    artifactsDirectory,
+    artifactsDirectoryIdentity: directoryIdentity(artifactsDirectory),
+    phase: "controlled",
+    control: {
+      kind: "agent-browser-control-v1",
+      version: "0.32.3",
+      session,
+      socketDirectory,
+      daemonOwner: owner,
+      engine: "chrome",
+      launchHash,
+      cdpUrl,
+    },
+  }) as BrowserCleanupResourceIdentityV2;
+  const lifecycle = (
+    state: Exclude<RecoveryFixtureState, "inactive">,
+    currentLaunchHash = launchHash,
+  ) => ({
+    effectiveLaunch: state === "launched"
+      ? {
+          browserLaunched: true,
+          engine: "chrome",
+          launchHash: currentLaunchHash,
+        }
+      : {
+          browserLaunched: false,
+          engine: "chrome",
+          launchHash: null,
+        },
+    launched: false,
+    relaunchedBrowser: false,
+    restartedBackground: false,
+    restoreStatus: "not_configured",
+    reused: true,
+    saveStatus: "not_attempted",
+  });
+  const sessionInfo = (
+    state: RecoveryFixtureState,
+    currentLaunchHash = launchHash,
+  ): unknown => {
+    if (state === "inactive") {
+      return {
+        success: true,
+        data: {
+          active: false,
+          namespace: null,
+          pid: null,
+          runtime: null,
+          runtimeError: null,
+          session,
+          socketDir: socketDirectory,
+          version: null,
+        },
+      };
+    }
+    const currentLifecycle = lifecycle(state, currentLaunchHash);
+    const launched = state === "launched";
+    return {
+      success: true,
+      data: {
+        active: true,
+        namespace: null,
+        pid: owner.pid,
+        runtime: {
+          backgroundPid: owner.pid,
+          browserLaunched: launched,
+          compatibilityStatus: "current",
+          effectiveLaunch: currentLifecycle.effectiveLaunch,
+          engine: "chrome",
+          launchHash: launched ? currentLaunchHash : null,
+          lifecycle: currentLifecycle,
+          namespace: null,
+          pageCount: launched ? 1 : 0,
+          restoreCheckFn: null,
+          restoreCheckText: null,
+          restoreCheckUrl: null,
+          restoreKey: null,
+          restoreLoadedPath: null,
+          restoreSave: "auto",
+          restoreSavedPath: null,
+          restoreStatus: "not_configured",
+          restoreStatusDetail: null,
+          restoreValidationPending: false,
+          saveStatus: "not_attempted",
+          session,
+          socketDir: socketDirectory,
+        },
+        runtimeError: null,
+        session,
+        socketDir: socketDirectory,
+        version: "0.32.3",
+      },
+    };
+  };
+  const cdpInfo = (currentLaunchHash = launchHash): unknown => ({
+    success: true,
+    data: {
+      cdpUrl,
+      lifecycle: lifecycle("launched", currentLaunchHash),
+    },
+  });
+  const commandResult = (
+    value: unknown,
+    exitCode = 0,
+  ) => ({
+    stdout: `${JSON.stringify(value).replace(
+      /"launchHash":"([0-9]+)"/gu,
+      '"launchHash":$1',
+    )}\n`,
+    stderr: "",
+    exitCode,
+  });
+  return {
+    artifactsDirectory,
+    cdpInfo,
+    cdpUrl,
+    commandResult,
+    launchHash,
+    owner,
+    resource,
+    session,
+    sessionInfo,
+    socketDirectory,
+    cleanup: () => {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(artifactsDirectory, { recursive: true, force: true });
+    },
+  };
+}
 
 describe("retired DOM recipe boundary", () => {
   test("rejects every direct recipe execution before browser startup", () => {
@@ -360,6 +543,7 @@ describe("browser process isolation helpers", () => {
           acquireCookieRecords: () => Promise.resolve({ cookies: [], warnings: [] }),
         },
       });
+      expect(session.cleanupResourceIdentity).toBeUndefined();
       await session.close();
       await session.cleanup();
       if (observed === null) throw new Error("fake browser did not observe an action policy");
@@ -369,41 +553,172 @@ describe("browser process isolation helpers", () => {
     expect(observedPolicies[1]).toContain("evaluate");
   });
 
-  test("publishes inode-bound cleanup identity before any proxy or browser can launch", async () => {
+  test("publishes a birth-bound root before launch and monotonically pins its live browser", async () => {
     const events: string[] = [];
-    let published:
-      | Parameters<
-          NonNullable<
-            Parameters<typeof createBrowserSession>[2]["publishCleanupResource"]
-          >
-        >[0]
-      | undefined;
+    type PublishedCleanupResource = Parameters<
+      NonNullable<
+        Parameters<typeof createBrowserSession>[2]["publishCleanupResource"]
+      >
+    >[0];
+    const published: PublishedCleanupResource[] = [];
+    const cleanupEvents: string[] = [];
+    let browserClosed = false;
+    let daemonLive = true;
+    const launchHash = "18446744073709551615";
+    const exactLaunchHashJson = (value: unknown): string =>
+      JSON.stringify(value).replaceAll(
+        `"launchHash":"${launchHash}"`,
+        `"launchHash":${launchHash}`,
+      );
+    const lifecycle = {
+      effectiveLaunch: {
+        browserLaunched: true,
+        engine: "chrome",
+        launchHash,
+      },
+      launched: false,
+      relaunchedBrowser: false,
+      restartedBackground: false,
+      restoreStatus: "not_configured",
+      reused: true,
+      saveStatus: "not_attempted",
+    } as const;
+    const activeSessionInfo = () => {
+      const resource = published[0];
+      if (resource === undefined) throw new Error("missing published root identity");
+      if (browserClosed && !daemonLive) {
+        return {
+          success: true,
+          data: {
+            active: false,
+            namespace: null,
+            pid: null,
+            runtime: null,
+            runtimeError: null,
+            session: resource.session,
+            socketDir: resource.socketDirectory,
+            version: null,
+          },
+        };
+      }
+      const currentLifecycle = browserClosed
+        ? {
+            ...lifecycle,
+            effectiveLaunch: {
+              browserLaunched: false,
+              engine: "chrome",
+              launchHash: null,
+            },
+          } as const
+        : lifecycle;
+      return {
+        success: true,
+        data: {
+          active: true,
+          namespace: null,
+          pid: process.pid,
+          runtime: {
+            backgroundPid: process.pid,
+            browserLaunched:
+              currentLifecycle.effectiveLaunch.browserLaunched,
+            compatibilityStatus: "current",
+            effectiveLaunch: currentLifecycle.effectiveLaunch,
+            engine: "chrome",
+            launchHash: currentLifecycle.effectiveLaunch.launchHash,
+            lifecycle: currentLifecycle,
+            namespace: null,
+            pageCount: browserClosed ? 0 : 1,
+            restoreCheckFn: null,
+            restoreCheckText: null,
+            restoreCheckUrl: null,
+            restoreKey: null,
+            restoreLoadedPath: null,
+            restoreSave: "auto",
+            restoreSavedPath: null,
+            restoreStatus: "not_configured",
+            restoreStatusDetail: null,
+            restoreValidationPending: false,
+            saveStatus: "not_attempted",
+            session: resource.session,
+            socketDir: resource.socketDirectory,
+          },
+          runtimeError: null,
+          session: resource.session,
+          socketDir: resource.socketDirectory,
+          version: "0.32.3",
+        },
+      };
+    };
     const session = await createBrowserSession(manifest, auth, {
       headed: false,
       timeoutMs: 1_000,
       maxOutputBytes: 64 * 1024,
-      publishCleanupResource: (resource) => {
-        expect(events).toEqual([]);
-        events.push("published");
-        published = resource;
-        const socket = lstatSync(resource.socketDirectory, {
-          bigint: true,
-        });
-        const artifacts = lstatSync(resource.artifactsDirectory, {
-          bigint: true,
-        });
-        expect(resource.socketDirectoryIdentity).toEqual({
-          device: socket.dev.toString(),
-          inode: socket.ino.toString(),
-        });
-        expect(resource.artifactsDirectoryIdentity).toEqual({
-          device: artifacts.dev.toString(),
-          inode: artifacts.ino.toString(),
-        });
-      },
+      publishCleanupResource: Object.assign(
+        (resource: PublishedCleanupResource) => {
+          if (published.length === 0) {
+            expect(events).toEqual([]);
+            expect(resource).toMatchObject({ phase: "prepared", control: null });
+            events.push("published-prepared");
+          } else {
+            expect(browserCleanupResourceExtends(
+              published[published.length - 1]!,
+              resource,
+            )).toBeTrue();
+            events.push(`published-${resource.kind === "agent-browser-session-v2"
+              ? resource.phase
+              : "legacy"}`);
+          }
+          published.push(resource);
+          const socket = lstatSync(resource.socketDirectory, {
+            bigint: true,
+          });
+          const artifacts = lstatSync(resource.artifactsDirectory, {
+            bigint: true,
+          });
+          expect(resource.socketDirectoryIdentity).toEqual({
+            device: socket.dev.toString(),
+            inode: socket.ino.toString(),
+            birthtimeNs: socket.birthtimeNs.toString(),
+            mode: "448",
+            uid: socket.uid.toString(),
+          });
+          expect(resource.artifactsDirectoryIdentity).toEqual({
+            device: artifacts.dev.toString(),
+            inode: artifacts.ino.toString(),
+            birthtimeNs: artifacts.birthtimeNs.toString(),
+            mode: "448",
+            uid: artifacts.uid.toString(),
+          });
+        },
+        {
+          markBrowserCleanupQuiescent: (
+            resource: PublishedCleanupResource,
+          ): void => {
+            if (resource.kind !== "agent-browser-session-v2") {
+              throw new Error("expected a v2 cleanup journal resource");
+            }
+            expect(browserCleanupResourceRootStatus(resource, "artifacts"))
+              .toBe("match");
+            expect(browserCleanupResourceRootStatus(resource, "socket"))
+              .toBe("match");
+            cleanupEvents.push("journal-quiescent");
+          },
+          markBrowserCleanupRootRemoved: (
+            resource: PublishedCleanupResource,
+            root: "artifacts" | "socket",
+          ): void => {
+            if (resource.kind !== "agent-browser-session-v2") {
+              throw new Error("expected a v2 cleanup journal resource");
+            }
+            expect(browserCleanupResourceRootStatus(resource, root))
+              .toBe("absent");
+            cleanupEvents.push(`journal-${root}`);
+          },
+        },
+      ),
       dependencies: {
         startNetworkProxy: () => {
-          expect(events).toEqual(["published"]);
+          expect(events).toEqual(["published-prepared"]);
           events.push("proxy");
           return Promise.resolve({
             url: "http://127.0.0.1:43124",
@@ -412,7 +727,10 @@ describe("browser process isolation helpers", () => {
           });
         },
         runCommand: (command, options) => {
-          expect(events[0]).toBe("published");
+          expect(events[0]).toBe("published-prepared");
+          if (command.includes("batch")) {
+            expect(events).toContain("published-launch-intent");
+          }
           events.push("command");
           if (command.includes("batch")) {
             const batch = JSON.parse(
@@ -427,30 +745,135 @@ describe("browser process isolation helpers", () => {
               exitCode: 0,
             });
           }
+          if (command.includes("info")) {
+            return Promise.resolve({
+              stdout: `${exactLaunchHashJson(activeSessionInfo())}\n`,
+              stderr: "",
+              exitCode: 0,
+            });
+          }
+          if (command.includes("cdp-url")) {
+            return Promise.resolve({
+              stdout: `${exactLaunchHashJson({
+                success: true,
+                data: {
+                  cdpUrl: "ws://127.0.0.1:43125/devtools/browser/exact-test",
+                  lifecycle,
+                },
+              })}\n`,
+              stderr: "",
+              exitCode: 0,
+            });
+          }
+          if (command.includes("close")) browserClosed = true;
           return Promise.resolve({
             stdout: "{\"success\":true}\n",
             stderr: "",
             exitCode: 0,
           });
         },
+        cleanupLifecycle: {
+          ownerStatus: () => daemonLive
+            ? "exact-live-owner"
+            : "different-or-dead",
+          terminateOwner: () => {
+            cleanupEvents.push("terminate-daemon");
+            daemonLive = false;
+          },
+          cdpEndpointStatus: () => {
+            const latest = published[published.length - 1];
+            if (
+              latest?.kind === "agent-browser-session-v2"
+              && browserCleanupResourceRootStatus(latest, "artifacts")
+                === "absent"
+            ) cleanupEvents.push("deletion-reproof");
+            return Promise.resolve("unavailable");
+          },
+          sleep: () => Promise.resolve(),
+        },
+        removePrivateArtifact: (path) => {
+          const latest = published[published.length - 1];
+          if (latest === undefined) throw new Error("missing cleanup identity");
+          if (path === latest.artifactsDirectory) {
+            cleanupEvents.push("remove-artifacts");
+            rmSync(path, { recursive: true });
+            return;
+          }
+          if (path === latest.socketDirectory) {
+            cleanupEvents.push("remove-socket");
+            throw new Error("simulated socket removal failure");
+          }
+          throw new Error("unexpected cleanup root");
+        },
         acquireCookieRecords: () =>
           Promise.resolve({ cookies: [], warnings: [] }),
       },
     });
     try {
-      if (published === undefined) {
-        throw new Error("browser cleanup resource was not published");
+      const initial = published[0];
+      const launchIntent = published[1];
+      const latest = published[2];
+      if (
+        initial === undefined
+        || launchIntent === undefined
+        || latest === undefined
+      ) {
+        throw new Error("browser cleanup resource extensions were not published");
+      }
+      if (latest.kind !== "agent-browser-session-v2") {
+        throw new Error("latest browser cleanup resource is not v2");
       }
       expect(parseBrowserRecoveryHandle(
-        published.recoveryHandle,
+        latest.recoveryHandle,
       )).toMatchObject({
-        session: published.session,
-        socketDirectory: published.socketDirectory,
-        artifactsDirectory: published.artifactsDirectory,
+        session: latest.session,
+        socketDirectory: latest.socketDirectory,
+        artifactsDirectory: latest.artifactsDirectory,
       });
-      expect(session.cleanupResourceIdentity).toEqual(published);
+      expect(initial).toMatchObject({
+        kind: "agent-browser-session-v2",
+        phase: "prepared",
+        control: null,
+      });
+      expect(launchIntent).toMatchObject({
+        kind: "agent-browser-session-v2",
+        phase: "launch-intent",
+        control: null,
+      });
+      expect(latest).toMatchObject({
+        kind: "agent-browser-session-v2",
+        phase: "controlled",
+        control: {
+          kind: "agent-browser-control-v1",
+          version: "0.32.3",
+          daemonOwner: { pid: process.pid },
+          engine: "chrome",
+          launchHash,
+          cdpUrl: "ws://127.0.0.1:43125/devtools/browser/exact-test",
+        },
+      });
+      expect(browserCleanupResourceExtends(initial, launchIntent)).toBeTrue();
+      expect(browserCleanupResourceExtends(launchIntent, latest)).toBeTrue();
+      expect(browserCleanupResourceExtends(initial, latest)).toBeFalse();
+      expect(browserCleanupResourceExtends(latest, initial)).toBeFalse();
+      expect(session.cleanupResourceIdentity).toEqual(latest);
       await session.close();
-      await session.cleanup();
+      expect(await rejectionMessage(session.cleanup())).toContain(
+        "did not remove every private resource",
+      );
+      const quiescentIndex = cleanupEvents.indexOf("journal-quiescent");
+      const artifactRemovalIndex = cleanupEvents.indexOf("remove-artifacts");
+      const artifactJournalIndex = cleanupEvents.indexOf("journal-artifacts");
+      const reproofIndex = cleanupEvents.indexOf("deletion-reproof");
+      const socketRemovalIndex = cleanupEvents.indexOf("remove-socket");
+      expect(quiescentIndex).toBeGreaterThanOrEqual(0);
+      expect(artifactRemovalIndex).toBeGreaterThan(quiescentIndex);
+      expect(artifactJournalIndex).toBeGreaterThan(artifactRemovalIndex);
+      expect(reproofIndex).toBeGreaterThan(artifactJournalIndex);
+      expect(socketRemovalIndex).toBeGreaterThan(reproofIndex);
+      expect(cleanupEvents).not.toContain("journal-socket");
+      expect(browserCleanupResourceRootStatus(latest, "artifacts")).toBe("absent");
+      expect(browserCleanupResourceRootStatus(latest, "socket")).toBe("match");
     } finally {
       if (session.cleanupResourceIdentity !== undefined) {
         rmSync(session.cleanupResourceIdentity.socketDirectory, {
@@ -462,6 +885,1017 @@ describe("browser process isolation helpers", () => {
           force: true,
         });
       }
+    }
+  });
+
+  test("publishes prepared roots before profile-clone effects can fail", async () => {
+    const unavailableProfile = join(
+      tmpdir(),
+      `wrench-missing-profile-${crypto.randomUUID()}`,
+    );
+    const publication: {
+      resource: BrowserCleanupResourceIdentityV2 | null;
+    } = { resource: null };
+    const error = await rejectionValue(createBrowserSession(manifest, {
+      schemaVersion: 1,
+      id: "missing-profile",
+      kind: "browser-profile",
+      profile: unavailableProfile,
+      trustUnfilteredEgress: true,
+    }, {
+      headed: false,
+      timeoutMs: 1_000,
+      maxOutputBytes: 64 * 1024,
+      publishCleanupResource: (resource) => {
+        if (resource.kind !== "agent-browser-session-v2") {
+          throw new Error("expected a v2 cleanup resource");
+        }
+        publication.resource = resource;
+      },
+    }));
+    expect(error).toBeInstanceOf(PreservedBrowserArtifactsError);
+    const prepared = publication.resource;
+    if (prepared === null) throw new Error("prepared roots were not published");
+    try {
+      expect(prepared).toMatchObject({ phase: "prepared", control: null });
+      expect(browserCleanupResourceRootStatus(prepared, "socket")).toBe("match");
+      expect(browserCleanupResourceRootStatus(prepared, "artifacts")).toBe("match");
+    } finally {
+      rmSync(prepared.socketDirectory, { recursive: true, force: true });
+      rmSync(prepared.artifactsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves exact roots when cleanup publication may have committed before throwing", async () => {
+    const publication: {
+      resource: BrowserCleanupResourceIdentityV2 | null;
+    } = { resource: null };
+    const removalAttempts: string[] = [];
+    const error = await rejectionValue(createBrowserSession(manifest, auth, {
+      headed: false,
+      timeoutMs: 1_000,
+      maxOutputBytes: 64 * 1024,
+      publishCleanupResource: (resource) => {
+        if (resource.kind !== "agent-browser-session-v2") {
+          throw new Error("expected a v2 cleanup resource");
+        }
+        publication.resource = resource;
+        throw new Error("simulated failure after durable publication");
+      },
+      dependencies: {
+        removePrivateArtifact: (path) => {
+          removalAttempts.push(path);
+          rmSync(path, { recursive: true, force: true });
+        },
+      },
+    }));
+
+    expect(error).toBeInstanceOf(PreservedBrowserArtifactsError);
+    expect(removalAttempts).toEqual([]);
+    const resource = publication.resource;
+    if (resource === null) throw new Error("cleanup publication was not attempted");
+    try {
+      expect(browserCleanupResourceRootStatus(resource, "artifacts")).toBe("match");
+      expect(browserCleanupResourceRootStatus(resource, "socket")).toBe("match");
+    } finally {
+      rmSync(resource.artifactsDirectory, { recursive: true, force: true });
+      rmSync(resource.socketDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("proves only an unchanged prepared and doubly inactive session quiescent", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    const prepared = parseBrowserCleanupResourceIdentity({
+      ...fixture.resource,
+      phase: "prepared",
+      control: null,
+    }) as BrowserCleanupResourceIdentityV2;
+    let reads = 0;
+    try {
+      expect(await refreshBrowserCleanupResourceQuiescence(
+        prepared,
+        {
+          runCommand: (command) => {
+            expect(command.includes("info")).toBeTrue();
+            reads += 1;
+            return Promise.resolve(fixture.commandResult(
+              fixture.sessionInfo("inactive"),
+            ));
+          },
+        },
+      )).toEqual(prepared);
+      expect(reads).toBe(2);
+      expect(browserCleanupResourceRootStatus(prepared, "socket")).toBe("match");
+      expect(browserCleanupResourceRootStatus(prepared, "artifacts")).toBe("match");
+
+      rmSync(prepared.socketDirectory, { recursive: true });
+      expect(browserCleanupResourceRootStatus(prepared, "socket")).toBe("absent");
+      writeFileSync(prepared.socketDirectory, "replacement", { mode: 0o600 });
+      expect(browserCleanupResourceRootStatus(prepared, "socket")).toBe("conflict");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("refuses prepared recovery when the second session read becomes active", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    const prepared = parseBrowserCleanupResourceIdentity({
+      ...fixture.resource,
+      phase: "prepared",
+      control: null,
+    }) as BrowserCleanupResourceIdentityV2;
+    let reads = 0;
+    try {
+      const message = await rejectionMessage(
+        provePreparedAgentBrowserCleanupResourceQuiescent(prepared, {
+          runCommand: () => {
+            reads += 1;
+            return Promise.resolve(fixture.commandResult(
+              fixture.sessionInfo(reads === 1 ? "inactive" : "launched"),
+            ));
+          },
+        }),
+      );
+      expect(message).toContain("state changed");
+      expect(message).not.toContain(fixture.session);
+      expect(reads).toBe(2);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("accepts only equality or one exact browser cleanup identity extension", () => {
+    const artifactsDirectory = mkdtempSync(join(tmpdir(), "io-browser-"));
+    const socketDirectory = mkdtempSync(join("/tmp", "io-ab-"));
+    chmodSync(artifactsDirectory, 0o700);
+    chmodSync(socketDirectory, 0o700);
+    const session = "io-123-abcdef123456";
+    const configPath = join(artifactsDirectory, "agent-browser.json");
+    writeFileSync(configPath, "{}\n", { mode: 0o600 });
+    const directoryIdentity = (path: string) => {
+      const stats = lstatSync(path, { bigint: true });
+      return {
+        device: stats.dev.toString(),
+        inode: stats.ino.toString(),
+        birthtimeNs: stats.birthtimeNs.toString(),
+        mode: "448" as const,
+        uid: stats.uid.toString(),
+      };
+    };
+    try {
+      const base = parseBrowserCleanupResourceIdentity({
+        kind: "agent-browser-session-v2",
+        recoveryHandle: browserRecoveryHandle({
+          session,
+          configPath,
+          socketDirectory,
+          artifactsDirectory,
+        }),
+        session,
+        socketDirectory,
+        socketDirectoryIdentity: directoryIdentity(socketDirectory),
+        artifactsDirectory,
+        artifactsDirectoryIdentity: directoryIdentity(artifactsDirectory),
+        phase: "prepared",
+        control: null,
+      }) as BrowserCleanupResourceIdentityV2;
+      const launchIntent = parseBrowserCleanupResourceIdentity({
+        ...base,
+        phase: "launch-intent",
+        control: null,
+      }) as BrowserCleanupResourceIdentityV2;
+      const pinned = parseBrowserCleanupResourceIdentity({
+        ...launchIntent,
+        phase: "controlled",
+        control: {
+          kind: "agent-browser-control-v1",
+          version: "0.32.3",
+          session,
+          socketDirectory,
+          daemonOwner: {
+            pid: 43125,
+            bootId: "a".repeat(64),
+            processStartId: "b".repeat(64),
+          },
+          engine: "chrome",
+          launchHash: "18446744073709551615",
+          cdpUrl: "ws://127.0.0.1:43125/devtools/browser/exact-test",
+        },
+      });
+      if (
+        pinned.kind !== "agent-browser-session-v2"
+        || pinned.phase !== "controlled"
+      ) {
+        throw new Error("expected a controlled v2 cleanup resource");
+      }
+      const legacy: BrowserCleanupResourceIdentityV1 = {
+        kind: "agent-browser-session-v1",
+        recoveryHandle: base.recoveryHandle,
+        session,
+        socketDirectory,
+        socketDirectoryIdentity: {
+          device: base.socketDirectoryIdentity.device,
+          inode: base.socketDirectoryIdentity.inode,
+        },
+        artifactsDirectory,
+        artifactsDirectoryIdentity: {
+          device: base.artifactsDirectoryIdentity.device,
+          inode: base.artifactsDirectoryIdentity.inode,
+        },
+      };
+
+      expect(browserCleanupResourceExtends(base, base)).toBeTrue();
+      expect(browserCleanupResourceExtends(base, launchIntent)).toBeTrue();
+      expect(browserCleanupResourceExtends(base, pinned)).toBeFalse();
+      expect(browserCleanupResourceExtends(launchIntent, pinned)).toBeTrue();
+      expect(browserCleanupResourceExtends(pinned, pinned)).toBeTrue();
+      expect(browserCleanupResourceExtends(pinned, base)).toBeFalse();
+      expect(browserCleanupResourceExtends(pinned, launchIntent)).toBeFalse();
+      expect(browserCleanupResourceExtends(legacy, base)).toBeFalse();
+      expect(browserCleanupResourceExtends(legacy, pinned)).toBeTrue();
+      expect(browserCleanupResourceExtends(pinned, {
+        ...pinned,
+        control: {
+          ...pinned.control,
+          launchHash: "1",
+        },
+      })).toBeFalse();
+
+      expect(() => parseBrowserCleanupResourceIdentity({
+        ...base,
+        unexpected: "private-value",
+      })).toThrow("malformed");
+      expect(() => parseBrowserCleanupResourceIdentity({
+        ...base,
+        phase: "controlled",
+      })).toThrow("phase");
+      expect(() => parseBrowserCleanupResourceIdentity({
+        ...pinned,
+        phase: "launch-intent",
+      })).toThrow("inconsistent");
+      expect(() => parseBrowserCleanupResourceIdentity({
+        ...base,
+        socketDirectoryIdentity: {
+          ...base.socketDirectoryIdentity,
+          birthtimeNs: "0",
+        },
+      })).toThrow("malformed");
+      expect(() => parseBrowserCleanupResourceIdentity({
+        ...pinned,
+        control: {
+          ...pinned.control!,
+          session: "io-123-000000000000",
+        },
+      })).toThrow("changed resource identity");
+      expect(() => parseBrowserCleanupResourceIdentity({
+        ...pinned,
+        control: {
+          ...pinned.control!,
+          cdpUrl: "ws://localhost:43125/devtools/browser/exact-test",
+        },
+      })).toThrow("malformed");
+      const accessor = { ...base } as Record<string, unknown>;
+      Object.defineProperty(accessor, "control", {
+        enumerable: true,
+        get: () => null,
+      });
+      expect(() => parseBrowserCleanupResourceIdentity(accessor)).toThrow(
+        "malformed",
+      );
+    } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(artifactsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a daemon or launch identity drift while binding a live cleanup pin", async () => {
+    const artifactsDirectory = mkdtempSync(join(tmpdir(), "io-browser-"));
+    const socketDirectory = mkdtempSync(join("/tmp", "io-ab-"));
+    chmodSync(artifactsDirectory, 0o700);
+    chmodSync(socketDirectory, 0o700);
+    const session = "io-124-abcdef123456";
+    const configPath = join(artifactsDirectory, "agent-browser.json");
+    writeFileSync(configPath, "{}\n", { mode: 0o600 });
+    writeFileSync(join(artifactsDirectory, "action-policy.json"), "{}\n", {
+      mode: 0o600,
+    });
+    const statsIdentity = (path: string) => {
+      const stats = lstatSync(path, { bigint: true });
+      return {
+        device: stats.dev.toString(),
+        inode: stats.ino.toString(),
+        birthtimeNs: stats.birthtimeNs.toString(),
+        mode: "448" as const,
+        uid: stats.uid.toString(),
+      };
+    };
+    const base = parseBrowserCleanupResourceIdentity({
+      kind: "agent-browser-session-v2",
+      recoveryHandle: browserRecoveryHandle({
+        session,
+        configPath,
+        socketDirectory,
+        artifactsDirectory,
+      }),
+      session,
+      socketDirectory,
+      socketDirectoryIdentity: statsIdentity(socketDirectory),
+      artifactsDirectory,
+      artifactsDirectoryIdentity: statsIdentity(artifactsDirectory),
+      phase: "launch-intent",
+      control: null,
+    }) as BrowserCleanupResourceIdentityV2;
+    const lifecycle = (launchHash: string) => ({
+      effectiveLaunch: {
+        browserLaunched: true,
+        engine: "chrome",
+        launchHash,
+      },
+      launched: false,
+      relaunchedBrowser: false,
+      restartedBackground: false,
+      restoreStatus: "not_configured",
+      reused: true,
+      saveStatus: "not_attempted",
+    });
+    const activeInfo = (launchHash: string) => ({
+      success: true,
+      data: {
+        active: true,
+        namespace: null,
+        pid: 43125,
+        runtime: {
+          backgroundPid: 43125,
+          browserLaunched: true,
+          compatibilityStatus: "current",
+          effectiveLaunch: lifecycle(launchHash).effectiveLaunch,
+          engine: "chrome",
+          launchHash,
+          lifecycle: lifecycle(launchHash),
+          namespace: null,
+          pageCount: 1,
+          restoreCheckFn: null,
+          restoreCheckText: null,
+          restoreCheckUrl: null,
+          restoreKey: null,
+          restoreLoadedPath: null,
+          restoreSave: "auto",
+          restoreSavedPath: null,
+          restoreStatus: "not_configured",
+          restoreStatusDetail: null,
+          restoreValidationPending: false,
+          saveStatus: "not_attempted",
+          session,
+          socketDir: socketDirectory,
+        },
+        runtimeError: null,
+        session,
+        socketDir: socketDirectory,
+        version: "0.32.3",
+      },
+    });
+    let sessionReads = 0;
+    try {
+      let preparedCommandCount = 0;
+      const prepared = parseBrowserCleanupResourceIdentity({
+        ...base,
+        phase: "prepared",
+        control: null,
+      }) as BrowserCleanupResourceIdentityV2;
+      expect(await rejectionMessage(bindLiveAgentBrowserCleanupResource(
+        prepared,
+        {
+          runCommand: () => {
+            preparedCommandCount += 1;
+            throw new Error("prepared claims must not inspect live control");
+          },
+        },
+      ))).toContain("cannot accept");
+      expect(preparedCommandCount).toBe(0);
+
+      for (const lifecycleDrift of [
+        { launched: true },
+        { relaunchedBrowser: true },
+        { restartedBackground: true },
+        { reused: false },
+        { restoreStatus: "restored" },
+        { saveStatus: "saved" },
+      ] as const) {
+        expect(await rejectionMessage(bindLiveAgentBrowserCleanupResource(base, {
+          runCommand: (command) => {
+            const current = activeInfo("41");
+            const value = command.includes("info")
+              ? {
+                  ...current,
+                  data: {
+                    ...current.data,
+                    runtime: {
+                      ...current.data.runtime,
+                      lifecycle: {
+                        ...current.data.runtime.lifecycle,
+                        ...lifecycleDrift,
+                      },
+                    },
+                  },
+                }
+              : {
+                  success: true,
+                  data: {
+                    cdpUrl: "ws://127.0.0.1:43125/devtools/browser/exact-test",
+                    lifecycle: lifecycle("41"),
+                  },
+                };
+            return Promise.resolve({
+              stdout: `${JSON.stringify(value).replaceAll(
+                '"launchHash":"41"',
+                '"launchHash":41',
+              )}\n`,
+              stderr: "",
+              exitCode: 0,
+            });
+          },
+        }))).toContain("lifecycle changed shape");
+      }
+
+      expect(await rejectionMessage(bindLiveAgentBrowserCleanupResource(base, {
+        captureOwner: () => ({
+          pid: 43125,
+          bootId: "a".repeat(64),
+          processStartId: "b".repeat(64),
+        }),
+        ownerStatus: () => "exact-live-owner",
+        runCommand: (command) => {
+          if (command.includes("info")) {
+            sessionReads += 1;
+            const launchHash = sessionReads === 1 ? "41" : "42";
+            return Promise.resolve({
+              stdout: `${JSON.stringify(activeInfo(launchHash)).replaceAll(
+                `"launchHash":"${launchHash}"`,
+                `"launchHash":${launchHash}`,
+              )}\n`,
+              stderr: "",
+              exitCode: 0,
+            });
+          }
+          return Promise.resolve({
+            stdout: `${JSON.stringify({
+              success: true,
+              data: {
+                cdpUrl: "ws://127.0.0.1:43125/devtools/browser/exact-test",
+                lifecycle: lifecycle("41"),
+              },
+            }).replaceAll(
+              `"launchHash":"41"`,
+              `"launchHash":41`,
+            )}\n`,
+            stderr: "",
+            exitCode: 0,
+          });
+        },
+      }))).toContain("changed while it was bound");
+      expect(sessionReads).toBe(3);
+
+      sessionReads = 0;
+      let cdpReads = 0;
+      expect(await rejectionMessage(bindLiveAgentBrowserCleanupResource(base, {
+        captureOwner: () => ({
+          pid: 43125,
+          bootId: "a".repeat(64),
+          processStartId: "b".repeat(64),
+        }),
+        ownerStatus: () => "exact-live-owner",
+        runCommand: (command) => {
+          if (command.includes("info")) {
+            sessionReads += 1;
+            return Promise.resolve({
+              stdout: `${JSON.stringify(activeInfo("41")).replaceAll(
+                '"launchHash":"41"',
+                '"launchHash":41',
+              )}\n`,
+              stderr: "",
+              exitCode: 0,
+            });
+          }
+          cdpReads += 1;
+          return Promise.resolve({
+            stdout: `${JSON.stringify({
+              success: true,
+              data: {
+                cdpUrl: cdpReads === 1
+                  ? "ws://127.0.0.1:43125/devtools/browser/exact-test"
+                  : "ws://127.0.0.1:43125/devtools/browser/drifted-test",
+                lifecycle: lifecycle("41"),
+              },
+            }).replaceAll(
+              '"launchHash":"41"',
+              '"launchHash":41',
+            )}\n`,
+            stderr: "",
+            exitCode: 0,
+          });
+        },
+      }))).toContain("changed while it was bound");
+      expect(sessionReads).toBe(3);
+      expect(cdpReads).toBe(2);
+
+      for (const lifecycleDrift of [
+        { launched: true },
+        { relaunchedBrowser: true },
+        { restartedBackground: true },
+        { reused: false },
+        { restoreStatus: "restored" },
+        { saveStatus: "saved" },
+      ] as const) {
+        expect(await rejectionMessage(bindLiveAgentBrowserCleanupResource(base, {
+          captureOwner: () => ({
+            pid: 43125,
+            bootId: "a".repeat(64),
+            processStartId: "b".repeat(64),
+          }),
+          ownerStatus: () => "exact-live-owner",
+          runCommand: (command) => {
+            const value = command.includes("info")
+              ? activeInfo("41")
+              : {
+                  success: true,
+                  data: {
+                    cdpUrl: "ws://127.0.0.1:43125/devtools/browser/exact-test",
+                    lifecycle: {
+                      ...lifecycle("41"),
+                      ...lifecycleDrift,
+                    },
+                  },
+                };
+            return Promise.resolve({
+              stdout: `${JSON.stringify(value).replaceAll(
+                '"launchHash":"41"',
+                '"launchHash":41',
+              )}\n`,
+              stderr: "",
+              exitCode: 0,
+            });
+          },
+        }))).toContain("lifecycle changed shape");
+      }
+
+      sessionReads = 0;
+      expect(await rejectionMessage(adoptLiveLegacyBrowserCleanupResource({
+        kind: "agent-browser-session-v1",
+        recoveryHandle: base.recoveryHandle,
+        session,
+        socketDirectory,
+        socketDirectoryIdentity: {
+          device: base.socketDirectoryIdentity.device,
+          inode: base.socketDirectoryIdentity.inode,
+        },
+        artifactsDirectory,
+        artifactsDirectoryIdentity: {
+          device: base.artifactsDirectoryIdentity.device,
+          inode: base.artifactsDirectoryIdentity.inode,
+        },
+      }, {
+        runCommand: () => Promise.resolve({
+          stdout: `${JSON.stringify({
+            success: true,
+            data: {
+              active: false,
+              namespace: null,
+              pid: null,
+              runtime: null,
+              runtimeError: null,
+              session,
+              socketDir: socketDirectory,
+              version: null,
+            },
+          })}\n`,
+          stderr: "",
+          exitCode: 0,
+        }),
+      }))).toContain("live control identity is unavailable");
+    } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(artifactsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("recovers the exact 0.32.3 browser-closed daemon lifecycle with SIGTERM", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    let state: RecoveryFixtureState = "launched";
+    let ownerLive = true;
+    let terminationCount = 0;
+    let cdpInspectionCount = 0;
+    let endpointRefusalCount = 0;
+    try {
+      const recovered = await refreshBrowserCleanupResourceQuiescence(
+        fixture.resource,
+        {
+          runCommand: (command) => {
+            if (command.includes("info")) {
+              return Promise.resolve(fixture.commandResult(
+                fixture.sessionInfo(state),
+              ));
+            }
+            if (command.includes("cdp-url")) {
+              expect(state).toBe("launched");
+              cdpInspectionCount += 1;
+              return Promise.resolve(fixture.commandResult(fixture.cdpInfo()));
+            }
+            if (command.includes("close")) {
+              expect(state).toBe("launched");
+              state = "closed";
+              return Promise.resolve(fixture.commandResult({ success: true }));
+            }
+            throw new Error("unexpected recovery command");
+          },
+          ownerStatus: () =>
+            ownerLive ? "exact-live-owner" : "different-or-dead",
+          terminateOwner: (owner) => {
+            expect(owner).toEqual(fixture.owner);
+            expect(state).toBe("closed");
+            terminationCount += 1;
+            ownerLive = false;
+            state = "inactive";
+          },
+          cdpEndpointStatus: (cdpUrl) => {
+            expect(cdpUrl).toBe(fixture.cdpUrl);
+            endpointRefusalCount += 1;
+            return Promise.resolve("unavailable");
+          },
+          sleep: () => Promise.resolve(),
+          now: () => 0,
+        },
+      );
+      expect(recovered).toEqual(fixture.resource);
+      expect(terminationCount).toBe(1);
+      expect(cdpInspectionCount).toBe(1);
+      expect(endpointRefusalCount).toBe(3);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("resumes after a prior close by terminating the exact closed daemon without closing again", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    let state: RecoveryFixtureState = "closed";
+    let ownerLive = true;
+    let sessionInspectionCount = 0;
+    let closeCount = 0;
+    let cdpInspectionCount = 0;
+    let terminationCount = 0;
+    try {
+      await recoverPinnedAgentBrowserCleanupResource(fixture.resource, {
+        runCommand: (command) => {
+          if (command.includes("info")) {
+            sessionInspectionCount += 1;
+            return Promise.resolve(fixture.commandResult(
+              fixture.sessionInfo(state),
+            ));
+          }
+          if (command.includes("close")) closeCount += 1;
+          if (command.includes("cdp-url")) cdpInspectionCount += 1;
+          throw new Error("closed-daemon recovery repeated a browser command");
+        },
+        ownerStatus: () =>
+          ownerLive ? "exact-live-owner" : "different-or-dead",
+        terminateOwner: (owner) => {
+          expect(owner).toEqual(fixture.owner);
+          expect(state).toBe("closed");
+          terminationCount += 1;
+          ownerLive = false;
+          state = "inactive";
+        },
+        cdpEndpointStatus: () => Promise.resolve("unavailable"),
+        sleep: () => Promise.resolve(),
+        now: () => 0,
+      });
+      expect(sessionInspectionCount).toBe(4);
+      expect(closeCount).toBe(0);
+      expect(cdpInspectionCount).toBe(0);
+      expect(terminationCount).toBe(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("falls back to SIGTERM only after an unsuccessful close preserves the exact pin", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    let state: RecoveryFixtureState = "launched";
+    let ownerLive = true;
+    let terminationCount = 0;
+    let cdpInspectionCount = 0;
+    try {
+      await recoverPinnedAgentBrowserCleanupResource(fixture.resource, {
+        runCommand: (command) => {
+          if (command.includes("info")) {
+            return Promise.resolve(fixture.commandResult(
+              fixture.sessionInfo(state),
+            ));
+          }
+          if (command.includes("cdp-url")) {
+            cdpInspectionCount += 1;
+            return Promise.resolve(fixture.commandResult(fixture.cdpInfo()));
+          }
+          if (command.includes("close")) {
+            return Promise.resolve(fixture.commandResult(
+              { success: false },
+              1,
+            ));
+          }
+          throw new Error("unexpected recovery command");
+        },
+        ownerStatus: () =>
+          ownerLive ? "exact-live-owner" : "different-or-dead",
+        terminateOwner: () => {
+          terminationCount += 1;
+          ownerLive = false;
+          state = "inactive";
+        },
+        cdpEndpointStatus: () => Promise.resolve("unavailable"),
+        sleep: () => Promise.resolve(),
+        now: () => 0,
+      });
+      expect(terminationCount).toBe(1);
+      expect(cdpInspectionCount).toBe(2);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("does not signal after post-close control drift", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    let sessionReadCount = 0;
+    let terminationCount = 0;
+    try {
+      const message = await rejectionMessage(
+        recoverPinnedAgentBrowserCleanupResource(fixture.resource, {
+          runCommand: (command) => {
+            if (command.includes("info")) {
+              sessionReadCount += 1;
+              const launchHash = sessionReadCount > 2 ? "42" : fixture.launchHash;
+              return Promise.resolve(fixture.commandResult(
+                fixture.sessionInfo("launched", launchHash),
+              ));
+            }
+            if (command.includes("cdp-url")) {
+              return Promise.resolve(fixture.commandResult(fixture.cdpInfo()));
+            }
+            if (command.includes("close")) {
+              return Promise.resolve(fixture.commandResult(
+                { success: false },
+                1,
+              ));
+            }
+            throw new Error("unexpected recovery command");
+          },
+          ownerStatus: () => "exact-live-owner",
+          terminateOwner: () => {
+            terminationCount += 1;
+          },
+        }),
+      );
+      expect(message).toContain("control identity changed");
+      expect(message).not.toContain(fixture.session);
+      expect(message).not.toContain(fixture.socketDirectory);
+      expect(message).not.toContain(String(fixture.owner.pid));
+      expect(message).not.toContain(fixture.cdpUrl);
+      expect(terminationCount).toBe(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("requires the exact owner to die after SIGTERM", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    let state: RecoveryFixtureState = "launched";
+    let clock = 0;
+    let terminationCount = 0;
+    try {
+      const message = await rejectionMessage(
+        recoverPinnedAgentBrowserCleanupResource(fixture.resource, {
+          runCommand: (command) => {
+            if (command.includes("info")) {
+              return Promise.resolve(fixture.commandResult(
+                fixture.sessionInfo(state),
+              ));
+            }
+            if (command.includes("cdp-url")) {
+              return Promise.resolve(fixture.commandResult(fixture.cdpInfo()));
+            }
+            if (command.includes("close")) {
+              state = "closed";
+              return Promise.resolve(fixture.commandResult({ success: true }));
+            }
+            throw new Error("unexpected recovery command");
+          },
+          ownerStatus: () => "exact-live-owner",
+          terminateOwner: () => {
+            terminationCount += 1;
+          },
+          sleep: () => Promise.resolve(),
+          now: () => {
+            const current = clock;
+            clock += 5_001;
+            return current;
+          },
+        }),
+      );
+      expect(message).toContain("did not stop after SIGTERM");
+      expect(terminationCount).toBe(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("proves an already-dead pinned session without signaling", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    let sessionInspectionCount = 0;
+    let endpointRefusalCount = 0;
+    let terminationCount = 0;
+    try {
+      await recoverPinnedAgentBrowserCleanupResource(fixture.resource, {
+        runCommand: (command) => {
+          if (!command.includes("info")) {
+            throw new Error("dead recovery must only inspect the session");
+          }
+          sessionInspectionCount += 1;
+          return Promise.resolve(fixture.commandResult(
+            fixture.sessionInfo("inactive"),
+          ));
+        },
+        ownerStatus: () => "different-or-dead",
+        terminateOwner: () => {
+          terminationCount += 1;
+        },
+        cdpEndpointStatus: () => {
+          endpointRefusalCount += 1;
+          return Promise.resolve("unavailable");
+        },
+        sleep: () => Promise.resolve(),
+        now: () => 0,
+      });
+      expect(sessionInspectionCount).toBe(2);
+      expect(endpointRefusalCount).toBe(3);
+      expect(terminationCount).toBe(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("re-proves prepared deletion safety from the surviving exact socket root", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    const prepared = parseBrowserCleanupResourceIdentity({
+      ...fixture.resource,
+      phase: "prepared",
+      control: null,
+    }) as BrowserCleanupResourceIdentityV2;
+    rmSync(prepared.artifactsDirectory, { recursive: true });
+    let sessionReads = 0;
+    let temporaryConfig: string | null = null;
+    try {
+      expect(await reproveBrowserCleanupAfterArtifactsRemoval(prepared, {
+        runCommand: (command, options) => {
+          expect(command.includes("close")).toBeFalse();
+          expect(command.includes("batch")).toBeFalse();
+          expect(command.includes("info")).toBeTrue();
+          expect(options.cwd).toBe(prepared.socketDirectory);
+          const configIndex = command.indexOf("--config");
+          temporaryConfig = command[configIndex + 1] ?? null;
+          if (temporaryConfig === null) throw new Error("missing temporary config");
+          expect(dirname(temporaryConfig)).toBe(prepared.socketDirectory);
+          expect(lstatSync(temporaryConfig).mode & 0o777).toBe(0o600);
+          sessionReads += 1;
+          return Promise.resolve(fixture.commandResult(
+            fixture.sessionInfo("inactive"),
+          ));
+        },
+        ownerStatus: () => {
+          throw new Error("prepared deletion reproof must not inspect an owner");
+        },
+        cdpEndpointStatus: () => {
+          throw new Error("prepared deletion reproof must not inspect CDP");
+        },
+      })).toEqual(prepared);
+      expect(sessionReads).toBe(2);
+      expect(temporaryConfig).not.toBeNull();
+      expect(existsSync(temporaryConfig!)).toBeFalse();
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("re-proves controlled deletion safety with dead-owner and endpoint refusals before and after", async () => {
+    const fixture = createPinnedBrowserRecoveryFixture();
+    rmSync(fixture.resource.artifactsDirectory, { recursive: true });
+    let sessionReads = 0;
+    let endpointRefusals = 0;
+    let temporaryConfig: string | null = null;
+    try {
+      expect(await reproveBrowserCleanupAfterArtifactsRemoval(
+        fixture.resource,
+        {
+          runCommand: (command) => {
+            expect(command.includes("close")).toBeFalse();
+            expect(command.includes("batch")).toBeFalse();
+            expect(command.includes("info")).toBeTrue();
+            temporaryConfig = command[command.indexOf("--config") + 1] ?? null;
+            sessionReads += 1;
+            return Promise.resolve(fixture.commandResult(
+              fixture.sessionInfo("inactive"),
+            ));
+          },
+          ownerStatus: () => "different-or-dead",
+          terminateOwner: () => {
+            throw new Error("deletion reproof must never signal");
+          },
+          cdpEndpointStatus: (cdpUrl) => {
+            expect(cdpUrl).toBe(fixture.cdpUrl);
+            endpointRefusals += 1;
+            return Promise.resolve("unavailable");
+          },
+        },
+      )).toEqual(fixture.resource);
+      expect(sessionReads).toBe(2);
+      expect(endpointRefusals).toBe(6);
+      expect(temporaryConfig).not.toBeNull();
+      expect(existsSync(temporaryConfig!)).toBeFalse();
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("fails closed at every partial-root deletion reproof boundary", async () => {
+    const changedRoot = createPinnedBrowserRecoveryFixture();
+    rmSync(changedRoot.artifactsDirectory, { recursive: true });
+    rmSync(changedRoot.socketDirectory, { recursive: true });
+    writeFileSync(changedRoot.socketDirectory, "replacement", { mode: 0o600 });
+    try {
+      expect(await rejectionMessage(
+        reproveBrowserCleanupAfterArtifactsRemoval(changedRoot.resource),
+      )).toContain("roots changed");
+    } finally {
+      changedRoot.cleanup();
+    }
+
+    const liveOwner = createPinnedBrowserRecoveryFixture();
+    rmSync(liveOwner.artifactsDirectory, { recursive: true });
+    try {
+      expect(await rejectionMessage(
+        reproveBrowserCleanupAfterArtifactsRemoval(liveOwner.resource, {
+          ownerStatus: () => "exact-live-owner",
+        }),
+      )).toContain("owner is not quiescent");
+    } finally {
+      liveOwner.cleanup();
+    }
+
+    const activeSession = createPinnedBrowserRecoveryFixture();
+    const prepared = parseBrowserCleanupResourceIdentity({
+      ...activeSession.resource,
+      phase: "prepared",
+      control: null,
+    }) as BrowserCleanupResourceIdentityV2;
+    rmSync(activeSession.artifactsDirectory, { recursive: true });
+    try {
+      expect(await rejectionMessage(
+        reproveBrowserCleanupAfterArtifactsRemoval(prepared, {
+          runCommand: () => Promise.resolve(activeSession.commandResult(
+            activeSession.sessionInfo("launched"),
+          )),
+        }),
+      )).toContain("remained active");
+    } finally {
+      activeSession.cleanup();
+    }
+
+    const liveEndpoint = createPinnedBrowserRecoveryFixture();
+    rmSync(liveEndpoint.artifactsDirectory, { recursive: true });
+    try {
+      expect(await rejectionMessage(
+        reproveBrowserCleanupAfterArtifactsRemoval(liveEndpoint.resource, {
+          ownerStatus: () => "different-or-dead",
+          cdpEndpointStatus: () => Promise.resolve("available"),
+        }),
+      )).toContain("endpoint refusal is unproved");
+    } finally {
+      liveEndpoint.cleanup();
+    }
+
+    const launchIntent = createPinnedBrowserRecoveryFixture();
+    const unpinned = parseBrowserCleanupResourceIdentity({
+      ...launchIntent.resource,
+      phase: "launch-intent",
+      control: null,
+    }) as BrowserCleanupResourceIdentityV2;
+    try {
+      expect(await rejectionMessage(
+        refreshBrowserCleanupResourceQuiescence(unpinned),
+      )).toContain("not durably controlled");
+      rmSync(launchIntent.artifactsDirectory, { recursive: true });
+      expect(await rejectionMessage(
+        reproveBrowserCleanupAfterArtifactsRemoval(unpinned),
+      )).toContain("ineligible");
+    } finally {
+      launchIntent.cleanup();
     }
   });
 

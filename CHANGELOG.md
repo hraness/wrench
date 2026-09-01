@@ -11,6 +11,12 @@ coordinate that completed both checks.
   25000-unit bound without truncation. Bind long-form text from `note_tweet`
   when CreateTweet returns a short `full_text` preview. Thread and reply item
   caps stay 280.
+- Recover an orphaned same-boot browser session through a durable doctor lease
+  bound to its exact daemon start identity, launch, CDP endpoint, and private
+  root generations. Prepared, launch-intent, quiescent, and per-root removal
+  phases make close, TERM, and deletion recovery crash-resumable. Changed or
+  unprovable state remains fail-closed without making reboot part of the
+  recovery contract.
 - Return a bound `cleanup-required` result when durable realm admission blocks
   an R1 read before dispatch. JSON callers retain the no-retry category while
   the cleanup-unsafe claim remains fail-closed.
