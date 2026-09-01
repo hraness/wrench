@@ -1849,12 +1849,17 @@ code:not(pre code) {
   --accent: #9a5d16;
   --accent-bright: #d99a4a;
   --accent-soft: #eee0cb;
+  --primary: var(--accent);
+  --inverse: var(--dark-background);
+  --inverse-foreground: var(--dark-foreground);
   --dark-background: #0b0b0e;
   --dark-surface: #111115;
   --dark-foreground: #f4f1e8;
   --dark-muted: #aaa6a0;
   --dark-line: #302e33;
   --font-serif: ui-serif, "Iowan Old Style", Baskerville, "Times New Roman", serif;
+  --font-text: var(--font-sans);
+  --font-heading: var(--font-serif);
   --page-inline: clamp(1.25rem, 4vw, 4rem);
   --section-block: clamp(4rem, 8vw, 7.5rem);
   --radius-sm: 0.2rem;
@@ -1988,12 +1993,6 @@ body {
   max-width: 37rem;
 }
 
-.hero-install-panel {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: clamp(1.5rem, 3vw, 2.25rem);
-}
-
 .skill-install {
   margin: 0;
   max-width: none;
@@ -2017,41 +2016,9 @@ body {
   color: var(--foreground);
 }
 
-.skill-install-note,
-.hero-local-install > p:last-child {
+.skill-install-note {
   color: var(--muted);
   font-size: 0.9rem;
-}
-
-.hero-local-install {
-  border-top: 1px solid var(--line);
-  margin-top: 1.75rem;
-  padding-top: 1.75rem;
-}
-
-.hero-local-install ol {
-  list-style: none;
-  margin: 0.8rem 0 1.1rem;
-  padding: 0;
-}
-
-.hero-local-install li {
-  align-items: baseline;
-  border-top: 1px solid var(--line);
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: 2rem minmax(0, 1fr);
-  padding: 0.9rem 0;
-}
-
-.hero-local-install li:last-child {
-  border-bottom: 1px solid var(--line);
-}
-
-.hero-local-install li > span {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
 }
 
 .action-row {
@@ -2407,9 +2374,6 @@ body {
     max-width: 14ch;
   }
 
-  .hero-install-panel {
-    max-width: 46rem;
-  }
 }
 
 @media (max-width: 45rem) {
@@ -2517,5 +2481,95 @@ body {
 @media (pointer: coarse) {
   .wrench-ask-ai [data-slot="ask-ai-about-this-link"] {
     min-height: 3rem;
+  }
+}
+
+/* Wrench maps the shared Hraness product-marketing grammar to its editorial identity. */
+.wrench-product-hero {
+  --hraness-marketing-action-radius: var(--radius-sm);
+  max-width: 80rem;
+}
+
+.hero .hraness-marketing-hero__copy {
+  padding-block: 0;
+}
+
+.hero .hraness-marketing-hero__heading {
+  font-weight: 400;
+}
+
+.hero .hraness-marketing-proof {
+  --hraness-marketing-inverse: var(--dark-background);
+  --hraness-marketing-inverse-ink: var(--dark-foreground);
+  border-color: var(--dark-line);
+}
+
+.hero .hraness-marketing-facts {
+  margin-top: clamp(1.25rem, 3vw, 2.5rem);
+}
+
+.start-section.hraness-marketing-install {
+  --hraness-marketing-action-radius: var(--radius-sm);
+  margin-block: var(--section-block);
+  padding: clamp(1.5rem, 4vw, 2.75rem);
+}
+
+.start-section .hraness-marketing-install__commands {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.install-summary {
+  color: var(--muted);
+  margin: 0;
+  max-width: 54rem;
+}
+
+.start-section .skill-install {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 1.5rem;
+}
+
+.section.hraness-marketing-interfaces,
+.section.hraness-marketing-trust,
+.section.hraness-marketing-questions {
+  padding-block: var(--section-block);
+}
+
+.hraness-marketing-interface pre {
+  background: var(--dark-background);
+  border: 1px solid var(--dark-line);
+  color: var(--dark-foreground);
+  font-size: 0.75rem;
+  padding: 1rem;
+}
+
+.faq-section .faq-list {
+  margin-top: 0;
+  max-width: none;
+}
+
+.faq-section .hraness-marketing-question__answer {
+  padding-bottom: 1.25rem;
+}
+
+.section.final-section.hraness-marketing-cta {
+  --hraness-marketing-inverse: var(--dark-background);
+  --hraness-marketing-inverse-ink: var(--dark-foreground);
+  align-items: start;
+  border: 1px solid var(--dark-line);
+  display: grid;
+  margin-block: var(--section-block);
+  padding: clamp(2rem, 6vw, 5rem);
+}
+
+.final-section .hraness-marketing-cta__heading {
+  margin: 0;
+}
+
+@media (max-width: 48rem) {
+  .wrench-product-hero,
+  .start-section.hraness-marketing-install {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

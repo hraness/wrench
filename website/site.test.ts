@@ -248,7 +248,7 @@ describe("wrench.rip static site", () => {
     expect(html).not.toContain("@jungle/");
     expect(html).not.toContain("hraness.com/wrench");
     expect(html.match(/<h1\b/gu)).toHaveLength(1);
-    expect(html.match(/<details>/gu)).toHaveLength(5);
+    expect(html.match(/<details\b/gu)).toHaveLength(5);
     expect(html).toContain('class="table-scroll" role="region" tabindex="0"');
     expect(html).toContain('<a class="skip-link" href="#main">');
     expect(html.match(/data-analytics-event="project link opened"/gu)).toHaveLength(2);
@@ -285,6 +285,14 @@ describe("wrench.rip static site", () => {
     expect(html.indexOf(argumentsSection ?? "")).toBeLessThan(html.indexOf(guidesSection ?? ""));
     expect(html).toContain("Give your coding agent bounded access to the web.");
     expect(html).toContain("Work with the services you already use.");
+    expect(html).toContain('data-hraness-marketing="hero"');
+    expect(html).toContain('data-hraness-marketing="install"');
+    expect(html).toContain('data-hraness-marketing="interfaces"');
+    expect(html).toContain('data-hraness-marketing="trust"');
+    expect(html).toContain('data-hraness-marketing="questions"');
+    expect(html).toContain('data-hraness-marketing="cta"');
+    expect(html).toContain("The same boundary from three surfaces.");
+    expect(html).toContain('import { isProviderPluginId } from "@hraness/wrench"');
     expect(html).toContain('class="wordmark" href="/">Wrench</a>');
     expect(html).not.toMatch(/hero-field|hero-orbit|hero-glyph/u);
     expect(html).not.toMatch(/observed provider operations|capture-required|unavailable reservations/iu);
@@ -371,6 +379,7 @@ describe("wrench.rip static site", () => {
     expect(sourceCss).toContain("@media (forced-colors: active)");
     expect(sourceCss).not.toContain(".footer {");
     expect(builtCss).toContain(".hraness-site-footer {");
+    expect(builtCss).toContain(".hraness-marketing-hero {");
     expect(builtCss).toContain("@media (pointer: coarse)");
     for (const css of [sourceCss, builtCss]) {
       const providerMarkDisplay = cssPropertyValues(css, ".provider-mark", "display");

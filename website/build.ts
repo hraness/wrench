@@ -208,6 +208,9 @@ const outputRoot = join(websiteRoot, "dist");
 const designKitFontsStylesPath = fileURLToPath(
   import.meta.resolve("@hraness/design-kit/fonts.css"),
 );
+const designKitProductMarketingStylesPath = fileURLToPath(
+  import.meta.resolve("@hraness/design-kit/product-marketing.css"),
+);
 const designKitFontsDirectory = join(dirname(designKitFontsStylesPath), "fonts");
 
 const supportedPostHogHosts = new Set([
@@ -684,6 +687,7 @@ export async function buildWebsite(
     llmsTemplate,
     css,
     designKitFontsCss,
+    designKitProductMarketingCss,
     hranessSiteFooterCss,
     analyticsBuild,
     skillInstallBuild,
@@ -697,6 +701,7 @@ export async function buildWebsite(
     readFile(join(sourceRoot, "llms.txt"), "utf8"),
     readFile(join(sourceRoot, "styles.css"), "utf8"),
     readFile(designKitFontsStylesPath, "utf8"),
+    readFile(designKitProductMarketingStylesPath, "utf8"),
     readFile(
       fileURLToPath(import.meta.resolve("@hraness/site-footer/styles.css")),
       "utf8",
@@ -734,7 +739,7 @@ export async function buildWebsite(
     );
   }
   const postHog = postHogEnvironment(environment);
-  const compiledCss = `${designKitFontsCss.trim()}\n\n${css.trimEnd()}\n\n${hranessSiteFooterCss.trim()}\n`;
+  const compiledCss = `${designKitFontsCss.trim()}\n\n${designKitProductMarketingCss.trim()}\n\n${css.trimEnd()}\n\n${hranessSiteFooterCss.trim()}\n`;
   const cssAsset = `/assets/styles-${contentHash(compiledCss)}.css`;
   const analyticsAsset = `/assets/analytics-${contentHash(analytics)}.js`;
   const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
