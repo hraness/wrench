@@ -37,14 +37,15 @@ verified SHA without executing tagged code, and then performs the leased push.
 The current-main workflow source must descend
 from that release commit; canonical npm, the peeled tag, and the immutable
 Latest GitHub Release must agree on the release identity. A missing branch is a hard
-failure; neither workflow recreates it. The live no-bypass ruleset currently
-protects deletion and non-fast-forward movement. The App-only update rule,
-creation rule, writer environment, and canary proof remain pending live
-reconciliation. The provisional contents-only App remains inactive until
-privileged setup proves its installation selects only Wrench and an exact
-workflow-changing `P` to `C` canary proves the leased push. Any proven need for
-Workflows permission requires a separate reviewed amendment and repeated
-canary. On a production deployment,
+failure; neither workflow recreates it. One live no-bypass ruleset protects
+creation, deletion, and non-fast-forward movement on the production and canary
+refs. A second no-bypass update rule freezes both refs until the dedicated App
+bypass is installed and proven. The Wrench-only App and reviewer-gated writer
+environment use exactly `metadata:read`, `contents:write`, and
+`workflows:write`; workflows write is required for admitted commits that change
+checked workflow files. They remain inactive until privileged setup proves the
+installation selects only Wrench and an exact workflow-changing `P` to `C`
+canary proves the leased push. On a production deployment,
 `website:vercel-build` independently verifies checked-out HEAD, the matching
 GitHub tag commit, canonical npm, and the immutable Latest Release before building.
 Preview and local builds perform no external release verification.

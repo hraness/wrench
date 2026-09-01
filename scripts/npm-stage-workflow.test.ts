@@ -2149,12 +2149,12 @@ fi
     }
     expect(workflow).not.toContain("WRENCH_RELEASE_APP_RULESET");
     expect(appHelper).toContain("repository_ids: Object.freeze([WRENCH_REPOSITORY_ID])");
-    expect(appHelper).toContain('permissions: Object.freeze({ contents: "write", metadata: "read" })');
+    expect(appHelper).toContain('["contents", "metadata", "workflows"]');
+    expect(appHelper).toContain('workflows: "write"');
     expect(appHelper).toContain("MAX_RESPONSE_BYTES = 1024 * 1024");
     expect(appHelper).toContain("response.body.getReader()");
     expect(appHelper).not.toContain("response.arrayBuffer()");
     expect(appHelper).not.toContain("administration");
-    expect(appHelper).not.toContain("workflows");
     expect(writerHelper).toContain(
       '`--force-with-lease=${PRODUCTION_REF}:${expectedOld}`',
     );
@@ -2220,7 +2220,7 @@ fi
     const configuration = parseReleaseAppConfiguration(environment);
     expect(configuration.repositoryId).toBe(1_316_443_113);
     expect(releaseAppTokenRequestBody()).toEqual({
-      permissions: { contents: "write", metadata: "read" },
+      permissions: { contents: "write", metadata: "read", workflows: "write" },
       repository_ids: [1_316_443_113],
     });
 
@@ -2250,7 +2250,7 @@ fi
       client_id: configuration.clientId,
       id: configuration.appId,
       owner: { login: "hraness", type: "Organization" },
-      permissions: { contents: "write", metadata: "read" },
+      permissions: { contents: "write", metadata: "read", workflows: "write" },
       slug: configuration.appSlug,
     };
     const installation = {
@@ -2258,14 +2258,14 @@ fi
       app_id: configuration.appId,
       app_slug: configuration.appSlug,
       id: configuration.installationId,
-      permissions: { contents: "write", metadata: "read" },
+      permissions: { contents: "write", metadata: "read", workflows: "write" },
       repository_selection: "selected",
       target_type: "Organization",
     };
     const token = "ghs_exact-wrench-release-token";
     const response = {
       expires_at: "2026-08-30T02:00:00Z",
-      permissions: { contents: "write", metadata: "read" },
+      permissions: { contents: "write", metadata: "read", workflows: "write" },
       repositories: [{
         full_name: providerRepository,
         id: WRENCH_REPOSITORY_ID,
@@ -2277,12 +2277,31 @@ fi
     };
     expect(() => parseReleaseAppIdentity(appIdentity, configuration)).not.toThrow();
     expect(() => parseReleaseAppInstallation(installation, configuration)).not.toThrow();
+    for (const permissions of [
+      { contents: "write", metadata: "read" },
+      { contents: "write", metadata: "read", workflows: "read" },
+      {
+        administration: "write",
+        contents: "write",
+        metadata: "read",
+        workflows: "write",
+      },
+    ] as const) {
+      expect(() => parseReleaseAppIdentity(
+        { ...appIdentity, permissions },
+        configuration,
+      )).toThrow();
+      expect(() => parseReleaseAppInstallation(
+        { ...installation, permissions },
+        configuration,
+      )).toThrow();
+    }
     expect(parseReleaseAppTokenResponse(
       response,
       "Sun, 30 Aug 2026 01:00:00 GMT",
     )).toEqual({
       expiresAt: "2026-08-30T02:00:00Z",
-      permissions: { contents: "write", metadata: "read" },
+      permissions: { contents: "write", metadata: "read", workflows: "write" },
       repositoryId: WRENCH_REPOSITORY_ID,
       token,
     });
@@ -2293,7 +2312,7 @@ fi
       single_file_paths: [],
     }, "Sun, 30 Aug 2026 01:00:00 GMT")).toEqual({
       expiresAt: "2026-08-30T02:00:00Z",
-      permissions: { contents: "write", metadata: "read" },
+      permissions: { contents: "write", metadata: "read", workflows: "write" },
       repositoryId: WRENCH_REPOSITORY_ID,
       token,
     });
@@ -2359,7 +2378,10 @@ fi
       mask() {},
       async mint() {
         return {
-          body: { ...response, permissions: { contents: "read", metadata: "read" } },
+          body: {
+            ...response,
+            permissions: { contents: "read", metadata: "read", workflows: "write" },
+          },
           serverDate: "Sun, 30 Aug 2026 01:00:00 GMT",
         };
       },
@@ -2407,7 +2429,17 @@ fi
     }
 
     for (const invalid of [
-      { ...response, permissions: { contents: "write", metadata: "read", workflows: "write" } },
+      { ...response, permissions: { contents: "write", metadata: "read" } },
+      { ...response, permissions: { contents: "write", metadata: "read", workflows: "read" } },
+      {
+        ...response,
+        permissions: {
+          administration: "write",
+          contents: "write",
+          metadata: "read",
+          workflows: "write",
+        },
+      },
       { ...response, repository_selection: "all" },
       { ...response, repositories: [] },
       { ...response, repositories: [{ ...response.repositories[0], id: 1 }] },
@@ -4681,17 +4713,18 @@ fi
       "For the one-time\nmigration only",
       "never bootstrap it from `main`",
       "exception must never be repeated",
-      "active ruleset `21832074` only to\n`refs/heads/website-production`",
+      "Live ruleset `21832074` targets exactly `refs/heads/website-production` and\n`refs/heads/website-production-canary`",
       "`current_user_can_bypass=never`",
-      "exact `deletion` and `non_fast_forward`\nrules",
-      "does not restrict ordinary fast-forward\nupdates, protect creation, prove a dedicated writer, or provide canary evidence",
-      "dedicated App installation, `production-ref-writer-key` environment",
-      "App-only update rule, creation rule, persistent canary",
+      "exact creation, deletion, and\nnon-fast-forward rules",
+      "Live ruleset `21887484` targets the same refs with one\nupdate restriction and no bypass actors",
+      "freeze both refs against\ncreation, deletion, non-fast-forward movement, and ordinary updates",
+      "dedicated App installation and\n`production-ref-writer-key` environment exist",
+      "App-only update bypass\nand positive and negative canary proofs remain mandatory",
       "GitHub Actions App Integration 15368 is not the production writer",
-      "Live Protect-main ruleset `20921911` still\ncarries an OrganizationAdmin `always` bypass",
+      "Live Protect-main ruleset `20921911` has no\nbypass actors",
       "assigns source ownership and notification",
       "does not claim live or\nindependent review enforcement",
-      "remove that\nbypass while retaining the pull-request path and exact Required integration\ncheck",
+      "retains the pull-request path and exact Required integration\ncheck",
       "`require_code_owner_review` must remain `false`",
       "until a second eligible independent code owner exists",
       "Repository Actions\ndefault to read",
@@ -4713,12 +4746,12 @@ fi
       "no environment admission, App variable, private key, token mint, or Git\npush",
       "`production-ref-writer-key`, configured with\n`deployment: false`",
       "require reviewer `0thernet`, disable\nadmin bypass, set `prevent_self_review=false`",
-      "provisional source and initial App registration close to exactly\n`metadata:read` and `contents:write`",
-      "with no Administration permission",
-      "runtime token proof does not prove\nthe installation-wide selected-repository set",
-      "exhaustively read every repository selected for the\ninstallation",
-      "contents-only permission set is provisional",
-      "`P` to `C`\ntransition on persistent ref `refs/heads/website-production-canary`",
+      "App\nregistration and every minted token close to exactly `metadata:read`,\n`contents:write`, and `workflows:write`",
+      "with no Administration or other\npermission",
+      "Workflows write is required because an admitted fast-forward may\nintroduce reviewed `.github/workflows` changes",
+      "That runtime token\nproof does not prove the installation-wide selected-repository set",
+      "privileged setup must exhaustively read every repository\nselected for the installation",
+      "exact permission set remains unready until one `P` to `C` transition on\npersistent ref `refs/heads/website-production-canary`",
       "Create\nthat canary ref once at `P` before its creation rule becomes active",
       "transition is single-use",
       "must never be reset,\ndeleted, or repurposed",
@@ -4727,8 +4760,6 @@ fi
       "must be removed after its exact run, ref, ruleset,",
       "production helper remains hard-bound to `website-production`",
       "`C` contains the real workflow-file changes",
-      "add exactly `workflows:write`",
-      "complete canary must run again",
       "`--force-with-lease=refs/heads/website-production:<expected-old>`",
       "first fetches only the verified tag through the fixed HTTPS",
       "peels that fetched object locally",
@@ -4815,8 +4846,9 @@ fi
     expect(agents).toContain("explicit `--force-with-lease=refs/heads/website-production:<expected-old>`");
     expect(agents).toContain("Fetch only the exact verified tag through the private askpass token");
     expect(agents).toContain("without executing tagged code");
-    expect(agents).toContain("provisional source and initial App registration must close to exactly `metadata:read` and `contents:write`");
-    expect(agents).toContain("with no Administration permission");
+    expect(agents).toContain("App registration and every minted token must close to exactly `metadata:read`, `contents:write`, and `workflows:write`");
+    expect(agents).toContain("with no Administration or other permission");
+    expect(agents).toContain("Workflows write is required because an admitted fast-forward may introduce reviewed `.github/workflows` changes");
     expect(agents).toContain("privileged setup must separately enumerate the installation-wide selected-repository set");
     expect(agents).toContain("`prevent_self_review=false`");
     expect(agents).toContain("one exact `P` to `C` transition on persistent ref `refs/heads/website-production-canary`");
@@ -4824,8 +4856,8 @@ fi
     expect(agents).toContain("Mirror the production lifecycle and App-only update rules exactly");
     expect(agents).toContain("separately reviewed temporary current-main source");
     expect(agents).toContain("Keep the production helper hard-bound to `website-production`");
-    expect(agents).toContain("add exactly `workflows:write` before repeating the complete canary");
-    expect(agents).not.toContain("Never grant that App Administration or Workflows permission");
+    expect(agents).not.toContain("provisional source and initial App registration");
+    expect(agents).not.toContain("contents-only writer");
     expect(agents).toContain("Require bounded read-only jobs");
     expect(agents).toContain("complete current state and `latestStatus` of at most 500");
     expect(agents).toContain("exhaustively audit only the pinned candidate's REST status history");
@@ -4840,10 +4872,11 @@ fi
     expect(agents).toContain("a missing production branch is a hard failure");
     expect(agents).toContain("Vercel's Production Branch on `website-production`");
     expect(agents).toContain("documented one-time Vercel bootstrap");
-    expect(agents).toContain("Live ruleset `21832074` currently supplies no-bypass deletion and non-fast-forward protection only");
-    expect(agents).toContain("do not claim the dedicated App environment, creation rule, App-only update rule, or persistent canary is active");
+    expect(agents).toContain("Live ruleset `21832074` supplies no-bypass creation, deletion, and non-fast-forward protection");
+    expect(agents).toContain("Live ruleset `21887484` currently supplies a no-bypass update freeze");
+    expect(agents).toContain("it is not the App exception until the exact App bypass and canary evidence are complete");
     expect(agents).toContain("Checked-in `CODEOWNERS` supplies ownership and notification only");
-    expect(agents).toContain("remove the Protect-main OrganizationAdmin bypass while retaining pull-request admission and the exact Required CI check");
+    expect(agents).toContain("Protect-main has no bypass actors and retains pull-request admission plus the exact Required CI check");
     expect(agents).toContain("`require_code_owner_review=false` until a second eligible independent code owner exists");
     expect(agents).toContain("`main` and pull requests are preview sources");
     expect(websiteAgents).toContain("tag Release workflow may only create or verify the immutable Latest Release");
@@ -4860,17 +4893,19 @@ fi
     expect(websiteAgents).toContain("absolute observation slots at minute offsets zero through 19");
     expect(websiteAgents).toContain("`[start, deadline)` provider window");
     expect(websiteAgents).toContain("charge API latency without sliding those slots");
-    expect(websiteAgents).toContain("App's initial provisional permission configuration must have exactly `metadata:read` and `contents:write`");
-    expect(websiteAgents).not.toContain("the App must have exactly `metadata:read` and `contents:write`");
-    expect(websiteAgents).toContain("initial `metadata:read` and `contents:write` App permission set as provisional");
+    expect(websiteAgents).toContain("App and each minted token must have exactly `metadata:read`, `contents:write`, and `workflows:write`");
+    expect(websiteAgents).toContain("Keep the App and minted token permission set exact at `metadata:read`, `contents:write`, and `workflows:write`");
+    expect(websiteAgents).toContain("Workflows write is required because an admitted fast-forward may introduce reviewed `.github/workflows` changes");
     expect(websiteAgents).toContain("privileged setup separately proves that the installation-wide selected-repository set contains only Wrench");
     expect(websiteAgents).toContain("`prevent_self_review=false`");
     expect(websiteAgents).toContain("one single-use `P` to `C` transition on persistent ref `refs/heads/website-production-canary`");
-    expect(websiteAgents).toContain("never reset/delete/repurpose it");
+    expect(websiteAgents).toContain("never reset, delete, or repurpose it");
     expect(websiteAgents).toContain("rules that exactly mirror production");
     expect(websiteAgents).toContain("remove the separately reviewed temporary canary workflow after the proof");
     expect(websiteAgents).toContain("keep the production helper hard-bound to `website-production`");
-    expect(websiteAgents).toContain("separate reviewed source and App-registration amendment to exactly `workflows:write`");
+    expect(websiteAgents).toContain("Live lifecycle rules cover creation, deletion, and non-fast-forward movement on production and canary");
+    expect(websiteAgents).toContain("A separate no-bypass update rule freezes both refs");
+    expect(websiteAgents).not.toContain("initial provisional permission configuration");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
     expect(websiteAgents).toContain("token revocation and exact ref readback");
@@ -4884,11 +4919,13 @@ fi
     expect(websiteReadme).toContain("fetches only the verified\ntag into its depth-one current-main checkout");
     expect(websiteReadme).toContain("without executing tagged code");
     expect(websiteReadme).toContain("current-main workflow source must descend\nfrom that release commit");
-    expect(websiteReadme).toContain("live no-bypass ruleset currently\nprotects deletion and non-fast-forward movement");
-    expect(websiteReadme).toContain("App-only update rule,\ncreation rule, writer environment, and canary proof remain pending live\nreconciliation");
-    expect(websiteReadme).toContain("provisional contents-only App remains inactive");
-    expect(websiteReadme).toContain("privileged setup proves its installation selects only Wrench");
-    expect(websiteReadme).toContain("workflow-changing `P` to `C` canary");
+    expect(websiteReadme).toContain("live no-bypass ruleset protects\ncreation, deletion, and non-fast-forward movement on the production and canary\nrefs");
+    expect(websiteReadme).toContain("second no-bypass update rule freezes both refs");
+    expect(websiteReadme).toContain("Wrench-only App and reviewer-gated writer\nenvironment use exactly `metadata:read`, `contents:write`, and\n`workflows:write`");
+    expect(websiteReadme).toContain("workflows write is required for admitted commits that change\nchecked workflow files");
+    expect(websiteReadme).toContain("remain inactive until privileged setup proves the\ninstallation selects only Wrench");
+    expect(websiteReadme).toContain("workflow-changing `P` to `C`\ncanary");
+    expect(websiteReadme).not.toContain("provisional contents-only App");
     expect(websiteReadme).toContain("A missing branch is a hard\nfailure");
     expect(websiteReadme).toContain("neither workflow recreates it");
     expect(websiteReadme).not.toContain("creates or fast-forwards");
