@@ -944,6 +944,18 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).toContain("versioned Message Like Me and contact-interaction exports");
     expect(beeper?.html).toContain("It wraps only the actions listed for this release");
     expect(beeper?.html).toContain(`all ${beeperFacts.cliCommandCount} public manual command paths`);
+    expect(beeper?.html).toContain("messages.delete");
+    expect(beeper?.html).toContain("fall back to deletion for only the authenticated user");
+    expect(beeper?.html).toContain("returns a void success response");
+    expect(beeper?.html).toContain("never dispatches this action");
+    expect(beeper?.html).toContain("media.download");
+    expect(beeper?.html).toContain("buffers the complete media body to stdout");
+    expect(beeper?.html).toContain("no reviewed finite supervisor and proven termination contract");
+    expect(beeper?.html).toContain("top-level CLI export is internal-only");
+    expect(beeper?.html).toContain("--no-attachments");
+    expect(beeper?.html).toContain('href="https://developers.beeper.com/desktop-api/"');
+    expect(beeper?.html).toContain("sending too many messages may result in suspension");
+    expect(beeper?.html).toContain("network's throttling, automation, or suspension rules");
     expect(beeper?.html).toContain("These workflows are not part of the 32 supported actions");
     expect(beeper?.html).not.toMatch(/all Beeper (?:CLI )?features/iu);
     expect(beeper?.html).not.toMatch(/all (?:your )?chats/iu);
