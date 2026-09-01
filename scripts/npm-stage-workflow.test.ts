@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, verify } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -48,6 +49,34 @@ import {
   verifiedReleaseFetchArguments,
   websiteProductionPushArguments,
 } from "./release-ref-writer.mjs";
+import {
+  advanceCanaryRef,
+  assertCanaryGitTopology,
+  assertRevokedTokenCannotBeReused,
+  CANARY_EVIDENCE_LOG_MARKER,
+  CANARY_START_SENTINEL,
+  CANARY_TARGET_SENTINEL,
+  canaryEvidenceLogLine,
+  canaryPushArguments,
+  decodeCanaryEvidence,
+  decodeCanaryReceipt,
+  encodeCanaryEvidence,
+  encodeCanaryReceipt,
+  fixedCanaryCoordinate,
+  parseApplicableRules,
+  parseCanaryCoordinate,
+  parseCanaryEvidenceLog,
+  parseCanaryInvocation,
+  parseGitHubServerTimestamp,
+  parseProductionApplicableRules,
+  parseRuleset,
+  parseRulesetTimestamp,
+  parseRulesetTimestampFingerprint,
+  parseSingleCanaryRun,
+  preflightCanary,
+  proveCanary,
+  publishCanaryEvidence,
+} from "./release-app-canary.mjs";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
 const ciWorkflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
@@ -56,10 +85,15 @@ const websiteProductionWorkflowUrl = new URL(
   "../.github/workflows/website-production.yml",
   import.meta.url,
 );
+const releaseAppCanaryWorkflowUrl = new URL(
+  "../.github/workflows/release-app-canary.yml",
+  import.meta.url,
+);
 const codeownersUrl = new URL("../.github/CODEOWNERS", import.meta.url);
 const workflowsUrl = new URL("../.github/workflows/", import.meta.url);
 const releaseAppTokenHelperUrl = new URL("./release-app-token.mjs", import.meta.url);
 const releaseRefWriterHelperUrl = new URL("./release-ref-writer.mjs", import.meta.url);
+const releaseAppCanaryHelperUrl = new URL("./release-app-canary.mjs", import.meta.url);
 const providerOutcomeHelperUrl = new URL("./release-provider-outcome.mjs", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
@@ -119,6 +153,19 @@ async function run(command: readonly string[], cwd: string): Promise<void> {
   const child = Bun.spawn([...command], { cwd, stderr: "inherit", stdout: "inherit" });
   const exitCode = await child.exited;
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
+}
+
+async function runOutput(command: readonly string[], cwd: string): Promise<string> {
+  const child = Bun.spawn([...command], { cwd, stderr: "pipe", stdout: "pipe" });
+  const [exitCode, stderr, stdout] = await Promise.all([
+    child.exited,
+    new Response(child.stderr).text(),
+    new Response(child.stdout).text(),
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`${command.join(" ")} failed with ${String(exitCode)}: ${stderr.trim()}`);
+  }
+  return stdout;
 }
 
 function sha1(bytes: Uint8Array): string {
@@ -4941,6 +4988,1022 @@ fi
     expect(skillInstallGuide).toContain("If the coordinate is not public, stop");
     expect(readme).not.toContain("not currently published on npm");
     expect(readme).not.toContain("registries are not supported install paths");
+  });
+});
+
+describe("single-use release App canary", () => {
+  const startSha = "a".repeat(40);
+  const targetSha = "b".repeat(40);
+  const baselineSha = "c".repeat(40);
+  const workflowSha = "d".repeat(40);
+  const lifecycleRulesetId = 500;
+  const updateRulesetId = 501;
+  const productionFreezeRulesetId = 502;
+  const rulesetCreatedAt = "2026-08-29T21:20:47.112-04:00";
+  const providerUpdatedAt = "2026-08-30T19:58:27.117-04:00";
+  const lifecycleUpdatedAt = "2026-08-30T23:58:27.117Z";
+  const updateUpdatedAt = "2026-08-30T23:58:27.117Z";
+  const productionFreezeUpdatedAt = "2026-08-30T23:58:28.117Z";
+
+  function canaryEnvironment(sha = workflowSha): Record<string, string> {
+    return {
+      GITHUB_ACTOR: "0thernet",
+      GITHUB_ACTOR_ID: "894119",
+      GITHUB_API_URL: "https://api.github.com",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_REF_PROTECTED: "true",
+      GITHUB_REPOSITORY: "hraness/wrench",
+      GITHUB_REPOSITORY_ID: "1316443113",
+      GITHUB_REPOSITORY_OWNER: "hraness",
+      GITHUB_RUN_ATTEMPT: "1",
+      GITHUB_RUN_ID: "33299900001",
+      GITHUB_SHA: sha,
+      GITHUB_TRIGGERING_ACTOR: "0thernet",
+      GITHUB_WORKFLOW: "Prove release App canary",
+      GITHUB_WORKFLOW_REF:
+        "hraness/wrench/.github/workflows/release-app-canary.yml@refs/heads/main",
+      GITHUB_WORKFLOW_SHA: sha,
+      WRENCH_RELEASE_APP_ID: "700",
+      WRENCH_RELEASE_LIFECYCLE_RULESET_ID: String(lifecycleRulesetId),
+      WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT: lifecycleUpdatedAt,
+      WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID: String(productionFreezeRulesetId),
+      WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT: productionFreezeUpdatedAt,
+      WRENCH_RELEASE_UPDATE_RULESET_ID: String(updateRulesetId),
+      WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT: updateUpdatedAt,
+    };
+  }
+
+  function applicableRules(): ReadonlyArray<Record<string, unknown>> {
+    const common = {
+      ruleset_source: "hraness/wrench",
+      ruleset_source_type: "Repository",
+    } as const;
+    return [
+      { ...common, ruleset_id: lifecycleRulesetId, type: "creation" },
+      { ...common, ruleset_id: lifecycleRulesetId, type: "deletion" },
+      { ...common, ruleset_id: lifecycleRulesetId, type: "non_fast_forward" },
+      {
+        ...common,
+        ruleset_id: updateRulesetId,
+        type: "update",
+      },
+    ];
+  }
+
+  function productionApplicableRules(): ReadonlyArray<Record<string, unknown>> {
+    const common = {
+      ruleset_source: "hraness/wrench",
+      ruleset_source_type: "Repository",
+    } as const;
+    return [
+      ...applicableRules(),
+      { ...common, ruleset_id: productionFreezeRulesetId, type: "creation" },
+      { ...common, ruleset_id: productionFreezeRulesetId, type: "deletion" },
+      { ...common, ruleset_id: productionFreezeRulesetId, type: "non_fast_forward" },
+      { ...common, ruleset_id: productionFreezeRulesetId, type: "update" },
+    ];
+  }
+
+  function workflowRunHistory(sha = workflowSha, count = 1): Record<string, unknown> {
+    const run = {
+      actor: { id: 894119, login: "0thernet", type: "User" },
+      event: "workflow_dispatch",
+      head_branch: "main",
+      head_sha: sha,
+      id: 33299900001,
+      path: ".github/workflows/release-app-canary.yml",
+      repository: { full_name: "hraness/wrench", id: 1316443113 },
+      run_attempt: 1,
+      status: "in_progress",
+      triggering_actor: { id: 894119, login: "0thernet", type: "User" },
+      workflow_id: 900,
+    };
+    return {
+      total_count: count,
+      workflow_runs: count === 1 ? [run] : [run, { ...run, id: 33299900002 }],
+    };
+  }
+
+  function ruleset(
+    id: number,
+    kind: "freeze" | "lifecycle" | "update",
+    lifecycleOrder: readonly string[] = ["deletion", "non_fast_forward", "creation"],
+  ): Record<string, unknown> {
+    return {
+      _links: {
+        html: { href: `https://github.com/hraness/wrench/rules/${String(id)}` },
+        self: { href: `https://api.github.com/repos/hraness/wrench/rulesets/${String(id)}` },
+      },
+      conditions: {
+        ref_name: {
+          exclude: [],
+          include: [
+            ...(kind === "freeze"
+              ? ["refs/heads/website-production"]
+              : [
+                  "refs/heads/website-production",
+                  "refs/heads/website-production-canary",
+                ]),
+          ],
+        },
+      },
+      created_at: rulesetCreatedAt,
+      current_user_can_bypass: "never",
+      enforcement: "active",
+      id,
+      name: kind === "lifecycle"
+        ? "Immutable website-production lifecycle"
+        : kind === "freeze"
+          ? "Temporary website-production activation freeze"
+          : "Wrench release App update exception",
+      node_id: `RRS_fixture_${String(id)}`,
+      rules: kind === "lifecycle"
+        ? lifecycleOrder.map(type => ({ type }))
+        : kind === "freeze"
+          ? [
+              { type: "creation" },
+              { type: "deletion" },
+              { type: "non_fast_forward" },
+              { type: "update" },
+            ]
+          : [{ type: "update" }],
+      source: "hraness/wrench",
+      source_type: "Repository",
+      target: "branch",
+      updated_at: kind === "freeze"
+        ? "2026-08-30T19:58:28.117-04:00"
+        : providerUpdatedAt,
+    };
+  }
+
+  class CanaryApiFixture {
+    readonly calls: string[] = [];
+    #index = -1;
+    readonly #states: ReadonlyArray<Readonly<{
+      canarySha: string;
+      productionSha: string;
+      serverDate: string;
+      workflowSha: string;
+    }>>;
+
+    constructor(states: ReadonlyArray<Readonly<{
+      canarySha: string;
+      productionSha: string;
+      serverDate: string;
+      workflowSha: string;
+    }>>) {
+      this.#states = states;
+    }
+
+    async getWithServerDate(endpoint: string): Promise<Readonly<{
+      body: Record<string, unknown>;
+      serverDate: string;
+    }>> {
+      this.calls.push(`GET+Date ${endpoint}`);
+      this.#index += 1;
+      const state = this.#states[this.#index];
+      if (state === undefined) throw new Error("Unexpected snapshot read");
+      return {
+        body: { default_branch: "main", full_name: "hraness/wrench", id: 1316443113 },
+        serverDate: state.serverDate,
+      };
+    }
+
+    async get(endpoint: string): Promise<Record<string, unknown> | ReadonlyArray<Record<string, unknown>>> {
+      this.calls.push(`GET ${endpoint}`);
+      if (
+        endpoint === "/repos/hraness/wrench/actions/workflows/release-app-canary.yml/runs" +
+          "?event=workflow_dispatch&per_page=2"
+      ) {
+        const workflow = this.#states[Math.max(this.#index, 0)]?.workflowSha;
+        if (workflow === undefined) throw new Error("Missing workflow fixture state");
+        return workflowRunHistory(workflow);
+      }
+      const state = this.#states[this.#index];
+      if (state === undefined) throw new Error("Snapshot Date read must happen first");
+      if (endpoint === "/repos/hraness/wrench/git/ref/heads/main") {
+        return { object: { sha: state.workflowSha, type: "commit" }, ref: "refs/heads/main" };
+      }
+      if (endpoint === "/repos/hraness/wrench/git/ref/heads/website-production") {
+        return {
+          object: { sha: state.productionSha, type: "commit" },
+          ref: "refs/heads/website-production",
+        };
+      }
+      if (endpoint === "/repos/hraness/wrench/git/ref/heads/website-production-canary") {
+        return {
+          object: { sha: state.canarySha, type: "commit" },
+          ref: "refs/heads/website-production-canary",
+        };
+      }
+      if (endpoint === "/repos/hraness/wrench/rules/branches/website-production-canary") {
+        return applicableRules();
+      }
+      if (endpoint === "/repos/hraness/wrench/rules/branches/website-production") {
+        return productionApplicableRules();
+      }
+      if (endpoint === `/repos/hraness/wrench/rulesets/${String(lifecycleRulesetId)}`) {
+        return ruleset(lifecycleRulesetId, "lifecycle");
+      }
+      if (endpoint === `/repos/hraness/wrench/rulesets/${String(updateRulesetId)}`) {
+        return ruleset(updateRulesetId, "update");
+      }
+      if (endpoint === `/repos/hraness/wrench/rulesets/${String(productionFreezeRulesetId)}`) {
+        return ruleset(productionFreezeRulesetId, "freeze");
+      }
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    }
+  }
+
+  async function writeFixture(path: string, content: string): Promise<void> {
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, content);
+  }
+
+  async function createTopologyFixture(): Promise<Readonly<{
+    baselineSha: string;
+    directory: string;
+    startSha: string;
+    targetSha: string;
+    workflowSha: string;
+  }>> {
+    const directory = await mkdtemp(join(tmpdir(), "wrench-canary-topology-"));
+    await run(["git", "init", "--quiet"], directory);
+    await run(["git", "config", "user.name", "Canary Fixture"], directory);
+    await run(["git", "config", "user.email", "canary@example.invalid"], directory);
+    const baselineFiles = [
+      ".github/workflows/website-production.yml",
+      "docs/publishing.md",
+      "scripts/npm-stage-workflow.test.ts",
+    ];
+    for (const path of baselineFiles) {
+      await writeFixture(join(directory, path), `P ${path}\n`);
+    }
+    await writeFixture(
+      join(directory, "vercel.json"),
+      `${JSON.stringify({ git: { deploymentEnabled: { "website-production-canary": false } } }, null, 2)}\n`,
+    );
+    await run(["git", "add", "."], directory);
+    await run(["git", "commit", "--quiet", "-m", "P"], directory);
+    const fixtureStart = (await runOutput(["git", "rev-parse", "HEAD"], directory)).trim();
+
+    await writeFixture(
+      join(directory, ".github/workflows/website-production.yml"),
+      "C .github/workflows/website-production.yml\n",
+    );
+    await run(["git", "add", "."], directory);
+    await run(["git", "commit", "--quiet", "-m", "C"], directory);
+    const fixtureTarget = (await runOutput(["git", "rev-parse", "HEAD"], directory)).trim();
+
+    await writeFixture(join(directory, "README.md"), "B current-main baseline\n");
+    await writeFixture(
+      join(directory, "vercel.json"),
+      `${JSON.stringify({
+        git: {
+          deploymentEnabled: {
+            main: true,
+            "website-production-canary": false,
+          },
+        },
+      }, null, 2)}\n`,
+    );
+    await run(["git", "add", "."], directory);
+    await run(["git", "commit", "--quiet", "-m", "B"], directory);
+    const fixtureBaseline = (await runOutput(["git", "rev-parse", "HEAD"], directory)).trim();
+
+    await writeFixture(
+      join(directory, ".github/workflows/release-app-canary.yml"),
+      "name: Prove release App canary\n",
+    );
+    await writeFixture(join(directory, "docs/publishing.md"), "D docs/publishing.md\n");
+    await writeFixture(
+      join(directory, "scripts/npm-stage-workflow.test.ts"),
+      "D scripts/npm-stage-workflow.test.ts\n",
+    );
+    await writeFixture(join(directory, "scripts/release-app-canary.mjs"), "// D\n");
+    await run(["git", "add", "."], directory);
+    await run(["git", "commit", "--quiet", "-m", "D"], directory);
+    const fixtureWorkflow = (await runOutput(["git", "rev-parse", "HEAD"], directory)).trim();
+    return {
+      baselineSha: fixtureBaseline,
+      directory,
+      startSha: fixtureStart,
+      targetSha: fixtureTarget,
+      workflowSha: fixtureWorkflow,
+    };
+  }
+
+  test("keeps unresolved P/C sentinels unpublishable and binds one exact dispatch", () => {
+    expect(() => parseCanaryCoordinate({
+      startSha: CANARY_START_SENTINEL,
+      targetSha,
+    })).toThrow("placeholders have not been replaced");
+    expect(() => parseCanaryCoordinate({
+      startSha,
+      targetSha: CANARY_TARGET_SENTINEL,
+    })).toThrow("placeholders have not been replaced");
+    expect(fixedCanaryCoordinate).toEqual({
+      startSha: "6d9096b0fabbc03ede0741ec4931fbe19127440c",
+      targetSha: "0bf88a064233635e0c5485c61f9c533974a7dca4",
+    });
+    expect(parseCanaryCoordinate(fixedCanaryCoordinate)).toEqual(fixedCanaryCoordinate);
+    expect(parseCanaryCoordinate({ startSha, targetSha })).toEqual({ startSha, targetSha });
+
+    const environment = canaryEnvironment();
+    const invocation = parseCanaryInvocation(environment);
+    expect(invocation).toEqual({
+      actorId: 894119,
+      repository: "hraness/wrench",
+      repositoryId: 1316443113,
+      runId: 33299900001,
+      workflowSha,
+    });
+    expect(parseSingleCanaryRun(workflowRunHistory(), invocation)).toBe(900);
+    expect(() => parseSingleCanaryRun(workflowRunHistory(workflowSha, 2), invocation))
+      .toThrow("not one unique first and only workflow run");
+    for (const malformed of [
+      { GITHUB_ACTOR: "another-writer" },
+      { GITHUB_ACTOR_ID: "1" },
+      { GITHUB_TRIGGERING_ACTOR: "another-writer" },
+      { GITHUB_RUN_ATTEMPT: "2" },
+      { GITHUB_REF: "refs/heads/topic" },
+      { GITHUB_REF_PROTECTED: "false" },
+      { GITHUB_WORKFLOW_SHA: startSha },
+    ]) {
+      expect(() => parseCanaryInvocation({ ...environment, ...malformed })).toThrow();
+    }
+  });
+
+  test("requires exact canary controls plus one production-only freeze", () => {
+    expect(parseApplicableRules([...applicableRules()].reverse())).toEqual({
+      lifecycleRulesetId,
+      updateRulesetId,
+    });
+    expect(parseApplicableRules([
+      ...applicableRules().slice(0, 3),
+      {
+        ...applicableRules()[3],
+        parameters: { update_allows_fetch_and_merge: false },
+      },
+    ])).toEqual({ lifecycleRulesetId, updateRulesetId });
+    const canaryProjection = { lifecycleRulesetId, updateRulesetId };
+    expect(parseProductionApplicableRules(
+      [...productionApplicableRules()].reverse(),
+      canaryProjection,
+    )).toEqual({
+      freezeRulesetId: productionFreezeRulesetId,
+      lifecycleRulesetId,
+      updateRulesetId,
+    });
+    expect(() => parseProductionApplicableRules(applicableRules(), canaryProjection))
+      .toThrow("mirrored four controls plus four freeze controls");
+    expect(() => parseProductionApplicableRules([
+      ...productionApplicableRules().slice(0, -1),
+      { ...productionApplicableRules()[7], ruleset_id: lifecycleRulesetId },
+    ], canaryProjection)).toThrow();
+    expect(() => parseProductionApplicableRules([
+      ...productionApplicableRules(),
+      {
+        ...productionApplicableRules()[0],
+        ruleset_id: productionFreezeRulesetId,
+      },
+    ], canaryProjection)).toThrow();
+    expect(() => parseApplicableRules(applicableRules().slice(1))).toThrow("exactly four");
+    for (const parameters of [
+      { update_allows_fetch_and_merge: true },
+      { update_allows_fetch_and_merge: "false" },
+      { extra: false, update_allows_fetch_and_merge: false },
+    ]) {
+      expect(() => parseApplicableRules([
+        ...applicableRules().slice(0, 3),
+        { ...applicableRules()[3], parameters },
+      ])).toThrow();
+    }
+    expect(() => parseApplicableRules([
+      ...applicableRules(),
+      {
+        ruleset_id: lifecycleRulesetId,
+        ruleset_source: "hraness/wrench",
+        ruleset_source_type: "Repository",
+        type: "required_signatures",
+      },
+    ])).toThrow();
+  });
+
+  test("accepts omitted false/default update parameters but rejects any other shape", () => {
+    const input = {
+      id: updateRulesetId,
+      kind: "update",
+      name: "Wrench release App update exception",
+    } as const;
+    const expected = {
+      createdAt: "2026-08-30T01:20:47.112Z",
+      id: updateRulesetId,
+      name: "Wrench release App update exception",
+      nodeId: `RRS_fixture_${String(updateRulesetId)}`,
+      updatedAt: updateUpdatedAt,
+    };
+    expect(parseRuleset(ruleset(updateRulesetId, "update"), input)).toEqual(expected);
+    expect(parseRuleset({
+      ...ruleset(updateRulesetId, "update"),
+      rules: [{ parameters: { update_allows_fetch_and_merge: false }, type: "update" }],
+    }, input)).toEqual(expected);
+    for (const parameters of [
+      { update_allows_fetch_and_merge: true },
+      { update_allows_fetch_and_merge: "false" },
+      { extra: false, update_allows_fetch_and_merge: false },
+    ]) {
+      expect(() => parseRuleset({
+        ...ruleset(updateRulesetId, "update"),
+        rules: [{ parameters, type: "update" }],
+      }, input)).toThrow();
+    }
+    const freezeInput = {
+      id: productionFreezeRulesetId,
+      kind: "freeze",
+      name: "Temporary website-production activation freeze",
+    } as const;
+    expect(parseRuleset(ruleset(productionFreezeRulesetId, "freeze"), freezeInput))
+      .toMatchObject({
+        id: productionFreezeRulesetId,
+        name: "Temporary website-production activation freeze",
+        updatedAt: productionFreezeUpdatedAt,
+      });
+    expect(() => parseRuleset({
+      ...ruleset(productionFreezeRulesetId, "freeze"),
+      conditions: ruleset(lifecycleRulesetId, "lifecycle").conditions,
+    }, freezeInput)).toThrow("exact reviewed refs");
+    expect(() => parseRuleset({
+      ...ruleset(productionFreezeRulesetId, "freeze"),
+      rules: [
+        { type: "creation" },
+        { type: "deletion" },
+        { type: "non_fast_forward" },
+        { parameters: { update_allows_fetch_and_merge: true }, type: "update" },
+      ],
+    }, freezeInput)).toThrow("allows fetch-and-merge");
+  });
+
+  test("accepts the exact lifecycle rule set in every provider order", () => {
+    const permutations = [
+      ["creation", "deletion", "non_fast_forward"],
+      ["creation", "non_fast_forward", "deletion"],
+      ["deletion", "creation", "non_fast_forward"],
+      ["deletion", "non_fast_forward", "creation"],
+      ["non_fast_forward", "creation", "deletion"],
+      ["non_fast_forward", "deletion", "creation"],
+    ] as const;
+    for (const permutation of permutations) {
+      expect(parseRuleset(ruleset(lifecycleRulesetId, "lifecycle", permutation), {
+        id: lifecycleRulesetId,
+        kind: "lifecycle",
+        name: "Immutable website-production lifecycle",
+      })).toEqual({
+        createdAt: "2026-08-30T01:20:47.112Z",
+        id: lifecycleRulesetId,
+        name: "Immutable website-production lifecycle",
+        nodeId: `RRS_fixture_${String(lifecycleRulesetId)}`,
+        updatedAt: lifecycleUpdatedAt,
+      });
+    }
+    expect(() => parseRuleset({
+      ...ruleset(lifecycleRulesetId, "lifecycle"),
+      rules: [{ type: "deletion" }, { type: "non_fast_forward" }, { type: "deletion" }],
+    }, {
+      id: lifecycleRulesetId,
+      kind: "lifecycle",
+      name: "Immutable website-production lifecycle",
+    })).toThrow("exact rule set");
+  });
+
+  test("canonicalizes provider ruleset timestamps without broadening other timestamps", () => {
+    expect(parseRulesetTimestamp(rulesetCreatedAt)).toBe("2026-08-30T01:20:47.112Z");
+    expect(parseRulesetTimestamp(providerUpdatedAt)).toBe(lifecycleUpdatedAt);
+    expect(parseRulesetTimestamp("2026-08-30T19:58:27.1-04:00"))
+      .toBe("2026-08-30T23:58:27.100Z");
+    expect(parseRulesetTimestamp("2026-08-30T19:58:27.12-04:00"))
+      .toBe("2026-08-30T23:58:27.120Z");
+    expect(parseRulesetTimestamp("2026-08-30T23:58:27Z"))
+      .toBe("2026-08-30T23:58:27Z");
+    expect(parseRulesetTimestampFingerprint(lifecycleUpdatedAt)).toBe(lifecycleUpdatedAt);
+    expect(() => parseRulesetTimestampFingerprint(providerUpdatedAt))
+      .toThrow("canonical UTC ruleset timestamp fingerprint");
+    expect(() => parseRulesetTimestampFingerprint("2026-08-30T23:58:27.1Z"))
+      .toThrow("canonical UTC ruleset timestamp fingerprint");
+    for (const malformed of [
+      "2026-02-30T19:58:27.117-04:00",
+      "2026-08-30 19:58:27.117-04:00",
+      "2026-08-30T19:58:27.1177-04:00",
+      "2026-08-30T19:58:27.117-24:00",
+      "2026-08-30T19:58:27.117-0400",
+      "2026-08-30T19:58:27.117z",
+      "2026-08-30T19:58:27.117",
+    ]) {
+      expect(() => parseRulesetTimestamp(malformed)).toThrow();
+    }
+  });
+
+  test("canonicalizes the checked HTTP Date parser output at the canary boundary", () => {
+    const body = JSON.stringify({ default_branch: "main", full_name: "hraness/wrench", id: 1316443113 });
+    const parsed = parseIncludedGitHubResponse(
+      `HTTP/2.0 200 OK\r\ndate: Sun, 30 Aug 2026 05:05:00 GMT\r\ncontent-type: application/json\r\n\r\n${body}\n`,
+    );
+    expect(parsed.serverDate).toBe("2026-08-30T05:05:00.000Z");
+    expect(parseGitHubServerTimestamp(parsed.serverDate)).toBe("2026-08-30T05:05:00Z");
+    expect(parseGitHubServerTimestamp("2026-08-30T05:05:00Z"))
+      .toBe("2026-08-30T05:05:00Z");
+    for (const malformed of [
+      "2026-08-30T05:05:00.001Z",
+      "2026-08-30T05:05:00.000+00:00",
+      "2026-02-30T05:05:00.000Z",
+    ]) {
+      expect(() => parseGitHubServerTimestamp(malformed)).toThrow();
+    }
+  });
+
+  test("uses one fixed canary lease, proves its stale rejection, and removes askpass", () => {
+    const arguments_ = canaryPushArguments(startSha, targetSha);
+    const staleArguments = canaryPushArguments(startSha, workflowSha);
+    expect(arguments_).toContain(
+      `--force-with-lease=refs/heads/website-production-canary:${startSha}`,
+    );
+    expect(arguments_).toContain(`${targetSha}:refs/heads/website-production-canary`);
+    expect(arguments_.filter((value) => value.startsWith("--force-with-lease="))).toHaveLength(1);
+    expect(arguments_.filter((value) => value === "push")).toHaveLength(1);
+    expect(arguments_).not.toContain("--force");
+    expect(arguments_.join(" ")).not.toContain("refs/heads/main");
+    expect(arguments_.join(" ")).not.toContain("refs/heads/website-production:");
+    expect(arguments_.join(" ")).not.toContain("*");
+
+    const calls: Array<Readonly<{
+      args: readonly string[];
+      askpass: string;
+      token: string;
+    }>> = [];
+    let askpass = "";
+    const result = advanceCanaryRef({
+      spawnImplementation(file: string, args: readonly string[], options: { env: Record<string, string> }) {
+        expect(file).toBe("/usr/bin/git");
+        askpass = options.env.GIT_ASKPASS;
+        expect(statSync(askpass).mode & 0o777).toBe(0o700);
+        expect(readFileSync(askpass, "utf8")).toContain("$WRENCH_RELEASE_APP_TOKEN");
+        calls.push({ args, askpass, token: options.env.WRENCH_RELEASE_APP_TOKEN });
+        return calls.length === 1
+          ? { error: undefined, status: 0, stderr: "", stdout: "ok P..C\n" }
+          : { error: undefined, status: 1, stderr: "stale info\n", stdout: "" };
+      },
+      startSha,
+      targetSha,
+      token: "secret-installation-token",
+      workflowSha,
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.args).toEqual(arguments_);
+    expect(calls[1]?.args).toEqual(staleArguments);
+    expect(calls.every((call) => call.token === "secret-installation-token")).toBe(true);
+    expect(calls.every((call) => !call.args.join(" ").includes("secret-installation-token"))).toBe(true);
+    expect(existsSync(askpass)).toBe(false);
+    expect(result.pushOutputSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(result.staleLeaseOutputSha256).toMatch(/^[0-9a-f]{64}$/u);
+
+    expect(() => advanceCanaryRef({
+      spawnImplementation() {
+        return { error: undefined, status: 0, stderr: "", stdout: "ok\n" };
+      },
+      startSha,
+      targetSha,
+      token: "secret-installation-token",
+      workflowSha,
+    })).toThrow("stale canary lease unexpectedly succeeded");
+  });
+
+  test("rejects the distinct stale P to D lease in a real Git remote and leaves canary at C", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wrench-release-canary-lease-"));
+    const remote = join(directory, "remote.git");
+    const source = join(directory, "source");
+    try {
+      await run(["git", "init", "--bare", remote], directory);
+      await run(["git", "init", source], directory);
+      await run(["git", "config", "user.name", "Release canary fixture"], source);
+      await run(["git", "config", "user.email", "canary@example.invalid"], source);
+      const value = join(source, "value.txt");
+      await writeFile(value, "P\n");
+      await run(["git", "add", "value.txt"], source);
+      await run(["git", "commit", "-m", "P"], source);
+      const fixtureP = (await runOutput(["git", "rev-parse", "HEAD"], source)).trim();
+      await writeFile(value, "C\n");
+      await run(["git", "commit", "-am", "C"], source);
+      const fixtureC = (await runOutput(["git", "rev-parse", "HEAD"], source)).trim();
+      await writeFile(value, "D\n");
+      await run(["git", "commit", "-am", "D"], source);
+      const fixtureD = (await runOutput(["git", "rev-parse", "HEAD"], source)).trim();
+      await run([
+        "git",
+        "push",
+        remote,
+        `${fixtureP}:refs/heads/website-production-canary`,
+      ], source);
+
+      const result = advanceCanaryRef({
+        spawnImplementation(
+          file: string,
+          args: readonly string[],
+          options: Parameters<typeof spawnSync>[2],
+        ) {
+          const mapped = args.map((argument) => argument === "https://github.com/hraness/wrench.git"
+            ? remote
+            : argument);
+          return spawnSync(file, mapped, { ...options, cwd: source });
+        },
+        startSha: fixtureP,
+        targetSha: fixtureC,
+        token: "local-fixture-token",
+        workflowSha: fixtureD,
+      });
+      expect(result.pushOutputSha256).toMatch(/^[0-9a-f]{64}$/u);
+      expect(result.staleLeaseOutputSha256).toMatch(/^[0-9a-f]{64}$/u);
+      expect((await runOutput([
+        "git",
+        "--git-dir",
+        remote,
+        "rev-parse",
+        "refs/heads/website-production-canary",
+      ], directory)).trim()).toBe(fixtureC);
+    } finally {
+      await chmod(directory, 0o700).catch(() => undefined);
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("requires revoked-token reuse to receive an exact non-redirecting 401", async () => {
+    const requests: Array<Readonly<{ input: string; init: RequestInit }>> = [];
+    await expect(assertRevokedTokenCannotBeReused(
+      "revoked-token",
+      async (input: string | URL | Request, init?: RequestInit) => {
+        requests.push({ input: String(input), init: init ?? {} });
+        return new Response('{"message":"Bad credentials"}', { status: 401 });
+      },
+    )).resolves.toBeUndefined();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.input).toBe("https://api.github.com/installation/repositories");
+    expect(requests[0]?.init.method).toBe("GET");
+    expect(JSON.stringify(requests[0]?.init)).toContain("revoked-token");
+    await expect(assertRevokedTokenCannotBeReused(
+      "still-live",
+      async () => new Response("{}", { status: 200 }),
+    )).rejects.toThrow("returned HTTP 200");
+  });
+
+  test("binds exact P to C and current-main B to D edges with the complete protocol", async () => {
+    const fixture = await createTopologyFixture();
+    try {
+      const coordinate = { startSha: fixture.startSha, targetSha: fixture.targetSha };
+      expect(assertCanaryGitTopology({
+        coordinate,
+        cwd: fixture.directory,
+        workflowSha: fixture.workflowSha,
+      })).toEqual({
+        baselineSha: fixture.baselineSha,
+        ...coordinate,
+        workflowSha: fixture.workflowSha,
+      });
+      expect(await runOutput([
+        "git",
+        "show",
+        `${fixture.startSha}:vercel.json`,
+      ], fixture.directory)).not.toBe(await runOutput([
+        "git",
+        "show",
+        `${fixture.baselineSha}:vercel.json`,
+      ], fixture.directory));
+      expect(() => assertCanaryGitTopology({
+        coordinate,
+        cwd: fixture.directory,
+        spawnImplementation(file: string, args: readonly string[], options: unknown) {
+          if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+            return { error: undefined, status: 1, stderr: "", stdout: "" };
+          }
+          return spawnSync(file, args, options as Parameters<typeof spawnSync>[2]);
+        },
+        workflowSha: fixture.workflowSha,
+      })).toThrow("canary Git topology read failed");
+
+      const productionSha = "e".repeat(40);
+      const preflightApi = new CanaryApiFixture([{
+        canarySha: fixture.startSha,
+        productionSha,
+        serverDate: "2026-08-30T05:05:00Z",
+        workflowSha: fixture.workflowSha,
+      }]);
+      const environment = canaryEnvironment(fixture.workflowSha);
+      const preflight = await preflightCanary({
+        api: preflightApi,
+        coordinate,
+        cwd: fixture.directory,
+        environment,
+      });
+      const receipt = encodeCanaryReceipt(preflight);
+      expect(decodeCanaryReceipt(receipt)).toEqual(preflight);
+      expect(preflightApi.calls).toEqual([
+        "GET /repos/hraness/wrench/actions/workflows/release-app-canary.yml/runs" +
+          "?event=workflow_dispatch&per_page=2",
+        "GET+Date /repos/hraness/wrench",
+        "GET /repos/hraness/wrench/git/ref/heads/main",
+        "GET /repos/hraness/wrench/git/ref/heads/website-production-canary",
+        "GET /repos/hraness/wrench/git/ref/heads/website-production",
+        "GET /repos/hraness/wrench/rules/branches/website-production-canary",
+        "GET /repos/hraness/wrench/rules/branches/website-production",
+        `GET /repos/hraness/wrench/rulesets/${String(lifecycleRulesetId)}`,
+        `GET /repos/hraness/wrench/rulesets/${String(updateRulesetId)}`,
+        `GET /repos/hraness/wrench/rulesets/${String(productionFreezeRulesetId)}`,
+      ]);
+
+      const proveApi = new CanaryApiFixture([
+        {
+          canarySha: fixture.startSha,
+          productionSha,
+          serverDate: "2026-08-30T05:06:00Z",
+          workflowSha: fixture.workflowSha,
+        },
+        {
+          canarySha: fixture.startSha,
+          productionSha,
+          serverDate: "2026-08-30T05:06:01Z",
+          workflowSha: fixture.workflowSha,
+        },
+        {
+          canarySha: fixture.targetSha,
+          productionSha,
+          serverDate: "2026-08-30T05:07:00Z",
+          workflowSha: fixture.workflowSha,
+        },
+      ]);
+      let pushes = 0;
+      let tokenOperation = false;
+      const evidence = await proveCanary({
+        api: proveApi,
+        coordinate,
+        cwd: fixture.directory,
+        environment,
+        fetchImplementation: async () => new Response("{}", { status: 401 }),
+        preflightReceipt: receipt,
+        spawnImplementation(file: string, args: readonly string[], options: unknown) {
+          if (args.includes("push")) {
+            pushes += 1;
+            return pushes === 1
+              ? { error: undefined, status: 0, stderr: "", stdout: "ok P..C\n" }
+              : { error: undefined, status: 1, stderr: "stale info\n", stdout: "" };
+          }
+          return spawnSync(file, args, options as Parameters<typeof spawnSync>[2]);
+        },
+        async withToken(_environment: Record<string, string>, operation: (
+          token: string,
+          identity: Record<string, unknown>,
+        ) => Promise<unknown>) {
+          tokenOperation = true;
+          return operation("fixture-token", {
+            appId: 700,
+            appSlug: "wrench-prod-ref-writer-1316443113",
+            clientId: "Iv1.fixture",
+            expiresAt: "2026-08-30T06:06:00Z",
+            installationId: 701,
+            repositoryId: 1316443113,
+          });
+        },
+      });
+      expect(tokenOperation).toBe(true);
+      expect(pushes).toBe(2);
+      expect(evidence).toMatchObject({
+        actorId: 894119,
+        baselineSha: fixture.baselineSha,
+        canaryAfter: fixture.targetSha,
+        canaryBefore: fixture.startSha,
+        productionSha,
+        productionFreezeRuleset: {
+          id: productionFreezeRulesetId,
+          name: "Temporary website-production activation freeze",
+        },
+        repositoryId: 1316443113,
+        runId: 33299900001,
+        schema: "wrench-release-app-canary-evidence/v1",
+        writeBoundServerDate: "2026-08-30T05:06:01Z",
+        workflowSha: fixture.workflowSha,
+      });
+      const encodedEvidence = encodeCanaryEvidence(evidence);
+      expect(decodeCanaryEvidence(encodedEvidence)).toEqual(evidence);
+      const evidenceLine = canaryEvidenceLogLine(evidence);
+      expect(evidenceLine).toBe(`${CANARY_EVIDENCE_LOG_MARKER}${encodedEvidence}`);
+      expect(parseCanaryEvidenceLog(
+        `2026-08-30T05:07:01.1234567Z ${evidenceLine}\n`,
+      )).toEqual(evidence);
+
+      const summaryPath = join(fixture.directory, "canary-summary.md");
+      let publishedLog = "";
+      expect(publishCanaryEvidence({
+        coordinate,
+        encodedEvidence,
+        environment,
+        summaryPath,
+        writeImplementation(value: string) {
+          publishedLog += value;
+        },
+      })).toEqual(evidence);
+      expect(publishedLog).toBe(`${evidenceLine}\n`);
+      expect(await readFile(summaryPath, "utf8")).toBe(
+        "## Wrench release App canary proof\n\n" +
+          "Validated bounded evidence (also retained in this job's downloadable log):\n\n" +
+          `\`${evidenceLine}\`\n`,
+      );
+      expect(publishedLog).not.toContain("fixture-token");
+      let reconciliationLog = "";
+      expect(() => publishCanaryEvidence({
+        appendImplementation() {
+          throw new Error("summary unavailable");
+        },
+        coordinate,
+        encodedEvidence,
+        environment,
+        summaryPath,
+        writeImplementation(value: string) {
+          reconciliationLog += value;
+        },
+      })).toThrow("summary unavailable");
+      expect(reconciliationLog).toBe(`${evidenceLine}\n`);
+
+      expect(() => parseCanaryEvidenceLog("no proof here\n"))
+        .toThrow("one unique proof marker");
+      expect(() => parseCanaryEvidenceLog(`${evidenceLine}\n${evidenceLine}\n`))
+        .toThrow("one unique proof marker");
+      expect(() => parseCanaryEvidenceLog(`prefix ${evidenceLine}\n`))
+        .toThrow("marker is malformed");
+      expect(() => parseCanaryEvidenceLog("x".repeat(4 * 1024 * 1024 + 1)))
+        .toThrow("not bounded text");
+      expect(() => decodeCanaryEvidence("A".repeat(Math.ceil(16 * 1024 * 4 / 3) + 1)))
+        .toThrow("not one bounded canonical base64url value");
+      const noncanonicalEvidence = Buffer.from(JSON.stringify(Object.fromEntries(
+        Object.entries(evidence).reverse(),
+      )), "utf8").toString("base64url");
+      expect(() => decodeCanaryEvidence(noncanonicalEvidence)).toThrow("JSON is not canonical");
+      const expandedEvidence = Buffer.from(JSON.stringify({ ...evidence, token: "must-not-leak" }), "utf8")
+        .toString("base64url");
+      expect(() => decodeCanaryEvidence(expandedEvidence)).toThrow("unexpected shape");
+      expect(() => publishCanaryEvidence({
+        coordinate: { ...coordinate, targetSha: fixture.workflowSha },
+        encodedEvidence,
+        environment,
+        summaryPath,
+      })).toThrow("does not belong to this exact run and P/C/B/D coordinate");
+      expect(proveApi.calls).toEqual([
+        ...preflightApi.calls,
+        ...preflightApi.calls,
+        ...preflightApi.calls,
+      ]);
+      expect(proveApi.calls.every((call) => call.startsWith("GET"))).toBe(true);
+
+      const driftApi = new CanaryApiFixture([{
+        canarySha: fixture.targetSha,
+        productionSha,
+        serverDate: "2026-08-30T05:06:00Z",
+        workflowSha: fixture.workflowSha,
+      }]);
+      await expect(proveCanary({
+        api: driftApi,
+        coordinate,
+        cwd: fixture.directory,
+        environment,
+        fetchImplementation: async () => new Response("{}", { status: 401 }),
+        preflightReceipt: receipt,
+        spawnImplementation: spawnSync,
+        async withToken() {
+          throw new Error("token mint must not begin after pre-read drift");
+        },
+      })).rejects.toThrow("pre-mutation control snapshot drifted");
+
+      const writeDriftApi = new CanaryApiFixture([
+        {
+          canarySha: fixture.startSha,
+          productionSha,
+          serverDate: "2026-08-30T05:06:00Z",
+          workflowSha: fixture.workflowSha,
+        },
+        {
+          canarySha: fixture.startSha,
+          productionSha,
+          serverDate: "2026-08-30T05:06:01Z",
+          workflowSha: startSha,
+        },
+      ]);
+      let writeDriftPushes = 0;
+      await expect(proveCanary({
+        api: writeDriftApi,
+        coordinate,
+        cwd: fixture.directory,
+        environment,
+        fetchImplementation: async () => new Response("{}", { status: 401 }),
+        preflightReceipt: receipt,
+        spawnImplementation(file: string, args: readonly string[], options: unknown) {
+          if (args.includes("push")) writeDriftPushes += 1;
+          return spawnSync(file, args, options as Parameters<typeof spawnSync>[2]);
+        },
+        async withToken(_environment: Record<string, string>, operation: (
+          token: string,
+          identity: Record<string, unknown>,
+        ) => Promise<unknown>) {
+          return operation("fixture-token", {
+            appId: 700,
+            appSlug: "wrench-prod-ref-writer-1316443113",
+            clientId: "Iv1.fixture",
+            expiresAt: "2026-08-30T06:06:00Z",
+            installationId: 701,
+            repositoryId: 1316443113,
+          });
+        },
+      })).rejects.toThrow("immediate pre-write control snapshot drifted");
+      expect(writeDriftPushes).toBe(0);
+    } finally {
+      await rm(fixture.directory, { force: true, recursive: true });
+    }
+  });
+
+  test("keeps the workflow input-free, read-only, temporary, and cleanup-bound", async () => {
+    const [workflow, helper, guide] = await Promise.all([
+      readFile(releaseAppCanaryWorkflowUrl, "utf8"),
+      readFile(releaseAppCanaryHelperUrl, "utf8"),
+      readFile(publishingGuideUrl, "utf8"),
+    ]);
+    expect(workflow).toContain("on:\n  workflow_dispatch:\n");
+    expect(workflow).not.toContain("inputs:");
+    expect(workflow).not.toContain("contents: write");
+    expect(workflow).not.toContain("actions: write");
+    expect(workflow.match(/actions: read/gmu) ?? []).toHaveLength(3);
+    expect(workflow.match(/contents: read/gmu) ?? []).toHaveLength(3);
+    expect(workflow.match(/environment: \{ name: production-ref-writer-key, deployment: false \}/gmu) ?? [])
+      .toHaveLength(1);
+    expect(workflow.match(/node \.\/scripts\/release-app-canary\.mjs preflight/gmu) ?? [])
+      .toHaveLength(1);
+    expect(workflow.match(/node \.\/scripts\/release-app-canary\.mjs prove/gmu) ?? [])
+      .toHaveLength(1);
+    expect(workflow.match(/node \.\/scripts\/release-app-canary\.mjs publish-evidence/gmu) ?? [])
+      .toHaveLength(1);
+    const publishStep = workflow.slice(
+      workflow.indexOf("      - name: Publish retrievable bounded canary evidence"),
+    );
+    expect(publishStep).toContain("CANARY_EVIDENCE: ${{ steps.canary.outputs.evidence }}");
+    expect(publishStep).toContain("GITHUB_RUN_ID: ${{ github.run_id }}");
+    expect(publishStep).toContain("GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}");
+    expect(publishStep).not.toContain("WRENCH_RELEASE_APP_PRIVATE_KEY");
+    expect(publishStep).not.toContain("WRENCH_RELEASE_APP_CLIENT_ID");
+    expect(publishStep).not.toContain("PREFLIGHT_RECEIPT");
+    expect(workflow).toContain("GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}");
+    expect(workflow).toContain("GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}");
+    expect(workflow).toContain("WRENCH_RELEASE_APP_PRIVATE_KEY: ${{ secrets.WRENCH_RELEASE_APP_PRIVATE_KEY }}");
+    expect(workflow).toContain(
+      "WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID: " +
+        "${{ vars.WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID }}",
+    );
+    expect(workflow).toContain(
+      "WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT: " +
+        "${{ vars.WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT }}",
+    );
+    expect(workflow).toContain("cancel-in-progress: false");
+    expect(workflow).not.toContain("workflow_run:");
+    expect(workflow).not.toContain("pull_request:");
+    expect(helper).toContain("withReleaseAppTokenFromEnvironment");
+    expect(helper).not.toContain("advanceWebsiteProductionRef");
+    expect(helper).toContain("temporary canary P/C placeholders have not been replaced");
+    expect(helper).toContain("const CANARY_BRANCH = \"website-production-canary\"");
+    expect(helper).toContain("temporary canary is not one unique first and only workflow run");
+    expect(helper).toContain("canary lease failed without an exact stale-lease rejection");
+    expect(helper).toContain("https://api.github.com/installation/repositories");
+    expect(helper).toContain("revoked release App token reuse returned HTTP");
+    expect(helper).toContain("WRENCH_RELEASE_APP_CANARY_EVIDENCE_V1=");
+    expect(helper).toContain("canary evidence log does not contain one unique proof marker");
+    expect(helper).toContain("current-main baseline B must be distinct from P, C, and D");
+    expect(helper).toContain("B and D do not retain one byte-identical Vercel canary exclusion");
+    expect(helper).toContain("mirrored four controls plus four freeze controls");
+    expect(releaseAppTokenRequestBody()).toEqual({
+      permissions: {
+        contents: "write",
+        metadata: "read",
+        workflows: "write",
+      },
+      repository_ids: [1316443113],
+    });
+    expect(JSON.stringify(releaseAppTokenRequestBody())).not.toContain("administration");
+    expect(guide).toContain("single-use exception");
+    expect(guide).toContain("production writer boundary");
+    expect(guide).toContain("`P` remains exact\ncommit `6d9096b0fabbc03ede0741ec4931fbe19127440c`");
+    expect(guide).toContain("`0bf88a064233635e0c5485c61f9c533974a7dca4`, the direct child of `P`");
+    expect(guide).toContain("direct child of the then-current green\nmain baseline `B`");
+    expect(guide).toContain("`vercel.json` must be byte-identical between `P` and `C`, and separately between\n`B` and `D`");
+    expect(guide).toContain("Temporary website-production activation freeze");
+    expect(guide).toContain("exactly four applicable rules on the canary ref");
+    expect(guide).toContain("plus exactly four controls from this one captured freeze");
+    expect(guide).toContain("`metadata:read`, `contents:write`, and\n`workflows:write`");
+    expect(guide).toContain("ordinary\n`0thernet` non-force `P` to `C` denial");
+    expect(guide).toContain("never rerun it or reset/delete the persistent\ncanary");
+    expect(guide).toContain("Retain the\ncanary at `C`");
   });
 });
 
