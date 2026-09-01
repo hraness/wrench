@@ -504,6 +504,15 @@ export function createBeeperPresentationFacts(
   if (adapterIdentity.version.length < 1 || beeper.contractVersions.length < 1) {
     throw new Error("Beeper presentation lost its adapter version");
   }
+  const cliSourceVersionDiscrepancy =
+    BEEPER_CLI_V062_SURFACE_CONTRACT.source.versionDiscrepancy;
+  if (
+    cliSourceVersionDiscrepancy === null
+    || BEEPER_CLI_V062_SURFACE_CONTRACT.source.packageDeclaredVersion
+      === BEEPER_CLI_PIN.version
+  ) {
+    throw new Error("Beeper presentation lost its reviewed source/executable version discrepancy");
+  }
   const semanticContractVersionLabel = beeper.contractVersions.length === 1
     ? `Contract version ${beeper.contractVersions[0]}`
     : `Contract versions ${beeper.contractVersions.join(", ")}`;
@@ -517,8 +526,7 @@ export function createBeeperPresentationFacts(
     cliSourceDeclaredVersion:
       BEEPER_CLI_V062_SURFACE_CONTRACT.source.packageDeclaredVersion,
     cliSourcePackagePath: BEEPER_CLI_V062_SURFACE_CONTRACT.source.packagePath,
-    cliSourceVersionDiscrepancy:
-      BEEPER_CLI_V062_SURFACE_CONTRACT.source.versionDiscrepancy,
+    cliSourceVersionDiscrepancy,
     cliVersion: BEEPER_CLI_PIN.version,
     desktopApiCommit: BEEPER_DESKTOP_API_PIN.commit,
     desktopApiVersion: BEEPER_DESKTOP_API_PIN.version,
