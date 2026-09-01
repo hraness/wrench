@@ -13,6 +13,7 @@ import archivedXWebManifest from "../../assets/adapters/x/wrench-web-adapter.v1.
 import archivedXWebPostsPublishV2Manifest from "../../assets/adapters/x/wrench-web-adapter.v1.7.0.json";
 import archivedXWebPostsPublishV3Manifest from "../../assets/adapters/x/wrench-web-adapter.v1.9.0.json";
 import archivedXWebArticlesReadV1Manifest from "../../assets/adapters/x/wrench-web-adapter.v1.11.0.json";
+import archivedXWebLongPostPredecessorManifest from "../../assets/adapters/x/wrench-web-adapter.v1.13.0.json";
 import {
   browserSessionAuthKinds,
   webSessionContractOperations,
@@ -152,7 +153,7 @@ function xArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(webSessionContractDefinitions.x),
-  "f02eb05f4c709d7a952be298a16bba1ca0df80be275fd19318460f89115d483f",
+  "c3d649bf6fa94a2f6488fefbafc65e20474993e6c90c99ddf46a82caea6c892d",
   {
     "likes.set": [1],
   },
@@ -333,6 +334,42 @@ function archivedXWebPostsPublishOperation(
   });
 }
 
+function archivedXWebCaptureRequiredOperation(
+  manifest: unknown,
+  adapterVersion: string,
+  operation: "posts.quote" | "content.delete",
+  implementation: string,
+) {
+  const contract = reviewedArchivedWebSessionContract(
+    manifest,
+    {
+      adapterId: "x-web",
+      adapterVersion,
+      site: "x",
+      operation,
+      contractVersion: 1,
+      risk: "R3",
+      state: "capture-required",
+      implementation,
+    },
+  );
+  return Object.freeze({
+    name: contract.operation,
+    contractVersion: contract.contractVersion,
+    risk: contract.risk,
+    input: contract.input,
+    sideEffect: contract.sideEffect,
+    idempotency: contract.idempotency,
+    dedupeWindowMs: contract.dedupeWindowMs,
+    state: contract.state,
+    dispatch: contract.dispatch,
+    implementation: contract.implementation,
+    planDispatches: (input: OperationInput) =>
+      planWebSessionContractDispatches(contract, input),
+    validateInput: () => Object.freeze([]),
+  });
+}
+
 const operations = Object.freeze([
   ...currentOperations,
   archivedArticlesReadOperation,
@@ -347,12 +384,29 @@ const operations = Object.freeze([
     "1.9.0",
     3,
   ),
+  archivedXWebPostsPublishOperation(
+    archivedXWebLongPostPredecessorManifest,
+    "1.13.0",
+    4,
+  ),
+  archivedXWebCaptureRequiredOperation(
+    archivedXWebLongPostPredecessorManifest,
+    "1.13.0",
+    "posts.quote",
+    "x posts.quote@1 kept the leftover 280-unit body cap and remains a capture-required reservation",
+  ),
+  archivedXWebCaptureRequiredOperation(
+    archivedXWebLongPostPredecessorManifest,
+    "1.13.0",
+    "content.delete",
+    "x content.delete@1 kept the leftover 280-unit expected_text cap and remains a capture-required reservation",
+  ),
 ]);
 
 export const xWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "x-web",
-  version: "1.3.0",
+  version: "1.4.0",
   displayName: "X Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
@@ -389,7 +443,7 @@ export const xWebPlugin = defineProviderPlugin({
             const readback = await runtime.readXWebPublishedMutationTarget({
               site: "x",
               action: operation,
-              contractVersion: 4,
+              contractVersion: 5,
               timeoutMs: 60_000,
               maxOutputBytes: 2 * 1024 * 1024,
             }, input, auth, context.target.identifier);

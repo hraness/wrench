@@ -34,7 +34,14 @@ import {
   type ProviderPluginRegistry,
 } from "./provider-plugin-registry";
 import { providerPluginRegistry } from "./provider-plugins";
-import { semanticOperationNames, type SemanticOperationName } from "./platform-catalog";
+import {
+  semanticOperationNames,
+  socialPlatformCatalog,
+  textWeightPolicies,
+  weightedTextLength,
+  type SemanticOperationName,
+} from "./platform-catalog";
+import { MAX_X_CREATE_TWEET_TEXT_LENGTH } from "./providers/x-web";
 import { getProviderContract as getProviderContractWithRegistry } from "./provider-contracts";
 import {
   webSessionConditionalInputIssues as webSessionConditionalInputIssuesWithRegistry,
@@ -987,7 +994,7 @@ describe("wrench manifest parsing", () => {
     const current = parseRuntimeManifest(currentValue);
     expect(current.ok).toBeTrue();
     if (!current.ok) return;
-    expect(current.value.version).toBe("1.13.0");
+    expect(current.value.version).toBe("1.14.0");
     const article = current.value.operations["articles.draft.save"];
     expect(article !== undefined && isWebSessionOperation(article)).toBeTrue();
     if (article === undefined || !isWebSessionOperation(article)) return;
@@ -1071,6 +1078,96 @@ describe("wrench manifest parsing", () => {
     expect(priorArticle.input.required).toEqual(["title", "document", "draft_only"]);
     expect(priorArticle.input.properties.inline_images).toMatchObject({ type: "array", maxItems: 20 });
     expect(priorArticle.input.properties.cover_image).toMatchObject({ type: "file", maxBytes: 5 * 1024 * 1024 });
+  });
+
+  test("accepts one long X posts.publish body up to the reviewed CreateTweet bound", () => {
+    const currentValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "x", "wrench-web-adapter.json"),
+      "utf8",
+    )) as unknown;
+    const current = parseRuntimeManifest(currentValue);
+    expect(current.ok).toBeTrue();
+    if (!current.ok) return;
+    const publish = current.value.operations["posts.publish"];
+    expect(publish !== undefined && isWebSessionOperation(publish)).toBeTrue();
+    if (publish === undefined || !isWebSessionOperation(publish)) return;
+    expect(publish.webSession.contractVersion).toBe(5);
+    expect(publish.input.properties.body).toMatchObject({
+      minLength: 1,
+      maxLength: MAX_X_CREATE_TWEET_TEXT_LENGTH,
+    });
+    const catalogPost = socialPlatformCatalog.x.compositions.post?.text.find((field) =>
+      field.name === "body");
+    expect(catalogPost?.safeMaxUnits).toBe(MAX_X_CREATE_TWEET_TEXT_LENGTH);
+    expect(catalogPost?.measurement).toBe("x-conservative-weighted");
+    const catalogReply = socialPlatformCatalog.x.compositions.reply?.text.find((field) =>
+      field.name === "body");
+    expect(catalogReply?.safeMaxUnits).toBe(280);
+
+    const observedAscii = "A".repeat(1158);
+    const accepted = validateOperationInput(publish.input, { body: observedAscii }, current.value.origins);
+    expect(accepted.ok).toBeTrue();
+    if (accepted.ok) {
+      expect(validatePlatformOperationInput(current.value, "posts.publish", accepted.value)).toEqual({
+        ok: true,
+        value: accepted.value,
+      });
+    }
+
+    const ceiling = "B".repeat(MAX_X_CREATE_TWEET_TEXT_LENGTH);
+    const ceilingInput = validateOperationInput(publish.input, { body: ceiling }, current.value.origins);
+    expect(ceilingInput.ok).toBeTrue();
+    if (ceilingInput.ok) {
+      expect(validatePlatformOperationInput(current.value, "posts.publish", ceilingInput.value).ok).toBeTrue();
+    }
+
+    const overflow = validateOperationInput(
+      publish.input,
+      { body: "C".repeat(MAX_X_CREATE_TWEET_TEXT_LENGTH + 1) },
+      current.value.origins,
+    );
+    expect(overflow.ok).toBeFalse();
+    if (!overflow.ok) {
+      expect(overflow.issues.some((issue) => issue.includes("body"))).toBeTrue();
+    }
+
+    const cjkAtCeiling = "漢".repeat(12_500);
+    expect(weightedTextLength(cjkAtCeiling, textWeightPolicies["x-conservative-weighted"])).toBe(
+      MAX_X_CREATE_TWEET_TEXT_LENGTH,
+    );
+    const cjkInput = validateOperationInput(publish.input, { body: cjkAtCeiling }, current.value.origins);
+    expect(cjkInput.ok).toBeTrue();
+    if (cjkInput.ok) {
+      expect(validatePlatformOperationInput(current.value, "posts.publish", cjkInput.value).ok).toBeTrue();
+    }
+    const cjkOver = validateOperationInput(
+      publish.input,
+      { body: "漢".repeat(12_501) },
+      current.value.origins,
+    );
+    expect(cjkOver.ok).toBeTrue();
+    if (cjkOver.ok) {
+      const weighted = validatePlatformOperationInput(current.value, "posts.publish", cjkOver.value);
+      expect(weighted.ok).toBeFalse();
+      if (!weighted.ok) {
+        expect(weighted.issues.some((issue) =>
+          issue.includes("weighs 25002, above the reviewed 25000-unit x limit"))).toBeTrue();
+      }
+    }
+
+    const predecessorValue = JSON.parse(readFileSync(
+      join(import.meta.dir, "assets", "adapters", "x", "wrench-web-adapter.v1.13.0.json"),
+      "utf8",
+    )) as unknown;
+    const predecessor = parseDiagnosticManifest(predecessorValue);
+    expect(predecessor.ok).toBeTrue();
+    if (!predecessor.ok) return;
+    expect(predecessor.value.version).toBe("1.13.0");
+    const leftover = predecessor.value.operations["posts.publish"];
+    expect(leftover !== undefined && isWebSessionOperation(leftover)).toBeTrue();
+    if (leftover === undefined || !isWebSessionOperation(leftover)) return;
+    expect(leftover.webSession.contractVersion).toBe(4);
+    expect(leftover.input.properties.body).toMatchObject({ maxLength: 280 });
   });
 
   test("ships LinkedIn native Article drafts separately from publication", () => {
@@ -1571,7 +1668,7 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
     properties.body = { ...properties.body, maxLength: 100_000 };
 
     expect(issues(candidate).some((issue) =>
-      issue.includes("input must exactly match authenticated web contract x/posts.publish@4"))).toBeTrue();
+      issue.includes("input must exactly match authenticated web contract x/posts.publish@5"))).toBeTrue();
   });
 
   test("rejects forged confirmation and replay semantics for a real X mutation", () => {
@@ -1585,7 +1682,7 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
       if (operation !== undefined) operation[field] = value;
 
       expect(issues(candidate).some((issue) =>
-        issue.includes(`${field} must exactly match authenticated web contract x/posts.publish@4`))).toBeTrue();
+        issue.includes(`${field} must exactly match authenticated web contract x/posts.publish@5`))).toBeTrue();
     }
   });
 

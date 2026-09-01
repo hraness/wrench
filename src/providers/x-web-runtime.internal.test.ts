@@ -2725,6 +2725,160 @@ describe("X authenticated internal-API runtime", () => {
       },
     )).toEqual({ present: true, postId: CREATED_POST_ID });
     expect(videoCalls.every((request) => request.method === "GET")).toBeTrue();
+    const longBody = "L".repeat(1158);
+    const longIdentifier = canonicalJson({ postId: CREATED_POST_ID, mediaId: null });
+    const longCalls: CapturedRequest[] = [];
+    expect(await readXWebPublishedMutationTarget(
+      xRecipe("posts.publish", 5),
+      { body: longBody },
+      xAuth,
+      longIdentifier,
+      {
+        dependencies: dependencies(longCalls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({
+              text: longBody.slice(0, 280),
+              extra: {
+                note_tweet: {
+                  note_tweet_results: { result: { text: longBody } },
+                },
+              },
+            }));
+          }
+          throw new Error(`unexpected X long-post reconciliation request ${request.url.href}`);
+        }),
+      },
+    )).toEqual({ present: true, postId: CREATED_POST_ID });
+    expect(longCalls.every((request) => request.method === "GET")).toBeTrue();
+  });
+
+  test("publishes one long CreateTweet body through note_tweet and never truncates", async () => {
+    const calls: CapturedRequest[] = [];
+    const body = "P".repeat(1158);
+    const preview = body.slice(0, 280);
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+          descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/CreateTweet")) {
+        const payload = JSON.parse(request.body ?? "null") as Record<string, unknown>;
+        const variables = payload.variables as Record<string, unknown>;
+        expect(variables.tweet_text).toBe(body);
+        expect(typeof variables.tweet_text === "string" && variables.tweet_text.length).toBe(1158);
+        return jsonResponse(createTweetResponse({
+          text: preview,
+          extra: {
+            note_tweet: {
+              note_tweet_results: { result: { text: body } },
+            },
+          },
+        }));
+      }
+      if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+        return jsonResponse(publishedTweetReadback({
+          text: preview,
+          extra: {
+            note_tweet: {
+              note_tweet_results: { result: { text: body } },
+            },
+          },
+        }));
+      }
+      throw new Error(`unexpected long-post request ${request.url.href}`);
+    });
+
+    const result = await executeXWebOperation(
+      xRecipe("posts.publish", 5),
+      { body },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: { posts: [{ id: CREATED_POST_ID }] },
+      dispatch: { planned: 1, started: 1, verified: 1 },
+    });
+  });
+
+  test("fails closed when CreateTweet returns a truncated preview without note_tweet", async () => {
+    const calls: CapturedRequest[] = [];
+    const body = "Q".repeat(1158);
+    const result = await executeXWebOperation(
+      xRecipe("posts.publish", 5),
+      { body },
+      xAuth,
+      {
+        dependencies: dependencies(calls, (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("CreateTweet", "WXTdKnLddrQOunD6MhWi3g", "mutation"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/CreateTweet")) {
+            const payload = JSON.parse(request.body ?? "null") as Record<string, unknown>;
+            const variables = payload.variables as Record<string, unknown>;
+            expect(variables.tweet_text).toBe(body);
+            return jsonResponse(createTweetResponse({ text: body.slice(0, 280) }));
+          }
+          throw new Error(`unexpected truncated CreateTweet follow-up ${request.url.href}`);
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "indeterminate",
+      dispatchStarted: true,
+      dispatch: { planned: 1, started: 1, verified: 0 },
+    });
+    expect(calls.some((call) => call.url.pathname.endsWith("/CreateTweet"))).toBeTrue();
+    expect(calls.some((call) => call.url.pathname.endsWith("/TweetResultByRestId"))).toBeFalse();
+    await expect(readXWebPublishedMutationTarget(
+      xRecipe("posts.publish", 5),
+      { body },
+      xAuth,
+      canonicalJson({ postId: CREATED_POST_ID, mediaId: null }),
+      {
+        dependencies: dependencies([], (request) => {
+          if (request.url.href === "https://x.com/home") {
+            return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+          }
+          if (request.url.href === MAIN_URL) {
+            return new Response(mainBundle(
+              descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+              descriptor("TweetResultByRestId", "4hhGRbehkcUVTKf8n0f0xw", "query"),
+            ), { headers: { "content-type": "application/javascript" } });
+          }
+          if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+          if (request.url.pathname.endsWith("/TweetResultByRestId")) {
+            return jsonResponse(publishedTweetReadback({ text: body.slice(0, 280) }));
+          }
+          throw new Error(`unexpected truncated recovery request ${request.url.href}`);
+        }),
+      },
+    )).rejects.toThrow("X created post response did not bind the confirmed text");
   });
 
   test("does not reconcile a labeled X post as present", async () => {

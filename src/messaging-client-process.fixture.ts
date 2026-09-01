@@ -53,7 +53,17 @@ function alive(pid: number): boolean {
 
 async function waitForStatus(path: string): Promise<{ parent: number; descendant: number; temp: string }> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (existsSync(path)) return JSON.parse(readFileSync(path, "utf8"));
+    if (existsSync(path)) {
+      try {
+        return JSON.parse(readFileSync(path, "utf8")) as {
+          parent: number;
+          descendant: number;
+          temp: string;
+        };
+      } catch {
+        // The helper may still be replacing the status file.
+      }
+    }
     await Bun.sleep(5);
   }
   throw new Error("lifecycle helper did not report its process tree");

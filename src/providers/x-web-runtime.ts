@@ -60,6 +60,7 @@ import {
   enforceXWebHeaderSinkPolicy,
   boundXWebProviderPage,
   extractXWebGraphQlReadResponseRoot,
+  MAX_X_CREATE_TWEET_TEXT_LENGTH,
   normalizeXWebProfileHandle,
   normalizeXWebGraphQlTimelineResponse,
   projectXWebBookmarkExportPage,
@@ -262,7 +263,7 @@ function threadTexts(input: OperationInput): readonly string[] {
     if (
       typeof item !== "string"
       || item.length === 0
-      || item.length > 25_000
+      || item.length > MAX_X_CREATE_TWEET_TEXT_LENGTH
       || /[\0\r]/u.test(item)
     ) throw new Error("input.items must be a string array");
     texts.push(item);
@@ -1231,9 +1232,9 @@ export async function readXWebPublishedMutationTarget(
   if (
     recipe.site !== "x"
     || recipe.action !== "posts.publish"
-    || (recipe.contractVersion !== 3 && recipe.contractVersion !== 4)
+    || (recipe.contractVersion !== 3 && recipe.contractVersion !== 4 && recipe.contractVersion !== 5)
   ) {
-    throw new Error("X publish recovery supports only posts.publish@3 or posts.publish@4");
+    throw new Error("X publish recovery supports only posts.publish@3, posts.publish@4, or posts.publish@5");
   }
   const target = parseXWebPublishedMutationTarget(identifier);
   const hasMedia = input.media !== undefined;
@@ -1241,7 +1242,7 @@ export async function readXWebPublishedMutationTarget(
   if (hasMedia !== (target.mediaId !== null)) {
     throw new Error("X provider-accepted post target did not bind the confirmed attachment shape");
   }
-  const text = requiredString(input.body, "input.body", 280);
+  const text = requiredString(input.body, "input.body", MAX_X_CREATE_TWEET_TEXT_LENGTH);
   const bootstrap = await bootstrapX(auth, recipe, options.dependencies);
   const viewer = await requireBoundViewer(bootstrap, auth);
   const readback = await tweetReadback(bootstrap, target.postId);
@@ -2122,6 +2123,26 @@ function tweetMediaIds(legacy: JsonRecord, expectedReadbackType: "photo" | "vide
   return Object.freeze(first);
 }
 
+/**
+ * Bind confirmed CreateTweet text from the long-form note_tweet record when
+ * present. Live long posts keep a short preview in legacy.full_text; that
+ * preview must not win over the exact note_tweet text or silently truncate.
+ */
+function boundCreateTweetText(
+  result: Readonly<Record<string, unknown>>,
+  legacy: Readonly<Record<string, unknown>>,
+): string | null {
+  if (
+    isRecord(result.note_tweet)
+    && isRecord(result.note_tweet.note_tweet_results)
+    && isRecord(result.note_tweet.note_tweet_results.result)
+    && typeof result.note_tweet.note_tweet_results.result.text === "string"
+  ) {
+    return result.note_tweet.note_tweet_results.result.text;
+  }
+  return typeof legacy.full_text === "string" ? legacy.full_text : null;
+}
+
 function assertTweetBinding(
   value: unknown,
   expectedText: string,
@@ -2135,13 +2156,7 @@ function assertTweetBinding(
   const result = unwrapTweet(value, `${label}.result`);
   const id = postId(result.rest_id, "X created post rest_id");
   const legacy = record(result.legacy, `${label}.legacy`);
-  const returnedText = typeof legacy.full_text === "string"
-    ? legacy.full_text
-    : isRecord(result.note_tweet) && isRecord(result.note_tweet.note_tweet_results)
-      && isRecord(result.note_tweet.note_tweet_results.result)
-      && typeof result.note_tweet.note_tweet_results.result.text === "string"
-      ? result.note_tweet.note_tweet_results.result.text
-      : null;
+  const returnedText = boundCreateTweetText(result, legacy);
   if (returnedText !== expectedText) throw new Error("X created post response did not bind the confirmed text");
   if (legacy.user_id_str !== expectedAuthorId) throw new Error("X created post response did not bind the confirmed viewer");
   const returnedReply = typeof legacy.in_reply_to_status_id_str === "string" ? legacy.in_reply_to_status_id_str : null;
@@ -2866,7 +2881,7 @@ async function executePublish(
     : null;
   const texts = action === "threads.publish"
     ? threadTexts(input)
-    : [stringInput(input, "body")];
+    : [requiredString(input.body, "input.body", MAX_X_CREATE_TWEET_TEXT_LENGTH)];
   const planned = texts.length;
   const posts: { readonly id: string; readonly url: string }[] = [];
   let started = 0;

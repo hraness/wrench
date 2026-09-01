@@ -7,6 +7,10 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+- Accept one `x-web` `posts.publish` body up to the reviewed CreateTweet
+  25000-unit bound without truncation. Bind long-form text from `note_tweet`
+  when CreateTweet returns a short `full_text` preview. Thread and reply item
+  caps stay 280.
 - Return a bound `cleanup-required` result when durable realm admission blocks
   an R1 read before dispatch. JSON callers retain the no-retry category while
   the cleanup-unsafe claim remains fail-closed.
