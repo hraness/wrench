@@ -264,7 +264,9 @@ function failedXFeedRead(
   });
   return {
     ...projected,
-    error: error instanceof Error ? error.message : projected.error,
+    error: error instanceof Error
+      ? error.message
+      : "X feed read failed before the dispatch boundary",
   };
 }
 
