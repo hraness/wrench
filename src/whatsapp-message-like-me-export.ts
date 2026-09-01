@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import {
   chmod,
   lstat,
@@ -10,19 +10,21 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
-import { createInterface } from "node:readline";
 import { createHash } from "node:crypto";
 import { dlopen, ptr } from "bun:ffi";
 
 import {
   exportBeeperMessageLikeMeBundle,
+  type BeeperMessageLikeMeArtifact,
   type BeeperMessageLikeMeBundleProgress,
+  type BeeperMessageLikeMeExportResult,
 } from "./beeper-message-like-me-export";
 import {
   createBeeperMessageLikeMeDirectoryLease,
   releaseBeeperMessageLikeMeDirectoryLease,
   type BeeperMessageLikeMeDirectoryLease,
 } from "./beeper-message-like-me-recovery";
+import { parseBeeperMessageLikeMeRecord } from "./beeper-message-bundle-v1";
 import { canonicalJson, sha256 } from "./canonical-json";
 import { removePrivateDirectoryTree } from "./storage";
 import {
@@ -100,6 +102,25 @@ type StagedManifest = Readonly<{
   bytes: number;
   sha256: string;
 }>;
+
+type PrivateFileIdentity = Readonly<{
+  device: number;
+  inode: number;
+  uid: number;
+  mode: number;
+  nlink: number;
+  bytes: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}>;
+
+type BoundV1Artifact = {
+  readonly path: string;
+  readonly manifest: BeeperMessageLikeMeArtifact;
+  readonly identity: PrivateFileIdentity;
+  readonly handle: FileHandle;
+  closed: boolean;
+};
 
 function fail(message: string): never {
   throw new Error(`WhatsApp Message Like Me export: ${message}`);
@@ -319,6 +340,195 @@ async function privateFileSha256(path: string, expectedBytes: number): Promise<s
   }
 }
 
+function samePrivateFileMetadata(
+  metadata: Stats,
+  identity: PrivateFileIdentity,
+): boolean {
+  return metadata.isFile()
+    && !metadata.isSymbolicLink()
+    && metadata.dev === identity.device
+    && metadata.ino === identity.inode
+    && metadata.uid === identity.uid
+    && (metadata.mode & 0o777) === identity.mode
+    && metadata.nlink === identity.nlink
+    && metadata.size === identity.bytes
+    && metadata.mtimeMs === identity.mtimeMs
+    && metadata.ctimeMs === identity.ctimeMs;
+}
+
+async function assertBoundV1Artifact(
+  root: PrivateDirectory,
+  input: BoundV1Artifact,
+): Promise<void> {
+  await assertPrivateDirectory(root.path, root.identity);
+  let opened: Stats;
+  let entry: Stats;
+  try {
+    opened = await input.handle.stat();
+    entry = await lstat(input.path);
+  } catch {
+    return fail(`${input.manifest.path} changed after v1 validation`);
+  }
+  if (
+    input.closed
+    || !samePrivateFileMetadata(opened, input.identity)
+    || !samePrivateFileMetadata(entry, input.identity)
+  ) return fail(`${input.manifest.path} changed after v1 validation`);
+}
+
+async function openBoundV1Artifact(
+  root: PrivateDirectory,
+  artifact: BeeperMessageLikeMeArtifact,
+): Promise<BoundV1Artifact> {
+  await assertPrivateDirectory(root.path, root.identity);
+  const path = resolve(root.path, artifact.path);
+  if (!path.startsWith(`${root.path}${sep}`)) {
+    return fail("validated v1 artifact path escaped its private bundle");
+  }
+  let handle: FileHandle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    return fail(`${artifact.path} changed before v1 conversion`);
+  }
+  try {
+    const uid = process.getuid?.();
+    const before = await handle.stat();
+    const entry = await lstat(path);
+    const after = await handle.stat();
+    if (
+      uid === undefined
+      || !before.isFile()
+      || before.isSymbolicLink()
+      || before.uid !== uid
+      || before.nlink !== 1
+      || (before.mode & 0o777) !== PRIVATE_FILE_MODE
+      || before.size !== artifact.bytes
+      || before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.uid !== after.uid
+      || before.nlink !== after.nlink
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || (before.mode & 0o777) !== (after.mode & 0o777)
+      || !entry.isFile()
+      || entry.isSymbolicLink()
+      || entry.dev !== after.dev
+      || entry.ino !== after.ino
+      || entry.uid !== after.uid
+      || entry.nlink !== after.nlink
+      || entry.size !== after.size
+      || entry.mtimeMs !== after.mtimeMs
+      || entry.ctimeMs !== after.ctimeMs
+      || (entry.mode & 0o777) !== PRIVATE_FILE_MODE
+    ) return fail(`${artifact.path} changed before v1 conversion`);
+    const input: BoundV1Artifact = {
+      path,
+      manifest: artifact,
+      identity: Object.freeze({
+        device: after.dev,
+        inode: after.ino,
+        uid: after.uid,
+        mode: after.mode & 0o777,
+        nlink: after.nlink,
+        bytes: after.size,
+        mtimeMs: after.mtimeMs,
+        ctimeMs: after.ctimeMs,
+      }),
+      handle,
+      closed: false,
+    };
+    await assertBoundV1Artifact(root, input);
+    return input;
+  } catch (error) {
+    try {
+      await handle.close();
+    } catch (closeError) {
+      throw new AggregateError(
+        [error, closeError],
+        "WhatsApp Message Like Me export: v1 artifact validation and close both failed",
+      );
+    }
+    throw error;
+  }
+}
+
+async function closeBoundV1Artifacts(inputs: readonly BoundV1Artifact[]): Promise<void> {
+  const errors: unknown[] = [];
+  for (const input of inputs) {
+    if (input.closed) continue;
+    input.closed = true;
+    try {
+      await input.handle.close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(
+      errors,
+      "WhatsApp Message Like Me export: validated v1 artifact handles could not be closed",
+    );
+  }
+}
+
+async function openBoundV1Artifacts(
+  root: PrivateDirectory,
+  result: BeeperMessageLikeMeExportResult,
+): Promise<BoundV1Artifact[]> {
+  if (
+    result.outputRoot !== root.path
+    || result.manifestPath !== resolve(root.path, "manifest.json")
+    || result.manifest.artifacts.length !== WHATSAPP_MESSAGE_BUNDLE_V2_ARTIFACTS.length
+  ) return fail("validated v1 bundle result does not identify the expected private bundle");
+  await assertPrivateDirectory(root.path, root.identity);
+  const expectedNames = [
+    ...result.manifest.artifacts.map((artifact) => artifact.path),
+    "manifest.json",
+  ].sort();
+  const observedNames = (await readdir(root.path)).sort();
+  if (
+    observedNames.length !== expectedNames.length
+    || observedNames.some((name, index) => name !== expectedNames[index])
+  ) return fail("validated v1 bundle no longer contains its exact seven-file inventory");
+
+  const manifestText = `${canonicalJson(result.manifest)}\n`;
+  const expectedManifestSha256 = sha256(manifestText);
+  if (
+    result.manifestSha256 !== expectedManifestSha256
+    || await privateFileSha256(result.manifestPath, Buffer.byteLength(manifestText, "utf8"))
+      !== expectedManifestSha256
+  ) return fail("validated v1 manifest changed before conversion");
+
+  const inputs: BoundV1Artifact[] = [];
+  try {
+    for (const [index, specification] of WHATSAPP_MESSAGE_BUNDLE_V2_ARTIFACTS.entries()) {
+      const artifact = result.manifest.artifacts[index];
+      if (
+        artifact === undefined
+        || artifact.path !== specification.path
+        || artifact.mediaType !== "application/x-ndjson"
+        || artifact.recordKind !== specification.kind
+        || artifact.records !== result.manifest.counts[specification.kind]
+      ) return fail("validated v1 manifest changed its fixed artifact binding");
+      inputs.push(await openBoundV1Artifact(root, artifact));
+    }
+    await assertPrivateDirectory(root.path, root.identity);
+    return inputs;
+  } catch (error) {
+    try {
+      await closeBoundV1Artifacts(inputs);
+    } catch (closeError) {
+      throw new AggregateError(
+        [error, closeError],
+        "WhatsApp Message Like Me export: v1 bundle binding and close both failed",
+      );
+    }
+    throw error;
+  }
+}
+
 async function validateCompleteBundle(
   root: string,
   identity: PrivateDirectoryIdentity,
@@ -389,50 +599,100 @@ async function createWriter(
 }
 
 async function convertArtifact(
-  inputRoot: string,
+  inputRoot: PrivateDirectory,
+  input: BoundV1Artifact,
   staging: PrivateDirectory,
   specification: typeof WHATSAPP_MESSAGE_BUNDLE_V2_ARTIFACTS[number],
   signal: AbortSignal | undefined,
   onRecord: (records: number) => void,
 ): Promise<WhatsAppMessageBundleV2Artifact> {
+  if (
+    input.manifest.path !== specification.path
+    || input.manifest.mediaType !== "application/x-ndjson"
+    || input.manifest.recordKind !== specification.kind
+  ) return fail("validated v1 artifact does not match its v2 conversion slot");
+  await assertBoundV1Artifact(inputRoot, input);
   const writer = await createWriter(staging, specification);
-  const inputHandle = await open(
-    resolve(inputRoot, specification.path),
-    constants.O_RDONLY | constants.O_NOFOLLOW,
-  );
   let failure: unknown;
   try {
-    const lines = createInterface({
-      input: inputHandle.createReadStream({ autoClose: false }),
-      crlfDelay: Infinity,
-    });
-    for await (const line of lines) {
+    const inputHash = createHash("sha256");
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const readBuffer = Buffer.allocUnsafe(64 * 1024);
+    let pending = Buffer.alloc(0);
+    let inputBytes = 0;
+    while (inputBytes < input.manifest.bytes) {
       throwIfAborted(signal);
-      if (line.length === 0) return fail(`${specification.path} contains an empty line`);
-      let raw: unknown;
-      try {
-        raw = JSON.parse(line) as unknown;
-      } catch {
-        return fail(`${specification.path} contains malformed JSON`);
+      const length = Math.min(readBuffer.byteLength, input.manifest.bytes - inputBytes);
+      const { bytesRead } = await input.handle.read(
+        readBuffer,
+        0,
+        length,
+        inputBytes,
+      );
+      if (bytesRead === 0) {
+        return fail(`${specification.path} ended before its manifested byte count`);
       }
-      const v1 = raw as Readonly<Record<string, unknown>>;
-      const v2 = parseWhatsAppMessageBundleV2Record({
-        ...v1,
-        schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
-      }, writer.records);
-      if (v2.kind !== specification.kind) {
-        return fail(`${specification.path} contains the wrong record kind`);
+      const chunk = readBuffer.subarray(0, bytesRead);
+      inputHash.update(chunk);
+      inputBytes += bytesRead;
+      const buffered = pending.byteLength === 0
+        ? chunk
+        : Buffer.concat([pending, chunk], pending.byteLength + chunk.byteLength);
+      let lineStart = 0;
+      for (;;) {
+        const lineEnd = buffered.indexOf(0x0a, lineStart);
+        if (lineEnd < 0) break;
+        const lineBytes = buffered.subarray(lineStart, lineEnd);
+        if (lineBytes.byteLength === 0) {
+          return fail(`${specification.path} contains an empty line`);
+        }
+        let raw: unknown;
+        try {
+          raw = JSON.parse(decoder.decode(lineBytes)) as unknown;
+        } catch {
+          return fail(`${specification.path} contains malformed UTF-8 JSON`);
+        }
+        const v1 = parseBeeperMessageLikeMeRecord(raw, writer.records);
+        if (v1.kind !== specification.kind) {
+          return fail(`${specification.path} contains the wrong v1 record kind`);
+        }
+        const v2 = parseWhatsAppMessageBundleV2Record({
+          ...v1,
+          schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
+        }, writer.records);
+        if (v2.kind !== specification.kind) {
+          return fail(`${specification.path} contains the wrong v2 record kind`);
+        }
+        const bytes = Buffer.from(`${canonicalJson(v2)}\n`, "utf8");
+        if (bytes.byteLength > WHATSAPP_MESSAGE_BUNDLE_V2_LIMITS.recordBytes) {
+          return fail("one v2 record exceeded its byte bound");
+        }
+        await writeAll(writer.handle, bytes);
+        writer.hash.update(bytes);
+        writer.records += 1;
+        writer.bytes += bytes.byteLength;
+        onRecord(writer.records);
+        lineStart = lineEnd + 1;
       }
-      const bytes = Buffer.from(`${canonicalJson(v2)}\n`, "utf8");
-      if (bytes.byteLength > WHATSAPP_MESSAGE_BUNDLE_V2_LIMITS.recordBytes) {
-        return fail("one v2 record exceeded its byte bound");
+      pending = Buffer.from(buffered.subarray(lineStart));
+      if (pending.byteLength > WHATSAPP_MESSAGE_BUNDLE_V2_LIMITS.recordBytes) {
+        return fail(`${specification.path} contains an overlong record`);
       }
-      await writeAll(writer.handle, bytes);
-      writer.hash.update(bytes);
-      writer.records += 1;
-      writer.bytes += bytes.byteLength;
-      onRecord(writer.records);
     }
+    const extra = Buffer.allocUnsafe(1);
+    if ((await input.handle.read(extra, 0, 1, inputBytes)).bytesRead !== 0) {
+      return fail(`${specification.path} exceeded its manifested byte count`);
+    }
+    if (pending.byteLength !== 0) {
+      return fail(`${specification.path} does not end at an NDJSON record boundary`);
+    }
+    if (writer.records !== input.manifest.records) {
+      return fail(`${specification.path} record count changed after v1 validation`);
+    }
+    if (inputHash.digest("hex") !== input.manifest.sha256) {
+      return fail(`${specification.path} digest changed after v1 validation`);
+    }
+    await assertBoundV1Artifact(inputRoot, input);
     await writer.handle.sync();
     const metadata = await writer.handle.stat();
     if (
@@ -445,11 +705,6 @@ async function convertArtifact(
   } catch (error) {
     failure = error;
   } finally {
-    try {
-      await inputHandle.close();
-    } catch (error) {
-      failure ??= error;
-    }
     try {
       await writer.handle.close();
     } catch (error) {
@@ -594,6 +849,7 @@ export async function exportWhatsAppMessageLikeMeBundle(
   let staging: PrivateDirectory | undefined;
   let workingLease: BeeperMessageLikeMeDirectoryLease | undefined;
   let stagingLease: BeeperMessageLikeMeDirectoryLease | undefined;
+  let v1Inputs: BoundV1Artifact[] = [];
   let renamed = false;
   let published = false;
   let operationError: unknown;
@@ -618,6 +874,15 @@ export async function exportWhatsAppMessageLikeMeBundle(
     });
     throwIfAborted(request.signal);
     await assertPrivateDirectory(working.path, working.identity);
+    const v1Directory = Object.freeze({
+      path: v1Root,
+      identity: await assertPrivateDirectory(v1Root),
+    });
+    if (
+      dirname(v1Directory.path) !== working.path
+      || v1Directory.identity.device !== working.identity.device
+    ) return fail("validated v1 bundle escaped its owned private working directory");
+    v1Inputs = await openBoundV1Artifacts(v1Directory, v1);
     await assertParentUnchanged(output);
     staging = await createPrivateDirectory(output, ".wrench-whatsapp-mlm-stage-");
     stagingLease = await createDirectoryLease({
@@ -631,8 +896,11 @@ export async function exportWhatsAppMessageLikeMeBundle(
     const artifacts: WhatsAppMessageBundleV2Artifact[] = [];
     let totalRecords = 0;
     for (const [index, specification] of WHATSAPP_MESSAGE_BUNDLE_V2_ARTIFACTS.entries()) {
+      const input = v1Inputs[index];
+      if (input === undefined) return fail("validated v1 artifact binding is incomplete");
       artifacts.push(await convertArtifact(
-        v1Root,
+        v1Directory,
+        input,
         staging,
         specification,
         request.signal,
@@ -649,6 +917,7 @@ export async function exportWhatsAppMessageLikeMeBundle(
         },
       ));
     }
+    await closeBoundV1Artifacts(v1Inputs);
     const counts = Object.freeze(Object.fromEntries(
       artifacts.map((artifact) => [artifact.recordKind, artifact.records]),
     )) as WhatsAppMessageBundleV2Manifest["counts"];
@@ -737,6 +1006,11 @@ export async function exportWhatsAppMessageLikeMeBundle(
     throw error;
   } finally {
     const cleanupErrors: unknown[] = [];
+    try {
+      await closeBoundV1Artifacts(v1Inputs);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
     if (!published && staging !== undefined) {
       let removalDurable = true;
       try {

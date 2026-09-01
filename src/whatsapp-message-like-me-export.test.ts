@@ -234,6 +234,56 @@ describe("WhatsApp Message Like Me v2 bundle publication", () => {
     }
   });
 
+  test("rejects a same-UID graph-valid v1 artifact replacement during v2 conversion", async () => {
+    const parent = privateParent();
+    const output = resolve(parent, "v1-replacement-bundle");
+    let replaced = false;
+    try {
+      let caught: unknown;
+      try {
+        await exportWhatsAppMessageLikeMeBundle({
+          outputRoot: output,
+          source: source([
+            accountRecord(),
+            participant("participant-self", SELF_JID, true),
+          ]),
+          onProgress: (progress) => {
+            if (replaced || progress.phase !== "v2-conversion") return;
+            const workingName = readdirSync(parent).find((name) =>
+              name.startsWith(".wrench-whatsapp-mlm-work-")
+            );
+            if (workingName === undefined) throw new Error("expected the private v1 working bundle");
+            const inputPath = join(parent, workingName, "validated-v1", "participants.ndjson");
+            const original = readFileSync(inputPath, "utf8");
+            const altered = original.replace('"displayName":null', '"displayName":"xx"');
+            if (altered === original || Buffer.byteLength(altered) !== Buffer.byteLength(original)) {
+              throw new Error("expected a same-size graph-valid participant mutation");
+            }
+            const replacementPath = `${inputPath}.same-uid-replacement`;
+            writeFileSync(replacementPath, altered, { flag: "wx", mode: 0o600 });
+            const replacement = lstatSync(replacementPath);
+            if (
+              replacement.uid !== process.getuid?.()
+              || replacement.nlink !== 1
+              || (replacement.mode & 0o777) !== 0o600
+            ) throw new Error("expected an owned singly-linked private replacement");
+            renameSync(replacementPath, inputPath);
+            replaced = true;
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(replaced).toBeTrue();
+      expect(errorMessages(caught).join("\n"))
+        .toContain("participants.ndjson changed after v1 validation");
+      expect(existsSync(output)).toBeFalse();
+      expect(readdirSync(parent)).toEqual([]);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   test("refuses an output parent writable by another user class", async () => {
     const parent = privateParent();
     const output = resolve(parent, "unsafe-parent-bundle");
