@@ -7,6 +7,10 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+- Accept one `x-web` `posts.publish` body up to the reviewed CreateTweet
+  25000-unit bound without truncation. Bind long-form text from `note_tweet`
+  when CreateTweet returns a short `full_text` preview. Thread and reply item
+  caps stay 280.
 - Recover an orphaned same-boot browser session through a durable doctor lease
   bound to its exact daemon start identity, launch, CDP endpoint, and private
   root generations. Prepared, launch-intent, quiescent, and per-root removal

@@ -652,8 +652,21 @@ function exactMutationPostId(value: unknown, label: string): string {
   return value;
 }
 
+/**
+ * Reviewed CreateTweet `tweet_text` ceiling. Live X long posts use this bound
+ * (not the stale 280 short-post schema). UTF-16 length matches the existing
+ * mutation validator; the conservative weighted catalog uses the same number
+ * as its unit ceiling so a 1158-character ASCII body stays valid input.
+ */
+export const MAX_X_CREATE_TWEET_TEXT_LENGTH = 25_000;
+
 function exactMutationText(value: unknown): void {
-  if (typeof value !== "string" || value.length < 1 || value.length > 25_000 || /[\0\r]/u.test(value)) {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > MAX_X_CREATE_TWEET_TEXT_LENGTH
+    || /[\0\r]/u.test(value)
+  ) {
     throw new Error("X CreateTweet text must be bounded and contain no NUL or carriage return");
   }
 }

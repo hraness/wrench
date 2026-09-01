@@ -11,6 +11,7 @@ import {
   enforceXWebHeaderSinkPolicy,
   extractXWebGraphQlReadResponseRoot,
   extractXWebUrtBottomCursor,
+  MAX_X_CREATE_TWEET_TEXT_LENGTH,
   normalizeXWebGraphQlTimelineResponse,
   normalizeXWebProfileHandle,
   parseXWebBookmarkExportPage,
@@ -609,6 +610,36 @@ describe("strict GraphQL operation/path/query-ID binding", () => {
     );
     expect(() => request({ semantic_annotation_ids: ["ai-label"] })).toThrow(
       "semantic annotations are outside the reviewed contract",
+    );
+  });
+
+  test("authorizes CreateTweet tweet_text up to the reviewed long-post bound and rejects overflow", () => {
+    const resolved = descriptor("CreateTweet");
+    const features = Object.fromEntries(resolved.metadata.featureSwitches.map((name) => [name, false]));
+    const fieldToggles = Object.fromEntries(resolved.metadata.fieldToggles.map((name) => [name, false]));
+    const body = (tweetText: string) => ({
+      variables: {
+        tweet_text: tweetText,
+        dark_request: false,
+        media: { media_entities: [], possibly_sensitive: false },
+        semantic_annotation_ids: [],
+      },
+      features,
+      ...(resolved.metadata.fieldToggles.length === 0 ? {} : { fieldToggles }),
+      queryId: resolved.queryId,
+    });
+    const authorize = (tweetText: string) => authorizeXWebMutationRequest("posts.publish", {
+      method: "POST",
+      url: graphqlUrl(resolved),
+      descriptor: resolved,
+      body: body(tweetText),
+    });
+    expect(authorize("A".repeat(1158))).toMatchObject({ operationName: "CreateTweet" });
+    expect(authorize("B".repeat(MAX_X_CREATE_TWEET_TEXT_LENGTH))).toMatchObject({
+      operationName: "CreateTweet",
+    });
+    expect(() => authorize("C".repeat(MAX_X_CREATE_TWEET_TEXT_LENGTH + 1))).toThrow(
+      "X CreateTweet text must be bounded and contain no NUL or carriage return",
     );
   });
 
