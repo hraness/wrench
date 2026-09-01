@@ -714,10 +714,11 @@ and reconciliation rules.
 The checked Beeper coverage ledger fully accounts for all 101 public manual
 command paths; this is provenance coverage, not supported-command parity.
 Forty-one paths collapse to the 32 semantic operations. `accounts use` is
-absorbed into explicit account IDs; target status, status, version, and
-top-level export are internal; account add/remove and message deletion are
-R4/capture-required; and 53 paths are unsupported. The selected 32-operation
-adapter has zero capture-required actions. Wrench does not turn administrative,
+absorbed into explicit account IDs; `targets status`, `version`, and top-level
+`export` are internal; `accounts add`, `accounts remove`, and `messages delete`
+are R4 and unavailable to provider dispatch; and plain `status` is among the
+53 unsupported paths. None of those three R4 paths appears in the selected
+32-operation provider adapter. Wrench does not turn administrative,
 destructive, caller-selected network, or arbitrary-filesystem commands into
 agent authority.
 

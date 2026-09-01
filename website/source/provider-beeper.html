@@ -75,7 +75,7 @@
               <p>Send text, files, stickers, or voice; edit an authored message; start a conversation; change read state or group metadata; set disappearing-message retention; send Notify Anyway; and emit bounded presence.</p>
             </article>
           </div>
-          <p><a href="/provider-capabilities/#provider-beeper">Inspect the operation-level contracts, risks, and limits</a>.</p>
+          <p>Browse <a href="/provider-capabilities/#provider-beeper">Beeper's supported action names and access methods</a>.</p>
         </section>
 
         <section aria-labelledby="setup">
@@ -87,7 +87,7 @@ wrench adapter sync-bundled --json
 wrench auth add beeper-main --linked-device beeper \
   --device-store "${HOME}/.beeper"
 wrench auth bind beeper-main --site beeper</code></pre></div>
-          <p>If a package manager installs different bytes, extract the matching release asset for your platform and place the executable at <code>&lt;WRENCH_STATE_HOME&gt;/tools/beeper/{{BEEPER_CLI_VERSION}}/beeper</code>. When <code>WRENCH_STATE_HOME</code> is unset, the default state root is <code>~/.local/share/wrench</code>. The artifact table below links the direct official asset for every supported macOS and Linux architecture. Wrench rejects an unpinned executable before private work. The authoritative executable identity is <code>@beeper/cli</code> {{BEEPER_CLI_VERSION}}; the tagged source <code>package.json</code> declares 0.6.1 and is provenance only. A Beeper Desktop update changes the bound runtime realm and requires explicit review and rebind.</p>
+          <p>If a package manager installs different bytes, extract the matching release asset for your platform and place the executable at <code>&lt;WRENCH_STATE_HOME&gt;/tools/beeper/{{BEEPER_CLI_VERSION}}/beeper</code>. When <code>WRENCH_STATE_HOME</code> is unset, the default state root is <code>~/.local/share/wrench</code>. The artifact table below links the direct official asset for every supported macOS and Linux architecture. Wrench rejects an unpinned executable before private work. The authoritative executable identity is <code>@beeper/cli</code> {{BEEPER_CLI_VERSION}}. Its exact reviewed provenance records this discrepancy: {{BEEPER_CLI_SOURCE_VERSION_DISCREPANCY}} The tagged source path is <code>{{BEEPER_CLI_SOURCE_PACKAGE_PATH}}</code>, and its declared {{BEEPER_CLI_SOURCE_DECLARED_VERSION}} is provenance only. A Beeper Desktop update changes the bound runtime realm and requires explicit review and rebind.</p>
         </section>
 
         <section aria-labelledby="boundary">
@@ -157,7 +157,7 @@ wrench beeper export-contact-interactions --auth beeper-main --json \
         <section aria-labelledby="limits">
           <h2 id="limits">Limits remain visible</h2>
           <p>Beeper CLI {{BEEPER_CLI_VERSION}} exposes no continuation for several list and search commands and may cap results below the requested limit. Desktop message reads use opaque before/after cursors returned by the reviewed endpoint and an optional sender filter; callers must pass those returned values rather than deriving cursors from message IDs. Wrench returns bounded candidate windows instead of claiming complete history.</p>
-          <p>The checked coverage ledger fully accounts for all {{BEEPER_CLI_COMMAND_COUNT}} public manual command paths; that is provenance coverage, not supported-command parity. Forty-one paths collapse to the 32 semantic operations. <code>accounts use</code> is absorbed into explicit account IDs; target status, status, version, and top-level export are internal; account add/remove and message deletion are R4/capture-required; and 53 paths are unsupported. The selected 32-operation adapter has zero capture-required actions.</p>
+          <p>The checked coverage ledger fully accounts for all {{BEEPER_CLI_COMMAND_COUNT}} public manual command paths; that is provenance coverage, not supported-command parity. Forty-one paths collapse to the 32 semantic operations. <code>accounts use</code> is absorbed into explicit account IDs; <code>targets status</code>, <code>version</code>, and top-level <code>export</code> are internal; <code>accounts add</code>, <code>accounts remove</code>, and <code>messages delete</code> are R4 and unavailable to provider dispatch; and plain <code>status</code> is among the 53 unsupported paths. None of those three R4 paths appears in the selected 32-operation provider adapter.</p>
           <p><code>messages.delete</code> is deliberately inert. Upstream <code>--for-everyone</code> requests can fall back to deletion for only the authenticated user when a network cannot delete for everyone, while the reviewed Desktop endpoint returns a void success response. Wrench therefore cannot prove the requested network-visible effect, never dispatches this action, and does not turn a local disappearance into a deletion receipt.</p>
           <p><code>media.download</code> remains unavailable because the official CLI buffers the complete media body to stdout before Wrench can enforce a streaming byte bound; no reviewed bounded worker accepts only a prior-message-bound opaque media handle. <code>watch</code> and outbound webhooks remain unavailable because their open-ended stream has no reviewed finite supervisor and proven termination contract. The top-level CLI export is internal-only: Wrench invokes a fixed, bounded, owner-private shard workflow with <code>--no-attachments</code>; callers cannot select raw export arguments, paths, or coverage claims.</p>
           <p><a href="https://developers.beeper.com/desktop-api/">Beeper recommends its Desktop API for personal use</a> and warns that sending too many messages may result in suspension by connected networks. Wrench bounds each operation, but it cannot waive Beeper's terms or a network's throttling, automation, or suspension rules.</p>
@@ -165,7 +165,7 @@ wrench beeper export-contact-interactions --auth beeper-main --json \
 
         <aside class="guide-callout" aria-labelledby="beeper-next">
           <h2 id="beeper-next">Inspect the local state before binding an account</h2>
-          <p>Install <a href="/getting-started/">Wrench {{WRENCH_RELEASE}}</a>, run <code>wrench doctor --json</code>, inspect <a href="/provider-capabilities/#provider-beeper">all Beeper contracts</a>, then read the <a href="/security/">security and local-custody guide</a>.</p>
+          <p>Install <a href="/getting-started/">Wrench {{WRENCH_RELEASE}}</a>, run <code>wrench doctor --json</code>, browse <a href="/provider-capabilities/#provider-beeper">Beeper's supported action names and access methods</a>, then read the <a href="/security/">security and local-custody guide</a>.</p>
         </aside>
       </article>
     </main>

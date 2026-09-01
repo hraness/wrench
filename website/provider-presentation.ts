@@ -1,6 +1,7 @@
 import {
   BEEPER_CLI_COMMAND_COVERAGE,
   BEEPER_CLI_PIN,
+  BEEPER_CLI_V062_SURFACE_CONTRACT,
   BEEPER_DESKTOP_API_PIN,
   BEEPER_LOCAL_OPERATION_NAMES,
 } from "../src/providers/beeper-local";
@@ -86,6 +87,9 @@ export type BeeperPresentationFacts = Readonly<{
   cliCommit: string;
   cliReleaseManifestSha256: string;
   cliReleaseUrl: string;
+  cliSourceDeclaredVersion: string;
+  cliSourcePackagePath: string;
+  cliSourceVersionDiscrepancy: string;
   cliVersion: string;
   desktopApiCommit: string;
   desktopApiVersion: string;
@@ -366,7 +370,7 @@ export function renderProviderOverviewCards(directory: ProviderDirectory): strin
     `<p class="provider-capabilities">${entry.capabilities.map(escapeHtml).join(" · ")}</p>`,
     `<p class="provider-transport">${entry.transports.map(transportLabel).join(" + ")}</p>`,
     entry.surfaceId === "beeper"
-      ? '<p class="provider-feature-copy">Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.</p>'
+      ? '<p class="provider-feature-copy">32 reviewed actions: 27 through one pinned CLI and five fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.</p>'
       : "",
     "</article>",
   ].join("")).join("");
@@ -510,6 +514,11 @@ export function createBeeperPresentationFacts(
     cliCommit: BEEPER_CLI_PIN.commit,
     cliReleaseManifestSha256: BEEPER_CLI_PIN.releaseManifestSha256,
     cliReleaseUrl: BEEPER_CLI_PIN.releaseUrl,
+    cliSourceDeclaredVersion:
+      BEEPER_CLI_V062_SURFACE_CONTRACT.source.packageDeclaredVersion,
+    cliSourcePackagePath: BEEPER_CLI_V062_SURFACE_CONTRACT.source.packagePath,
+    cliSourceVersionDiscrepancy:
+      BEEPER_CLI_V062_SURFACE_CONTRACT.source.versionDiscrepancy,
     cliVersion: BEEPER_CLI_PIN.version,
     desktopApiCommit: BEEPER_DESKTOP_API_PIN.commit,
     desktopApiVersion: BEEPER_DESKTOP_API_PIN.version,

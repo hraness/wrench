@@ -15,7 +15,7 @@ and adds five fixed Beeper Desktop loopback reads, for 32 named operations in
 all. The source plugin owns executable and endpoint verification, Desktop-target
 and account binding, strict projections, process bounds, and mutation recovery.
 See the public [Beeper provider guide](https://wrench.rip/providers/beeper/) and
-the current release's [operation attestation](https://wrench.rip/provider-capabilities/#provider-beeper).
+the current release's [supported-action directory](https://wrench.rip/provider-capabilities/#provider-beeper).
 
 The selected operation set is 25 operations at contract version 1, six at
 version 2, and `messaging.read` at version 3. The five direct loopback reads are
@@ -26,10 +26,11 @@ declares 0.6.1, which is provenance only.
 
 The 101 public manual command paths are fully accounted for as provenance, not
 as supported-command parity. Forty-one paths collapse to 32 operations.
-`accounts use` is absorbed into explicit account IDs; target status, status,
-version, and top-level export are internal; account add/remove and message
-deletion are R4/capture-required; and 53 paths are unsupported. The selected
-adapter has zero capture-required operations.
+`accounts use` is absorbed into explicit account IDs; `targets status`,
+`version`, and top-level `export` are internal; the R4 paths `accounts add`,
+`accounts remove`, and `messages delete` are unavailable to provider dispatch;
+and plain `status` is among the 53 unsupported paths. None of those three R4
+paths appears in the selected 32-operation provider adapter.
 
 ## Keep three versions separate
 

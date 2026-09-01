@@ -75,6 +75,10 @@ describe("provider presentation", () => {
       cliCommandCount: 101,
       cliCommit: "a416af06023449a87312dc11e54643fd9dc94b8c",
       cliReleaseUrl: "https://github.com/beeper/cli/releases/tag/v0.6.2",
+      cliSourceDeclaredVersion: "0.6.1",
+      cliSourcePackagePath: "packages/cli/package.json",
+      cliSourceVersionDiscrepancy:
+        "Official v0.6.2 binaries.json and the exact executable report 0.6.2, while package.json at tag a416af06023449a87312dc11e54643fd9dc94b8c declares 0.6.1; executable runtime identity remains authoritative.",
       cliVersion: "0.6.2",
       desktopApiCommit: "b9c1714410139c2139b597338cd002d785653e85",
       desktopApiVersion: "5.0.0",
@@ -146,6 +150,10 @@ describe("provider presentation", () => {
     expect(cards.indexOf(">Beeper</a>")).toBeLessThan(cards.indexOf(">Bluesky</a>"));
     expect(cards).toContain("32 supported actions");
     expect(cards).toContain("Accounts · Bridges · Contacts · Conversations · Messages · Presence · Reactions");
+    expect(cards).toContain(
+      "32 reviewed actions: 27 through one pinned CLI and five fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.",
+    );
+    expect(cards).not.toContain("other supported actions");
     expect(cards).not.toContain("{{");
     expect(cards).not.toMatch(/observed|capture-required|adapter/iu);
     expect(groups.match(/class="provider-attestation-group"/gu)).toHaveLength(directory.providerCount);

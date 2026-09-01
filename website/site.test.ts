@@ -323,6 +323,7 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('data-hraness-marketing="cta"');
     expect(html).toContain("The same boundary from three surfaces.");
     expect(html).toContain('import { isProviderPluginId } from "@hraness/wrench"');
+    expect(html).toMatch(/Reviewed operations across \d+ supported services\./u);
     expect(html).toContain('class="wordmark" href="/">Wrench</a>');
     expect(html).not.toMatch(/hero-field|hero-orbit|hero-glyph/u);
     expect(html).not.toMatch(/observed provider operations|capture-required|unavailable reservations/iu);
@@ -374,6 +375,8 @@ describe("wrench.rip static site", () => {
     expect(llms).not.toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
     expect(llms).toContain("pending message ID proves submission to Desktop only, not network delivery");
+    expect(llms).toContain("tagged `packages/cli/package.json` declares 0.6.1 and is provenance-only");
+    expect(llms).toContain("exact executable runtime identity remains authoritative");
     expect(llms.replaceAll(/https:\/\/wrench\.rip\/[a-z0-9-/]+/gu, "")).not.toMatch(
       /observed|capture-required|reservation|attestation/iu,
     );
@@ -872,11 +875,19 @@ describe("wrench.rip static site", () => {
     expect(html.match(/class="provider-feature-copy"/gu)).toHaveLength(1);
     expect(providerCapabilities?.html.match(/class="provider-feature-copy"/gu)).toHaveLength(1);
     expect(html).toContain(
-      "Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.",
+      "32 reviewed actions: 27 through one pinned CLI and five fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.",
     );
     expect(providerCapabilities?.html).toContain(
-      "Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.",
+      "32 reviewed actions: 27 through one pinned CLI and five fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.",
     );
+    expect(html).toContain(
+      `<h2 id="providers-title">Reviewed operations across ${String(providerDirectory.providerCount)} supported services.</h2>`,
+    );
+    expect(html).toContain(
+      "These cards summarize capability families and access methods, then link",
+    );
+    expect(html).toContain("to the named actions supported in this release");
+    expect(html).not.toContain("Each card names the actions");
     for (const entry of providerDirectory.entries) {
       expect(html).toContain(`data-provider-icon="${entry.icon}"`);
       expect(providerCapabilities?.html).toContain(`data-provider-icon="${entry.icon}"`);
@@ -917,6 +928,10 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).toContain(`adapter <code>beeper-local</code> ${beeperFacts.adapterVersion}`);
     expect(beeper?.html).toContain(`official Beeper CLI ${beeperFacts.cliVersion}`);
     expect(beeper?.html).toContain(
+      `The tagged source path is <code>${beeperFacts.cliSourcePackagePath}</code>, and its declared ${beeperFacts.cliSourceDeclaredVersion} is provenance only`,
+    );
+    expect(beeper?.html).toContain(beeperFacts.cliSourceVersionDiscrepancy);
+    expect(beeper?.html).toContain(
       `href="${beeperFacts.cliReleaseUrl}">official ${beeperFacts.cliVersion} release</a>`,
     );
     expect(beeper?.html).toContain(
@@ -944,6 +959,15 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).toContain("versioned Message Like Me and contact-interaction exports");
     expect(beeper?.html).toContain("It wraps only the actions listed for this release");
     expect(beeper?.html).toContain(`all ${beeperFacts.cliCommandCount} public manual command paths`);
+    expect(beeper?.html.match(/Beeper's supported action names and access methods/gu))
+      .toHaveLength(2);
+    expect(beeper?.html).not.toContain("operation-level contracts, risks, and limits");
+    expect(beeper?.html).not.toContain("all Beeper contracts");
+    expect(beeper?.html).toContain("<code>targets status</code>, <code>version</code>, and top-level <code>export</code> are internal");
+    expect(beeper?.html).toContain("plain <code>status</code> is among the 53 unsupported paths");
+    expect(beeper?.html).toContain("<code>messages delete</code> are R4 and unavailable to provider dispatch");
+    expect(beeper?.html).toContain("None of those three R4 paths appears in the selected 32-operation provider adapter");
+    expect(beeper?.html).not.toContain("R4/capture-required");
     expect(beeper?.html).toContain("messages.delete");
     expect(beeper?.html).toContain("fall back to deletion for only the authenticated user");
     expect(beeper?.html).toContain("returns a void success response");
