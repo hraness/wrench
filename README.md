@@ -174,8 +174,10 @@ The package root exposes programmatic plugin types and bounded validators.
 `@hraness/wrench/client` exposes persistent-read and strict live-invocation
 helpers, `@hraness/wrench/beeper` exposes the body-free Beeper contact
 interaction export, `@hraness/wrench/apple-photos` exposes exact local Photos
-contact evidence, and `@hraness/wrench/omni` exposes normalized cross-provider
-reads. Importing any SDK entrypoint does not start the CLI.
+contact evidence, `@hraness/wrench/whatsapp` exposes the bounded private
+Message Like Me export, `@hraness/wrench/omni` exposes normalized
+cross-provider reads, and `@hraness/wrench/messaging` exposes agentic messaging
+route discovery and resolution. Importing any SDK entrypoint does not start the CLI.
 Importing the package root also does not inspect local state or load provider
 runtimes.
 
@@ -514,10 +516,12 @@ distinct `ZASSET`-row counts, first and last linked asset dates, capture scope,
 privacy exclusions, path-free library realm, generation and schema digests,
 component capture intervals, and an integrity-bound receipt. Cluster
 identifiers and counts are private biometric-derived metadata. Wrench does not
-open or ask Photos to materialize referenced photo or video asset files. Its
-full private SQLite captures can contain other source fields, but names, paths,
-images, media, raw database fields, locations, faceprint templates, face crops,
-and unmatched clusters are excluded from the returned JSON.
+open, copy, or ask Photos to materialize referenced photo or video asset files.
+Its transient captures are full private Photos and Contacts SQLite database
+copies and can include unselected columns and raw blobs. The privacy exclusions
+apply only to the returned JSON: names, paths, images, media, raw database
+fields, locations, faceprint templates, face crops, and unmatched clusters are
+excluded.
 
 ```ts
 import {
