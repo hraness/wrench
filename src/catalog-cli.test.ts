@@ -67,6 +67,22 @@ test("catalogs the installed local CLI capability with its exact contract and to
       readonly artifacts?: readonly unknown[];
     } | undefined;
     expect(tool?.artifacts).toHaveLength(4);
+    for (const operationId of [
+      "accounts.list",
+      "messaging.search",
+      "conversations.read",
+      "messaging.content.search",
+      "messaging.read",
+    ]) {
+      expect(view.adapters[0]?.operations.find((entry) =>
+        entry.id === operationId)).toMatchObject({
+          transport: "local-cli",
+          surface: "beeper",
+          localCliAction: operationId,
+          localCliContractVersion: 2,
+          state: "observed",
+        });
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

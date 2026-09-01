@@ -230,13 +230,15 @@ type ConversationInput = AccountInput & Readonly<{ conversationId: string }>;
 type ConversationReadInput = ConversationInput & Readonly<{ maxParticipants: number }>;
 type MessageInput = ConversationInput & Readonly<{ messageId: string }>;
 type MessageContextInput = MessageInput & Readonly<{ before: number; after: number }>;
-type MessageSearchInput = Readonly<{
+export type BeeperMessageContentSearchInput = Readonly<{
   query: string | null;
   accountId: string | null;
   conversationId: string | null;
   chatType: "group" | "single" | null;
   after: string | null;
   before: string | null;
+  beforeCursor: string | null;
+  afterCursor: string | null;
   excludeLowPriority: boolean;
   includeMuted: boolean;
   media: readonly ("any" | "video" | "image" | "link" | "file")[];
@@ -278,7 +280,7 @@ export type BeeperOperationInput =
   | EmptyInput | AccountInput | BridgeListInput | BridgeInput | ContactInput
   | BeeperContactsListInput | BeeperContactsSearchInput | BeeperMessagingListInput
   | BeeperMessagingSearchInput | ConversationReadInput | BeeperMessagingReadInput
-  | MessageSearchInput | MessageInput | MessageContextInput | SendInput
+  | BeeperMessageContentSearchInput | MessageInput | MessageContextInput | SendInput
   | ReactionInput | EditInput | StartInput | BooleanStateInput | ReadStateInput
   | PriorityInput | TextStateInput | FileStateInput | DraftInput
   | DisappearingInput | ReminderInput | FocusInput | PresenceInput;
@@ -499,10 +501,10 @@ export function parseBeeperMessagingReadInput(input: OperationInput): BeeperMess
   return Object.freeze({ accountId: accountId(source, "messaging.read input"), conversationId: conversationId(source, "messaging.read input"), beforeCursor, afterCursor, limit: source.limit === undefined ? 200 : integer(source.limit, "messaging.read input.limit", 1, 200) });
 }
 
-function parseMessageSearchInput(input: OperationInput): MessageSearchInput {
+function parseMessageSearchInput(input: OperationInput): BeeperMessageContentSearchInput {
   const label = "messaging.content.search input";
   const source = record(input, label);
-  exactKeys(source, [], ["query", "account_id", "conversation_id", "chat_type", "after", "before", "exclude_low_priority", "include_muted", "media", "sender", "limit"], label);
+  exactKeys(source, [], ["query", "account_id", "conversation_id", "chat_type", "after", "before", "before_cursor", "after_cursor", "exclude_low_priority", "include_muted", "media", "sender", "limit"], label);
   const query = source.query === undefined ? null : normalizedSearchQuery(source.query, `${label}.query`);
   const account = optionalOpaque(source.account_id, `${label}.account_id`, 512);
   const conversation = source.conversation_id === undefined
@@ -512,6 +514,9 @@ function parseMessageSearchInput(input: OperationInput): MessageSearchInput {
   const after = optionalTimestamp(source.after, `${label}.after`);
   const before = optionalTimestamp(source.before, `${label}.before`);
   if (after !== null && before !== null && Date.parse(after) > Date.parse(before)) throw new Error(`${label}.after must not follow before`);
+  const beforeCursor = optionalOpaque(source.before_cursor, `${label}.before_cursor`, 2_048);
+  const afterCursor = optionalOpaque(source.after_cursor, `${label}.after_cursor`, 2_048);
+  if (beforeCursor !== null && afterCursor !== null) throw new Error(`${label} accepts only one cursor direction`);
   const media: readonly ("any" | "video" | "image" | "link" | "file")[] =
     source.media === undefined
       ? Object.freeze([])
@@ -524,6 +529,7 @@ function parseMessageSearchInput(input: OperationInput): MessageSearchInput {
   if (query === null && account === null && conversation === null && chatType === null && after === null && before === null && media.length === 0 && sender === null) throw new Error(`${label} requires a query or an exact filter`);
   return Object.freeze({
     query, accountId: account, conversationId: conversation, chatType, after, before,
+    beforeCursor, afterCursor,
     excludeLowPriority: source.exclude_low_priority === undefined ? true : bool(source.exclude_low_priority, `${label}.exclude_low_priority`),
     includeMuted: source.include_muted === undefined ? true : bool(source.include_muted, `${label}.include_muted`),
     media: Object.freeze(media), sender,
@@ -867,7 +873,7 @@ export function planBeeperOperationCommand(
     ], false);
   }
   if (action === "messaging.content.search") {
-    const value = input as MessageSearchInput;
+    const value = input as BeeperMessageContentSearchInput;
     return command(action, [
       "messages", "search",
       ...(value.query === null ? [] : [value.query]),

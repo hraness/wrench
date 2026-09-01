@@ -852,14 +852,14 @@ describe("npm publication contract", () => {
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain(
-      "measured the merged PR #117 and PR #118 candidate at",
+      "packed the rebased v0.16.2 Beeper direct-read candidate",
     );
-    expect(budget).toContain("11,200,629 unpacked bytes and 435 files");
-    expect(budget).toContain("prior CI for that\n// same v0.16.2 payload measured a");
-    expect(budget).toContain("2,021,302 packed bytes");
-    expect(MAX_PACKED_BYTES).toBe(2_050_000);
+    expect(budget).toContain("11,320,511 unpacked bytes, and 437 files");
+    expect(budget).toContain("earlier v0.16.2 payload measured a 3,543-byte");
+    expect(budget).toContain("2,052,563 packed bytes");
+    expect(MAX_PACKED_BYTES).toBe(2_075_000);
     expect(MAX_PACKED_FILES).toBe(450);
-    expect(MAX_UNPACKED_BYTES).toBe(11_300_000);
+    expect(MAX_UNPACKED_BYTES).toBe(11_425_000);
     expect(Object.isFrozen(packageArtifactBudget)).toBe(true);
     for (const range of Object.values(packageArtifactBudget)) {
       expect(Object.isFrozen(range)).toBe(true);
@@ -867,8 +867,8 @@ describe("npm publication contract", () => {
     expect(packageArtifactBudget).toEqual({
       entryCount: { min: 350, max: 450 },
       fileCount: { min: 350, max: 450 },
-      packedBytes: { min: 1_600_000, max: 2_050_000 },
-      unpackedBytes: { min: 9_000_000, max: 11_300_000 },
+      packedBytes: { min: 1_600_000, max: 2_075_000 },
+      unpackedBytes: { min: 9_000_000, max: 11_425_000 },
     });
   });
 

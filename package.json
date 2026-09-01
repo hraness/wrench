@@ -87,6 +87,8 @@
     "src/assets/adapters/beeper/wrench-web-adapter.json",
     "src/assets/adapters/beeper/wrench-web-adapter.v1.0.0.json",
     "src/assets/adapters/beeper/wrench-web-adapter.v1.1.0.json",
+    "src/assets/adapters/beeper/wrench-web-adapter.v2.0.0.json",
+    "src/assets/adapters/beeper/wrench-web-adapter.v2.1.0.json",
     "src/assets/adapters/imessage/wrench-web-adapter.json",
     "src/assets/adapters/bluesky/wrench-web-adapter.json",
     "src/assets/adapters/bluesky/wrench-web-adapter.v1.0.0.json",

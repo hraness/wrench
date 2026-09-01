@@ -173,6 +173,12 @@ describe("Beeper direct messaging transport", () => {
       "boundary",
       "POST /v1/chats/!room%3Abeeper.com/messages",
     ]);
+    expect(requests.map(({ auth }) => auth)).toEqual([
+      "Bearer fixture-secret",
+      "Bearer fixture-secret",
+      "Bearer fixture-secret",
+      "Bearer fixture-secret",
+    ]);
     expect(requests.at(-1)).toEqual({
       url: `${baseUrl.slice(0, -1)}/v1/chats/!room%3Abeeper.com/messages`,
       method: "POST",

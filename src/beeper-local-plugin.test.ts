@@ -64,9 +64,9 @@ describe("Beeper pinned local-CLI provider plugin", () => {
     const plugin = providerPluginRegistry.get("beeper-linked-device");
     const binding = providerPluginRegistry.requireRoute("local-cli", "beeper");
     expect(plugin?.displayName).toBe("Beeper Pinned Local CLI");
-    expect(plugin?.version).toBe("2.0.0");
+    expect(plugin?.version).toBe("2.2.0");
     expect(beeperManifest.schemaVersion).toBe(6);
-    expect(beeperManifest.version).toBe("2.0.0");
+    expect(beeperManifest.version).toBe("2.2.0");
     expect(Object.keys(beeperManifest.operations).sort()).toEqual(
       [...BEEPER_LOCAL_OPERATION_NAMES].sort(),
     );
@@ -82,11 +82,49 @@ describe("Beeper pinned local-CLI provider plugin", () => {
       releaseManifestUrl: BEEPER_CLI_PIN.releaseManifestUrl,
     });
     expect(binding.tool.artifacts).toHaveLength(4);
-    expect(binding.operations.map((operation) => operation.name).sort()).toEqual(
+    const versionOne = binding.operations.filter((operation) =>
+      operation.contractVersion === 1);
+    const versionTwo = binding.operations.filter((operation) =>
+      operation.contractVersion === 2);
+    expect(versionOne.map((operation) => operation.name).sort()).toEqual(
       [...BEEPER_LOCAL_OPERATION_NAMES].sort(),
     );
-    expect(binding.operations.filter((operation) => operation.risk === "R1")).toHaveLength(14);
+    expect(versionTwo.map((operation) => operation.name).sort()).toEqual([
+      "accounts.list",
+      "conversations.read",
+      "messaging.content.search",
+      "messaging.read",
+      "messaging.search",
+    ]);
+    expect(binding.operations.filter((operation) => operation.risk === "R1")).toHaveLength(19);
     expect(binding.operations.every((operation) => operation.state === "observed")).toBeTrue();
+    for (const operationName of [
+      "accounts.list",
+      "messaging.search",
+      "conversations.read",
+      "messaging.read",
+    ] as const) {
+      expect(beeperManifest.operations[operationName].localCli.contractVersion).toBe(2);
+      const cli = versionOne.find((operation) => operation.name === operationName);
+      const direct = versionTwo.find((operation) => operation.name === operationName);
+      expect(direct?.input).toEqual(cli?.input);
+      expect(cli?.implementation).toContain("official Beeper CLI 0.6.2");
+      expect(direct?.implementation).toContain("fixed Beeper Desktop loopback read");
+      expect(direct?.implementation).toContain("no CLI or transport fallback");
+      expect(direct?.omni).toEqual(cli?.omni);
+    }
+    const cliMessageSearch = versionOne.find((operation) =>
+      operation.name === "messaging.content.search");
+    const directMessageSearch = versionTwo.find((operation) =>
+      operation.name === "messaging.content.search");
+    expect(beeperManifest.operations["messaging.content.search"].localCli.contractVersion)
+      .toBe(2);
+    expect(cliMessageSearch?.input.properties.before_cursor).toBeUndefined();
+    expect(cliMessageSearch?.input.properties.after_cursor).toBeUndefined();
+    expect(directMessageSearch?.input.properties.before_cursor).toBeDefined();
+    expect(directMessageSearch?.input.properties.after_cursor).toBeDefined();
+    expect(directMessageSearch?.implementation)
+      .toContain("fixed Beeper Desktop loopback read");
     for (const operationName of [
       "conversations.avatar.set",
       "conversations.draft.set",
@@ -120,16 +158,24 @@ describe("Beeper pinned local-CLI provider plugin", () => {
     expect(changed.hash).not.toBe(baseline.hash);
   });
 
-  test("never treats legacy linked-device writers as local-CLI readers", () => {
+  test("retains the prior current writer and v2.0.0 only on its exact v1 routes", () => {
     const binding = providerPluginRegistry.requireRoute("local-cli", "beeper");
     for (const operation of binding.operations) {
-      for (const contractVersion of operation.contractVersions) {
-        expect(providerPluginRegistry.legacyContractImplementationHashes(
-          binding,
-          operation.name,
-          contractVersion,
-        )).toEqual([]);
-      }
+      const legacy = providerPluginRegistry.legacyContractImplementationHashes(
+        binding,
+        operation.name,
+        operation.contractVersion,
+      ).map((value) => value.toString("hex"));
+      expect(legacy).toEqual(operation.contractVersion === 1
+        ? [
+            "89a51cc1e082b15ff89dd4e85e48e218653ca4bf7e49b5bbc824e5381bad86e1",
+            "1f5ed0abd4eaaef92e0d035452273e8a081f564da827897547b6e65939974a60",
+            "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+          ]
+        : [
+            "89a51cc1e082b15ff89dd4e85e48e218653ca4bf7e49b5bbc824e5381bad86e1",
+            "1f5ed0abd4eaaef92e0d035452273e8a081f564da827897547b6e65939974a60",
+          ]);
     }
   });
 
