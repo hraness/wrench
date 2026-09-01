@@ -193,14 +193,22 @@ that blocks the same plugin even if its bundle is replaced. Built-in and source
 authenticated-web plugins retain an auth-realm admission keyed by the exact
 surface and auth locator; registration durably marks the realm resource-active
 before the resource starts. Same-boot cleanup-unsafe state is fail-closed and
-visible in `wrench operator doctor`. Wrench permits same-boot recovery only when the browser
-close was verified, the exact owner is dead, every retained private root still
-matches its durably published device and inode, and identity-bound removal
-succeeds. Active commands, forced termination, missing publication, unknown
-ownership, changed roots, and generic cleanup failures remain fenced until a
-different boot proves that the admitted resource cannot still be running.
-After recovery or reboot, run `wrench operator doctor` to retire and report the durable
-fence before retrying.
+visible in `wrench operator doctor`. The browser publishes an exact prepared
+root generation before profile effects, then durably records launch intent and
+an immutable live control pin. Same-boot recovery first leases the exact claim,
+then binds the private session to its daemon start identity, socket, engine,
+launch hash, and CDP endpoint before graceful close or a bounded TERM. It
+records quiescence only after the pinned owner is dead, the session is inactive,
+and CDP refuses three times. Root deletion is then journaled one exact target at
+a time; an already-absent root is accepted only from that durable quiescent
+phase, while any replacement fails closed. Every remaining root must still
+match its device, inode, birth time, owner, and private mode. Live or changed
+owners, missing publication, unknown liveness, changed roots, and generic
+cleanup failures remain fenced. Legacy claims may be adopted only while their
+exact private session is live and bindable; dead legacy claims remain retained. Run
+`wrench operator doctor` until it reports either repaired state or a bounded
+retention category before retrying. Never edit or delete a durable claim to
+bypass this recovery boundary.
 
 All other capabilities are denied. Process isolation contains ordinary crashes
 and dependency mistakes; it is not a hostile-code sandbox for deliberately

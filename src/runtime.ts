@@ -5150,8 +5150,8 @@ async function runPreparedCore(
         ? "provider browser cleanup could not be verified; private artifacts were preserved and durable cleanup admission requires wrench doctor before retry"
         : cleanupRequired
           ? localCliOperation
-            ? "local CLI child/private-root cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves every pinned process group quiescent and removes the exact private root, or reboot recovery proves quiescence"
-            : "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves exact browser-closed evidence, or reboot recovery proves quiescence"
+            ? "local CLI child/private-root cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves every pinned process group quiescent and removes the exact private root"
+            : "authenticated web cleanup could not be verified; durable cleanup admission blocks retry until wrench doctor proves and completes exact browser-session recovery"
           : boundedThrownExecutorReason(error),
       ...(operation.risk === "R1"
         && cleanupRequired
@@ -5218,7 +5218,7 @@ async function runPreparedCore(
     && execution.privateArtifactsPreserved === true;
   const recoveryHandle = boundedRecoveryHandle("recoveryHandle" in execution ? execution.recoveryHandle : undefined);
   const privateArtifactRecoveryMessage = privateArtifactsPreserved
-    ? `private browser artifacts were preserved; manual recovery is required unless wrench doctor can remove exact browser-closed artifacts, and reboot is required when quiescence evidence is unavailable${recoveryHandle === null
+    ? `private browser artifacts were preserved; wrench doctor must prove and complete exact browser-session recovery before retry${recoveryHandle === null
         ? ""
         : `; recovery handle: ${recoveryHandle}`}`
     : null;

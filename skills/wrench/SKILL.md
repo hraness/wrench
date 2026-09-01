@@ -73,10 +73,15 @@ browser-live attachment skip admission because Wrench does not own those
 browser processes. Managed provider/bootstrap and derivation sessions remain
 outside this first cap. Before parallel first use of a new state home, run
 `wrench runs list --json` once serially. Malformed, unverifiable, and same-boot
-dead-owner claims remain occupied. Run
-`wrench doctor --json` to locate the state home. Prefer reboot recovery; remove
-one same-boot claim manually only after terminating its exact orphaned
-agent-browser and Chromium process group.
+dead-owner claims remain occupied until their exact resources are recovered.
+Run `wrench doctor --json`; it acquires a durable recovery lease before any
+effect and acts only when the exact private session, daemon start identity,
+launch identity, CDP endpoint, and private-root generation still match. It
+persists quiescence before journaled root removal so a crash can resume without
+weakening those proofs. Never delete a claim, kill a browser tree, or edit
+Wrench state to bypass this fence. If any proof is missing or changes, retain
+the claim and inspect the reported category rather than treating a reboot as a
+recovery procedure.
 
 ## Author a portable provider
 
