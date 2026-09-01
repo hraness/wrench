@@ -1,5 +1,7 @@
 import { types as nodeTypes } from "node:util";
 
+import { isCanonicalWhatsAppAccountSubject } from "./whatsapp-account-identity";
+
 export const WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION = 1 as const;
 export const WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_LIMIT = 500;
 export const WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDIN_BYTES = 16 * 1024;
@@ -10,8 +12,6 @@ export const WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT =
 const MAX_ROWID = 9_223_372_036_854_775_807n;
 const ROWID_PATTERN = /^(?:0|[1-9][0-9]{0,18})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const PN_SUBJECT_PATTERN = /^whatsapp:pn:[1-9][0-9]{4,14}$/u;
-const LID_SUBJECT_PATTERN = /^whatsapp:lid:[1-9][0-9]{4,19}$/u;
 const MESSAGE_ID_PATTERN = /^[A-Za-z0-9._~:-]{1,256}$/u;
 const USER_JID_PATTERN = /^[1-9][0-9]{4,14}@s\.whatsapp\.net$/u;
 const LID_JID_PATTERN = /^[1-9][0-9]{4,19}@lid$/u;
@@ -97,6 +97,7 @@ export type WhatsAppMessageExportProjectionSuccess = Readonly<{
   schemaVersion: typeof WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION;
   status: "succeeded";
   projectionGeneration: WhatsAppMessageExportProjectionGeneration;
+  systemChatExcluded: boolean;
   messages: readonly WhatsAppMessageExportProjectionItem[];
   nextCursor: string | null;
   localInsertPageComplete: boolean;
@@ -301,8 +302,7 @@ export function parseWhatsAppMessageExportProjectionRequest(
   if (
     parsed.schemaVersion !== WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION
     || parsed.operation !== "message-like-me.export"
-    || typeof parsed.accountSubject !== "string"
-    || (!PN_SUBJECT_PATTERN.test(parsed.accountSubject) && !LID_SUBJECT_PATTERN.test(parsed.accountSubject))
+    || !isCanonicalWhatsAppAccountSubject(parsed.accountSubject)
     || typeof parsed.limit !== "number"
     || !Number.isSafeInteger(parsed.limit)
     || parsed.limit < 1
@@ -359,12 +359,13 @@ export function parseWhatsAppMessageExportProjectionResponse(
     });
   }
   exactKeys(parsed, [
-    "schemaVersion", "status", "projectionGeneration", "messages", "nextCursor",
-    "localInsertPageComplete", "checkpoint",
+    "schemaVersion", "status", "projectionGeneration", "systemChatExcluded", "messages",
+    "nextCursor", "localInsertPageComplete", "checkpoint",
   ], "response");
   if (
     parsed.schemaVersion !== WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION
     || parsed.status !== "succeeded"
+    || typeof parsed.systemChatExcluded !== "boolean"
     || !Array.isArray(parsed.messages)
     || parsed.messages.length > WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_LIMIT
     || typeof parsed.localInsertPageComplete !== "boolean"
@@ -410,6 +411,7 @@ export function parseWhatsAppMessageExportProjectionResponse(
     schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
     status: "succeeded",
     projectionGeneration,
+    systemChatExcluded: parsed.systemChatExcluded,
     messages: Object.freeze(messages),
     nextCursor,
     localInsertPageComplete: parsed.localInsertPageComplete,

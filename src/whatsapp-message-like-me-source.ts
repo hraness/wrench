@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import type { WrenchAuth } from "./auth";
 import { sha256 } from "./canonical-json";
+import { isCanonicalWhatsAppAccountSubject } from "./providers/whatsapp-account-identity";
 import {
   runWhatsAppContactProjectionHelperChild,
   validateWhatsAppStoreDirectory,
@@ -92,8 +93,10 @@ function requireAuth(value: WrenchAuth): WhatsAppAuth & Readonly<{ subject: stri
     value.kind !== "linked-device-store"
     || value.provider !== "whatsapp"
     || value.subject === undefined
-    || !/^whatsapp:(?:pn:[1-9][0-9]{4,14}|lid:[1-9][0-9]{4,19})$/u.test(value.subject)
-  ) return fail("a bound WhatsApp linked-device-store auth locator is required");
+    || !isCanonicalWhatsAppAccountSubject(value.subject)
+  ) return fail(
+    "a bound WhatsApp linked-device-store auth locator is required; its account subject must be canonical, so re-pair a legacy noncanonical account under a new auth id",
+  );
   return value as WhatsAppAuth & Readonly<{ subject: string }>;
 }
 
@@ -273,6 +276,7 @@ export function createWhatsAppMessageLikeMeSource(
     let unprovenReactionActorRows = 0;
     let excludedSelfChatRows = 0;
     let payloadPurgedRows = 0;
+    let systemChatExcluded = false;
 
     yield Object.freeze({
       schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
@@ -340,6 +344,7 @@ export function createWhatsAppMessageLikeMeSource(
         return fail(`fixed read-only projection rejected the store (${response.errorCode})`);
       }
       expectedGeneration = response.projectionGeneration;
+      systemChatExcluded ||= response.systemChatExcluded;
 
       for (const item of response.messages) {
         messageRows += 1;
@@ -514,6 +519,7 @@ export function createWhatsAppMessageLikeMeSource(
       ...(unprovenReactionActorRows > 0 ? ["reaction-actor-unproven"] : []),
       ...(excludedSelfChatRows > 0 ? ["self-chat-excluded"] : []),
       ...(payloadPurgedRows > 0 ? ["message-payload-purged"] : []),
+      ...(systemChatExcluded ? ["system-chat-excluded"] : []),
     ]);
     completion = Object.freeze({
       completeness: Object.freeze({

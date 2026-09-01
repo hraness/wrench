@@ -720,6 +720,7 @@ function messageExportAnchor(item: WhatsAppMessageExportProjectionItem): string 
 
 const MESSAGE_EXPORT_FILTER = `
   c.kind IN ('dm', 'group')
+  AND m.chat_jid <> '0@s.whatsapp.net'
   AND m.chat_jid NOT LIKE '%@broadcast'
   AND m.chat_jid NOT LIKE '%@newsletter'
   AND (
@@ -728,6 +729,23 @@ const MESSAGE_EXPORT_FILTER = `
     OR m.chat_jid LIKE '%@g.us'
   )
 `;
+
+function hasSystemChatMessages(database: Database): boolean {
+  let projected: readonly SqliteRow[];
+  try {
+    projected = rows(database.query(`
+      SELECT EXISTS(
+        SELECT 1 FROM messages WHERE chat_jid = ?1 LIMIT 1
+      ) AS excluded
+    `).iterate(SYSTEM_SENTINEL_JID), 1, "projection-invalid");
+  } catch (error) {
+    if (error instanceof HelperFailure) throw error;
+    return fail("projection-invalid");
+  }
+  if (projected.length !== 1) return fail("projection-invalid");
+  exactRowKeys(projected[0]!, ["excluded"]);
+  return projectedBoolean(projected[0]!.excluded);
+}
 
 const MESSAGE_EXPORT_COLUMNS = `
   CAST(m.rowid AS TEXT) AS rowid,
@@ -792,6 +810,7 @@ function projectMessageExport(
     request.expectedGeneration !== null
     && !sameMessageExportGeneration(projectionGeneration, request.expectedGeneration)
   ) return fail("generation-mismatch");
+  const systemChatExcluded = hasSystemChatMessages(database);
   assertMessageExportCursorAnchor(database, request);
   let projectedRows: readonly SqliteRow[];
   try {
@@ -822,6 +841,7 @@ function projectMessageExport(
     schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
     status: "succeeded",
     projectionGeneration,
+    systemChatExcluded,
     messages,
     nextCursor: hasMore ? last?.rowid ?? null : null,
     localInsertPageComplete: !hasMore,

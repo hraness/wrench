@@ -2,11 +2,14 @@ import {
   chmodSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   readdirSync,
+  renameSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -87,6 +90,13 @@ function privateParent(): string {
   const path = realpathSync(mkdtempSync(join(tmpdir(), "wrench-whatsapp-v2-test-")));
   chmodSync(path, 0o700);
   return path;
+}
+
+function errorMessages(error: unknown): readonly string[] {
+  if (error instanceof AggregateError) {
+    return [error.message, ...error.errors.flatMap(errorMessages)];
+  }
+  return [error instanceof Error ? error.message : String(error)];
 }
 
 describe("WhatsApp Message Like Me v2 bundle publication", () => {
@@ -219,6 +229,205 @@ describe("WhatsApp Message Like Me v2 bundle publication", () => {
       });
       expect(readFileSync(join(output, "messages.ndjson"), "utf8")).toBe("");
       expect(readFileSync(join(output, "conversations.ndjson"), "utf8")).toBe("");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses an output parent writable by another user class", async () => {
+    const parent = privateParent();
+    const output = resolve(parent, "unsafe-parent-bundle");
+    try {
+      chmodSync(parent, 0o777);
+      await expect(exportWhatsAppMessageLikeMeBundle({
+        outputRoot: output,
+        source: source([]),
+      })).rejects.toThrow("output parent must not be writable by the group or other users");
+      expect(existsSync(output)).toBeFalse();
+      expect(readdirSync(parent)).toEqual([]);
+    } finally {
+      chmodSync(parent, 0o700);
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when the output parent is swapped during conversion", async () => {
+    const parent = privateParent();
+    const displacedParent = `${parent}.displaced`;
+    const output = resolve(parent, "parent-swap-bundle");
+    let swapped = false;
+    try {
+      let caught: unknown;
+      try {
+        await exportWhatsAppMessageLikeMeBundle({
+          outputRoot: output,
+          source: source([accountRecord(), participant("participant-self", SELF_JID, true)]),
+          onProgress: (progress) => {
+            if (swapped || progress.phase !== "v2-conversion") return;
+            swapped = true;
+            renameSync(parent, displacedParent);
+            mkdirSync(parent, { mode: 0o700 });
+            writeFileSync(join(parent, "foreign-marker"), "preserve\n", { mode: 0o600 });
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(swapped).toBeTrue();
+      expect(errorMessages(caught).join("\n")).toContain("private export directory changed");
+      expect(readFileSync(join(parent, "foreign-marker"), "utf8")).toBe("preserve\n");
+      expect(existsSync(output)).toBeFalse();
+      expect(readdirSync(displacedParent).some((name) =>
+        name.startsWith(".wrench-whatsapp-mlm-stage-")
+      )).toBeTrue();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+      rmSync(displacedParent, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves a replacement stage and keeps its lease bound to the displaced inode", async () => {
+    const parent = privateParent();
+    const output = resolve(parent, "stage-swap-bundle");
+    const recoveryEnvironment = Object.freeze({ WRENCH_STATE_HOME: join(parent, "state") });
+    const leaseRoot = join(
+      recoveryEnvironment.WRENCH_STATE_HOME,
+      "recovery",
+      "beeper-message-like-me-directory-leases",
+    );
+    let stagePath: string | undefined;
+    let displacedStage: string | undefined;
+    try {
+      let caught: unknown;
+      try {
+        await exportWhatsAppMessageLikeMeBundle({
+          outputRoot: output,
+          source: source([accountRecord(), participant("participant-self", SELF_JID, true)]),
+          recoveryEnvironment,
+          onProgress: (progress) => {
+            if (stagePath !== undefined || progress.phase !== "v2-conversion") return;
+            const stageName = readdirSync(parent).find((name) =>
+              name.startsWith(".wrench-whatsapp-mlm-stage-")
+            );
+            if (stageName === undefined) throw new Error("expected the private stage");
+            stagePath = join(parent, stageName);
+            displacedStage = `${stagePath}.displaced`;
+            renameSync(stagePath, displacedStage);
+            mkdirSync(stagePath, { mode: 0o700 });
+            writeFileSync(join(stagePath, "foreign-marker"), "preserve\n", { mode: 0o600 });
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(stagePath).toBeDefined();
+      expect(displacedStage).toBeDefined();
+      expect(errorMessages(caught).join("\n")).toContain("private export directory changed");
+      expect(readFileSync(join(stagePath!, "foreign-marker"), "utf8")).toBe("preserve\n");
+      const claims = readdirSync(leaseRoot).map((name) =>
+        JSON.parse(readFileSync(join(leaseRoot, name), "utf8")) as {
+          readonly role: string;
+          readonly path: string;
+          readonly directoryIdentity: { readonly device: string; readonly inode: string };
+        });
+      expect(claims).toHaveLength(1);
+      expect(claims[0]).toMatchObject({ role: "bundle-stage", path: stagePath });
+      const displacedIdentity = lstatSync(displacedStage!);
+      const replacementIdentity = lstatSync(stagePath!);
+      expect(claims[0]?.directoryIdentity).toMatchObject({
+        device: displacedIdentity.dev.toString(),
+        inode: displacedIdentity.ino.toString(),
+      });
+      expect(claims[0]?.directoryIdentity.inode).not.toBe(replacementIdentity.ino.toString());
+      expect(existsSync(output)).toBeFalse();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("revalidates exact file bytes after the atomic rename and rolls back tampering", async () => {
+    const parent = privateParent();
+    const output = resolve(parent, "post-rename-tamper-bundle");
+    let tampered = false;
+    try {
+      let caught: unknown;
+      try {
+        await exportWhatsAppMessageLikeMeBundle({
+          outputRoot: output,
+          source: source([accountRecord(), participant("participant-self", SELF_JID, true)]),
+          onProgress: (progress) => {
+            if (
+              tampered
+              || progress.phase !== "bundle-publishing"
+              || !existsSync(output)
+            ) return;
+            tampered = true;
+            writeFileSync(join(output, "manifest.json"), "{}\n", { mode: 0o600 });
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(tampered).toBeTrue();
+      expect(errorMessages(caught).join("\n")).toMatch(/manifest\.json changed|private staged artifact changed/u);
+      expect(existsSync(output)).toBeFalse();
+      expect(readdirSync(parent).filter((name) => name.startsWith(".wrench-whatsapp-"))).toEqual([]);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("does not remove a replacement installed after the atomic rename", async () => {
+    const parent = privateParent();
+    const output = resolve(parent, "post-rename-replacement-bundle");
+    const displacedOutput = `${output}.displaced`;
+    const recoveryEnvironment = Object.freeze({ WRENCH_STATE_HOME: join(parent, "state") });
+    const leaseRoot = join(
+      recoveryEnvironment.WRENCH_STATE_HOME,
+      "recovery",
+      "beeper-message-like-me-directory-leases",
+    );
+    let replaced = false;
+    try {
+      let caught: unknown;
+      try {
+        await exportWhatsAppMessageLikeMeBundle({
+          outputRoot: output,
+          source: source([accountRecord(), participant("participant-self", SELF_JID, true)]),
+          recoveryEnvironment,
+          onProgress: (progress) => {
+            if (
+              replaced
+              || progress.phase !== "bundle-publishing"
+              || !existsSync(output)
+            ) return;
+            replaced = true;
+            renameSync(output, displacedOutput);
+            mkdirSync(output, { mode: 0o700 });
+            writeFileSync(join(output, "foreign-marker"), "preserve\n", { mode: 0o600 });
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(replaced).toBeTrue();
+      expect(errorMessages(caught).join("\n")).toContain("private export directory changed");
+      expect(readFileSync(join(output, "foreign-marker"), "utf8")).toBe("preserve\n");
+      expect(readdirSync(displacedOutput)).toContain("manifest.json");
+      const claims = readdirSync(leaseRoot).map((name) =>
+        JSON.parse(readFileSync(join(leaseRoot, name), "utf8")) as {
+          readonly role: string;
+          readonly directoryIdentity: { readonly device: string; readonly inode: string };
+        });
+      expect(claims).toHaveLength(1);
+      expect(claims[0]?.role).toBe("bundle-stage");
+      const displacedIdentity = lstatSync(displacedOutput);
+      const replacementIdentity = lstatSync(output);
+      expect(claims[0]?.directoryIdentity).toMatchObject({
+        device: displacedIdentity.dev.toString(),
+        inode: displacedIdentity.ino.toString(),
+      });
+      expect(claims[0]?.directoryIdentity.inode).not.toBe(replacementIdentity.ino.toString());
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }

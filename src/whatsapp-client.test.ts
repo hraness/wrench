@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { canonicalJson, sha256 } from "./canonical-json";
+import { requireWhatsAppMessageLikeMeReceiptRequestBinding } from "./whatsapp-client-binding";
 import { parseWhatsAppMessageLikeMeExportReceipt } from "./whatsapp-client";
 
 function receipt() {
@@ -38,7 +39,7 @@ function receipt() {
       classification: "private-local",
       attachments: "metadata-only",
       credentials: "excluded",
-      paths: "excluded",
+      sourcePaths: "excluded",
       mediaBytes: "excluded",
       cloudSync: "none",
     },
@@ -67,5 +68,26 @@ describe("public WhatsApp export receipt parser", () => {
       ...receipt(),
       privacy: { ...receipt().privacy, cloudSync: "enabled" },
     })).toThrow("privacy");
+    const { sourcePaths: _sourcePaths, ...privacyWithoutSourcePaths } = receipt().privacy;
+    expect(() => parseWhatsAppMessageLikeMeExportReceipt({
+      ...receipt(),
+      privacy: { ...privacyWithoutSourcePaths, paths: "excluded" },
+    })).toThrow("unsupported or missing");
+  });
+
+  test("binds a valid receipt to the exact requested auth and output", () => {
+    const parsed = parseWhatsAppMessageLikeMeExportReceipt(receipt());
+    expect(requireWhatsAppMessageLikeMeReceiptRequestBinding(parsed, {
+      authId: "whatsapp-main",
+      output: "/private/tmp/message-like-me",
+    })).toBe(parsed);
+    expect(() => requireWhatsAppMessageLikeMeReceiptRequestBinding(parsed, {
+      authId: "whatsapp-other",
+      output: "/private/tmp/message-like-me",
+    })).toThrow("auth identity does not match");
+    expect(() => requireWhatsAppMessageLikeMeReceiptRequestBinding(parsed, {
+      authId: "whatsapp-main",
+      output: "/private/tmp/message-like-me-other",
+    })).toThrow("output directory does not match");
   });
 });

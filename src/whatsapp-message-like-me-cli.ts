@@ -68,7 +68,7 @@ export type WhatsAppMessageLikeMeExportReceipt = Readonly<{
     classification: "private-local";
     attachments: "metadata-only";
     credentials: "excluded";
-    paths: "excluded";
+    sourcePaths: "excluded";
     mediaBytes: "excluded";
     cloudSync: "none";
   }>;
@@ -155,7 +155,7 @@ export async function exportWhatsAppMessageLikeMeFromAuth(
       classification: "private-local" as const,
       attachments: "metadata-only" as const,
       credentials: "excluded" as const,
-      paths: "excluded" as const,
+      sourcePaths: "excluded" as const,
       mediaBytes: "excluded" as const,
       cloudSync: "none" as const,
     }),

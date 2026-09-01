@@ -50,7 +50,7 @@ export type WhatsAppMessageLikeMeExportReceipt = Readonly<{
     classification: "private-local";
     attachments: "metadata-only";
     credentials: "excluded";
-    paths: "excluded";
+    sourcePaths: "excluded";
     mediaBytes: "excluded";
     cloudSync: "none";
   }>;

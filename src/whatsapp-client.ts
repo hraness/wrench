@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { types as nodeTypes } from "node:util";
 
 import { canonicalJson, sha256 } from "./canonical-json";
+import { requireWhatsAppMessageLikeMeReceiptRequestBinding } from "./whatsapp-client-binding";
 import type {
   WhatsAppMessageLikeMeClientOptions,
   WhatsAppMessageLikeMeClientRequest,
@@ -152,13 +153,13 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
   digest(output.manifestSha256, "receipt.output.manifestSha256");
   const privacy = record(root.privacy, "receipt.privacy");
   exact(privacy, [
-    "classification", "attachments", "credentials", "paths", "mediaBytes", "cloudSync",
+    "classification", "attachments", "credentials", "sourcePaths", "mediaBytes", "cloudSync",
   ], "receipt.privacy");
   if (
     privacy.classification !== "private-local"
     || privacy.attachments !== "metadata-only"
     || privacy.credentials !== "excluded"
-    || privacy.paths !== "excluded"
+    || privacy.sourcePaths !== "excluded"
     || privacy.mediaBytes !== "excluded"
     || privacy.cloudSync !== "none"
   ) return fail("receipt privacy boundary is unsupported");
@@ -218,6 +219,10 @@ export function exportWhatsAppMessageLikeMeSync(
     || !isAbsolute(request.output)
     || resolve(request.output) !== request.output
   ) return fail("request requires a lowercase authId and normalized absolute output");
+  const requested = Object.freeze({
+    authId: request.authId,
+    output: request.output,
+  });
   const options = record(optionsValue, "options");
   exact(options, Object.hasOwn(options, "environment") ? ["environment"] : [], "options");
   const result = spawnSync(process.execPath, [
@@ -250,5 +255,8 @@ export function exportWhatsAppMessageLikeMeSync(
   } catch {
     return fail("installed CLI returned malformed JSON");
   }
-  return parseWhatsAppMessageLikeMeExportReceipt(raw);
+  return requireWhatsAppMessageLikeMeReceiptRequestBinding(
+    parseWhatsAppMessageLikeMeExportReceipt(raw),
+    requested,
+  );
 }

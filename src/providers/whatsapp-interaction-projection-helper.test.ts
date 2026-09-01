@@ -435,6 +435,7 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       expect(projected).toMatchObject({
         schemaVersion: 1,
         status: "succeeded",
+        systemChatExcluded: false,
         localInsertPageComplete: true,
         nextCursor: null,
         projectionGeneration: {
@@ -475,6 +476,42 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       expect(encoded).not.toContain("/private/local/file");
       expect(encoded).not.toContain("secret-key");
       expect(encoded).not.toContain("deletion_reason");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("excludes the fixed system chat and reports only a categorical condition", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query("INSERT INTO chats(jid, kind) VALUES (?1, ?2)")
+          .run("0@s.whatsapp.net", "dm");
+        database.query(`
+          INSERT INTO messages(chat_jid,msg_id,sender_jid,ts,from_me,text)
+          VALUES (?1,?2,NULL,?3,0,?4)
+        `).run("0@s.whatsapp.net", "SYSTEM-1", 1_776_513_603, "private system body");
+      } finally {
+        database.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      const projected = await messageResponse(path, messageRequest(path));
+      expect(projected).toMatchObject({
+        status: "succeeded",
+        systemChatExcluded: true,
+        messages: [
+          { rowid: "1", messageId: "MSG-1" },
+          { rowid: "2", messageId: "MSG-2" },
+          { rowid: "3", messageId: "MSG-3" },
+        ],
+        nextCursor: null,
+        localInsertPageComplete: true,
+      });
+      const encoded = JSON.stringify(projected);
+      expect(encoded).not.toContain("0@s.whatsapp.net");
+      expect(encoded).not.toContain("SYSTEM-1");
+      expect(encoded).not.toContain("private system body");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

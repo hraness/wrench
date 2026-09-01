@@ -7,6 +7,8 @@ export const WHATSAPP_INTERACTION_PROJECTION_SCHEMA_FINGERPRINT =
 
 const MAX_ROWID = 9_223_372_036_854_775_807n;
 const ROWID_PATTERN = /^(?:0|[1-9][0-9]{0,18})$/u;
+// Read-only compatibility keeps historic local auth subjects parseable. New
+// pairings use whatsapp-account-identity's narrower export-compatible grammar.
 const PN_SUBJECT_PATTERN = /^whatsapp:pn:[0-9]{5,20}$/u;
 const LID_SUBJECT_PATTERN = /^whatsapp:lid:[0-9]{5,32}$/u;
 const JID_PATTERNS = [

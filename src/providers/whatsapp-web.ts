@@ -8,6 +8,7 @@
  */
 
 import type { OperationInput } from "../model";
+import { isCanonicalWhatsAppAccountId } from "./whatsapp-account-identity";
 
 export const WHATSAPP_PROTOCOL_PIN = Object.freeze({
   implementation: "github.com/openclaw/wacli",
@@ -319,10 +320,11 @@ export function whatsappSubjectFromLinkedJid(value: unknown): string {
     throw new Error("WhatsApp linked-device JID must name one user account");
   }
   const account = parsed.jid.slice(0, parsed.jid.indexOf("@")).split(":", 1)[0];
-  if (account === undefined || !/^[0-9]{5,32}$/u.test(account)) {
-    throw new Error("WhatsApp linked-device account identifier is malformed");
+  const kind = parsed.kind === "user" ? "pn" : "lid";
+  if (account === undefined || !isCanonicalWhatsAppAccountId(kind, account)) {
+    throw new Error("WhatsApp linked-device account identifier is not canonical");
   }
-  return `whatsapp:${parsed.kind === "user" ? "pn" : "lid"}:${account}`;
+  return `whatsapp:${kind}:${account}`;
 }
 
 export function parseWhatsAppAuthStatusEnvelope(
@@ -353,8 +355,8 @@ export function parseWhatsAppAuthStatusEnvelope(
   }
   if (data.phone !== undefined) {
     const phone = text(data.phone, "auth status.phone", 20);
-    if (!/^[0-9]{5,20}$/u.test(phone)) {
-      throw new Error("auth status.phone must be an international number");
+    if (!isCanonicalWhatsAppAccountId("pn", phone)) {
+      throw new Error("auth status.phone must be a canonical international number");
     }
     const linkedAccount = linkedJid.jid.slice(0, linkedJid.jid.indexOf("@"))
       .split(":", 1)[0];

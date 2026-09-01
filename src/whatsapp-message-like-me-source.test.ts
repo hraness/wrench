@@ -78,6 +78,7 @@ function item(overrides: Partial<WhatsAppMessageExportProjectionItem>): WhatsApp
 function fakeDependencies(
   store: string,
   messages: readonly WhatsAppMessageExportProjectionItem[],
+  systemChatExcluded = false,
 ): WhatsAppMessageLikeMeSourceDependencies {
   return {
     helperPath: "/private/fixed/helper.ts",
@@ -101,6 +102,7 @@ function fakeDependencies(
             ctimeNs: stats.ctimeNs.toString(),
             schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
           },
+          systemChatExcluded,
           messages,
           nextCursor: null,
           localInsertPageComplete: true,
@@ -117,10 +119,11 @@ async function collect(
   path: string,
   messages: readonly WhatsAppMessageExportProjectionItem[],
   subject = "whatsapp:pn:15551234567",
+  systemChatExcluded = false,
 ) {
   const source = createWhatsAppMessageLikeMeSource({
     auth: auth(path, subject),
-    dependencies: fakeDependencies(path, messages),
+    dependencies: fakeDependencies(path, messages, systemChatExcluded),
   });
   const records = [];
   let index = 0;
@@ -238,6 +241,24 @@ describe("WhatsApp Message Like Me source mapping", () => {
           provenance: expect.objectContaining({ providerId: "222222222222222@lid" }),
         }),
       ]);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("reports a categorical warning when the fixed system chat is excluded", async () => {
+    const path = privateStore();
+    try {
+      const result = await collect(
+        path,
+        [],
+        "whatsapp:pn:15551234567",
+        true,
+      );
+      expect(result.completion).toMatchObject({
+        warnings: ["remote-history-incomplete", "system-chat-excluded"],
+      });
+      expect(JSON.stringify(result)).not.toContain("0@s.whatsapp.net");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

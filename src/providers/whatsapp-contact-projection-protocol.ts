@@ -17,6 +17,8 @@ const MAX_JID_LENGTH = 96;
 const MAX_NAME_LENGTH = 512;
 const MAX_REDACTED_PHONE_LENGTH = 64;
 const IDENTITY_PATTERN = /^(?:0|[1-9][0-9]{0,19})$/u;
+// Read-only compatibility keeps historic local auth subjects parseable. New
+// pairings use whatsapp-account-identity's narrower export-compatible grammar.
 const PN_SUBJECT_PATTERN = /^whatsapp:pn:([0-9]{5,20})$/u;
 const LID_SUBJECT_PATTERN = /^whatsapp:lid:([0-9]{5,32})$/u;
 const CONTACT_PN_JID_PATTERN = /^([0-9]{5,20})@s\.whatsapp\.net$/u;

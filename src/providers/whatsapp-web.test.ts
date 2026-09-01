@@ -209,6 +209,16 @@ describe("WhatsApp account and target binding", () => {
       linkedJid: null,
       subject: null,
     });
+    for (const linkedJid of [
+      "01234@s.whatsapp.net",
+      "1234567890123456@s.whatsapp.net",
+      "01234@lid",
+      "123456789012345678901@lid",
+    ]) {
+      expect(() => whatsappSubjectFromLinkedJid(linkedJid)).toThrow(
+        "account identifier is not canonical",
+      );
+    }
   });
 
   test("accepts canonical user/LID/group targets and excludes broadcasts", () => {
@@ -237,6 +247,11 @@ describe("WhatsApp account and target binding", () => {
       linked_jid: ACCOUNT_JID,
       phone: "15550000000",
     }))).toThrow("did not match");
+    expect(() => parseWhatsAppAuthStatusEnvelope(success({
+      authenticated: true,
+      linked_jid: ACCOUNT_JID,
+      phone: "01234",
+    }))).toThrow("canonical international number");
     expect(() => parseWhatsAppAuthStatusEnvelope({
       success: true,
       data: { authenticated: true, linked_jid: ACCOUNT_JID },
