@@ -355,6 +355,73 @@ describe("local browser admission", () => {
     }
   });
 
+  test("retries exact read drift on the first claim read", async () => {
+    const testState = state();
+    let reads = 0;
+    let waits = 0;
+    try {
+      const initialized = await acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies(),
+      });
+      initialized.release();
+      const directory = join(
+        testState.directory,
+        ...BROWSER_ADMISSION_STATE_DIRECTORY.split("/"),
+      );
+      writeFileSync(join(directory, "slot-1.json"), "{}\n", { mode: 0o600 });
+
+      const admission = await acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies({
+          beforeClaimReadForTest: (slot) => {
+            reads += 1;
+            if (reads !== 1) return;
+            expect(slot).toBe(0);
+            throw new Error(
+              "could not safely open optional browser admission claim",
+              {
+                cause: new Error(
+                  "state helper: state file changed while it was read",
+                ),
+              },
+            );
+          },
+          random: () => 0,
+          sleep: async () => {
+            waits += 1;
+          },
+        }),
+      });
+
+      expect(admission.slot).toBe(0);
+      expect(reads).toBe(3);
+      expect(waits).toBe(1);
+      admission.release();
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps unrelated first-read storage failures fatal", async () => {
+    const testState = state();
+    try {
+      await expect(acquireBrowserAdmission({
+        timeoutMs: 10_000,
+        environment: testState.environment,
+        dependencies: admissionDependencies({
+          beforeClaimReadForTest: () => {
+            throw new Error("unrelated first-read storage failure");
+          },
+        }),
+      })).rejects.toThrow("unrelated first-read storage failure");
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+    }
+  });
+
   test("retries exact read drift after create contention", async () => {
     const testState = state();
     let mutationPath: string | null = null;
