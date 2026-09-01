@@ -17,6 +17,11 @@ import {
   exportBeeperMessageLikeMeBundle,
   type BeeperMessageLikeMeBundleProgress,
 } from "./beeper-message-like-me-export";
+import {
+  createBeeperMessageLikeMeDirectoryLease,
+  releaseBeeperMessageLikeMeDirectoryLease,
+  type BeeperMessageLikeMeDirectoryLease,
+} from "./beeper-message-like-me-recovery";
 import { canonicalJson, sha256 } from "./canonical-json";
 import { removePrivateDirectoryTree } from "./storage";
 import {
@@ -31,6 +36,7 @@ import {
   parseWhatsAppMessageBundleV2Manifest,
   parseWhatsAppMessageBundleV2Record,
   toLocalMessageBundleV1Record,
+  whatsAppMessageBundleV2BundleSha256,
   type WhatsAppMessageBundleV2Artifact,
   type WhatsAppMessageBundleV2Manifest,
 } from "./whatsapp-message-bundle-v2";
@@ -55,6 +61,7 @@ export type WhatsAppMessageLikeMeExportRequest = Readonly<{
   signal?: AbortSignal;
   onProgress?: (progress: WhatsAppMessageLikeMeBundleProgress) => void;
   clock?: () => Date;
+  recoveryEnvironment?: Readonly<Record<string, string | undefined>>;
 }>;
 
 export type WhatsAppMessageLikeMeExportResult = Readonly<{
@@ -262,6 +269,25 @@ async function removePrivate(path: string): Promise<void> {
   if (!(await absent(path))) removePrivateDirectoryTree(path);
 }
 
+async function createDirectoryLease(
+  request: Readonly<{
+    path: string;
+    outputRoot?: string;
+    recoveryEnvironment?: Readonly<Record<string, string | undefined>>;
+  }>,
+): Promise<BeeperMessageLikeMeDirectoryLease | undefined> {
+  if (request.recoveryEnvironment === undefined) return undefined;
+  const createdAtMs = Date.now();
+  return createBeeperMessageLikeMeDirectoryLease({
+    role: request.outputRoot === undefined ? "raw-working" : "bundle-stage",
+    path: request.path,
+    ...(request.outputRoot === undefined ? {} : { outputRoot: request.outputRoot }),
+    recoverAfterMs: createdAtMs,
+    nowMs: createdAtMs,
+    environment: request.recoveryEnvironment,
+  });
+}
+
 function translatedSource(source: WhatsAppMessageLikeMeExportSource) {
   parseWhatsAppMessageBundleV2Descriptor(source.descriptor);
   let index = 0;
@@ -290,19 +316,37 @@ export async function exportWhatsAppMessageLikeMeBundle(
   await chmod(working, PRIVATE_DIRECTORY_MODE);
   const v1Root = resolve(working, "validated-v1");
   let staging: string | undefined;
+  let workingLease: BeeperMessageLikeMeDirectoryLease | undefined;
+  let stagingLease: BeeperMessageLikeMeDirectoryLease | undefined;
   let published = false;
   let operationError: unknown;
   try {
+    workingLease = await createDirectoryLease({
+      path: working,
+      ...(request.recoveryEnvironment === undefined
+        ? {}
+        : { recoveryEnvironment: request.recoveryEnvironment }),
+    });
     const v1 = await exportBeeperMessageLikeMeBundle({
       outputRoot: v1Root,
       source: translatedSource(request.source),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       ...(request.clock === undefined ? {} : { clock: request.clock }),
       ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
+      ...(request.recoveryEnvironment === undefined
+        ? {}
+        : { recoveryEnvironment: request.recoveryEnvironment }),
     });
     throwIfAborted(request.signal);
     staging = await mkdtemp(join(output.parent, ".wrench-whatsapp-mlm-stage-"));
     await chmod(staging, PRIVATE_DIRECTORY_MODE);
+    stagingLease = await createDirectoryLease({
+      path: staging,
+      outputRoot: output.outputRoot,
+      ...(request.recoveryEnvironment === undefined
+        ? {}
+        : { recoveryEnvironment: request.recoveryEnvironment }),
+    });
     const artifacts: WhatsAppMessageBundleV2Artifact[] = [];
     let totalRecords = 0;
     for (const [index, specification] of WHATSAPP_MESSAGE_BUNDLE_V2_ARTIFACTS.entries()) {
@@ -348,7 +392,7 @@ export async function exportWhatsAppMessageLikeMeBundle(
       ...manifestProjection,
       integrity: Object.freeze({
         algorithm: "sha256",
-        bundleSha256: sha256(canonicalJson(manifestProjection)),
+        bundleSha256: whatsAppMessageBundleV2BundleSha256(manifestProjection),
       }),
     }));
     const manifestBytes = Buffer.from(`${canonicalJson(manifest)}\n`, "utf8");
@@ -390,16 +434,40 @@ export async function exportWhatsAppMessageLikeMeBundle(
   } finally {
     const cleanupErrors: unknown[] = [];
     if (!published && staging !== undefined) {
+      let removed = false;
       try {
         await removePrivate(staging);
+        removed = true;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (removed && stagingLease !== undefined) {
+        try {
+          releaseBeeperMessageLikeMeDirectoryLease(stagingLease);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+    } else if (published && operationError === undefined && stagingLease !== undefined) {
+      try {
+        releaseBeeperMessageLikeMeDirectoryLease(stagingLease);
       } catch (error) {
         cleanupErrors.push(error);
       }
     }
+    let workingRemoved = false;
     try {
       await removePrivate(working);
+      workingRemoved = true;
     } catch (error) {
       cleanupErrors.push(error);
+    }
+    if (workingRemoved && workingLease !== undefined) {
+      try {
+        releaseBeeperMessageLikeMeDirectoryLease(workingLease);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
     }
     if (cleanupErrors.length > 0) {
       throw new AggregateError(

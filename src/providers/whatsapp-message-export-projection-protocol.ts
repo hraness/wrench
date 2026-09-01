@@ -10,10 +10,10 @@ export const WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT =
 const MAX_ROWID = 9_223_372_036_854_775_807n;
 const ROWID_PATTERN = /^(?:0|[1-9][0-9]{0,18})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const PN_SUBJECT_PATTERN = /^whatsapp:pn:[0-9]{5,20}$/u;
-const LID_SUBJECT_PATTERN = /^whatsapp:lid:[0-9]{5,32}$/u;
+const PN_SUBJECT_PATTERN = /^whatsapp:pn:[1-9][0-9]{4,14}$/u;
+const LID_SUBJECT_PATTERN = /^whatsapp:lid:[1-9][0-9]{4,19}$/u;
 const MESSAGE_ID_PATTERN = /^[A-Za-z0-9._~:-]{1,256}$/u;
-const JID_PATTERN = /^(?:[0-9]{5,20}(?::[0-9]{1,5})?@s\.whatsapp\.net|[0-9]{5,32}(?::[0-9]{1,5})?@lid|[0-9]{5,32}(?:-[0-9]{5,20})?@g\.us)$/u;
+const JID_PATTERN = /^(?:[1-9][0-9]{4,14}(?::[0-9]{1,5})?@s\.whatsapp\.net|[1-9][0-9]{4,19}(?::[0-9]{1,5})?@lid|[1-9][0-9]{4,19}(?:-[1-9][0-9]{0,19})?@g\.us)$/u;
 
 export type WhatsAppMessageExportFileIdentity = Readonly<{
   dev: string;

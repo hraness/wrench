@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdtempSync,
   readFileSync,
@@ -93,6 +94,15 @@ describe("WhatsApp Message Like Me v2 bundle publication", () => {
     const parent = privateParent();
     const output = resolve(parent, "bundle");
     try {
+      const recoveryEnvironment = Object.freeze({
+        WRENCH_STATE_HOME: join(parent, "state"),
+      });
+      const leaseRoot = join(
+        recoveryEnvironment.WRENCH_STATE_HOME,
+        "recovery",
+        "beeper-message-like-me-directory-leases",
+      );
+      let observedOuterLeases = false;
       const message: WhatsAppMessageBundleV2Record = {
         schemaVersion: 2,
         kind: "message",
@@ -136,6 +146,21 @@ describe("WhatsApp Message Like Me v2 bundle publication", () => {
           conversation,
         ]),
         clock: () => new Date(OBSERVED_AT),
+        recoveryEnvironment,
+        onProgress: (progress) => {
+          if (progress.phase !== "v2-conversion") return;
+          const claims = readdirSync(leaseRoot).map((name) =>
+            JSON.parse(readFileSync(join(leaseRoot, name), "utf8")) as {
+              readonly path: string;
+              readonly role: string;
+            });
+          observedOuterLeases ||= claims.some((claim) =>
+            claim.role === "raw-working"
+            && claim.path.startsWith(join(parent, ".wrench-whatsapp-mlm-work-")))
+            && claims.some((claim) =>
+              claim.role === "bundle-stage"
+              && claim.path.startsWith(join(parent, ".wrench-whatsapp-mlm-stage-")));
+        },
       });
       expect(result.manifest).toMatchObject({
         schemaVersion: 2,
@@ -163,6 +188,9 @@ describe("WhatsApp Message Like Me v2 bundle publication", () => {
         body: "hello",
       });
       expect(readFileSync(join(output, "messages.ndjson"), "utf8")).not.toContain("beeper");
+      expect(observedOuterLeases).toBeTrue();
+      expect(existsSync(leaseRoot)).toBeTrue();
+      expect(readdirSync(leaseRoot)).toEqual([]);
       expect(readdirSync(parent).filter((name) => name.startsWith(".wrench-whatsapp-"))).toEqual([]);
     } finally {
       rmSync(parent, { recursive: true, force: true });

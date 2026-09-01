@@ -377,6 +377,15 @@ describe("WhatsApp Message Like Me source mapping", () => {
           mediaCaption: "real document caption",
           mimeType: "application/pdf",
         }),
+        item({
+          rowid: "8",
+          messageId: "PTT-PLACEHOLDER",
+          text: "[Audio]",
+          displayText: "[Audio]",
+          mediaType: "PtT",
+          mediaCaption: "[Audio]",
+          mimeType: "audio/ogg",
+        }),
       ]);
       expect(result.records.filter((record) => record.kind === "message").map((record) => ({
         body: record.body,
@@ -389,7 +398,48 @@ describe("WhatsApp Message Like Me source mapping", () => {
         { body: "voice memo note", attachments: [expect.objectContaining({ kind: "audio" })] },
         { body: "real video caption", attachments: [expect.objectContaining({ kind: "video" })] },
         { body: "real document caption", attachments: [expect.objectContaining({ kind: "document" })] },
+        { body: null, attachments: [expect.objectContaining({ kind: "audio" })] },
       ]);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("marks a locally purged payload as unavailable prose evidence", async () => {
+    const path = privateStore();
+    try {
+      const result = await collect(path, [
+        item({
+          rowid: "1",
+          messageId: "PURGED-PAYLOAD",
+          text: "stale body must not survive",
+          payloadPurgedAt: "2026-08-28T12:00:01.000Z",
+        }),
+        item({
+          rowid: "2",
+          messageId: "PURGED-DELETED-PAYLOAD",
+          text: "deleted stale body must not survive",
+          revoked: true,
+          deletedAt: "2026-08-28T12:00:02.000Z",
+          payloadPurgedAt: "2026-08-28T12:00:03.000Z",
+        }),
+      ]);
+      const messages = result.records.filter((record) => record.kind === "message");
+      expect(messages[0]).toMatchObject({
+        body: null,
+        bodyTruncated: true,
+        deletion: null,
+        provenance: { providerRevision: "2026-08-28T12:00:01.000Z" },
+      });
+      expect(messages[1]).toMatchObject({
+        body: null,
+        bodyTruncated: false,
+        deletion: { state: "revoked" },
+        provenance: { providerRevision: "2026-08-28T12:00:02.000Z" },
+      });
+      expect(result.completion).toMatchObject({
+        warnings: ["remote-history-incomplete", "message-payload-purged"],
+      });
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

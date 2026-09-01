@@ -15,14 +15,26 @@ import {
   WHATSAPP_MESSAGE_BUNDLE_V2_PROVIDER,
   WHATSAPP_MESSAGE_BUNDLE_V2_SOURCE,
 } from "./whatsapp-message-bundle-v2";
+import {
+  acquireBeeperMessageLikeMeExportAdmission,
+  recoverBeeperMessageLikeMeDirectoryLeases,
+  releaseBeeperMessageLikeMeExportAdmission,
+} from "./beeper-message-like-me-recovery";
 
 export type WhatsAppMessageLikeMeCliProgress =
   | WhatsAppMessageLikeMeProgress
-  | WhatsAppMessageLikeMeBundleProgress;
+  | WhatsAppMessageLikeMeBundleProgress
+  | Readonly<{ phase: "recovery-started" }>
+  | Readonly<{
+      phase: "recovery-completed";
+      recovered: number;
+      published: number;
+    }>;
 
 export type WhatsAppMessageLikeMeCliRequest = Readonly<{
   auth: WrenchAuth;
   outputRoot: string;
+  environment?: Readonly<Record<string, string | undefined>>;
   signal?: AbortSignal;
   onProgress?: (progress: WhatsAppMessageLikeMeCliProgress) => void;
 }>;
@@ -80,17 +92,35 @@ export async function exportWhatsAppMessageLikeMeFromAuth(
     || request.auth.provider !== "whatsapp"
     || request.auth.subject === undefined
   ) return fail("a bound WhatsApp linked-device-store auth locator is required");
+  const environment = request.environment ?? process.env;
+  request.onProgress?.(Object.freeze({ phase: "recovery-started" }));
+  const admission = acquireBeeperMessageLikeMeExportAdmission({ environment });
+  let bundle: WhatsAppMessageLikeMeExportResult;
   const startedAt = new Date().toISOString();
-  const bundle = await exportWhatsAppMessageLikeMeBundle({
-    outputRoot: request.outputRoot,
-    source: createWhatsAppMessageLikeMeSource({
-      auth: request.auth,
+  try {
+    const recovery = await recoverBeeperMessageLikeMeDirectoryLeases({ environment });
+    if (recovery.active > 0 || recovery.indeterminate > 0) {
+      return fail("another private message export is active or prior recovery is indeterminate");
+    }
+    request.onProgress?.(Object.freeze({
+      phase: "recovery-completed",
+      recovered: recovery.recovered,
+      published: recovery.published,
+    }));
+    bundle = await exportWhatsAppMessageLikeMeBundle({
+      outputRoot: request.outputRoot,
+      source: createWhatsAppMessageLikeMeSource({
+        auth: request.auth,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+        ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
+      }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
-    }),
-    ...(request.signal === undefined ? {} : { signal: request.signal }),
-    ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
-  });
+      recoveryEnvironment: environment,
+    });
+  } finally {
+    releaseBeeperMessageLikeMeExportAdmission(admission);
+  }
   const finishedAt = new Date().toISOString();
   const projection = Object.freeze({
     schemaVersion: 1 as const,

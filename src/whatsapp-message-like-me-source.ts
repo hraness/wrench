@@ -92,7 +92,7 @@ function requireAuth(value: WrenchAuth): WhatsAppAuth & Readonly<{ subject: stri
     value.kind !== "linked-device-store"
     || value.provider !== "whatsapp"
     || value.subject === undefined
-    || !/^whatsapp:(?:pn:[0-9]{5,20}|lid:[0-9]{5,32})$/u.test(value.subject)
+    || !/^whatsapp:(?:pn:[1-9][0-9]{4,14}|lid:[1-9][0-9]{4,19})$/u.test(value.subject)
   ) return fail("a bound WhatsApp linked-device-store auth locator is required");
   return value as WhatsAppAuth & Readonly<{ subject: string }>;
 }
@@ -105,8 +105,11 @@ function selfJid(subject: string): string {
 }
 
 function canonicalParticipantJid(value: string): string {
-  const match = /^([0-9]{5,32})(?::[0-9]{1,5})?@(s\.whatsapp\.net|lid)$/u.exec(value);
+  const match = /^([1-9][0-9]{4,19})(?::[0-9]{1,5})?@(s\.whatsapp\.net|lid)$/u.exec(value);
   if (match?.[1] === undefined || match[2] === undefined) {
+    return fail("message sender is not a canonical WhatsApp participant JID");
+  }
+  if (match[2] === "s.whatsapp.net" && match[1].length > 15) {
     return fail("message sender is not a canonical WhatsApp participant JID");
   }
   return `${match[1]}@${match[2]}`;
@@ -125,7 +128,7 @@ function participantId(accountJid: string, participantJid: string): string {
 }
 
 function userHandle(jid: string): string | null {
-  const phone = /^([0-9]{5,20})@s\.whatsapp\.net$/u.exec(jid);
+  const phone = /^([1-9][0-9]{4,14})@s\.whatsapp\.net$/u.exec(jid);
   return phone?.[1] === undefined ? null : `+${phone[1]}`;
 }
 
@@ -172,7 +175,8 @@ function body(item: WhatsAppMessageExportProjectionItem): string | null {
   const candidates = [item.text, item.mediaCaption].filter(
     (candidate): candidate is string => candidate !== null && candidate.trim().length > 0,
   );
-  if (item.mediaType?.toLowerCase() === "audio") {
+  const mediaType = item.mediaType?.toLowerCase();
+  if (mediaType === "audio" || mediaType === "ptt") {
     const authoredCandidates = candidates.filter((candidate) => candidate !== "[Audio]");
     if (authoredCandidates.length > 0) return authoredCandidates[0] ?? null;
     if (candidates.length > 0) return null;
@@ -268,6 +272,7 @@ export function createWhatsAppMessageLikeMeSource(
     let skippedReactionRows = 0;
     let unprovenReactionActorRows = 0;
     let excludedSelfChatRows = 0;
+    let payloadPurgedRows = 0;
 
     yield Object.freeze({
       schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
@@ -421,6 +426,9 @@ export function createWhatsAppMessageLikeMeSource(
         }
 
         const deletion = messageDeletion(item, observedAt);
+        const payloadPurged = item.payloadPurgedAt !== null;
+        const bodyTruncated = payloadPurged && deletion === null;
+        if (bodyTruncated) payloadPurgedRows += 1;
         const edit = item.edited && item.editedAt !== null
           ? Object.freeze({
               kind: "in-place" as const,
@@ -438,15 +446,15 @@ export function createWhatsAppMessageLikeMeSource(
             providerId,
             accountJid,
             observedAt,
-            item.editedAt ?? item.deletedAt,
+            item.editedAt ?? item.deletedAt ?? item.payloadPurgedAt,
           ),
           conversationId: localId("conversation", accountJid, item.chatJid),
           senderParticipantId: senderJid === null ? null : participantId(accountJid, senderJid),
           direction: item.fromMe ? "outgoing" : "incoming",
           sentAt: item.timestamp,
           sortKey: item.rowid.padStart(19, "0"),
-          body: body(item),
-          bodyTruncated: false,
+          body: payloadPurged ? null : body(item),
+          bodyTruncated,
           replyTo: item.quotedMessageId === null
             ? null
             : Object.freeze({
@@ -505,6 +513,7 @@ export function createWhatsAppMessageLikeMeSource(
       ...(skippedReactionRows > 0 ? ["reaction-removal-unproven"] : []),
       ...(unprovenReactionActorRows > 0 ? ["reaction-actor-unproven"] : []),
       ...(excludedSelfChatRows > 0 ? ["self-chat-excluded"] : []),
+      ...(payloadPurgedRows > 0 ? ["message-payload-purged"] : []),
     ]);
     completion = Object.freeze({
       completeness: Object.freeze({
