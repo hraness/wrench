@@ -75,6 +75,37 @@ describe("public WhatsApp export receipt parser", () => {
     })).toThrow("unsupported or missing");
   });
 
+  test("rejects hostile warning arrays without evaluating accessors", () => {
+    let accessorEvaluated = false;
+    const accessorWarnings: unknown[] = [];
+    Object.defineProperty(accessorWarnings, "0", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorEvaluated = true;
+        throw new Error("warning accessor evaluated");
+      },
+    });
+    expect(() => parseWhatsAppMessageLikeMeExportReceipt({
+      ...receipt(),
+      warnings: accessorWarnings,
+    })).toThrow("dense enumerable data elements");
+    expect(accessorEvaluated).toBe(false);
+
+    const sparseWarnings = new Array<unknown>(1);
+    expect(() => parseWhatsAppMessageLikeMeExportReceipt({
+      ...receipt(),
+      warnings: sparseWarnings,
+    })).toThrow("dense array");
+
+    const namedWarnings = ["remote-history-incomplete"] as unknown[] & { note?: string };
+    namedWarnings.note = "unreviewed";
+    expect(() => parseWhatsAppMessageLikeMeExportReceipt({
+      ...receipt(),
+      warnings: namedWarnings,
+    })).toThrow("dense array");
+  });
+
   test("binds a valid receipt to the exact requested auth and output", () => {
     const parsed = parseWhatsAppMessageLikeMeExportReceipt(receipt());
     expect(requireWhatsAppMessageLikeMeReceiptRequestBinding(parsed, {

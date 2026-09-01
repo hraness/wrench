@@ -76,6 +76,50 @@ function nonNegative(value: unknown, label: string): number {
   return value;
 }
 
+function denseDataArray(
+  value: unknown,
+  label: string,
+  maximum: number,
+): readonly unknown[] {
+  if (
+    nodeTypes.isProxy(value)
+    || !Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+  ) return fail(`${label} must be an ordinary non-proxy array`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    lengthDescriptor === undefined
+    || !("value" in lengthDescriptor)
+    || typeof lengthDescriptor.value !== "number"
+    || !Number.isSafeInteger(lengthDescriptor.value)
+    || lengthDescriptor.value < 0
+    || lengthDescriptor.value > maximum
+  ) return fail(`${label} length exceeds its reviewed bound`);
+  const length = lengthDescriptor.value;
+  const keys = Reflect.ownKeys(descriptors);
+  if (
+    keys.length !== length + 1
+    || keys.some((key) => typeof key !== "string")
+  ) return fail(`${label} must be a dense array without named properties`);
+  const items: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (
+      descriptor === undefined
+      || !descriptor.enumerable
+      || !("value" in descriptor)
+    ) return fail(`${label} must contain only dense enumerable data elements`);
+    items.push(descriptor.value);
+  }
+  if (keys.some((key) =>
+    key !== "length"
+    && (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/u.test(key)))) {
+    return fail(`${label} must be a dense array without named properties`);
+  }
+  return Object.freeze(items);
+}
+
 export function parseWhatsAppMessageLikeMeExportReceipt(
   value: unknown,
 ): WhatsAppMessageLikeMeExportReceipt {
@@ -131,11 +175,11 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
   if (observedFrom !== null && observedThrough !== null && observedThrough < observedFrom) {
     return fail("receipt completeness timestamps are reversed");
   }
+  const warnings = denseDataArray(root.warnings, "receipt.warnings", 128);
   if (
-    !Array.isArray(root.warnings)
-    || root.warnings.length > 128
-    || root.warnings.some((item) => typeof item !== "string" || !/^[a-z0-9][a-z0-9._+-]*$/u.test(item))
-    || new Set(root.warnings).size !== root.warnings.length
+    warnings.some((item) =>
+      typeof item !== "string" || !/^[a-z0-9][a-z0-9._+-]*$/u.test(item))
+    || new Set(warnings).size !== warnings.length
   ) return fail("receipt warnings are unsupported");
   const counts = record(root.counts, "receipt.counts");
   const countKinds = ["account", "participant", "conversation", "message", "reaction", "tombstone"] as const;
