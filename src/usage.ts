@@ -80,7 +80,7 @@ export const wrenchUsage = `Usage:
 
   wrench apple-photos export-contact-evidence
                 [--library <normalized-absolute-.photoslibrary>] [--json]
-                # exact local contact matches only; no names, paths, media, locations, or biometrics
+                # private cluster evidence; returned JSON has no images, crops, or templates
 
   wrench beeper export-message-like-me --auth <id> --output <new-absolute-directory>
                 [--limit-chats <n>] [--limit-messages <n>]

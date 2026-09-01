@@ -466,23 +466,34 @@ wrench apple-photos export-contact-evidence --json \
   > /absolute/private/path/apple-photos-contact-evidence.json
 ```
 
-Wrench copies the owned Photos SQLite main file and any complete WAL/SHM pair
-into a new private temporary directory only after bounded pre-open and
-post-copy file-identity checks agree. It applies the same snapshot discipline
-to every current Apple Contacts database discovered under the account's fixed
-AddressBook root, queries only the copied databases, and removes the temporary
-snapshot before returning. Symlinks, hardlinks, changed files, incomplete
-sidecars, unexpected owners, size overruns, missing tables, and relevant Core
-Data column drift fail closed.
+Wrench opens each owned source database read-only and uses SQLite `VACUUM INTO`
+to create one self-contained database in a new private temporary directory. It
+binds each source's physical identity before and after capture while allowing
+ordinary live size and modification-time changes. It applies the same capture
+boundary to every current Apple Contacts database discovered under the
+account's fixed AddressBook root, validates and queries only the captured
+databases, and removes them after ordinary success or handled failure.
+Symlinks, hardlinks, owner or identity changes, size overruns, missing tables,
+and relevant Core Data column drift fail closed.
+
+Before database bytes enter the temporary directory, the CLI wins the shared
+private-export admission and records a process-owned,
+filesystem-identity-bound recovery lease. A later export reclaims only the
+exact leased directory left by forced termination or a crash after proving its
+owner is dead; live or uninspectable owners remain untouched and stop the run.
 
 The only identity join is an exact equality between
 `ZPERSON.ZPERSONURI` and Apple Contacts `ZABCDRECORD.ZUNIQUEID`. Wrench never
 parses `ZCONTACTMATCHINGDICTIONARY`. The schema-1 artifact contains only the
 matched Photos person identifier, Apple contact identifier, linked face and
-distinct-asset counts, first and last linked asset dates, explicit local
-snapshot completeness, privacy exclusions, generation and schema digests, and
-an integrity-bound receipt. Names, paths, images, media, raw database fields,
-locations, faceprints, face crops, and unmatched clusters are excluded.
+distinct `ZASSET`-row counts, first and last linked asset dates, capture scope,
+privacy exclusions, path-free library realm, generation and schema digests,
+component capture intervals, and an integrity-bound receipt. Cluster
+identifiers and counts are private biometric-derived metadata. Wrench does not
+open or ask Photos to materialize referenced photo or video asset files. Its
+full private SQLite captures can contain other source fields, but names, paths,
+images, media, raw database fields, locations, faceprint templates, face crops,
+and unmatched clusters are excluded from the returned JSON.
 
 ```ts
 import {
@@ -492,10 +503,11 @@ import {
 const { receipt, output } = exportApplePhotosContactEvidenceSync()
 ```
 
-The result is complete only for the stable local Photos and Contacts snapshots
-observed by that run. It makes no claim about pending iCloud or Contacts sync,
-and absence is not deletion evidence. Keep the artifact private because its
-two exact identifiers are personal relationship data. See the focused
+Each component is consistent within its recorded capture interval. The result
+does not claim one atomic instant across Photos and Contacts or complete iCloud
+and Contacts synchronization. Absence is not deletion evidence. Keep the
+artifact private because its exact identifiers and cluster counts reveal
+personal relationship and biometric-derived metadata. See the focused
 [Apple Photos guide](skills/wrench/references/apple-photos.md).
 
 ### Beeper through an exact local CLI contract

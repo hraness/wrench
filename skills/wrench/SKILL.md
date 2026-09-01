@@ -44,7 +44,10 @@ automation.
   only its typed read or action operation with the bound local Desktop realm.
 - Export exact local Apple Photos contact evidence: follow
   [Apple Photos contact evidence](references/apple-photos.md). This source has
-  no auth or network authority and never exposes media or biometric material.
+  no auth or network authority. Its cluster identifiers and counts are private
+  biometric-derived metadata. It does not open or ask Photos to materialize
+  referenced photo or video asset files, and the returned JSON excludes images,
+  crops, and faceprint templates.
 - Read or act on a live conversation: follow
   [agentic messaging](references/messaging.md). Keep one exact provider route,
   use private artifacts for prose and capability references, and never expose a

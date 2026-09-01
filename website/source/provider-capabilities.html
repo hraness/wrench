@@ -71,8 +71,8 @@
 
         <section aria-labelledby="local-source-exports">
           <h2 id="local-source-exports">Local source exports</h2>
-          <p><code>wrench apple-photos export-contact-evidence</code> reads stable private copies of the current macOS account's local Photos and Contacts databases. It returns exact person-to-contact identifiers, linked face and asset counts, linked-asset date bounds, snapshot scope, privacy declarations, and integrity evidence. It performs no authentication, network request, synchronization, media read, or mutation. Names, paths, images, locations, raw blobs, faceprints, face crops, and unmatched people are excluded.</p>
-          <p>This workflow stays outside the provider-action table above because it does not connect to a service or enter the action catalog. Its complete claim covers the stable local snapshots read by that run; remote iCloud and Contacts synchronization are not asserted.</p>
+          <p><code>wrench apple-photos export-contact-evidence</code> reads bounded full private captures of the current macOS account's local Photos and Contacts databases. It returns exact person-to-contact identifiers, biometric-derived cluster counts, distinct <code>ZASSET</code>-row counts, linked-asset date bounds, component capture intervals, privacy declarations, and integrity evidence. It performs no authentication, network request, synchronization, or mutation, and it does not open or ask Photos to materialize referenced photo or video asset files. The transient SQLite copies can contain source fields outside the reviewed query; names, paths, images, locations, raw blobs, faceprint templates, face crops, and unmatched people are excluded from returned JSON.</p>
+          <p>This workflow stays outside the provider-action table above because it does not connect to a service or enter the action catalog. Each local database is consistent within its recorded capture interval; no atomic instant across databases is claimed. Remote iCloud and Contacts synchronization are not asserted.</p>
         </section>
 
         <aside class="guide-callout" aria-labelledby="provider-next">
