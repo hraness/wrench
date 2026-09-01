@@ -373,7 +373,7 @@ describe("wrench.rip static site", () => {
     expect(llms).not.toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).not.toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
-    expect(llms).toContain("submission is not a delivery claim");
+    expect(llms).toContain("pending message ID proves submission to Desktop only, not network delivery");
     expect(llms.replaceAll(/https:\/\/wrench\.rip\/[a-z0-9-/]+/gu, "")).not.toMatch(
       /observed|capture-required|reservation|attestation/iu,
     );
@@ -927,19 +927,23 @@ describe("wrench.rip static site", () => {
       `&lt;WRENCH_STATE_HOME&gt;/tools/beeper/${beeperFacts.cliVersion}/beeper`,
     );
     expect(beeper?.html).toContain('aria-current="location" href="/provider-capabilities/"');
-    expect(beeper?.html).toContain("evidence of submission, not network delivery");
-    expect(beeper?.html).toContain("Wrench does not retry it");
+    expect(beeper?.html).toContain("one fixed POST");
+    expect(beeper?.html).toContain("pendingMessageID");
+    expect(beeper?.html).toContain("proves submission to Desktop only, not network delivery");
+    expect(beeper?.html).toContain("does not call the CLI or SDK and never retries");
+    expect(beeper?.html).not.toContain("--wait");
+    expect(beeper?.html).not.toContain("terminal returned message ID");
     expect(beeper?.html).toContain("Use Beeper directly for the lowest-friction access to its first-party breadth");
     expect(beeper?.html).toContain(
       'href="https://developers.beeper.com/desktop-api/mcp/">built-in Beeper Desktop MCP</a>',
     );
     expect(beeper?.html).toContain('href="https://github.com/beeper/cli">official Beeper CLI</a>');
-    expect(beeper?.html).toContain("exact CLI artifact and adapter-version pinning");
-    expect(beeper?.html).toContain("write previews, durable receipts, and no blind retry");
+    expect(beeper?.html).toContain("exact executable and adapter-version pinning");
+    expect(beeper?.html).toContain("write previews, durable receipts, reconciliation, and no blind retry");
     expect(beeper?.html).toContain("encrypted snapshots");
     expect(beeper?.html).toContain("versioned Message Like Me and contact-interaction exports");
     expect(beeper?.html).toContain("It wraps only the actions listed for this release");
-    expect(beeper?.html).toContain(`all ${beeperFacts.cliCommandCount} canonical CLI commands`);
+    expect(beeper?.html).toContain(`all ${beeperFacts.cliCommandCount} public manual command paths`);
     expect(beeper?.html).toContain("These workflows are not part of the 32 supported actions");
     expect(beeper?.html).not.toMatch(/all Beeper (?:CLI )?features/iu);
     expect(beeper?.html).not.toMatch(/all (?:your )?chats/iu);
@@ -947,6 +951,22 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).not.toContain("seamless");
     expect(beeper?.html).not.toContain("Provider capabilities attestation");
     expect(beeper?.html).toContain("wrench.messaging-route-resolve-request");
+    const beeperJsonMatch = /<script type="application\/ld\+json">([^<]+)<\/script>/u.exec(
+      beeper?.html ?? "",
+    );
+    const beeperStructured = JSON.parse(beeperJsonMatch?.[1] ?? "null") as {
+      "@graph"?: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    };
+    const beeperBreadcrumb = beeperStructured["@graph"]?.find((node) =>
+      node["@id"] === `${SITE_ORIGIN}/providers/beeper/#breadcrumb`);
+    expect(beeperBreadcrumb).toMatchObject({
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        { name: "Wrench", position: 1, item: `${SITE_ORIGIN}/` },
+        { name: "Providers", position: 2, item: `${SITE_ORIGIN}/provider-capabilities/` },
+        { name: "Beeper", position: 3, item: `${SITE_ORIGIN}/providers/beeper/` },
+      ],
+    });
     const agentFacingMessagingDocs = [
       beeper?.html ?? "",
       await readFile(join(repositoryRoot, "README.md"), "utf8"),

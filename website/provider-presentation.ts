@@ -10,6 +10,7 @@ import type {
 } from "./provider-capability-attestation";
 
 type ProviderIcon =
+  | "beeper"
   | "broadcast"
   | "chat"
   | "code"
@@ -30,7 +31,7 @@ type ProviderPresentationDefinition = Readonly<{
 }>;
 
 export const PROVIDER_PRESENTATIONS = Object.freeze([
-  { accent: "blue", icon: "chat", name: "Beeper", surfaceId: "beeper" },
+  { accent: "blue", icon: "beeper", name: "Beeper", surfaceId: "beeper" },
   { accent: "blue", icon: "network", name: "Bluesky", surfaceId: "bluesky" },
   { accent: "gold", icon: "store", name: "ClasificadosOnline", surfaceId: "clasificados" },
   { accent: "blue", icon: "network", name: "Facebook", surfaceId: "facebook" },
@@ -97,7 +98,7 @@ export type BeeperPresentationFacts = Readonly<{
 
 export const BEEPER_PAGE_METADATA = Object.freeze({
   description:
-    `Use ${BEEPER_LOCAL_OPERATION_NAMES.length} supported Wrench actions to read and act through the official Beeper CLI ${BEEPER_CLI_PIN.version} and one connected Beeper Desktop account.`,
+    `Use ${BEEPER_LOCAL_OPERATION_NAMES.length} supported Wrench actions with one connected Beeper Desktop account: 27 CLI-backed operations and five fixed Desktop loopback reads.`,
   title:
     `Beeper support in Wrench: ${BEEPER_LOCAL_OPERATION_NAMES.length} supported actions`,
 } as const);
@@ -297,6 +298,10 @@ function entryCountLabel(entry: ProviderDirectoryEntry): string {
 }
 
 const providerIconPaths: Readonly<Record<ProviderIcon, readonly string[]>> = Object.freeze({
+  beeper: Object.freeze([
+    '<path d="M5.5 5.5h13a2.5 2.5 0 0 1 2.5 2.5v6.5a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3v-3A2.5 2.5 0 0 1 3 16.5V8a2.5 2.5 0 0 1 2.5-2.5Z"></path>',
+    '<path d="M8 10h.01M12 10h.01M16 10h.01M8 13.5h8"></path>',
+  ]),
   broadcast: Object.freeze([
     '<rect x="4" y="7" width="16" height="11" rx="2"></rect>',
     '<path d="m9 22 3-4 3 4M8 3c2.7 2.3 5.3 2.3 8 0"></path>',

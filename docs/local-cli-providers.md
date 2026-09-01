@@ -10,11 +10,26 @@ Portable plugin protocol v1 cannot declare `local-cli`. Native process authority
 and executable provenance remain code-owned source-plugin responsibilities.
 
 The built-in Beeper adapter is the first production example. It turns the
-pinned official Beeper CLI 0.6.2 artifacts into 32 named operations while the
-source plugin owns executable verification, Desktop-target and account binding,
-strict projections, process bounds, and mutation recovery. See the public
-[Beeper provider guide](https://wrench.rip/providers/beeper/) and the current
-release's [operation attestation](https://wrench.rip/provider-capabilities/#provider-beeper).
+pinned official `@beeper/cli` 0.6.2 executable into 27 CLI-backed operations
+and adds five fixed Beeper Desktop loopback reads, for 32 named operations in
+all. The source plugin owns executable and endpoint verification, Desktop-target
+and account binding, strict projections, process bounds, and mutation recovery.
+See the public [Beeper provider guide](https://wrench.rip/providers/beeper/) and
+the current release's [operation attestation](https://wrench.rip/provider-capabilities/#provider-beeper).
+
+The selected operation set is 25 operations at contract version 1, six at
+version 2, and `messaging.read` at version 3. The five direct loopback reads are
+`accounts.list`, `messaging.search`, `conversations.read`, `messaging.read`, and
+`messaging.content.search`; they do not fall back to the CLI or SDK. The CLI
+executable is authoritative: the tagged source `packages/cli/package.json`
+declares 0.6.1, which is provenance only.
+
+The 101 public manual command paths are fully accounted for as provenance, not
+as supported-command parity. Forty-one paths collapse to 32 operations.
+`accounts use` is absorbed into explicit account IDs; target status, status,
+version, and top-level export are internal; account add/remove and message
+deletion are R4/capture-required; and 53 paths are unsupported. The selected
+adapter has zero capture-required operations.
 
 ## Keep three versions separate
 
@@ -141,6 +156,14 @@ timeout, signal, malformed response, lost response, or noncategorical failure
 after dispatch is indeterminate. Reconcile only through a separately obtained
 exact read supported by the operation contract. Upstream retry flags and
 claimed idempotency do not replace Wrench's at-most-once evidence.
+
+The Beeper messaging facade has a separate agentic text-send path. After route
+and context preflight it performs one fixed POST to the bound Desktop loopback
+endpoint; it does not call the CLI or SDK and never retries. A returned
+`pendingMessageID` proves submission to Desktop only, not network delivery.
+Message reads use opaque before/after cursors returned by Desktop and an
+optional sender filter. Callers pass those returned values and never derive a
+cursor from a terminal message ID.
 
 Use R4 for destructive, administrative, account-recovery, software-lifecycle,
 or insufficiently observable operations. The presence of a CLI command does

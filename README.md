@@ -54,12 +54,13 @@ lists only executable actions, grouped by the tasks each service supports and
 the access method each action uses. Inspect `wrench capabilities --json` for
 the exact installed contract state.
 
-Beeper is Wrench's first pinned local-CLI provider. Its 32 supported actions
-read accounts, contacts, conversations, and messages; manage reactions, drafts,
-reminders, and conversation state; and preview and confirm sends, edits, group
-changes, and presence. Wrench accepts only the reviewed official Beeper CLI
-0.6.2 executable and one bound Desktop target. It does not expose a generic
-command runner, and submission is not a claim of network delivery.
+Beeper is Wrench's first provider adapter with a pinned local-CLI transport. Its
+32 supported actions read accounts, contacts, conversations, and messages;
+manage reactions, drafts, reminders, and conversation state; and preview and
+confirm sends, edits, group changes, and presence. Twenty-seven operations use
+the authoritative `@beeper/cli` 0.6.2 executable; five reads use fixed Beeper
+Desktop loopback endpoints. Wrench binds one Desktop target and does not expose
+a generic command runner. Submission is not a claim of network delivery.
 
 ```sh
 wrench messaging routes --input @/absolute/private/beeper-routes-request.json \
@@ -510,18 +511,25 @@ artifact private because its exact identifiers and cluster counts reveal
 personal relationship and biometric-derived metadata. See the focused
 [Apple Photos guide](skills/wrench/references/apple-photos.md).
 
-### Beeper through an exact local CLI contract
+### Beeper through exact pinned and direct Desktop contracts
 
 The bundled `beeper-linked-device` source plugin operates an existing Beeper
-Desktop authorization through the official Beeper CLI 0.6.2. This is Wrench's
-first `local-cli` transport: the adapter selects semantic operations while its
-source plugin owns exact executable identity, fixed command templates, strict
-input and output projections, account and Desktop-target proof, process bounds,
-and mutation recovery. It is not a generic Beeper command runner.
+Desktop authorization through one pinned CLI contract and five fixed Desktop
+loopback read contracts. This is Wrench's first `local-cli` transport: the
+adapter selects semantic operations while its source plugin owns exact
+executable identity, fixed command templates and endpoints, strict input and
+output projections, account and Desktop-target proof, process bounds, and
+mutation recovery. It is not a generic Beeper command runner.
 
-The adapter covers ordinary Beeper work through 32 operations. R1 reads include
-accounts, bridges, contacts, conversations, message pages, exact messages,
-message context, and bounded searches. R2 desired-state actions include
+The adapter covers ordinary Beeper work through 32 operations: 25 at contract
+version 1, six at contract version 2, and `messaging.read` at contract version 3.
+The 27 CLI-backed operations include bridges, contacts, writes, exact message
+reads, and the other named actions. Five fixed Desktop loopback reads are
+`accounts.list`, `messaging.search`, `conversations.read`, `messaging.read`, and
+`messaging.content.search`; the current `messaging.read` contract adds opaque
+before/after cursors and a sender filter. R1 reads include accounts, bridges,
+contacts, conversations, message pages, exact messages, message context, and
+bounded searches. R2 desired-state actions include
 reactions, archive, pin, mute, priority, private drafts, reminders, and local
 Desktop focus. R3 actions send text, files, stickers, or voice messages; edit
 an exact message; start a conversation; change the network-visible read state;
@@ -578,6 +586,10 @@ reviewed against `@beeper/desktop-api` 5.0.0 at
 the executable digest does not by itself attest independently updated Desktop
 API behavior.
 
+The authoritative runtime identity is `@beeper/cli` 0.6.2 from the pinned
+release artifacts. The tagged source `packages/cli/package.json` declares 0.6.1;
+that value is provenance only and is not execution authority.
+
 The live Desktop `/v1/info` bundle ID and exact advertised version are also
 part of the bound account realm. An in-place Desktop upgrade therefore
 requires an explicit auth rebind and produces new previews instead of silently
@@ -605,7 +617,10 @@ wrench beeper-local messaging.read --auth beeper-main \
 The generic Beeper mutation command remains available for checked manual
 workflows. Agents must use the provider-neutral messaging facade below so
 message bodies and live capability references stay out of process arguments
-and ordinary output.
+and ordinary output. The facade's agentic text-send path performs one fixed
+Desktop loopback POST after route and context preflight; it does not call the
+CLI or SDK and never retries. A returned `pendingMessageID` proves submission
+to Desktop only, not network delivery.
 
 ## Agentic messaging through one exact provider route
 
@@ -696,12 +711,15 @@ of guessing from body, recipient, time, or nearby messages. See the packaged
 the complete route, freshness, authorization, private-artifact, terminal-state,
 and reconciliation rules.
 
-The checked Beeper coverage ledger accounts for all 101 canonical 0.6.2
-commands. Account setup and removal, authentication and verification, target
-and server lifecycle, configuration and update, plugin lifecycle, raw API/RPC,
-watch/webhook, arbitrary exports, media download, and message deletion remain
-unavailable or R4. Wrench does not turn administrative, destructive,
-caller-selected network, or arbitrary-filesystem commands into agent authority.
+The checked Beeper coverage ledger fully accounts for all 101 public manual
+command paths; this is provenance coverage, not supported-command parity.
+Forty-one paths collapse to the 32 semantic operations. `accounts use` is
+absorbed into explicit account IDs; target status, status, version, and
+top-level export are internal; account add/remove and message deletion are
+R4/capture-required; and 53 paths are unsupported. The selected 32-operation
+adapter has zero capture-required actions. Wrench does not turn administrative,
+destructive, caller-selected network, or arbitrary-filesystem commands into
+agent authority.
 
 Create a private, agent-ready Message Like Me bundle from every connected
 account materialized by Beeper Desktop:
@@ -832,14 +850,15 @@ gives supported MCP clients a first-party path to Beeper Desktop. This export
 path uses the official CLI because Wrench needs a pinned, bounded, read-only
 file snapshot that it can validate and publish atomically.
 
-Contact and chat lists are bounded to 200 records because CLI 0.6.2 exposes no
-continuation cursor for those commands. Message pages derive the next
-before/after cursor only from the terminal returned message ID and reject
-duplicates or a non-advancing cursor at normalization. Output marks remote
-history coverage unknown, preserves account/network/reply/edit/delete and
-reaction provenance, and includes attachment metadata without media IDs,
-paths, URLs, or downloads. This is a local materialized view, not a claim that
-every connected network has finished backfilling its remote history.
+Contact and chat lists are bounded to 200 records because the reviewed Desktop
+reads expose no continuation for those commands. Message pages use opaque
+before/after cursors returned by Desktop, plus the optional sender filter; Wrench
+rejects duplicate or non-advancing cursors at normalization and never derives a
+cursor from a terminal message ID. Output marks remote history coverage
+unknown, preserves account/network/reply/edit/delete and reaction provenance,
+and includes attachment metadata without media IDs, paths, URLs, or downloads.
+This is a local materialized view, not a claim that every connected network has
+finished backfilling its remote history.
 
 ### Direct iMessage through a reviewed private transport
 

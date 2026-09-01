@@ -38,9 +38,9 @@ describe("provider presentation", () => {
 
     expect(directory.entries[0]).toMatchObject({
       adapterCount: 1,
-      adapterIdentities: [{ id: "beeper-local", version: "2.2.0" }],
+      adapterIdentities: [{ id: "beeper-local", version: "2.3.0" }],
       captureRequiredCount: 0,
-      contractVersions: [1, 2],
+      contractVersions: [1, 2, 3],
       href: "/providers/beeper/",
       name: "Beeper",
       observedCount: 32,
@@ -71,7 +71,7 @@ describe("provider presentation", () => {
     );
     const facts = createBeeperPresentationFacts(directory);
     expect(facts).toMatchObject({
-      adapterVersion: "2.2.0",
+      adapterVersion: "2.3.0",
       cliCommandCount: 101,
       cliCommit: "a416af06023449a87312dc11e54643fd9dc94b8c",
       cliReleaseUrl: "https://github.com/beeper/cli/releases/tag/v0.6.2",
@@ -81,8 +81,8 @@ describe("provider presentation", () => {
       observedOperationCount: 32,
       pageDescription: BEEPER_PAGE_METADATA.description,
       pageTitle: BEEPER_PAGE_METADATA.title,
-      semanticContractVersionLabel: "Contract versions 1, 2",
-      semanticContractVersions: [1, 2],
+      semanticContractVersionLabel: "Contract versions 1, 2, 3",
+      semanticContractVersions: [1, 2, 3],
     });
     expect(facts.artifactTable.match(/<tbody><tr>/gu)).toHaveLength(1);
     expect(facts.artifactTable.match(/<tr>/gu)).toHaveLength(5);
@@ -104,8 +104,8 @@ describe("provider presentation", () => {
       rows: Object.freeze(changedRows),
     }));
 
-    expect(facts.semanticContractVersions).toEqual([1, 2]);
-    expect(facts.semanticContractVersionLabel).toBe("Contract versions 1, 2");
+    expect(facts.semanticContractVersions).toEqual([1, 2, 3]);
+    expect(facts.semanticContractVersionLabel).toBe("Contract versions 1, 2, 3");
   });
 
   test("renders supported tasks without exposing internal readiness states", async () => {
@@ -114,6 +114,7 @@ describe("provider presentation", () => {
     const cards = renderProviderOverviewCards(directory);
     const groups = renderProviderAttestationGroups(directory, attestation);
     const iconSignatures = {
+      beeper: '<path d="M5.5 5.5h13a2.5 2.5 0 0 1 2.5 2.5v6.5a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3v-3A2.5 2.5 0 0 1 3 16.5V8a2.5 2.5 0 0 1 2.5-2.5Z"></path>',
       broadcast: '<rect x="4" y="7" width="16" height="11" rx="2"></rect>',
       chat: '<path d="M5.5 5.5h13a2.5 2.5 0 0 1 2.5 2.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3v-3A2.5 2.5 0 0 1 3 15V8a2.5 2.5 0 0 1 2.5-2.5Z"></path>',
       code: '<path d="m9 7-5 5 5 5M15 7l5 5-5 5M13.5 4 10.5 20"></path>',

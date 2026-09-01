@@ -435,6 +435,15 @@ function jsonLd(identity: PackageIdentity, page: PublicPage): Readonly<Record<st
   const url = `${SITE_ORIGIN}${page.canonicalPath}`;
   const pageId = `${url}#webpage`;
   const isHome = page.canonicalPath === "/";
+  const breadcrumbItems = isHome
+    ? undefined
+    : page.canonicalPath === "/providers/beeper/"
+      ? [
+        { item: `${SITE_ORIGIN}/`, name: "Wrench" },
+        { item: `${SITE_ORIGIN}/provider-capabilities/`, name: "Providers" },
+        { item: url, name: "Beeper" },
+      ]
+      : [{ item: `${SITE_ORIGIN}/`, name: "Wrench" }, { item: url, name: page.title }];
   const pageGraph: Array<Readonly<Record<string, unknown>>> = [
     {
       "@id": pageId,
@@ -468,20 +477,11 @@ function jsonLd(identity: PackageIdentity, page: PublicPage): Readonly<Record<st
       {
         "@id": `${url}#breadcrumb`,
         "@type": "BreadcrumbList",
-        itemListElement: [
-          {
-            "@type": "ListItem",
-            item: `${SITE_ORIGIN}/`,
-            name: "Wrench",
-            position: 1,
-          },
-          {
-            "@type": "ListItem",
-            item: url,
-            name: page.title,
-            position: 2,
-          },
-        ],
+        itemListElement: breadcrumbItems?.map((item, index) => ({
+          "@type": "ListItem",
+          ...item,
+          position: index + 1,
+        })),
       },
     );
   }
