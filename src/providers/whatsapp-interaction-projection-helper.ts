@@ -5,7 +5,6 @@ import {
   lstatSync,
   openSync,
   realpathSync,
-  unlinkSync,
   writeSync,
   type BigIntStats,
 } from "node:fs";
@@ -62,6 +61,7 @@ const SQLITE_CACHE_KIB = 4_096;
 const MAX_UNIX_SECONDS = 253_402_300_799n;
 const SYSTEM_SENTINEL_JID = "0@s.whatsapp.net";
 const MESSAGE_EXPORT_SESSION_MAX_MESSAGES = 500_000;
+type MessageExportSessionSelfChatsExcluded = "none-detected" | "present-excluded";
 
 type BoundMessageStoreRequest = Pick<
   WhatsAppInteractionProjectionRequest,
@@ -802,6 +802,11 @@ const MESSAGE_EXPORT_FILTER = `
   )
 `;
 
+const MESSAGE_EXPORT_SELF_CHAT_FILTER = `
+  m.chat_jid <> ?3
+  AND (?4 IS NULL OR m.chat_jid <> ?4)
+`;
+
 function hasExcludedNonConversationMessages(database: Database): boolean {
   let projected: readonly SqliteRow[];
   try {
@@ -824,6 +829,33 @@ function hasExcludedNonConversationMessages(database: Database): boolean {
   if (projected.length !== 1) return fail("projection-invalid");
   exactRowKeys(projected[0]!, ["excluded"]);
   return projectedBoolean(projected[0]!.excluded);
+}
+
+function selfChatsExcluded(
+  database: Database,
+  owner: WhatsAppMatchedOwnerIdentity,
+): MessageExportSessionSelfChatsExcluded {
+  try {
+    const result = rows(database.query(`
+      SELECT EXISTS(
+        SELECT 1
+        FROM messages m
+        JOIN chats c ON c.jid = m.chat_jid
+        WHERE c.kind = 'dm'
+          AND (m.chat_jid = ?1 OR (?2 IS NOT NULL AND m.chat_jid = ?2))
+        LIMIT 1
+      ) AS excluded
+    `).iterate(
+      owner.accountJidAliases.pnJid,
+      owner.accountJidAliases.lidJid,
+    ), 1, "projection-invalid");
+    if (result.length !== 1) return fail("projection-invalid");
+    exactRowKeys(result[0]!, ["excluded"]);
+    return projectedBoolean(result[0]!.excluded) ? "present-excluded" : "none-detected";
+  } catch (error) {
+    if (error instanceof HelperFailure) throw error;
+    return fail("projection-invalid");
+  }
 }
 
 const MESSAGE_EXPORT_COLUMNS = `
@@ -867,9 +899,16 @@ function assertMessageExportCursorAnchor(
       SELECT ${MESSAGE_EXPORT_COLUMNS}
       FROM messages m
       JOIN chats c ON c.jid = m.chat_jid
-      WHERE m.rowid = ?1 AND ${MESSAGE_EXPORT_FILTER}
+      WHERE m.rowid = ?1
+        AND ${MESSAGE_EXPORT_FILTER}
+        AND ${MESSAGE_EXPORT_SELF_CHAT_FILTER}
       LIMIT 2
-    `).iterate(BigInt(request.cursor)), 2, "projection-invalid");
+    `).iterate(
+      BigInt(request.cursor),
+      request.limit + 1,
+      owner.accountJidAliases.pnJid,
+      owner.accountJidAliases.lidJid,
+    ), 2, "projection-invalid");
   } catch (error) {
     if (error instanceof HelperFailure) throw error;
     return fail("projection-invalid");
@@ -899,10 +938,17 @@ function projectMessageExport(
       SELECT ${MESSAGE_EXPORT_COLUMNS}
       FROM messages m
       JOIN chats c ON c.jid = m.chat_jid
-      WHERE m.rowid > ?1 AND ${MESSAGE_EXPORT_FILTER}
+      WHERE m.rowid > ?1
+        AND ${MESSAGE_EXPORT_FILTER}
+        AND ${MESSAGE_EXPORT_SELF_CHAT_FILTER}
       ORDER BY m.rowid ASC
       LIMIT ?2
-    `).iterate(BigInt(request.cursor), request.limit + 1), request.limit + 1, "projection-invalid");
+    `).iterate(
+      BigInt(request.cursor),
+      request.limit + 1,
+      owner.accountJidAliases.pnJid,
+      owner.accountJidAliases.lidJid,
+    ), request.limit + 1, "projection-invalid");
   } catch (error) {
     if (error instanceof HelperFailure) throw error;
     return fail("projection-invalid");
@@ -1055,8 +1101,17 @@ export function projectWhatsAppMessageExportFromBoundCwd(
 
 export function projectWhatsAppMessageExportSessionFromBoundCwd(
   requestValue: unknown,
-  outputDescriptor: number,
-): Readonly<{ pages: number; messages: number }> {
+  writeFrame: (frame: unknown) => void,
+): Readonly<{
+  pages: number;
+  messages: number;
+  checkpoint: WhatsAppMessageExportProjectionSuccess["checkpoint"];
+  projectionGeneration: WhatsAppMessageExportProjectionSuccess["projectionGeneration"];
+  selfJids: readonly string[];
+  selfChatsExcluded: MessageExportSessionSelfChatsExcluded;
+  integrityChecks: 1;
+  framesSha256: string;
+}> {
   const initial = parseWhatsAppMessageExportProjectionRequest(requestValue);
   if (
     initial.cursor !== "0"
@@ -1071,6 +1126,14 @@ export function projectWhatsAppMessageExportSessionFromBoundCwd(
     let messages = 0;
     const framesHash = createHash("sha256");
     let finalResponse: WhatsAppMessageExportProjectionSuccess | undefined;
+    const selfJids = Object.freeze([...owner.selfJids].sort());
+    const excludedSelfChats = selfChatsExcluded(database, owner);
+    if (
+      selfJids.length < 1
+      || selfJids.length > 2
+      || !selfJids.includes(owner.accountJidAliases.pnJid)
+      || new Set(selfJids).size !== selfJids.length
+    ) return fail("owner-mismatch");
     for (;;) {
       revalidate();
       pages += 1;
@@ -1083,18 +1146,17 @@ export function projectWhatsAppMessageExportSessionFromBoundCwd(
       const frame = Object.freeze({
         kind: "page" as const,
         index: pages,
-        response,
+        projectionGeneration: response.projectionGeneration,
+        selfJids,
+        selfChatsExcluded: excludedSelfChats,
+        nonConversationChatsExcluded: response.nonConversationChatsExcluded,
+        messages: response.messages,
+        checkpoint: response.checkpoint,
+        terminal: response.localInsertPageComplete,
       });
       const canonicalFrame = canonicalJson(frame);
       framesHash.update(canonicalFrame).update("\n");
-      const encoded = `${canonicalFrame}\n`;
-      let offset = 0;
-      const bytes = Buffer.from(encoded, "utf8");
-      while (offset < bytes.length) {
-        const written = writeSync(outputDescriptor, bytes, offset, bytes.length - offset);
-        if (written < 1) return fail("projection-invalid");
-        offset += written;
-      }
+      writeFrame(frame);
       revalidate();
       if (response.localInsertPageComplete) break;
       if (response.nextCursor === null || response.nextCursor !== response.checkpoint.cursor) {
@@ -1108,29 +1170,31 @@ export function projectWhatsAppMessageExportSessionFromBoundCwd(
       });
     }
     if (finalResponse === undefined) return fail("projection-invalid");
-    const seal = canonicalJson(Object.freeze({
-      kind: "seal" as const,
+    return Object.freeze({
       pages,
       messages,
       checkpoint: finalResponse.checkpoint,
       projectionGeneration: finalResponse.projectionGeneration,
+      selfJids,
+      selfChatsExcluded: excludedSelfChats,
+      integrityChecks: 1 as const,
       framesSha256: framesHash.digest("hex"),
-    }));
-    const sealBytes = Buffer.from(`${seal}\n`, "utf8");
-    let sealOffset = 0;
-    while (sealOffset < sealBytes.length) {
-      const written = writeSync(
-        outputDescriptor,
-        sealBytes,
-        sealOffset,
-        sealBytes.length - sealOffset,
-      );
-      if (written < 1) return fail("projection-invalid");
-      sealOffset += written;
-    }
-      return Object.freeze({ pages, messages });
+    });
     },
   );
+}
+
+function writeSessionFrame(frame: unknown): void {
+  const bytes = Buffer.from(`${canonicalJson(frame)}\n`, "utf8");
+  if (bytes.byteLength > WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDOUT_BYTES) {
+    return fail("output-too-large");
+  }
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = writeSync(1, bytes, offset, bytes.length - offset);
+    if (written < 1) return fail("projection-invalid");
+    offset += written;
+  }
 }
 
 async function readBoundedStdin(): Promise<unknown> {
@@ -1183,40 +1247,30 @@ export async function runWhatsAppInteractionProjectionHelper(): Promise<
   if (session) {
     const record = requestValue as Readonly<Record<string, unknown>>;
     if (
-      Object.keys(record).sort().join("\0") !== "operation\0outputPath\0request"
-      || typeof record.outputPath !== "string"
-      || !record.outputPath.startsWith("/")
-      || record.outputPath.length > 4_096
-      || /[\0\r\n]/u.test(record.outputPath)
-    ) return createWhatsAppMessageExportProjectionFailure("request-invalid");
-    let descriptor: number | undefined;
+      Object.keys(record).sort().join("\0") !== "operation\0request"
+    ) {
+      writeSessionFrame(Object.freeze({
+        kind: "failed" as const,
+        errorCode: "request-invalid" as const,
+      }));
+      return undefined;
+    }
     try {
-      descriptor = openSync(
-        record.outputPath,
-        fsConstants.O_WRONLY
-          | fsConstants.O_CREAT
-          | fsConstants.O_EXCL
-          | fsConstants.O_NOFOLLOW,
-        0o600,
-      );
       const summary = projectWhatsAppMessageExportSessionFromBoundCwd(
         record.request,
-        descriptor,
+        writeSessionFrame,
       );
-      closeSync(descriptor);
-      descriptor = undefined;
-      return Object.freeze({
-        schemaVersion: 1,
-        status: "succeeded",
-        pages: summary.pages,
-        messages: summary.messages,
-      });
+      // projectBoundWhatsAppMessageStore closes and revalidates the database
+      // before returning. The seal therefore proves that every page preceded
+      // a clean close of the one identity-bound snapshot.
+      writeSessionFrame(Object.freeze({ kind: "seal" as const, ...summary }));
+      return undefined;
     } catch (error) {
-      if (descriptor !== undefined) {
-        try { closeSync(descriptor); } catch { /* cleanup below remains authoritative */ }
-      }
-      try { unlinkSync(record.outputPath); } catch { /* parent removes the private root */ }
-      return createWhatsAppMessageExportProjectionFailure(errorCode(error));
+      writeSessionFrame(Object.freeze({
+        kind: "failed" as const,
+        errorCode: errorCode(error),
+      }));
+      return undefined;
     }
   }
   const messageExport = typeof requestValue === "object"
@@ -1252,6 +1306,7 @@ export async function runWhatsAppInteractionProjectionHelper(): Promise<
 
 async function main(): Promise<void> {
   let response = await runWhatsAppInteractionProjectionHelper();
+  if (response === undefined) return;
   let output = `${JSON.stringify(response)}\n`;
   if (Buffer.byteLength(output, "utf8") > Math.max(
     WHATSAPP_INTERACTION_PROJECTION_MAX_STDOUT_BYTES,

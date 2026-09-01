@@ -1,17 +1,15 @@
-import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdtemp, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
+import { lstat } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { WrenchAuth } from "./auth";
 import {
-  createBeeperMessageLikeMeDirectoryLease,
-  releaseBeeperMessageLikeMeDirectoryLease,
-  updateBeeperMessageLikeMeDirectoryLease,
-  type BeeperMessageLikeMeDirectoryLease,
+  beginBeeperMessageLikeMeHelperLaunch,
+  bindBeeperMessageLikeMeHelperOwner,
+  markBeeperMessageLikeMeHelperCleanupUnsafe,
+  settleBeeperMessageLikeMeHelper,
+  type BeeperMessageLikeMeExportAdmission,
 } from "./beeper-message-like-me-recovery";
 import { canonicalJson, sha256 } from "./canonical-json";
 import {
@@ -20,11 +18,12 @@ import {
   isCanonicalWhatsAppAccountSubject,
 } from "./providers/whatsapp-account-identity";
 import {
-  runWhatsAppContactProjectionHelperChild,
+  containsWhatsAppContactProjectionCleanupUnverified,
+  runWhatsAppMessageExportSessionHelperChild,
   validateWhatsAppStoreDirectory,
-  WhatsAppContactProjectionCleanupUnverifiedError,
   type WhatsAppContactProjectionHelperInvocation,
   type WhatsAppContactProjectionHelperResult,
+  type WhatsAppMessageExportSessionHelperResult,
 } from "./providers/whatsapp-web-runtime";
 import {
   WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDOUT_BYTES,
@@ -73,7 +72,7 @@ export type WhatsAppMessageLikeMeSourceDependencies = Readonly<{
   /** Test-only persistent-session process seam. */
   runSessionHelper?: (
     invocation: WhatsAppContactProjectionHelperInvocation,
-  ) => Promise<WhatsAppContactProjectionHelperResult>;
+  ) => Promise<WhatsAppMessageExportSessionHelperResult>;
   /** Test-only total-operation deadline override. */
   totalTimeoutMs?: number;
   /** Test-only monotonic clock seam. */
@@ -83,6 +82,8 @@ export type WhatsAppMessageLikeMeSourceDependencies = Readonly<{
 export type WhatsAppMessageLikeMeSourceRequest = Readonly<{
   auth: WrenchAuth;
   stateEnvironment?: Readonly<Record<string, string | undefined>>;
+  /** Internal durable admission held by the native CLI. */
+  admission?: BeeperMessageLikeMeExportAdmission;
   signal?: AbortSignal;
   onProgress?: (progress: WhatsAppMessageLikeMeProgress) => void;
   dependencies?: WhatsAppMessageLikeMeSourceDependencies;
@@ -301,176 +302,193 @@ function latest(current: string | null, candidate: string): string {
   return current === null || candidate > current ? candidate : current;
 }
 
+function isSortedSelfJids(value: unknown): value is readonly string[] {
+  if (
+    !Array.isArray(value)
+    || value.length < 1
+    || value.length > 2
+    || !value.every((jid) => typeof jid === "string")
+    || new Set(value).size !== value.length
+  ) return false;
+  const sorted = [...value].sort();
+  return value.every((jid, index) => jid === sorted[index]);
+}
+
 async function* runMessageExportSession(
   initialRequest: WhatsAppMessageExportProjectionRequest,
   invocationBase: Omit<WhatsAppContactProjectionHelperInvocation, "stdin" | "maxOutputBytes">,
-  environment: Readonly<Record<string, string | undefined>>,
   runHelper: (
     invocation: WhatsAppContactProjectionHelperInvocation,
-  ) => Promise<WhatsAppContactProjectionHelperResult>,
+  ) => Promise<WhatsAppMessageExportSessionHelperResult>,
+  admission: BeeperMessageLikeMeExportAdmission | undefined,
 ): AsyncGenerator<unknown> {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "wrench-whatsapp-pages-")));
-  await chmod(root, 0o700);
-  const initialRoot = await lstat(root, { bigint: true });
-  const outputPath = join(root, "pages.ndjson");
-  let cleanupSafe = true;
-  let lease: BeeperMessageLikeMeDirectoryLease | undefined;
+  if (admission !== undefined) beginBeeperMessageLikeMeHelperLaunch(admission);
+  let result: WhatsAppMessageExportSessionHelperResult;
   try {
-    const acquiredAt = Date.now();
-    lease = await createBeeperMessageLikeMeDirectoryLease({
-      role: "raw-working",
-      path: root,
-      recoverAfterMs: acquiredAt + invocationBase.timeoutMs,
-      nowMs: acquiredAt,
-      environment,
-    });
-    updateBeeperMessageLikeMeDirectoryLease(lease, "launching");
-    let result: WhatsAppContactProjectionHelperResult;
-    try {
-      result = await runHelper(Object.freeze({
-        ...invocationBase,
-        stdin: `${JSON.stringify({
-          operation: "message-like-me.export-session",
-          outputPath,
-          request: initialRequest,
-        })}\n`,
-        maxOutputBytes: 16 * 1024,
-        onSpawned: (pid) => {
-          if (lease === undefined) {
-            throw new Error("private projection-session lease disappeared before launch");
-          }
-          updateBeeperMessageLikeMeDirectoryLease(lease, "running", pid);
-        },
-      }));
-      if (lease === undefined) {
-        return fail("private projection-session lease disappeared after launch");
+    result = await runHelper(Object.freeze({
+      ...invocationBase,
+      stdin: `${canonicalJson({
+        operation: "message-like-me.export-session",
+        request: initialRequest,
+      })}\n`,
+      maxOutputBytes: WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDOUT_BYTES,
+      ...(admission === undefined
+        ? {}
+        : { onSpawned: (pid: number) => bindBeeperMessageLikeMeHelperOwner(admission, pid) }),
+    }));
+    if (admission !== undefined) settleBeeperMessageLikeMeHelper(admission);
+  } catch (error) {
+    if (admission !== undefined) {
+      try {
+        if (containsWhatsAppContactProjectionCleanupUnverified(error)) {
+          markBeeperMessageLikeMeHelperCleanupUnsafe(admission);
+        } else {
+          settleBeeperMessageLikeMeHelper(admission);
+        }
+      } catch (lifecycleError) {
+        throw new AggregateError([error, lifecycleError], "WhatsApp helper lifecycle failed closed");
       }
-      updateBeeperMessageLikeMeDirectoryLease(lease, "settled");
-    } catch (error) {
-      if (error instanceof WhatsAppContactProjectionCleanupUnverifiedError) {
-        cleanupSafe = false;
-      }
-      throw error;
     }
-    if (result.exitCode !== 0 || result.stderr.length !== 0) {
-      return fail("fixed read-only projection session failed before reviewed output");
+    throw error;
+  }
+  if (result.exitCode !== 0 || result.stderr.length !== 0) {
+    return fail("fixed read-only projection session failed before reviewed output");
+  }
+  const framesHash = createHash("sha256");
+  const pages: unknown[] = [];
+  let messages = 0;
+  let finalCheckpoint: unknown;
+  let finalGeneration: unknown;
+  let finalSelfJids: readonly unknown[] | undefined;
+  let finalSelfChatsExcluded: unknown;
+  let failed = false;
+  let sealed = false;
+  let terminal = false;
+  let request = initialRequest;
+  for (const frame of result.frames) {
+    if (failed || sealed) return fail("the fixed projection session emitted an extra frame");
+    if (
+      typeof frame !== "object"
+      || frame === null
+      || Array.isArray(frame)
+      || !("kind" in frame)
+    ) return fail("one fixed projection frame was malformed");
+    if (frame.kind === "failed") {
+      if (
+        sealed
+        || Object.keys(frame).sort().join("\0") !== "errorCode\0kind"
+        || !("errorCode" in frame)
+        || typeof frame.errorCode !== "string"
+      ) return fail("the fixed projection failure frame was malformed");
+      const failure = parseWhatsAppMessageExportProjectionResponse({
+        schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
+        status: "failed",
+        errorCode: frame.errorCode,
+      }, request);
+      if (failure.status !== "failed") return fail("the fixed projection failure frame was invalid");
+      failed = true;
+      continue;
     }
-    let summary: unknown;
-    try {
-      summary = JSON.parse(result.stdout.trim()) as unknown;
-    } catch {
-      return fail("fixed read-only projection session returned malformed output");
+    if (frame.kind === "page") {
+      if (
+        sealed
+        || failed
+        || terminal
+        || Object.keys(frame).sort().join("\0")
+          !== "checkpoint\0index\0kind\0messages\0nonConversationChatsExcluded\0projectionGeneration\0selfChatsExcluded\0selfJids\0terminal"
+        || !("index" in frame)
+        || frame.index !== pages.length + 1
+        || !("selfChatsExcluded" in frame)
+        || (frame.selfChatsExcluded !== "none-detected"
+          && frame.selfChatsExcluded !== "present-excluded")
+        || !("selfJids" in frame)
+        || !isSortedSelfJids(frame.selfJids)
+        || !("terminal" in frame)
+        || typeof frame.terminal !== "boolean"
+        || !("messages" in frame)
+        || !Array.isArray(frame.messages)
+        || !("checkpoint" in frame)
+        || !("projectionGeneration" in frame)
+        || !("nonConversationChatsExcluded" in frame)
+        || typeof frame.nonConversationChatsExcluded !== "boolean"
+      ) return fail("one fixed projection page frame was unsupported");
+      const pnJid = frame.selfJids.find((jid) =>
+        typeof jid === "string" && jid.endsWith("@s.whatsapp.net"));
+      const lidJid = frame.selfJids.find((jid) =>
+        typeof jid === "string" && jid.endsWith("@lid")) ?? null;
+      if (typeof pnJid !== "string") return fail("one fixed projection page omitted the PN owner alias");
+      const responseValue = {
+        schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
+        status: "succeeded",
+        projectionGeneration: frame.projectionGeneration,
+        accountJidAliases: { pnJid, lidJid },
+        nonConversationChatsExcluded: frame.nonConversationChatsExcluded,
+        messages: frame.messages,
+        nextCursor: frame.terminal ? null : (frame.checkpoint as { cursor?: unknown }).cursor,
+        localInsertPageComplete: frame.terminal,
+        checkpoint: frame.checkpoint,
+      };
+      const response = parseWhatsAppMessageExportProjectionResponse(responseValue, request);
+      if (response.status !== "succeeded") return fail("one fixed projection page failed");
+      if (
+        finalGeneration !== undefined
+        && canonicalJson(finalGeneration) !== canonicalJson(response.projectionGeneration)
+      ) return fail("the fixed projection generation changed inside its session");
+      if (
+        finalSelfJids !== undefined
+        && canonicalJson(finalSelfJids) !== canonicalJson(frame.selfJids)
+      ) return fail("the fixed projection owner aliases changed inside its session");
+      if (
+        finalSelfChatsExcluded !== undefined
+        && finalSelfChatsExcluded !== frame.selfChatsExcluded
+      ) return fail("the fixed projection self-chat exclusion changed inside its session");
+      const canonicalFrame = canonicalJson(frame);
+      framesHash.update(canonicalFrame).update("\n");
+      messages += response.messages.length;
+      if (messages > 500_000) return fail("the fixed projection session exceeded its message bound");
+      pages.push(Object.freeze({ response, selfChatsExcluded: frame.selfChatsExcluded }));
+      finalCheckpoint = response.checkpoint;
+      finalGeneration = response.projectionGeneration;
+      finalSelfJids = Object.freeze([...frame.selfJids]);
+      finalSelfChatsExcluded = frame.selfChatsExcluded;
+      terminal = response.localInsertPageComplete;
+      request = parseWhatsAppMessageExportProjectionRequest({
+        ...request,
+        cursor: response.checkpoint.cursor,
+        cursorAnchor: response.checkpoint.anchor,
+        expectedGeneration: response.projectionGeneration,
+      });
+      continue;
     }
     if (
-      typeof summary !== "object"
-      || summary === null
-      || Array.isArray(summary)
-      || Object.keys(summary).sort().join("\0") !== "messages\0pages\0schemaVersion\0status"
-      || !("schemaVersion" in summary)
-      || summary.schemaVersion !== 1
-      || !("status" in summary)
-      || summary.status !== "succeeded"
-      || !("pages" in summary)
-      || typeof summary.pages !== "number"
-      || !Number.isSafeInteger(summary.pages)
-      || summary.pages < 1
-      || !("messages" in summary)
-      || typeof summary.messages !== "number"
-      || !Number.isSafeInteger(summary.messages)
-      || summary.messages < 0
-    ) return fail("fixed read-only projection session returned unsupported output");
-    const summaryPages = summary.pages;
-    const summaryMessages = summary.messages;
-    const lines = createInterface({ input: createReadStream(outputPath), crlfDelay: Infinity });
-    const framesHash = createHash("sha256");
-    let pages = 0;
-    let messages = 0;
-    let sealed = false;
-    let finalCheckpoint: unknown;
-    let finalGeneration: unknown;
-    try {
-      for await (const line of lines) {
-        if (Buffer.byteLength(line, "utf8") > WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDOUT_BYTES) {
-          return fail("one fixed projection page exceeded its reviewed bound");
-        }
-        let frame: unknown;
-        try {
-          frame = JSON.parse(line) as unknown;
-        } catch {
-          return fail("one fixed projection page was malformed");
-        }
-        if (
-          typeof frame !== "object"
-          || frame === null
-          || Array.isArray(frame)
-          || !("kind" in frame)
-        ) return fail("one fixed projection frame was malformed");
-        if (frame.kind === "page") {
-          if (
-            sealed
-            || Object.keys(frame).sort().join("\0") !== "index\0kind\0response"
-            || !("index" in frame)
-            || frame.index !== pages + 1
-            || !("response" in frame)
-            || typeof frame.response !== "object"
-            || frame.response === null
-            || Array.isArray(frame.response)
-            || !("messages" in frame.response)
-            || !Array.isArray(frame.response.messages)
-            || !("checkpoint" in frame.response)
-            || !("projectionGeneration" in frame.response)
-          ) return fail("one fixed projection page frame was unsupported");
-          const canonicalFrame = canonicalJson(frame);
-          if (line !== canonicalFrame) return fail("one fixed projection page was not canonical");
-          framesHash.update(canonicalFrame).update("\n");
-          pages += 1;
-          messages += frame.response.messages.length;
-          finalCheckpoint = frame.response.checkpoint;
-          finalGeneration = frame.response.projectionGeneration;
-          yield frame.response;
-          continue;
-        }
-        if (
-          frame.kind !== "seal"
-          || sealed
-          || Object.keys(frame).sort().join("\0")
-            !== "checkpoint\0framesSha256\0kind\0messages\0pages\0projectionGeneration"
-          || !("pages" in frame)
-          || frame.pages !== pages
-          || !("messages" in frame)
-          || frame.messages !== messages
-          || !("framesSha256" in frame)
-          || frame.framesSha256 !== framesHash.digest("hex")
-          || !("checkpoint" in frame)
-          || canonicalJson(frame.checkpoint) !== canonicalJson(finalCheckpoint)
-          || !("projectionGeneration" in frame)
-          || canonicalJson(frame.projectionGeneration) !== canonicalJson(finalGeneration)
-          || line !== canonicalJson(frame)
-        ) return fail("the fixed projection session seal was invalid");
-        sealed = true;
-      }
-      if (
-        !sealed
-        || pages < 1
-        || pages !== summaryPages
-        || messages !== summaryMessages
-      ) return fail("the fixed projection session omitted or contradicted its seal");
-    } finally {
-      lines.close();
-    }
-  } finally {
-    if (cleanupSafe) {
-      const currentRoot = await lstat(root, { bigint: true }).catch(() => null);
-      if (
-        currentRoot === null
-        || currentRoot.dev !== initialRoot.dev
-        || currentRoot.ino !== initialRoot.ino
-        || currentRoot.birthtimeNs !== initialRoot.birthtimeNs
-      ) return fail("the private projection-session root changed before cleanup");
-      await rm(root, { recursive: true, force: true });
-      if (lease !== undefined) releaseBeeperMessageLikeMeDirectoryLease(lease);
-    }
+      frame.kind !== "seal"
+      || sealed
+      || failed
+      || Object.keys(frame).sort().join("\0")
+        !== "checkpoint\0framesSha256\0integrityChecks\0kind\0messages\0pages\0projectionGeneration\0selfChatsExcluded\0selfJids"
+      || !("pages" in frame)
+      || frame.pages !== pages.length
+      || !("messages" in frame)
+      || frame.messages !== messages
+      || !terminal
+      || !("integrityChecks" in frame)
+      || frame.integrityChecks !== 1
+      || !("framesSha256" in frame)
+      || frame.framesSha256 !== framesHash.digest("hex")
+      || !("checkpoint" in frame)
+      || canonicalJson(frame.checkpoint) !== canonicalJson(finalCheckpoint)
+      || !("projectionGeneration" in frame)
+      || canonicalJson(frame.projectionGeneration) !== canonicalJson(finalGeneration)
+      || !("selfJids" in frame)
+      || canonicalJson(frame.selfJids) !== canonicalJson(finalSelfJids)
+      || !("selfChatsExcluded" in frame)
+      || frame.selfChatsExcluded !== finalSelfChatsExcluded
+    ) return fail("the fixed projection session seal was invalid");
+    sealed = true;
   }
+  if (failed) return fail("fixed read-only projection rejected the private store");
+  if (!sealed || pages.length < 1) return fail("the fixed projection session omitted its seal");
+  for (const page of pages) yield page;
 }
 
 export function createWhatsAppMessageLikeMeSource(
@@ -595,15 +613,28 @@ export function createWhatsAppMessageLikeMeSource(
             maxStderrBytes: invocation.maxStderrBytes,
             ...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
           }),
-          request.stateEnvironment ?? process.env,
           request.dependencies?.runSessionHelper
-            ?? runWhatsAppContactProjectionHelperChild,
+            ?? runWhatsAppMessageExportSessionHelperChild,
+          request.admission,
         )[Symbol.asyncIterator]();
         const pageResult = await sessionIterator.next();
         if (pageResult.done) {
           return fail("fixed read-only projection session omitted a page");
         }
-        raw = pageResult.value;
+        if (
+          typeof pageResult.value !== "object"
+          || pageResult.value === null
+          || Array.isArray(pageResult.value)
+          || Object.keys(pageResult.value).sort().join("\0") !== "response\0selfChatsExcluded"
+          || !("response" in pageResult.value)
+          || !("selfChatsExcluded" in pageResult.value)
+          || (pageResult.value.selfChatsExcluded !== "none-detected"
+            && pageResult.value.selfChatsExcluded !== "present-excluded")
+        ) return fail("fixed read-only projection session returned an unsupported page");
+        if (pageResult.value.selfChatsExcluded === "present-excluded") {
+          excludedSelfChatRows = Math.max(1, excludedSelfChatRows);
+        }
+        raw = pageResult.value.response;
       }
       const response = parseWhatsAppMessageExportProjectionResponse(raw, projectionRequest);
       if (response.status === "failed") {

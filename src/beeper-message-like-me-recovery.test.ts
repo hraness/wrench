@@ -293,7 +293,6 @@ describe("Beeper Message Like Me export admission", () => {
     expect(afterReboot.claimId).not.toBe(claim.id);
     releaseBeeperMessageLikeMeExportAdmission(afterReboot);
   });
-
   test("lifecycle updates are compare-and-swap guarded against a stale controller", () => {
     const fixture = recoveryFixture("export-admission-lifecycle-cas");
     const admission = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });

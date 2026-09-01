@@ -38,6 +38,7 @@ import {
   planWhatsAppReadCommand,
   planWhatsAppSyncOnce,
   probeWhatsAppWebSubject,
+  runWhatsAppMessageExportSessionHelperChild,
   syncWhatsAppAuthOnce,
   validateWhatsAppStoreDirectory,
   type WacliInvocation,
@@ -1416,6 +1417,41 @@ describe("WhatsApp zero-network read plans", () => {
     } finally {
       rmSync(path, { recursive: true, force: true });
       rmSync(replacement, { recursive: true, force: true });
+    }
+  });
+
+  test("pre-abort prevents session spawn and timeout hard-kills a SIGTERM-ignoring helper", async () => {
+    const path = privateDirectory();
+    try {
+      const preAborted = new AbortController();
+      preAborted.abort();
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", "process.exit(99)"],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 100,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+        signal: preAborted.signal,
+      })).rejects.toThrow("cancelled");
+
+      const started = performance.now();
+      await expect(runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "-e", [
+          "process.on('SIGTERM', () => undefined);",
+          "setInterval(() => undefined, 1000);",
+        ].join("")],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin" },
+        stdin: "{}\n",
+        timeoutMs: 20,
+        maxOutputBytes: 1024,
+        maxStderrBytes: 1024,
+      })).rejects.toThrow("timed out");
+      expect(performance.now() - started).toBeLessThan(3_000);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
     }
   });
 

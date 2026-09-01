@@ -2,7 +2,6 @@ import {
   chmodSync,
   lstatSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -15,6 +14,7 @@ import { Database } from "bun:sqlite";
 
 import {
   runWhatsAppContactProjectionHelperChild,
+  runWhatsAppMessageExportSessionHelperChild,
   type WhatsAppContactProjectionHelperResult,
 } from "./whatsapp-web-runtime";
 import {
@@ -506,31 +506,44 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
 
   test("serves every cursor from one integrity-checked helper session", async () => {
     const path = createStore();
-    const outputRoot = privateDirectory();
     try {
-      const outputPath = join(outputRoot, "pages.ndjson");
       const initial = messageRequest(path, { limit: 1 });
-      const result = await invoke(path, {
-        operation: "message-like-me.export-session",
-        outputPath,
-        request: initial,
+      const result = await runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "--no-env-file", "--no-install", "--no-macros",
+          "--no-addons", `--config=${config}`, helper],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" },
+        stdin: `${JSON.stringify({
+          operation: "message-like-me.export-session",
+          request: initial,
+        })}\n`,
+        timeoutMs: 10_000,
+        maxOutputBytes: 1024 * 1024,
+        maxStderrBytes: 16 * 1024,
       });
       expect(result).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(JSON.parse(result.stdout)).toEqual({
-        schemaVersion: 1,
-        status: "succeeded",
-        pages: 3,
-        messages: 3,
-      });
-      const frames = readFileSync(outputPath, "utf8").trim().split("\n")
-        .map((line) => JSON.parse(line) as unknown);
+      const frames = result.frames;
       expect(frames).toHaveLength(4);
-      const pages = frames.slice(0, -1).map((frame) =>
-        (frame as { readonly response: unknown }).response);
+      const pages = frames.slice(0, -1);
       expect(pages).toHaveLength(3);
       let requestValue = initial;
       const projected = pages.map((page) => {
-        const parsed = parseWhatsAppMessageExportProjectionResponse(page, requestValue);
+        const frame = page as Readonly<Record<string, unknown>>;
+        const selfJids = frame.selfJids as readonly string[];
+        const parsed = parseWhatsAppMessageExportProjectionResponse({
+          schemaVersion: 1,
+          status: "succeeded",
+          projectionGeneration: frame.projectionGeneration,
+          accountJidAliases: {
+            pnJid: selfJids.find((jid) => jid.endsWith("@s.whatsapp.net")),
+            lidJid: selfJids.find((jid) => jid.endsWith("@lid")) ?? null,
+          },
+          nonConversationChatsExcluded: frame.nonConversationChatsExcluded,
+          messages: frame.messages,
+          nextCursor: frame.terminal ? null : (frame.checkpoint as { cursor: string }).cursor,
+          localInsertPageComplete: frame.terminal,
+          checkpoint: frame.checkpoint,
+        }, requestValue);
         if (parsed.status !== "succeeded") {
           throw new Error("expected a successful session page");
         }
@@ -559,7 +572,101 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       });
     } finally {
       rmSync(path, { recursive: true, force: true });
-      rmSync(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("streams 501 rows in two pages with one snapshot integrity proof", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        const insert = database.query(`
+          INSERT INTO messages(chat_jid, msg_id, sender_jid, ts, from_me, text)
+          VALUES (?1, ?2, ?3, ?4, 0, ?5)
+        `);
+        database.transaction(() => {
+          for (let index = 4; index <= 501; index += 1) {
+            insert.run(
+              "15557654321@s.whatsapp.net",
+              `MSG-${String(index)}`,
+              "15557654321:2@s.whatsapp.net",
+              1_776_513_600 + index,
+              `body-${String(index)}`,
+            );
+          }
+        })();
+      } finally {
+        database.close();
+      }
+      const initial = messageRequest(path, { limit: 500 });
+      const result = await runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "--no-env-file", "--no-install", "--no-macros",
+          "--no-addons", `--config=${config}`, helper],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" },
+        stdin: `${JSON.stringify({ operation: "message-like-me.export-session", request: initial })}\n`,
+        timeoutMs: 10_000,
+        maxOutputBytes: 8 * 1024 * 1024,
+        maxStderrBytes: 16 * 1024,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.frames).toHaveLength(3);
+      expect(result.frames.slice(0, 2).map((frame) =>
+        (frame as { messages: readonly unknown[] }).messages.length)).toEqual([500, 1]);
+      expect(result.frames.at(-1)).toMatchObject({
+        kind: "seal",
+        pages: 2,
+        messages: 501,
+        integrityChecks: 1,
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("filters exact PN and LID self chats before stdout and binds sorted aliases", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query("INSERT INTO chats(jid, kind) VALUES (?1, 'dm')")
+          .run("15551234567@s.whatsapp.net");
+        database.query("INSERT INTO chats(jid, kind) VALUES (?1, 'dm')")
+          .run("999999999999999@lid");
+        const insert = database.query(`
+          INSERT INTO messages(chat_jid, msg_id, sender_jid, ts, from_me, text)
+          VALUES (?1, ?2, ?3, ?4, 1, ?5)
+        `);
+        insert.run(
+          "15551234567@s.whatsapp.net", "SELF-PN", OWNER_JID,
+          1_776_513_700, "must-not-cross-stdout-pn",
+        );
+        insert.run(
+          "999999999999999@lid", "SELF-LID", "999999999999999@lid",
+          1_776_513_701, "must-not-cross-stdout-lid",
+        );
+      } finally {
+        database.close();
+      }
+      const initial = messageRequest(path, { limit: 500 });
+      const result = await runWhatsAppMessageExportSessionHelperChild({
+        command: [process.execPath, "--no-env-file", "--no-install", "--no-macros",
+          "--no-addons", `--config=${config}`, helper],
+        cwd: path,
+        environment: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" },
+        stdin: `${JSON.stringify({ operation: "message-like-me.export-session", request: initial })}\n`,
+        timeoutMs: 10_000,
+        maxOutputBytes: 8 * 1024 * 1024,
+        maxStderrBytes: 16 * 1024,
+      });
+      const encoded = JSON.stringify(result.frames);
+      expect(encoded).not.toContain("must-not-cross-stdout");
+      expect(result.frames[0]).toMatchObject({
+        selfJids: ["15551234567@s.whatsapp.net", "999999999999999@lid"],
+        selfChatsExcluded: "present-excluded",
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
     }
   });
 

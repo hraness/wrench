@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { BoundedByteBuffer } from "@hraness/kb/clip/bounded-byte-buffer";
 
 import type { WrenchAuth } from "../auth";
+import { canonicalJson } from "../canonical-json";
 import type { OperationInput, WebSessionRecipe } from "../model";
 import { OperationDeadline } from "../operation-deadline";
 import type {
@@ -68,6 +69,7 @@ const MAX_SYNC_MESSAGES = 200_000;
 const MAX_SYNC_DB_SIZE = "2GB";
 const MAX_CONTACT_PROJECTION_STDERR_BYTES = 16 * 1024;
 const CONTACT_PROJECTION_FORCE_KILL_DELAY_MS = 1_000;
+const MESSAGE_EXPORT_SESSION_MAX_TOTAL_STDOUT_BYTES = 512 * 1024 * 1024;
 const WEB_SESSION_OPERATION_LABEL = "authenticated web operation deadline";
 
 type WhatsAppAuth = Extract<
@@ -109,6 +111,12 @@ export type WhatsAppContactProjectionHelperResult = {
   readonly stderr: string;
 };
 
+export type WhatsAppMessageExportSessionHelperResult = Readonly<{
+  exitCode: number;
+  frames: readonly unknown[];
+  stderr: string;
+}>;
+
 export class WhatsAppContactProjectionCleanupUnverifiedError extends Error {
   constructor() {
     super(
@@ -116,6 +124,19 @@ export class WhatsAppContactProjectionCleanupUnverifiedError extends Error {
     );
     this.name = "WhatsAppContactProjectionCleanupUnverifiedError";
   }
+}
+
+export function containsWhatsAppContactProjectionCleanupUnverified(
+  error: unknown,
+): boolean {
+  if (error instanceof WhatsAppContactProjectionCleanupUnverifiedError) return true;
+  if (error instanceof AggregateError) {
+    return error.errors.some(containsWhatsAppContactProjectionCleanupUnverified);
+  }
+  if (typeof error === "object" && error !== null && "cause" in error) {
+    return containsWhatsAppContactProjectionCleanupUnverified(error.cause);
+  }
+  return false;
 }
 
 export type WhatsAppWebRuntimeDependencies = {
@@ -1380,6 +1401,191 @@ export async function runWhatsAppContactProjectionHelperChild(
     });
   } finally {
     clearTimeout(timeout);
+    if (forceKill !== undefined) clearTimeout(forceKill);
+    invocation.signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+async function readCanonicalSessionFrames(
+  stream: ReadableStream<Uint8Array>,
+  maximumFrameBytes: number,
+): Promise<readonly unknown[]> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const frames: unknown[] = [];
+  let pending = "";
+  let totalBytes = 0;
+  try {
+    for (;;) {
+      const item = await reader.read();
+      if (item.done) break;
+      totalBytes += item.value.byteLength;
+      if (totalBytes > MESSAGE_EXPORT_SESSION_MAX_TOTAL_STDOUT_BYTES) {
+        throw new Error("WhatsApp projection session output exceeded its total bound");
+      }
+      pending += decoder.decode(item.value, { stream: true });
+      for (;;) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        if (
+          line.length < 2
+          || line.includes("\r")
+          || Buffer.byteLength(line, "utf8") > maximumFrameBytes
+          || frames.length >= 1_002
+        ) throw new Error("WhatsApp projection session frame exceeded its bound");
+        let frame: unknown;
+        try {
+          frame = JSON.parse(line) as unknown;
+        } catch {
+          throw new Error("WhatsApp projection session frame was malformed");
+        }
+        if (canonicalJson(frame) !== line) {
+          throw new Error("WhatsApp projection session frame was not canonical");
+        }
+        frames.push(frame);
+      }
+      if (Buffer.byteLength(pending, "utf8") > maximumFrameBytes) {
+        throw new Error("WhatsApp projection session frame exceeded its bound");
+      }
+    }
+    pending += decoder.decode();
+    if (pending.length !== 0) {
+      throw new Error("WhatsApp projection session ended inside a frame");
+    }
+    return Object.freeze(frames);
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * Runs the one-process Message Like Me projection session. The returned frames
+ * are withheld until stdout EOF, bounded stderr, and exact child exit all
+ * settle. Any unproved reap is a durable cleanup-boundary failure.
+ */
+export async function runWhatsAppMessageExportSessionHelperChild(
+  invocation: WhatsAppContactProjectionHelperInvocation,
+): Promise<WhatsAppMessageExportSessionHelperResult> {
+  const isAborted = (): boolean => invocation.signal?.aborted === true;
+  if (isAborted()) {
+    throw new Error("WhatsApp projection session helper was cancelled");
+  }
+  let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
+  try {
+    child = Bun.spawn([...invocation.command], {
+      cwd: invocation.cwd,
+      env: { ...invocation.environment },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      detached: process.platform !== "win32",
+    });
+  } catch {
+    throw new WhatsAppContactProjectionCleanupUnverifiedError();
+  }
+
+  const signalChild = (signal: "SIGTERM" | "SIGKILL"): void => {
+    if (process.platform !== "win32") {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch (error) {
+        if (typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH") {
+          return;
+        }
+      }
+    }
+    try { child.kill(signal); } catch { /* exact child.exited remains authoritative */ }
+  };
+  let terminationStarted = false;
+  let forceKill: ReturnType<typeof setTimeout> | undefined;
+  const terminate = (): void => {
+    if (!terminationStarted) {
+      terminationStarted = true;
+      signalChild("SIGTERM");
+    }
+    forceKill ??= setTimeout(
+      () => signalChild("SIGKILL"),
+      CONTACT_PROJECTION_FORCE_KILL_DELAY_MS,
+    );
+  };
+  try {
+    invocation.onSpawned?.(child.pid);
+  } catch (error) {
+    terminate();
+    const joined = await Promise.race([
+      child.exited.then(() => true, () => false),
+      Bun.sleep(CONTACT_PROJECTION_FORCE_KILL_DELAY_MS * 2).then(() => false),
+    ]);
+    if (!joined) throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    throw error;
+  }
+
+  let timedOut = false;
+  let cancelled = false;
+  const onAbort = (): void => {
+    cancelled = true;
+    terminate();
+  };
+  invocation.signal?.addEventListener("abort", onAbort, { once: true });
+  if (isAborted()) onAbort();
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    terminate();
+  }, invocation.timeoutMs);
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  let reapTimer: ReturnType<typeof setTimeout> | undefined;
+  const cleanupDeadline = new Promise<never>((_resolve, reject) => {
+    deadlineTimer = setTimeout(() => {
+      terminate();
+      reapTimer = setTimeout(
+        () => reject(new WhatsAppContactProjectionCleanupUnverifiedError()),
+        CONTACT_PROJECTION_FORCE_KILL_DELAY_MS * 2,
+      );
+    }, invocation.timeoutMs);
+  });
+  const guarded = <T>(promise: Promise<T>): Promise<T> => promise.catch((error: unknown) => {
+    terminate();
+    throw error;
+  });
+  const stdin = guarded((async () => {
+    await child.stdin.write(invocation.stdin);
+    await child.stdin.end();
+  })());
+  const frames = guarded(readCanonicalSessionFrames(
+    child.stdout,
+    invocation.maxOutputBytes,
+  ));
+  const stderr = guarded(readBoundedStream(child.stderr, invocation.maxStderrBytes));
+  try {
+    const settled = await Promise.race([
+      Promise.allSettled([stdin, frames, stderr, child.exited]),
+      cleanupDeadline,
+    ]);
+    const [stdinResult, framesResult, stderrResult, exitResult] = settled;
+    if (exitResult.status === "rejected") {
+      throw new WhatsAppContactProjectionCleanupUnverifiedError();
+    }
+    if (
+      stdinResult.status === "rejected"
+      || framesResult.status === "rejected"
+      || stderrResult.status === "rejected"
+    ) {
+      throw new Error("WhatsApp projection session stream failed within its bound");
+    }
+    if (cancelled) throw new Error("WhatsApp projection session helper was cancelled");
+    if (timedOut) throw new Error("WhatsApp projection session helper timed out");
+    return Object.freeze({
+      exitCode: exitResult.value,
+      frames: framesResult.value,
+      stderr: stderrResult.value,
+    });
+  } finally {
+    clearTimeout(timeout);
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    if (reapTimer !== undefined) clearTimeout(reapTimer);
     if (forceKill !== undefined) clearTimeout(forceKill);
     invocation.signal?.removeEventListener("abort", onAbort);
   }

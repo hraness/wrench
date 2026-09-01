@@ -12,7 +12,7 @@ import {
   type WhatsAppMessageLikeMeProgress,
   type WhatsAppMessageLikeMeSourceDependencies,
 } from "./whatsapp-message-like-me-source";
-import { WhatsAppContactProjectionCleanupUnverifiedError } from "./providers/whatsapp-web-runtime";
+import { containsWhatsAppContactProjectionCleanupUnverified } from "./providers/whatsapp-web-runtime";
 import {
   WHATSAPP_MESSAGE_BUNDLE_V2_PROVIDER,
   WHATSAPP_MESSAGE_BUNDLE_V2_SOURCE,
@@ -117,6 +117,7 @@ export async function exportWhatsAppMessageLikeMeFromAuth(
       source: createWhatsAppMessageLikeMeSource({
         auth: request.auth,
         stateEnvironment: environment,
+        admission,
         ...(request.signal === undefined ? {} : { signal: request.signal }),
         ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
         ...(request.sourceDependencies === undefined
@@ -128,7 +129,7 @@ export async function exportWhatsAppMessageLikeMeFromAuth(
       recoveryEnvironment: environment,
     });
   } catch (error) {
-    if (error instanceof WhatsAppContactProjectionCleanupUnverifiedError) {
+    if (containsWhatsAppContactProjectionCleanupUnverified(error)) {
       // The exact helper may still own the admitted private store. Keep the
       // durable admission claim occupied so no later export can overlap an
       // indeterminate process lifetime.

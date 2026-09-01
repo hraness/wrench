@@ -211,12 +211,14 @@ function parseExportAdmission(value: unknown): ExportAdmissionClaim {
     || typeof source.id !== "string"
     || !UUID_PATTERN.test(source.id)
   ) return fail("export admission identity is invalid");
-  if (legacy) return Object.freeze({
-    schemaVersion: 1 as const,
-    kind: EXPORT_ADMISSION_KIND,
-    id: source.id,
-    owner: owner(source.owner, "export admission owner"),
-  });
+  if (legacy) {
+    return Object.freeze({
+      schemaVersion: 1 as const,
+      kind: EXPORT_ADMISSION_KIND,
+      id: source.id,
+      owner: owner(source.owner, "export admission owner"),
+    });
+  }
   if (
     !["parent-owned", "helper-launching", "helper-active", "cleanup-unsafe"].includes(
       typeof source.phase === "string" ? source.phase : "",
@@ -444,7 +446,11 @@ export function acquireBeeperMessageLikeMeExportAdmission(options: Readonly<{
     ) {
       const observed = readExportAdmission(root, environment);
       if (observed !== null) {
-        const disposition = exportAdmissionDisposition(observed.claim, inspectOwner, currentBootId);
+        const disposition = exportAdmissionDisposition(
+          observed.claim,
+          inspectOwner,
+          currentBootId,
+        );
         if (disposition === "active") {
           return fail("another export is active");
         }

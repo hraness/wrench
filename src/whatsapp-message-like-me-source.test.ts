@@ -6,12 +6,14 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
 import type { WrenchAuth } from "./auth";
+import { canonicalJson } from "./canonical-json";
 import {
   WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
   type WhatsAppMessageExportProjectionItem,
@@ -123,6 +125,56 @@ function fakeDependencies(
   };
 }
 
+function sealedSessionDependencies(
+  store: string,
+  transform: (frames: readonly unknown[]) => readonly unknown[] = (frames) => frames,
+): WhatsAppMessageLikeMeSourceDependencies {
+  return {
+    helperPath: "/private/fixed/helper.ts",
+    configPath: "/private/fixed/config.toml",
+    runSessionHelper: async (invocation) => {
+      invocation.onSpawned?.(process.pid);
+      const wrapper = JSON.parse(invocation.stdin) as {
+        request: { messageStoreIdentity: { dev: string; ino: string } };
+      };
+      const stats = lstatSync(join(store, "wacli.db"), { bigint: true });
+      const message = item({ rowid: "1" });
+      const generation = {
+        messageStoreIdentity: wrapper.request.messageStoreIdentity,
+        size: stats.size.toString(),
+        mtimeNs: stats.mtimeNs.toString(),
+        ctimeNs: stats.ctimeNs.toString(),
+        schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+      };
+      const page = {
+        kind: "page",
+        index: 1,
+        projectionGeneration: generation,
+        selfJids: ["15551234567@s.whatsapp.net"],
+        selfChatsExcluded: "none-detected",
+        nonConversationChatsExcluded: false,
+        messages: [message],
+        checkpoint: { cursor: "1", anchor: "a".repeat(64) },
+        terminal: true,
+      };
+      const hash = createHash("sha256")
+        .update(canonicalJson(page)).update("\n").digest("hex");
+      const seal = {
+        kind: "seal",
+        pages: 1,
+        messages: 1,
+        checkpoint: page.checkpoint,
+        projectionGeneration: generation,
+        selfJids: page.selfJids,
+        selfChatsExcluded: "none-detected",
+        integrityChecks: 1,
+        framesSha256: hash,
+      };
+      return { exitCode: 0, stderr: "", frames: transform([page, seal]) };
+    },
+  };
+}
+
 async function collect(
   path: string,
   messages: readonly WhatsAppMessageExportProjectionItem[],
@@ -144,6 +196,68 @@ async function collect(
 }
 
 describe("WhatsApp Message Like Me source mapping", () => {
+  test("replays a sealed helper session only after terminal validation", async () => {
+    const path = privateStore();
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: sealedSessionDependencies(path),
+      });
+      const records: unknown[] = [];
+      for await (const record of source.records) records.push(record);
+      expect(records.some((record) =>
+        typeof record === "object" && record !== null && "kind" in record && record.kind === "message"))
+        .toBeTrue();
+      expect(await source.completion()).toMatchObject({
+        completeness: { kind: "bounded-local" },
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("withholds a streamed page when its seal is missing or followed by another frame", async () => {
+    const path = privateStore();
+    try {
+      for (const transform of [
+        (frames: readonly unknown[]) => frames.slice(0, 1),
+        (frames: readonly unknown[]) => [...frames, frames[0]],
+      ]) {
+        const source = createWhatsAppMessageLikeMeSource({
+          auth: auth(path),
+          dependencies: sealedSessionDependencies(path, transform),
+        });
+        const observed: unknown[] = [];
+        await expect((async () => {
+          for await (const record of source.records) observed.push(record);
+        })()).rejects.toThrow();
+        // Only the public account descriptor precedes helper admission. No
+        // private page record crosses the source boundary without exact seal.
+        expect(observed).toHaveLength(1);
+      }
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects alias drift in the sealed stdout protocol", async () => {
+    const path = privateStore();
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: sealedSessionDependencies(path, (frames) => {
+          const page = frames[0] as Record<string, unknown>;
+          return [{ ...page, selfJids: ["15550000001@s.whatsapp.net"] }, frames[1]];
+        }),
+      });
+      await expect((async () => {
+        for await (const _record of source.records) { /* drain */ }
+      })()).rejects.toThrow();
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("applies one monotonic deadline across an admitted multi-page traversal", async () => {
     const path = privateStore();
     let helperCalls = 0;
@@ -179,6 +293,10 @@ describe("WhatsApp Message Like Me source mapping", () => {
                   mtimeNs: stats.mtimeNs.toString(),
                   ctimeNs: stats.ctimeNs.toString(),
                   schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+                },
+                accountJidAliases: {
+                  pnJid: "15551234567@s.whatsapp.net",
+                  lidJid: null,
                 },
                 nonConversationChatsExcluded: false,
                 messages,

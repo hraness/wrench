@@ -44,7 +44,7 @@ function boundAuth(path: string): WrenchAuth {
 }
 
 describe("WhatsApp Message Like Me CLI recovery preflight", () => {
-  test("keeps a durable helper lease and admission when process death is unproven", async () => {
+  test("keeps durable admission for recursively wrapped cleanup uncertainty", async () => {
     const root = realpathSync(
       mkdtempSync(join(tmpdir(), "wrench-whatsapp-cli-indeterminate-test-")),
     );
@@ -69,21 +69,18 @@ describe("WhatsApp Message Like Me CLI recovery preflight", () => {
         configPath: "/private/fixed/config.toml",
         runSessionHelper: async (invocation) => {
           invocation.onSpawned?.(process.pid);
-          throw new WhatsAppContactProjectionCleanupUnverifiedError();
+          throw new AggregateError([
+            new Error("secondary stream failure"),
+            new WhatsAppContactProjectionCleanupUnverifiedError(),
+          ], "joined helper failure");
         },
       },
-    })).rejects.toBeInstanceOf(WhatsAppContactProjectionCleanupUnverifiedError);
+    })).rejects.toBeInstanceOf(AggregateError);
 
     const recovery = await recoverBeeperMessageLikeMeDirectoryLeases({ environment });
-    expect(recovery).toMatchObject({ active: 1, indeterminate: 0 });
+    expect(recovery).toMatchObject({ active: 0, indeterminate: 0 });
     expect(() => acquireBeeperMessageLikeMeExportAdmission({ environment }))
       .toThrow("another export is active");
-
-    const cleanup = await recoverBeeperMessageLikeMeDirectoryLeases({
-      environment,
-      inspectOwner: () => "different-or-dead",
-    });
-    expect(cleanup.recovered).toBe(1);
   });
 
   test("rejects an active private export before inspecting the WhatsApp store", async () => {
@@ -130,6 +127,34 @@ describe("WhatsApp Message Like Me CLI recovery preflight", () => {
     } finally {
       releaseBeeperMessageLikeMeDirectoryLease(activeLease);
     }
+  });
+
+  test("releases admission after an ordinary helper failure with proved cleanup", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wrench-whatsapp-cli-safe-failure-test-")));
+    temporaryRoots.push(root);
+    chmodSync(root, 0o700);
+    const store = join(root, "store");
+    mkdirSync(store, { mode: 0o700 });
+    for (const name of ["session.db", "wacli.db"]) {
+      writeFileSync(join(store, name), "fixed");
+      chmodSync(join(store, name), 0o600);
+    }
+    const environment = { WRENCH_STATE_HOME: join(root, "state") };
+    await expect(exportWhatsAppMessageLikeMeFromAuth({
+      auth: boundAuth(store),
+      outputRoot: join(root, "bundle"),
+      environment,
+      sourceDependencies: {
+        helperPath: "/private/fixed/helper.ts",
+        configPath: "/private/fixed/config.toml",
+        runSessionHelper: async (invocation) => {
+          invocation.onSpawned?.(process.pid);
+          throw new Error("proved helper failure");
+        },
+      },
+    })).rejects.toThrow("proved helper failure");
+    const next = acquireBeeperMessageLikeMeExportAdmission({ environment });
+    releaseBeeperMessageLikeMeExportAdmission(next);
   });
 
   test("releases global admission after post-recovery source setup fails", async () => {
