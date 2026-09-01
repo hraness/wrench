@@ -291,8 +291,7 @@ export function createWhatsAppMessageLikeMeSource(
     let messageRows = 0;
     let observedFrom: string | null = null;
     let observedThrough: string | null = null;
-    let skippedReactionRows = 0;
-    let unprovenReactionActorRows = 0;
+    let unprovenReactionStateRows = 0;
     let excludedSelfChatRows = 0;
     let payloadPurgedRows = 0;
     let nonConversationChatsExcluded = false;
@@ -374,6 +373,12 @@ export function createWhatsAppMessageLikeMeSource(
           excludedSelfChatRows += 1;
           continue;
         }
+        if (item.reactionToMessageId !== null) {
+          // Wacli 0.15 may retain the prior emoji when the same reaction row is
+          // removed, so no projected reaction row proves current active state.
+          unprovenReactionStateRows += 1;
+          continue;
+        }
         observedFrom = earliest(observedFrom, item.timestamp);
         observedThrough = latest(observedThrough, item.timestamp);
         let conversation = conversations.get(item.chatJid);
@@ -418,35 +423,6 @@ export function createWhatsAppMessageLikeMeSource(
         }
 
         const providerId = messageProviderId(item);
-        const targetProviderId = item.reactionToMessageId === null
-          ? null
-          : `${item.chatJid}/${item.reactionToMessageId}`;
-        if (targetProviderId !== null) {
-          if (item.reactionEmoji === null || item.reactionEmoji.length === 0) {
-            skippedReactionRows += 1;
-            continue;
-          }
-          if (resolvedSenderJid === null) {
-            unprovenReactionActorRows += 1;
-            continue;
-          }
-          yield Object.freeze({
-            schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
-            kind: "reaction",
-            id: localId("reaction", accountJid, item.chatJid, item.messageId),
-            accountId,
-            network: WHATSAPP_MESSAGE_BUNDLE_V2_NETWORK,
-            provenance: provenance(providerId, accountJid, observedAt, null),
-            messageId: null,
-            messageProviderId: targetProviderId,
-            participantId: participantId(accountJid, resolvedSenderJid),
-            body: item.reactionEmoji,
-            reactedAt: item.timestamp,
-            state: "active",
-          });
-          continue;
-        }
-
         const deletion = messageDeletion(item, observedAt);
         const payloadPurged = item.payloadPurgedAt !== null;
         const bodyTruncated = payloadPurged && deletion === null;
@@ -534,8 +510,7 @@ export function createWhatsAppMessageLikeMeSource(
     }
     const warnings = Object.freeze([
       "remote-history-incomplete",
-      ...(skippedReactionRows > 0 ? ["reaction-removal-unproven"] : []),
-      ...(unprovenReactionActorRows > 0 ? ["reaction-actor-unproven"] : []),
+      ...(unprovenReactionStateRows > 0 ? ["reaction-state-unproven"] : []),
       ...(excludedSelfChatRows > 0 ? ["self-chat-excluded"] : []),
       ...(payloadPurgedRows > 0 ? ["message-payload-purged"] : []),
       ...(nonConversationChatsExcluded ? ["non-conversation-chats-excluded"] : []),

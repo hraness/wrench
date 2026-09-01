@@ -135,7 +135,7 @@ async function collect(
 }
 
 describe("WhatsApp Message Like Me source mapping", () => {
-  test("preserves bubbles, replies, edits, deletions, reactions, rosters, and safe user handles", async () => {
+  test("preserves bubbles, replies, edits, deletions, rosters, and safe user handles", async () => {
     const path = privateStore();
     try {
       const result = await collect(path, [
@@ -159,12 +159,23 @@ describe("WhatsApp Message Like Me source mapping", () => {
           senderJid: "222222222222222:4@lid",
           senderName: "LID member",
           timestamp: "2026-08-28T12:01:00.000Z",
+          text: "group message",
+        }),
+        item({
+          rowid: "3",
+          chatJid: "120363123456789012@g.us",
+          chatKind: "group",
+          chatName: "Group",
+          messageId: "REACTION-1",
+          senderJid: "222222222222222:4@lid",
+          senderName: "LID member",
+          timestamp: "2026-08-28T12:01:30.000Z",
           text: null,
           reactionToMessageId: "TARGET-1",
           reactionEmoji: "❤️",
         }),
         item({
-          rowid: "3",
+          rowid: "4",
           messageId: "MSG-3",
           timestamp: "2026-08-28T12:02:00.000Z",
           revoked: true,
@@ -184,7 +195,7 @@ describe("WhatsApp Message Like Me source mapping", () => {
         record.kind === "participant" && record.provenance.providerId === "222222222222222@lid"
       )).toMatchObject({ handle: null });
       const messages = result.records.filter((record) => record.kind === "message");
-      expect(messages).toHaveLength(2);
+      expect(messages).toHaveLength(3);
       expect(messages[0]).toMatchObject({
         provenance: { providerId: "15557654321@s.whatsapp.net/MSG-1" },
         sortKey: "0000000000000000001",
@@ -193,17 +204,11 @@ describe("WhatsApp Message Like Me source mapping", () => {
         edit: { kind: "in-place", editedAt: "2026-08-28T12:00:05.000Z" },
         attachments: [{ kind: "image", name: "photo.jpg", sizeBytes: 42 }],
       });
-      expect(messages[1]).toMatchObject({
+      expect(messages[2]).toMatchObject({
         body: null,
         deletion: { state: "revoked", observedAt: "2026-08-28T12:02:02.000Z" },
       });
-      expect(result.records.filter((record) => record.kind === "reaction")).toEqual([
-        expect.objectContaining({
-          messageProviderId: "120363123456789012@g.us/TARGET-1",
-          body: "❤️",
-          state: "active",
-        }),
-      ]);
+      expect(result.records.filter((record) => record.kind === "reaction")).toEqual([]);
       const conversations = result.records.filter((record) => record.kind === "conversation");
       const direct = conversations.find((record) => record.type === "direct");
       expect(direct).toMatchObject({
@@ -215,7 +220,7 @@ describe("WhatsApp Message Like Me source mapping", () => {
       });
       expect(result.completion).toMatchObject({
         completeness: { kind: "bounded-local", reason: "local-store-coverage-unknown" },
-        warnings: ["remote-history-incomplete"],
+        warnings: ["remote-history-incomplete", "reaction-state-unproven"],
       });
     } finally {
       rmSync(path, { recursive: true, force: true });
@@ -290,7 +295,7 @@ describe("WhatsApp Message Like Me source mapping", () => {
     }
   });
 
-  test("keeps actorless group messages but skips reactions whose actor is unproven", async () => {
+  test("keeps actorless group messages but omits unproven reaction state", async () => {
     const path = privateStore();
     try {
       const result = await collect(path, [
@@ -325,36 +330,44 @@ describe("WhatsApp Message Like Me source mapping", () => {
       ]);
       expect(result.records.filter((record) => record.kind === "reaction")).toEqual([]);
       expect(result.completion).toMatchObject({
-        warnings: ["remote-history-incomplete", "reaction-actor-unproven"],
+        warnings: ["remote-history-incomplete", "reaction-state-unproven"],
       });
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
   });
 
-  test("omits reaction removals and reports the exact unproven-removal warning", async () => {
+  test("omits every reaction row because current state is unproven", async () => {
     const path = privateStore();
     try {
       const result = await collect(path, [
         item({
           rowid: "1",
+          messageId: "REACTION-ACTIVE-LOOKING",
+          text: null,
+          reactionToMessageId: "TARGET-1",
+          reactionEmoji: "👍",
+        }),
+        item({
+          rowid: "2",
           messageId: "REACTION-REMOVAL-NULL",
           text: null,
           reactionToMessageId: "TARGET-1",
           reactionEmoji: null,
         }),
         item({
-          rowid: "2",
+          rowid: "3",
           messageId: "REACTION-REMOVAL-EMPTY",
           text: null,
-          reactionToMessageId: "TARGET-2",
+          reactionToMessageId: "TARGET-1",
           reactionEmoji: "",
         }),
       ]);
       expect(result.records.filter((record) =>
         record.kind === "message" || record.kind === "reaction")).toEqual([]);
+      expect(result.records.filter((record) => record.kind === "conversation")).toEqual([]);
       expect(result.completion).toMatchObject({
-        warnings: ["remote-history-incomplete", "reaction-removal-unproven"],
+        warnings: ["remote-history-incomplete", "reaction-state-unproven"],
       });
     } finally {
       rmSync(path, { recursive: true, force: true });
