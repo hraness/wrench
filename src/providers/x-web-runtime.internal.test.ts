@@ -387,7 +387,17 @@ function xRecipe(action: WebSessionRecipe["action"], contractVersion = 1): WebSe
 
 async function rejectionMessage(action: Promise<unknown>): Promise<string> {
   try {
-    await action;
+    const result = await action;
+    if (
+      typeof result === "object"
+      && result !== null
+      && "status" in result
+      && result.status === "failed"
+      && "error" in result
+      && typeof result.error === "string"
+    ) {
+      return result.error;
+    }
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -493,6 +503,56 @@ describe("X authenticated internal-API runtime", () => {
       "shared~bundle.BookmarkFolders~bundle.Bookmarks.12fa7b2a.js",
     ).href).toBe(
       "https://abs.twimg.com/responsive-web/client-web/shared~bundle.BookmarkFolders~bundle.Bookmarks.deadbeea.js",
+    );
+  });
+
+  test("resolves Bookmarks through the 2026-09-01 overlapping family map", () => {
+    const html = [
+      "prefix;p.u=e=>({",
+      "3400:\"shared~bundle.Routes~ondemand.HoverCard~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Grok~bundle.UserProfil\",",
+      "3636:\"shared~bundle.Routes~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.Grok~bundle.HomeTimeline~b\",",
+      "17361:\"shared~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifications~bundle\",",
+      "25406:\"shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica\",",
+      "34778:\"shared~bundle.BookmarkFolders~bundle.Bookmarks\",",
+      "69742:\"bundle.Bookmarks\",",
+      "85606:\"bundle.BookmarkFolders\"",
+      "})[e]||e)+\".\"+({",
+      "3400:\"3be34a2eec35761e\",",
+      "3636:\"a5d56a204c7230a7\",",
+      "17361:\"8c8285f14dba0ab8\",",
+      "25406:\"d9211a8803d7758e\",",
+      "34778:\"34bab1bee55aa5a1\",",
+      "69742:\"3d8970a2b0ccde0d\",",
+      "85606:\"2ee874d2c5cb29b3\"",
+      "})[e]+\"a.js\";suffix",
+    ].join("");
+
+    expect(resolveCurrentXWebChunkUrl(
+      html,
+      "shared~bundle.BookmarkFolders~bundle.Bookmarks.34bab1bee55aa5a1a.js",
+    ).href).toBe(
+      "https://abs.twimg.com/responsive-web/client-web/shared~bundle.BookmarkFolders~bundle.Bookmarks.34bab1bee55aa5a1a.js",
+    );
+  });
+
+  test("selects the uniquely tightest Bookmarks family when the exact name is absent", () => {
+    const html = [
+      "prefix;p.u=e=>({",
+      "17361:\"shared~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore\",",
+      "25406:\"shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica\",",
+      "3636:\"shared~bundle.Routes~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.Grok~bundle.HomeTimeline\"",
+      "})[e]||e)+\".\"+({",
+      "17361:\"8c8285f14dba0ab8\",",
+      "25406:\"d9211a8803d7758e\",",
+      "3636:\"a5d56a204c7230a7\"",
+      "})[e]+\"a.js\";suffix",
+    ].join("");
+
+    expect(resolveCurrentXWebChunkUrl(
+      html,
+      "shared~bundle.BookmarkFolders~bundle.Bookmarks.34bab1bee55aa5a1a.js",
+    ).href).toBe(
+      "https://abs.twimg.com/responsive-web/client-web/shared~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore.8c8285f14dba0ab8a.js",
     );
   });
 
@@ -1248,17 +1308,94 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
       throw new Error(`unexpected Bookmarks dispatch ${request.url.href}`);
     });
-    const message = await rejectionMessage(executeXWebOperation(
+    const result = await executeXWebOperation(
       xRecipe("feeds.read"),
       { feed: "bookmarks", limit: 25 },
       xAuth,
       { dependencies: runtimeDependencies },
-    ));
-    expect(message).toContain("query-ID drift");
-    expect(message).toContain("Bookmarks:query");
-    expect(message).toContain("reviewed evidence is stale");
-    expect(message).not.toContain("ChangedQueryId_12345");
-    expect(message).not.toContain("LoLaMO4GuHLEPJWrenchH9kjAw");
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      dispatchStarted: false,
+      readFailure: { category: "contract-drift" },
+    });
+    expect(result.error).toContain("query-ID drift");
+    expect(result.error).toContain("Bookmarks:query");
+    expect(result.error).toContain("reviewed evidence is stale");
+    expect(result.error).not.toContain("ChangedQueryId_12345");
+    expect(result.error).not.toContain("LoLaMO4GuHLEPJWrenchH9kjAw");
+  });
+
+  test("classifies a public first-party Bookmarks asset transport failure as provider-temporary", async () => {
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      throw new Error("Failed to fetch");
+    });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "bookmarks", limit: 25 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      dispatchStarted: false,
+      finalUrl: "https://x.com/i/bookmarks",
+      readFailure: { category: "provider-temporary" },
+    });
+    expect(result.error).toBe("public first-party web asset request failed");
+  });
+
+  test("exports bookmarks through the 2026-09-01 overlapping chunk family map", async () => {
+    const html = `${homeHtml()}<script>p.u=e=>({3400:"shared~bundle.Routes~ondemand.HoverCard~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Grok~bundle.UserProfil",34778:"shared~bundle.BookmarkFolders~bundle.Bookmarks",25406:"shared~loader.Dock~bundle.BookmarkFolders~bundle.Bookmarks~bundle.Explore~bundle.HomeTimeline~bundle.Notifica"})[e]||e)+"."+({3400:"3be34a2eec35761e",34778:"34bab1bee55aa5a1",25406:"d9211a8803d7758e"})[e]+"a.js"</script>`;
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query")), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (
+        request.url.href
+          === "https://abs.twimg.com/responsive-web/client-web/shared~bundle.BookmarkFolders~bundle.Bookmarks.34bab1bee55aa5a1a.js"
+      ) {
+        return new Response(descriptor("Bookmarks", BOOKMARKS_QUERY_ID, "query"), {
+          headers: { "content-type": "application/javascript" },
+        });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/Bookmarks")) {
+        return jsonResponse(bookmarksFeedResponse(
+          tweetEntry(FOCAL_POST_ID, "overlapping family bookmark", VIEWER_ID, null, {
+            username: "hraness",
+            name: "Hraness",
+          }),
+        ));
+      }
+      throw new Error(`unexpected Bookmarks dispatch ${request.url.href}`);
+    });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "bookmarks", limit: 25 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalUrl: "https://x.com/i/bookmarks",
+      output: {
+        feed: "bookmarks",
+        items: [{ post_id: FOCAL_POST_ID, text: "overlapping family bookmark" }],
+      },
+    });
+    expect(calls.some((call) => call.url.pathname.endsWith("/Bookmarks"))).toBe(true);
   });
 
   test("fails closed when the current bootstrap omits the Bookmarks chunk family", async () => {
