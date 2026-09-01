@@ -259,6 +259,7 @@ describe("wrench.rip static site", () => {
     expect(html).toContain('href="/vms-cannot-contain-agents/"');
     expect(html).toContain('href="/paypal-grapheneos-attestation/"');
     expect(html).toContain('href="/rumour-is-the-exploit/"');
+    expect(html).toContain('href="/omarchy-root-escalation/"');
     expect(html).toContain('href="/providers/beeper/"');
     const argumentsSection = /<section aria-labelledby="arguments-title" class="section editorial-cluster">[\s\S]*?<\/section>/u
       .exec(html)?.[0];
@@ -268,12 +269,14 @@ describe("wrench.rip static site", () => {
     expect(guidesSection).toBeDefined();
     expect(argumentsSection).toContain('<h2 id="arguments-title">Arguments and comparisons</h2>');
     expect(argumentsSection).toContain('<div class="card-grid editorial-card-grid">');
-    expect(argumentsSection?.match(/<article class="card(?: editorial-card)?">/gu)).toHaveLength(5);
+    expect(argumentsSection?.match(/<article class="card(?: editorial-card)?">/gu)).toHaveLength(6);
     expect(guidesSection?.match(/<article class="card">/gu)).toHaveLength(5);
     expect(argumentsSection).toContain('href="/paypal-grapheneos-attestation/"');
     expect(argumentsSection).toContain('href="/rumour-is-the-exploit/"');
+    expect(argumentsSection).toContain('href="/omarchy-root-escalation/"');
     expect(guidesSection).not.toContain('href="/paypal-grapheneos-attestation/"');
     expect(guidesSection).not.toContain('href="/rumour-is-the-exploit/"');
+    expect(guidesSection).not.toContain('href="/omarchy-root-escalation/"');
     for (const image of editorialImages) {
       expect(argumentsSection).toContain(`href="${image.canonicalPath}"`);
       expect(guidesSection).not.toContain(`href="${image.canonicalPath}"`);
@@ -328,6 +331,7 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain(`${SITE_ORIGIN}/compare/personal-agents-browser-use/`);
     expect(llms).toContain(`${SITE_ORIGIN}/paypal-grapheneos-attestation/`);
     expect(llms).toContain(`${SITE_ORIGIN}/rumour-is-the-exploit/`);
+    expect(llms).toContain(`${SITE_ORIGIN}/omarchy-root-escalation/`);
     expect(llms).not.toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).not.toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
@@ -354,6 +358,7 @@ describe("wrench.rip static site", () => {
     }
     expect(sitemap).not.toContain("paypal-grapheneos-attestation.webp");
     expect(sitemap).not.toContain("rumour-is-the-exploit.webp");
+    expect(sitemap).not.toContain("omarchy-root-escalation.webp");
     expect(sitemap).not.toContain("<lastmod>");
     expect(sitemap).not.toContain("<changefreq>");
     expect(sitemap).not.toContain("<priority>");
@@ -758,6 +763,8 @@ describe("wrench.rip static site", () => {
       canonicalPath === ("/paypal-grapheneos-attestation/" as never))).toBe(false);
     expect(editorialImages.some(({ canonicalPath }) =>
       canonicalPath === ("/rumour-is-the-exploit/" as never))).toBe(false);
+    expect(editorialImages.some(({ canonicalPath }) =>
+      canonicalPath === ("/omarchy-root-escalation/" as never))).toBe(false);
 
     expect(html).toContain('href="https://pipedream.com/docs/connect">Pipedream Connect</a>');
     expect(html).toContain("Hosted integration breadth and managed end-user authentication");
@@ -1015,6 +1022,7 @@ describe("wrench.rip static site", () => {
     expect(vmsCannotContainAgents?.html).toContain("The pages do not reprint one another.");
     expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/paypal-grapheneos-attestation/");
     expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/rumour-is-the-exploit/");
+    expect(vmsCannotContainAgents?.html).toContain("https://wrench.rip/omarchy-root-escalation/");
     expect(vmsCannotContainAgents?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(vmsCannotContainAgents?.html).not.toContain("stripedex.com");
     expect(vmsCannotContainAgents?.html).not.toContain("spongeresearch.com");
@@ -1052,6 +1060,7 @@ describe("wrench.rip static site", () => {
     expect(paypalGrapheneOsAttestation?.html).toContain("does not invent a PayPal API");
     expect(paypalGrapheneOsAttestation?.html).toContain("The pages do not reprint one another.");
     expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/rumour-is-the-exploit/");
+    expect(paypalGrapheneOsAttestation?.html).toContain("https://wrench.rip/omarchy-root-escalation/");
     expect(paypalGrapheneOsAttestation?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(paypalGrapheneOsAttestation?.html).not.toContain("stripedex.com");
     expect(paypalGrapheneOsAttestation?.html).not.toContain("spongeresearch.com");
@@ -1088,10 +1097,48 @@ describe("wrench.rip static site", () => {
     expect(rumourIsTheExploit?.html).toContain("does not reconstruct exploits");
     expect(rumourIsTheExploit?.html).toContain("does not reprint the essay");
     expect(rumourIsTheExploit?.html).toContain("The pages do not reprint one another.");
+    expect(rumourIsTheExploit?.html).toContain("https://wrench.rip/omarchy-root-escalation/");
     expect(rumourIsTheExploit?.html).not.toContain("{{PROVIDER_CAPABILITY");
     expect(rumourIsTheExploit?.html).not.toContain("stripedex.com");
     expect(rumourIsTheExploit?.html).not.toContain("spongeresearch.com");
     expect(rumourIsTheExploit?.html).not.toMatch(/percent-encod|proof.of.concept|PoC|payload|exploit step/iu);
+
+    const omarchyRootEscalation = pages.find((page) =>
+      page.definition.canonicalPath === "/omarchy-root-escalation/");
+    expect(omarchyRootEscalation?.html).toContain(
+      "<h1>A root-capable desktop is not a named web operation.</h1>",
+    );
+    expect(omarchyRootEscalation?.html).toContain("News take");
+    expect(omarchyRootEscalation?.html).toContain("https://0xcc.io/posts/omarchy-root-creds/");
+    expect(omarchyRootEscalation?.html).toContain("Omarchy: Any User Process Can Escalate to Root");
+    expect(omarchyRootEscalation?.html).toContain("https://rough.day");
+    expect(omarchyRootEscalation?.html).toContain("https://rough.day/info");
+    expect(omarchyRootEscalation?.html).toContain("Sunday 30 August 2026");
+    expect(omarchyRootEscalation?.html).toContain(
+      "Omarchy desktop environment allows any user process to escalate to root",
+    );
+    expect(omarchyRootEscalation?.html).toContain("https://hraness.com");
+    expect(omarchyRootEscalation?.html).toContain("https://wrench.rip/");
+    expect(omarchyRootEscalation?.html).toContain("https://wrench.rip/provider-capabilities/");
+    expect(omarchyRootEscalation?.html).toContain("https://wrench.rip/vms-cannot-contain-agents/");
+    expect(omarchyRootEscalation?.html).toContain("https://wrench.rip/paypal-grapheneos-attestation/");
+    expect(omarchyRootEscalation?.html).toContain("https://wrench.rip/rumour-is-the-exploit/");
+    expect(omarchyRootEscalation?.html).toContain(
+      `The current release attests ${attestation.operationCount} operations across ${attestation.adapterCount} bundled public adapters.`,
+    );
+    expect(omarchyRootEscalation?.html).toContain(
+      `${attestation.observedCount} are <code>observed</code>. ${attestation.captureRequiredCount} remain <code>capture-required</code>.`,
+    );
+    expect(omarchyRootEscalation?.html).toContain("Telegram is absent from those manifests");
+    expect(omarchyRootEscalation?.html).toContain("does not decide which desktop processes may become root");
+    expect(omarchyRootEscalation?.html).toContain("does not reprint the post");
+    expect(omarchyRootEscalation?.html).toContain("The pages do not reprint one another.");
+    expect(omarchyRootEscalation?.html).not.toContain("{{PROVIDER_CAPABILITY");
+    expect(omarchyRootEscalation?.html).not.toContain("stripedex.com");
+    expect(omarchyRootEscalation?.html).not.toContain("spongeresearch.com");
+    expect(omarchyRootEscalation?.html).not.toMatch(
+      /percent-encod|proof.of.concept|PoC|payload|exploit step|docker\.sock|\/etc\/shadow/iu,
+    );
     const software = (graph as ReadonlyArray<Readonly<Record<string, unknown>>>).find((node) =>
       node["@id"] === `${SITE_ORIGIN}/#software`);
     expect(software).toMatchObject({

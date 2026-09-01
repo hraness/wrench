@@ -255,6 +255,16 @@
       "source": "/rumour-is-the-exploit/index.html",
       "destination": "/rumour-is-the-exploit/",
       "permanent": true
+    },
+    {
+      "source": "/omarchy-root-escalation",
+      "destination": "/omarchy-root-escalation/",
+      "permanent": true
+    },
+    {
+      "source": "/omarchy-root-escalation/index.html",
+      "destination": "/omarchy-root-escalation/",
+      "permanent": true
     }
   ]
 }
