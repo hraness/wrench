@@ -25,7 +25,7 @@ import {
 const CLAIM_KIND = "beeper-message-like-me-directory-lease";
 const CLAIM_SCHEMA_VERSION = 2;
 const EXPORT_ADMISSION_KIND = "beeper-message-like-me-export-admission";
-const EXPORT_ADMISSION_SCHEMA_VERSION = 1;
+const EXPORT_ADMISSION_SCHEMA_VERSION = 2;
 const EXPORT_ADMISSION_FILE = "active.json";
 const MAX_EXPORT_ADMISSION_ACQUIRE_ATTEMPTS = 8;
 const MAX_CLAIMS = 64;
@@ -37,12 +37,29 @@ const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
 type LeaseRole = "raw-working" | "bundle-stage";
 type RawPhase = "preparing" | "launching" | "running" | "settled";
 
-type ExportAdmissionClaim = Readonly<{
+type LegacyExportAdmissionClaim = Readonly<{
   schemaVersion: 1;
   kind: typeof EXPORT_ADMISSION_KIND;
   id: string;
   owner: ProcessOwnerIdentity;
 }>;
+
+export type BeeperMessageLikeMeExportAdmissionPhase =
+  | "parent-owned"
+  | "helper-launching"
+  | "helper-active"
+  | "cleanup-unsafe";
+
+type ExportAdmissionClaimV2 = Readonly<{
+  schemaVersion: 2;
+  kind: typeof EXPORT_ADMISSION_KIND;
+  id: string;
+  owner: ProcessOwnerIdentity;
+  helperOwner: ProcessOwnerIdentity | null;
+  phase: BeeperMessageLikeMeExportAdmissionPhase;
+}>;
+
+type ExportAdmissionClaim = LegacyExportAdmissionClaim | ExportAdmissionClaimV2;
 
 type ExportAdmissionSnapshot = Readonly<{
   claim: ExportAdmissionClaim;
@@ -53,7 +70,8 @@ export type BeeperMessageLikeMeExportAdmission = {
   readonly claimPath: string;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly claimId: string;
-  readonly contentSha256: string;
+  claim: ExportAdmissionClaimV2;
+  contentSha256: string;
   released: boolean;
 };
 
@@ -179,18 +197,43 @@ function owner(value: unknown, label: string): ProcessOwnerIdentity {
 
 function parseExportAdmission(value: unknown): ExportAdmissionClaim {
   const source = record(value, "export admission");
-  exactKeys(source, ["id", "kind", "owner", "schemaVersion"], "export admission");
+  const legacy = source.schemaVersion === 1;
+  exactKeys(
+    source,
+    legacy
+      ? ["id", "kind", "owner", "schemaVersion"]
+      : ["helperOwner", "id", "kind", "owner", "phase", "schemaVersion"],
+    "export admission",
+  );
   if (
-    source.schemaVersion !== EXPORT_ADMISSION_SCHEMA_VERSION
+    (source.schemaVersion !== 1 && source.schemaVersion !== EXPORT_ADMISSION_SCHEMA_VERSION)
     || source.kind !== EXPORT_ADMISSION_KIND
     || typeof source.id !== "string"
     || !UUID_PATTERN.test(source.id)
   ) return fail("export admission identity is invalid");
-  return Object.freeze({
-    schemaVersion: 1,
+  if (legacy) return Object.freeze({
+    schemaVersion: 1 as const,
     kind: EXPORT_ADMISSION_KIND,
     id: source.id,
     owner: owner(source.owner, "export admission owner"),
+  });
+  if (
+    !["parent-owned", "helper-launching", "helper-active", "cleanup-unsafe"].includes(
+      typeof source.phase === "string" ? source.phase : "",
+    )
+    || (source.phase === "helper-active" && source.helperOwner === null)
+    || ((source.phase === "parent-owned" || source.phase === "helper-launching")
+      && source.helperOwner !== null)
+  ) return fail("export admission lifecycle is invalid");
+  return Object.freeze({
+    schemaVersion: 2 as const,
+    kind: EXPORT_ADMISSION_KIND,
+    id: source.id,
+    owner: owner(source.owner, "export admission owner"),
+    helperOwner: source.helperOwner === null
+      ? null
+      : owner(source.helperOwner, "export admission helper owner"),
+    phase: source.phase as BeeperMessageLikeMeExportAdmissionPhase,
   });
 }
 
@@ -339,26 +382,58 @@ function acquiredExportAdmission(
   environment: Readonly<Record<string, string | undefined>>,
   snapshot: ExportAdmissionSnapshot,
 ): BeeperMessageLikeMeExportAdmission {
+  if (snapshot.claim.schemaVersion !== 2) {
+    return fail("a legacy export admission cannot be acquired as current ownership");
+  }
   return {
     claimPath: join(root, EXPORT_ADMISSION_FILE),
     environment,
     claimId: snapshot.claim.id,
+    claim: snapshot.claim,
     contentSha256: snapshot.contentSha256,
     released: false,
   };
+}
+
+function exportAdmissionDisposition(
+  claim: ExportAdmissionClaim,
+  inspectOwner: (owner: ProcessOwnerIdentity) => ProcessOwnerStatus,
+  currentBootId: string,
+): "active" | "indeterminate" | "recoverable" {
+  const parent = inspectOwner(claim.owner);
+  if (parent === "exact-live-owner") return "active";
+  if (parent === "unknown") return "indeterminate";
+  if (claim.schemaVersion === 1 || claim.phase === "parent-owned") return "recoverable";
+  // Only a reboot proves that an unjoined helper, its streams, and its process
+  // group cannot still retain private work after the supervising parent exits.
+  if (
+    claim.helperOwner !== null
+    && claim.helperOwner.bootId !== claim.owner.bootId
+  ) return "indeterminate";
+  if (claim.owner.bootId !== currentBootId) return "recoverable";
+  if (claim.helperOwner === null) return "indeterminate";
+  const helper = inspectOwner(claim.helperOwner);
+  return helper === "exact-live-owner"
+    ? "active"
+    : "indeterminate";
 }
 
 export function acquireBeeperMessageLikeMeExportAdmission(options: Readonly<{
   environment?: Readonly<Record<string, string | undefined>>;
   /** Test-only process-liveness seam. */
   inspectOwnerForTest?: (owner: ProcessOwnerIdentity) => ProcessOwnerStatus;
+  /** Test-only exact kernel boot identity seam. */
+  currentBootIdForTest?: string;
 }> = {}): BeeperMessageLikeMeExportAdmission {
   if (
-    options.inspectOwnerForTest !== undefined
+    (options.inspectOwnerForTest !== undefined || options.currentBootIdForTest !== undefined)
     && process.env.NODE_ENV !== "test"
   ) return fail("export admission liveness injection is available only in tests");
   const environment = options.environment ?? process.env;
   const inspectOwner = options.inspectOwnerForTest ?? processOwnerStatus;
+  const currentBootId = options.currentBootIdForTest
+    ?? currentProcessStartIdentity().bootId;
+  if (!DIGEST_PATTERN.test(currentBootId)) return fail("current boot identity is invalid");
   const root = exportAdmissionRoot(environment);
   try {
     ensurePrivateDirectory(root);
@@ -369,11 +444,11 @@ export function acquireBeeperMessageLikeMeExportAdmission(options: Readonly<{
     ) {
       const observed = readExportAdmission(root, environment);
       if (observed !== null) {
-        const status = inspectOwner(observed.claim.owner);
-        if (status === "exact-live-owner") {
+        const disposition = exportAdmissionDisposition(observed.claim, inspectOwner, currentBootId);
+        if (disposition === "active") {
           return fail("another export is active");
         }
-        if (status === "unknown") {
+        if (disposition === "indeterminate") {
           return fail("prior export owner cannot be inspected safely");
         }
         if (!removePrivateStateFileIfUnchanged(
@@ -385,10 +460,12 @@ export function acquireBeeperMessageLikeMeExportAdmission(options: Readonly<{
 
       const processIdentity = currentProcessStartIdentity();
       const claim = Object.freeze({
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         kind: EXPORT_ADMISSION_KIND,
         id: randomUUID(),
         owner: Object.freeze({ pid: process.pid, ...processIdentity }),
+        helperOwner: null,
+        phase: "parent-owned" as const,
       });
       const snapshot = Object.freeze({
         claim,
@@ -421,10 +498,73 @@ export function acquireBeeperMessageLikeMeExportAdmission(options: Readonly<{
   }
 }
 
+function updateExportAdmission(
+  admission: BeeperMessageLikeMeExportAdmission,
+  phase: BeeperMessageLikeMeExportAdmissionPhase,
+  helperOwner: ProcessOwnerIdentity | null,
+): void {
+  if (admission.released) return fail("released export admission cannot change lifecycle");
+  const current = admission.claim.phase;
+  const valid =
+    (phase === "helper-launching" && current === "parent-owned" && helperOwner === null)
+    || (phase === "helper-active" && current === "helper-launching" && helperOwner !== null)
+    || (phase === "parent-owned"
+      && (current === "helper-launching" || current === "helper-active")
+      && helperOwner === null)
+    || (phase === "cleanup-unsafe"
+      && current !== "parent-owned"
+      && (helperOwner === null || current === "helper-active"));
+  if (!valid) return fail("export admission lifecycle transition is invalid");
+  const next = Object.freeze({ ...admission.claim, phase, helperOwner });
+  try {
+    if (!writePrivateJsonIfUnchanged(admission.claimPath, next, {
+      expectedCurrentContentSha256: admission.contentSha256,
+    })) return fail("export admission changed before lifecycle update");
+    admission.claim = next;
+    admission.contentSha256 = sha256(exportAdmissionBytes(next));
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Beeper Message Like Me recovery:")) {
+      throw error;
+    }
+    return fail("export admission lifecycle could not be updated safely");
+  }
+}
+
+export function beginBeeperMessageLikeMeHelperLaunch(
+  admission: BeeperMessageLikeMeExportAdmission,
+): void {
+  updateExportAdmission(admission, "helper-launching", null);
+}
+
+export function bindBeeperMessageLikeMeHelperOwner(
+  admission: BeeperMessageLikeMeExportAdmission,
+  childPid: number,
+): void {
+  if (!Number.isSafeInteger(childPid) || childPid < 1 || childPid > 2_147_483_647) {
+    return fail("export admission helper PID is invalid");
+  }
+  updateExportAdmission(admission, "helper-active", captureProcessOwnerIdentity(childPid));
+}
+
+export function settleBeeperMessageLikeMeHelper(
+  admission: BeeperMessageLikeMeExportAdmission,
+): void {
+  updateExportAdmission(admission, "parent-owned", null);
+}
+
+export function markBeeperMessageLikeMeHelperCleanupUnsafe(
+  admission: BeeperMessageLikeMeExportAdmission,
+): void {
+  updateExportAdmission(admission, "cleanup-unsafe", admission.claim.helperOwner);
+}
+
 export function releaseBeeperMessageLikeMeExportAdmission(
   admission: BeeperMessageLikeMeExportAdmission,
 ): void {
   if (admission.released) return;
+  if (admission.claim.phase !== "parent-owned" || admission.claim.helperOwner !== null) {
+    return fail("export admission cannot release an unsettled helper lifecycle");
+  }
   try {
     if (!removePrivateStateFileIfUnchanged(admission.claimPath, {
       expectedCurrentContentSha256: admission.contentSha256,

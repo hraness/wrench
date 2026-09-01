@@ -5,6 +5,7 @@ import { canonicalJson, sha256 } from "./canonical-json";
 import type {
   ApplePhotosContactEvidence,
   ApplePhotosContactEvidenceArtifact,
+  ApplePhotosContactEvidenceCapture,
   ApplePhotosContactEvidenceCompleteness,
   ApplePhotosContactEvidenceExportReceipt,
   ApplePhotosContactEvidenceExportResult,
@@ -22,49 +23,56 @@ export const APPLE_PHOTOS_LOCAL_SOURCE = Object.freeze({
   version: "1.0.0" as const,
 });
 export const APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS = Object.freeze({
-  snapshotAttempts: 3 as const,
+  captureAttemptsPerDatabase: 1 as const,
   maximumPhotosDatabaseBytes: 4 * 1024 * 1024 * 1024,
   maximumContactsDatabases: 32,
   maximumContactsDatabaseBytes: 2 * 1024 * 1024 * 1024,
+  maximumDirectoryEntries: 4_096,
+  maximumContactsSourceDirectories: 256,
   maximumPeople: 100_000,
   maximumContacts: 1_000_000,
   maximumWireBytes: 128 * 1024 * 1024,
 });
 
 const COMPLETENESS: ApplePhotosContactEvidenceCompleteness = Object.freeze({
-  kind: "complete-local-snapshot",
-  localPhotos: "complete",
-  localContacts: "all-discovered-address-book-stores",
+  kind: "bounded-local-observation",
+  localPhotos: "one-reviewed-library-database-capture",
+  localContacts: "ordered-discovered-address-book-database-captures",
+  crossDatabaseAtomicity: "not-asserted",
   remoteSync: "not-asserted",
   unmatchedPeople: "excluded",
   reason:
-    "Complete for exact ZPERSONURI-to-ZUNIQUEID matches in the stable local snapshots; remote synchronization state is not asserted.",
+    "Exact matches from bounded independent local database captures; cross-database atomicity and remote synchronization state are not asserted.",
 });
 
 const PRIVACY: ApplePhotosContactEvidencePrivacy = Object.freeze({
-  names: "excluded",
-  localPaths: "excluded",
-  images: "excluded",
-  media: "excluded",
-  locations: "excluded",
-  rawContactData: "excluded",
-  rawPhotosData: "excluded",
-  faceprints: "excluded",
-  faceCrops: "excluded",
-  unmatchedPeople: "excluded",
+  names: "excluded-from-returned-json",
+  localPaths: "excluded-from-returned-json",
+  images: "excluded-from-returned-json",
+  media: "excluded-from-returned-json",
+  locations: "excluded-from-returned-json",
+  rawContactData: "excluded-from-returned-json",
+  rawPhotosData: "excluded-from-returned-json",
+  faceClusterIdentifiers: "included-biometric-derived-private-metadata",
+  faceClusterCounts: "included-biometric-derived-private-metadata",
+  faceprintTemplates: "excluded-from-returned-json",
+  faceCrops: "excluded-from-returned-json",
+  unmatchedPeople: "excluded-from-returned-json",
 });
 
 const SCOPE = Object.freeze({
   people: "exact-zpersonuri-zuniqueid-matches-only" as const,
-  faces: "all-detected-face-links-in-local-snapshot" as const,
-  assets: "distinct-assets-linked-through-detected-faces" as const,
+  faces: "detected-face-links-present-in-photos-capture" as const,
+  assets: "distinct-zasset-rows-linked-through-detected-faces" as const,
 });
 
 type ArtifactInput = Readonly<{
   observedAt: string;
+  libraryRealmSha256: string;
   generationSha256: string;
   photosSchemaSha256: string;
   contactsSchemaSha256: string;
+  capture: ApplePhotosContactEvidenceCapture;
   evidence: readonly ApplePhotosContactEvidence[];
 }>;
 
@@ -106,6 +114,49 @@ function dataRecord(
   return Object.freeze(Object.fromEntries(
     Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]),
   ));
+}
+
+function dataArray(
+  value: unknown,
+  label: string,
+  maximum: number,
+): readonly unknown[] {
+  if (
+    !Array.isArray(value)
+    || nodeTypes.isProxy(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+  ) return fail(`${label} must be an ordinary, non-proxy array`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    lengthDescriptor === undefined
+    || !("value" in lengthDescriptor)
+    || typeof lengthDescriptor.value !== "number"
+    || !Number.isSafeInteger(lengthDescriptor.value)
+    || lengthDescriptor.value < 0
+    || lengthDescriptor.value > maximum
+  ) return fail(`${label} length exceeds its reviewed bound`);
+  const length = lengthDescriptor.value;
+  const items: unknown[] = [];
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.length !== length + 1 || keys.some((key) => typeof key !== "string")) {
+    return fail(`${label} must not have holes, symbols, or named fields`);
+  }
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (
+      descriptor === undefined
+      || !descriptor.enumerable
+      || !("value" in descriptor)
+    ) return fail(`${label} must contain dense enumerable data elements`);
+    items.push(descriptor.value);
+  }
+  if (keys.some((key) =>
+    key !== "length"
+    && (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/u.test(key)))) {
+    return fail(`${label} must not have holes, symbols, or named fields`);
+  }
+  return Object.freeze(items);
 }
 
 function exactKeys(
@@ -175,6 +226,87 @@ function integer(
   return value;
 }
 
+function parseInterval(
+  value: unknown,
+  label: string,
+): Readonly<{ startedAt: string; finishedAt: string }> {
+  const record = dataRecord(value, label);
+  exactKeys(record, ["startedAt", "finishedAt"], label);
+  return parseIntervalFields(record, label);
+}
+
+function parseIntervalFields(
+  record: Readonly<Record<string, unknown>>,
+  label: string,
+): Readonly<{ startedAt: string; finishedAt: string }> {
+  const startedAt = timestamp(record.startedAt, `${label}.startedAt`);
+  const finishedAt = timestamp(record.finishedAt, `${label}.finishedAt`);
+  if (startedAt > finishedAt) return fail(`${label} timestamps are reversed`);
+  return Object.freeze({ startedAt, finishedAt });
+}
+
+function parseCapture(value: unknown): ApplePhotosContactEvidenceCapture {
+  const record = dataRecord(value, "source.capture");
+  exactKeys(record, [
+    "startedAt",
+    "finishedAt",
+    "photos",
+    "contacts",
+    "consistency",
+    "crossDatabaseAtomicity",
+  ], "source.capture");
+  const enclosing = parseIntervalFields(record, "source.capture");
+  const photos = parseInterval(record.photos, "source.capture.photos");
+  const contactValues = dataArray(
+    record.contacts,
+    "source.capture.contacts",
+    APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsDatabases,
+  );
+  if (contactValues.length < 1) {
+    return fail("source.capture.contacts must contain at least one database interval");
+  }
+  const contacts = Object.freeze(contactValues.map((item, index) => {
+    const label = `source.capture.contacts[${String(index)}]`;
+    const contact = dataRecord(item, label);
+    exactKeys(contact, ["ordinal", "startedAt", "finishedAt"], label);
+    const interval = parseIntervalFields(contact, label);
+    const ordinal = integer(
+      contact.ordinal,
+      `${label}.ordinal`,
+      APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsDatabases - 1,
+    );
+    if (ordinal !== index) return fail(`${label}.ordinal must equal its array position`);
+    return Object.freeze({ ordinal, ...interval });
+  }));
+  if (
+    enclosing.startedAt > photos.startedAt
+    || photos.finishedAt > enclosing.finishedAt
+  ) return fail("source.capture.photos must be inside its enclosing interval");
+  let priorFinishedAt = photos.finishedAt;
+  for (const [index, contact] of contacts.entries()) {
+    if (
+      contact.startedAt < priorFinishedAt
+      || contact.finishedAt > enclosing.finishedAt
+    ) return fail(`source.capture.contacts[${String(index)}] is outside capture order`);
+    priorFinishedAt = contact.finishedAt;
+  }
+  return Object.freeze({
+    ...enclosing,
+    photos,
+    contacts,
+    consistency: exactString(
+      record.consistency,
+      "independent-read-transactions",
+      "source.capture.consistency",
+    ),
+    crossDatabaseAtomicity: exactString(
+      record.crossDatabaseAtomicity,
+      "not-asserted",
+      "source.capture.crossDatabaseAtomicity",
+    ),
+  });
+}
+
 function parseCompleteness(value: unknown): ApplePhotosContactEvidenceCompleteness {
   const record = dataRecord(value, "completeness");
   exactKeys(record, Object.keys(COMPLETENESS), "completeness");
@@ -219,19 +351,27 @@ function parseEvidence(
   if (first !== null && last !== null && first > last) {
     return fail(`${label} asset date bounds are reversed`);
   }
+  const linkedFaceCount = integer(
+    record.linkedFaceCount,
+    `${label}.linkedFaceCount`,
+    10_000_000,
+  );
+  const linkedAssetCount = integer(
+    record.linkedAssetCount,
+    `${label}.linkedAssetCount`,
+    10_000_000,
+  );
+  if (linkedAssetCount > linkedFaceCount) {
+    return fail(`${label} cannot link more distinct assets than detected faces`);
+  }
+  if (linkedAssetCount === 0 && (first !== null || last !== null)) {
+    return fail(`${label} with zero linked assets must have null date bounds`);
+  }
   return Object.freeze({
     photosPersonId: identifier(record.photosPersonId, `${label}.photosPersonId`, 128),
     appleContactId: identifier(record.appleContactId, `${label}.appleContactId`, 512),
-    linkedFaceCount: integer(
-      record.linkedFaceCount,
-      `${label}.linkedFaceCount`,
-      10_000_000,
-    ),
-    linkedAssetCount: integer(
-      record.linkedAssetCount,
-      `${label}.linkedAssetCount`,
-      10_000_000,
-    ),
+    linkedFaceCount,
+    linkedAssetCount,
     firstAssetAt: first,
     lastAssetAt: last,
   });
@@ -255,7 +395,12 @@ function compareEvidence(
 function artifactWithoutIntegrity(
   input: ArtifactInput,
 ): Omit<ApplePhotosContactEvidenceArtifact, "integrity"> {
-  const evidence = Object.freeze(input.evidence.map((item, index) =>
+  const evidenceInput = dataArray(
+    input.evidence,
+    "evidence",
+    APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPeople,
+  );
+  const evidence = Object.freeze(evidenceInput.map((item, index) =>
     parseEvidence(item, index)).sort(compareEvidence));
   if (evidence.length > APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPeople) {
     return fail("evidence exceeds the matched-person bound");
@@ -280,6 +425,15 @@ function artifactWithoutIntegrity(
       return fail("aggregate counts exceed the safe integer range");
     }
   }
+  const capture = parseCapture(input.capture);
+  const observedAt = timestamp(input.observedAt, "observedAt");
+  if (observedAt < capture.startedAt || observedAt > capture.finishedAt) {
+    return fail("observedAt must be inside the enclosing capture interval");
+  }
+  const lastContact = capture.contacts[capture.contacts.length - 1]!;
+  if (observedAt < lastContact.finishedAt) {
+    return fail("observedAt must not precede the final database capture");
+  }
   return Object.freeze({
     schemaVersion: APPLE_PHOTOS_CONTACT_EVIDENCE_SCHEMA_VERSION,
     format: APPLE_PHOTOS_CONTACT_EVIDENCE_FORMAT,
@@ -290,11 +444,16 @@ function artifactWithoutIntegrity(
     source: Object.freeze({
       ...APPLE_PHOTOS_LOCAL_SOURCE,
       platform: "darwin" as const,
+      libraryRealmSha256: digest(
+        input.libraryRealmSha256,
+        "source.libraryRealmSha256",
+      ),
       generationSha256: digest(input.generationSha256, "source.generationSha256"),
       photosSchemaSha256: digest(input.photosSchemaSha256, "source.photosSchemaSha256"),
       contactsSchemaSha256: digest(input.contactsSchemaSha256, "source.contactsSchemaSha256"),
+      capture,
     }),
-    observedAt: timestamp(input.observedAt, "observedAt"),
+    observedAt,
     scope: SCOPE,
     completeness: COMPLETENESS,
     privacy: PRIVACY,
@@ -329,17 +488,24 @@ function parseArtifactSource(
     "id",
     "version",
     "platform",
+    "libraryRealmSha256",
     "generationSha256",
     "photosSchemaSha256",
     "contactsSchemaSha256",
+    "capture",
   ], "source");
   return Object.freeze({
     id: exactString(source.id, "apple-photos-local", "source.id"),
     version: exactString(source.version, "1.0.0", "source.version"),
     platform: exactString(source.platform, "darwin", "source.platform"),
+    libraryRealmSha256: digest(
+      source.libraryRealmSha256,
+      "source.libraryRealmSha256",
+    ),
     generationSha256: digest(source.generationSha256, "source.generationSha256"),
     photosSchemaSha256: digest(source.photosSchemaSha256, "source.photosSchemaSha256"),
     contactsSchemaSha256: digest(source.contactsSchemaSha256, "source.contactsSchemaSha256"),
+    capture: parseCapture(source.capture),
   });
 }
 
@@ -380,17 +546,20 @@ export function parseApplePhotosContactEvidenceArtifact(
     exactString(scope[key], expected, `scope.${key}`);
   }
   const evidenceValue = artifact.evidence;
-  if (!Array.isArray(evidenceValue)) return fail("evidence must be an array");
-  if (evidenceValue.length > APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPeople) {
-    return fail("evidence exceeds the matched-person bound");
-  }
+  const evidence = dataArray(
+    evidenceValue,
+    "evidence",
+    APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPeople,
+  );
   const source = parseArtifactSource(artifact.source);
   const parsed = createApplePhotosContactEvidenceArtifact({
     observedAt: timestamp(artifact.observedAt, "observedAt"),
+    libraryRealmSha256: source.libraryRealmSha256,
     generationSha256: source.generationSha256,
     photosSchemaSha256: source.photosSchemaSha256,
     contactsSchemaSha256: source.contactsSchemaSha256,
-    evidence: evidenceValue.map(parseEvidence),
+    capture: source.capture,
+    evidence: evidence.map(parseEvidence),
   });
   const counts = dataRecord(artifact.counts, "counts");
   exactKeys(counts, Object.keys(parsed.counts), "counts");
@@ -429,13 +598,20 @@ function receiptWithoutIntegrity(
   const startedAt = timestamp(input.startedAt, "startedAt");
   const finishedAt = timestamp(input.finishedAt, "finishedAt");
   if (startedAt > finishedAt) return fail("receipt timestamps are reversed");
+  if (
+    startedAt > output.source.capture.startedAt
+    || output.source.capture.finishedAt > finishedAt
+  ) return fail("the database capture must be inside the receipt interval");
+  if (contactsDatabases !== output.source.capture.contacts.length) {
+    return fail("counts.contactsDatabases must match the ordered capture intervals");
+  }
   return Object.freeze({
     schemaVersion: 1 as const,
     format: APPLE_PHOTOS_CONTACT_EVIDENCE_RECEIPT_FORMAT,
     runId,
     operation: "apple-photos.export-contact-evidence" as const,
     status: "succeeded" as const,
-    transport: "local-sqlite-snapshot" as const,
+    transport: "local-sqlite-vacuum-capture" as const,
     implementation: Object.freeze({
       producer: Object.freeze({
         package: "@hraness/wrench" as const,
@@ -446,13 +622,18 @@ function receiptWithoutIntegrity(
     startedAt,
     finishedAt,
     bounds: Object.freeze({
-      snapshotAttempts: APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.snapshotAttempts,
+      captureAttemptsPerDatabase:
+        APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.captureAttemptsPerDatabase,
       maximumPhotosDatabaseBytes:
         APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPhotosDatabaseBytes,
       maximumContactsDatabases:
         APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsDatabases,
       maximumContactsDatabaseBytes:
         APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsDatabaseBytes,
+      maximumDirectoryEntries:
+        APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumDirectoryEntries,
+      maximumContactsSourceDirectories:
+        APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsSourceDirectories,
       maximumPeople: APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPeople,
       maximumContacts: APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContacts,
     }),
@@ -491,13 +672,18 @@ function parseBounds(
 ): ApplePhotosContactEvidenceExportReceipt["bounds"] {
   const bounds = dataRecord(value, "receipt.bounds");
   const expected = {
-    snapshotAttempts: APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.snapshotAttempts,
+    captureAttemptsPerDatabase:
+      APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.captureAttemptsPerDatabase,
     maximumPhotosDatabaseBytes:
       APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPhotosDatabaseBytes,
     maximumContactsDatabases:
       APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsDatabases,
     maximumContactsDatabaseBytes:
       APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsDatabaseBytes,
+    maximumDirectoryEntries:
+      APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumDirectoryEntries,
+    maximumContactsSourceDirectories:
+      APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsSourceDirectories,
     maximumPeople: APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPeople,
     maximumContacts: APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContacts,
   } as const;
@@ -547,7 +733,7 @@ export function parseApplePhotosContactEvidenceExportResult(
   exactString(receipt.status, "succeeded", "receipt.status");
   exactString(
     receipt.transport,
-    "local-sqlite-snapshot",
+    "local-sqlite-vacuum-capture",
     "receipt.transport",
   );
   const implementation = dataRecord(receipt.implementation, "receipt.implementation");
@@ -622,9 +808,11 @@ export function parseApplePhotosContactEvidenceExportResult(
     finishedAt: timestamp(receipt.finishedAt, "receipt.finishedAt"),
     contactsDatabases,
     observedAt: output.observedAt,
+    libraryRealmSha256: output.source.libraryRealmSha256,
     generationSha256: output.source.generationSha256,
     photosSchemaSha256: output.source.photosSchemaSha256,
     contactsSchemaSha256: output.source.contactsSchemaSha256,
+    capture: output.source.capture,
     evidence: output.evidence,
   });
   if (

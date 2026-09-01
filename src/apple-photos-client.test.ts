@@ -28,4 +28,12 @@ describe("Apple Photos public client", () => {
       "plain, non-proxy object",
     );
   });
+
+  test("does not let public environment options redirect local source authority", () => {
+    for (const key of ["HOME", "TMPDIR", "TMP", "TEMP"] as const) {
+      expect(() => exportApplePhotosContactEvidenceSync({}, {
+        environment: { [key]: `/private/untrusted-${key.toLowerCase()}` },
+      })).toThrow(`${key} cannot override Apple Photos source authority`);
+    }
+  });
 });

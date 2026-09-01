@@ -7,7 +7,9 @@ media reader.
 
 ## Run the bounded export
 
-The default source is the current macOS account's Photos system library:
+The default source is the conventional current-account Photos library path,
+`~/Pictures/Photos Library.photoslibrary`. It does not discover or claim the
+library that Photos currently designates as the System Photo Library:
 
 ```sh
 umask 077
@@ -31,17 +33,25 @@ or ask Photos to materialize an asset.
 ## Exact evidence boundary
 
 Wrench accepts only owned real directories and owned single-link regular
-SQLite files within reviewed byte and count bounds. It copies the Photos main
-database and a complete WAL/SHM pair, when present, into a mode-`0700`
-operation-owned temporary directory. Open-file and path identities must equal
-the pre-copy identities after every byte has been copied. A mismatch discards
-the attempt; three mismatches fail the run. Apple Contacts databases use the
-same boundary. Queries open only the copies in read-only, query-only mode.
+SQLite files within reviewed byte and count bounds. It opens each source
+read-only with trusted schemas disabled and uses SQLite `VACUUM INTO` to create
+one mode-`0600` database in a mode-`0700` operation-owned temporary directory.
+The source's device, inode, birth time, owner, type, link count, and permission
+mode must agree before and after capture. Live size and modification-time churn
+is allowed. Apple Contacts databases use the same boundary. Wrench runs
+`quick_check`, then opens only the captured databases read-only and query-only.
 
 Relevant Core Data tables and columns have a strict schema fingerprint. Schema
-drift, SQLite integrity failure, missing or one-sided WAL state, a symlink,
-hardlink, owner mismatch, or size overrun fails closed. Temporary copies are
-removed before success or failure returns.
+drift, SQLite integrity failure, a symlink, hardlink, owner or physical-identity
+mismatch, or size overrun fails closed. Ordinary success and handled failure
+remove the temporary captures before returning. Forced termination or a crash
+can leave an exact leased capture for a later recovery pass.
+
+The CLI serializes private local exports before inspecting a source. Its
+operation-owned snapshot directory has a process-owned,
+filesystem-identity-bound recovery lease before database bytes are copied. A
+later export reclaims only an exact directory whose owner is dead; live or
+uninspectable owners remain untouched and stop the run.
 
 The exact relationship is:
 
@@ -61,21 +71,27 @@ sorted evidence row contains:
 - `photosPersonId`;
 - `appleContactId`;
 - `linkedFaceCount`;
-- `linkedAssetCount`;
+- `linkedAssetCount`, the number of distinct `ZASSET` rows linked through the
+  detected faces;
 - `firstAssetAt` and `lastAssetAt`, or two null values when no linked asset has
   a date.
 
-The output and receipt declare the source generation, relevant Photos and
-Contacts schema digests, local-snapshot completeness, bounds, counts, privacy
-exclusions, and canonical SHA-256 integrity. The export is complete for exact
-matches in the copied local snapshots only. It does not claim that iCloud
-Photos or Contacts finished remote synchronization. Absence is not deletion
-evidence.
+The output and receipt declare a path-free realm digest for the physical Photos
+library, the source generation, relevant Photos and Contacts schema digests,
+bounds, counts, privacy exclusions, component capture intervals, and canonical
+SHA-256 integrity. Each captured database is internally consistent within its
+interval. The export does not claim an atomic instant across Photos and
+Contacts or completed iCloud and Contacts synchronization. Absence is not
+deletion evidence.
 
-Names, paths, images, encoded media, thumbnails, locations, raw blobs,
-faceprints, face crops, credentials, and unmatched clusters are never selected
-or projected. The two returned identifiers are still private relationship
-data. Keep the artifact outside Git and shared output paths.
+Wrench does not open or ask Photos to materialize referenced photo or video
+asset files. A `VACUUM INTO` capture is nevertheless a full private SQLite
+database copy and can contain source fields outside the reviewed query. Names,
+paths, images, encoded media, thumbnails, locations, raw blobs, credentials,
+faceprint templates, face crops, and unmatched clusters are not selected or
+projected into the returned JSON. The returned cluster identifiers and counts
+are private biometric-derived metadata as well as relationship evidence. Keep
+the artifact outside Git and shared output paths.
 
 ## Typed client
 
@@ -94,5 +110,5 @@ const checked = parseApplePhotosContactEvidenceExportResult(result)
 
 Consumers should map these exact source coordinates into their own person
 model and retain the receipt. They must not read Photos or Contacts databases
-again, treat face counts as biometric output, infer names, or advance a deletion
+again, infer names, expose biometric-derived counts, or advance a deletion
 state from an absent relationship.

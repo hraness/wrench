@@ -21,7 +21,16 @@ export {
 };
 
 const MAX_STDERR_BYTES = 8 * 1024;
-const PROCESS_TIMEOUT_MS = 15 * 60 * 1_000;
+// The inner supervisor owns the 15-minute operation deadline and two bounded
+// TERM/KILL proof intervals. The synchronous client must not preempt that
+// cleanup boundary and strand its detached worker.
+const PROCESS_TIMEOUT_MS = 15 * 60 * 1_000 + 10_000;
+const SOURCE_AUTHORITY_ENVIRONMENT = new Set([
+  "HOME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+]);
 
 function fail(message: string): never {
   throw new Error(`Wrench Apple Photos client: ${message}`);
@@ -102,6 +111,10 @@ function prepareEnvironment(
       return fail("environment name is malformed");
     }
     const item = descriptors[key]!.value as unknown;
+    if (
+      SOURCE_AUTHORITY_ENVIRONMENT.has(key)
+      && item !== environment[key]
+    ) return fail(`${key} cannot override Apple Photos source authority`);
     if (item === undefined) delete environment[key];
     else if (typeof item !== "string" || item.includes("\0")) {
       return fail("environment value is malformed");
@@ -176,10 +189,13 @@ export function exportApplePhotosContactEvidenceSync(
 export type {
   ApplePhotosContactEvidence,
   ApplePhotosContactEvidenceArtifact,
+  ApplePhotosContactEvidenceCapture,
   ApplePhotosContactEvidenceClientOptions,
   ApplePhotosContactEvidenceClientRequest,
   ApplePhotosContactEvidenceCompleteness,
   ApplePhotosContactEvidenceExportReceipt,
   ApplePhotosContactEvidenceExportResult,
   ApplePhotosContactEvidencePrivacy,
+  ApplePhotosContactsDatabaseCaptureInterval,
+  ApplePhotosDatabaseCaptureInterval,
 } from "./apple-photos-client-types";

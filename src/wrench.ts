@@ -1981,9 +1981,14 @@ async function runCommand(
         ? {}
         : { library: arguments_.library }),
       environment,
+      progress: (event) => {
+        output.stderr(runtime.formatApplePhotosContactEvidenceProgress(event));
+      },
       ...(signal === undefined ? {} : { signal }),
     });
-    output.stdout(runtime.encodeApplePhotosContactEvidenceExportResult(result));
+    output.stdout(
+      runtime.encodeApplePhotosContactEvidenceCliOutput(result, arguments_.json),
+    );
     return 0;
   }
   if (arguments_.command === "beeper-export-contact-interactions") {

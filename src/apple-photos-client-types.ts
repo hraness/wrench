@@ -1,34 +1,60 @@
 /** Self-contained DTO types for the side-effect-free Apple Photos client. */
 
+import type { WRENCH_VERSION } from "./version";
+
 export type ApplePhotosContactEvidence = Readonly<{
   photosPersonId: string;
   appleContactId: string;
   linkedFaceCount: number;
+  /** Count of distinct ZASSET rows linked through the detected faces. */
   linkedAssetCount: number;
   firstAssetAt: string | null;
   lastAssetAt: string | null;
 }>;
 
+export type ApplePhotosDatabaseCaptureInterval = Readonly<{
+  startedAt: string;
+  finishedAt: string;
+}>;
+
+export type ApplePhotosContactsDatabaseCaptureInterval = Readonly<{
+  ordinal: number;
+  startedAt: string;
+  finishedAt: string;
+}>;
+
+export type ApplePhotosContactEvidenceCapture = Readonly<{
+  startedAt: string;
+  finishedAt: string;
+  photos: ApplePhotosDatabaseCaptureInterval;
+  contacts: readonly ApplePhotosContactsDatabaseCaptureInterval[];
+  consistency: "independent-read-transactions";
+  crossDatabaseAtomicity: "not-asserted";
+}>;
+
 export type ApplePhotosContactEvidenceCompleteness = Readonly<{
-  kind: "complete-local-snapshot";
-  localPhotos: "complete";
-  localContacts: "all-discovered-address-book-stores";
+  kind: "bounded-local-observation";
+  localPhotos: "one-reviewed-library-database-capture";
+  localContacts: "ordered-discovered-address-book-database-captures";
+  crossDatabaseAtomicity: "not-asserted";
   remoteSync: "not-asserted";
   unmatchedPeople: "excluded";
   reason: string;
 }>;
 
 export type ApplePhotosContactEvidencePrivacy = Readonly<{
-  names: "excluded";
-  localPaths: "excluded";
-  images: "excluded";
-  media: "excluded";
-  locations: "excluded";
-  rawContactData: "excluded";
-  rawPhotosData: "excluded";
-  faceprints: "excluded";
-  faceCrops: "excluded";
-  unmatchedPeople: "excluded";
+  names: "excluded-from-returned-json";
+  localPaths: "excluded-from-returned-json";
+  images: "excluded-from-returned-json";
+  media: "excluded-from-returned-json";
+  locations: "excluded-from-returned-json";
+  rawContactData: "excluded-from-returned-json";
+  rawPhotosData: "excluded-from-returned-json";
+  faceClusterIdentifiers: "included-biometric-derived-private-metadata";
+  faceClusterCounts: "included-biometric-derived-private-metadata";
+  faceprintTemplates: "excluded-from-returned-json";
+  faceCrops: "excluded-from-returned-json";
+  unmatchedPeople: "excluded-from-returned-json";
 }>;
 
 export type ApplePhotosContactEvidenceArtifact = Readonly<{
@@ -42,15 +68,17 @@ export type ApplePhotosContactEvidenceArtifact = Readonly<{
     id: "apple-photos-local";
     version: "1.0.0";
     platform: "darwin";
+    libraryRealmSha256: string;
     generationSha256: string;
     photosSchemaSha256: string;
     contactsSchemaSha256: string;
+    capture: ApplePhotosContactEvidenceCapture;
   }>;
   observedAt: string;
   scope: Readonly<{
     people: "exact-zpersonuri-zuniqueid-matches-only";
-    faces: "all-detected-face-links-in-local-snapshot";
-    assets: "distinct-assets-linked-through-detected-faces";
+    faces: "detected-face-links-present-in-photos-capture";
+    assets: "distinct-zasset-rows-linked-through-detected-faces";
   }>;
   completeness: ApplePhotosContactEvidenceCompleteness;
   privacy: ApplePhotosContactEvidencePrivacy;
@@ -73,11 +101,11 @@ export type ApplePhotosContactEvidenceExportReceipt = Readonly<{
   runId: string;
   operation: "apple-photos.export-contact-evidence";
   status: "succeeded";
-  transport: "local-sqlite-snapshot";
+  transport: "local-sqlite-vacuum-capture";
   implementation: Readonly<{
     producer: Readonly<{
       package: "@hraness/wrench";
-      version: "0.16.2";
+      version: typeof WRENCH_VERSION;
     }>;
     source: Readonly<{
       id: "apple-photos-local";
@@ -87,10 +115,12 @@ export type ApplePhotosContactEvidenceExportReceipt = Readonly<{
   startedAt: string;
   finishedAt: string;
   bounds: Readonly<{
-    snapshotAttempts: 3;
+    captureAttemptsPerDatabase: 1;
     maximumPhotosDatabaseBytes: number;
     maximumContactsDatabases: number;
     maximumContactsDatabaseBytes: number;
+    maximumDirectoryEntries: number;
+    maximumContactsSourceDirectories: number;
     maximumPeople: number;
     maximumContacts: number;
   }>;

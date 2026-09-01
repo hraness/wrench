@@ -3,20 +3,18 @@ import {
   constants as fsConstants,
   createReadStream,
   type BigIntStats,
-  type Dirent,
+  lstatSync,
+  realpathSync,
 } from "node:fs";
 import {
-  chmod,
   lstat,
   mkdtemp,
   open,
-  readdir,
+  opendir,
   realpath,
   rm,
-  stat,
-  type FileHandle,
 } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import {
   isAbsolute,
   join,
@@ -34,7 +32,14 @@ import type {
   ApplePhotosContactEvidence,
   ApplePhotosContactEvidenceExportResult,
 } from "./apple-photos-client-types";
+import {
+  createBeeperMessageLikeMeDirectoryLease,
+  releaseBeeperMessageLikeMeDirectoryLease,
+  type BeeperMessageLikeMeDirectoryLease,
+  updateBeeperMessageLikeMeDirectoryLease,
+} from "./beeper-message-like-me-recovery";
 import { canonicalJson, sha256 } from "./canonical-json";
+import { removePrivateDirectoryTree } from "./storage";
 
 const PHOTOS_DATABASE_RELATIVE_PATH = join("database", "Photos.sqlite");
 const CONTACTS_RELATIVE_ROOT = join(
@@ -43,9 +48,6 @@ const CONTACTS_RELATIVE_ROOT = join(
   "AddressBook",
 );
 const SQLITE_HEADER_BYTES = 512;
-const MAX_WAL_BYTES = 1024 * 1024 * 1024;
-const MAX_SHM_BYTES = 64 * 1024 * 1024;
-const COPY_BUFFER_BYTES = 1024 * 1024;
 const CONTACT_DATABASE_PATTERN = /^AddressBook-v([1-9][0-9]*)\.abcddb$/u;
 const CONTACT_SOURCE_DIRECTORY_PATTERN =
   /^[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$/u;
@@ -81,30 +83,59 @@ export const APPLE_CONTACTS_SCHEMA_SHA256 = sha256(
   canonicalJson(CONTACTS_SCHEMA_CONTRACT),
 );
 
-type SnapshotRole = "photos" | "contacts";
+type CaptureRole = "photos" | "contacts";
 
 export type ApplePhotosLocalSourceDependencies = Readonly<{
   platform?: NodeJS.Platform;
-  homeDirectory?: string;
+  resolveAccountHomeDirectory?: () => string;
   temporaryDirectory?: string;
   now?: () => Date;
   runId?: () => string;
-  afterSnapshotFilesCopied?: (
-    role: SnapshotRole,
+  afterDatabaseCaptured?: (
+    role: CaptureRole,
     attempt: number,
   ) => void | Promise<void>;
 }>;
 
 export type ApplePhotosLocalSourceRequest = Readonly<{
   library?: string;
-  environment?: Readonly<Record<string, string | undefined>>;
+  stateEnvironment?: Readonly<Record<string, string | undefined>>;
   signal?: AbortSignal;
   dependencies?: ApplePhotosLocalSourceDependencies;
+  progress?: (event: ApplePhotosLocalSourceProgressEvent) => void;
+}>;
+
+export type ApplePhotosLocalSourceProgressEvent = Readonly<
+  | { phase: "source-admission" }
+  | { phase: "contacts-discovery" }
+  | { phase: "photos-capture" }
+  | { phase: "contacts-capture"; current: number; total: number }
+  | { phase: "evidence-validation" }
+  | { phase: "generation-hashing" }
+  | { phase: "cleanup" }
+>;
+
+type DirectoryIdentity = Readonly<{
+  kind: "directory";
+  dev: bigint;
+  ino: bigint;
+  birthtimeNs: bigint;
+  uid: bigint;
+  mode: bigint;
+}>;
+
+type SnapshotDirectory = Readonly<{
+  path: string;
+  parentPath: string;
+  identity: DirectoryIdentity;
+  parentIdentity: DirectoryIdentity;
 }>;
 
 type FileIdentity = Readonly<{
+  kind: "regular-file";
   dev: bigint;
   ino: bigint;
+  birthtimeNs: bigint;
   mode: bigint;
   nlink: bigint;
   uid: bigint;
@@ -115,16 +146,15 @@ type FileIdentity = Readonly<{
 
 type SourceFile = Readonly<{
   path: string;
-  suffix: "" | "-wal" | "-shm";
   identity: FileIdentity;
 }>;
 
 type SnapshotDatabase = Readonly<{
   mainPath: string;
-  files: readonly Readonly<{
-    suffix: SourceFile["suffix"];
-    snapshotPath: string;
-  }>[];
+  capture: Readonly<{
+    startedAt: string;
+    finishedAt: string;
+  }>;
 }>;
 
 type TableColumnContract = Readonly<Record<string, Readonly<{
@@ -137,14 +167,23 @@ type TableColumnContract = Readonly<Record<string, Readonly<{
 
 type SchemaContract = Readonly<Record<string, TableColumnContract>>;
 
-class SnapshotDriftError extends Error {}
-
 function fail(message: string): never {
   throw new Error(`Apple Photos local source: ${message}`);
 }
 
 function abortIfRequested(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) return fail("operation was cancelled");
+}
+
+function reportProgress(
+  request: ApplePhotosLocalSourceRequest,
+  event: ApplePhotosLocalSourceProgressEvent,
+): void {
+  try {
+    request.progress?.(Object.freeze(event));
+  } catch {
+    // Progress is advisory and cannot weaken capture or cleanup custody.
+  }
 }
 
 function normalizedAbsolutePath(value: string, label: string): string {
@@ -161,7 +200,7 @@ async function exactRealDirectory(
   path: string,
   label: string,
   uid: bigint,
-): Promise<void> {
+): Promise<DirectoryIdentity> {
   let metadata: BigIntStats;
   let resolved: string;
   try {
@@ -178,12 +217,119 @@ async function exactRealDirectory(
     || metadata.uid !== uid
     || resolved !== path
   ) return fail(`${label} must be an owned real directory without symlink components`);
+  return Object.freeze({
+    kind: "directory" as const,
+    dev: metadata.dev,
+    ino: metadata.ino,
+    birthtimeNs: metadata.birthtimeNs,
+    uid: metadata.uid,
+    mode: metadata.mode,
+  });
+}
+
+function sameDirectoryIdentity(
+  left: DirectoryIdentity,
+  right: DirectoryIdentity,
+): boolean {
+  return left.kind === right.kind
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.birthtimeNs === right.birthtimeNs
+    && left.uid === right.uid
+    && left.mode === right.mode;
+}
+
+async function exactPrivateDirectory(
+  path: string,
+  label: string,
+  uid: bigint,
+): Promise<DirectoryIdentity> {
+  const observed = await exactRealDirectory(path, label, uid);
+  if ((observed.mode & 0o777n) !== 0o700n) {
+    return fail(`${label} must be private mode 0700`);
+  }
+  return observed;
+}
+
+async function assertBoundDirectory(
+  path: string,
+  expected: DirectoryIdentity,
+  label: string,
+  uid: bigint,
+  privateMode: boolean,
+): Promise<void> {
+  const observed = privateMode
+    ? await exactPrivateDirectory(path, label, uid)
+    : await exactRealDirectory(path, label, uid);
+  if (!sameDirectoryIdentity(observed, expected)) {
+    return fail(`${label} changed filesystem identity during the export`);
+  }
+}
+
+async function assertSnapshotDirectory(
+  snapshot: SnapshotDirectory,
+  uid: bigint,
+): Promise<void> {
+  await assertBoundDirectory(
+    snapshot.parentPath,
+    snapshot.parentIdentity,
+    "the private snapshot parent",
+    uid,
+    true,
+  );
+  await assertBoundDirectory(
+    snapshot.path,
+    snapshot.identity,
+    "the private snapshot root",
+    uid,
+    true,
+  );
+}
+
+function assertSnapshotDirectorySync(
+  snapshot: SnapshotDirectory,
+  uid: bigint,
+): void {
+  for (const [path, expected, label] of [
+    [snapshot.parentPath, snapshot.parentIdentity, "the private snapshot parent"],
+    [snapshot.path, snapshot.identity, "the private snapshot root"],
+  ] as const) {
+    let metadata: BigIntStats;
+    let resolved: string;
+    try {
+      metadata = lstatSync(path, { bigint: true });
+      resolved = realpathSync(path);
+    } catch {
+      return fail(`${label} is unavailable`);
+    }
+    const observed = Object.freeze({
+      kind: "directory" as const,
+      dev: metadata.dev,
+      ino: metadata.ino,
+      birthtimeNs: metadata.birthtimeNs,
+      uid: metadata.uid,
+      mode: metadata.mode,
+    });
+    if (
+      !metadata.isDirectory()
+      || metadata.isSymbolicLink()
+      || metadata.uid !== uid
+      || resolved !== path
+      || (metadata.mode & 0o777n) !== 0o700n
+      || !sameDirectoryIdentity(observed, expected)
+    ) return fail(`${label} changed filesystem identity during the export`);
+  }
 }
 
 function identity(metadata: BigIntStats): FileIdentity {
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    return fail("a database descriptor is not a regular file");
+  }
   return Object.freeze({
+    kind: "regular-file" as const,
     dev: metadata.dev,
     ino: metadata.ino,
+    birthtimeNs: metadata.birthtimeNs,
     mode: metadata.mode,
     nlink: metadata.nlink,
     uid: metadata.uid,
@@ -193,229 +339,180 @@ function identity(metadata: BigIntStats): FileIdentity {
   });
 }
 
-function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev
-    && left.ino === right.ino
-    && left.mode === right.mode
-    && left.nlink === right.nlink
-    && left.uid === right.uid
+function sameExactIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  return sameStableIdentity(left, right)
     && left.size === right.size
     && left.mtimeNs === right.mtimeNs
     && left.ctimeNs === right.ctimeNs;
 }
 
-function fileMaximum(
-  suffix: SourceFile["suffix"],
-  mainMaximum: number,
-): number {
-  if (suffix === "") return mainMaximum;
-  return suffix === "-wal" ? MAX_WAL_BYTES : MAX_SHM_BYTES;
+function libraryRealmSha256(identity: DirectoryIdentity): string {
+  return sha256(canonicalJson({
+    domain: "wrench.apple-photos.library-realm.v1",
+    device: identity.dev.toString(),
+    inode: identity.ino.toString(),
+    birthtimeNs: identity.birthtimeNs.toString(),
+  }));
 }
 
-async function optionalOwnedSourceFile(
+function sameStableIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  return left.kind === right.kind
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.birthtimeNs === right.birthtimeNs
+    && left.mode === right.mode
+    && left.nlink === right.nlink
+    && left.uid === right.uid;
+}
+
+async function ownedSourceFile(
   path: string,
-  suffix: SourceFile["suffix"],
   uid: bigint,
-  mainMaximum: number,
-): Promise<SourceFile | null> {
+  maximumBytes: number,
+): Promise<SourceFile> {
   let metadata: BigIntStats;
   try {
     metadata = await lstat(path, { bigint: true });
-  } catch (error) {
-    if (
-      typeof error === "object"
-      && error !== null
-      && "code" in error
-      && error.code === "ENOENT"
-    ) return null;
+  } catch {
     return fail("a source database file could not be inspected");
   }
-  const maximum = BigInt(fileMaximum(suffix, mainMaximum));
-  const minimum = suffix === "" ? BigInt(SQLITE_HEADER_BYTES) : 1n;
   if (
     !metadata.isFile()
     || metadata.isSymbolicLink()
     || metadata.uid !== uid
     || metadata.nlink !== 1n
-    || metadata.size < minimum
-    || metadata.size > maximum
+    || metadata.size < BigInt(SQLITE_HEADER_BYTES)
+    || metadata.size > BigInt(maximumBytes)
   ) return fail("a source database file failed type, owner, hardlink, or size validation");
-  return Object.freeze({ path, suffix, identity: identity(metadata) });
+  return Object.freeze({ path, identity: identity(metadata) });
 }
 
-async function inspectSourceSet(
-  mainPath: string,
+async function sourcePathStillMatches(
+  file: SourceFile,
   uid: bigint,
-  mainMaximum: number,
-): Promise<readonly SourceFile[]> {
-  const [main, wal, shm] = await Promise.all([
-    optionalOwnedSourceFile(mainPath, "", uid, mainMaximum),
-    optionalOwnedSourceFile(`${mainPath}-wal`, "-wal", uid, mainMaximum),
-    optionalOwnedSourceFile(`${mainPath}-shm`, "-shm", uid, mainMaximum),
-  ]);
-  if (main === null) return fail("the source database is unavailable");
-  if ((wal === null) !== (shm === null)) {
-    return fail("the source SQLite WAL and shared-memory sidecars are incomplete");
-  }
-  return Object.freeze([
-    main,
-    ...(wal === null || shm === null ? [] : [wal, shm]),
-  ]);
-}
-
-async function sourcePathStillMatches(file: SourceFile): Promise<boolean> {
+  maximumBytes: number,
+): Promise<boolean> {
   try {
     const current = await lstat(file.path, { bigint: true });
-    return sameIdentity(file.identity, identity(current));
+    return current.isFile()
+      && !current.isSymbolicLink()
+      && current.uid === uid
+      && current.nlink === 1n
+      && current.size >= BigInt(SQLITE_HEADER_BYTES)
+      && current.size <= BigInt(maximumBytes)
+      && sameStableIdentity(file.identity, identity(current));
   } catch {
     return false;
   }
 }
 
-async function absentSidecarsStayedAbsent(mainPath: string): Promise<boolean> {
-  for (const suffix of ["-wal", "-shm"] as const) {
-    try {
-      await lstat(`${mainPath}${suffix}`, { bigint: true });
-      return false;
-    } catch (error) {
-      if (
-        typeof error !== "object"
-        || error === null
-        || !("code" in error)
-        || error.code !== "ENOENT"
-      ) return false;
-    }
-  }
-  return true;
-}
-
-async function copyExactFile(
-  source: FileHandle,
-  destinationPath: string,
-  expectedSize: bigint,
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  const destination = await open(
-    destinationPath,
-    fsConstants.O_CREAT
-      | fsConstants.O_EXCL
-      | fsConstants.O_WRONLY
-      | fsConstants.O_NOFOLLOW,
-    0o600,
-  );
-  const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
-  let position = 0;
-  const exactSize = Number(expectedSize);
+async function capturedFileIdentity(
+  path: string,
+  uid: bigint,
+  maximumBytes: number,
+): Promise<FileIdentity> {
+  const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
-    while (position < exactSize) {
-      abortIfRequested(signal);
-      const remaining = exactSize - position;
-      const length = Math.min(remaining, buffer.byteLength);
-      const read = await source.read(buffer, 0, length, position);
-      if (read.bytesRead !== length) {
-        throw new SnapshotDriftError(
-          "source database changed or ended during snapshot copy",
-        );
-      }
-      let written = 0;
-      while (written < read.bytesRead) {
-        const next = await destination.write(
-          buffer,
-          written,
-          read.bytesRead - written,
-          position + written,
-        );
-        if (next.bytesWritten < 1) return fail("a private snapshot write made no progress");
-        written += next.bytesWritten;
-      }
-      position += read.bytesRead;
-    }
-    await destination.sync();
-    await destination.chmod(0o600);
+    await handle.chmod(0o600);
+    await handle.sync();
+    const metadata = await handle.stat({ bigint: true });
+    if (
+      !metadata.isFile()
+      || metadata.isSymbolicLink()
+      || metadata.uid !== uid
+      || metadata.nlink !== 1n
+      || (metadata.mode & 0o777n) !== 0o600n
+      || metadata.size < BigInt(SQLITE_HEADER_BYTES)
+      || metadata.size > BigInt(maximumBytes)
+    ) return fail("a captured database failed private file validation");
+    return identity(metadata);
   } finally {
-    await destination.close();
+    await handle.close();
   }
 }
 
-async function snapshotSqliteDatabase(
+async function captureSqliteDatabase(
   sourceMainPath: string,
-  snapshotRoot: string,
+  snapshotRoot: SnapshotDirectory,
   snapshotStem: string,
   mainMaximum: number,
   uid: bigint,
-  role: SnapshotRole,
+  role: CaptureRole,
   signal: AbortSignal | undefined,
-  afterCopied: ApplePhotosLocalSourceDependencies["afterSnapshotFilesCopied"],
+  afterCaptured: ApplePhotosLocalSourceDependencies["afterDatabaseCaptured"],
+  now: () => Date,
 ): Promise<SnapshotDatabase> {
-  const destinations = ["", "-wal", "-shm"].map((suffix) =>
-    join(snapshotRoot, `${snapshotStem}${suffix}`));
-  for (
-    let attempt = 1;
-    attempt <= APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.snapshotAttempts;
-    attempt += 1
-  ) {
-    abortIfRequested(signal);
-    await Promise.all(destinations.map((path) => rm(path, { force: true })));
-    const sources = await inspectSourceSet(sourceMainPath, uid, mainMaximum);
-    const handles: FileHandle[] = [];
-    let stable = false;
+  const destination = join(snapshotRoot.path, snapshotStem);
+  abortIfRequested(signal);
+  await assertSnapshotDirectory(snapshotRoot, uid);
+  await rm(destination, { force: true });
+  await assertSnapshotDirectory(snapshotRoot, uid);
+  const source = await ownedSourceFile(sourceMainPath, uid, mainMaximum);
+  const sourceHandle = await open(
+    source.path,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+  );
+  let capturedIdentity: FileIdentity | undefined;
+  const startedAt = now().toISOString();
+  try {
+    const opened = identity(await sourceHandle.stat({ bigint: true }));
+    if (!sameStableIdentity(opened, source.identity)) {
+      return fail("the source database changed identity before capture");
+    }
+    const sourceDatabase = new Database(source.path, {
+      readonly: true,
+      strict: true,
+    });
     try {
-      for (const source of sources) {
-        const handle = await open(
-          source.path,
-          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-        );
-        handles.push(handle);
-        const opened = identity(await handle.stat({ bigint: true }));
-        if (!sameIdentity(opened, source.identity)) {
-          stable = false;
-          break;
-        }
-      }
-      if (handles.length !== sources.length) continue;
-      for (const [index, source] of sources.entries()) {
-        const destination = join(snapshotRoot, `${snapshotStem}${source.suffix}`);
-        await copyExactFile(
-          handles[index]!,
-          destination,
-          source.identity.size,
-          signal,
-        );
-      }
-      await afterCopied?.(role, attempt);
-      const descriptorStable = (
-        await Promise.all(handles.map(async (handle, index) =>
-          sameIdentity(
-            identity(await handle.stat({ bigint: true })),
-            sources[index]!.identity,
-          )))
-      ).every(Boolean);
-      const pathsStable = (
-        await Promise.all(sources.map(sourcePathStillMatches))
-      ).every(Boolean);
-      const sidecarsStable = sources.length === 1
-        ? await absentSidecarsStayedAbsent(sourceMainPath)
-        : true;
-      stable = descriptorStable && pathsStable && sidecarsStable;
-      if (stable) {
-        return Object.freeze({
-          mainPath: join(snapshotRoot, snapshotStem),
-          files: Object.freeze(sources.map((source) => Object.freeze({
-            suffix: source.suffix,
-            snapshotPath: join(snapshotRoot, `${snapshotStem}${source.suffix}`),
-          }))),
-        });
-      }
-    } catch (error) {
-      if (!(error instanceof SnapshotDriftError)) throw error;
+      sourceDatabase.exec("PRAGMA trusted_schema = OFF");
+      sourceDatabase.exec("PRAGMA foreign_keys = OFF");
+      sourceDatabase.query("VACUUM INTO ?1").run(destination);
     } finally {
-      await Promise.all(handles.map((handle) => handle.close().catch(() => undefined)));
-      if (!stable) {
-        await Promise.all(destinations.map((path) => rm(path, { force: true })));
-      }
+      sourceDatabase.close(false);
+    }
+    capturedIdentity = await capturedFileIdentity(destination, uid, mainMaximum);
+    const captured = new Database(destination, { readonly: true, strict: true });
+    try {
+      captured.exec("PRAGMA trusted_schema = OFF");
+      validateQuickCheck(captured, "captured SQLite database");
+      captured.exec("PRAGMA query_only = ON");
+      captured.exec("PRAGMA foreign_keys = OFF");
+    } finally {
+      captured.close(false);
+    }
+    await afterCaptured?.(
+      role,
+      APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.captureAttemptsPerDatabase,
+    );
+    abortIfRequested(signal);
+    await assertSnapshotDirectory(snapshotRoot, uid);
+    const descriptorStable = sameStableIdentity(
+      identity(await sourceHandle.stat({ bigint: true })),
+      source.identity,
+    );
+    const pathStable = await sourcePathStillMatches(source, uid, mainMaximum);
+    if (!descriptorStable || !pathStable) {
+      return fail("the source database changed filesystem identity during capture");
+    }
+    const afterValidation = identity(await lstat(destination, { bigint: true }));
+    if (!sameExactIdentity(capturedIdentity, afterValidation)) {
+      return fail("the captured database changed after integrity validation");
+    }
+    return Object.freeze({
+      mainPath: destination,
+      capture: Object.freeze({
+        startedAt,
+        finishedAt: now().toISOString(),
+      }),
+    });
+  } finally {
+    await sourceHandle.close().catch(() => undefined);
+    if (capturedIdentity === undefined) {
+      await assertSnapshotDirectory(snapshotRoot, uid);
+      await rm(destination, { force: true });
+      await assertSnapshotDirectory(snapshotRoot, uid);
     }
   }
-  return fail("source database did not remain stable across a bounded snapshot attempt");
 }
 
 async function latestContactDatabaseInDirectory(
@@ -423,20 +520,24 @@ async function latestContactDatabaseInDirectory(
   uid: bigint,
 ): Promise<string | null> {
   await exactRealDirectory(directory, "an Apple Contacts store directory", uid);
-  const entries = await readdir(directory, { withFileTypes: true });
-  const candidates = entries.flatMap((entry): readonly Readonly<{
-    path: string;
-    version: number;
-  }>[] => {
+  const entries = await opendir(directory);
+  let scanned = 0;
+  let latest: Readonly<{ path: string; version: number }> | null = null;
+  for await (const entry of entries) {
+    scanned += 1;
+    if (scanned > APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumDirectoryEntries) {
+      return fail("an Apple Contacts store directory exceeds the reviewed entry bound");
+    }
     const match = CONTACT_DATABASE_PATTERN.exec(entry.name);
-    if (match === null) return [];
+    if (match === null) continue;
     if (!entry.isFile()) return fail("an Apple Contacts database candidate is not a regular directory entry");
     const version = Number(match[1]);
     if (!Number.isSafeInteger(version)) return fail("an Apple Contacts database version is malformed");
-    return [Object.freeze({ path: join(directory, entry.name), version })];
-  });
-  candidates.sort((left, right) => right.version - left.version);
-  return candidates[0]?.path ?? null;
+    if (latest === null || version > latest.version) {
+      latest = Object.freeze({ path: join(directory, entry.name), version });
+    }
+  }
+  return latest?.path ?? null;
 }
 
 async function discoverContactDatabases(
@@ -449,23 +550,39 @@ async function discoverContactDatabases(
   const primary = await latestContactDatabaseInDirectory(root, uid);
   if (primary !== null) candidates.push(primary);
   const sourcesRoot = join(root, "Sources");
-  let sourceEntries: Dirent<string>[] = [];
+  const sourceNames: string[] = [];
   try {
     await exactRealDirectory(sourcesRoot, "the Apple Contacts Sources directory", uid);
-    sourceEntries = await readdir(sourcesRoot, { withFileTypes: true });
+    const entries = await opendir(sourcesRoot);
+    let scanned = 0;
+    for await (const entry of entries) {
+      scanned += 1;
+      if (scanned > APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumDirectoryEntries) {
+        return fail("the Apple Contacts Sources directory exceeds the reviewed entry bound");
+      }
+      if (!CONTACT_SOURCE_DIRECTORY_PATTERN.test(entry.name)) continue;
+      if (!entry.isDirectory()) {
+        return fail("an Apple Contacts source identifier is not a directory");
+      }
+      sourceNames.push(entry.name);
+      if (
+        sourceNames.length
+        > APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsSourceDirectories
+      ) return fail("Apple Contacts source directories exceed the reviewed bound");
+    }
   } catch (error) {
     if (
       !(error instanceof Error)
       || error.message !== "Apple Photos local source: the Apple Contacts Sources directory is unavailable"
     ) throw error;
   }
-  for (const entry of sourceEntries) {
-    if (!CONTACT_SOURCE_DIRECTORY_PATTERN.test(entry.name)) continue;
-    if (!entry.isDirectory()) {
-      return fail("an Apple Contacts source identifier is not a directory");
-    }
+  sourceNames.sort((left, right) => Buffer.compare(
+    Buffer.from(left, "utf8"),
+    Buffer.from(right, "utf8"),
+  ));
+  for (const sourceName of sourceNames) {
     const candidate = await latestContactDatabaseInDirectory(
-      join(sourcesRoot, entry.name),
+      join(sourcesRoot, sourceName),
       uid,
     );
     if (candidate !== null) candidates.push(candidate);
@@ -505,17 +622,20 @@ function integerField(value: unknown, label: string, maximum: number): number {
   return value;
 }
 
+function validateQuickCheck(database: Database, label: string): void {
+  const quickCheck = database.query("PRAGMA quick_check(1)").get() as unknown;
+  const quickCheckRow = databaseRow(quickCheck, `${label} quick check`);
+  if (Object.values(quickCheckRow).length !== 1 || Object.values(quickCheckRow)[0] !== "ok") {
+    return fail(`${label} failed SQLite quick_check`);
+  }
+}
+
 function validateSchema(
   database: Database,
   contract: SchemaContract,
   expectedSha256: string,
   label: string,
 ): void {
-  const quickCheck = database.query("PRAGMA quick_check(1)").get() as unknown;
-  const quickCheckRow = databaseRow(quickCheck, `${label} quick check`);
-  if (Object.values(quickCheckRow).length !== 1 || Object.values(quickCheckRow)[0] !== "ok") {
-    return fail(`${label} snapshot failed SQLite quick_check`);
-  }
   const observed: Record<string, Record<string, unknown>> = Object.create(null);
   for (const [table, columns] of Object.entries(contract)) {
     const schemaRows = database.query(
@@ -559,8 +679,8 @@ function validateSchema(
 }
 
 function configureReadOnlyDatabase(database: Database): void {
-  database.exec("PRAGMA query_only = ON");
   database.exec("PRAGMA trusted_schema = OFF");
+  database.exec("PRAGMA query_only = ON");
   database.exec("PRAGMA foreign_keys = OFF");
 }
 
@@ -603,15 +723,19 @@ function coreDataTimestamp(value: unknown, label: string): string | null {
 
 function loadContactIds(
   snapshots: readonly SnapshotDatabase[],
+  snapshotRoot: SnapshotDirectory,
+  uid: bigint,
 ): Set<string> {
   const ids = new Set<string>();
   let scanned = 0;
   for (const snapshot of snapshots) {
+    assertSnapshotDirectorySync(snapshotRoot, uid);
     const database = new Database(snapshot.mainPath, {
       readonly: true,
       strict: true,
     });
     try {
+      assertSnapshotDirectorySync(snapshotRoot, uid);
       configureReadOnlyDatabase(database);
       validateSchema(
         database,
@@ -630,8 +754,10 @@ function loadContactIds(
         const row = databaseRow(raw, `Apple Contacts row ${String(index)}`);
         ids.add(providerIdentifier(row.contactId, "an Apple Contacts identifier", 4_096));
       }
+      assertSnapshotDirectorySync(snapshotRoot, uid);
     } finally {
       database.close(false);
+      assertSnapshotDirectorySync(snapshotRoot, uid);
     }
   }
   return ids;
@@ -640,12 +766,16 @@ function loadContactIds(
 function queryPhotosEvidence(
   snapshot: SnapshotDatabase,
   contactIds: ReadonlySet<string>,
+  snapshotRoot: SnapshotDirectory,
+  uid: bigint,
 ): readonly ApplePhotosContactEvidence[] {
+  assertSnapshotDirectorySync(snapshotRoot, uid);
   const database = new Database(snapshot.mainPath, {
     readonly: true,
     strict: true,
   });
   try {
+    assertSnapshotDirectorySync(snapshotRoot, uid);
     configureReadOnlyDatabase(database);
     validateSchema(
       database,
@@ -717,15 +847,19 @@ function queryPhotosEvidence(
         lastAssetAt,
       }));
     }
+    assertSnapshotDirectorySync(snapshotRoot, uid);
     return Object.freeze(evidence);
   } finally {
     database.close(false);
+    assertSnapshotDirectorySync(snapshotRoot, uid);
   }
 }
 
 async function hashSnapshotDatabases(
   photos: SnapshotDatabase,
   contacts: readonly SnapshotDatabase[],
+  snapshotRoot: SnapshotDirectory,
+  uid: bigint,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const hash = createHash("sha256");
@@ -734,20 +868,26 @@ async function hashSnapshotDatabases(
     hash.update(databaseIndex === 0
       ? "apple-photos\0"
       : `apple-contacts-${String(databaseIndex - 1).padStart(2, "0")}\0`);
-    for (const file of database.files) {
-      // The SHM file is copied and identity-fenced because SQLite needs its
-      // matching WAL index. Its transient lock bytes do not identify logical
-      // database content and therefore do not enter the source generation.
-      if (file.suffix === "-shm") continue;
+    abortIfRequested(signal);
+    await assertSnapshotDirectory(snapshotRoot, uid);
+    const before = await capturedFileIdentity(
+      database.mainPath,
+      uid,
+      databaseIndex === 0
+        ? APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumPhotosDatabaseBytes
+        : APPLE_PHOTOS_CONTACT_EVIDENCE_LIMITS.maximumContactsDatabaseBytes,
+    );
+    hash.update("vacuum-capture\0");
+    hash.update(`${before.size.toString()}\0`);
+    for await (const chunk of createReadStream(database.mainPath)) {
       abortIfRequested(signal);
-      hash.update(file.suffix === "" ? "main\0" : `${file.suffix.slice(1)}\0`);
-      const metadata = await stat(file.snapshotPath, { bigint: true });
-      hash.update(`${metadata.size.toString()}\0`);
-      for await (const chunk of createReadStream(file.snapshotPath)) {
-        abortIfRequested(signal);
-        hash.update(chunk as Buffer);
-      }
+      hash.update(chunk as Buffer);
     }
+    const after = identity(await lstat(database.mainPath, { bigint: true }));
+    if (!sameExactIdentity(before, after)) {
+      return fail("a captured database changed during generation hashing");
+    }
+    await assertSnapshotDirectory(snapshotRoot, uid);
   }
   return hash.digest("hex");
 }
@@ -756,12 +896,20 @@ async function checkedHomeDirectory(
   request: ApplePhotosLocalSourceRequest,
   uid: bigint,
 ): Promise<string> {
-  const selected = request.dependencies?.homeDirectory
-    ?? request.environment?.HOME
-    ?? homedir();
+  const selected = request.dependencies?.resolveAccountHomeDirectory?.()
+    ?? resolveApplePhotosAccountHomeDirectory();
   const home = normalizedAbsolutePath(selected, "the home directory");
   await exactRealDirectory(home, "the home directory", uid);
   return home;
+}
+
+/** Resolve the signed-in OS account's home without consulting ambient env. */
+export function resolveApplePhotosAccountHomeDirectory(): string {
+  try {
+    return userInfo({ encoding: "utf8" }).homedir;
+  } catch {
+    return fail("the operating system account home directory is unavailable");
+  }
 }
 
 export async function exportApplePhotosContactEvidence(
@@ -772,7 +920,9 @@ export async function exportApplePhotosContactEvidence(
   const currentUid = process.getuid?.();
   if (currentUid === undefined) return fail("the current file owner cannot be established");
   const uid = BigInt(currentUid);
-  const startedAt = (request.dependencies?.now ?? (() => new Date()))().toISOString();
+  const now = request.dependencies?.now ?? (() => new Date());
+  const startedAt = now().toISOString();
+  reportProgress(request, { phase: "source-admission" });
   const home = await checkedHomeDirectory(request, uid);
   const library = normalizedAbsolutePath(
     request.library ?? join(home, "Pictures", "Photos Library.photoslibrary"),
@@ -781,12 +931,21 @@ export async function exportApplePhotosContactEvidence(
   if (!library.endsWith(".photoslibrary")) {
     return fail("the Photos library must have the .photoslibrary suffix");
   }
-  await exactRealDirectory(library, "the Photos library", uid);
+  const libraryIdentity = await exactRealDirectory(
+    library,
+    "the Photos library",
+    uid,
+  );
   const databaseDirectory = join(library, "database");
-  await exactRealDirectory(databaseDirectory, "the Photos database directory", uid);
+  const databaseDirectoryIdentity = await exactRealDirectory(
+    databaseDirectory,
+    "the Photos database directory",
+    uid,
+  );
   if (!join(databaseDirectory, "Photos.sqlite").startsWith(`${library}${sep}`)) {
     return fail("the Photos database escaped the selected library");
   }
+  reportProgress(request, { phase: "contacts-discovery" });
   const contacts = await discoverContactDatabases(home, uid);
   const explicitTemporary = request.dependencies?.temporaryDirectory;
   const selectedTemporary = normalizedAbsolutePath(
@@ -800,11 +959,48 @@ export async function exportApplePhotosContactEvidence(
         "the physical temporary directory",
       )
     : selectedTemporary;
-  await exactRealDirectory(temporaryBase, "the temporary directory", uid);
-  const snapshotRoot = await mkdtemp(join(temporaryBase, "wrench-apple-photos-"));
+  await exactPrivateDirectory(
+    temporaryBase,
+    "the temporary directory",
+    uid,
+  );
+  const snapshotRootPath = await mkdtemp(join(temporaryBase, "wrench-apple-photos-"));
+  const snapshotParentIdentity = await exactPrivateDirectory(
+    temporaryBase,
+    "the temporary directory",
+    uid,
+  );
+  const snapshotRoot: SnapshotDirectory = Object.freeze({
+    path: snapshotRootPath,
+    parentPath: temporaryBase,
+    identity: await exactPrivateDirectory(
+      snapshotRootPath,
+      "the private snapshot root",
+      uid,
+    ),
+    parentIdentity: snapshotParentIdentity,
+  });
+  let snapshotLease: BeeperMessageLikeMeDirectoryLease | undefined;
   try {
-    await chmod(snapshotRoot, 0o700);
-    const photosSnapshot = await snapshotSqliteDatabase(
+    await assertSnapshotDirectory(snapshotRoot, uid);
+    if (request.stateEnvironment !== undefined) {
+      const createdAtMs = Date.now();
+      snapshotLease = await createBeeperMessageLikeMeDirectoryLease({
+        role: "raw-working",
+        path: snapshotRoot.path,
+        recoverAfterMs: createdAtMs,
+        nowMs: createdAtMs,
+        environment: request.stateEnvironment,
+      });
+      updateBeeperMessageLikeMeDirectoryLease(snapshotLease, "launching");
+      updateBeeperMessageLikeMeDirectoryLease(
+        snapshotLease,
+        "running",
+        process.pid,
+      );
+    }
+    reportProgress(request, { phase: "photos-capture" });
+    const photosSnapshot = await captureSqliteDatabase(
       join(library, PHOTOS_DATABASE_RELATIVE_PATH),
       snapshotRoot,
       "photos.sqlite",
@@ -812,11 +1008,17 @@ export async function exportApplePhotosContactEvidence(
       uid,
       "photos",
       request.signal,
-      request.dependencies?.afterSnapshotFilesCopied,
+      request.dependencies?.afterDatabaseCaptured,
+      now,
     );
     const contactSnapshots: SnapshotDatabase[] = [];
     for (const [index, source] of contacts.entries()) {
-      contactSnapshots.push(await snapshotSqliteDatabase(
+      reportProgress(request, {
+        phase: "contacts-capture",
+        current: index + 1,
+        total: contacts.length,
+      });
+      contactSnapshots.push(await captureSqliteDatabase(
         source,
         snapshotRoot,
         `contacts-${String(index).padStart(2, "0")}.sqlite`,
@@ -824,19 +1026,59 @@ export async function exportApplePhotosContactEvidence(
         uid,
         "contacts",
         request.signal,
-        request.dependencies?.afterSnapshotFilesCopied,
+        request.dependencies?.afterDatabaseCaptured,
+        now,
       ));
     }
     abortIfRequested(request.signal);
-    const contactIds = loadContactIds(contactSnapshots);
-    const evidence = queryPhotosEvidence(photosSnapshot, contactIds);
+    await assertSnapshotDirectory(snapshotRoot, uid);
+    await assertBoundDirectory(
+      library,
+      libraryIdentity,
+      "the Photos library",
+      uid,
+      false,
+    );
+    await assertBoundDirectory(
+      databaseDirectory,
+      databaseDirectoryIdentity,
+      "the Photos database directory",
+      uid,
+      false,
+    );
+    reportProgress(request, { phase: "evidence-validation" });
+    const contactIds = loadContactIds(contactSnapshots, snapshotRoot, uid);
+    const evidence = queryPhotosEvidence(
+      photosSnapshot,
+      contactIds,
+      snapshotRoot,
+      uid,
+    );
+    reportProgress(request, { phase: "generation-hashing" });
     const generationSha256 = await hashSnapshotDatabases(
       photosSnapshot,
       contactSnapshots,
+      snapshotRoot,
+      uid,
       request.signal,
     );
-    const observedAt = (request.dependencies?.now ?? (() => new Date()))().toISOString();
-    const finishedAt = (request.dependencies?.now ?? (() => new Date()))().toISOString();
+    await assertBoundDirectory(
+      library,
+      libraryIdentity,
+      "the Photos library",
+      uid,
+      false,
+    );
+    await assertBoundDirectory(
+      databaseDirectory,
+      databaseDirectoryIdentity,
+      "the Photos database directory",
+      uid,
+      false,
+    );
+    const observedAt = now().toISOString();
+    const captureFinishedAt = now().toISOString();
+    const finishedAt = now().toISOString();
     return createApplePhotosContactEvidenceExportResult({
       ...(request.dependencies?.runId === undefined
         ? {}
@@ -845,9 +1087,19 @@ export async function exportApplePhotosContactEvidence(
       finishedAt,
       observedAt,
       contactsDatabases: contactSnapshots.length,
+      libraryRealmSha256: libraryRealmSha256(libraryIdentity),
       generationSha256,
       photosSchemaSha256: APPLE_PHOTOS_SCHEMA_SHA256,
       contactsSchemaSha256: APPLE_CONTACTS_SCHEMA_SHA256,
+      capture: Object.freeze({
+        startedAt,
+        finishedAt: captureFinishedAt,
+        photos: photosSnapshot.capture,
+        contacts: Object.freeze(contactSnapshots.map((snapshot, ordinal) =>
+          Object.freeze({ ordinal, ...snapshot.capture }))),
+        consistency: "independent-read-transactions" as const,
+        crossDatabaseAtomicity: "not-asserted" as const,
+      }),
       evidence,
     });
   } catch (error) {
@@ -857,6 +1109,23 @@ export async function exportApplePhotosContactEvidence(
     ) throw error;
     throw new Error("Apple Photos local source: private local operation failed");
   } finally {
-    await rm(snapshotRoot, { recursive: true, force: true });
+    let removed = false;
+    try {
+      reportProgress(request, { phase: "cleanup" });
+      await assertSnapshotDirectory(snapshotRoot, uid);
+      removed = removePrivateDirectoryTree(snapshotRoot.path, {
+        device: snapshotRoot.identity.dev.toString(),
+        inode: snapshotRoot.identity.ino.toString(),
+        birthtimeNs: snapshotRoot.identity.birthtimeNs.toString(),
+      });
+      if (!removed) return fail("the private snapshot root could not be removed exactly");
+    } catch {
+      return fail("the private snapshot root changed before exact cleanup");
+    } finally {
+      if (removed && snapshotLease !== undefined) {
+        updateBeeperMessageLikeMeDirectoryLease(snapshotLease, "settled");
+        releaseBeeperMessageLikeMeDirectoryLease(snapshotLease);
+      }
+    }
   }
 }
