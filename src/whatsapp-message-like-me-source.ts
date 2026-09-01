@@ -471,12 +471,14 @@ async function* runMessageExportSession(
         this.#finalSelfChatsExcluded = frame.selfChatsExcluded;
         this.#finalNonConversationChatsExcluded = frame.nonConversationChatsExcluded;
         this.#terminal = response.localInsertPageComplete;
-        this.#request = parseWhatsAppMessageExportProjectionRequest({
-          ...this.#request,
-          cursor: response.checkpoint.cursor,
-          cursorAnchor: response.checkpoint.anchor,
-          expectedGeneration: response.projectionGeneration,
-        });
+        if (!response.localInsertPageComplete) {
+          this.#request = parseWhatsAppMessageExportProjectionRequest({
+            ...this.#request,
+            cursor: response.checkpoint.cursor,
+            cursorAnchor: response.checkpoint.anchor,
+            expectedGeneration: response.projectionGeneration,
+          });
+        }
         checkDeadline();
         return Object.freeze({ response, selfChatsExcluded: frame.selfChatsExcluded });
       }

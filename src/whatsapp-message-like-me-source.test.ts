@@ -220,6 +220,27 @@ function sealedSessionDependencies(
   };
 }
 
+function sessionFrame(
+  frames: readonly unknown[],
+  index: number,
+): Readonly<Record<string, unknown>> {
+  const value = frames[index];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("test session frame was not an object");
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function replaceSessionSeal(
+  frames: readonly unknown[],
+  values: Readonly<Record<string, unknown>>,
+): readonly unknown[] {
+  return Object.freeze([
+    ...frames.slice(0, -1),
+    Object.freeze({ ...sessionFrame(frames, frames.length - 1), ...values }),
+  ]);
+}
+
 async function collect(
   path: string,
   messages: readonly WhatsAppMessageExportProjectionItem[],
@@ -255,6 +276,40 @@ describe("WhatsApp Message Like Me source mapping", () => {
         .toBeTrue();
       expect(await source.completion()).toMatchObject({
         completeness: { kind: "bounded-local" },
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("completes an empty sealed store with only the account and self participant", async () => {
+    const path = privateStore();
+    try {
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path),
+        dependencies: sealedSessionDependencies(path, (frames) => {
+          const page = sessionFrame(frames, 0);
+          return sealedPages([Object.freeze({
+            ...page,
+            messages: Object.freeze([]),
+            checkpoint: Object.freeze({ cursor: "0", anchor: null }),
+          })]);
+        }),
+      });
+      const records: unknown[] = [];
+      for await (const record of source.records) records.push(record);
+      expect(records).toEqual([
+        expect.objectContaining({ kind: "account" }),
+        expect.objectContaining({ kind: "participant", isSelf: true }),
+      ]);
+      expect(await source.completion()).toEqual({
+        completeness: {
+          kind: "bounded-local",
+          reason: "local-store-coverage-unknown",
+          observedFrom: null,
+          observedThrough: null,
+        },
+        warnings: ["remote-history-incomplete"],
       });
     } finally {
       rmSync(path, { recursive: true, force: true });
@@ -322,6 +377,153 @@ describe("WhatsApp Message Like Me source mapping", () => {
       rmSync(path, { recursive: true, force: true });
     }
   });
+
+  const sealedSessionCorruptions = [
+    {
+      name: "page index drift",
+      transform: (frames: readonly unknown[]) => sealedPages([
+        Object.freeze({ ...sessionFrame(frames, 0), index: 2 }),
+      ]),
+    },
+    {
+      name: "seed generation outside the bound store",
+      transform: (frames: readonly unknown[]) => {
+        const page = sessionFrame(frames, 0);
+        const generation = sessionFrame([page.projectionGeneration], 0);
+        const identity = sessionFrame([generation.messageStoreIdentity], 0);
+        return sealedPages([Object.freeze({
+          ...page,
+          projectionGeneration: Object.freeze({
+            ...generation,
+            messageStoreIdentity: Object.freeze({ ...identity, ino: "999999" }),
+          }),
+        })]);
+      },
+    },
+    {
+      name: "generation drift between pages",
+      transform: (frames: readonly unknown[]) => {
+        const base = sessionFrame(frames, 0);
+        const generation = sessionFrame([base.projectionGeneration], 0);
+        return sealedPages([
+          Object.freeze({
+            ...base,
+            messages: sessionMessages(1, 500),
+            checkpoint: Object.freeze({ cursor: "500", anchor: "a".repeat(64) }),
+            terminal: false,
+          }),
+          Object.freeze({
+            ...base,
+            index: 2,
+            projectionGeneration: Object.freeze({ ...generation, mtimeNs: "999999" }),
+            messages: sessionMessages(501, 1),
+            checkpoint: Object.freeze({ cursor: "501", anchor: "b".repeat(64) }),
+            terminal: true,
+          }),
+        ]);
+      },
+    },
+    {
+      name: "page checkpoint cursor drift",
+      transform: (frames: readonly unknown[]) => sealedPages([
+        Object.freeze({
+          ...sessionFrame(frames, 0),
+          checkpoint: Object.freeze({ cursor: "2", anchor: "a".repeat(64) }),
+        }),
+      ]),
+    },
+    {
+      name: "seal before a terminal page",
+      transform: (frames: readonly unknown[]) => sealedPages([
+        Object.freeze({
+          ...sessionFrame(frames, 0),
+          messages: sessionMessages(1, 500),
+          checkpoint: Object.freeze({ cursor: "500", anchor: "a".repeat(64) }),
+          terminal: false,
+        }),
+      ]),
+    },
+    {
+      name: "seal page count drift",
+      transform: (frames: readonly unknown[]) => replaceSessionSeal(frames, { pages: 2 }),
+    },
+    {
+      name: "seal message count drift",
+      transform: (frames: readonly unknown[]) => replaceSessionSeal(frames, { messages: 2 }),
+    },
+    {
+      name: "seal checkpoint cursor drift",
+      transform: (frames: readonly unknown[]) => replaceSessionSeal(frames, {
+        checkpoint: Object.freeze({ cursor: "2", anchor: "a".repeat(64) }),
+      }),
+    },
+    {
+      name: "seal checkpoint anchor drift",
+      transform: (frames: readonly unknown[]) => replaceSessionSeal(frames, {
+        checkpoint: Object.freeze({ cursor: "1", anchor: "b".repeat(64) }),
+      }),
+    },
+    {
+      name: "seal generation drift",
+      transform: (frames: readonly unknown[]) => {
+        const seal = sessionFrame(frames, frames.length - 1);
+        const generation = sessionFrame([seal.projectionGeneration], 0);
+        return replaceSessionSeal(frames, {
+          projectionGeneration: Object.freeze({ ...generation, size: "999999" }),
+        });
+      },
+    },
+    {
+      name: "seal owner-alias drift",
+      transform: (frames: readonly unknown[]) => replaceSessionSeal(frames, {
+        selfJids: Object.freeze(["14445556666@s.whatsapp.net"]),
+      }),
+    },
+    {
+      name: "seal self-chat proof drift",
+      transform: (frames: readonly unknown[]) => replaceSessionSeal(frames, {
+        selfChatsExcluded: "present-excluded",
+      }),
+    },
+    {
+      name: "seal integrity-check count drift",
+      transform: (frames: readonly unknown[]) => replaceSessionSeal(frames, {
+        integrityChecks: 0,
+      }),
+    },
+    {
+      name: "seal rolling frame hash drift",
+      transform: (frames: readonly unknown[]) => replaceSessionSeal(frames, {
+        framesSha256: "0".repeat(64),
+      }),
+    },
+    {
+      name: "failure followed by another frame",
+      transform: (frames: readonly unknown[]) => Object.freeze([
+        Object.freeze({ kind: "failed", errorCode: "database-invalid" }),
+        sessionFrame(frames, 0),
+      ]),
+    },
+  ] as const;
+
+  for (const scenario of sealedSessionCorruptions) {
+    test(`rejects sealed-session ${scenario.name}`, async () => {
+      const path = privateStore();
+      try {
+        const source = createWhatsAppMessageLikeMeSource({
+          auth: auth(path),
+          dependencies: sealedSessionDependencies(path, scenario.transform),
+        });
+        const observed: unknown[] = [];
+        await expect((async () => {
+          for await (const record of source.records) observed.push(record);
+        })()).rejects.toThrow();
+        expect(observed).toHaveLength(1);
+      } finally {
+        rmSync(path, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("rejects alias drift in the sealed stdout protocol", async () => {
     const path = privateStore();

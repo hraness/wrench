@@ -36,6 +36,7 @@ import {
   WhatsAppContactProjectionCleanupUnverifiedError,
   containsWhatsAppContactProjectionCleanupUnverified,
   executeWhatsAppWebOperation,
+  inspectWhatsAppProtocolRuntime,
   pairWhatsAppAuth,
   planWhatsAppPairing,
   planWhatsAppReadCommand,
@@ -315,6 +316,24 @@ async function waitForProcessExit(pid: number): Promise<void> {
 }
 
 describe("WhatsApp linked-device auth storage", () => {
+  test("reports offline runtime checks separately from installer notarization", async () => {
+    const stateHome = mkdtempSync(join(tmpdir(), "wrench-whatsapp-runtime-status-"));
+    try {
+      const status = await inspectWhatsAppProtocolRuntime({
+        WRENCH_STATE_HOME: stateHome,
+      });
+      expect(status.ready).toBe(false);
+      expect(status.integrity).toBe(
+        "official-release+sha256+offline-code-signature",
+      );
+      expect(status.signature).not.toHaveProperty("notarized");
+      expect(JSON.stringify(status)).not.toContain("notarized");
+      expect(status.setupCommand).toContain("install-whatsapp-protocol.sh");
+    } finally {
+      rmSync(stateHome, { force: true, recursive: true });
+    }
+  });
+
   test("creates and parses a realm that is distinct from browser cookies", () => {
     const path = privateDirectory();
     try {
@@ -1453,6 +1472,37 @@ describe("WhatsApp zero-network read plans", () => {
         maxStderrBytes: 1024,
       })).rejects.toThrow("timed out");
       expect(performance.now() - started).toBeLessThan(3_000);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("retains cleanup uncertainty when helper launch cannot be proved absent", async () => {
+    const path = privateDirectory();
+    const prefix = "wrench-whatsapp-stdout-";
+    const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)));
+    let rejection: unknown;
+    try {
+      try {
+        await runWhatsAppMessageExportSessionHelperChild({
+          command: [],
+          cwd: path,
+          environment: { PATH: "/usr/bin:/bin" },
+          stdin: "{}\n",
+          timeoutMs: 1_000,
+          maxOutputBytes: 1_024,
+          maxStderrBytes: 1_024,
+        });
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(WhatsAppContactProjectionCleanupUnverifiedError);
+      expect((rejection as Error).message).toBe(
+        "WhatsApp contact projection helper cleanup could not be verified",
+      );
+      expect(
+        readdirSync(tmpdir()).filter((name) => name.startsWith(prefix) && !before.has(name)),
+      ).toEqual([]);
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

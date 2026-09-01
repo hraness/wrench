@@ -824,17 +824,30 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
     try {
       const database = new Database(join(path, "wacli.db"), { strict: true });
       try {
-        database.query("INSERT INTO chats(jid, kind) VALUES (?1, ?2)")
-          .run("unsupported@example.invalid", "dm");
-        database.query(`
-          INSERT INTO messages(chat_jid,msg_id,sender_jid,ts,from_me,text)
-          VALUES (?1,?2,NULL,?3,0,?4)
-        `).run(
-          "unsupported@example.invalid",
-          "UNSUPPORTED-1",
-          1_776_513_603,
-          "private unsupported body",
-        );
+        const unsupported = [
+          ["unsupported@example.invalid", "dm"],
+          ["00000@s.whatsapp.net", "dm"],
+          ["1234567890123456@s.whatsapp.net", "dm"],
+          ["14445556666:3@s.whatsapp.net", "dm"],
+          ["00000@lid", "dm"],
+          ["123456789012345678901@lid", "dm"],
+          ["999999999999999:2@lid", "dm"],
+          ["00000@g.us", "group"],
+          ["12345-0@g.us", "group"],
+        ] as const;
+        for (const [index, [jid, kind]] of unsupported.entries()) {
+          database.query("INSERT INTO chats(jid, kind) VALUES (?1, ?2)")
+            .run(jid, kind);
+          database.query(`
+            INSERT INTO messages(chat_jid,msg_id,sender_jid,ts,from_me,text)
+            VALUES (?1,?2,NULL,?3,0,?4)
+          `).run(
+            jid,
+            `UNSUPPORTED-${String(index + 1)}`,
+            1_776_513_603,
+            `private unsupported body ${String(index + 1)}`,
+          );
+        }
       } finally {
         database.close();
       }
@@ -850,9 +863,19 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
         ],
       });
       const encoded = JSON.stringify(projected);
-      expect(encoded).not.toContain("unsupported@example.invalid");
-      expect(encoded).not.toContain("UNSUPPORTED-1");
-      expect(encoded).not.toContain("private unsupported body");
+      for (const privateValue of [
+        "unsupported@example.invalid",
+        "00000@s.whatsapp.net",
+        "1234567890123456@s.whatsapp.net",
+        "14445556666:3@s.whatsapp.net",
+        "00000@lid",
+        "123456789012345678901@lid",
+        "999999999999999:2@lid",
+        "00000@g.us",
+        "12345-0@g.us",
+        "UNSUPPORTED-",
+        "private unsupported body",
+      ]) expect(encoded).not.toContain(privateValue);
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -8,12 +9,14 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { WrenchAuth } from "./auth";
+import { canonicalJson } from "./canonical-json";
 import {
   acquireBeeperMessageLikeMeExportAdmission,
   createBeeperMessageLikeMeDirectoryLease,
@@ -23,6 +26,7 @@ import {
 } from "./beeper-message-like-me-recovery";
 import { exportWhatsAppMessageLikeMeFromAuth } from "./whatsapp-message-like-me-cli";
 import { WhatsAppContactProjectionCleanupUnverifiedError } from "./providers/whatsapp-web-runtime";
+import { WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT } from "./providers/whatsapp-message-export-projection-protocol";
 
 const temporaryRoots: string[] = [];
 
@@ -79,6 +83,83 @@ describe("WhatsApp Message Like Me CLI recovery preflight", () => {
 
     const recovery = await recoverBeeperMessageLikeMeDirectoryLeases({ environment });
     expect(recovery).toMatchObject({ active: 0, indeterminate: 0 });
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({ environment }))
+      .toThrow("another export is active");
+  });
+
+  test("discards a valid seal and retains admission when launch cleanup stays unproved", async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), "wrench-whatsapp-cli-launch-uncertain-test-")),
+    );
+    temporaryRoots.push(root);
+    chmodSync(root, 0o700);
+    const store = join(root, "store");
+    mkdirSync(store, { mode: 0o700 });
+    for (const name of ["session.db", "wacli.db"]) {
+      writeFileSync(join(store, name), "fixed");
+      chmodSync(join(store, name), 0o600);
+    }
+    const outputRoot = join(root, "bundle");
+    const environment = { WRENCH_STATE_HOME: join(root, "state") };
+
+    await expect(exportWhatsAppMessageLikeMeFromAuth({
+      auth: boundAuth(store),
+      outputRoot,
+      environment,
+      sourceDependencies: {
+        helperPath: "/private/fixed/helper.ts",
+        configPath: "/private/fixed/config.toml",
+        runSessionHelper: async (invocation) => {
+          const wrapper = JSON.parse(invocation.stdin) as {
+            readonly request: {
+              readonly messageStoreIdentity: { readonly dev: string; readonly ino: string };
+            };
+          };
+          const stats = lstatSync(join(store, "wacli.db"), { bigint: true });
+          const projectionGeneration = Object.freeze({
+            messageStoreIdentity: wrapper.request.messageStoreIdentity,
+            size: stats.size.toString(),
+            mtimeNs: stats.mtimeNs.toString(),
+            ctimeNs: stats.ctimeNs.toString(),
+            schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+          });
+          const checkpoint = Object.freeze({ cursor: "0", anchor: null });
+          const page = Object.freeze({
+            kind: "page",
+            index: 1,
+            projectionGeneration,
+            selfJids: Object.freeze(["15551234567@s.whatsapp.net"]),
+            selfChatsExcluded: "none-detected",
+            nonConversationChatsExcluded: false,
+            messages: Object.freeze([]),
+            checkpoint,
+            terminal: true,
+          });
+          const pageCanonical = canonicalJson(page);
+          const seal = Object.freeze({
+            kind: "seal",
+            pages: 1,
+            messages: 0,
+            checkpoint,
+            projectionGeneration,
+            selfJids: page.selfJids,
+            selfChatsExcluded: page.selfChatsExcluded,
+            integrityChecks: 1,
+            framesSha256: createHash("sha256").update(pageCanonical).update("\n").digest("hex"),
+          });
+          for (const [index, value] of [page, seal].entries()) {
+            invocation.onCanonicalFrame?.(Object.freeze({
+              index: index + 1,
+              canonical: canonicalJson(value),
+              value,
+            }));
+          }
+          throw new WhatsAppContactProjectionCleanupUnverifiedError();
+        },
+      },
+    })).rejects.toBeInstanceOf(WhatsAppContactProjectionCleanupUnverifiedError);
+
+    expect(existsSync(outputRoot)).toBeFalse();
     expect(() => acquireBeeperMessageLikeMeExportAdmission({ environment }))
       .toThrow("another export is active");
   });

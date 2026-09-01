@@ -821,15 +821,57 @@ function messageExportAnchor(item: WhatsAppMessageExportProjectionItem): string 
   return createHash("sha256").update(JSON.stringify(item)).digest("hex");
 }
 
+function numericSqlExpression(
+  value: string,
+  minimumLength: number,
+  maximumLength: number,
+): string {
+  return `(
+    length(${value}) BETWEEN ${String(minimumLength)} AND ${String(maximumLength)}
+    AND substr(${value}, 1, 1) GLOB '[1-9]'
+    AND ${value} NOT GLOB '*[^0-9]*'
+  )`;
+}
+
+const MESSAGE_EXPORT_PN_BODY = "substr(m.chat_jid, 1, length(m.chat_jid) - 15)";
+const MESSAGE_EXPORT_LID_BODY = "substr(m.chat_jid, 1, length(m.chat_jid) - 4)";
+const MESSAGE_EXPORT_GROUP_BODY = "substr(m.chat_jid, 1, length(m.chat_jid) - 5)";
+const MESSAGE_EXPORT_GROUP_SEPARATOR = `instr(${MESSAGE_EXPORT_GROUP_BODY}, '-')`;
+const MESSAGE_EXPORT_GROUP_LEFT =
+  `substr(${MESSAGE_EXPORT_GROUP_BODY}, 1, ${MESSAGE_EXPORT_GROUP_SEPARATOR} - 1)`;
+const MESSAGE_EXPORT_GROUP_RIGHT =
+  `substr(${MESSAGE_EXPORT_GROUP_BODY}, ${MESSAGE_EXPORT_GROUP_SEPARATOR} + 1)`;
+
 const MESSAGE_EXPORT_FILTER = `
-  c.kind IN ('dm', 'group')
-  AND m.chat_jid <> '0@s.whatsapp.net'
-  AND m.chat_jid NOT LIKE '%@broadcast'
-  AND m.chat_jid NOT LIKE '%@newsletter'
-  AND (
-    m.chat_jid LIKE '%@s.whatsapp.net'
-    OR m.chat_jid LIKE '%@lid'
-    OR m.chat_jid LIKE '%@g.us'
+  (
+    (
+      c.kind = 'dm'
+      AND (
+        (
+          substr(m.chat_jid, -15) = '@s.whatsapp.net'
+          AND ${numericSqlExpression(MESSAGE_EXPORT_PN_BODY, 5, 15)}
+        )
+        OR (
+          substr(m.chat_jid, -4) = '@lid'
+          AND ${numericSqlExpression(MESSAGE_EXPORT_LID_BODY, 5, 20)}
+        )
+      )
+    )
+    OR (
+      c.kind = 'group'
+      AND substr(m.chat_jid, -5) = '@g.us'
+      AND (
+        (
+          ${MESSAGE_EXPORT_GROUP_SEPARATOR} = 0
+          AND ${numericSqlExpression(MESSAGE_EXPORT_GROUP_BODY, 5, 20)}
+        )
+        OR (
+          ${MESSAGE_EXPORT_GROUP_SEPARATOR} BETWEEN 6 AND 21
+          AND ${numericSqlExpression(MESSAGE_EXPORT_GROUP_LEFT, 5, 20)}
+          AND ${numericSqlExpression(MESSAGE_EXPORT_GROUP_RIGHT, 1, 20)}
+        )
+      )
+    )
   )
 `;
 

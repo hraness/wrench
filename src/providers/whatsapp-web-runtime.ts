@@ -574,13 +574,13 @@ export type WhatsAppProtocolRuntimeStatus = {
   readonly ready: boolean;
   readonly implementation: typeof WHATSAPP_PROTOCOL_PIN.implementation;
   readonly version: typeof WHATSAPP_PROTOCOL_PIN.version;
-  readonly integrity: "official-release+sha256+developer-id+notarization";
+  readonly integrity: "official-release+sha256+offline-code-signature";
   readonly transport: typeof WHATSAPP_PROTOCOL_PIN.transport;
   readonly archiveSha256:
     typeof WHATSAPP_PROTOCOL_PIN.darwinArm64ArchiveSha256;
   readonly binarySha256:
     typeof WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256;
-  readonly signature: typeof WHATSAPP_PROTOCOL_PIN.signature;
+  readonly signature: Omit<typeof WHATSAPP_PROTOCOL_PIN.signature, "notarized">;
   readonly qualification: "read-only-runtime";
   readonly setupCommand: string;
 };
@@ -607,11 +607,19 @@ export async function inspectWhatsAppProtocolRuntime(
     ready,
     implementation: WHATSAPP_PROTOCOL_PIN.implementation,
     version: WHATSAPP_PROTOCOL_PIN.version,
-    integrity: "official-release+sha256+developer-id+notarization",
+    integrity: "official-release+sha256+offline-code-signature",
     transport: WHATSAPP_PROTOCOL_PIN.transport,
     archiveSha256: WHATSAPP_PROTOCOL_PIN.darwinArm64ArchiveSha256,
     binarySha256: WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256,
-    signature: WHATSAPP_PROTOCOL_PIN.signature,
+    signature: Object.freeze({
+      authority: WHATSAPP_PROTOCOL_PIN.signature.authority,
+      identifier: WHATSAPP_PROTOCOL_PIN.signature.identifier,
+      teamIdentifier: WHATSAPP_PROTOCOL_PIN.signature.teamIdentifier,
+      designatedRequirement: WHATSAPP_PROTOCOL_PIN.signature.designatedRequirement,
+      cdHash: WHATSAPP_PROTOCOL_PIN.signature.cdHash,
+      cdHashFull: WHATSAPP_PROTOCOL_PIN.signature.cdHashFull,
+      hardenedRuntime: WHATSAPP_PROTOCOL_PIN.signature.hardenedRuntime,
+    }),
     qualification: "read-only-runtime",
     setupCommand: `/bin/sh ${shellQuote(installer)}`,
   });
@@ -1993,18 +2001,19 @@ export async function runWhatsAppMessageExportSessionHelperChild(
       stderr: "pipe",
       detached: process.platform !== "win32",
     });
-  } catch (error) {
+  } catch {
+    const launchUncertainty = new WhatsAppContactProjectionCleanupUnverifiedError();
     try {
       await spool.publicSpool.close();
     } catch (cleanupError) {
       runnerDeadline.dispose();
       throw new AggregateError(
-        [error, cleanupError],
+        [launchUncertainty, cleanupError],
         "WhatsApp projection session spawn and spool cleanup both failed",
       );
     }
     runnerDeadline.dispose();
-    throw new Error("WhatsApp projection session helper could not start");
+    throw launchUncertainty;
   }
 
   let childExited = false;
