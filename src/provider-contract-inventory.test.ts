@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const predecessorDefaultInventorySha256 =
-  "3bcfdeeac4f7878f17a62dfd79fa01ce42f81302372c4f72c87ac8275c1260ee";
+  "e4f04d2a873aa6b3a70db673f30d8d87955f0df63a9075e5866bd85067d9c4c8";
 const predecessorLegacyInventorySha256 = [
   "5be8b3ff9da1e8100f838a44ababc00b77692a65701f8a138d1d83754c232f75",
   "92cae606544b38bed97795688970386f1ea2bbd7cc2c8cd6e1d159c3b27f4c83",
@@ -13,8 +13,8 @@ const predecessorLegacyInventorySha256 = [
   "76f16b52415d7c6d4b6b20b61bcd36240db25c790ceb2b42faa8fd5cdaef1cbb",
   "3d24e682510065c5212a6548d3da1ee5c1f5b44d35da20abdc3ab5f9c99127c2",
   "8054163089bf9f02751394f72d8dbd1e53ec11f96f0f4dc3b7013bc26386eee9",
-  "41b510ec6a1c2e19b71b01e6d01d0fbdcd85a8e2358d0a95fc38987faff7285d",
-  "01fc1d11547aa46aaa95966a66df8410956f2ac68c27980562c35af5edc4f3db",
+  "808156a720dc6e5055f9eeb37a65fb157e68c20aac668ac684b54e294cfedf63",
+  "bcfdd3087c9732ce1f4011117186a6dbc3c7d185db66093e3f584aa884141819",
   "72a2269c3780a6a5171dbc4ee09823e7ddbdd212cb5d4e0f221d47373ab7f3c4",
   "954015a0e5c00dfa8dd51972fec2aa0dd884cf1346d74dcc9abe4b69d8bfd88b",
   "572edee59ca1acae13d68bd545dc14dcf1ee7d5819fa1e5e340f8d35ec1ea0a1",
@@ -275,7 +275,7 @@ describe("durable provider contract inventory", () => {
           322,
           322,
           290,
-          280,
+          290,
           252,
           226,
           185,
