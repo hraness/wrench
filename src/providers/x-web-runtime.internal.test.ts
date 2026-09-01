@@ -31,6 +31,8 @@ import {
 const MAIN_URL = "https://abs.twimg.com/responsive-web/client-web/main.abcdef12.js";
 const VIEWER_QUERY_ID = "5XShkXk2oO2J7SYmTu6pvw";
 const BOOKMARKS_QUERY_ID = "iblrFnKr6PZUR-dWpfXG6g";
+const USER_TWEETS_QUERY_ID = "SXVCYB8XHSS25nzIljNtZA";
+const SEARCH_TIMELINE_QUERY_ID = "hyPfJYJ_XAtDYoslQc-Rgg";
 const ARTICLE_QUERY_ID = "btD9FyMDa3_vydVp7fr87Q";
 const ARTICLE_BUNDLE_URL = "https://abs.twimg.com/responsive-web/client-web/bundle.TwitterArticles.305538ca.js";
 const ARTICLE_RESULT_QUERY_ID = "rPdndX2XxQoXIMUafLSSJQ";
@@ -236,6 +238,18 @@ function userFeedResponse(userId: string, ...entries: readonly unknown[]): unkno
         result: {
           rest_id: userId,
           timeline: { timeline: timeline(...entries) },
+        },
+      },
+    },
+  };
+}
+
+function searchFeedResponse(...entries: readonly unknown[]): unknown {
+  return {
+    data: {
+      search_by_raw_query: {
+        search_timeline: {
+          timeline: timeline(...entries),
         },
       },
     },
@@ -1013,7 +1027,7 @@ describe("X authenticated internal-API runtime", () => {
         if (request.url.href === MAIN_URL) {
           return new Response(mainBundle(
             descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-            descriptor("UserTweets", "6r5OLCC_wFH4CpRyXKuAmQ", "query"),
+            descriptor("UserTweets", USER_TWEETS_QUERY_ID, "query"),
           ), { headers: { "content-type": "application/javascript" } });
         }
         if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -1099,7 +1113,7 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.href === MAIN_URL) {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-          descriptor("UserTweets", "6r5OLCC_wFH4CpRyXKuAmQ", "query"),
+          descriptor("UserTweets", USER_TWEETS_QUERY_ID, "query"),
         ), { headers: { "content-type": "application/javascript" } });
       }
       if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -1133,7 +1147,7 @@ describe("X authenticated internal-API runtime", () => {
       if (request.url.href === MAIN_URL) {
         return new Response(mainBundle(
           descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
-          descriptor("UserTweets", "6r5OLCC_wFH4CpRyXKuAmQ", "query"),
+          descriptor("UserTweets", USER_TWEETS_QUERY_ID, "query"),
         ), { headers: { "content-type": "application/javascript" } });
       }
       if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
@@ -1151,6 +1165,172 @@ describe("X authenticated internal-API runtime", () => {
     ));
     expect(message).toContain("more entries than the requested limit");
     expect(message).toContain("no continuation cursor was exposed");
+  });
+
+  test("fails closed when the current UserTweets query ID drifted", async () => {
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("UserTweets", "ChangedQueryId_12345", "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      throw new Error(`unexpected UserTweets dispatch ${request.url.href}`);
+    });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "user", user_id: VIEWER_ID, limit: 10 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      dispatchStarted: false,
+      readFailure: { category: "contract-drift" },
+    });
+    expect(result.error).toContain("query-ID drift");
+    expect(result.error).toContain("UserTweets:query");
+    expect(result.error).toContain("reviewed evidence is stale");
+    expect(result.error).not.toContain("ChangedQueryId_12345");
+    expect(result.error).not.toContain("6r5OLCC_wFH4CpRyXKuAmQ");
+  });
+
+  test("dispatches SearchTimeline and pages a search feed with a next cursor", async () => {
+    const calls: CapturedRequest[] = [];
+    const runtimeDependencies = dependencies(calls, (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("SearchTimeline", SEARCH_TIMELINE_QUERY_ID, "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      if (request.url.pathname.endsWith("/SearchTimeline")) {
+        expect(JSON.parse(request.url.searchParams.get("variables") ?? "null")).toMatchObject({
+          rawQuery: "from:CathPoaster -filter:replies",
+          count: 10,
+          querySource: "typed_query",
+          product: "Latest",
+        });
+        return jsonResponse(searchFeedResponse(
+          tweetEntry(FOCAL_POST_ID, "search hit"),
+          cursorEntry("next-search-page"),
+        ));
+      }
+      throw new Error(`unexpected search request ${request.url.href}`);
+    });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "search", query: "from:CathPoaster -filter:replies", limit: 10 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: { posts: [{ id: FOCAL_POST_ID }], cursor: "next-search-page" },
+    });
+    expect(calls.some((call) => call.url.pathname.endsWith("/SearchTimeline"))).toBe(true);
+  });
+
+  test("never returns a provider end cursor after truncating unseen search entries", async () => {
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("SearchTimeline", SEARCH_TIMELINE_QUERY_ID, "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      return jsonResponse(searchFeedResponse(
+        tweetEntry(FOCAL_POST_ID, "first"),
+        tweetEntry(CREATED_POST_ID, "second"),
+        cursorEntry("would-skip-second-search"),
+      ));
+    });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "search", query: "from:CathPoaster -filter:replies", limit: 1 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toMatchObject({
+      posts: [{ id: FOCAL_POST_ID }],
+      cursor: null,
+    });
+    expect((result.output as { posts: readonly unknown[] }).posts).toHaveLength(1);
+    expect(JSON.stringify(result.output)).not.toContain("would-skip-second-search");
+  });
+
+  test("rejects an oversized search page that exposes no continuation cursor", async () => {
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("SearchTimeline", SEARCH_TIMELINE_QUERY_ID, "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      return jsonResponse(searchFeedResponse(
+        tweetEntry(FOCAL_POST_ID, "first"),
+        tweetEntry(CREATED_POST_ID, "second"),
+      ));
+    });
+    const message = await rejectionMessage(executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "search", query: "from:CathPoaster -filter:replies", limit: 1 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    ));
+    expect(message).toContain("more entries than the requested limit");
+    expect(message).toContain("no continuation cursor was exposed");
+  });
+
+  test("fails closed when the current SearchTimeline query ID drifted", async () => {
+    const runtimeDependencies = dependencies([], (request) => {
+      if (request.url.href === "https://x.com/home") {
+        return new Response(homeHtml(), { headers: { "content-type": "text/html" } });
+      }
+      if (request.url.href === MAIN_URL) {
+        return new Response(mainBundle(
+          descriptor("Viewer", "u4ni7JqpqdAQxWQfkLsdUQ", "query"),
+          descriptor("SearchTimeline", "ChangedQueryId_12345", "query"),
+        ), { headers: { "content-type": "application/javascript" } });
+      }
+      if (request.url.pathname.endsWith("/Viewer")) return jsonResponse(viewerResponse());
+      throw new Error(`unexpected SearchTimeline dispatch ${request.url.href}`);
+    });
+    const result = await executeXWebOperation(
+      xRecipe("feeds.read"),
+      { feed: "search", query: "from:CathPoaster -filter:replies", limit: 10 },
+      xAuth,
+      { dependencies: runtimeDependencies },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      dispatchStarted: false,
+      readFailure: { category: "contract-drift" },
+    });
+    expect(result.error).toContain("query-ID drift");
+    expect(result.error).toContain("SearchTimeline:query");
+    expect(result.error).toContain("reviewed evidence is stale");
+    expect(result.error).not.toContain("ChangedQueryId_12345");
+    expect(result.error).not.toContain("hz_94eVAtrtQo_vO3my7Rw");
   });
 
   test("exports a bounded bookmarks page with stable post ids and a next cursor", async () => {
