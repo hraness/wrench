@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+    <title>Omarchy lets any user process escalate to root, and why named web operations still matter</title>
+    <meta name="description" content="The Sunday 30 August 2026 rough.day tech edition ranked Omarchy’s default desktop allowing any user process to escalate to root. A host privilege grant is not a named Wrench operation.">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/omarchy-root-escalation/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="Omarchy lets any user process escalate to root, and why named web operations still matter">
+    <meta property="og:description" content="The Sunday 30 August 2026 rough.day tech edition ranked Omarchy’s default desktop allowing any user process to escalate to root. A host privilege grant is not a named Wrench operation.">
+    <meta property="og:url" content="https://wrench.rip/omarchy-root-escalation/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Omarchy lets any user process escalate to root, and why named web operations still matter">
+    <meta name="twitter:description" content="The Sunday 30 August 2026 rough.day tech edition ranked Omarchy’s default desktop allowing any user process to escalate to root. A host privilege grant is not a named Wrench operation.">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Install</a>
+        <a href="/provider-capabilities/">Providers</a>
+        <a href="https://github.com/hraness/wrench">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li aria-current="page">Desktop root and named operations</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero">
+          <p class="eyebrow">News take · Wrench {{WRENCH_VERSION}}</p>
+          <h1>A root-capable desktop is not a named web operation.</h1>
+          <p class="answer-lede">The Sunday 30 August 2026 <a href="https://rough.day">rough.day</a> tech edition ranked “Omarchy desktop environment allows any user process to escalate to root” as item one. The live source is the 0xcc.io post <a href="https://0xcc.io/posts/omarchy-root-creds/">Omarchy: Any User Process Can Escalate to Root</a>. <a href="https://wrench.rip/">Wrench</a> does not treat that host privilege grant as its job. It names a provider operation a session can call on purpose, attests whether the current contract can run it, and stays on provider capabilities rather than desktop root.</p>
+          <p class="review-note">This news take uses the live 0xcc.io post fetched for this draft, the Sunday 30 August 2026 <a href="https://rough.day">rough.day</a> tech edition, the <a href="https://rough.day/info">rough.day selection notes</a>, and the public {{WRENCH_RELEASE}} pages for the <a href="https://wrench.rip/">Wrench home</a>, <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>, <a href="https://wrench.rip/vms-cannot-contain-agents/">VM-containment argument</a>, <a href="https://wrench.rip/paypal-grapheneos-attestation/">PayPal GrapheneOS device-policy argument</a>, and <a href="https://wrench.rip/rumour-is-the-exploit/">rumour sourced take</a>. Operation counts are the current release attestation, substituted at site build time. This page does not reprint the post or any privilege-escalation procedure.</p>
+        </header>
+
+        <section aria-labelledby="sunday-edition">
+          <h2 id="sunday-edition">Sunday ranked a desktop privilege grant, not a Wrench contract</h2>
+          <p><a href="https://rough.day">rough.day</a> considers reporting from the previous 24 hours, groups related coverage, and publishes up to six stories per category when the day supports that many. Its <a href="https://rough.day/info">selection notes</a> say the tech edition favors demonstrated impact and durable change over product promotion. The Sunday 30 August 2026 tech list placed the Omarchy privilege report at rank one, with 0xcc.io as the source host.</p>
+          <p>The ranked title is the edition’s headline. The live post title is “Omarchy: Any User Process Can Escalate to Root.” This page names both. It does not reprint the edition summary or the post’s reconstruction notes.</p>
+          <p><a href="https://hraness.com">Hraness</a> publishes Wrench and this site. The edition is an independent ranking of a public desktop-security report. It is not a Wrench release note, and a ranked story does not add a provider operation.</p>
+        </section>
+
+        <section aria-labelledby="host-privilege">
+          <h2 id="host-privilege">Session-wide root is a host story, not a named web job</h2>
+          <p>The post says Omarchy’s default desktop left every process in the user session able to obtain host root, without a password, <code>sudo</code>, or a privilege prompt. The author reported the configuration privately. The project later removed that default and published 4.0.1. This page keeps that bound. It does not describe how a process obtained root, and it does not treat the patched default as a Wrench capability.</p>
+          <p>The object under test is the desktop session. A Linux environment that grants host root to ordinary user processes is making a local privilege decision. That is a different object from the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>, which names operations a session can call on purpose.</p>
+          <p>Wrench’s product is the outbound contract, not the workstation’s root boundary. The <a href="https://wrench.rip/">Wrench home</a> states that each authenticated operation is typed, bounded, and tied to one account and transport. The caller brings the model and interface. Wrench supplies the local capability and custody layer. It is not an AI agent, planner, or approval shell. It does not decide which desktop processes may become root.</p>
+        </section>
+
+        <section aria-labelledby="named-operation">
+          <h2 id="named-operation">Attestation names the operation a caller chose</h2>
+          <p>The current release attests {{PROVIDER_CAPABILITY_OPERATION_COUNT}} operations across {{PROVIDER_CAPABILITY_ADAPTER_COUNT}} bundled public adapters. {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} are <code>observed</code>. {{PROVIDER_CAPABILITY_CAPTURE_REQUIRED_COUNT}} remain <code>capture-required</code>. Those figures are the same release-bound counts published on the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a>. This page does not add a provider, invent an Omarchy operation, or treat a reservation as ready. Telegram is absent from those manifests. Wrench does not install a Telegram Bot API substitute or claim Telegram contact access.</p>
+          <p><code>observed</code> means the current contract can plan and execute after local doctor and auth checks pass. <code>capture-required</code> is an inert reservation. The attestation page says a missing or <code>capture-required</code> operation stays unavailable rather than falling back to general browser control. A desktop that can escalate a user process to root does not mark a Wrench reservation <code>observed</code>, and a patched host default does not invent one.</p>
+        </section>
+
+        <section aria-labelledby="four-objects">
+          <h2 id="four-objects">Desktop root, guest machines, device policy, and rumour answer different questions</h2>
+          <p>The <a href="https://wrench.rip/vms-cannot-contain-agents/">VM-containment argument</a> asks whether a guest machine can stand in for attestation. The <a href="https://wrench.rip/paypal-grapheneos-attestation/">PayPal GrapheneOS device-policy argument</a> asks whether a rooted-phone check can stand in for a named web job. The <a href="https://wrench.rip/rumour-is-the-exploit/">rumour sourced take</a> asks whether a search direction can stand in for that same job. This page asks whether a desktop that lets any user process escalate to root can stand in for named, attested web operations. The pages refuse different substitutes.</p>
+          <div class="table-scroll" role="region" aria-labelledby="four-objects" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Decision</th>
+                  <th scope="col">Omarchy session-wide root grant</th>
+                  <th scope="col">Wrench attested operation</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">What is named</th>
+                  <td>A desktop session whose ordinary processes can become host root</td>
+                  <td>A named outbound outcome such as <code>messaging.list</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">What is attested</th>
+                  <td>Local privilege on the workstation, not an outbound contract</td>
+                  <td>Exact provider, transport, account realm, contract version, implementation, input, and risk</td>
+                </tr>
+                <tr>
+                  <th scope="row">Failed check</th>
+                  <td>Any process in the user session could obtain host root</td>
+                  <td>The operation stops. A <code>capture-required</code> reservation stays inert</td>
+                </tr>
+                <tr>
+                  <th scope="row">Missing proof</th>
+                  <td>A later patched default is still not a named web operation</td>
+                  <td>The reservation cannot plan or execute, and Wrench does not invent a browser fallback</td>
+                </tr>
+                <tr>
+                  <th scope="row">Job of the layer</th>
+                  <td>Choose which desktop processes may become root</td>
+                  <td>Name the operation a caller chose and attest whether it is available</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>A session that can escalate to root still does not name <code>messaging.list</code> or mark a reservation <code>observed</code>. The post is evidence that a desktop default can grant host privilege. It is not a Wrench capability grant.</p>
+          <p>Read the VM page for containment. Read the PayPal page for device policy. Read the rumour page for agentic search. Read this page for why a root-capable desktop is not an attested operation. The pages do not reprint one another.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="omarchy-next">
+          <h2 id="omarchy-next">Read the edition and the post, then the current contract</h2>
+          <p>Start with <a href="https://0xcc.io/posts/omarchy-root-creds/">Omarchy: Any User Process Can Escalate to Root</a>. Keep the Sunday 30 August 2026 ranking on <a href="https://rough.day">rough.day</a> and the <a href="https://rough.day/info">selection notes</a> as the edition record. <a href="https://hraness.com">hraness.com</a> is the publisher of Wrench. Then read the <a href="https://wrench.rip/provider-capabilities/">provider capability attestation</a> for every current operation and completeness mark, the <a href="https://wrench.rip/vms-cannot-contain-agents/">VM-containment argument</a> when the question is a guest machine rather than desktop root, the <a href="https://wrench.rip/paypal-grapheneos-attestation/">PayPal GrapheneOS device-policy argument</a> when the question is a rooted-phone check rather than a host privilege grant, and the <a href="https://wrench.rip/rumour-is-the-exploit/">rumour sourced take</a> when the question is a search direction rather than a desktop default.</p>
+        </aside>
+      </article>
+    </main>
+    <aside aria-label="Wrench project information" class="site-disclosure">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </aside>
+    {{HRANESS_SITE_FOOTER}}
+  </body>
+</html>

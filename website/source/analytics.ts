@@ -36,6 +36,10 @@ const CANONICAL_ROUTES = new Map<string, Readonly<{ canonicalPath: string; pageK
     canonicalPath: "/rumour-is-the-exploit/",
     pageKind: "rumour_is_the_exploit",
   }],
+  ["/omarchy-root-escalation", {
+    canonicalPath: "/omarchy-root-escalation/",
+    pageKind: "omarchy_root_escalation",
+  }],
 ]);
 
 const ALLOWED_EVENTS = new Set([

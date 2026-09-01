@@ -177,6 +177,14 @@ export const PUBLIC_PAGES = [
     sourceFile: "rumour-is-the-exploit.html",
     title: "A rumour is enough for agentic search, and why named web operations still matter",
   },
+  {
+    canonicalPath: "/omarchy-root-escalation/",
+    description:
+      "The Sunday 30 August 2026 rough.day tech edition ranked Omarchy’s default desktop allowing any user process to escalate to root. A host privilege grant is not a named Wrench operation.",
+    outputFile: "omarchy-root-escalation/index.html",
+    sourceFile: "omarchy-root-escalation.html",
+    title: "Omarchy lets any user process escalate to root, and why named web operations still matter",
+  },
 ] as const;
 
 export type PublicPage = (typeof PUBLIC_PAGES)[number];
