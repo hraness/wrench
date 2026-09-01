@@ -27,9 +27,110 @@ export interface ReviewedBuiltInContractIdentityV1 {
 const identities = Object.freeze({
   "beeper-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "2.0.0",
-    implementationSha256: "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
-    legacyCurrentReadImplementationSha256: [],
+    pluginVersion: "2.2.0",
+    implementationSha256: "e6d49d29ece94d3c9eb1817ea194699bbe56ecb1170e3691e0242e16ef2c26eb",
+    legacyCurrentReadImplementationSha256: [
+      "89a51cc1e082b15ff89dd4e85e48e218653ca4bf7e49b5bbc824e5381bad86e1",
+      "1f5ed0abd4eaaef92e0d035452273e8a081f564da827897547b6e65939974a60",
+    ],
+    legacyRouteReadImplementationSha256: {
+      "accounts.list@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "accounts.read@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "bridges.list@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "bridges.read@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "contacts.list@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "contacts.search@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "contacts.read@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "messaging.list@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "messaging.search@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.read@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "messaging.read@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "messaging.content.search@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "messaging.message.read@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "messaging.context.read@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "messaging.send@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "reactions.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "messaging.edit@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.start@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.archive.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.pin.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.mute.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.read-state.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.priority.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.notify@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.title.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.description.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.avatar.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.draft.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.disappearing.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.reminder.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "conversations.focus@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+      "presence.set@1": [
+        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
+      ],
+    },
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,
   },
@@ -371,7 +472,7 @@ for (const [pluginId, identity] of Object.entries(identities)) {
   for (const [operation, values] of Object.entries(
     reviewedIdentity.legacyRouteReadImplementationSha256 ?? {},
   )) {
-    if (!/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+@[1-9][0-9]*$/u.test(operation)) {
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+@[1-9][0-9]*$/u.test(operation)) {
       throw new Error(`${pluginId} has a malformed route-scoped reader identity`);
     }
     if (values.length > MAXIMUM_LATER_CURRENT_IDENTITIES) {

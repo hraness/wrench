@@ -1652,6 +1652,61 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
     }
   });
 
+  test("keeps both Beeper upgrade baselines exact while current reads select v2", () => {
+    const archived = JSON.parse(readFileSync(join(
+      import.meta.dir,
+      "assets",
+      "adapters",
+      "beeper",
+      "wrench-web-adapter.v2.0.0.json",
+    ), "utf8")) as Record<string, unknown>;
+    const current = JSON.parse(readFileSync(join(
+      import.meta.dir,
+      "assets",
+      "adapters",
+      "beeper",
+      "wrench-web-adapter.json",
+    ), "utf8")) as Record<string, unknown>;
+    const intermediate = JSON.parse(readFileSync(join(
+      import.meta.dir,
+      "assets",
+      "adapters",
+      "beeper",
+      "wrench-web-adapter.v2.1.0.json",
+    ), "utf8")) as Record<string, unknown>;
+
+    expect(parseDiagnosticManifest(archived).ok).toBeTrue();
+    expect(parseDiagnosticManifest(intermediate).ok).toBeTrue();
+    expect(parseRuntimeManifest(archived).ok).toBeTrue();
+    expect(parseRuntimeManifest(intermediate).ok).toBeTrue();
+    expect(parseRuntimeManifest(current).ok).toBeTrue();
+
+    const archivedOperations = archived.operations as Record<
+      string,
+      { readonly localCli: { readonly contractVersion: number } }
+    >;
+    const intermediateOperations = intermediate.operations as typeof archivedOperations;
+    const currentOperations = current.operations as typeof archivedOperations;
+    const directReads = new Set([
+      "accounts.list",
+      "messaging.search",
+      "conversations.read",
+      "messaging.read",
+      "messaging.content.search",
+    ]);
+    for (const [operation, value] of Object.entries(archivedOperations)) {
+      expect(value.localCli.contractVersion).toBe(1);
+      expect(intermediateOperations[operation]?.localCli.contractVersion).toBe(
+        directReads.has(operation) && operation !== "messaging.content.search"
+          ? 2
+          : 1,
+      );
+      expect(currentOperations[operation]?.localCli.contractVersion).toBe(
+        directReads.has(operation) ? 2 : 1,
+      );
+    }
+  });
+
   test("keeps every bundled LinkedIn and X web operation bound to its code-owned contract", () => {
     for (const site of ["linkedin", "x"] as const) {
       const result = parseManifest(webSessionManifest(site));

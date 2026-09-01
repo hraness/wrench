@@ -64,6 +64,7 @@ import {
   type BeeperMessagingListInput,
   type BeeperMessagingSearchInput,
   type BeeperMessagingReadInput,
+  type BeeperMessageContentSearchInput,
   type BeeperOperationInput,
   type BeeperReadCommand,
 } from "./beeper-local";
@@ -77,6 +78,25 @@ const MAX_MESSAGES = 200;
 const MAX_TEXT_BYTES = 1_048_576;
 const OPERATION_LABEL = "Beeper local CLI operation";
 const SUBJECT_PROBE_TIMEOUT_MS = 120_000;
+const BEEPER_DIRECT_READ_CONTRACT_VERSION = 2;
+const BEEPER_DIRECT_READ_OPERATIONS = Object.freeze([
+  "accounts.list",
+  "messaging.search",
+  "conversations.read",
+  "messaging.read",
+  "messaging.content.search",
+] as const satisfies readonly BeeperLocalOperationName[]);
+
+type BeeperDirectReadOperation =
+  (typeof BEEPER_DIRECT_READ_OPERATIONS)[number];
+
+function isBeeperDirectReadOperation(
+  value: BeeperLocalOperationName,
+): value is BeeperDirectReadOperation {
+  return BEEPER_DIRECT_READ_OPERATIONS.includes(
+    value as BeeperDirectReadOperation,
+  );
+}
 
 class BeeperLocalCleanupUnverifiedError extends Error {
   constructor() {
@@ -153,7 +173,7 @@ export type BeeperLocalRuntimeDependencies = Readonly<{
   removeCacheDirectory?: (path: string) => Promise<void>;
 }>;
 
-export type BeeperDirectMessagingDependencies = Readonly<{
+export type BeeperDirectDependencies = Readonly<{
   /** Test-only request seam. Production uses the process-native fetch. */
   fetch?: (
     input: string | URL | Request,
@@ -162,6 +182,8 @@ export type BeeperDirectMessagingDependencies = Readonly<{
   /** Test-only deadline override; production always uses the reviewed bound. */
   requestTimeoutMs?: number;
 }>;
+
+export type BeeperDirectMessagingDependencies = BeeperDirectDependencies;
 
 export type BeeperDirectMessagingAttempt = Readonly<{
   /**
@@ -183,6 +205,12 @@ export type BeeperDirectMessagingAcceptance = Readonly<{
   conversationId: string;
   pendingMessageId: string;
   providerRevision: null;
+}>;
+
+export type BeeperDirectReadOptions = Readonly<{
+  signal?: AbortSignal;
+  operationDeadline?: WebSessionOperationDeadline;
+  dependencies?: BeeperDirectDependencies;
 }>;
 
 export type BeeperUserProjection = Readonly<{
@@ -2075,6 +2103,7 @@ function parseBeeperDirectInfo(
     "Beeper Desktop direct info.app.bundle_id",
     256,
   );
+  boundedString(app.name, "Beeper Desktop direct info.app.name", 256);
   if (!BEEPER_DESKTOP_BUNDLE_IDS.includes(
     bundleId as typeof BEEPER_DESKTOP_BUNDLE_IDS[number],
   )) throw new Error("Beeper Desktop direct info returned an unsupported bundle ID");
@@ -2083,16 +2112,26 @@ function parseBeeperDirectInfo(
     "Beeper Desktop direct info.server.base_url",
   );
   const expectedPort = Number(new URL(expectedBaseUrl).port);
+  if (baseUrl !== expectedBaseUrl) {
+    throw new Error("Beeper Desktop direct info base URL did not bind the selected local realm");
+  }
+  if (server.hostname !== "127.0.0.1") {
+    throw new Error("Beeper Desktop direct info hostname did not bind the selected local realm");
+  }
   if (
-    baseUrl !== expectedBaseUrl
-    || server.hostname !== "127.0.0.1"
-    || integer(server.port, "Beeper Desktop direct info.server.port", 23_373, 23_392)
+    integer(server.port, "Beeper Desktop direct info.server.port", 23_373, 23_392)
       !== expectedPort
-    || server.remote_access !== false
-    || typeof server.mcp_enabled !== "boolean"
-    || boundedString(server.status, "Beeper Desktop direct info.server.status", 128)
-      !== "ready"
-  ) throw new Error("Beeper Desktop direct info did not bind the selected local realm");
+  ) throw new Error("Beeper Desktop direct info port did not bind the selected local realm");
+  if (server.remote_access !== false) {
+    throw new Error("Beeper Desktop direct info remote access did not bind the selected local realm");
+  }
+  if (typeof server.mcp_enabled !== "boolean") {
+    throw new Error("Beeper Desktop direct info MCP state did not bind the selected local realm");
+  }
+  // The Desktop API defines status as a string without a closed enum. The
+  // authenticated 200 response and subsequent account proof establish live
+  // readiness; this field remains bounded metadata rather than realm identity.
+  boundedString(server.status, "Beeper Desktop direct info.server.status", 128);
   // These documents are not used to choose an endpoint. Parsing them prevents
   // an unexpected response shape from silently becoming accepted evidence.
   strictRecord(source.endpoints, "Beeper Desktop direct info.endpoints");
@@ -2108,7 +2147,7 @@ async function beeperDirectJsonRequest(
   url: string,
   init: RequestInit,
   label: string,
-  dependencies: BeeperDirectMessagingDependencies | undefined,
+  dependencies: BeeperDirectDependencies | undefined,
   signal: AbortSignal | undefined,
 ): Promise<unknown> {
   const request = dependencies?.fetch ?? fetch;
@@ -2142,6 +2181,8 @@ async function beeperDirectJsonRequest(
       || response.url !== "" && response.url !== url
       || response.status !== 200
       || response.body === null
+      || response.headers.get("content-type")?.split(";", 1)[0]?.trim()
+          .toLowerCase() !== "application/json"
     ) throw new Error(`${label} did not return one exact successful response`);
     text = await readBoundedStream(
       response.body,
@@ -2160,6 +2201,658 @@ async function beeperDirectJsonRequest(
     throw new Error(`${label} returned malformed JSON`);
   }
   return value;
+}
+
+type BeeperDirectRealm = Readonly<{
+  accounts: readonly BeeperAccountProjection[];
+  authorizationHeaders: Readonly<Record<string, string>>;
+  baseUrl: string;
+  subject: string;
+}>;
+
+type BeeperDirectCursorPage = Readonly<{
+  items: readonly unknown[];
+  hasMore: boolean;
+  oldestCursor: string | null;
+  newestCursor: string | null;
+}>;
+
+type BeeperDirectMessageSearchPage = BeeperDirectCursorPage & Readonly<{
+  chats: JsonRecord;
+}>;
+
+function directCursor(
+  value: unknown,
+  label: string,
+): string | null {
+  return value === undefined || value === null
+    ? null
+    : boundedString(value, label, 2_048);
+}
+
+function parseBeeperDirectCursorPage(
+  value: unknown,
+  label: string,
+  maximumItems: number,
+): BeeperDirectCursorPage {
+  const source = strictRecord(value, label);
+  exactKeys(
+    source,
+    ["items", "hasMore", "oldestCursor", "newestCursor"],
+    [],
+    label,
+  );
+  const items = strictArray(source.items, `${label}.items`, maximumItems);
+  const hasMore = requiredBoolean(source.hasMore, `${label}.hasMore`);
+  const oldestCursor = directCursor(
+    source.oldestCursor,
+    `${label}.oldestCursor`,
+  );
+  const newestCursor = directCursor(
+    source.newestCursor,
+    `${label}.newestCursor`,
+  );
+  return Object.freeze({ items, hasMore, oldestCursor, newestCursor });
+}
+
+function parseBeeperDirectMessageSearchPage(
+  value: unknown,
+  label: string,
+): BeeperDirectMessageSearchPage {
+  const source = strictRecord(value, label);
+  exactKeys(
+    source,
+    ["chats", "items", "hasMore", "oldestCursor", "newestCursor"],
+    [],
+    label,
+  );
+  const chats = strictRecord(source.chats, `${label}.chats`);
+  if (Object.keys(chats).length > MAX_CHATS) {
+    throw new Error(`${label}.chats exceeded its reviewed result bound`);
+  }
+  const items = strictArray(source.items, `${label}.items`, 20);
+  const hasMore = requiredBoolean(source.hasMore, `${label}.hasMore`);
+  const oldestCursor = directCursor(
+    source.oldestCursor,
+    `${label}.oldestCursor`,
+  );
+  const newestCursor = directCursor(
+    source.newestCursor,
+    `${label}.newestCursor`,
+  );
+  return Object.freeze({ chats, items, hasMore, oldestCursor, newestCursor });
+}
+
+function beeperDirectUrl(
+  baseUrl: string,
+  path: string,
+  query: readonly (readonly [string, string])[] = [],
+): string {
+  if (!path.startsWith("/v1/") || path.includes("?") || path.includes("#")) {
+    throw new Error("Beeper direct request path is not one fixed v1 route");
+  }
+  const url = new URL(path, `${baseUrl}/`);
+  for (const [key, value] of query) url.searchParams.append(key, value);
+  return url.toString();
+}
+
+async function bindBeeperDirectRealm(
+  authValue: WrenchAuth,
+  dependencies: BeeperDirectDependencies | undefined,
+  signal: AbortSignal | undefined,
+  enforceBoundSubject = true,
+): Promise<BeeperDirectRealm> {
+  const auth = requireBeeperAuth(authValue);
+  if (enforceBoundSubject && auth.subject === undefined) {
+    throw new Error("Beeper direct reads require one bound local account realm");
+  }
+  const snapshot = await validateBeeperCliStoreInternal(auth.path);
+  const accessToken = snapshot.effectiveAuth.accessToken;
+  if (typeof accessToken !== "string") {
+    throw new Error("Beeper Desktop selected target lost its effective bearer token");
+  }
+  const baseUrl = snapshot.targetBaseUrl.endsWith("/")
+    ? snapshot.targetBaseUrl.slice(0, -1)
+    : snapshot.targetBaseUrl;
+  const authorizationHeaders = Object.freeze({
+    Accept: "application/json",
+    Authorization: `Bearer ${accessToken}`,
+  });
+  const info = parseBeeperDirectInfo(
+    await beeperDirectJsonRequest(
+      beeperDirectUrl(baseUrl, "/v1/info"),
+      { method: "GET", headers: authorizationHeaders },
+      "Beeper Desktop direct info",
+      dependencies,
+      signal,
+    ),
+    snapshot.targetBaseUrl,
+  );
+  const accounts = parseAccounts(await beeperDirectJsonRequest(
+    beeperDirectUrl(baseUrl, "/v1/accounts"),
+    { method: "GET", headers: authorizationHeaders },
+    "Beeper Desktop direct accounts",
+    dependencies,
+    signal,
+  ));
+  const subject = beeperSubjectFromAccountsAndTarget(
+    accounts,
+    info.baseUrl,
+    info.bundleId,
+    info.version,
+  );
+  if (enforceBoundSubject && subject !== auth.subject) {
+    throw new Error("Beeper Desktop direct account did not match the bound auth realm");
+  }
+  return Object.freeze({
+    accounts,
+    authorizationHeaders,
+    baseUrl,
+    subject,
+  });
+}
+
+function directReadSuccess(output: unknown): LocalCliExecution {
+  return Object.freeze({
+    status: "succeeded",
+    output,
+    finalUrl: BEEPER_ORIGIN,
+    dispatchStarted: false,
+    dispatch: Object.freeze({ planned: 0, started: 0, verified: 0 }),
+  });
+}
+
+async function directConversationSearch(
+  realm: BeeperDirectRealm,
+  input: BeeperMessagingSearchInput,
+  dependencies: BeeperDirectDependencies | undefined,
+  signal: AbortSignal | undefined,
+): Promise<readonly unknown[]> {
+  if (input.accountId !== null) {
+    requireBoundAccount(realm.accounts, input.accountId, "messaging.search");
+  }
+  const collected: unknown[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  for (let pageIndex = 0; pageIndex < 8; pageIndex += 1) {
+    const query: [string, string][] = [
+      ["query", input.query],
+      ["limit", String(input.limit)],
+    ];
+    if (input.accountId !== null) query.push(["accountIDs", input.accountId]);
+    if (cursor !== null) query.push(["cursor", cursor]);
+    const page = parseBeeperDirectCursorPage(
+      await beeperDirectJsonRequest(
+        beeperDirectUrl(realm.baseUrl, "/v1/chats/search", query),
+        { method: "GET", headers: realm.authorizationHeaders },
+        `Beeper Desktop direct chat search page ${String(pageIndex + 1)}`,
+        dependencies,
+        signal,
+      ),
+      `Beeper Desktop direct chat search page ${String(pageIndex + 1)}`,
+      MAX_CHATS,
+    );
+    const validationInput = Object.freeze({ ...input, limit: MAX_CHATS });
+    messagingSearchOutput(
+      realm.accounts,
+      realm.subject,
+      validationInput,
+      page.items,
+    );
+    for (const item of page.items) {
+      const source = strictRecord(item, "Beeper Desktop direct searched chat");
+      const id = `${boundedString(
+        source.accountID,
+        "Beeper Desktop direct searched chat.accountID",
+        512,
+      )}\0${boundedString(
+        source.id,
+        "Beeper Desktop direct searched chat.id",
+        2_048,
+      )}`;
+      if (seenIds.has(id)) {
+        throw new Error("Beeper Desktop direct chat search repeated a chat across pages");
+      }
+      seenIds.add(id);
+      collected.push(item);
+      if (collected.length >= input.limit) {
+        return Object.freeze(collected.slice(0, input.limit));
+      }
+    }
+    if (!page.hasMore) return Object.freeze(collected);
+    cursor = page.oldestCursor;
+    if (cursor === null || seenCursors.has(cursor)) {
+      throw new Error("Beeper Desktop direct chat search did not advance its cursor");
+    }
+    seenCursors.add(cursor);
+  }
+  throw new Error("Beeper Desktop direct chat search exceeded its page bound");
+}
+
+async function directMessages(
+  realm: BeeperDirectRealm,
+  input: BeeperMessagingReadInput,
+  dependencies: BeeperDirectDependencies | undefined,
+  signal: AbortSignal | undefined,
+): Promise<Readonly<{
+  items: readonly unknown[];
+  continuation: Readonly<{
+    direction: "before" | "after";
+    cursor: string;
+  }> | null;
+}>> {
+  const collected: unknown[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor = input.beforeCursor ?? input.afterCursor;
+  if (cursor !== null) seenCursors.add(cursor);
+  const direction = input.afterCursor === null ? "before" : "after";
+  for (let pageIndex = 0; pageIndex < 8; pageIndex += 1) {
+    const query: [string, string][] = [];
+    if (cursor !== null) {
+      query.push(["cursor", cursor], ["direction", direction]);
+    }
+    const path = `/v1/chats/${encodeURIComponent(input.conversationId)}/messages`;
+    const page = parseBeeperDirectCursorPage(
+      await beeperDirectJsonRequest(
+        beeperDirectUrl(realm.baseUrl, path, query),
+        { method: "GET", headers: realm.authorizationHeaders },
+        `Beeper Desktop direct messages page ${String(pageIndex + 1)}`,
+        dependencies,
+        signal,
+      ),
+      `Beeper Desktop direct messages page ${String(pageIndex + 1)}`,
+      MAX_MESSAGES,
+    );
+    const validationInput = Object.freeze({ ...input, limit: MAX_MESSAGES });
+    messageOutput(
+      realm.accounts,
+      realm.subject,
+      validationInput,
+      page.items,
+    );
+    const pageIds = page.items.map((item) => {
+      const source = strictRecord(item, "Beeper Desktop direct message");
+      const id = boundedString(
+        source.id,
+        "Beeper Desktop direct message.id",
+        2_048,
+      );
+      if (seenIds.has(id)) {
+        throw new Error("Beeper Desktop direct message history repeated an ID across pages");
+      }
+      return id;
+    });
+    if (new Set(pageIds).size !== pageIds.length) {
+      throw new Error(
+        "Beeper Desktop direct message history repeated an ID within one page",
+      );
+    }
+    if (collected.length + page.items.length > input.limit) {
+      if (collected.length === 0 || cursor === null) {
+        throw new Error(
+          "Beeper Desktop direct message provider page exceeded the requested no-skip result bound",
+        );
+      }
+      return Object.freeze({
+        items: Object.freeze(collected),
+        continuation: Object.freeze({ direction, cursor }),
+      });
+    }
+    pageIds.forEach((id) => seenIds.add(id));
+    collected.push(...page.items);
+    if (!page.hasMore) {
+      return Object.freeze({
+        items: Object.freeze(collected),
+        continuation: null,
+      });
+    }
+    const nextCursor = direction === "before"
+      ? page.oldestCursor
+      : page.newestCursor;
+    if (nextCursor === null || seenCursors.has(nextCursor)) {
+      throw new Error("Beeper Desktop direct message history did not advance its cursor");
+    }
+    seenCursors.add(nextCursor);
+    if (collected.length >= input.limit) {
+      return Object.freeze({
+        items: Object.freeze(collected),
+        continuation: Object.freeze({ direction, cursor: nextCursor }),
+      });
+    }
+    if (pageIndex === 7) {
+      return Object.freeze({
+        items: Object.freeze(collected),
+        continuation: Object.freeze({ direction, cursor: nextCursor }),
+      });
+    }
+    cursor = nextCursor;
+  }
+  throw new Error("Beeper Desktop direct message history exceeded its page bound");
+}
+
+function validateBeeperDirectMessageSearchPage(
+  realm: BeeperDirectRealm,
+  input: BeeperMessageContentSearchInput,
+  page: BeeperDirectMessageSearchPage,
+  label: string,
+): readonly BeeperMessageProjection[] {
+  const accountIds = new Set(realm.accounts.map((account) => account.accountId));
+  const referencedChatAccounts = new Map<string, string>();
+  const messages = page.items.map((item, index) => {
+    const itemLabel = `${label}.items[${String(index)}]`;
+    const source = strictRecord(item, itemLabel);
+    const accountId = boundedString(source.accountID, `${itemLabel}.accountID`, 512);
+    const conversationId = boundedString(source.chatID, `${itemLabel}.chatID`, 2_048);
+    if (!accountIds.has(accountId)) {
+      throw new Error("Beeper searched message escaped the bound account realm");
+    }
+    if (input.accountId !== null && accountId !== input.accountId) {
+      throw new Error("Beeper searched message escaped the requested account");
+    }
+    if (
+      input.conversationId !== null
+      && conversationId !== input.conversationId
+    ) throw new Error("Beeper searched message escaped the requested conversation");
+    const referencedAccountId = referencedChatAccounts.get(conversationId);
+    if (referencedAccountId !== undefined && referencedAccountId !== accountId) {
+      throw new Error(
+        "Beeper message search referenced one chat from multiple accounts",
+      );
+    }
+    referencedChatAccounts.set(conversationId, accountId);
+    const message = parseMessage(item, itemLabel, {
+      accountId,
+      conversationId,
+      beforeCursor: null,
+      afterCursor: null,
+      limit: MAX_MESSAGES,
+    });
+    if (
+      input.after !== null
+      && Date.parse(message.timestamp) <= Date.parse(input.after)
+    ) throw new Error("Beeper searched message escaped the requested date-after boundary");
+    if (
+      input.before !== null
+      && Date.parse(message.timestamp) >= Date.parse(input.before)
+    ) throw new Error("Beeper searched message escaped the requested date-before boundary");
+    if (
+      input.sender === "me" && message.isSender !== true
+      || input.sender === "others" && message.isSender !== false
+      || input.sender !== null
+        && input.sender !== "me"
+        && input.sender !== "others"
+        && message.senderId !== input.sender
+    ) throw new Error("Beeper searched message escaped the requested sender filter");
+    return message;
+  });
+  const chatIds = Object.keys(page.chats);
+  if (
+    chatIds.length !== referencedChatAccounts.size
+    || chatIds.some((chatId) => !referencedChatAccounts.has(chatId))
+  ) throw new Error("Beeper message search chat map did not exactly bind its result items");
+  for (const chatId of chatIds) {
+    boundedString(chatId, `${label}.chats key`, 2_048);
+    const chat = parseConversation(
+      page.chats[chatId],
+      `${label}.chats.${chatId}`,
+      accountIds,
+      referencedChatAccounts.get(chatId) ?? null,
+    );
+    if (chat.id !== chatId) {
+      throw new Error("Beeper message search chat map key did not match its chat ID");
+    }
+    if (input.conversationId !== null && chat.id !== input.conversationId) {
+      throw new Error("Beeper message search chat map escaped the requested conversation");
+    }
+    if (input.chatType !== null && chat.type !== input.chatType) {
+      throw new Error("Beeper message search chat map escaped the requested chat type");
+    }
+    if (input.excludeLowPriority && chat.isLowPriority === true) {
+      throw new Error("Beeper message search returned an excluded low-priority chat");
+    }
+    if (!input.includeMuted && chat.isMuted === true) {
+      throw new Error("Beeper message search returned an excluded muted chat");
+    }
+  }
+  return Object.freeze(messages);
+}
+
+async function directMessageContentSearch(
+  realm: BeeperDirectRealm,
+  input: BeeperMessageContentSearchInput,
+  dependencies: BeeperDirectDependencies | undefined,
+  signal: AbortSignal | undefined,
+): Promise<Readonly<{
+  items: readonly unknown[];
+  continuation: Readonly<{
+    direction: "before" | "after";
+    cursor: string;
+  }> | null;
+}>> {
+  if (input.accountId !== null) {
+    requireBoundAccount(realm.accounts, input.accountId, "messaging.content.search");
+  }
+  const collected: unknown[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor = input.beforeCursor ?? input.afterCursor;
+  if (cursor !== null) seenCursors.add(cursor);
+  const direction = input.afterCursor === null ? "before" : "after";
+  for (let pageIndex = 0; pageIndex < 8; pageIndex += 1) {
+    const query: [string, string][] = [];
+    if (input.query !== null) query.push(["query", input.query]);
+    if (input.accountId !== null) query.push(["accountIDs", input.accountId]);
+    if (input.conversationId !== null) {
+      query.push(["chatIDs", input.conversationId]);
+    }
+    if (input.chatType !== null) query.push(["chatType", input.chatType]);
+    if (cursor !== null) query.push(["cursor", cursor], ["direction", direction]);
+    if (input.after !== null) query.push(["dateAfter", input.after]);
+    if (input.before !== null) query.push(["dateBefore", input.before]);
+    query.push(
+      ["excludeLowPriority", String(input.excludeLowPriority)],
+      ["includeMuted", String(input.includeMuted)],
+      ["limit", String(Math.min(20, Math.max(1, input.limit - collected.length)))],
+    );
+    for (const mediaType of input.media) query.push(["mediaTypes", mediaType]);
+    if (input.sender !== null) query.push(["sender", input.sender]);
+    const label = `Beeper Desktop direct message search page ${String(pageIndex + 1)}`;
+    const page = parseBeeperDirectMessageSearchPage(
+      await beeperDirectJsonRequest(
+        beeperDirectUrl(realm.baseUrl, "/v1/messages/search", query),
+        { method: "GET", headers: realm.authorizationHeaders },
+        label,
+        dependencies,
+        signal,
+      ),
+      label,
+    );
+    const projected = validateBeeperDirectMessageSearchPage(
+      realm,
+      input,
+      page,
+      label,
+    );
+    const pageIds = projected.map((message) =>
+      `${message.accountId}\0${message.conversationId}\0${message.id}`);
+    if (pageIds.some((id) => seenIds.has(id))) {
+      throw new Error("Beeper Desktop direct message search repeated an ID across pages");
+    }
+    if (new Set(pageIds).size !== pageIds.length) {
+      throw new Error("Beeper Desktop direct message search repeated an ID within one page");
+    }
+    if (collected.length + page.items.length > input.limit) {
+      if (collected.length === 0 || cursor === null) {
+        throw new Error(
+          "Beeper Desktop direct message search provider page exceeded the requested no-skip result bound",
+        );
+      }
+      return Object.freeze({
+        items: Object.freeze(collected),
+        continuation: Object.freeze({ direction, cursor }),
+      });
+    }
+    pageIds.forEach((id) => seenIds.add(id));
+    collected.push(...page.items);
+    if (!page.hasMore) {
+      return Object.freeze({
+        items: Object.freeze(collected),
+        continuation: null,
+      });
+    }
+    const nextCursor = direction === "before"
+      ? page.oldestCursor
+      : page.newestCursor;
+    if (nextCursor === null || seenCursors.has(nextCursor)) {
+      throw new Error("Beeper Desktop direct message search did not advance its cursor");
+    }
+    seenCursors.add(nextCursor);
+    if (collected.length >= input.limit || pageIndex === 7) {
+      return Object.freeze({
+        items: Object.freeze(collected),
+        continuation: Object.freeze({ direction, cursor: nextCursor }),
+      });
+    }
+    cursor = nextCursor;
+  }
+  throw new Error("Beeper Desktop direct message search exceeded its page bound");
+}
+
+export async function executeBeeperDirectReadOperation(
+  recipe: LocalCliRecipe,
+  inputValue: OperationInput,
+  authValue: WrenchAuth,
+  options: BeeperDirectReadOptions = {},
+): Promise<LocalCliExecution> {
+  if (
+    recipe.surface !== "beeper"
+    || recipe.contractVersion !== BEEPER_DIRECT_READ_CONTRACT_VERSION
+    || !isBeeperLocalOperation(recipe.action)
+    || !isBeeperDirectReadOperation(recipe.action)
+  ) throw new Error("Beeper Desktop direct read recipe is not installed");
+  options.operationDeadline?.throwIfUnavailable("Beeper Desktop direct read");
+  const input = parseBeeperOperationInput(recipe.action, inputValue);
+  const signal = options.operationDeadline?.signal ?? options.signal;
+  const realm = await bindBeeperDirectRealm(
+    authValue,
+    options.dependencies,
+    signal,
+  );
+  options.operationDeadline?.throwIfUnavailable("Beeper Desktop direct read");
+  let raw: unknown;
+  if (recipe.action === "accounts.list") {
+    const output = Object.freeze({
+      provider: "beeper",
+      operation: recipe.action,
+      accountSubject: realm.subject,
+      accounts: publicAccountProjections(realm.accounts),
+    });
+    if (Buffer.byteLength(JSON.stringify(output), "utf8") > recipe.maxOutputBytes) {
+      throw new Error("Beeper Desktop direct projection exceeded the reviewed output bound");
+    }
+    return directReadSuccess(output);
+  } else if (recipe.action === "messaging.search") {
+    raw = await directConversationSearch(
+      realm,
+      input as BeeperMessagingSearchInput,
+      options.dependencies,
+      signal,
+    );
+  } else if (recipe.action === "conversations.read") {
+    const value = operationInputRecord(input);
+    requireBoundAccount(realm.accounts, value.accountId as string, recipe.action);
+    raw = await beeperDirectJsonRequest(
+      beeperDirectUrl(
+        realm.baseUrl,
+        `/v1/chats/${encodeURIComponent(value.conversationId as string)}`,
+        [["maxParticipantCount", String(value.maxParticipants)]],
+      ),
+      { method: "GET", headers: realm.authorizationHeaders },
+      "Beeper Desktop direct conversation",
+      options.dependencies,
+      signal,
+    );
+  } else if (recipe.action === "messaging.content.search") {
+    const value = input as BeeperMessageContentSearchInput;
+    const page = await directMessageContentSearch(
+      realm,
+      value,
+      options.dependencies,
+      signal,
+    );
+    const projected = messageSearchOutput(
+      realm.accounts,
+      realm.subject,
+      operationInputRecord(value),
+      page.items,
+    );
+    const output = Object.freeze({
+      ...projected,
+      continuation: page.continuation,
+      completeness: Object.freeze({
+        resultWindowComplete: page.continuation === null,
+        continuationAvailable: page.continuation !== null,
+        requestedLimitReached: projected.messages.length >= value.limit,
+        remoteConversationHistoryComplete: false,
+        warnings: Object.freeze([
+          "continuation-is-an-opaque-provider-page-boundary-cursor",
+          "newly-connected-accounts-may-have-incomplete-history",
+          "beeper-desktop-loopback-search-does-not-force-remote-history-sync",
+        ]),
+      }),
+    });
+    if (Buffer.byteLength(JSON.stringify(output), "utf8") > recipe.maxOutputBytes) {
+      throw new Error("Beeper Desktop direct projection exceeded the reviewed output bound");
+    }
+    return directReadSuccess(output);
+  } else {
+    const value = input as BeeperMessagingReadInput;
+    requireBoundAccount(realm.accounts, value.accountId, recipe.action);
+    const page = await directMessages(
+      realm,
+      value,
+      options.dependencies,
+      signal,
+    );
+    const projected = messageOutput(
+      realm.accounts,
+      realm.subject,
+      value,
+      page.items,
+    );
+    const output = Object.freeze({
+      ...projected,
+      continuation: page.continuation,
+      completeness: Object.freeze({
+        localPageComplete: page.continuation === null,
+        remoteConversationHistoryComplete: false,
+        limitReached: projected.messages.length >= value.limit,
+        warnings: Object.freeze([
+          "continuation-is-an-opaque-provider-page-boundary-cursor",
+          "edits-reactions-and-deletions-may-require-overlap-reconciliation",
+          "newly-connected-accounts-may-have-incomplete-history",
+          "beeper-desktop-loopback-read-does-not-force-remote-history-sync",
+        ]),
+      }),
+    });
+    if (Buffer.byteLength(JSON.stringify(output), "utf8") > recipe.maxOutputBytes) {
+      throw new Error("Beeper Desktop direct projection exceeded the reviewed output bound");
+    }
+    return directReadSuccess(output);
+  }
+  const output = await executeRead(
+    recipe.action,
+    input,
+    realm.accounts,
+    realm.subject,
+    raw,
+  );
+  if (Buffer.byteLength(JSON.stringify(output), "utf8") > recipe.maxOutputBytes) {
+    throw new Error("Beeper Desktop direct projection exceeded the reviewed output bound");
+  }
+  return directReadSuccess(output);
 }
 
 /**
@@ -2205,7 +2898,7 @@ export async function executeBeeperDirectMessagingPart(
   const info = parseBeeperDirectInfo(
     await beeperDirectJsonRequest(
       `${baseUrl}/v1/info`,
-      { method: "GET", headers: { Accept: "application/json" } },
+      { method: "GET", headers: commonHeaders },
       "Beeper Desktop direct info",
       attempt.dependencies,
       attempt.signal,
@@ -2599,32 +3292,24 @@ export async function probeBeeperLocalSubject(
   options: {
     readonly signal?: AbortSignal;
     readonly dependencies?: BeeperLocalRuntimeDependencies;
+    readonly directDependencies?: BeeperDirectDependencies;
     readonly environment?: Readonly<Record<string, string | undefined>>;
     readonly registerCleanupBarrier?: LocalCliExecutionOptions["registerCleanupBarrier"];
   } = {},
 ): Promise<string> {
-  const auth = requireBeeperAuth(authValue);
   const deadline = new OperationDeadline(SUBJECT_PROBE_TIMEOUT_MS, {
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   try {
-    return await startProviderPluginCleanupTrackedOperation(
-      options.registerCleanupBarrier,
-      async (publishCleanupResource, cleanup) => withRuntime(
-        auth,
-        SUBJECT_PROBE_TIMEOUT_MS,
-        8 * 1024 * 1024,
-        options.dependencies,
-        options.environment ?? process.env,
-        deadline,
-        publishCleanupResource,
-        cleanup,
-        options.registerCleanupBarrier !== undefined,
-        async ({ subject }) => subject,
-      ),
+    const realm = await bindBeeperDirectRealm(
+      authValue,
+      options.directDependencies,
+      deadline.signal,
+      false,
     );
-  } catch (error) {
-    if (error instanceof BeeperLocalCleanupUnverifiedError) throw error;
+    deadline.throwIfUnavailable("Beeper subject probe");
+    return realm.subject;
+  } catch {
     throw new Error("Beeper subject probe failed at a protected local boundary");
   } finally {
     deadline.dispose();
@@ -3406,6 +4091,11 @@ function exactConversationReadOutput(
     input.conversationId as string,
     "Beeper conversation",
   );
+  if (conversation.participants.items.length > (input.maxParticipants as number)) {
+    throw new Error(
+      "Beeper conversation exceeded the requested participant projection bound",
+    );
+  }
   return Object.freeze({
     provider: "beeper",
     operation: "conversations.read",
@@ -4124,19 +4814,51 @@ export async function executeBeeperLocalOperation(
   authValue: WrenchAuth,
   options: LocalCliExecutionOptions & Readonly<{
     dependencies?: BeeperLocalRuntimeDependencies;
+    directDependencies?: BeeperDirectDependencies;
   }> = {},
 ): Promise<LocalCliExecution> {
   if (
     recipe.surface !== "beeper"
-    || recipe.contractVersion !== 1
     || !isBeeperLocalOperation(recipe.action)
+    || (
+      recipe.contractVersion !== 1
+      && !(
+        recipe.contractVersion === BEEPER_DIRECT_READ_CONTRACT_VERSION
+        && isBeeperDirectReadOperation(recipe.action)
+      )
+    )
   ) throw new Error("Beeper local CLI recipe is not installed");
   const action: BeeperLocalOperationName = recipe.action;
   const contract = BEEPER_LOCAL_OPERATIONS[action];
   const input = parseBeeperOperationInput(action, inputValue);
+  if (
+    recipe.contractVersion === 1
+    && action === "messaging.content.search"
+    && "beforeCursor" in input
+    && (input.beforeCursor !== null || input.afterCursor !== null)
+  ) throw new Error("Beeper message search cursor input requires direct-read contract v2");
   const auth = requireBeeperAuth(authValue);
   options.operationDeadline?.throwIfUnavailable(OPERATION_LABEL);
   try {
+    if (
+      recipe.contractVersion === BEEPER_DIRECT_READ_CONTRACT_VERSION
+      && isBeeperDirectReadOperation(action)
+    ) {
+      return await executeBeeperDirectReadOperation(
+        recipe,
+        inputValue,
+        auth,
+        {
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+          ...(options.operationDeadline === undefined
+            ? {}
+            : { operationDeadline: options.operationDeadline }),
+          ...(options.directDependencies === undefined
+            ? {}
+            : { dependencies: options.directDependencies }),
+        },
+      );
+    }
     return await startProviderPluginCleanupTrackedOperation(
       options.registerCleanupBarrier,
       async (publishCleanupResource, cleanup) => withRuntime(
@@ -4200,6 +4922,6 @@ export async function executeBeeperLocalOperation(
     );
   } catch (error) {
     if (error instanceof BeeperLocalCleanupUnverifiedError) throw error;
-    throw new Error("Beeper local CLI execution failed at a protected local boundary");
+    throw new Error("Beeper local execution failed at a protected local boundary");
   }
 }

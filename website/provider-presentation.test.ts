@@ -38,9 +38,9 @@ describe("provider presentation", () => {
 
     expect(directory.entries[0]).toMatchObject({
       adapterCount: 1,
-      adapterIdentities: [{ id: "beeper-local", version: "2.0.0" }],
+      adapterIdentities: [{ id: "beeper-local", version: "2.2.0" }],
       captureRequiredCount: 0,
-      contractVersions: [1],
+      contractVersions: [1, 2],
       href: "/providers/beeper/",
       name: "Beeper",
       observedCount: 32,
@@ -71,7 +71,7 @@ describe("provider presentation", () => {
     );
     const facts = createBeeperPresentationFacts(directory);
     expect(facts).toMatchObject({
-      adapterVersion: "2.0.0",
+      adapterVersion: "2.2.0",
       cliCommandCount: 101,
       cliCommit: "a416af06023449a87312dc11e54643fd9dc94b8c",
       cliReleaseUrl: "https://github.com/beeper/cli/releases/tag/v0.6.2",
@@ -81,8 +81,8 @@ describe("provider presentation", () => {
       observedOperationCount: 32,
       pageDescription: BEEPER_PAGE_METADATA.description,
       pageTitle: BEEPER_PAGE_METADATA.title,
-      semanticContractVersionLabel: "Contract version 1",
-      semanticContractVersions: [1],
+      semanticContractVersionLabel: "Contract versions 1, 2",
+      semanticContractVersions: [1, 2],
     });
     expect(facts.artifactTable.match(/<tbody><tr>/gu)).toHaveLength(1);
     expect(facts.artifactTable.match(/<tr>/gu)).toHaveLength(5);

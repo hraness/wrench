@@ -1,7 +1,7 @@
 {
   "schemaVersion": 6,
   "id": "beeper-local",
-  "version": "2.2.0",
+  "version": "2.0.0",
   "displayName": "Beeper (Pinned Local CLI)",
   "surfaceId": "beeper",
   "origins": [
@@ -24,7 +24,7 @@
       "localCli": {
         "surface": "beeper",
         "action": "accounts.list",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }
@@ -312,7 +312,7 @@
       "localCli": {
         "surface": "beeper",
         "action": "messaging.search",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }
@@ -352,7 +352,7 @@
       "localCli": {
         "surface": "beeper",
         "action": "conversations.read",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }
@@ -404,13 +404,13 @@
       "localCli": {
         "surface": "beeper",
         "action": "messaging.read",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }
     },
     "messaging.content.search": {
-      "description": "Search and paginate one bounded message-content candidate window through the exact local provider index.",
+      "description": "Search one bounded message-content candidate window.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -457,18 +457,6 @@
             "minLength": 20,
             "maxLength": 64
           },
-          "before_cursor": {
-            "type": "string",
-            "description": "Exact opaque provider cursor returned by a prior older-results page",
-            "minLength": 1,
-            "maxLength": 2048
-          },
-          "after_cursor": {
-            "type": "string",
-            "description": "Exact opaque provider cursor returned by a prior newer-results page",
-            "minLength": 1,
-            "maxLength": 2048
-          },
           "exclude_low_priority": {
             "type": "boolean",
             "description": "Exclude low-priority chats"
@@ -514,7 +502,7 @@
       "localCli": {
         "surface": "beeper",
         "action": "messaging.content.search",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }

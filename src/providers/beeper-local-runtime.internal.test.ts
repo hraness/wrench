@@ -124,6 +124,33 @@ function targetStatus(overrides: Readonly<Record<string, unknown>> = {}): unknow
   });
 }
 
+function directInfo(): unknown {
+  return Object.freeze({
+    app: Object.freeze({
+      bundle_id: BUNDLE_ID,
+      name: "Beeper",
+      version: "4.2.0-fixture",
+    }),
+    endpoints: Object.freeze({}),
+    platform: Object.freeze({}),
+    server: Object.freeze({
+      base_url: "http://127.0.0.1:23384",
+      hostname: "127.0.0.1",
+      mcp_enabled: true,
+      port: 23_384,
+      remote_access: false,
+      status: "serving-fixture",
+    }),
+  });
+}
+
+function directJsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
 function bridges(): readonly unknown[] {
   return Object.freeze(["signal", "whatsapp"].map((id) => Object.freeze({
     id,
@@ -1548,36 +1575,42 @@ describe("Beeper local read runtime", () => {
     expect(JSON.stringify(parsed[0]!.reactions)).not.toContain("ignored-duplicate-image");
   });
 
-  test("keeps first-run CLI payload extraction inside the overall probe deadline", async () => {
+  test("rediscovers a stale bound subject through the authenticated direct realm", async () => {
     const path = privateStore();
-    const calls: BeeperCliInvocation[] = [];
+    const requests: Array<{ route: string; authorization: string | null }> = [];
+    let cliRuns = 0;
     try {
-      const subject = await probeBeeperLocalSubject(auth(path), {
+      const staleSubject = `beeper:local:${"0".repeat(64)}`;
+      const subject = await probeBeeperLocalSubject({
+        ...auth(path),
+        subject: staleSubject,
+      }, {
         dependencies: {
-          binaryPath: "/fixture/beeper-0.6.2",
-          run: async (invocation) => {
-            calls.push(invocation);
-            if (invocation.arguments[0] === "version") {
-              expect(invocation.timeoutMs).toBeGreaterThan(5_000);
-              await new Promise((resolve) => setTimeout(resolve, 10));
-              return envelope({ name: "@beeper/cli", version: "0.6.2" });
-            }
-            if (invocation.arguments.slice(0, 2).join(" ") === "targets status") {
-              return envelope(targetStatus());
-            }
-            if (invocation.arguments.slice(0, 2).join(" ") === "accounts list") {
-              return envelope(accounts());
-            }
-            throw new Error("unexpected subject-probe fixture command");
+          run: () => {
+            cliRuns += 1;
+            throw new Error("the subject probe must not start a CLI child");
+          },
+        },
+        directDependencies: {
+          fetch: (input, init) => {
+            const url = String(input);
+            requests.push({
+              route: `${init?.method ?? "GET"} ${new URL(url).pathname}`,
+              authorization: new Headers(init?.headers).get("Authorization"),
+            });
+            return Promise.resolve(directJsonResponse(
+              url.endsWith("/v1/info") ? directInfo() : accounts(),
+            ));
           },
         },
       });
       expect(subject).toBe(SUBJECT);
-      expect(calls.map((call) => call.arguments[0])).toEqual([
-        "version",
-        "targets",
-        "accounts",
+      expect(subject).not.toBe(staleSubject);
+      expect(requests).toEqual([
+        { route: "GET /v1/info", authorization: "Bearer fixture-never-read-by-test-runner" },
+        { route: "GET /v1/accounts", authorization: "Bearer fixture-never-read-by-test-runner" },
       ]);
+      expect(cliRuns).toBe(0);
     } finally {
       rmSync(path, { recursive: true, force: true });
     }
