@@ -79,6 +79,7 @@ function fakeDependencies(
   store: string,
   messages: readonly WhatsAppMessageExportProjectionItem[],
   nonConversationChatsExcluded = false,
+  aliases?: Readonly<{ pnJid: string | null; lidJid: string | null }>,
 ): WhatsAppMessageLikeMeSourceDependencies {
   return {
     helperPath: "/private/fixed/helper.ts",
@@ -86,7 +87,13 @@ function fakeDependencies(
     runHelper: async (invocation) => {
       const request = JSON.parse(invocation.stdin) as {
         readonly messageStoreIdentity: { readonly dev: string; readonly ino: string };
+        readonly accountSubject: string;
       };
+      const subject = /^whatsapp:(pn|lid):([0-9]+)$/u.exec(request.accountSubject);
+      if (subject?.[1] === undefined || subject[2] === undefined) throw new Error("bad test subject");
+      const accountJidAliases = aliases ?? (subject[1] === "pn"
+        ? { pnJid: `${subject[2]}@s.whatsapp.net`, lidJid: null }
+        : { pnJid: null, lidJid: `${subject[2]}@lid` });
       const stats = lstatSync(join(store, "wacli.db"), { bigint: true });
       const last = messages.at(-1);
       return {
@@ -102,6 +109,7 @@ function fakeDependencies(
             ctimeNs: stats.ctimeNs.toString(),
             schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
           },
+          accountJidAliases,
           nonConversationChatsExcluded,
           messages,
           nextCursor: null,
@@ -120,10 +128,11 @@ async function collect(
   messages: readonly WhatsAppMessageExportProjectionItem[],
   subject = "whatsapp:pn:15551234567",
   nonConversationChatsExcluded = false,
+  aliases?: Readonly<{ pnJid: string | null; lidJid: string | null }>,
 ) {
   const source = createWhatsAppMessageLikeMeSource({
     auth: auth(path, subject),
-    dependencies: fakeDependencies(path, messages, nonConversationChatsExcluded),
+    dependencies: fakeDependencies(path, messages, nonConversationChatsExcluded, aliases),
   });
   const records = [];
   let index = 0;
@@ -272,6 +281,111 @@ describe("WhatsApp Message Like Me source mapping", () => {
       })], "whatsapp:lid:222222222222222")).rejects.toThrow(
         "WhatsApp message export projection protocol",
       );
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("uses the session-proved PN alias for LID-bound direction and self-chat exclusion", async () => {
+    const path = privateStore();
+    const aliases = {
+      pnJid: "15551234567@s.whatsapp.net",
+      lidJid: "222222222222222@lid",
+    } as const;
+    try {
+      const outgoing = await collect(path, [item({
+        fromMe: true,
+        senderJid: "15551234567:4@s.whatsapp.net",
+      })], "whatsapp:lid:222222222222222", false, aliases);
+      expect(outgoing.records.find((record) => record.kind === "message")).toMatchObject({
+        direction: "outgoing",
+      });
+      expect(outgoing.records.find((record) => record.kind === "account")).toMatchObject({
+        handle: null,
+        provenance: {
+          providerId: "222222222222222@lid",
+          connectedAccountProviderId: "222222222222222@lid",
+        },
+      });
+      expect(outgoing.records.filter((record) => record.kind === "participant" && record.isSelf))
+        .toHaveLength(1);
+      await expect(collect(path, [item({
+        chatJid: "120363123456789012@g.us",
+        chatKind: "group",
+        fromMe: false,
+        senderJid: "15551234567:4@s.whatsapp.net",
+      })], "whatsapp:lid:222222222222222", false, aliases)).rejects.toThrow(
+        "WhatsApp message export projection protocol",
+      );
+
+      const selfChat = await collect(path, [item({
+        chatJid: "15551234567@s.whatsapp.net",
+        fromMe: true,
+        senderJid: "15551234567:4@s.whatsapp.net",
+      })], "whatsapp:lid:222222222222222", false, aliases);
+      expect(selfChat.records.map((record) => record.kind)).toEqual(["account", "participant"]);
+      expect(selfChat.completion).toMatchObject({
+        warnings: ["remote-history-incomplete", "self-chat-excluded"],
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when proved account aliases change between projection pages", async () => {
+    const path = privateStore();
+    try {
+      const stats = lstatSync(join(path, "wacli.db"), { bigint: true });
+      let page = 0;
+      const source = createWhatsAppMessageLikeMeSource({
+        auth: auth(path, "whatsapp:lid:222222222222222"),
+        dependencies: {
+          helperPath: "/private/fixed/helper.ts",
+          configPath: "/private/fixed/config.toml",
+          runHelper: async (invocation) => {
+            page += 1;
+            const request = JSON.parse(invocation.stdin) as {
+              readonly messageStoreIdentity: { readonly dev: string; readonly ino: string };
+            };
+            const first = page === 1;
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: `${JSON.stringify({
+                schemaVersion: 1,
+                status: "succeeded",
+                projectionGeneration: {
+                  messageStoreIdentity: request.messageStoreIdentity,
+                  size: stats.size.toString(),
+                  mtimeNs: stats.mtimeNs.toString(),
+                  ctimeNs: stats.ctimeNs.toString(),
+                  schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+                },
+                accountJidAliases: first
+                  ? { pnJid: "15551234567@s.whatsapp.net", lidJid: "222222222222222@lid" }
+                  : { pnJid: null, lidJid: "222222222222222@lid" },
+                nonConversationChatsExcluded: false,
+                messages: first
+                  ? Array.from({ length: 500 }, (_, index) => item({
+                      rowid: String(index + 1),
+                      messageId: `MSG-${String(index + 1)}`,
+                    }))
+                  : [],
+                nextCursor: first ? "500" : null,
+                localInsertPageComplete: !first,
+                checkpoint: first
+                  ? { cursor: "500", anchor: "a".repeat(64) }
+                  : { cursor: "500", anchor: "a".repeat(64) },
+              })}\n`,
+            };
+          },
+        },
+      });
+      await expect((async () => {
+        for await (const _record of source.records) {
+          // Consume the full source so the second page is validated.
+        }
+      })()).rejects.toThrow("bound account aliases changed inside the fixed snapshot");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

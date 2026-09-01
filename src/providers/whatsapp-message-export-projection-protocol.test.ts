@@ -58,7 +58,14 @@ function item(
   };
 }
 
-function response(messages: unknown, checkpointCursor = "1") {
+function response(
+  messages: unknown,
+  checkpointCursor = "1",
+  accountJidAliases: Readonly<{ pnJid: string | null; lidJid: string | null }> = {
+    pnJid: "15551234567@s.whatsapp.net",
+    lidJid: null,
+  },
+) {
   const values = Array.isArray(messages) ? messages : [];
   return {
     schemaVersion: 1,
@@ -70,6 +77,7 @@ function response(messages: unknown, checkpointCursor = "1") {
       ctimeNs: "300",
       schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
     },
+    accountJidAliases,
     nonConversationChatsExcluded: false,
     messages,
     nextCursor: null,
@@ -85,8 +93,12 @@ function parses(
   accountSubject = "whatsapp:pn:15551234567",
 ): boolean {
   try {
+    const lid = /^whatsapp:lid:([0-9]+)$/u.exec(accountSubject)?.[1];
+    const aliases = lid === undefined
+      ? { pnJid: "15551234567@s.whatsapp.net", lidJid: null }
+      : { pnJid: "15551234567@s.whatsapp.net", lidJid: `${lid}@lid` };
     parseWhatsAppMessageExportProjectionResponse(
-      response([value], value.rowid),
+      response([value], value.rowid, aliases),
       request(accountSubject),
     );
     return true;
@@ -125,10 +137,10 @@ describe("WhatsApp message export projection protocol", () => {
     }
   });
 
-  test("enforces the same direction matrix for a LID-bound account without treating its PN alias as self", () => {
+  test("enforces the same direction matrix for a LID-bound account using its proved PN alias", () => {
     const accountSubject = "whatsapp:lid:222222222222222";
     const self = "222222222222222@lid";
-    const sameDigitsPn = "222222222222222@s.whatsapp.net";
+    const pnAlias = "15551234567@s.whatsapp.net";
     const peer = "15557654321@s.whatsapp.net";
     const group = "120363123456789012@g.us";
     const cases = [
@@ -137,12 +149,12 @@ describe("WhatsApp message export projection protocol", () => {
       { chatKind: "dm", chatJid: peer, fromMe: false, senderJid: self, valid: false },
       { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: null, valid: true },
       { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: "222222222222222:3@lid", valid: true },
-      { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: sameDigitsPn, valid: false },
+      { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: pnAlias, valid: true },
       { chatKind: "group", chatJid: group, fromMe: true, senderJid: null, valid: true },
       { chatKind: "group", chatJid: group, fromMe: true, senderJid: self, valid: true },
-      { chatKind: "group", chatJid: group, fromMe: true, senderJid: sameDigitsPn, valid: false },
+      { chatKind: "group", chatJid: group, fromMe: true, senderJid: pnAlias, valid: true },
       { chatKind: "group", chatJid: group, fromMe: false, senderJid: null, valid: true },
-      { chatKind: "group", chatJid: group, fromMe: false, senderJid: sameDigitsPn, valid: true },
+      { chatKind: "group", chatJid: group, fromMe: false, senderJid: pnAlias, valid: false },
       { chatKind: "group", chatJid: group, fromMe: false, senderJid: self, valid: false },
     ] as const;
     for (const candidate of cases) {
@@ -152,6 +164,27 @@ describe("WhatsApp message export projection protocol", () => {
         fromMe: candidate.fromMe,
         senderJid: candidate.senderJid,
       }), accountSubject)).toBe(candidate.valid);
+    }
+  });
+
+  test("binds the exact proved PN and LID aliases to the requested account", () => {
+    const lidRequest = request("whatsapp:lid:222222222222222");
+    expect(() => parseWhatsAppMessageExportProjectionResponse(response([], "1", {
+      pnJid: "15551234567@s.whatsapp.net",
+      lidJid: "222222222222222@lid",
+    }), lidRequest)).not.toThrow();
+    for (const aliases of [
+      { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
+      { pnJid: null, lidJid: "333333333333333@lid" },
+      { pnJid: null, lidJid: null },
+      { pnJid: "15551234567:2@s.whatsapp.net", lidJid: "222222222222222@lid" },
+      { pnJid: "015551234567@s.whatsapp.net", lidJid: "222222222222222@lid" },
+      { pnJid: "15551234567@s.whatsapp.net", lidJid: `${"2".repeat(21)}@lid` },
+    ]) {
+      expect(() => parseWhatsAppMessageExportProjectionResponse(
+        response([], "1", aliases),
+        lidRequest,
+      )).toThrow("accountJidAliases");
     }
   });
 

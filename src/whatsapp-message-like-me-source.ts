@@ -107,6 +107,7 @@ function requireAuth(value: WrenchAuth): WhatsAppAuth & Readonly<{ subject: stri
 function senderJid(
   item: WhatsAppMessageExportProjectionItem,
   accountJid: string,
+  accountJidAliases: ReadonlySet<string>,
   directPeer: string | null,
 ): string | null {
   const explicit = item.senderJid === null
@@ -115,7 +116,7 @@ function senderJid(
   if (item.chatKind === "dm") {
     if (directPeer === null) return fail("direct conversation peer is missing");
     if (item.fromMe) {
-      if (explicit !== null && explicit !== accountJid) {
+      if (explicit !== null && !accountJidAliases.has(explicit)) {
         return fail("outgoing direct sender does not match the bound account");
       }
       return accountJid;
@@ -126,12 +127,12 @@ function senderJid(
     return explicit ?? directPeer;
   }
   if (item.fromMe) {
-    if (explicit !== null && explicit !== accountJid) {
+    if (explicit !== null && !accountJidAliases.has(explicit)) {
       return fail("outgoing group sender does not match the bound account");
     }
     return accountJid;
   }
-  if (explicit === accountJid) {
+  if (explicit !== null && accountJidAliases.has(explicit)) {
     return fail("incoming group sender cannot be the bound account");
   }
   return explicit;
@@ -295,6 +296,7 @@ export function createWhatsAppMessageLikeMeSource(
     let excludedSelfChatRows = 0;
     let payloadPurgedRows = 0;
     let nonConversationChatsExcluded = false;
+    let accountJidAliases: ReadonlySet<string> | null = null;
 
     yield Object.freeze({
       schemaVersion: WHATSAPP_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
@@ -363,12 +365,24 @@ export function createWhatsAppMessageLikeMeSource(
       }
       expectedGeneration = response.projectionGeneration;
       nonConversationChatsExcluded ||= response.nonConversationChatsExcluded;
+      const pageAliases = new Set([
+        response.accountJidAliases.pnJid,
+        response.accountJidAliases.lidJid,
+      ].filter((jid): jid is string => jid !== null));
+      if (accountJidAliases === null) {
+        accountJidAliases = pageAliases;
+      } else if (
+        accountJidAliases.size !== pageAliases.size
+        || [...accountJidAliases].some((jid) => !pageAliases.has(jid))
+      ) {
+        return fail("bound account aliases changed inside the fixed snapshot");
+      }
 
       for (const item of response.messages) {
         messageRows += 1;
         if (
           item.chatKind === "dm"
-          && canonicalWhatsAppParticipantJid(item.chatJid) === accountJid
+          && accountJidAliases.has(canonicalWhatsAppParticipantJid(item.chatJid))
         ) {
           excludedSelfChatRows += 1;
           continue;
@@ -409,7 +423,7 @@ export function createWhatsAppMessageLikeMeSource(
             participants.set(directPeer, { jid: directPeer, displayName: item.chatName, isSelf: false });
           }
         }
-        const resolvedSenderJid = senderJid(item, accountJid, directPeer);
+        const resolvedSenderJid = senderJid(item, accountJid, accountJidAliases, directPeer);
         if (resolvedSenderJid !== null) {
           conversation.participantJids.add(resolvedSenderJid);
           const current = participants.get(resolvedSenderJid);

@@ -26,19 +26,27 @@ export type WhatsAppMessageLikeMeExportReceipt = Readonly<{
   source: Readonly<{ id: "wacli-local"; version: "1.0.0" }>;
   provider: Readonly<{ id: "whatsapp"; version: "0.15.0" }>;
   completeness: Readonly<{
-    kind: "bounded-local" | "truncated" | "unknown";
-    reason: string | null;
+    kind: "bounded-local";
+    reason: "local-store-coverage-unknown";
     observedFrom: string | null;
     observedThrough: string | null;
   }>;
-  warnings: readonly string[];
+  warnings: readonly [
+    "remote-history-incomplete",
+    ...(
+      | "reaction-state-unproven"
+      | "self-chat-excluded"
+      | "message-payload-purged"
+      | "non-conversation-chats-excluded"
+    )[],
+  ];
   counts: Readonly<{
-    account: number;
+    account: 1;
     participant: number;
     conversation: number;
     message: number;
-    reaction: number;
-    tombstone: number;
+    reaction: 0;
+    tombstone: 0;
   }>;
   output: Readonly<{
     schemaVersion: 2;

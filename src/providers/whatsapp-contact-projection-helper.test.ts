@@ -54,6 +54,7 @@ function createStore(options: {
   readonly overlongPnContact?: boolean;
   readonly overlongPnDevice?: boolean;
   readonly malformedSentinelContact?: boolean;
+  readonly lidDeviceOwner?: boolean;
 } = {}): string {
   const path = privateDirectory();
   const database = new Database(join(path, "session.db"), {
@@ -102,9 +103,10 @@ function createStore(options: {
       ${extraTables}
       ${extraDeviceIndexes}
     `);
+    const ownerJid = options.lidDeviceOwner === true ? OWNER_LID : OWNER_JID;
     database.query(
       "INSERT INTO whatsmeow_device (jid, lid) VALUES (?1, ?2)",
-    ).run(OWNER_JID, OWNER_LID);
+    ).run(ownerJid, OWNER_LID);
     database.query(
       "INSERT INTO whatsmeow_device (jid, lid) VALUES (?1, ?2)",
     ).run("18888888888@s.whatsapp.net", "888888888888888");
@@ -125,7 +127,7 @@ function createStore(options: {
       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
     `);
     insert.run(
-      OWNER_JID,
+      ownerJid,
       options.overlongPnContact === true
         ? "123456789012345678901@s.whatsapp.net"
         : FIRST_CONTACT_JID,
@@ -136,7 +138,7 @@ function createStore(options: {
       "+1 ••• ••• 0001",
     );
     insert.run(
-      OWNER_JID,
+      ownerJid,
       options.malformedSentinelContact === true
         ? "19999private@s.whatsapp.net"
         : SECOND_CONTACT_JID,
@@ -147,7 +149,7 @@ function createStore(options: {
       null,
     );
     insert.run(
-      OWNER_JID,
+      ownerJid,
       "120363123456789012@g.us",
       null,
       "Excluded Group",
@@ -361,6 +363,7 @@ describe("WhatsApp account-bound contact projection helper", () => {
         code: "owner-mismatch",
       },
       { path: createStore({ duplicateLidOwner: true }), code: "owner-mismatch", lid: true },
+      { path: createStore({ lidDeviceOwner: true }), code: "owner-mismatch", lid: true },
     ] as const;
     try {
       for (const scenario of cases) {

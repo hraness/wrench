@@ -33,6 +33,22 @@ const MAX_SESSION_DATABASE_BYTES = 128 * 1024 * 1024;
 const MAX_DEVICE_ROWS = 1_024;
 const SQLITE_CACHE_KIB = 2_048;
 
+export type WhatsAppMatchedOwnerIdentity = Readonly<{
+  storageJid: string;
+  accountJidAliases: Readonly<{
+    pnJid: string | null;
+    lidJid: string | null;
+  }>;
+}>;
+
+export const WHATSAPP_MATCHED_OWNER_IDENTITY = Symbol(
+  "wrench.whatsapp.matched-owner-identity",
+);
+
+type WhatsAppContactProjectionInternalSuccess = WhatsAppContactProjectionSuccess & Readonly<{
+  [WHATSAPP_MATCHED_OWNER_IDENTITY]: WhatsAppMatchedOwnerIdentity;
+}>;
+
 class HelperFailure extends Error {
   readonly code: WhatsAppContactProjectionErrorCode;
 
@@ -497,25 +513,19 @@ function assertPinnedSchema(database: Database): void {
 }
 
 const DEVICE_PN_JID_PATTERN = /^([0-9]{5,20})(?::[0-9]{1,5})?@s\.whatsapp\.net$/u;
-const DEVICE_LID_JID_PATTERN = /^([0-9]{5,32})(?::[0-9]{1,5})?@lid$/u;
 const LID_VALUE_PATTERN = /^([0-9]{5,32})(?::[0-9]{1,5})?@lid$/u;
 const LID_DIGITS_PATTERN = /^[0-9]{5,32}$/u;
 
 function normalizedDeviceJid(value: unknown): Readonly<{
   id: string;
-  kind: "pn" | "lid";
 }> {
   if (typeof value !== "string" || value.length > 96) fail("owner-mismatch");
   const phone = DEVICE_PN_JID_PATTERN.exec(value);
-  const lid = DEVICE_LID_JID_PATTERN.exec(value);
-  const id = phone?.[1] ?? lid?.[1];
+  const id = phone?.[1];
   if (id === undefined) {
     return fail("owner-mismatch");
   }
-  return Object.freeze({
-    id,
-    kind: phone === null ? "lid" : "pn",
-  });
+  return Object.freeze({ id });
 }
 
 function normalizedLid(value: unknown): string | null {
@@ -527,10 +537,10 @@ function normalizedLid(value: unknown): string | null {
   return match[1];
 }
 
-function matchedOwnerJid(
+function matchedOwnerIdentity(
   database: Database,
   accountSubject: string,
-): string {
+): WhatsAppMatchedOwnerIdentity {
   const subject = parseWhatsAppContactProjectionSubject(accountSubject);
   let deviceRows: readonly SqliteRow[];
   try {
@@ -545,19 +555,21 @@ function matchedOwnerJid(
     return fail("owner-mismatch");
   }
   if (deviceRows.length > MAX_DEVICE_ROWS) fail("owner-mismatch");
-  const matches: string[] = [];
+  const matches: WhatsAppMatchedOwnerIdentity[] = [];
   for (const row of deviceRows) {
     exactRowKeys(row, ["jid", "lid"]);
     if (typeof row.jid !== "string") fail("owner-mismatch");
     const jid = normalizedDeviceJid(row.jid);
     const lid = normalizedLid(row.lid);
+    const pnJid = `${jid.id}@s.whatsapp.net`;
+    const lidJid = lid === null ? null : `${lid}@lid`;
     if (
-      (subject.kind === "pn" && jid.kind === "pn" && jid.id === subject.id)
-      || (subject.kind === "lid" && (
-        (jid.kind === "lid" && jid.id === subject.id)
-        || lid === subject.id
-      ))
-    ) matches.push(row.jid);
+      (subject.kind === "pn" && jid.id === subject.id)
+      || (subject.kind === "lid" && lid === subject.id)
+    ) matches.push(Object.freeze({
+      storageJid: row.jid,
+      accountJidAliases: Object.freeze({ pnJid, lidJid }),
+    }));
   }
   if (matches.length !== 1) fail("owner-mismatch");
   return matches[0]!;
@@ -623,8 +635,8 @@ function projectContact(row: SqliteRow): WhatsAppContactProjectionContact {
 function projectContacts(
   database: Database,
   request: WhatsAppContactProjectionRequest,
-): WhatsAppContactProjectionSuccess {
-  const ownerJid = matchedOwnerJid(database, request.accountSubject);
+): WhatsAppContactProjectionInternalSuccess {
+  const owner = matchedOwnerIdentity(database, request.accountSubject);
   let projectedRows: readonly SqliteRow[];
   try {
     projectedRows = rows(database.query(`
@@ -644,7 +656,7 @@ function projectContacts(
         )
       ORDER BY their_jid COLLATE BINARY ASC
       LIMIT ?3
-    `).iterate(ownerJid, request.cursor, request.limit + 1), request.limit + 1);
+    `).iterate(owner.storageJid, request.cursor, request.limit + 1), request.limit + 1);
   } catch (error) {
     if (error instanceof HelperFailure) throw error;
     return fail("projection-invalid");
@@ -664,19 +676,26 @@ function projectContacts(
   }
   const hasMore = projectedContacts.length > request.limit;
   const contacts = Object.freeze(projectedContacts.slice(0, request.limit));
-  return Object.freeze({
+  const result = {
     schemaVersion: WHATSAPP_CONTACT_PROJECTION_PROTOCOL_VERSION,
     status: "succeeded",
     contacts,
     nextCursor: hasMore ? contacts.at(-1)?.providerId ?? null : null,
     localContactTablePageComplete: !hasMore,
+  } as WhatsAppContactProjectionSuccess;
+  Object.defineProperty(result, WHATSAPP_MATCHED_OWNER_IDENTITY, {
+    configurable: false,
+    enumerable: false,
+    value: owner,
+    writable: false,
   });
+  return Object.freeze(result) as WhatsAppContactProjectionInternalSuccess;
 }
 
 function projectDatabaseBuffer(
   buffer: Buffer,
   request: WhatsAppContactProjectionRequest,
-): WhatsAppContactProjectionSuccess {
+): WhatsAppContactProjectionInternalSuccess {
   let database: Database;
   try {
     database = Database.deserialize(buffer, {
@@ -703,7 +722,7 @@ function projectDatabaseBuffer(
 
 export function projectWhatsAppContactsFromBoundCwd(
   requestValue: unknown,
-): WhatsAppContactProjectionSuccess {
+): WhatsAppContactProjectionInternalSuccess {
   const request = parseWhatsAppContactProjectionRequest(requestValue);
   const initialCwd = assertBoundCwd(request);
   assertNoSidecars();
@@ -726,7 +745,7 @@ export function projectWhatsAppContactsFromBoundCwd(
 
   let initialFile: BigIntStats | undefined;
   let buffer: Buffer | undefined;
-  let result: WhatsAppContactProjectionSuccess | undefined;
+  let result: WhatsAppContactProjectionInternalSuccess | undefined;
   let failure: unknown;
   try {
     initialFile = fstatSync(descriptor, { bigint: true });

@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import { canonicalJson, sha256 } from "./canonical-json";
 import { requireWhatsAppMessageLikeMeReceiptRequestBinding } from "./whatsapp-client-binding";
-import { parseWhatsAppMessageLikeMeExportReceipt } from "./whatsapp-client";
+import {
+  exportWhatsAppMessageLikeMeSync,
+  parseWhatsAppMessageLikeMeExportReceipt,
+} from "./whatsapp-client";
 
 function receipt() {
   const projection = {
@@ -28,7 +31,7 @@ function receipt() {
       observedThrough: "2026-08-28T12:00:00.000Z",
     },
     warnings: ["remote-history-incomplete"],
-    counts: { account: 1, participant: 2, conversation: 1, message: 5, reaction: 1, tombstone: 0 },
+    counts: { account: 1, participant: 2, conversation: 1, message: 5, reaction: 0, tombstone: 0 },
     output: {
       schemaVersion: 2,
       format: "message-like-me.local-message-bundle",
@@ -51,6 +54,17 @@ function receipt() {
       receiptSha256: sha256(canonicalJson(projection)),
     },
   } as const;
+}
+
+function resigned(value: Readonly<Record<string, unknown>>) {
+  const { integrity: _integrity, ...projection } = value;
+  return {
+    ...projection,
+    integrity: {
+      algorithm: "sha256",
+      receiptSha256: sha256(canonicalJson(projection)),
+    },
+  };
 }
 
 describe("public WhatsApp export receipt parser", () => {
@@ -106,6 +120,43 @@ describe("public WhatsApp export receipt parser", () => {
     })).toThrow("dense array");
   });
 
+  test("rejects producer-impossible completeness, warning, and count states", () => {
+    const valid = receipt();
+    const impossible = [
+      { ...valid, completeness: { ...valid.completeness, kind: "truncated" } },
+      { ...valid, completeness: { ...valid.completeness, reason: null } },
+      { ...valid, completeness: { ...valid.completeness, observedFrom: null } },
+      { ...valid, warnings: ["remote-history-incomplete", "unknown-warning"] },
+      { ...valid, warnings: ["self-chat-excluded", "remote-history-incomplete"] },
+      { ...valid, warnings: ["remote-history-incomplete", "self-chat-excluded", "reaction-state-unproven"] },
+      { ...valid, counts: { ...valid.counts, account: 0 } },
+      { ...valid, counts: { ...valid.counts, participant: 0 } },
+      { ...valid, counts: { ...valid.counts, reaction: 1 } },
+      { ...valid, counts: { ...valid.counts, tombstone: 1 } },
+      { ...valid, counts: { ...valid.counts, conversation: 6 } },
+      {
+        ...valid,
+        completeness: { ...valid.completeness, observedFrom: null, observedThrough: null },
+      },
+      {
+        ...valid,
+        warnings: ["remote-history-incomplete", "message-payload-purged"],
+        counts: { ...valid.counts, conversation: 0, message: 0 },
+        completeness: { ...valid.completeness, observedFrom: null, observedThrough: null },
+      },
+    ];
+    for (const candidate of impossible) {
+      expect(() => parseWhatsAppMessageLikeMeExportReceipt(resigned(candidate)))
+        .toThrow();
+    }
+    expect(parseWhatsAppMessageLikeMeExportReceipt(resigned({
+      ...valid,
+      warnings: ["remote-history-incomplete", "reaction-state-unproven", "self-chat-excluded"],
+    }))).toMatchObject({
+      warnings: ["remote-history-incomplete", "reaction-state-unproven", "self-chat-excluded"],
+    });
+  });
+
   test("binds a valid receipt to the exact requested auth and output", () => {
     const parsed = parseWhatsAppMessageLikeMeExportReceipt(receipt());
     expect(requireWhatsAppMessageLikeMeReceiptRequestBinding(parsed, {
@@ -120,5 +171,18 @@ describe("public WhatsApp export receipt parser", () => {
       authId: "whatsapp-main",
       output: "/private/tmp/message-like-me-other",
     })).toThrow("output directory does not match");
+  });
+
+  test("rejects client coordinates beyond the CLI auth and path bounds before spawning", () => {
+    const validAuth = `a${"b".repeat(47)}`;
+    for (const request of [
+      { authId: `${validAuth}c`, output: "/private/tmp/message-like-me" },
+      { authId: "whatsapp-main", output: `/private/tmp/${"é".repeat(2_042)}` },
+      { authId: "whatsapp-main", output: "/private/tmp/message-like-me\nother" },
+    ]) {
+      expect(() => exportWhatsAppMessageLikeMeSync(request)).toThrow(
+        "request requires a lowercase authId and normalized absolute output",
+      );
+    }
   });
 });

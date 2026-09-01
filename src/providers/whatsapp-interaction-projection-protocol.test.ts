@@ -46,6 +46,7 @@ function terminal(interactions: unknown) {
     schemaVersion: 1,
     status: "succeeded",
     projectionGeneration: generation(),
+    accountJidAliases: { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
     interactions,
     nextCursor: null,
     localInsertPageComplete: true,
@@ -81,6 +82,7 @@ describe("WhatsApp interaction projection protocol", () => {
       schemaVersion: 1,
       status: "succeeded",
       projectionGeneration: generation(),
+      accountJidAliases: { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
       interactions: [interaction("42"), interaction("43")],
       nextCursor: "43",
       localInsertPageComplete: false,
@@ -99,6 +101,8 @@ describe("WhatsApp interaction projection protocol", () => {
       { ...value, interactions: [{ ...interaction("42"), body: "private" }] },
       { ...value, interactions: [{ ...interaction("42"), timestamp: "2026-08-18T12:00:00Z" }] },
       { ...value, checkpoint: { cursor: "42", anchor: "d".repeat(64) } },
+      { ...value, accountJidAliases: { pnJid: "015551234567@s.whatsapp.net", lidJid: null } },
+      { ...value, accountJidAliases: { pnJid: "1".repeat(16) + "@s.whatsapp.net", lidJid: null } },
     ]) expect(() => parseWhatsAppInteractionProjectionResponse(invalid, request())).toThrow();
   });
 
@@ -107,6 +111,7 @@ describe("WhatsApp interaction projection protocol", () => {
       schemaVersion: 1,
       status: "succeeded",
       projectionGeneration: generation(),
+      accountJidAliases: { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
       interactions: [interaction("42")],
       nextCursor: null,
       localInsertPageComplete: true,
@@ -116,6 +121,7 @@ describe("WhatsApp interaction projection protocol", () => {
       schemaVersion: 1,
       status: "succeeded",
       projectionGeneration: generation(),
+      accountJidAliases: { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
       interactions: [{
         ...interaction("42"),
         chatJid: "0@s.whatsapp.net",

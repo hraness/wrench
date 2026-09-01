@@ -52,6 +52,11 @@ export type WhatsAppInteractionProjectionItem = Readonly<{
   chatKind: "dm" | "group" | "broadcast" | "newsletter" | "unknown";
 }>;
 
+export type WhatsAppInteractionAccountJidAliases = Readonly<{
+  pnJid: string | null;
+  lidJid: string | null;
+}>;
+
 export const WHATSAPP_INTERACTION_PROJECTION_ERROR_CODES = Object.freeze([
   "request-invalid",
   "store-binding-invalid",
@@ -79,6 +84,7 @@ export type WhatsAppInteractionProjectionSuccess = Readonly<{
     messageStoreIdentity: WhatsAppInteractionProjectionFileIdentity;
     schemaFingerprint: typeof WHATSAPP_INTERACTION_PROJECTION_SCHEMA_FINGERPRINT;
   }>;
+  accountJidAliases: WhatsAppInteractionAccountJidAliases;
   interactions: readonly WhatsAppInteractionProjectionItem[];
   nextCursor: string | null;
   localInsertPageComplete: boolean;
@@ -297,6 +303,31 @@ function interaction(value: unknown, label: string): WhatsAppInteractionProjecti
   });
 }
 
+function accountJidAliases(
+  value: unknown,
+  subject: string | undefined,
+): WhatsAppInteractionAccountJidAliases {
+  const parsed = record(value, "response.accountJidAliases");
+  exactKeys(parsed, ["pnJid", "lidJid"], "response.accountJidAliases");
+  const pnJid = parsed.pnJid === null
+    ? null
+    : typeof parsed.pnJid === "string"
+        && /^[1-9][0-9]{4,14}@s\.whatsapp\.net$/u.test(parsed.pnJid)
+      ? parsed.pnJid
+      : fail("response.accountJidAliases.pnJid");
+  const lidJid = parsed.lidJid === null
+    ? null
+    : typeof parsed.lidJid === "string" && /^[1-9][0-9]{4,19}@lid$/u.test(parsed.lidJid)
+      ? parsed.lidJid
+      : fail("response.accountJidAliases.lidJid");
+  if (pnJid === null && lidJid === null) fail("response.accountJidAliases");
+  if (subject !== undefined) {
+    const bound = legacyInteractionAccountSubjectJid(subject);
+    if (bound !== pnJid && bound !== lidJid) fail("response.accountJidAliases binding");
+  }
+  return Object.freeze({ pnJid, lidJid });
+}
+
 export function parseWhatsAppInteractionProjectionResponse(
   value: unknown,
   request?: Pick<
@@ -320,7 +351,7 @@ export function parseWhatsAppInteractionProjectionResponse(
   }
   exactKeys(parsed, [
     "schemaVersion", "status", "projectionGeneration", "interactions", "nextCursor",
-    "localInsertPageComplete", "checkpoint",
+    "localInsertPageComplete", "checkpoint", "accountJidAliases",
   ], "response");
   if (
     parsed.schemaVersion !== WHATSAPP_INTERACTION_PROJECTION_PROTOCOL_VERSION
@@ -356,16 +387,19 @@ export function parseWhatsAppInteractionProjectionResponse(
   )) fail("response.interactions");
   const interactions = rawInteractions.map((item, index) =>
     interaction(item, `response.interactions[${index}]`));
+  const aliases = accountJidAliases(parsed.accountJidAliases, request?.accountSubject);
   if (request?.accountSubject !== undefined) {
-    const selfJid = legacyInteractionAccountSubjectJid(request.accountSubject);
+    const selfJids = new Set([aliases.pnJid, aliases.lidJid].filter(
+      (value): value is string => value !== null,
+    ));
     for (const item of interactions) {
       if (item.chatKind !== "dm" && item.chatKind !== "group") continue;
       const senderJid = item.senderJid === null
         ? null
         : legacyInteractionParticipantJid(item.senderJid);
       const valid = item.chatKind === "dm"
-        ? senderJid === null || senderJid === (item.fromMe ? selfJid : item.chatJid)
-        : senderJid === null || (item.fromMe ? senderJid === selfJid : senderJid !== selfJid);
+        ? senderJid === null || (item.fromMe ? selfJids.has(senderJid) : senderJid === item.chatJid)
+        : senderJid === null || (item.fromMe ? selfJids.has(senderJid) : !selfJids.has(senderJid));
       if (!valid) fail("response.interactions sender direction");
     }
   }
@@ -409,6 +443,7 @@ export function parseWhatsAppInteractionProjectionResponse(
       messageStoreIdentity,
       schemaFingerprint: WHATSAPP_INTERACTION_PROJECTION_SCHEMA_FINGERPRINT,
     }),
+    accountJidAliases: aliases,
     interactions: Object.freeze(interactions),
     nextCursor,
     localInsertPageComplete: parsed.localInsertPageComplete,

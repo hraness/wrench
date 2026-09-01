@@ -145,7 +145,7 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
   exact(auth, ["id", "provider", "identitySha256"], "receipt.auth");
   if (
     typeof auth.id !== "string"
-    || !/^[a-z][a-z0-9-]{0,127}$/u.test(auth.id)
+    || !/^[a-z][a-z0-9-]{0,47}$/u.test(auth.id)
     || auth.provider !== "whatsapp"
   ) return fail("receipt auth identity is unsupported");
   digest(auth.identitySha256, "receipt.auth.identitySha256");
@@ -163,28 +163,51 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
   exact(completeness, ["kind", "reason", "observedFrom", "observedThrough"], "receipt.completeness");
   if (
     completeness.kind !== "bounded-local"
-    && completeness.kind !== "truncated"
-    && completeness.kind !== "unknown"
-  ) return fail("receipt completeness kind is unsupported");
-  if (
-    completeness.reason !== null
-    && (typeof completeness.reason !== "string" || !/^[a-z0-9][a-z0-9._+-]*$/u.test(completeness.reason))
-  ) return fail("receipt completeness reason is unsupported");
+    || completeness.reason !== "local-store-coverage-unknown"
+  ) return fail("receipt completeness boundary is unsupported");
   const observedFrom = timestamp(completeness.observedFrom, "receipt.completeness.observedFrom", true);
   const observedThrough = timestamp(completeness.observedThrough, "receipt.completeness.observedThrough", true);
-  if (observedFrom !== null && observedThrough !== null && observedThrough < observedFrom) {
+  if (
+    (observedFrom === null) !== (observedThrough === null)
+    || (observedFrom !== null && observedThrough !== null && observedThrough < observedFrom)
+  ) {
     return fail("receipt completeness timestamps are reversed");
   }
-  const warnings = denseDataArray(root.warnings, "receipt.warnings", 128);
+  const warnings = denseDataArray(root.warnings, "receipt.warnings", 5);
+  const warningOrder = [
+    "remote-history-incomplete",
+    "reaction-state-unproven",
+    "self-chat-excluded",
+    "message-payload-purged",
+    "non-conversation-chats-excluded",
+  ] as const;
   if (
-    warnings.some((item) =>
-      typeof item !== "string" || !/^[a-z0-9][a-z0-9._+-]*$/u.test(item))
-    || new Set(warnings).size !== warnings.length
+    warnings[0] !== warningOrder[0]
+    || warnings.some((item) => typeof item !== "string" || !warningOrder.includes(
+      item as (typeof warningOrder)[number],
+    ))
+    || warnings.some((item, index) => index > 0
+      && warningOrder.indexOf(item as (typeof warningOrder)[number])
+        <= warningOrder.indexOf(warnings[index - 1] as (typeof warningOrder)[number]))
   ) return fail("receipt warnings are unsupported");
   const counts = record(root.counts, "receipt.counts");
   const countKinds = ["account", "participant", "conversation", "message", "reaction", "tombstone"] as const;
   exact(counts, countKinds, "receipt.counts");
-  for (const kind of countKinds) nonNegative(counts[kind], `receipt.counts.${kind}`);
+  const parsedCounts = Object.fromEntries(countKinds.map((kind) => [
+    kind,
+    nonNegative(counts[kind], `receipt.counts.${kind}`),
+  ])) as Record<(typeof countKinds)[number], number>;
+  const observed = observedFrom !== null;
+  if (
+    parsedCounts.account !== 1
+    || parsedCounts.participant < 1
+    || parsedCounts.reaction !== 0
+    || parsedCounts.tombstone !== 0
+    || (parsedCounts.message > 0) !== observed
+    || (parsedCounts.conversation > 0) !== observed
+    || parsedCounts.conversation > parsedCounts.message
+    || (warnings.includes("message-payload-purged") && parsedCounts.message === 0)
+  ) return fail("receipt counts contradict the fixed producer");
   const output = record(root.output, "receipt.output");
   exact(output, ["schemaVersion", "format", "directory", "manifestSha256"], "receipt.output");
   if (
@@ -193,6 +216,8 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
     || typeof output.directory !== "string"
     || !isAbsolute(output.directory)
     || resolve(output.directory) !== output.directory
+    || Buffer.byteLength(output.directory, "utf8") > 4_096
+    || /[\0\r\n]/u.test(output.directory)
   ) return fail("receipt output identity is unsupported");
   digest(output.manifestSha256, "receipt.output.manifestSha256");
   const privacy = record(root.privacy, "receipt.privacy");
@@ -258,10 +283,12 @@ export function exportWhatsAppMessageLikeMeSync(
   exact(request, ["authId", "output"], "request");
   if (
     typeof request.authId !== "string"
-    || !/^[a-z][a-z0-9-]{0,127}$/u.test(request.authId)
+    || !/^[a-z][a-z0-9-]{0,47}$/u.test(request.authId)
     || typeof request.output !== "string"
     || !isAbsolute(request.output)
     || resolve(request.output) !== request.output
+    || Buffer.byteLength(request.output, "utf8") > 4_096
+    || /[\0\r\n]/u.test(request.output)
   ) return fail("request requires a lowercase authId and normalized absolute output");
   const requested = Object.freeze({
     authId: request.authId,

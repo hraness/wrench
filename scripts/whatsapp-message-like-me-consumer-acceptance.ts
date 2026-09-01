@@ -80,20 +80,6 @@ function fixtureRecords(): readonly LocalMessageBundleV2Record[] {
     }),
     Object.freeze({
       schemaVersion: LOCAL_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
-      kind: "reaction",
-      id: "whatsapp:fixture:reaction:incoming",
-      accountId: ACCOUNT_ID,
-      network: "whatsapp",
-      provenance: provenance(`${PEER_JID}/FIXTURE-REACTION`),
-      messageId: null,
-      messageProviderId: `${PEER_JID}/FIXTURE-INCOMING`,
-      participantId: PEER_PARTICIPANT_ID,
-      body: "👍",
-      reactedAt: "2026-08-28T12:01:30.000Z",
-      state: "active",
-    }),
-    Object.freeze({
-      schemaVersion: LOCAL_MESSAGE_BUNDLE_V2_SCHEMA_VERSION,
       kind: "message",
       id: "whatsapp:fixture:message:outgoing",
       accountId: ACCOUNT_ID,
@@ -243,8 +229,8 @@ function exactSourceSummary(
   if (
     typeof source.id !== "string"
     || source.conversations !== 1
-    || source.messages !== 3
-    || source.reactions !== 1
+    || source.messages !== 2
+    || source.reactions !== 0
   ) {
     throw new Error(
       `Message Like Me ${version} did not retain the expected source, message, and reaction counts: ${JSON.stringify(source)}`,

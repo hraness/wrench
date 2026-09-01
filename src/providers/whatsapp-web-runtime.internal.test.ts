@@ -1000,6 +1000,10 @@ describe("WhatsApp zero-network read plans", () => {
                     schemaFingerprint:
                       "sha256:994b5024bc2479a269866060ea14a06230532b5aba8365d31b1f94113df3bc57",
                   },
+                  accountJidAliases: {
+                    pnJid: "15551234567@s.whatsapp.net",
+                    lidJid: null,
+                  },
                   interactions: [{
                     rowid: "42",
                     chatJid: CHAT_JID,

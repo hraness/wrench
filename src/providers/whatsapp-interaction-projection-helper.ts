@@ -12,14 +12,17 @@ import { createHash } from "node:crypto";
 import { Database, constants as sqliteConstants } from "bun:sqlite";
 
 import {
-  canonicalWhatsAppAccountSubjectJid,
   canonicalWhatsAppParticipantJid,
 } from "./whatsapp-account-identity";
 import {
   WHATSAPP_CONTACT_PROJECTION_PROTOCOL_VERSION,
   isExactWhatsAppContactProjectionMode,
 } from "./whatsapp-contact-projection-protocol";
-import { projectWhatsAppContactsFromBoundCwd } from "./whatsapp-contact-projection-helper";
+import {
+  WHATSAPP_MATCHED_OWNER_IDENTITY,
+  projectWhatsAppContactsFromBoundCwd,
+  type WhatsAppMatchedOwnerIdentity,
+} from "./whatsapp-contact-projection-helper";
 import {
   WHATSAPP_INTERACTION_PROJECTION_MAX_STDIN_BYTES,
   WHATSAPP_INTERACTION_PROJECTION_MAX_STDOUT_BYTES,
@@ -475,15 +478,6 @@ function projectedJid(value: unknown, nullable = false): string | null {
   return value;
 }
 
-function legacyInteractionAccountSubjectJid(subject: string): string {
-  const match = /^whatsapp:(pn):([0-9]{5,20})$/u.exec(subject)
-    ?? /^whatsapp:(lid):([0-9]{5,32})$/u.exec(subject);
-  if (match?.[1] === undefined || match[2] === undefined) return fail("owner-mismatch");
-  return match[1] === "pn"
-    ? `${match[2]}@s.whatsapp.net`
-    : `${match[2]}@lid`;
-}
-
 function legacyInteractionParticipantJid(value: string): string {
   const match = /^([0-9]{5,20})(?::[0-9]{1,5})?@s\.whatsapp\.net$/u.exec(value)
     ?? /^([0-9]{5,32})(?::[0-9]{1,5})?@lid$/u.exec(value);
@@ -495,7 +489,7 @@ function legacyInteractionParticipantJid(value: string): string {
 
 function assertMessageDirection(
   item: Pick<WhatsAppInteractionProjectionItem, "chatJid" | "chatKind" | "senderJid" | "fromMe">,
-  accountSubject: string,
+  owner: WhatsAppMatchedOwnerIdentity,
   grammar: "canonical" | "legacy-interaction",
 ): void {
   if (item.chatKind !== "dm" && item.chatKind !== "group") return;
@@ -509,23 +503,24 @@ function assertMessageDirection(
     || (item.chatKind === "group" && !groupJid.test(item.chatJid))) {
     fail("projection-invalid");
   }
-  const selfJid = grammar === "canonical"
-    ? canonicalWhatsAppAccountSubjectJid(accountSubject)
-    : legacyInteractionAccountSubjectJid(accountSubject);
+  const selfJids = new Set([
+    owner.accountJidAliases.pnJid,
+    owner.accountJidAliases.lidJid,
+  ].filter((value): value is string => value !== null));
   const senderJid = item.senderJid === null
     ? null
     : grammar === "canonical"
       ? canonicalWhatsAppParticipantJid(item.senderJid)
       : legacyInteractionParticipantJid(item.senderJid);
   const valid = item.chatKind === "dm"
-    ? senderJid === null || senderJid === (item.fromMe ? selfJid : item.chatJid)
-    : senderJid === null || (item.fromMe ? senderJid === selfJid : senderJid !== selfJid);
+    ? senderJid === null || (item.fromMe ? selfJids.has(senderJid) : senderJid === item.chatJid)
+    : senderJid === null || (item.fromMe ? selfJids.has(senderJid) : !selfJids.has(senderJid));
   if (!valid) fail("projection-invalid");
 }
 
 function projectItem(
   row: SqliteRow,
-  accountSubject: string,
+  owner: WhatsAppMatchedOwnerIdentity,
 ): WhatsAppInteractionProjectionItem {
   exactRowKeys(row, ["rowid", "chat_jid", "msg_id", "sender_jid", "ts", "from_me", "chat_kind"]);
   const rowid = sqliteBigInt(row.rowid);
@@ -554,7 +549,7 @@ function projectItem(
     fromMe: fromMe === 1n,
     chatKind: chatJid === SYSTEM_SENTINEL_JID ? "unknown" : row.chat_kind,
   });
-  assertMessageDirection(projected, accountSubject, "legacy-interaction");
+  assertMessageDirection(projected, owner, "legacy-interaction");
   return projected;
 }
 
@@ -571,6 +566,7 @@ function interactionAnchor(item: WhatsAppInteractionProjectionItem): string {
 function assertCursorAnchor(
   database: Database,
   request: WhatsAppInteractionProjectionRequest,
+  owner: WhatsAppMatchedOwnerIdentity,
 ): void {
   if (request.cursor === "0") return;
   let projected: readonly SqliteRow[];
@@ -591,13 +587,14 @@ function assertCursorAnchor(
   }
   if (
     projected.length !== 1
-    || interactionAnchor(projectItem(projected[0]!, request.accountSubject)) !== request.cursorAnchor
+    || interactionAnchor(projectItem(projected[0]!, owner)) !== request.cursorAnchor
   ) fail("projection-invalid");
 }
 
 function projectInteractions(
   database: Database,
   request: WhatsAppInteractionProjectionRequest,
+  owner: WhatsAppMatchedOwnerIdentity,
 ): WhatsAppInteractionProjectionSuccess {
   let projectedRows: readonly SqliteRow[];
   try {
@@ -620,7 +617,7 @@ function projectInteractions(
     if (error instanceof HelperFailure) throw error;
     return fail("projection-invalid");
   }
-  const projected = projectedRows.map((row) => projectItem(row, request.accountSubject));
+  const projected = projectedRows.map((row) => projectItem(row, owner));
   for (let index = 0; index < projected.length; index += 1) {
     const previous = index === 0 ? request.cursor : projected[index - 1]?.rowid;
     if (previous === undefined || BigInt(projected[index]!.rowid) <= BigInt(previous)) {
@@ -640,6 +637,7 @@ function projectInteractions(
       messageStoreIdentity: request.messageStoreIdentity,
       schemaFingerprint: WHATSAPP_INTERACTION_PROJECTION_SCHEMA_FINGERPRINT,
     }),
+    accountJidAliases: owner.accountJidAliases,
     interactions,
     nextCursor: hasMore ? interactions.at(-1)?.rowid ?? null : null,
     localInsertPageComplete: !hasMore,
@@ -711,7 +709,7 @@ function projectedFileLength(value: unknown): number | null {
 
 function projectMessageExportItem(
   row: SqliteRow,
-  accountSubject: string,
+  owner: WhatsAppMatchedOwnerIdentity,
 ): WhatsAppMessageExportProjectionItem {
   exactRowKeys(row, [
     "rowid", "chat_jid", "chat_kind", "chat_name", "msg_id", "sender_jid", "sender_name",
@@ -785,7 +783,7 @@ function projectMessageExportItem(
     edited,
     editedAt: edited ? rawEditedAt : null,
   });
-  assertMessageDirection(projected, accountSubject, "canonical");
+  assertMessageDirection(projected, owner, "canonical");
   return projected;
 }
 
@@ -861,6 +859,7 @@ const MESSAGE_EXPORT_COLUMNS = `
 function assertMessageExportCursorAnchor(
   database: Database,
   request: WhatsAppMessageExportProjectionRequest,
+  owner: WhatsAppMatchedOwnerIdentity,
 ): void {
   if (request.cursor === "0") return;
   let projected: readonly SqliteRow[];
@@ -878,7 +877,7 @@ function assertMessageExportCursorAnchor(
   }
   if (
     projected.length !== 1
-    || messageExportAnchor(projectMessageExportItem(projected[0]!, request.accountSubject)) !== request.cursorAnchor
+    || messageExportAnchor(projectMessageExportItem(projected[0]!, owner)) !== request.cursorAnchor
   ) return fail("projection-invalid");
 }
 
@@ -886,6 +885,7 @@ function projectMessageExport(
   database: Database,
   request: WhatsAppMessageExportProjectionRequest,
   fileStats: BigIntStats,
+  owner: WhatsAppMatchedOwnerIdentity,
 ): WhatsAppMessageExportProjectionSuccess {
   const projectionGeneration = messageExportGeneration(fileStats);
   if (
@@ -893,7 +893,7 @@ function projectMessageExport(
     && !sameMessageExportGeneration(projectionGeneration, request.expectedGeneration)
   ) return fail("generation-mismatch");
   const nonConversationChatsExcluded = hasExcludedNonConversationMessages(database);
-  assertMessageExportCursorAnchor(database, request);
+  assertMessageExportCursorAnchor(database, request, owner);
   let projectedRows: readonly SqliteRow[];
   try {
     projectedRows = rows(database.query(`
@@ -909,7 +909,7 @@ function projectMessageExport(
     return fail("projection-invalid");
   }
   const projected = projectedRows.map((row) =>
-    projectMessageExportItem(row, request.accountSubject));
+    projectMessageExportItem(row, owner));
   for (let index = 0; index < projected.length; index += 1) {
     const previous = index === 0 ? request.cursor : projected[index - 1]!.rowid;
     if (BigInt(projected[index]!.rowid) <= BigInt(previous)) return fail("projection-invalid");
@@ -924,6 +924,7 @@ function projectMessageExport(
     schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
     status: "succeeded",
     projectionGeneration,
+    accountJidAliases: owner.accountJidAliases,
     nonConversationChatsExcluded,
     messages,
     nextCursor: hasMore ? last?.rowid ?? null : null,
@@ -934,11 +935,16 @@ function projectMessageExport(
 
 function projectBoundWhatsAppMessageStore<Result>(
   request: BoundMessageStoreRequest,
-  projection: (database: Database, fileStats: BigIntStats) => Result,
+  projection: (
+    database: Database,
+    fileStats: BigIntStats,
+    owner: WhatsAppMatchedOwnerIdentity,
+  ) => Result,
 ): Result {
   const initialCwd = assertBoundCwd(request);
+  let owner: WhatsAppMatchedOwnerIdentity;
   try {
-    projectWhatsAppContactsFromBoundCwd({
+    const contacts = projectWhatsAppContactsFromBoundCwd({
       schemaVersion: WHATSAPP_CONTACT_PROJECTION_PROTOCOL_VERSION,
       operation: "contacts.list",
       accountSubject: request.accountSubject,
@@ -947,6 +953,7 @@ function projectBoundWhatsAppMessageStore<Result>(
       storeIdentity: request.storeIdentity,
       sessionIdentity: request.sessionIdentity,
     });
+    owner = contacts[WHATSAPP_MATCHED_OWNER_IDENTITY];
   } catch {
     return fail("owner-mismatch");
   }
@@ -984,7 +991,7 @@ function projectBoundWhatsAppMessageStore<Result>(
     configureDatabase(database);
     assertIntegrity(database);
     assertPinnedSchema(database);
-    result = projection(database, initialFile);
+    result = projection(database, initialFile, owner);
   } catch (error) {
     failure = error;
   } finally {
@@ -1022,9 +1029,9 @@ export function projectWhatsAppInteractionsFromBoundCwd(
   requestValue: unknown,
 ): WhatsAppInteractionProjectionSuccess {
   const request = parseWhatsAppInteractionProjectionRequest(requestValue);
-  return projectBoundWhatsAppMessageStore(request, (database) => {
-    assertCursorAnchor(database, request);
-    return projectInteractions(database, request);
+  return projectBoundWhatsAppMessageStore(request, (database, _fileStats, owner) => {
+    assertCursorAnchor(database, request, owner);
+    return projectInteractions(database, request, owner);
   });
 }
 
@@ -1034,7 +1041,7 @@ export function projectWhatsAppMessageExportFromBoundCwd(
   const request = parseWhatsAppMessageExportProjectionRequest(requestValue);
   return projectBoundWhatsAppMessageStore(
     request,
-    (database, fileStats) => projectMessageExport(database, request, fileStats),
+    (database, fileStats, owner) => projectMessageExport(database, request, fileStats, owner),
   );
 }
 

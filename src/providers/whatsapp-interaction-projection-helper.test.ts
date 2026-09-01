@@ -217,6 +217,10 @@ describe("WhatsApp content-free interaction projection helper", () => {
           messageStoreIdentity: firstRequest.messageStoreIdentity,
           schemaFingerprint: WHATSAPP_INTERACTION_PROJECTION_SCHEMA_FINGERPRINT,
         },
+        accountJidAliases: {
+          pnJid: "15551234567@s.whatsapp.net",
+          lidJid: "999999999999999@lid",
+        },
         interactions: [{
           rowid: "1", chatJid: "15557654321@s.whatsapp.net", messageId: "MSG-1",
           senderJid: "15557654321:2@s.whatsapp.net",
@@ -454,6 +458,10 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
           messageStoreIdentity: requestValue.messageStoreIdentity,
           schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
         },
+        accountJidAliases: {
+          pnJid: "15551234567@s.whatsapp.net",
+          lidJid: "999999999999999@lid",
+        },
         messages: [{
           rowid: "1",
           chatJid: "15557654321@s.whatsapp.net",
@@ -622,7 +630,7 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
     }
   });
 
-  test("binds LID-owned outgoing direction without treating the same PN digits as self", async () => {
+  test("binds LID-owned outgoing direction to both exact session-proved aliases", async () => {
     const path = createStore();
     try {
       const database = new Database(join(path, "wacli.db"), { strict: true });
@@ -649,16 +657,22 @@ describe("WhatsApp Message Like Me fixed projection helper", () => {
       try {
         changed.query(`
           UPDATE messages
-          SET sender_jid = '999999999999999@s.whatsapp.net'
+          SET sender_jid = '15551234567:5@s.whatsapp.net'
           WHERE msg_id = 'MSG-2'
         `).run();
       } finally {
         changed.close();
       }
       chmodSync(join(path, "wacli.db"), 0o600);
-      expect(await messageResponse(path, messageRequest(path, {
+      const pnAliasProjection = await messageResponse(path, messageRequest(path, {
         accountSubject: "whatsapp:lid:999999999999999",
-      }))).toMatchObject({ status: "failed", errorCode: "projection-invalid" });
+      }));
+      expect(pnAliasProjection).toMatchObject({ status: "succeeded" });
+      if (pnAliasProjection.status !== "succeeded") throw new Error("expected PN alias projection");
+      expect(pnAliasProjection.messages[1]).toMatchObject({
+        senderJid: "15551234567:5@s.whatsapp.net",
+        fromMe: true,
+      });
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

@@ -77,6 +77,11 @@ export type WhatsAppMessageExportProjectionItem = Readonly<{
   editedAt: string | null;
 }>;
 
+export type WhatsAppMessageExportAccountJidAliases = Readonly<{
+  pnJid: string | null;
+  lidJid: string | null;
+}>;
+
 export const WHATSAPP_MESSAGE_EXPORT_PROJECTION_ERROR_CODES = Object.freeze([
   "request-invalid",
   "store-binding-invalid",
@@ -101,6 +106,7 @@ export type WhatsAppMessageExportProjectionSuccess = Readonly<{
   schemaVersion: typeof WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION;
   status: "succeeded";
   projectionGeneration: WhatsAppMessageExportProjectionGeneration;
+  accountJidAliases: WhatsAppMessageExportAccountJidAliases;
   nonConversationChatsExcluded: boolean;
   messages: readonly WhatsAppMessageExportProjectionItem[];
   nextCursor: string | null;
@@ -265,7 +271,7 @@ function timestamp(value: unknown, label: string, nullable = false): string | nu
 function item(
   value: unknown,
   label: string,
-  accountJid: string | undefined,
+  accountJids: ReadonlySet<string> | undefined,
 ): WhatsAppMessageExportProjectionItem {
   const parsed = record(value, label);
   exactKeys(parsed, [
@@ -338,19 +344,44 @@ function item(
     edited: parsed.edited,
     editedAt,
   });
-  if (accountJid !== undefined) {
+  if (accountJids !== undefined) {
     const senderJid = projected.senderJid === null
       ? null
       : canonicalWhatsAppParticipantJid(projected.senderJid);
     const senderMustBeSelf = projected.fromMe;
     const valid = projected.chatKind === "dm"
       ? senderJid === null
-        || senderJid === (senderMustBeSelf ? accountJid : projected.chatJid)
+        || (senderMustBeSelf ? accountJids.has(senderJid) : senderJid === projected.chatJid)
       : senderJid === null
-        || (senderMustBeSelf ? senderJid === accountJid : senderJid !== accountJid);
+        || (senderMustBeSelf ? accountJids.has(senderJid) : !accountJids.has(senderJid));
     if (!valid) return fail(`${label}.senderJid`);
   }
   return projected;
+}
+
+function accountJidAliases(
+  value: unknown,
+  accountSubject: string | undefined,
+): WhatsAppMessageExportAccountJidAliases {
+  const parsed = record(value, "response.accountJidAliases");
+  exactKeys(parsed, ["pnJid", "lidJid"], "response.accountJidAliases");
+  const pnJid = parsed.pnJid === null
+    ? null
+    : typeof parsed.pnJid === "string" && USER_JID_PATTERN.test(parsed.pnJid)
+      ? parsed.pnJid
+      : fail("response.accountJidAliases.pnJid");
+  const lidJid = parsed.lidJid === null
+    ? null
+    : typeof parsed.lidJid === "string" && LID_JID_PATTERN.test(parsed.lidJid)
+      ? parsed.lidJid
+      : fail("response.accountJidAliases.lidJid");
+  if (pnJid === null && lidJid === null) fail("response.accountJidAliases");
+  if (
+    accountSubject !== undefined
+    && canonicalWhatsAppAccountSubjectJid(accountSubject) !== pnJid
+    && canonicalWhatsAppAccountSubjectJid(accountSubject) !== lidJid
+  ) fail("response.accountJidAliases binding");
+  return Object.freeze({ pnJid, lidJid });
 }
 
 export function parseWhatsAppMessageExportProjectionRequest(
@@ -421,7 +452,7 @@ export function parseWhatsAppMessageExportProjectionResponse(
     });
   }
   exactKeys(parsed, [
-    "schemaVersion", "status", "projectionGeneration", "nonConversationChatsExcluded", "messages",
+    "schemaVersion", "status", "projectionGeneration", "accountJidAliases", "nonConversationChatsExcluded", "messages",
     "nextCursor", "localInsertPageComplete", "checkpoint",
   ], "response");
   if (
@@ -443,11 +474,12 @@ export function parseWhatsAppMessageExportProjectionResponse(
     || rawMessages.length > request.limit
     || (!parsed.localInsertPageComplete && rawMessages.length !== request.limit)
   )) return fail("response projection binding");
-  const accountJid = request === undefined
-    ? undefined
-    : canonicalWhatsAppAccountSubjectJid(request.accountSubject);
+  const aliases = accountJidAliases(parsed.accountJidAliases, request?.accountSubject);
+  const accountJids = new Set([aliases.pnJid, aliases.lidJid].filter(
+    (jid): jid is string => jid !== null,
+  ));
   const messages = rawMessages.map((value, index) =>
-    item(value, `response.messages[${index}]`, accountJid));
+    item(value, `response.messages[${index}]`, accountJids));
   for (let index = 0; index < messages.length; index += 1) {
     const previous = index === 0 ? request?.cursor : messages[index - 1]?.rowid;
     if (previous !== undefined && BigInt(messages[index]!.rowid) <= BigInt(previous)) {
@@ -480,6 +512,7 @@ export function parseWhatsAppMessageExportProjectionResponse(
     schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
     status: "succeeded",
     projectionGeneration,
+    accountJidAliases: aliases,
     nonConversationChatsExcluded: parsed.nonConversationChatsExcluded,
     messages: Object.freeze(messages),
     nextCursor,
