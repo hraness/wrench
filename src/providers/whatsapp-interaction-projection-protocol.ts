@@ -53,7 +53,7 @@ export type WhatsAppInteractionProjectionItem = Readonly<{
 }>;
 
 export type WhatsAppInteractionAccountJidAliases = Readonly<{
-  pnJid: string | null;
+  pnJid: string;
   lidJid: string | null;
 }>;
 
@@ -309,18 +309,15 @@ function accountJidAliases(
 ): WhatsAppInteractionAccountJidAliases {
   const parsed = record(value, "response.accountJidAliases");
   exactKeys(parsed, ["pnJid", "lidJid"], "response.accountJidAliases");
-  const pnJid = parsed.pnJid === null
-    ? null
-    : typeof parsed.pnJid === "string"
-        && /^[1-9][0-9]{4,14}@s\.whatsapp\.net$/u.test(parsed.pnJid)
-      ? parsed.pnJid
-      : fail("response.accountJidAliases.pnJid");
+  const pnJid = typeof parsed.pnJid === "string"
+      && /^[1-9][0-9]{4,14}@s\.whatsapp\.net$/u.test(parsed.pnJid)
+    ? parsed.pnJid
+    : fail("response.accountJidAliases.pnJid");
   const lidJid = parsed.lidJid === null
     ? null
     : typeof parsed.lidJid === "string" && /^[1-9][0-9]{4,19}@lid$/u.test(parsed.lidJid)
       ? parsed.lidJid
       : fail("response.accountJidAliases.lidJid");
-  if (pnJid === null && lidJid === null) fail("response.accountJidAliases");
   if (subject !== undefined) {
     const bound = legacyInteractionAccountSubjectJid(subject);
     if (bound !== pnJid && bound !== lidJid) fail("response.accountJidAliases binding");

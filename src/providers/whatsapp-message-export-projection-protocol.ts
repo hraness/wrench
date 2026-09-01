@@ -78,7 +78,7 @@ export type WhatsAppMessageExportProjectionItem = Readonly<{
 }>;
 
 export type WhatsAppMessageExportAccountJidAliases = Readonly<{
-  pnJid: string | null;
+  pnJid: string;
   lidJid: string | null;
 }>;
 
@@ -365,17 +365,14 @@ function accountJidAliases(
 ): WhatsAppMessageExportAccountJidAliases {
   const parsed = record(value, "response.accountJidAliases");
   exactKeys(parsed, ["pnJid", "lidJid"], "response.accountJidAliases");
-  const pnJid = parsed.pnJid === null
-    ? null
-    : typeof parsed.pnJid === "string" && USER_JID_PATTERN.test(parsed.pnJid)
-      ? parsed.pnJid
-      : fail("response.accountJidAliases.pnJid");
+  const pnJid = typeof parsed.pnJid === "string" && USER_JID_PATTERN.test(parsed.pnJid)
+    ? parsed.pnJid
+    : fail("response.accountJidAliases.pnJid");
   const lidJid = parsed.lidJid === null
     ? null
     : typeof parsed.lidJid === "string" && LID_JID_PATTERN.test(parsed.lidJid)
       ? parsed.lidJid
       : fail("response.accountJidAliases.lidJid");
-  if (pnJid === null && lidJid === null) fail("response.accountJidAliases");
   if (
     accountSubject !== undefined
     && canonicalWhatsAppAccountSubjectJid(accountSubject) !== pnJid

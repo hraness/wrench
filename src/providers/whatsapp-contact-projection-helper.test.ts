@@ -55,6 +55,8 @@ function createStore(options: {
   readonly overlongPnDevice?: boolean;
   readonly malformedSentinelContact?: boolean;
   readonly lidDeviceOwner?: boolean;
+  readonly ownerJid?: string;
+  readonly ownerLid?: string;
 } = {}): string {
   const path = privateDirectory();
   const database = new Database(join(path, "session.db"), {
@@ -103,10 +105,12 @@ function createStore(options: {
       ${extraTables}
       ${extraDeviceIndexes}
     `);
-    const ownerJid = options.lidDeviceOwner === true ? OWNER_LID : OWNER_JID;
+    const ownerJid = options.ownerJid
+      ?? (options.lidDeviceOwner === true ? OWNER_LID : OWNER_JID);
+    const ownerLid = options.ownerLid ?? OWNER_LID;
     database.query(
       "INSERT INTO whatsmeow_device (jid, lid) VALUES (?1, ?2)",
-    ).run(ownerJid, OWNER_LID);
+    ).run(ownerJid, ownerLid);
     database.query(
       "INSERT INTO whatsmeow_device (jid, lid) VALUES (?1, ?2)",
     ).run("18888888888@s.whatsapp.net", "888888888888888");
@@ -364,14 +368,36 @@ describe("WhatsApp account-bound contact projection helper", () => {
       },
       { path: createStore({ duplicateLidOwner: true }), code: "owner-mismatch", lid: true },
       { path: createStore({ lidDeviceOwner: true }), code: "owner-mismatch", lid: true },
+      {
+        path: createStore({ ownerJid: "05551234567:3@s.whatsapp.net" }),
+        code: "owner-mismatch",
+        subject: "whatsapp:pn:05551234567",
+      },
+      {
+        path: createStore({ ownerJid: "1234567890123456:3@s.whatsapp.net" }),
+        code: "owner-mismatch",
+        subject: "whatsapp:pn:1234567890123456",
+      },
+      {
+        path: createStore({ ownerLid: "099999999999999@lid" }),
+        code: "owner-mismatch",
+        subject: "whatsapp:lid:099999999999999",
+      },
+      {
+        path: createStore({ ownerLid: `${"9".repeat(21)}@lid` }),
+        code: "owner-mismatch",
+        subject: `whatsapp:lid:${"9".repeat(21)}`,
+      },
     ] as const;
     try {
       for (const scenario of cases) {
         const projected = await response(
           scenario.path,
-          request(scenario.path, "lid" in scenario && scenario.lid === true
-            ? { accountSubject: "whatsapp:lid:999999999999999" }
-            : {}),
+          request(scenario.path, "subject" in scenario
+            ? { accountSubject: scenario.subject }
+            : "lid" in scenario && scenario.lid === true
+              ? { accountSubject: "whatsapp:lid:999999999999999" }
+              : {}),
         );
         expect(projected).toEqual({
           schemaVersion: 1,

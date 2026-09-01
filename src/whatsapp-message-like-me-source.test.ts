@@ -79,7 +79,7 @@ function fakeDependencies(
   store: string,
   messages: readonly WhatsAppMessageExportProjectionItem[],
   nonConversationChatsExcluded = false,
-  aliases?: Readonly<{ pnJid: string | null; lidJid: string | null }>,
+  aliases?: Readonly<{ pnJid: string; lidJid: string | null }>,
 ): WhatsAppMessageLikeMeSourceDependencies {
   return {
     helperPath: "/private/fixed/helper.ts",
@@ -93,7 +93,7 @@ function fakeDependencies(
       if (subject?.[1] === undefined || subject[2] === undefined) throw new Error("bad test subject");
       const accountJidAliases = aliases ?? (subject[1] === "pn"
         ? { pnJid: `${subject[2]}@s.whatsapp.net`, lidJid: null }
-        : { pnJid: null, lidJid: `${subject[2]}@lid` });
+        : { pnJid: "15551234567@s.whatsapp.net", lidJid: `${subject[2]}@lid` });
       const stats = lstatSync(join(store, "wacli.db"), { bigint: true });
       const last = messages.at(-1);
       return {
@@ -128,7 +128,7 @@ async function collect(
   messages: readonly WhatsAppMessageExportProjectionItem[],
   subject = "whatsapp:pn:15551234567",
   nonConversationChatsExcluded = false,
-  aliases?: Readonly<{ pnJid: string | null; lidJid: string | null }>,
+  aliases?: Readonly<{ pnJid: string; lidJid: string | null }>,
 ) {
   const source = createWhatsAppMessageLikeMeSource({
     auth: auth(path, subject),
@@ -363,7 +363,7 @@ describe("WhatsApp Message Like Me source mapping", () => {
                 },
                 accountJidAliases: first
                   ? { pnJid: "15551234567@s.whatsapp.net", lidJid: "222222222222222@lid" }
-                  : { pnJid: null, lidJid: "222222222222222@lid" },
+                  : { pnJid: "15550000001@s.whatsapp.net", lidJid: "222222222222222@lid" },
                 nonConversationChatsExcluded: false,
                 messages: first
                   ? Array.from({ length: 500 }, (_, index) => item({

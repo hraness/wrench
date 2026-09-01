@@ -226,6 +226,10 @@ describe("wrench CLI grammar", () => {
       ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "relative"],
       ["whatsapp", "messages"],
       ["whatsapp", "export-message-like-me", "--auth", "Bad ID", "--output", "/tmp/export"],
+      ["whatsapp", "export-message-like-me", "--auth", `a${"b".repeat(48)}`, "--output", "/tmp/export"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "/"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "/tmp/export\nother"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", `/tmp/${"é".repeat(2_046)}`],
       ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "/tmp/export", "--limit-messages", "1"],
     ]) expect(parseWrenchArguments(raw).ok).toBeFalse();
   });

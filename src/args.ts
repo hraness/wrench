@@ -14,6 +14,10 @@ import {
   isProviderPluginSurfaceId,
   type ProviderPluginSurfaceId,
 } from "./provider-plugin-identifiers";
+import {
+  isWhatsAppExportAuthId,
+  isWhatsAppExportOutputDirectory,
+} from "./whatsapp-export-coordinate";
 
 type MessagingCommand =
   | "messaging-routes"
@@ -929,19 +933,13 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
     if (isFailure(parsed)) return parsed;
     const authId = parsed.values["--auth"];
     const output = parsed.values["--output"];
-    if (authId === undefined || validId(authId, "auth ID") !== null) {
+    if (!isWhatsAppExportAuthId(authId)) {
       return {
         ok: false,
         message: "whatsapp export-message-like-me requires --auth <lowercase-kebab-id>",
       };
     }
-    if (
-      output === undefined
-      || !isAbsolute(output)
-      || resolve(output) !== output
-      || Buffer.byteLength(output, "utf8") > 4_096
-      || /[\0\r\n]/u.test(output)
-    ) {
+    if (!isWhatsAppExportOutputDirectory(output)) {
       return {
         ok: false,
         message: "whatsapp export-message-like-me requires --output <normalized-absolute-directory>",

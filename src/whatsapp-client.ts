@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { types as nodeTypes } from "node:util";
 
@@ -11,6 +10,10 @@ import type {
   WhatsAppMessageLikeMeClientRequest,
   WhatsAppMessageLikeMeExportReceipt,
 } from "./whatsapp-client-types";
+import {
+  isWhatsAppExportAuthId,
+  isWhatsAppExportOutputDirectory,
+} from "./whatsapp-export-coordinate";
 
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES = 8 * 1024;
@@ -143,12 +146,12 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
   if (finishedAt < startedAt) return fail("receipt timestamps are reversed");
   const auth = record(root.auth, "receipt.auth");
   exact(auth, ["id", "provider", "identitySha256"], "receipt.auth");
-  if (
-    typeof auth.id !== "string"
-    || !/^[a-z][a-z0-9-]{0,47}$/u.test(auth.id)
-    || auth.provider !== "whatsapp"
-  ) return fail("receipt auth identity is unsupported");
-  digest(auth.identitySha256, "receipt.auth.identitySha256");
+  if (!isWhatsAppExportAuthId(auth.id)) {
+    return fail("receipt.auth.id is not a bounded lowercase auth coordinate");
+  }
+  const parsedAuthId = auth.id;
+  if (auth.provider !== "whatsapp") return fail("receipt auth identity is unsupported");
+  const identitySha256 = digest(auth.identitySha256, "receipt.auth.identitySha256");
   const source = record(root.source, "receipt.source");
   exact(source, ["id", "version"], "receipt.source");
   const provider = record(root.provider, "receipt.provider");
@@ -190,6 +193,13 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
       && warningOrder.indexOf(item as (typeof warningOrder)[number])
         <= warningOrder.indexOf(warnings[index - 1] as (typeof warningOrder)[number]))
   ) return fail("receipt warnings are unsupported");
+  type ReceiptWarning = WhatsAppMessageLikeMeExportReceipt["warnings"][number];
+  type ReceiptWarningTail = Exclude<ReceiptWarning, "remote-history-incomplete">;
+  const warningTail = warnings.slice(1).map((warning) => warning as ReceiptWarningTail);
+  const canonicalWarnings: WhatsAppMessageLikeMeExportReceipt["warnings"] = Object.freeze([
+    "remote-history-incomplete" as const,
+    ...warningTail,
+  ]);
   const counts = record(root.counts, "receipt.counts");
   const countKinds = ["account", "participant", "conversation", "message", "reaction", "tombstone"] as const;
   exact(counts, countKinds, "receipt.counts");
@@ -206,20 +216,21 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
     || (parsedCounts.message > 0) !== observed
     || (parsedCounts.conversation > 0) !== observed
     || parsedCounts.conversation > parsedCounts.message
+    || parsedCounts.message > 500_000
+    || parsedCounts.participant > parsedCounts.message + 1
     || (warnings.includes("message-payload-purged") && parsedCounts.message === 0)
   ) return fail("receipt counts contradict the fixed producer");
   const output = record(root.output, "receipt.output");
   exact(output, ["schemaVersion", "format", "directory", "manifestSha256"], "receipt.output");
+  if (!isWhatsAppExportOutputDirectory(output.directory)) {
+    return fail("receipt.output.directory is not a bounded normalized non-root absolute directory");
+  }
+  const parsedOutputDirectory = output.directory;
   if (
     output.schemaVersion !== 2
     || output.format !== "message-like-me.local-message-bundle"
-    || typeof output.directory !== "string"
-    || !isAbsolute(output.directory)
-    || resolve(output.directory) !== output.directory
-    || Buffer.byteLength(output.directory, "utf8") > 4_096
-    || /[\0\r\n]/u.test(output.directory)
   ) return fail("receipt output identity is unsupported");
-  digest(output.manifestSha256, "receipt.output.manifestSha256");
+  const manifestSha256 = digest(output.manifestSha256, "receipt.output.manifestSha256");
   const privacy = record(root.privacy, "receipt.privacy");
   exact(privacy, [
     "classification", "attachments", "credentials", "sourcePaths", "mediaBytes", "cloudSync",
@@ -236,11 +247,59 @@ export function parseWhatsAppMessageLikeMeExportReceipt(
   exact(integrity, ["algorithm", "receiptSha256"], "receipt.integrity");
   if (integrity.algorithm !== "sha256") return fail("receipt integrity algorithm is unsupported");
   const expectedDigest = digest(integrity.receiptSha256, "receipt.integrity.receiptSha256");
-  const { integrity: _integrity, ...projection } = root;
+  const projection = Object.freeze({
+    schemaVersion: 1 as const,
+    format: "wrench.whatsapp-message-like-me-export-receipt" as const,
+    runId: root.runId as string,
+    operation: "whatsapp.export-message-like-me" as const,
+    status: "succeeded" as const,
+    transport: "linked-device-local-store" as const,
+    startedAt,
+    finishedAt,
+    auth: Object.freeze({
+      id: parsedAuthId,
+      provider: "whatsapp" as const,
+      identitySha256,
+    }),
+    source: Object.freeze({ id: "wacli-local" as const, version: "1.0.0" as const }),
+    provider: Object.freeze({ id: "whatsapp" as const, version: "0.15.0" as const }),
+    completeness: Object.freeze({
+      kind: "bounded-local" as const,
+      reason: "local-store-coverage-unknown" as const,
+      observedFrom,
+      observedThrough,
+    }),
+    warnings: canonicalWarnings,
+    counts: Object.freeze({
+      account: 1 as const,
+      participant: parsedCounts.participant,
+      conversation: parsedCounts.conversation,
+      message: parsedCounts.message,
+      reaction: 0 as const,
+      tombstone: 0 as const,
+    }),
+    output: Object.freeze({
+      schemaVersion: 2 as const,
+      format: "message-like-me.local-message-bundle" as const,
+      directory: parsedOutputDirectory,
+      manifestSha256,
+    }),
+    privacy: Object.freeze({
+      classification: "private-local" as const,
+      attachments: "metadata-only" as const,
+      credentials: "excluded" as const,
+      sourcePaths: "excluded" as const,
+      mediaBytes: "excluded" as const,
+      cloudSync: "none" as const,
+    }),
+  });
   if (sha256(canonicalJson(projection)) !== expectedDigest) {
     return fail("receipt digest does not match its canonical projection");
   }
-  return root as WhatsAppMessageLikeMeExportReceipt;
+  return Object.freeze({
+    ...projection,
+    integrity: Object.freeze({ algorithm: "sha256" as const, receiptSha256: expectedDigest }),
+  });
 }
 
 function cliSourcePath(): string {
@@ -281,18 +340,17 @@ export function exportWhatsAppMessageLikeMeSync(
   }
   const request = record(requestValue, "request");
   exact(request, ["authId", "output"], "request");
-  if (
-    typeof request.authId !== "string"
-    || !/^[a-z][a-z0-9-]{0,47}$/u.test(request.authId)
-    || typeof request.output !== "string"
-    || !isAbsolute(request.output)
-    || resolve(request.output) !== request.output
-    || Buffer.byteLength(request.output, "utf8") > 4_096
-    || /[\0\r\n]/u.test(request.output)
-  ) return fail("request requires a lowercase authId and normalized absolute output");
+  if (!isWhatsAppExportAuthId(request.authId)) {
+    return fail("request.authId is not a bounded lowercase auth coordinate");
+  }
+  if (!isWhatsAppExportOutputDirectory(request.output)) {
+    return fail("request.output is not a bounded normalized non-root absolute directory");
+  }
+  const requestedAuthId = request.authId;
+  const requestedOutput = request.output;
   const requested = Object.freeze({
-    authId: request.authId,
-    output: request.output,
+    authId: requestedAuthId,
+    output: requestedOutput,
   });
   const options = record(optionsValue, "options");
   exact(options, Object.hasOwn(options, "environment") ? ["environment"] : [], "options");
@@ -301,9 +359,9 @@ export function exportWhatsAppMessageLikeMeSync(
     "whatsapp",
     "export-message-like-me",
     "--auth",
-    request.authId,
+    requestedAuthId,
     "--output",
-    request.output,
+    requestedOutput,
     "--json",
   ], {
     cwd: process.cwd(),

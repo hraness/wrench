@@ -61,7 +61,7 @@ function item(
 function response(
   messages: unknown,
   checkpointCursor = "1",
-  accountJidAliases: Readonly<{ pnJid: string | null; lidJid: string | null }> = {
+  accountJidAliases: unknown = {
     pnJid: "15551234567@s.whatsapp.net",
     lidJid: null,
   },

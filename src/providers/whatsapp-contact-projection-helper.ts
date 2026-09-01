@@ -35,8 +35,9 @@ const SQLITE_CACHE_KIB = 2_048;
 
 export type WhatsAppMatchedOwnerIdentity = Readonly<{
   storageJid: string;
+  selfJids: readonly [string] | readonly [string, string];
   accountJidAliases: Readonly<{
-    pnJid: string | null;
+    pnJid: string;
     lidJid: string | null;
   }>;
 }>;
@@ -512,9 +513,9 @@ function assertPinnedSchema(database: Database): void {
   }
 }
 
-const DEVICE_PN_JID_PATTERN = /^([0-9]{5,20})(?::[0-9]{1,5})?@s\.whatsapp\.net$/u;
-const LID_VALUE_PATTERN = /^([0-9]{5,32})(?::[0-9]{1,5})?@lid$/u;
-const LID_DIGITS_PATTERN = /^[0-9]{5,32}$/u;
+const DEVICE_PN_JID_PATTERN = /^([1-9][0-9]{4,14})(?::[0-9]{1,5})?@s\.whatsapp\.net$/u;
+const LID_VALUE_PATTERN = /^([1-9][0-9]{4,19})(?::[0-9]{1,5})?@lid$/u;
+const LID_DIGITS_PATTERN = /^[1-9][0-9]{4,19}$/u;
 
 function normalizedDeviceJid(value: unknown): Readonly<{
   id: string;
@@ -566,10 +567,16 @@ function matchedOwnerIdentity(
     if (
       (subject.kind === "pn" && jid.id === subject.id)
       || (subject.kind === "lid" && lid === subject.id)
-    ) matches.push(Object.freeze({
-      storageJid: row.jid,
-      accountJidAliases: Object.freeze({ pnJid, lidJid }),
-    }));
+    ) {
+      const selfJids = lidJid === null
+        ? Object.freeze([pnJid] as [string])
+        : Object.freeze([pnJid, lidJid].sort() as [string, string]);
+      matches.push(Object.freeze({
+        storageJid: row.jid,
+        selfJids,
+        accountJidAliases: Object.freeze({ pnJid, lidJid }),
+      }));
+    }
   }
   if (matches.length !== 1) fail("owner-mismatch");
   return matches[0]!;

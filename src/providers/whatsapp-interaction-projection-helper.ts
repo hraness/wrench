@@ -503,10 +503,7 @@ function assertMessageDirection(
     || (item.chatKind === "group" && !groupJid.test(item.chatJid))) {
     fail("projection-invalid");
   }
-  const selfJids = new Set([
-    owner.accountJidAliases.pnJid,
-    owner.accountJidAliases.lidJid,
-  ].filter((value): value is string => value !== null));
+  const selfJids = new Set(owner.selfJids);
   const senderJid = item.senderJid === null
     ? null
     : grammar === "canonical"
